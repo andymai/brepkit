@@ -1934,6 +1934,26 @@ pub(super) fn tessellate_nonplanar_cdt(
                     continue;
                 }
 
+                // A seam point's projected v is exact where the projection is
+                // well behaved (only u is ambiguous across the seam), so the
+                // run keeps it when it climbs steadily within the rims' span.
+                // Spacing the run evenly by index assumes the run holds both
+                // seam vertices, but a rim usually keeps the vertex it closes.
+                let (v_lo, v_hi) = (v_min_bnd.min(v_max_bnd), v_min_bnd.max(v_max_bnd));
+                let slack = 1e-9 * (v_hi - v_lo).max(1.0);
+                let projected: Vec<f64> = run.indices.iter().map(|&i| boundary_uv[i].1).collect();
+                let within = projected
+                    .iter()
+                    .all(|&v| v >= v_lo - slack && v <= v_hi + slack);
+                let steady = projected.windows(2).all(|w| w[1] > w[0])
+                    || projected.windows(2).all(|w| w[1] < w[0]);
+                if within && steady {
+                    for &i in &run.indices {
+                        boundary_uv[i].0 = u_assign;
+                    }
+                    continue;
+                }
+
                 let v_first = boundary_uv[run.indices[0]].1;
                 let (v_start, v_end) = if (v_first - v_min_bnd).abs() < (v_first - v_max_bnd).abs()
                 {
@@ -1952,6 +1972,48 @@ pub(super) fn tessellate_nonplanar_cdt(
                     boundary_uv[i] = (u_assign, v);
                 }
             }
+
+            // A straight seam on a NURBS face belongs to this face alone and
+            // needs no samples between its vertices. Left in where the rulings
+            // get no interior rows, each one would fan out across the face to
+            // the rims.
+            let mut drop: DetHashSet<usize> = DetHashSet::default();
+            let nurbs = matches!(face_data.surface(), FaceSurface::Nurbs(_));
+            for run in seam_runs.iter().filter(|_| nurbs) {
+                let edge = topo.edge(boundary_3d[run.indices[0]].2)?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let length = (b - a).length();
+                if length <= 0.0 {
+                    continue;
+                }
+                let dir = (b - a) * (1.0 / length);
+                let off_line = |p: Point3| {
+                    let r = p - a;
+                    (r - dir * r.dot(dir)).length()
+                };
+                if run
+                    .indices
+                    .iter()
+                    .all(|&i| off_line(boundary_3d[i].0) <= 1e-9 * length)
+                {
+                    for &i in &run.indices {
+                        let p = boundary_3d[i].0;
+                        if (p - a).length() > 1e-9 * length && (p - b).length() > 1e-9 * length {
+                            drop.insert(i);
+                        }
+                    }
+                }
+            }
+            if !drop.is_empty() {
+                let keep: Vec<usize> = (0..boundary_uv.len())
+                    .filter(|i| !drop.contains(i))
+                    .collect();
+                boundary_uv = keep.iter().map(|&i| boundary_uv[i]).collect();
+                boundary_3d = keep.iter().map(|&i| boundary_3d[i]).collect();
+            }
         }
 
         // Recompute UV bounding box after seam fix.
@@ -1961,7 +2023,7 @@ pub(super) fn tessellate_nonplanar_cdt(
     // Inner wires in the outer loop's (u, v): each hole is unwrapped along
     // itself and shifted by whole periods into the outer loop's span, then
     // constrained and flood-removed below like a planar face's holes.
-    let holes = inner_wire_uv_loops(
+    let mut holes = inner_wire_uv_loops(
         topo,
         face_id,
         face_data,
@@ -1973,6 +2035,20 @@ pub(super) fn tessellate_nonplanar_cdt(
         merged,
         point_to_global,
     )?;
+    let joined = join_winding_hole(
+        face_data,
+        &mut holes,
+        &mut boundary_uv,
+        &mut boundary_3d,
+        merged,
+        point_to_global,
+    );
+    let (u_min, u_max, v_min, v_max) = if joined {
+        uv_bounds(&boundary_uv)
+    } else {
+        (u_min, u_max, v_min, v_max)
+    };
+    let n_boundary = boundary_3d.len();
     if cdt_trace() {
         log::debug!("cdt {face_id:?} outer u[{u_min:.4},{u_max:.4}] v[{v_min:.4},{v_max:.4}]");
         for (hi, h) in holes.iter().enumerate() {
@@ -2045,7 +2121,7 @@ pub(super) fn tessellate_nonplanar_cdt(
             let cell = radius * du / divisions as f64;
             (radius, cell / dv)
         }
-        _ => (1.0, 1.0),
+        _ => nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv)).unwrap_or((1.0, 1.0)),
     };
     let to_cdt = |point: Point2| Point2::new(point.x() * cdt_u_scale, point.y() * cdt_v_scale);
     let from_cdt = |point: Point2| Point2::new(point.x() / cdt_u_scale, point.y() / cdt_v_scale);
@@ -2376,7 +2452,6 @@ pub(super) fn tessellate_nonplanar_cdt(
             final_global_ids[i] = gid;
         }
     }
-
     // The CDT's UV winding is internally consistent but can be inverted as
     // a whole against the surface: a pinched parameterization (a horn torus
     // corner patch, where the base arc's UV image degenerates) triangulates
@@ -2902,6 +2977,148 @@ fn close_loop_at_pole(
         boundary_3d.push((pole, gid, edge, true));
     }
     Ok(())
+}
+
+/// A NURBS face's average speeds along u and v over its parameter box. Its
+/// knot values carry no common scale (a converted cylinder's u spans 1 around
+/// a circumference its v spans 4 along), so the CDT measures in lengths:
+/// raw, it would pick diagonals running far round the surface and chord
+/// through the solid.
+fn nurbs_speeds(
+    surface: &FaceSurface,
+    (u_min, du): (f64, f64),
+    (v_min, dv): (f64, f64),
+) -> Option<(f64, f64)> {
+    const ROWS: u32 = 5;
+    let FaceSurface::Nurbs(nurbs) = surface else {
+        return None;
+    };
+    if du <= 1e-15 || dv <= 1e-15 {
+        return None;
+    }
+    let (mut speed_u, mut speed_v) = (0.0, 0.0);
+    for i in 0..ROWS {
+        for j in 0..ROWS {
+            let (u, v) = wrap_to_domain(
+                surface,
+                u_min + du * (f64::from(i) + 0.5) / f64::from(ROWS),
+                v_min + dv * (f64::from(j) + 0.5) / f64::from(ROWS),
+            );
+            let d = nurbs.derivatives(u, v, 1);
+            speed_u += d[1][0].length();
+            speed_v += d[0][1].length();
+        }
+    }
+    (speed_u > 0.0 && speed_v > 0.0).then_some((speed_u, speed_v))
+}
+
+/// A NURBS band bounded by two loops that each wind once around the periodic
+/// u direction (a sphere zone left by a coaxial bore) encloses nothing in the
+/// unwrapped `(u, v)` plane. The hole is joined to the outer loop along a
+/// virtual seam from the outer loop's first sample to the hole sample nearest
+/// it in u: the outer loop continues one winding on, climbs the seam, runs
+/// the hole the other way round, and descends the seam's copy one period
+/// back, whose samples it shares. Returns whether the loops were joined.
+fn join_winding_hole(
+    face_data: &brepkit_topology::face::Face,
+    holes: &mut Vec<HoleLoop>,
+    boundary_uv: &mut Vec<(f64, f64)>,
+    boundary_3d: &mut Vec<(Point3, u32, brepkit_topology::edge::EdgeId, bool)>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> bool {
+    let surface = face_data.surface();
+    if !matches!(surface, FaceSurface::Nurbs(_)) || holes.len() != 1 || boundary_uv.len() < 3 {
+        return false;
+    }
+    let (Some((_, period)), _) = surface_periods(surface) else {
+        return false;
+    };
+    let winding = |us: &[f64]| {
+        let (first, last) = (us[0], us[us.len() - 1]);
+        last - first + (first - last + period / 2.0).rem_euclid(period) - period / 2.0
+    };
+    let outer_us: Vec<f64> = boundary_uv.iter().map(|p| p.0).collect();
+    let hole_us: Vec<f64> = holes[0].iter().map(|p| p.0).collect();
+    let (w_outer, w_hole) = (winding(&outer_us), winding(&hole_us));
+    let once = |w: f64| (w.abs() - period).abs() <= 1e-6 * period;
+    if !once(w_outer) || !once(w_hole) || holes[0].len() < 3 {
+        return false;
+    }
+    let Some(&(_, _, edge, _)) = boundary_3d.last() else {
+        return false;
+    };
+
+    // The hole runs against the outer loop, starting nearest its first
+    // sample, from one winding on back down to it.
+    let mut hole = holes.remove(0);
+    if w_hole.signum() == w_outer.signum() {
+        hole.reverse();
+    }
+    let (u0, v0) = boundary_uv[0];
+    let offset = |u: f64| (u - u0 + period / 2.0).rem_euclid(period) - period / 2.0;
+    let Some(start) = (0..hole.len())
+        .min_by(|&a, &b| offset(hole[a].0).abs().total_cmp(&offset(hole[b].0).abs()))
+    else {
+        return false;
+    };
+    hole.rotate_left(start);
+    let mut hole_uv: Vec<(f64, f64, u32)> = Vec::with_capacity(hole.len() + 1);
+    let mut prev_u = u0 + w_outer + offset(hole[0].0);
+    for &(u, v, gid) in &hole {
+        let u = u - ((u - prev_u) / period).round() * period;
+        hole_uv.push((u, v, gid));
+        prev_u = u;
+    }
+
+    // Seam samples, spaced like the outer loop's.
+    let (_, first_gid, _, _) = boundary_3d[0];
+    let spacing = boundary_3d
+        .windows(2)
+        .map(|w| (w[1].0 - w[0].0).length())
+        .sum::<f64>()
+        / (boundary_3d.len() - 1) as f64;
+    let (top_u, top_v) = (u0 + w_outer, v0);
+    let (hole_u, hole_v, hole_gid) = hole_uv[0];
+    let reach =
+        (merged.positions[hole_gid as usize] - merged.positions[first_gid as usize]).length();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let steps = ((reach / spacing.max(1e-12)).ceil() as usize).max(2);
+    let seam: Vec<(f64, f64, u32)> = (1..steps)
+        .map(|k| {
+            #[allow(clippy::cast_precision_loss)]
+            let t = k as f64 / steps as f64;
+            let (u, v) = (top_u + (hole_u - top_u) * t, top_v + (hole_v - top_v) * t);
+            let pt = eval_surface_point(surface, u, v);
+            let gid = *point_to_global
+                .entry(point_merge_key(pt, MERGE_GRID))
+                .or_insert_with(|| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let idx = merged.positions.len() as u32;
+                    merged.positions.push(pt);
+                    merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                    idx
+                });
+            (u, v, gid)
+        })
+        .collect();
+
+    let mut push = |u: f64, v: f64, gid: u32| {
+        boundary_uv.push((u, v));
+        boundary_3d.push((merged.positions[gid as usize], gid, edge, true));
+    };
+    push(top_u, top_v, first_gid);
+    for &(u, v, gid) in &seam {
+        push(u, v, gid);
+    }
+    for &(u, v, gid) in &hole_uv {
+        push(u, v, gid);
+    }
+    push(hole_u - w_outer, hole_v, hole_gid);
+    for &(u, v, gid) in seam.iter().rev() {
+        push(u - w_outer, v, gid);
+    }
+    true
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
