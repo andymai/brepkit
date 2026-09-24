@@ -186,7 +186,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **The ellipsoid primitive meshed to nothing (CLOSED 2026-09-23; pin `crates/operations/tests/ellipsoid_mesh.rs`)** —
+- **The ellipsoid primitive meshed to nothing (CLOSED 2026-09-23; pin `crates/operations/tests/ellipsoid_mesh.rs`)**:
   `makeEllipsoid` scales a unit sphere non-uniformly, so each hemisphere
   becomes an exact NURBS cap whose only wire is the equator, winding the
   periodic u once with no seam. The curved CDT could not close that region
