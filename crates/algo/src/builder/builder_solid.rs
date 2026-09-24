@@ -1084,45 +1084,48 @@ fn excise_out_and_back_spurs(
     face_ids: &mut Vec<FaceId>,
     sources: &mut Vec<Option<FaceId>>,
 ) {
-    let excise = |oes: &mut Vec<OrientedEdge>| -> bool {
-        let mut changed = false;
-        loop {
-            let n = oes.len();
-            if n < 2 {
-                return changed;
-            }
-            let mut removed = false;
-            for i in 0..n {
-                let j = (i + 1) % n;
-                if i != j
-                    && oes[i].edge() == oes[j].edge()
-                    && oes[i].is_forward() != oes[j].is_forward()
-                {
-                    let (hi, lo) = if i > j { (i, j) } else { (j, i) };
-                    oes.remove(hi);
-                    oes.remove(lo);
-                    removed = true;
-                    changed = true;
-                    break;
+    let excise =
+        |oes: &mut Vec<OrientedEdge>, seam: Option<brepkit_topology::edge::EdgeId>| -> bool {
+            let mut changed = false;
+            loop {
+                let n = oes.len();
+                if n < 2 {
+                    return changed;
+                }
+                let mut removed = false;
+                for i in 0..n {
+                    let j = (i + 1) % n;
+                    if i != j
+                        && oes[i].edge() == oes[j].edge()
+                        && oes[i].is_forward() != oes[j].is_forward()
+                        && Some(oes[i].edge()) != seam
+                    {
+                        let (hi, lo) = if i > j { (i, j) } else { (j, i) };
+                        oes.remove(hi);
+                        oes.remove(lo);
+                        removed = true;
+                        changed = true;
+                        break;
+                    }
+                }
+                if !removed {
+                    return changed;
                 }
             }
-            if !removed {
-                return changed;
-            }
-        }
-    };
+        };
 
     let mut drop: Vec<usize> = Vec::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let Ok(face) = topo.face(fid) else { continue };
         let outer_wid = face.outer_wire();
         let inner_wids: Vec<WireId> = face.inner_wires().to_vec();
+        let seam = pointed_cone_seam(topo, fid);
 
         let mut outer = match topo.wire(outer_wid) {
             Ok(w) => w.edges().to_vec(),
             Err(_) => continue,
         };
-        if excise(&mut outer) {
+        if excise(&mut outer, seam) {
             if outer.len() < 3 {
                 drop.push(fi);
                 continue;
@@ -1143,7 +1146,7 @@ fn excise_out_and_back_spurs(
                 continue;
             };
             let mut inner = inner_wire.edges().to_vec();
-            if excise(&mut inner) {
+            if excise(&mut inner, None) {
                 if inner.len() < 3 {
                     // The hole WAS the excursion (a zero-width slit): dropping
                     // it entirely is the only consistent outcome — writing the
@@ -1173,6 +1176,31 @@ fn excise_out_and_back_spurs(
         face_ids.remove(fi);
         sources.remove(fi);
     }
+}
+
+/// A pointed cone face's seam: the line its outer wire runs up to the apex
+/// and straight back down, which reads like a spur but is the cut the cone
+/// is opened along.
+fn pointed_cone_seam(topo: &Topology, fid: FaceId) -> Option<brepkit_topology::edge::EdgeId> {
+    let face = topo.face(fid).ok()?;
+    let brepkit_topology::face::FaceSurface::Cone(cone) = face.surface() else {
+        return None;
+    };
+    let apex = cone.apex();
+    topo.wire(face.outer_wire())
+        .ok()?
+        .edges()
+        .iter()
+        .map(OrientedEdge::edge)
+        .find(|&eid| {
+            topo.edge(eid).is_ok_and(|edge| {
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                    && [edge.start(), edge.end()].iter().any(|&v| {
+                        topo.vertex(v)
+                            .is_ok_and(|vertex| (vertex.point() - apex).length() < MERGE_TOL)
+                    })
+            })
+        })
 }
 
 /// Iteratively remove edges that cannot belong to any closed loop: in a
@@ -1986,13 +2014,21 @@ fn is_rebuildable_loop(topo: &Topology, oes: &[OrientedEdge]) -> bool {
 }
 
 /// Whether a face's outer wire is an all-Line loop with fewer than 3
-/// distinct vertex positions (zero enclosed area).
+/// distinct vertex positions (zero enclosed area). A torus face's wire of
+/// that shape is its seam pair collapsed onto one vertex: the whole ring,
+/// less any holes.
 fn is_degenerate_line_sliver(topo: &Topology, fid: FaceId) -> bool {
     use brepkit_topology::edge::EdgeCurve;
 
     let Ok(face) = topo.face(fid) else {
         return false;
     };
+    if matches!(
+        face.surface(),
+        brepkit_topology::face::FaceSurface::Torus(_)
+    ) {
+        return false;
+    }
     let Ok(wire) = topo.wire(face.outer_wire()) else {
         return false;
     };
@@ -2807,6 +2843,24 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
     for entry in &entries {
         groups.entry(entry.qpair).or_default().push(entry.edge_id);
     }
+    // Zero-length lines that one face alone uses are that face's collapsed
+    // seams (a whole torus's u and v seams, each used twice at its single
+    // vertex): distinct edges no position can tell apart, never duplicates.
+    groups.retain(|&(qs, qe), edge_ids| {
+        if qs != qe {
+            return true;
+        }
+        let zero_length_lines = edge_ids.iter().all(|&e| {
+            topo.edge(e)
+                .is_ok_and(|edge| matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line))
+        });
+        let mut faces = entries
+            .iter()
+            .filter(|entry| edge_ids.contains(&entry.edge_id))
+            .map(|entry| entry.face_idx);
+        let first = faces.next();
+        !(zero_length_lines && faces.all(|f| Some(f) == first))
+    });
 
     // Build edge replacement map: duplicate EdgeId → (canonical EdgeId, needs_flip).
     // needs_flip is true when the duplicate's vertex order is reversed vs canonical,

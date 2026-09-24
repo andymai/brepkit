@@ -318,7 +318,9 @@ pub fn remove_degenerate_edges(
 /// out-and-back instead of leaving it as the clean boundary shared with the
 /// filler face. The spur makes that edge non-manifold (3+ faces) and inflates
 /// the measured volume. Stripping it is always sound — the face region is
-/// unchanged and the edge drops to its correct neighbours.
+/// unchanged and the edge drops to its correct neighbours. A pointed cone's
+/// seam, which runs up to the apex and straight back, is the cut the cone is
+/// opened along and stays.
 ///
 /// Returns the number of oriented-edge occurrences removed (two per spur).
 ///
@@ -338,6 +340,7 @@ pub fn remove_wire_spurs(
                 .chain(face.inner_wires().iter().copied())
                 .collect()
         };
+        let seam = pointed_cone_seam(topo, fid)?;
 
         for wid in wire_ids {
             let (mut oes, closed) = {
@@ -345,7 +348,7 @@ pub fn remove_wire_spurs(
                 (wire.edges().to_vec(), wire.is_closed())
             };
 
-            let n_removed = strip_wire_spurs(&mut oes);
+            let n_removed = strip_wire_spurs(&mut oes, seam);
             if n_removed == 0 {
                 continue;
             }
@@ -383,7 +386,10 @@ pub fn remove_wire_spurs(
 /// Strip consecutive same-edge opposite-orientation pairs (out-and-back spurs)
 /// from an oriented-edge loop, including the wrap-around pair. Iterates because
 /// removing one spur can expose another. Returns the count removed.
-fn strip_wire_spurs(oes: &mut Vec<OrientedEdge>) -> usize {
+fn strip_wire_spurs(
+    oes: &mut Vec<OrientedEdge>,
+    seam: Option<brepkit_topology::edge::EdgeId>,
+) -> usize {
     let mut removed = 0;
     loop {
         let n = oes.len();
@@ -392,7 +398,9 @@ fn strip_wire_spurs(oes: &mut Vec<OrientedEdge>) -> usize {
         }
         let spur = (0..n).find_map(|i| {
             let j = (i + 1) % n;
-            (oes[i].edge() == oes[j].edge() && oes[i].is_forward() != oes[j].is_forward())
+            (oes[i].edge() == oes[j].edge()
+                && oes[i].is_forward() != oes[j].is_forward()
+                && Some(oes[i].edge()) != seam)
                 .then_some((i, j))
         });
         match spur {
@@ -406,6 +414,30 @@ fn strip_wire_spurs(oes: &mut Vec<OrientedEdge>) -> usize {
         }
     }
     removed
+}
+
+/// A pointed cone face's seam: a line of its outer wire ending at the apex.
+fn pointed_cone_seam(
+    topo: &Topology,
+    fid: FaceId,
+) -> Result<Option<brepkit_topology::edge::EdgeId>, crate::OperationsError> {
+    let face = topo.face(fid)?;
+    let FaceSurface::Cone(cone) = face.surface() else {
+        return Ok(None);
+    };
+    let apex = cone.apex();
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            continue;
+        }
+        for vid in [edge.start(), edge.end()] {
+            if (topo.vertex(vid)?.point() - apex).length() < 1e-7 {
+                return Ok(Some(oe.edge()));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Fix face orientations so normals point outward from the solid.

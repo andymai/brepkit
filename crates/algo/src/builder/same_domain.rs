@@ -272,6 +272,17 @@ fn build_sd_grouping(
                     if !planar(surf_i) && distinct_curved_regions(sub_faces, i, j, tol) {
                         continue;
                     }
+                    let same_orientation = same_dir ^ (reversed[i] != reversed[j]);
+                    if complementary_regions_of_closed_surface(
+                        topo,
+                        arena,
+                        sub_faces[i].face_id,
+                        sub_faces[j].face_id,
+                        scale,
+                        same_orientation,
+                    ) {
+                        continue;
+                    }
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
                     if std::env::var("BK_SD_SEL").is_ok() {
@@ -1839,6 +1850,59 @@ impl UnionFind {
 /// containment tests, so the curved-region guard only applies to non-planes).
 fn planar(surf: &FaceSurface) -> bool {
     matches!(surf, FaceSurface::Plane { .. })
+}
+
+/// Whether two faces of one closed surface (a sphere or torus) whose outer
+/// wires share their edges lie on opposite sides of that boundary: a closed
+/// curve there bounds two regions, and faces oriented alike traverse their
+/// common boundary the same way when they cover one region and oppositely
+/// when they cover the two (a sphere's hemispheres on the equator, one of
+/// them untouched and so without an interior sample).
+fn complementary_regions_of_closed_surface(
+    topo: &Topology,
+    arena: &GfaArena,
+    face_i: FaceId,
+    face_j: FaceId,
+    scale: f64,
+    same_orientation: bool,
+) -> bool {
+    let (Ok(fi), Ok(fj)) = (topo.face(face_i), topo.face(face_j)) else {
+        return false;
+    };
+    if !matches!(fi.surface(), FaceSurface::Sphere(_) | FaceSurface::Torus(_)) {
+        return false;
+    }
+    let traversal = |face: &brepkit_topology::face::Face| -> Option<Vec<(QVert, QVert)>> {
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        wire.edges()
+            .iter()
+            .map(|oe| {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let at = |v| {
+                    topo.vertex(arena.resolve_vertex(v))
+                        .ok()
+                        .map(|vertex| quantize_point(vertex.point(), scale))
+                };
+                let (from, to) = (at(edge.start())?, at(edge.end())?);
+                Some(if oe.is_forward() {
+                    (from, to)
+                } else {
+                    (to, from)
+                })
+            })
+            .collect()
+    };
+    let (Some(ti), Some(tj)) = (traversal(fi), traversal(fj)) else {
+        return false;
+    };
+    let Some(&(from, to)) = ti.iter().find(|(from, to)| from != to) else {
+        return false;
+    };
+    let (same_way, opposite_way) = (tj.contains(&(from, to)), tj.contains(&(to, from)));
+    if same_way == opposite_way {
+        return false;
+    }
+    same_way != same_orientation
 }
 
 /// Whether two curved sub-faces of the same underlying surface, paired by a

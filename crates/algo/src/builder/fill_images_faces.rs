@@ -3991,9 +3991,19 @@ fn build_topology_face(
         return None;
     }
 
-    // Step 3: Build wire.
-    let wire = Wire::new(oriented_edges, true).ok()?;
-    let wire_id = topo.add_wire(wire);
+    // Step 3: Build wire. A torus sub-face bounded only by the collapsed
+    // seam pair is the whole ring less its holes: it keeps the parent's
+    // seams, each one edge used twice, which fresh zero-length edges at one
+    // point could not tell apart.
+    let collapsed_seams = matches!(split.surface, FaceSurface::Torus(_))
+        && split.outer_wire.iter().all(|e| {
+            matches!(e.curve_3d, EdgeCurve::Line) && (e.start_3d - e.end_3d).length() < tol.linear
+        });
+    let wire_id = if collapsed_seams {
+        topo.face(parent_face_id).ok()?.outer_wire()
+    } else {
+        topo.add_wire(Wire::new(oriented_edges, true).ok()?)
+    };
 
     // Step 4: Build inner wires (holes).
     let mut inner_wire_ids = Vec::new();

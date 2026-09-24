@@ -34,10 +34,17 @@ fn sphere_outer_wire_constant_v(
     face_id: FaceId,
     sphere: &brepkit_math::surfaces::SphericalSurface,
 ) -> bool {
-    let Ok(face) = topo.face(face_id) else {
-        return false;
-    };
-    let Ok(wire) = topo.wire(face.outer_wire()) else {
+    topo.face(face_id)
+        .is_ok_and(|face| sphere_wire_constant_v(topo, face.outer_wire(), sphere))
+}
+
+/// Whether a wire on a sphere lies on a single constant-`v` latitude.
+fn sphere_wire_constant_v(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> bool {
+    let Ok(wire) = topo.wire(wire_id) else {
         return false;
     };
     let mut v_min = f64::INFINITY;
@@ -318,7 +325,14 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                 // (great-circle/seam arcs, e.g. a box ∩ sphere patch) is not
                 // that shape — its scalloped floor and lune bites would be
                 // mis-integrated, so defer the whole solid to tessellation.
-                if !sphere_outer_wire_constant_v(topo, fid, s) {
+                // Its holes are clipped as latitudes too; a drill's entry loop
+                // is not one, and the per-face flux subtracts it instead.
+                if !sphere_outer_wire_constant_v(topo, fid, s)
+                    || !face
+                        .inner_wires()
+                        .iter()
+                        .all(|&wire| sphere_wire_constant_v(topo, wire, s))
+                {
                     return None;
                 }
                 has_bored_quadric = true;
@@ -2470,8 +2484,79 @@ fn analytic_sphere_signed_volume(
             + cy * cos2_v * (-cos_u2 + cos_u1)
             + cz * sincos_v * du
             + r * cos_v_int * du);
+    let mut vol = vol;
+    for &wire in face.inner_wires() {
+        if let Some(hole) = sphere_hole_flux(topo, sph, wire, about)? {
+            vol -= hole;
+        }
+    }
 
     Ok(if face.is_reversed() { -vol } else { vol })
+}
+
+/// Divergence flux `(1/3) ∫ (P − about)·N dA` of the region of a sphere that
+/// a loop winding none of its u bounds (a drill's entry hole), under the
+/// sphere's outward normal: `R·area + (C − about)·∫N dA`, over three. Both
+/// come from the loop: the area is `R² ∮ −sin v du` and `∫N dA` is
+/// `½ ∮ (P − C) × dP`, taken counterclockwise about the normal (midpoint sums
+/// at two resolutions and a Richardson step). `None` for a loop around a pole.
+fn sphere_hole_flux(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+    about: Point3,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use std::f64::consts::{PI, TAU};
+    let centre = sphere.center();
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let (mut turn, mut sweep, mut progress) = (0.0, Vec3::new(0.0, 0.0, 0.0), 0.0);
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep);
+        let sums = |(from, to): (f64, f64), n: usize| {
+            let (mut turn, mut sweep, mut progress) = (0.0, Vec3::new(0.0, 0.0, 0.0), 0.0);
+            #[allow(clippy::cast_precision_loss)]
+            let step = (to - from) / n as f64;
+            let mut p_prev = at(from);
+            let mut u_prev = sphere.project_point(p_prev).0;
+            for k in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let tk = from + step * k as f64;
+                let pm = at(tk + 0.5 * step);
+                let pn = at(tk + step);
+                let (_, vm) = sphere.project_point(pm);
+                let un = sphere.project_point(pn).0;
+                turn -= vm.sin() * wrap(un - u_prev);
+                sweep += (pm - centre).cross(pn - p_prev) * 0.5;
+                progress += wrap(un - u_prev);
+                p_prev = pn;
+                u_prev = un;
+            }
+            (turn, sweep, progress)
+        };
+        for span in traversal_spans(edge, oe.is_forward(), sp, ep) {
+            let (tc, sc, _) = sums(span, 128);
+            let (tf, sf, pf) = sums(span, 256);
+            turn += (4.0 * tf - tc) / 3.0;
+            sweep += (sf * 4.0 - sc) * (1.0 / 3.0);
+            progress += pf;
+        }
+    }
+    if progress.abs() > PI {
+        return Ok(None);
+    }
+    let (turn, sweep) = if turn < 0.0 {
+        (-turn, sweep * -1.0)
+    } else {
+        (turn, sweep)
+    };
+    let radius = sphere.radius();
+    let area = radius * radius * turn;
+    Ok(Some((radius * area + (centre - about).dot(sweep)) / 3.0))
 }
 
 /// Exact signed volume contribution of a toroidal face via the divergence
@@ -2497,7 +2582,36 @@ fn analytic_torus_signed_volume(
         }
     };
 
+    let mut holes = 0.0;
+    for &wire in face.inner_wires() {
+        if let Some(hole) = torus_hole_flux(topo, tor, wire, about)? {
+            holes += hole;
+        }
+    }
     let wire = topo.wire(face.outer_wire())?;
+    // An outer wire of zero-length lines is the seam pair collapsed onto one
+    // vertex: the face is the whole ring, whose flux is its volume about any
+    // point.
+    let whole_ring = wire.edges().iter().all(|oe| {
+        topo.edge(oe.edge()).is_ok_and(|edge| {
+            matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                && topo
+                    .vertex(edge.start())
+                    .ok()
+                    .zip(topo.vertex(edge.end()).ok())
+                    .is_some_and(|(a, b)| (a.point() - b.point()).length() < 1e-9)
+        })
+    });
+    if whole_ring {
+        let ring = 2.0
+            * std::f64::consts::PI
+            * std::f64::consts::PI
+            * tor.major_radius()
+            * tor.minor_radius()
+            * tor.minor_radius();
+        let vol = ring - holes;
+        return Ok(if face.is_reversed() { -vol } else { vol });
+    }
     let mut u_vals = Vec::new();
     let mut v_vals = Vec::new();
     for oe in wire.edges() {
@@ -2662,9 +2776,93 @@ fn analytic_torus_signed_volume(
     //   r*r*[R*dv + r*i_cos] * du
     let const_coeff = small_r * small_r * (big_r * dv + small_r * i_cos);
 
-    let vol = (1.0 / 3.0) * (s_coeff * s_u_integral + (cz_coeff + rcos_coeff + const_coeff) * du);
+    let vol =
+        (1.0 / 3.0) * (s_coeff * s_u_integral + (cz_coeff + rcos_coeff + const_coeff) * du) - holes;
 
     Ok(if face.is_reversed() { -vol } else { vol })
+}
+
+/// Divergence flux `(1/3) ∫ (P − about)·N dA` of the region of a torus that
+/// a loop winding neither of its angles bounds (a drill's entry hole), under
+/// the torus's outward normal. By Green's theorem it is `∮ G dv` along the
+/// loop, counterclockwise in `(u, v)`, where `G` is the flux density's
+/// antiderivative in `u`:
+/// `(r/3)(R + r cos v)[cos v (cx sin u − cy cos u) + (cz sin v + R cos v + r) u]`
+/// (midpoint sums at two resolutions and a Richardson step). `None` for a
+/// loop that winds either angle.
+fn torus_hole_flux(
+    topo: &Topology,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+    about: Point3,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let (big_r, small_r) = (torus.major_radius(), torus.minor_radius());
+    let offset = torus.center() - about;
+    let (cx, cy, cz) = (
+        offset.dot(torus.x_axis()),
+        offset.dot(torus.y_axis()),
+        offset.dot(torus.z_axis()),
+    );
+    let antiderivative = |u: f64, v: f64| {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_v, cos_v) = v.sin_cos();
+        small_r / 3.0
+            * (big_r + small_r * cos_v)
+            * (cos_v * (cx * sin_u - cy * cos_u) + (cz * sin_v + big_r * cos_v + small_r) * u)
+    };
+    // The loop's (u, v) walk, unwrapped continuously from its first sample.
+    let step_to = |state: Option<(f64, f64)>, p: Point3| {
+        let (u, v) = torus.project_point(p);
+        state.map_or((u, v), |(lu, lv)| (lu + wrap(u - lu), lv + wrap(v - lv)))
+    };
+    let mut first: Option<(f64, f64)> = None;
+    let mut last: Option<(f64, f64)> = None;
+    let (mut flux, mut area) = (0.0, 0.0);
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep);
+        // Midpoint Stieltjes sums of G and of u against dv at `n` steps,
+        // returning the walk's state at the span's end.
+        let walk = |(from, to): (f64, f64), n: usize, state: Option<(f64, f64)>| {
+            let (mut g, mut a) = (0.0, 0.0);
+            #[allow(clippy::cast_precision_loss)]
+            let step = (to - from) / n as f64;
+            let mut state = Some(step_to(state, at(from)));
+            let start = state;
+            let mut v_prev = state.map_or(0.0, |(_, v)| v);
+            for k in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let tk = from + step * k as f64;
+                let (um, vm) = step_to(state, at(tk + 0.5 * step));
+                let next = step_to(Some((um, vm)), at(tk + step));
+                g += antiderivative(um, vm) * (next.1 - v_prev);
+                a += um * (next.1 - v_prev);
+                v_prev = next.1;
+                state = Some(next);
+            }
+            (g, a, start, state)
+        };
+        for span in traversal_spans(edge, oe.is_forward(), sp, ep) {
+            let (gc, ac, _, _) = walk(span, 128, last);
+            let (gf, af, start, end) = walk(span, 256, last);
+            first = first.or(start);
+            last = end;
+            flux += (4.0 * gf - gc) / 3.0;
+            area += (4.0 * af - ac) / 3.0;
+        }
+    }
+    if let (Some((u0, v0)), Some((u1, v1))) = (first, last)
+        && ((u1 - u0).abs() > PI || (v1 - v0).abs() > PI)
+    {
+        return Ok(None);
+    }
+    Ok(Some(if area < 0.0 { -flux } else { flux }))
 }
 
 /// Whether a face's outer wire holds an edge that is neither a line nor a

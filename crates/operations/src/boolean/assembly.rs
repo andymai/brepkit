@@ -717,8 +717,20 @@ pub(super) fn validate_boolean_result_lenient(
     let s = topo.solid(solid)?;
     let shell = topo.shell(s.outer_shell())?;
     let face_count = shell.faces().len();
+    // A sphere or torus face closes on itself, so a solid with one needs
+    // fewer faces: a ring drilled through its tube is the ring's face and the
+    // tunnel wall.
+    let closes_on_itself = shell.faces().iter().any(|&fid| {
+        topo.face(fid).is_ok_and(|face| {
+            matches!(
+                face.surface(),
+                brepkit_topology::face::FaceSurface::Sphere(_)
+                    | brepkit_topology::face::FaceSurface::Torus(_)
+            )
+        })
+    });
 
-    if face_count < MIN_SOLID_FACES {
+    if face_count == 0 || (face_count < MIN_SOLID_FACES && !closes_on_itself) {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!(
                 "boolean result has only {face_count} faces (minimum {MIN_SOLID_FACES} required for a closed solid)"

@@ -1,6 +1,6 @@
 # sphere r=3
-vertices: 354
-triangles: 676
+vertices: 570
+triangles: 1136
 volume: 113.097336
 bbox_min: (-3.000000, -3.000000, -3.000000)
 bbox_max: (3.000000, 3.000000, 3.000000)
