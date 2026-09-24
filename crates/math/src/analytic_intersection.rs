@@ -1494,14 +1494,18 @@ fn try_algebraic_intersection(
             algebraic_cylinder_cylinder(c1, c2)
         }
         // Sphere-cylinder (both orderings).
-        (AnalyticSurface::Sphere(s), AnalyticSurface::Cylinder(c))
-        | (AnalyticSurface::Cylinder(c), AnalyticSurface::Sphere(s)) => {
-            algebraic_sphere_cylinder(s, c)
+        (AnalyticSurface::Sphere(s), AnalyticSurface::Cylinder(c)) => {
+            algebraic_sphere_cylinder(s, c, true)
+        }
+        (AnalyticSurface::Cylinder(c), AnalyticSurface::Sphere(s)) => {
+            algebraic_sphere_cylinder(s, c, false)
         }
         (AnalyticSurface::Cone(c1), AnalyticSurface::Cone(c2)) => algebraic_cone_cone(c1, c2),
-        (AnalyticSurface::Torus(t), AnalyticSurface::Cylinder(c))
-        | (AnalyticSurface::Cylinder(c), AnalyticSurface::Torus(t)) => {
-            Ok(parallel_axis_torus_cylinder(t, c))
+        (AnalyticSurface::Torus(t), AnalyticSurface::Cylinder(c)) => {
+            Ok(parallel_axis_torus_cylinder(t, c, true))
+        }
+        (AnalyticSurface::Cylinder(c), AnalyticSurface::Torus(t)) => {
+            Ok(parallel_axis_torus_cylinder(t, c, false))
         }
         _ => Ok(None),
     }
@@ -1516,6 +1520,7 @@ fn try_algebraic_intersection(
 fn parallel_axis_torus_cylinder(
     torus: &ToroidalSurface,
     cyl: &CylindricalSurface,
+    torus_first: bool,
 ) -> Option<Vec<IntersectionCurve>> {
     let axis = torus.z_axis();
     let along = cyl.axis().dot(axis);
@@ -1543,7 +1548,9 @@ fn parallel_axis_torus_cylinder(
     if loops.is_empty() {
         return None;
     }
-    Some(fit_ruling_loops(&loops, |_| ((0.0, 0.0), (0.0, 0.0))))
+    Some(fit_ruling_loops(&loops, |p| {
+        in_order(torus.project_point(p), cyl.project_point(p), torus_first)
+    }))
 }
 
 /// Exact coaxial cone-cone intersection: returns the shared circle.
@@ -1897,9 +1904,10 @@ pub fn exact_sphere_cylinder(
 fn algebraic_sphere_cylinder(
     sphere: &SphericalSurface,
     cyl: &CylindricalSurface,
+    sphere_first: bool,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
     let Some(exacts) = exact_sphere_cylinder(sphere, cyl)? else {
-        return Ok(off_axis_sphere_cylinder(sphere, cyl));
+        return Ok(off_axis_sphere_cylinder(sphere, cyl, sphere_first));
     };
 
     let mut curves = Vec::new();
@@ -1915,10 +1923,15 @@ fn algebraic_sphere_cylinder(
             let theta = TAU * i as f64 / (n_samples - 1) as f64;
             let pt = crate::traits::ParametricCurve::evaluate(&circle, theta);
             positions.push(pt);
+            let (param1, param2) = in_order(
+                sphere.project_point(pt),
+                cyl.project_point(pt),
+                sphere_first,
+            );
             points.push(IntersectionPoint {
                 point: pt,
-                param1: (0.0, 0.0),
-                param2: (0.0, 0.0),
+                param1,
+                param2,
             });
         }
         let degree = 3.min(positions.len() - 1);
@@ -1940,6 +1953,7 @@ fn algebraic_sphere_cylinder(
 fn off_axis_sphere_cylinder(
     sphere: &SphericalSurface,
     cyl: &CylindricalSurface,
+    sphere_first: bool,
 ) -> Option<Vec<IntersectionCurve>> {
     let (centre, radius) = (sphere.center(), sphere.radius());
     let axis = cyl.axis();
@@ -1964,7 +1978,15 @@ fn off_axis_sphere_cylinder(
     if loops.is_empty() {
         return None;
     }
-    Some(fit_ruling_loops(&loops, |_| ((0.0, 0.0), (0.0, 0.0))))
+    Some(fit_ruling_loops(&loops, |p| {
+        in_order(sphere.project_point(p), cyl.project_point(p), sphere_first)
+    }))
+}
+
+/// Parameters on the pair's first and second surfaces, from those on `a`
+/// and `b` and whether `a` came first.
+const fn in_order(a: (f64, f64), b: (f64, f64), a_first: bool) -> ((f64, f64), (f64, f64)) {
+    if a_first { (a, b) } else { (b, a) }
 }
 
 /// Algebraic cylinder-cylinder intersection for non-coaxial cylinders.
@@ -3341,9 +3363,18 @@ mod tests {
         let cyl =
             CylindricalSurface::new(cylinder_origin, Vec3::new(0.0, 0.0, 1.0), cylinder_radius)
                 .unwrap();
-        let curves = algebraic_sphere_cylinder(&sphere, &cyl).unwrap().unwrap();
+        let curves = algebraic_sphere_cylinder(&sphere, &cyl, true)
+            .unwrap()
+            .unwrap();
         let mut worst: f64 = 0.0;
         for c in &curves {
+            for ip in &c.points {
+                let on_sphere = sphere.evaluate(ip.param1.0, ip.param1.1);
+                let on_cylinder = cyl.evaluate(ip.param2.0, ip.param2.1);
+                worst = worst
+                    .max((on_sphere - ip.point).length())
+                    .max((on_cylinder - ip.point).length());
+            }
             let (t0, t1) = c.curve.domain();
             assert!((c.curve.evaluate(t0) - c.curve.evaluate(t1)).length() < 1e-9);
             for k in 0..=400 {

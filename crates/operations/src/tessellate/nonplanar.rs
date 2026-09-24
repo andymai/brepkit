@@ -1811,7 +1811,9 @@ pub(super) fn tessellate_nonplanar_cdt(
             if close_diff.abs() > u_period / 2.0 {
                 let u_mid = boundary_uv.iter().map(|p| p.0).sum::<f64>() / boundary_uv.len() as f64;
                 let target_mid = u_origin + u_period / 2.0;
-                let shift = target_mid - u_mid;
+                // Whole periods only: any other shift moves the samples off
+                // the points their (u, v) evaluates to.
+                let shift = ((target_mid - u_mid) / u_period).round() * u_period;
                 for pt in &mut boundary_uv {
                     pt.0 += shift;
                 }
@@ -1930,6 +1932,16 @@ pub(super) fn tessellate_nonplanar_cdt(
                 });
             }
 
+            // A pointed cone's seam runs up to the apex and back: after its
+            // halves are put on the seam's two sides, the apex row joining
+            // them is inserted here, `(after index, from u, to u, v, id)`.
+            let mut apex_rows: Vec<(usize, f64, f64, f64, u32)> = Vec::new();
+            // A holed cone only: its wall takes the refined developable
+            // metric below; a whole cone keeps the snap mesher's grid.
+            let apex = match face_data.surface() {
+                FaceSurface::Cone(cone) if !face_data.inner_wires().is_empty() => Some(cone.apex()),
+                _ => None,
+            };
             for run in &seam_runs {
                 // The rim sample just before the run is the seam's own vertex
                 // on that rim, already unwrapped to the seam's side of the
@@ -1946,6 +1958,24 @@ pub(super) fn tessellate_nonplanar_cdt(
                     u_max_bnd
                 };
                 let n_pts = run.indices.len();
+                let at_apex = apex.and_then(|apex| {
+                    run.indices
+                        .iter()
+                        .position(|&i| (boundary_3d[i].0 - apex).length() < 1e-9)
+                });
+                if let Some(turn) = at_apex {
+                    let u_other = if (u_assign - u_min_bnd).abs() < (u_assign - u_max_bnd).abs() {
+                        u_max_bnd
+                    } else {
+                        u_min_bnd
+                    };
+                    for (k, &i) in run.indices.iter().enumerate() {
+                        boundary_uv[i].0 = if k <= turn { u_assign } else { u_other };
+                    }
+                    let i = run.indices[turn];
+                    apex_rows.push((i, u_assign, u_other, boundary_uv[i].1, boundary_3d[i].1));
+                    continue;
+                }
                 if n_pts == 1 {
                     // A lone sample is one of the seam's ends; its projected
                     // v is exact there.
@@ -1991,6 +2021,70 @@ pub(super) fn tessellate_nonplanar_cdt(
                     let v = v_start + t * (v_end - v_start);
                     boundary_uv[i] = (u_assign, v);
                 }
+            }
+
+            apex_rows.sort_by_key(|row| std::cmp::Reverse(row.0));
+            let rim_spacing = {
+                let mut gaps: Vec<f64> = boundary_3d
+                    .windows(2)
+                    .map(|w| (w[1].0 - w[0].0).length())
+                    .filter(|&g| g > 0.0)
+                    .collect();
+                gaps.sort_by(f64::total_cmp);
+                gaps.get(gaps.len() / 2).copied().unwrap_or(1.0)
+            };
+            for (i, from, to, v, id) in apex_rows {
+                let (point, _, edge, forward) = boundary_3d[i];
+                let before = (i + boundary_3d.len() - 1) % boundary_3d.len();
+                let (v_rim, rim_point) = (boundary_uv[before].1, boundary_3d[before].0);
+                // A lone apex sample leaves each side of the seam one ruling
+                // long; sampled like the rim, the ruling's triangles stay
+                // local instead of fanning round the cone.
+                let side: Vec<(f64, Point3, u32)> = if boundary_3d.len() > 2 {
+                    let slant = (rim_point - point).length();
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let n = ((slant / rim_spacing).ceil() as usize).max(2);
+                    (1..n)
+                        .map(|k| {
+                            #[allow(clippy::cast_precision_loss)]
+                            let f = k as f64 / n as f64;
+                            let p = point + (rim_point - point) * f;
+                            let gid = *point_to_global
+                                .entry(point_merge_key(p, MERGE_GRID))
+                                .or_insert_with(|| {
+                                    #[allow(clippy::cast_possible_truncation)]
+                                    let idx = merged.positions.len() as u32;
+                                    merged.positions.push(p);
+                                    merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                                    idx
+                                });
+                            (v + (v_rim - v) * f, p, gid)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                // Down one side to the apex, along the apex row, and up the
+                // other side back to the rim.
+                let steps = 16;
+                let row = (1..=steps).map(|k| {
+                    let u = from + (to - from) * f64::from(k) / f64::from(steps);
+                    ((u, v), (point, id, edge, forward))
+                });
+                let up = side
+                    .iter()
+                    .map(|&(sv, p, gid)| ((to, sv), (p, gid, edge, forward)));
+                let (after_uv, after_3d): (Vec<_>, Vec<_>) = row.chain(up).unzip();
+                let after = i + 1;
+                boundary_uv.splice(after..after, after_uv);
+                boundary_3d.splice(after..after, after_3d);
+                let (down_uv, down_3d): (Vec<_>, Vec<_>) = side
+                    .iter()
+                    .rev()
+                    .map(|&(sv, p, gid)| ((from, sv), (p, gid, edge, forward)))
+                    .unzip();
+                boundary_uv.splice(i..i, down_uv);
+                boundary_3d.splice(i..i, down_3d);
             }
 
             // A straight seam on a NURBS face belongs to this face alone and
@@ -2079,6 +2173,26 @@ pub(super) fn tessellate_nonplanar_cdt(
             log::debug!("cdt {face_id:?} hole {hi}: {}", pts.join(" "));
         }
     }
+    if cdt_trace() {
+        for h in &holes {
+            for w in h.windows(2) {
+                let (a, b) = (
+                    merged.positions[w[0].2 as usize],
+                    merged.positions[w[1].2 as usize],
+                );
+                if (a - b).length() < 1e-4 {
+                    log::debug!(
+                        "cdt {face_id:?} NEAR gid {} -> {} gap {:.3e} uv ({:.6},{:.6})",
+                        w[0].2,
+                        w[1].2,
+                        (a - b).length(),
+                        w[1].0,
+                        w[1].1
+                    );
+                }
+            }
+        }
+    }
     let hole_polys: Vec<Vec<(f64, f64)>> = holes
         .iter()
         .map(|h| h.iter().map(|&(u, v, _)| (u, v)).collect())
@@ -2158,7 +2272,12 @@ pub(super) fn tessellate_nonplanar_cdt(
     // already exact along, which lands the stripe on two triangles per angular
     // division. Only the metric moves: boundary identity, the trimmed-domain
     // tests and every surface evaluation stay in the face's parameterization.
+    // A cone face running up to its apex has rulings that converge rather
+    // than span the face, so its slant (v, a length already) keeps its scale.
+    let reaches_apex = matches!(face_data.surface(), FaceSurface::Cone(_))
+        && v_min.abs().min(v_max.abs()) < 1e-9 * (v_max - v_min).abs().max(1.0);
     let (cdt_u_scale, cdt_v_scale) = match stripe_radius.or(holed_wall_radius) {
+        Some(radius) if reaches_apex => (radius, 1.0),
         Some(radius) if du > 1e-15 && dv > 1e-15 => {
             let divisions =
                 segments_for_chord_deviation_a(radius, du, deflection, angular_tol, false);
@@ -3142,7 +3261,9 @@ fn whole_ring_rectangle(
             );
             let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
             for k in 0..=16 {
-                let t = t0 + (t1 - t0) * f64::from(k) / 16.0;
+                let f = f64::from(k) / 16.0;
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                let t = t0 + (t1 - t0) * f;
                 let (u, v) =
                     torus.project_point(edge.curve().evaluate_with_endpoints(t, start, end));
                 walk.push(

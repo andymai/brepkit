@@ -315,6 +315,30 @@ pub(super) fn sample_edge(
         }
     };
 
+    // A fitted curve's evaluated end can miss its vertex by the fit error (a
+    // marched section's end sits ~1e-8 off the pave), enough to land in
+    // another merge cell than the neighbouring edge's end: its ends are the
+    // vertices every edge meeting there shares. Its samples already run
+    // start to end; the analytic curves' ends are exact.
+    if !matches!(edge.curve(), EdgeCurve::NurbsCurve(_)) {
+        return Ok(points);
+    }
+    let mut points = points;
+    let (start, end) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    if let Some(first) = points.first_mut()
+        && (*first - start).length() < 1e-6
+    {
+        *first = start;
+    }
+    if let Some(last) = points.last_mut()
+        && (*last - end).length() < 1e-6
+    {
+        *last = end;
+    }
+
     Ok(points)
 }
 

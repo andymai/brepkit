@@ -1084,45 +1084,48 @@ fn excise_out_and_back_spurs(
     face_ids: &mut Vec<FaceId>,
     sources: &mut Vec<Option<FaceId>>,
 ) {
-    let excise = |oes: &mut Vec<OrientedEdge>| -> bool {
-        let mut changed = false;
-        loop {
-            let n = oes.len();
-            if n < 2 {
-                return changed;
-            }
-            let mut removed = false;
-            for i in 0..n {
-                let j = (i + 1) % n;
-                if i != j
-                    && oes[i].edge() == oes[j].edge()
-                    && oes[i].is_forward() != oes[j].is_forward()
-                {
-                    let (hi, lo) = if i > j { (i, j) } else { (j, i) };
-                    oes.remove(hi);
-                    oes.remove(lo);
-                    removed = true;
-                    changed = true;
-                    break;
+    let excise =
+        |oes: &mut Vec<OrientedEdge>, seam: Option<brepkit_topology::edge::EdgeId>| -> bool {
+            let mut changed = false;
+            loop {
+                let n = oes.len();
+                if n < 2 {
+                    return changed;
+                }
+                let mut removed = false;
+                for i in 0..n {
+                    let j = (i + 1) % n;
+                    if i != j
+                        && oes[i].edge() == oes[j].edge()
+                        && oes[i].is_forward() != oes[j].is_forward()
+                        && Some(oes[i].edge()) != seam
+                    {
+                        let (hi, lo) = if i > j { (i, j) } else { (j, i) };
+                        oes.remove(hi);
+                        oes.remove(lo);
+                        removed = true;
+                        changed = true;
+                        break;
+                    }
+                }
+                if !removed {
+                    return changed;
                 }
             }
-            if !removed {
-                return changed;
-            }
-        }
-    };
+        };
 
     let mut drop: Vec<usize> = Vec::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let Ok(face) = topo.face(fid) else { continue };
         let outer_wid = face.outer_wire();
         let inner_wids: Vec<WireId> = face.inner_wires().to_vec();
+        let seam = pointed_cone_seam(topo, fid);
 
         let mut outer = match topo.wire(outer_wid) {
             Ok(w) => w.edges().to_vec(),
             Err(_) => continue,
         };
-        if excise(&mut outer) {
+        if excise(&mut outer, seam) {
             if outer.len() < 3 {
                 drop.push(fi);
                 continue;
@@ -1143,7 +1146,7 @@ fn excise_out_and_back_spurs(
                 continue;
             };
             let mut inner = inner_wire.edges().to_vec();
-            if excise(&mut inner) {
+            if excise(&mut inner, None) {
                 if inner.len() < 3 {
                     // The hole WAS the excursion (a zero-width slit): dropping
                     // it entirely is the only consistent outcome — writing the
@@ -1173,6 +1176,31 @@ fn excise_out_and_back_spurs(
         face_ids.remove(fi);
         sources.remove(fi);
     }
+}
+
+/// A pointed cone face's seam: the line its outer wire runs up to the apex
+/// and straight back down, which reads like a spur but is the cut the cone
+/// is opened along.
+fn pointed_cone_seam(topo: &Topology, fid: FaceId) -> Option<brepkit_topology::edge::EdgeId> {
+    let face = topo.face(fid).ok()?;
+    let brepkit_topology::face::FaceSurface::Cone(cone) = face.surface() else {
+        return None;
+    };
+    let apex = cone.apex();
+    topo.wire(face.outer_wire())
+        .ok()?
+        .edges()
+        .iter()
+        .map(OrientedEdge::edge)
+        .find(|&eid| {
+            topo.edge(eid).is_ok_and(|edge| {
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                    && [edge.start(), edge.end()].iter().any(|&v| {
+                        topo.vertex(v)
+                            .is_ok_and(|vertex| (vertex.point() - apex).length() < MERGE_TOL)
+                    })
+            })
+        })
 }
 
 /// Iteratively remove edges that cannot belong to any closed loop: in a

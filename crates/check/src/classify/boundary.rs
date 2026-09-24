@@ -178,6 +178,7 @@ where
 /// # Errors
 ///
 /// Returns an error if topology lookups fail.
+#[allow(clippy::too_many_arguments)]
 fn count_analytic_crossings<F>(
     topo: &Topology,
     face_id: FaceId,
@@ -186,6 +187,7 @@ fn count_analytic_crossings<F>(
     roots: &SmallVec<[f64; 4]>,
     project: F,
     v_periodic: bool,
+    apex: Option<Point3>,
 ) -> Result<u32, CheckError>
 where
     F: Fn(Point3) -> (f64, f64),
@@ -215,7 +217,22 @@ where
         return Ok(crossings);
     }
 
-    let uv_boundary = build_uv_boundary(&verts, &project, v_periodic);
+    let mut uv_boundary = build_uv_boundary(&verts, &project, v_periodic);
+    // A pointed cone's wire runs up its seam to the apex and straight back,
+    // which bounds nothing in (u, v): its region is the rim's run closed
+    // along the apex row, as a pole closes a sphere cap.
+    if let Some(apex) = apex
+        && let Some(turn) = verts
+            .iter()
+            .position(|v| (*v - apex).length_squared() < COINCIDENT_SQ)
+        && turn >= 2
+    {
+        let (_, v_apex) = project(apex);
+        let (first_u, last_u) = (uv_boundary[0].0, uv_boundary[turn - 1].0);
+        uv_boundary.truncate(turn);
+        uv_boundary.push((last_u, v_apex));
+        uv_boundary.push((first_u, v_apex));
+    }
 
     let mut crossings = 0u32;
     for &t in roots {
@@ -325,6 +342,7 @@ pub fn count_face_ray_crossings(
                 &roots,
                 |p| cyl.project_point(p),
                 false,
+                None,
             )
         }
         FaceSurface::Cone(cone) => {
@@ -338,6 +356,7 @@ pub fn count_face_ray_crossings(
                 &roots,
                 |p| cone.project_point(p),
                 false,
+                Some(cone.apex()),
             )
         }
         FaceSurface::Sphere(sph) => {
@@ -358,6 +377,7 @@ pub fn count_face_ray_crossings(
                 &roots,
                 |p| tor.project_point(p),
                 true,
+                None,
             )
         }
         FaceSurface::Nurbs(surface) => {
