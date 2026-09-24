@@ -1,0 +1,24 @@
+crates/wasm/src/bindings/assembly.rs
+  s_ba2f7b5c6902b6::t_18de4e29181588 128-196
+README.md
+  s_ba2f7b5c6902b6::t_c09379174d5a4e 102,116
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_c09379174d5a4e 187-192
+  s_ba2f7b5c6902b6::t_5568020057b36d 193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "36886fa71cd7b5051add46b85d13ae304f651225",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
