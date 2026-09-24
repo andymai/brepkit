@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790252255966,
+  "lastUpdate": 1790255758872,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37151,6 +37151,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 40740283,
             "range": "± 65696",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "97a482eecbb551871f6d78706d8b5ca417bfce5f",
+          "message": "fix(operations): build sweep_smooth's rails as curves shared by its faces (#1714)\n\n## What was wrong\n\n`sweep_smooth` now produces side faces whose boundaries remain on their\nsurfaces. On main, each rail edge is the straight chord\n(`EdgeCurve::Line`) between a profile vertex's first and last ring\npositions, while each side face is an `interpolate_surface` fit through\nits own two columns of ring positions. The boundaries therefore leave\ntheir surfaces. A trimmed per-face mesh of a unit square swept along a\nradius 5 quarter circle reads 6.87, against the 7.85 its volume should\nbe.\n\n## What this does\n\n- Builds one B-spline rail per profile vertex, interpolated through that\nvertex's ring positions at mean chord-length parameters shared by every\nrail. `loft::mean_chord_params` and `loft::interpolate_at` are now\ncrate-visible, and all rails share one knot vector.\n\n- Places those curves on the rail edges and constructs each side face as\nthe ruled surface between its two rails, with u across the edge and v\nalong the rails. Its boundary is exactly the rail and ring edges shared\nwith its neighbours. This is the construction `loft_smooth` uses since\n#1700.\n\n- Moves the outward check to the new parameterization, probed at u = 0.5\non the start ring. This unblocks trimming NURBS faces in the per-face\nmesher, tracked by the roadmap's per-face NURBS row from #1713.\n\n## Verification\n\n- Added `sweep_smooth_rails_lie_on_their_faces`, which sweeps the unit\nsquare along the quarter circle and checks `validate_solid`.\n\n- The test checks that 17 points along every edge of every side face\nproject onto the face's surface within 1e-7, that a mesh at 0.001 is\nwatertight, and that `solid_volume` and the mesh volume are within 1e-3\nof the Pappus volume 5 pi / 2. It fails on main because a rail point\nlies off its face.\n\n- The operations, io and wasm suites pass: 1694 tests, 0 failures. The\nroadmap records the fix.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `sweep_smooth`'s side faces so their rails lie on their surfaces,\ncorrecting swept-volume measurement (a quarter-circle sweep now reads\n~7.85 instead of 6.87) and unblocking trimmed NURBS faces in the\nper-face mesher.\n\n**Changes**\n- Builds one B-spline rail per profile vertex, interpolated through its\nring positions at shared parameters, and constructs each side face as\nthe ruled surface between adjacent rails (the same construction\n`loft_smooth` uses).\n- Makes `loft::mean_chord_params` and `loft::interpolate_at`\ncrate-visible.\n- Moves the outward-normal check to `u = 0.5` on the start ring to keep\nface orientations consistent.\n- Adds `sweep_smooth_rails_lie_on_their_faces`, which validates the\nsolid, checks 17 points per edge lie on their faces within `1e-7`,\nrequires a watertight mesh, and checks both solid and mesh volumes match\nthe Pappus value.\n\n<sup>Written for commit 6354dfa1c6f59b0853f17d53221b94814f47c7c8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1714?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T13:13:19Z",
+          "tree_id": "faaf6edd27542b556e49a73bad7344e3824d8632",
+          "url": "https://github.com/andymai/brepkit/commit/97a482eecbb551871f6d78706d8b5ca417bfce5f"
+        },
+        "date": 1790255755378,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 987432,
+            "range": "± 9268",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1068245,
+            "range": "± 1983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13256,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 738550,
+            "range": "± 1059",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41307023,
+            "range": "± 204705",
             "unit": "ns/iter"
           }
         ]
