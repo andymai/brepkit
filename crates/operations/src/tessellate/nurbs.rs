@@ -680,6 +680,131 @@ fn force_subdivide(
     let _ = surface;
 }
 
+/// Mesh a NURBS surface that closes on itself in both directions (a torus
+/// image) as a structured grid over its whole domain. The adaptive quadtree
+/// keeps one-level steps between neighbouring cells, which leave T-junction
+/// cracks, and cannot see that the domain's opposite edges meet. Here every
+/// row is sampled alike, and the far seam rows copy the near rows' positions,
+/// so a caller that welds by position closes both seams exactly.
+pub(super) fn tessellate_periodic_nurbs_grid(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    deflection: f64,
+    angular_tol: f64,
+) -> TriangleMeshUV {
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let n_u = iso_divisions(surface, true, deflection, angular_tol);
+    let n_v = iso_divisions(surface, false, deflection, angular_tol);
+    let (um, vm) = (0.5 * (u_lo + u_hi), 0.5 * (v_lo + v_hi));
+    let duv = surface.derivatives(um, vm, 1);
+    let right_handed = duv[1][0].cross(duv[0][1]).dot(safe_normal(surface, um, vm)) >= 0.0;
+
+    let mut positions = Vec::with_capacity((n_u + 1) * (n_v + 1));
+    let mut normals = Vec::with_capacity(positions.capacity());
+    let mut uvs = Vec::with_capacity(positions.capacity());
+    for i in 0..=n_u {
+        for j in 0..=n_v {
+            #[allow(clippy::cast_precision_loss)]
+            let (u, v) = (
+                u_lo + (u_hi - u_lo) * i as f64 / n_u as f64,
+                v_lo + (v_hi - v_lo) * j as f64 / n_v as f64,
+            );
+            let (pos, nrm) = if i == n_u || j == n_v {
+                let k = (i % n_u) * (n_v + 1) + j % n_v;
+                (positions[k], normals[k])
+            } else {
+                (surface.evaluate(u, v), safe_normal(surface, u, v))
+            };
+            positions.push(pos);
+            normals.push(nrm);
+            uvs.push([u, v]);
+        }
+    }
+    let mut indices = Vec::with_capacity(n_u * n_v * 6);
+    for i in 0..n_u {
+        for j in 0..n_v {
+            #[allow(clippy::cast_possible_truncation)]
+            let at = |a: usize, b: usize| (a * (n_v + 1) + b) as u32;
+            let (i00, i10, i11, i01) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+            if right_handed {
+                indices.extend([i00, i10, i11, i00, i11, i01]);
+            } else {
+                indices.extend([i00, i11, i10, i00, i01, i11]);
+            }
+        }
+    }
+    TriangleMeshUV {
+        mesh: TriangleMesh {
+            positions,
+            normals,
+            indices,
+        },
+        uvs,
+    }
+}
+
+/// Divisions of one parameter direction that keep every iso-line chord of a
+/// few sampled rows within half the deflection (a grid cell's diagonal sags
+/// further than its sides) and within the angular tolerance.
+fn iso_divisions(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    along_u: bool,
+    deflection: f64,
+    angular_tol: f64,
+) -> usize {
+    const ROWS: usize = 8;
+    const MAX_DIVISIONS: usize = 4096;
+    let ((lo, hi), (o_lo, o_hi)) = if along_u {
+        (surface.domain_u(), surface.domain_v())
+    } else {
+        (surface.domain_v(), surface.domain_u())
+    };
+    let at = |t: f64, o: f64| {
+        if along_u {
+            surface.evaluate(t, o)
+        } else {
+            surface.evaluate(o, t)
+        }
+    };
+    let normal_at = |t: f64, o: f64| {
+        if along_u {
+            safe_normal(surface, t, o)
+        } else {
+            safe_normal(surface, o, t)
+        }
+    };
+    let fits = |n: usize| {
+        (0..ROWS).all(|row| {
+            #[allow(clippy::cast_precision_loss)]
+            let o = o_lo + (o_hi - o_lo) * (row as f64 + 0.5) / ROWS as f64;
+            (0..n).all(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let (t0, t1) = (
+                    lo + (hi - lo) * k as f64 / n as f64,
+                    lo + (hi - lo) * (k + 1) as f64 / n as f64,
+                );
+                let (p0, p1) = (at(t0, o), at(t1, o));
+                let chord_mid = Point3::new(
+                    0.5 * (p0.x() + p1.x()),
+                    0.5 * (p0.y() + p1.y()),
+                    0.5 * (p0.z() + p1.z()),
+                );
+                let sag = (at(0.5 * (t0 + t1), o) - chord_mid).length();
+                let turn = normal_at(t0, o)
+                    .dot(normal_at(t1, o))
+                    .clamp(-1.0, 1.0)
+                    .acos();
+                sag <= 0.5 * deflection && (angular_tol <= 0.0 || turn <= angular_tol)
+            })
+        })
+    };
+    let mut n = 8;
+    while n < MAX_DIVISIONS && !fits(n) {
+        n *= 2;
+    }
+    n
+}
+
 /// Tessellate a NURBS surface via curvature-adaptive subdivision.
 #[allow(clippy::too_many_lines)]
 pub(super) fn tessellate_nurbs(

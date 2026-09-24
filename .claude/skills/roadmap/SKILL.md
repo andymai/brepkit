@@ -179,20 +179,23 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: `loft_smooth`** | Three squares (half 3, 2, 3 at z 0, 2, 4): signed volume 3.4, magnitude 6.7, 8 open mesh edges |
 | **Stable row defect: heal `convert_to_bspline` on a cylinder or a bored sphere** | Cylinder: 7 open mesh edges at the seam vertex, the band skips the rim's vertex sample while the cap keeps it. Bored sphere (`make_sphere(6, 24)` less an r=3 bore along z): 9141 open mesh edges at 0.01, the tunnel mouths filled, `solid_volume` 1533.7 against 587.6 before the conversion |
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
-| **Stable row defect: a non-uniformly scaled torus does not mesh** | `transform_solid` gives it an exact NURBS image (`solid_volume` 444.04 against 444.07 under `rotation_z(0.3) * scale(2, 1, 1)`), but the doubly periodic face bounded by its a, b, a⁻¹, b⁻¹ seam pair meshes to NOTHING. The squashed cylinder, cone and sphere mesh watertight; their mesh volumes sit 0.2 to 0.6% low, the NURBS interior density row |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **The ellipsoid primitive meshed to nothing (CLOSED 2026-09-23; pin `crates/operations/tests/ellipsoid_mesh.rs`)**:
+- **The ellipsoid primitive and a squashed torus meshed to nothing (CLOSED 2026-09-23; pins `crates/operations/tests/non_uniform_scale_mesh.rs`)**:
   `makeEllipsoid` scales a unit sphere non-uniformly, so each hemisphere
   becomes an exact NURBS cap whose only wire is the equator, winding the
   periodic u once with no seam. The curved CDT could not close that region
   in (u, v) and returned no triangles. `close_loop_at_pole` continues such a
   loop into its first sample's image one winding on and back along the
-  degenerate v edge on its left, welded to the pole.
+  degenerate v edge on its left, welded to the pole. A torus's one face,
+  bounded by its seam pair collapsed onto one vertex, encloses nothing; the
+  solid mesher now falls back when the CDT emits no triangles, and a doubly
+  periodic NURBS face meshes as a structured grid whose far seam rows copy
+  the near ones (the adaptive quadtree left T-junction cracks).
 
 - **Mirrors broke solids that mix NURBS and analytic faces (CLOSED 2026-09-23; pin `crates/operations/tests/mirror_mixed_faces.rs`)**:
   `transform_solid` and `copy_and_transform_solid` reversed every wire and

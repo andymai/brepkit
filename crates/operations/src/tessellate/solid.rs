@@ -1032,6 +1032,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             )?;
         }
     } else if matches!(face_data.surface(), FaceSurface::Nurbs(_)) {
+        let triangles_before = merged.indices.len();
         let cdt_ok = tessellate_nonplanar_cdt(
             topo,
             face_id,
@@ -1043,7 +1044,10 @@ pub(super) fn tessellate_face_with_shared_edges(
             merged,
             point_to_global,
         );
-        if cdt_ok.is_err() {
+        // A boundary that encloses nothing in (u, v), such as a whole torus's
+        // seam pair collapsed onto one vertex, leaves the CDT without
+        // triangles: the snap mesher covers the surface's whole domain.
+        if cdt_ok.is_err() || merged.indices.len() == triangles_before {
             tessellate_nonplanar_snap(
                 topo,
                 face_id,

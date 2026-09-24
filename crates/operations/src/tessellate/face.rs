@@ -9,7 +9,7 @@ use super::TriangleMeshUV;
 use super::edge_sampling::{plane_axes, segments_for_chord_deviation_a};
 use super::nurbs::{
     compute_angular_range, compute_axial_range, compute_sphere_v_range, compute_torus_v_range,
-    compute_v_param_range, sphere_analytic_kind, tessellate_nurbs,
+    compute_v_param_range, sphere_analytic_kind, tessellate_nurbs, tessellate_periodic_nurbs_grid,
 };
 use super::planar::{tessellate_analytic, tessellate_analytic_with_boundary, tessellate_planar};
 
@@ -127,6 +127,13 @@ pub(super) fn tessellate_with_uvs_floor(
                     })
                     .collect();
                 Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
+            }
+            FaceSurface::Nurbs(surface) if surface.is_periodic_u() && surface.is_periodic_v() => {
+                Ok(tessellate_periodic_nurbs_grid(
+                    surface,
+                    deflection,
+                    angular_tol,
+                ))
             }
             FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection, angular_tol)),
             FaceSurface::Cylinder(cyl) => {
