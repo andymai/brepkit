@@ -751,6 +751,16 @@ pub fn perform(
                     raw.t_range = (t_seam, t_seam + span);
                     raw.p_start = p_seam;
                     raw.p_end = p_seam;
+                } else if is_closed
+                    && let Some((t_seam, p_seam)) = torus_meridian_start(surf_a, surf_b, &raw.curve)
+                {
+                    // A torus's section circles start on its reference lines
+                    // (the meridian and equator through the torus's vertex),
+                    // so the band splitter can seam them along one of them.
+                    let span = raw.t_range.1 - raw.t_range.0;
+                    raw.t_range = (t_seam, t_seam + span);
+                    raw.p_start = p_seam;
+                    raw.p_end = p_seam;
                 }
 
                 let start_vid = adopted_seam.map(|(vid, _, _)| vid).unwrap_or_else(|| {
@@ -2588,6 +2598,41 @@ fn line_misses_conic_face(topo: &Topology, face: FaceId, p0: Point3, p1: Point3)
     distance > 1.0 + 1e-9
 }
 
+/// Where a torus section circle meets the torus's reference lines: a circle
+/// about the axis crosses the meridian `u = 0` (along the torus frame's x
+/// axis), and a tube cross-section (a meridian circle) crosses the outer
+/// equator `v = 0`. The circle's parameter there and the point.
+fn torus_meridian_start(
+    surf_a: &FaceSurface,
+    surf_b: &FaceSurface,
+    curve: &EdgeCurve,
+) -> Option<(f64, Point3)> {
+    let EdgeCurve::Circle(circle) = curve else {
+        return None;
+    };
+    let torus = match (surf_a, surf_b) {
+        (FaceSurface::Torus(t), _) | (_, FaceSurface::Torus(t)) => t,
+        _ => return None,
+    };
+    let axis = torus.z_axis();
+    let from_center = circle.center() - torus.center();
+    let scale = torus.major_radius();
+    let toward = if circle.normal().cross(axis).length() <= 1e-9
+        && from_center.cross(axis).length() <= 1e-9 * scale
+    {
+        torus.x_axis()
+    } else if circle.normal().dot(axis).abs() <= 1e-9
+        && from_center.dot(axis).abs() <= 1e-9 * scale
+        && (from_center.length() - scale).abs() <= 1e-9 * scale
+    {
+        from_center.normalize().ok()?
+    } else {
+        return None;
+    };
+    let t = circle.project(circle.center() + toward * circle.radius());
+    Some((t, circle.evaluate(t)))
+}
+
 /// Where a closed plane-section ellipse on a cylinder or cone wall meets
 /// that wall's seam line (a line its outer wire uses twice): the ellipse's
 /// parameter there and the point.
@@ -3490,6 +3535,22 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Torus(t1), FaceSurface::Torus(t2)) => {
+            // Coaxial tori meet in circles about their axis; the marcher's
+            // dense chain around such a loop made its fit a dense solve over
+            // thousands of points.
+            match analytic_intersection::exact_torus_torus(t1, t2)? {
+                Some(exacts) => Ok(exact_raw_curves(exacts)),
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (FaceSurface::Cone(c1), FaceSurface::Cone(c2)) => {
             // Coaxial cones meet at a single circle that coincides with their
             // shared cap rim. Emit it as an exact Circle so the closed-circle
@@ -3995,6 +4056,31 @@ fn plane_cylinder_parallel_lines(
         });
     }
     Ok(results)
+}
+
+/// Exact section circles and ellipses as raw curves over their full turn.
+fn exact_raw_curves(exacts: Vec<analytic_intersection::ExactIntersectionCurve>) -> Vec<RawCurve> {
+    let domain = (0.0, std::f64::consts::TAU);
+    exacts
+        .into_iter()
+        .filter_map(|exact| match exact {
+            analytic_intersection::ExactIntersectionCurve::Circle(circle) => Some(RawCurve {
+                bbox: circle_bbox(&circle),
+                p_start: ParametricCurve::evaluate(&circle, domain.0),
+                p_end: ParametricCurve::evaluate(&circle, domain.1),
+                curve: EdgeCurve::Circle(circle),
+                t_range: domain,
+            }),
+            analytic_intersection::ExactIntersectionCurve::Ellipse(ellipse) => Some(RawCurve {
+                bbox: ellipse_bbox(&ellipse),
+                p_start: ParametricCurve::evaluate(&ellipse, domain.0),
+                p_end: ParametricCurve::evaluate(&ellipse, domain.1),
+                curve: EdgeCurve::Ellipse(ellipse),
+                t_range: domain,
+            }),
+            analytic_intersection::ExactIntersectionCurve::Points(_) => None,
+        })
+        .collect()
 }
 
 /// Analytic-analytic surface intersection using marching.

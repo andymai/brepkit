@@ -43,7 +43,7 @@ use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic, sample_wire_lo
 use special_cases::{
     split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
     split_periodic_face_into_sectors, split_torus_band_by_arrangement,
-    try_split_crossing_plane_face, try_split_disk_by_chords,
+    split_torus_by_coaxial_circles, try_split_crossing_plane_face, try_split_disk_by_chords,
 };
 
 /// Number of probe points (plus one for the closing sample) walked along a
@@ -5347,6 +5347,21 @@ fn split_face_2d_impl(
             split_torus_band_by_arrangement(&surface, sections, rank, reversed, face_id, tol.linear)
     {
         return band;
+    }
+
+    if matches!(surface, FaceSurface::Torus(_))
+        && original_inner_wires.is_empty()
+        && let Some(bands) = split_torus_by_coaxial_circles(
+            &surface,
+            &boundary_edges,
+            sections,
+            rank,
+            reversed,
+            face_id,
+            tol.linear,
+        )
+    {
+        return bands;
     }
 
     // Seam-anchor a winding section chain: a chain that winds the periodic

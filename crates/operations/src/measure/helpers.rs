@@ -549,3 +549,108 @@ pub(super) fn traversal_spans(
         spans.into_iter().rev().map(|(a, b)| (b, a)).collect()
     }
 }
+
+/// The tube-angle range `(v0, v1)`, `v0 < v1 < v0 + 2 pi`, of a torus band
+/// bounded by two closed rim circles at distinct `v` and seamed by open arcs
+/// along a meridian: of the two arcs of `v` between the rims, the one holding
+/// a seam arc's middle (open arcs run counterclockwise from their start
+/// vertex). `None` for any other torus face.
+pub(super) fn torus_band_v_range(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<(f64, f64)>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::TAU;
+
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let mut rims: Vec<f64> = Vec::new();
+    let mut middle: Option<f64> = None;
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let EdgeCurve::Circle(circle) = edge.curve() else {
+            return Ok(None);
+        };
+        let start = topo.vertex(edge.start())?.point();
+        if edge.start() == edge.end() {
+            if circle.normal().cross(torus.z_axis()).length() > 1e-9 {
+                return Ok(None);
+            }
+            let (_, v) = torus.project_point(start);
+            rims.push(v.rem_euclid(TAU));
+        } else {
+            let end = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(f64::midpoint(t0, t1), start, end);
+            middle = Some(torus.project_point(mid).1.rem_euclid(TAU));
+        }
+    }
+    let ([a, b], Some(m)) = (rims.as_slice(), middle) else {
+        return Ok(None);
+    };
+    let (lo, hi) = if a < b { (*a, *b) } else { (*b, *a) };
+    if hi - lo < 1e-9 {
+        return Ok(None);
+    }
+    Ok(Some(if lo < m && m < hi {
+        (lo, hi)
+    } else {
+        (hi, lo + TAU)
+    }))
+}
+
+/// The ring-angle range `(u0, u1)`, `u0 < u1 < u0 + 2 pi`, of a torus sector
+/// bounded by two tube cross-sections (meridian circles) and seamed by open
+/// arcs along a latitude: of the two arcs of `u` between the cross-sections,
+/// the one holding a seam arc's middle. `None` for any other torus face.
+pub(super) fn torus_sector_u_range(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<(f64, f64)>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::TAU;
+
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let mut rims: Vec<f64> = Vec::new();
+    let mut middle: Option<f64> = None;
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let EdgeCurve::Circle(circle) = edge.curve() else {
+            return Ok(None);
+        };
+        let start = topo.vertex(edge.start())?.point();
+        if edge.start() == edge.end() {
+            if circle.normal().dot(torus.z_axis()).abs() > 1e-9 {
+                return Ok(None);
+            }
+            let (u, _) = torus.project_point(circle.center());
+            rims.push(u.rem_euclid(TAU));
+        } else {
+            let end = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(f64::midpoint(t0, t1), start, end);
+            middle = Some(torus.project_point(mid).0.rem_euclid(TAU));
+        }
+    }
+    let ([a, b], Some(m)) = (rims.as_slice(), middle) else {
+        return Ok(None);
+    };
+    let (lo, hi) = if a < b { (*a, *b) } else { (*b, *a) };
+    if hi - lo < 1e-9 {
+        return Ok(None);
+    }
+    Ok(Some(if lo < m && m < hi {
+        (lo, hi)
+    } else {
+        (hi, lo + TAU)
+    }))
+}

@@ -46,7 +46,10 @@ pub fn exact_plane_analytic(
         AnalyticSurface::Sphere(sphere) => exact_plane_sphere(sphere, plane_normal, plane_d),
         AnalyticSurface::Cone(cone) => exact_plane_cone(cone, plane_normal, plane_d),
         AnalyticSurface::Torus(torus) => {
-            // Torus intersections are degree-4 — fall back to sampling.
+            if let Some(circles) = exact_plane_torus(torus, plane_normal, plane_d)? {
+                return Ok(circles);
+            }
+            // Other torus sections are degree-4 — fall back to sampling.
             let chains = sample_plane_torus(torus, plane_normal, plane_d)?;
             Ok(chains
                 .into_iter()
@@ -54,6 +57,57 @@ pub fn exact_plane_analytic(
                 .collect())
         }
     }
+}
+
+/// The plane-torus sections that are circles:
+///
+/// - a plane across the axis at height `h` from the centre, `|h| < r`: the
+///   two circles of radius `R ± sqrt(r² − h²)` about the axis;
+/// - a plane through the axis: the two tube cross-sections of radius `r`,
+///   `R` either side of the axis.
+///
+/// `Some` of no curves for a plane across the axis that misses the tube;
+/// `None` for any other plane, a plane tangent to the tube, or a torus whose
+/// tube reaches its axis.
+fn exact_plane_torus(
+    torus: &ToroidalSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let len = normal.length();
+    let n = normal.normalize()?;
+    let d = d / len;
+    let axis = torus.z_axis();
+    let center = torus.center();
+    let (big, small) = (torus.major_radius(), torus.minor_radius());
+    let height = d - dot_np(n, center);
+    let along = n.dot(axis);
+    if along.abs() > 1.0 - 1e-10 {
+        if height.abs() >= small - 1e-10 * small {
+            return Ok(if height.abs() > small + 1e-10 * small {
+                Some(Vec::new())
+            } else {
+                None
+            });
+        }
+        let reach = small.mul_add(small, -(height * height)).sqrt();
+        if big - reach <= 1e-10 * big {
+            return Ok(None);
+        }
+        let middle = center + n * height;
+        return Ok(Some(vec![
+            ExactIntersectionCurve::Circle(Circle3D::new(middle, n, big + reach)?),
+            ExactIntersectionCurve::Circle(Circle3D::new(middle, n, big - reach)?),
+        ]));
+    }
+    if along.abs() < 1e-10 && height.abs() < 1e-10 * (big + small) {
+        let out = axis.cross(n).normalize()?;
+        return Ok(Some(vec![
+            ExactIntersectionCurve::Circle(Circle3D::new(center + out * big, n, small)?),
+            ExactIntersectionCurve::Circle(Circle3D::new(center - out * big, n, small)?),
+        ]));
+    }
+    Ok(None)
 }
 
 /// Exact plane-cylinder intersection.
@@ -1551,6 +1605,58 @@ fn parallel_axis_torus_cylinder(
     Some(fit_ruling_loops(&loops, |p| {
         in_order(torus.project_point(p), cyl.project_point(p), torus_first)
     }))
+}
+
+/// Exact intersection of two tori sharing an axis: their tube cross-sections
+/// in a half-plane through the axis cross in up to two points, and each sweeps
+/// a circle about the axis.
+///
+/// `None` (defer to the marcher) unless the axes lie on one line, or when the
+/// cross-sections coincide or touch.
+///
+/// # Errors
+///
+/// Returns an error if a section circle cannot be built.
+pub fn exact_torus_torus(
+    first: &ToroidalSurface,
+    second: &ToroidalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let axis = first.z_axis();
+    let scale = first.major_radius() + second.major_radius();
+    let offset = second.center() - first.center();
+    if axis.cross(second.z_axis()).length() > 1e-9 || offset.cross(axis).length() > 1e-9 * scale {
+        return Ok(None);
+    }
+    let height = offset.dot(axis);
+    let (r1, r2) = (first.minor_radius(), second.minor_radius());
+    let (dx, dz) = (second.major_radius() - first.major_radius(), height);
+    let dist = dx.hypot(dz);
+    let slack = 1e-9 * scale;
+    if dist < slack || (dist - (r1 + r2)).abs() < slack || (dist - (r1 - r2).abs()).abs() < slack {
+        return Ok(None);
+    }
+    if dist > r1 + r2 || dist < (r1 - r2).abs() {
+        return Ok(Some(Vec::new()));
+    }
+    let along = r2.mul_add(-r2, r1.mul_add(r1, dist * dist)) / (2.0 * dist);
+    let across = r1.mul_add(r1, -(along * along)).max(0.0).sqrt();
+    let (ux, uz) = (dx / dist, dz / dist);
+    let mut circles = Vec::with_capacity(2);
+    for side in [1.0, -1.0] {
+        let rho = first.major_radius() + along * ux - side * across * uz;
+        let z = along * uz + side * across * ux;
+        // A crossing on or past the axis is no circle about it: leave the
+        // pair to the marcher rather than drop part of the section.
+        if rho <= slack {
+            return Ok(None);
+        }
+        circles.push(ExactIntersectionCurve::Circle(Circle3D::new(
+            first.center() + axis * z,
+            axis,
+            rho,
+        )?));
+    }
+    Ok(Some(circles))
 }
 
 /// Exact coaxial cone-cone intersection: returns the shared circle.

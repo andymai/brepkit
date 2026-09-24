@@ -9,7 +9,7 @@ use crate::tessellate;
 
 use super::helpers::{
     angular_range_from_wire_arcs, collect_solid_vertex_points, compute_angular_range,
-    planar_wire_signed_area2, traversal_spans,
+    planar_wire_signed_area2, torus_band_v_range, torus_sector_u_range, traversal_spans,
 };
 
 /// Volume of a solid that contains a bored quadric — a sphere (or torus) face
@@ -1338,15 +1338,17 @@ fn partial_torus_sector_volume(
         }
     }
 
-    // The band's seam: a non-closed Circle edge centred ON the axis. Its CCW
-    // start→end span is the swept angle.
+    // The band's seam: non-closed Circle edges centred ON the axis, run up
+    // and back. Their CCW start→end spans add up to the swept angle.
     let wire = topo.wire(face.outer_wire()).ok()?;
     let mut sweep: Option<f64> = None;
+    let mut seen: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
-        if edge.start() == edge.end() {
+        if edge.start() == edge.end() || seen.contains(&oe.edge()) {
             continue;
         }
+        seen.push(oe.edge());
         let brepkit_topology::edge::EdgeCurve::Circle(c) = edge.curve() else {
             continue;
         };
@@ -1363,11 +1365,7 @@ fn partial_torus_sector_volume(
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
         let delta = (c.project(ep) - c.project(sp)).rem_euclid(TAU);
-        match sweep {
-            None => sweep = Some(delta),
-            Some(prev) if (prev - delta).abs() < 1e-9 => {}
-            Some(_) => return None,
-        }
+        sweep = Some(sweep.unwrap_or(0.0) + delta);
     }
     let du = sweep?;
     if !(1e-12..=TAU - 1e-12).contains(&du) {
@@ -2768,9 +2766,12 @@ fn analytic_torus_signed_volume(
         }
     }
 
+    // A sector between two tube cross-sections covers the whole tube, over
+    // the ring angle its seam runs along.
+    let sector = torus_sector_u_range(topo, face, tor)?;
     let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
     let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    if (v_max - v_min).abs() < 1e-15 {
+    if sector.is_none() && (v_max - v_min).abs() < 1e-15 {
         return Ok(0.0);
     }
 
@@ -2784,7 +2785,13 @@ fn analytic_torus_signed_volume(
     // (e.g. a fillet's concave quarter rim, whose endpoints are 270° apart but
     // whose band is the 90° short side), so decline and fall back to
     // tessellation rather than integrate the wrong portion.
-    let (v_min, v_max) = {
+    // A band seamed along a meridian says by its seam which side it covers.
+    let seamed = torus_band_v_range(topo, face, tor)?;
+    let (v_min, v_max) = if sector.is_some() {
+        (0.0, std::f64::consts::TAU)
+    } else if let Some(range) = seamed {
+        range
+    } else {
         let mut sorted = v_vals.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         sorted.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
@@ -2802,7 +2809,7 @@ fn analytic_torus_signed_volume(
         }
     };
 
-    let u_range = compute_angular_range(&mut u_vals);
+    let u_range = sector.unwrap_or_else(|| compute_angular_range(&mut u_vals));
 
     let big_r = tor.major_radius();
     let small_r = tor.minor_radius();

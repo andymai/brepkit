@@ -9,7 +9,7 @@ use crate::tessellate;
 
 use super::helpers::{
     collect_solid_face_ids, collect_wire_positions, compute_angular_range,
-    planar_wire_signed_area2, traversal_spans,
+    planar_wire_signed_area2, torus_band_v_range, torus_sector_u_range, traversal_spans,
 };
 
 /// Compute the area of a single face.
@@ -582,6 +582,12 @@ fn analytic_torus_face_area(
             });
         }
     };
+    // A sector seamed along a latitude says by its seam which way round the
+    // ring it runs, and covers the whole tube.
+    if let Some((u0, u1)) = torus_sector_u_range(topo, face, tor)? {
+        let tube = std::f64::consts::TAU * tor.major_radius();
+        return Ok(tor.minor_radius() * (u1 - u0) * tube);
+    }
     let wire = topo.wire(face.outer_wire())?;
 
     let mut u_vals = Vec::new();
@@ -645,6 +651,11 @@ fn analytic_torus_face_area(
     let u_range = compute_angular_range(&mut u_vals);
     let (u0, u1) = u_range;
 
+    // A band seamed along a meridian says by its seam which side it covers.
+    if let Some((v0, v1)) = torus_band_v_range(topo, face, tor)? {
+        v_min = v0;
+        v_max = v1;
+    }
     let big_r = tor.major_radius();
     let small_r = tor.minor_radius();
     let area =
