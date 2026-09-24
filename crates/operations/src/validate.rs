@@ -202,8 +202,8 @@ pub fn validate_solid_with_options(
             severity: Severity::Error,
             description: format!(
                 "Euler characteristic V-E+F = {euler} is invalid \
-                 (expected V-E+F = 2S+L with S={shells} shells and \
-                 L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
+                 (expected V-E+F = 2(S-g)+L for a genus g >= 0, with S={shells} \
+                 shells and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
             ),
         });
     }
