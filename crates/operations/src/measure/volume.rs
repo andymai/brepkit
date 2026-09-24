@@ -929,6 +929,9 @@ fn ball_less_caps_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         return None;
     }
     let mut ball: Option<(Point3, f64)> = None;
+    // A piece of a ball faces out of the sphere, so its sphere faces carry
+    // the shell's orientation: all reversed means the whole shell is.
+    let mut inverted: Option<bool> = None;
     // Each disc's outward unit normal and its plane's offset along it.
     let mut discs: Vec<(Vec3, f64)> = Vec::new();
     let mut on_sphere: Vec<Point3> = Vec::new();
@@ -936,6 +939,9 @@ fn ball_less_caps_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         let face = topo.face(fid).ok()?;
         match face.surface() {
             FaceSurface::Sphere(s) => {
+                if *inverted.get_or_insert_with(|| face.is_reversed()) != face.is_reversed() {
+                    return None;
+                }
                 if let Some((c, r)) = ball {
                     if (s.center() - c).length() > 1e-9 * r || (s.radius() - r).abs() > 1e-9 * r {
                         return None;
@@ -973,6 +979,11 @@ fn ball_less_caps_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         }
     }
     let (center, r) = ball?;
+    if inverted == Some(true) {
+        for disc in &mut discs {
+            *disc = (-disc.0, -disc.1);
+        }
+    }
     // A non-uniform scale moves the vertices off the stored sphere.
     if discs.is_empty()
         || on_sphere

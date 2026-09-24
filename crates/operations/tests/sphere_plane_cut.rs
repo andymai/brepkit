@@ -156,3 +156,33 @@ fn two_caps_of_one_ball_keep_both_volumes() {
         "volume {volume}, truth {truth}"
     );
 }
+
+/// A shell turned inside out still bounds the same piece of the ball.
+#[test]
+fn inverted_ball_piece_keeps_its_volume() {
+    let r = 3.0_f64;
+    for keep_below in [true, false] {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, r, 32).unwrap();
+        let lid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        transform_solid(&mut topo, lid, &Mat4::translation(-10.0, -10.0, 1.0)).unwrap();
+        let op = if keep_below {
+            BooleanOp::Cut
+        } else {
+            BooleanOp::Intersect
+        };
+        let piece = boolean(&mut topo, op, ball, lid).unwrap();
+        let before = solid_volume(&topo, piece, 0.01).unwrap();
+        for f in solid_faces(&topo, piece).unwrap() {
+            let face = topo.face_mut(f).unwrap();
+            let flipped = !face.is_reversed();
+            face.set_reversed(flipped);
+        }
+        let after = solid_volume(&topo, piece, 0.01).unwrap();
+        assert!(
+            (after - before).abs() < 1e-9 * before,
+            "keeping {}: volume {after} after inverting, {before} before",
+            if keep_below { "below" } else { "above" }
+        );
+    }
+}
