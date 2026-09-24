@@ -2545,9 +2545,6 @@ fn circle_arc_plane_crossings(
     out
 }
 
-/// Crossing of a line SEGMENT `[sp, ep]` with the plane `normal·p = d`.
-/// Returns the point for the root parameter `s ∈ [0, 1]`, or `None` if the
-/// segment is parallel to the plane or crosses outside `[0, 1]`.
 /// Whether the line through `p0` and `p1`, lying in a planar face's plane,
 /// misses the region of the single closed circle or ellipse bounding that
 /// face. `false` for any other face.
@@ -2638,6 +2635,9 @@ fn ellipse_seam_crossing(
     None
 }
 
+/// Crossing of a line SEGMENT `[sp, ep]` with the plane `normal·p = d`.
+/// Returns the point for the root parameter `s ∈ [0, 1]`, or `None` if the
+/// segment is parallel to the plane or crosses outside `[0, 1]`.
 fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> Option<Point3> {
     let dir = ep - sp;
     let denom = dir.dot(normal);

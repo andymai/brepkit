@@ -9,7 +9,7 @@ use crate::tessellate;
 
 use super::helpers::{
     angular_range_from_wire_arcs, collect_solid_vertex_points, compute_angular_range,
-    planar_wire_signed_area2,
+    planar_wire_signed_area2, traversal_spans,
 };
 
 /// Volume of a solid that contains a bored quadric — a sphere (or torus) face
@@ -1994,54 +1994,6 @@ fn wire_box(
         }
     }
     Ok(b)
-}
-
-/// Parameter spans that walk `edge` from its traversal-start vertex to its
-/// traversal-end vertex. `domain_with_endpoints` gives a whole NURBS edge its
-/// curve's own domain even where the curve runs from the edge's end vertex,
-/// and a closed edge the span from its curve's origin; either would walk a
-/// wire out of order in the unwrapped `(u, v)` plane.
-fn traversal_spans(
-    edge: &brepkit_topology::edge::Edge,
-    forward: bool,
-    sp: Point3,
-    ep: Point3,
-) -> Vec<(f64, f64)> {
-    use brepkit_topology::edge::EdgeCurve;
-
-    let curve = edge.curve();
-    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
-    let spans = if edge.start() == edge.end() {
-        match curve {
-            EdgeCurve::Circle(c) => {
-                let tv = c.project(sp);
-                vec![(tv, tv + (t1 - t0))]
-            }
-            EdgeCurve::Ellipse(e) => {
-                let tv = e.project(sp);
-                vec![(tv, tv + (t1 - t0))]
-            }
-            EdgeCurve::NurbsCurve(n) => {
-                match brepkit_math::nurbs::projection::project_point_to_curve(n, sp, 1e-9) {
-                    Ok(hit) => vec![(hit.parameter, t1), (t0, hit.parameter)],
-                    Err(_) => vec![(t0, t1)],
-                }
-            }
-            EdgeCurve::Line => vec![(t0, t1)],
-        }
-    } else {
-        let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
-        if (at(t0) - sp).length() <= (at(t0) - ep).length() {
-            vec![(t0, t1)]
-        } else {
-            vec![(t1, t0)]
-        }
-    };
-    if forward {
-        spans
-    } else {
-        spans.into_iter().rev().map(|(a, b)| (b, a)).collect()
-    }
 }
 
 /// Exact signed volume contribution of a cylindrical face via the

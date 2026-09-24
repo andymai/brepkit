@@ -8,7 +8,8 @@ use brepkit_topology::solid::SolidId;
 use crate::tessellate;
 
 use super::helpers::{
-    collect_solid_face_ids, collect_wire_positions, compute_angular_range, planar_wire_signed_area2,
+    collect_solid_face_ids, collect_wire_positions, compute_angular_range,
+    planar_wire_signed_area2, traversal_spans,
 };
 
 /// Compute the area of a single face.
@@ -232,8 +233,6 @@ fn wire_uv_area_on_cylinder(
     const SEGMENTS: usize = 16;
     const ORDER: usize = 8;
     let axis = cyl.axis();
-    let origin = cyl.origin();
-    let v_of = |p: Point3| axis.dot(p - origin);
     let u_near = |p: Point3, near: Option<f64>| {
         let (u, _) = cyl.project_point(p);
         near.map_or(u, |n| u - ((u - n + PI) / TAU).floor() * TAU)
@@ -247,46 +246,32 @@ fn wire_uv_area_on_cylinder(
         let start = topo.vertex(edge.start())?.point();
         let end = topo.vertex(edge.end())?.point();
         let curve = edge.curve();
-        let (t0, t1) = curve.domain_with_endpoints(start, end);
-        // A closed conic's domain starts at its frame's origin; walk it from
-        // its vertex so the wire's u stays continuous.
-        let (t0, t1) = match curve {
-            EdgeCurve::Circle(c) if edge.start() == edge.end() => {
-                let tv = c.project(start);
-                (tv, tv + (t1 - t0))
-            }
-            EdgeCurve::Ellipse(e) if edge.start() == edge.end() => {
-                let tv = e.project(start);
-                (tv, tv + (t1 - t0))
-            }
-            _ => (t0, t1),
-        };
-        let (ta, tb) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
         let at = |t: f64| curve.evaluate_with_endpoints(t, start, end);
-        let mut u_prev = u_near(at(ta), last_u);
-        if first_u.is_none() {
-            first_u = Some(u_prev);
-        }
-        #[allow(clippy::cast_precision_loss)]
-        for seg in 0..SEGMENTS {
-            let a = ta + (tb - ta) * seg as f64 / SEGMENTS as f64;
-            let b = ta + (tb - ta) * (seg + 1) as f64 / SEGMENTS as f64;
-            let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
-            let h = 1e-6 * half.abs().max(1e-12);
-            for gp in points {
-                let t = mid + half * gp.x;
-                let u = u_near(at(t), Some(u_prev));
-                let dv = match curve {
-                    EdgeCurve::Line => axis.dot(end - start),
-                    EdgeCurve::Circle(c) => c.radius() * axis.dot(c.tangent(t)),
-                    EdgeCurve::Ellipse(e) => axis.dot(e.tangent(t)),
-                    EdgeCurve::NurbsCurve(_) => (v_of(at(t + h)) - v_of(at(t - h))) / (2.0 * h),
-                };
-                sum += gp.w * half * u * dv;
-                u_prev = u;
+        for (ta, tb) in traversal_spans(edge, oe.is_forward(), start, end) {
+            let mut u_prev = u_near(at(ta), last_u);
+            if first_u.is_none() {
+                first_u = Some(u_prev);
             }
+            #[allow(clippy::cast_precision_loss)]
+            for seg in 0..SEGMENTS {
+                let a = ta + (tb - ta) * seg as f64 / SEGMENTS as f64;
+                let b = ta + (tb - ta) * (seg + 1) as f64 / SEGMENTS as f64;
+                let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
+                for gp in points {
+                    let t = mid + half * gp.x;
+                    let u = u_near(at(t), Some(u_prev));
+                    let dv = match curve {
+                        EdgeCurve::Line => axis.dot(end - start),
+                        EdgeCurve::Circle(c) => c.radius() * axis.dot(c.tangent(t)),
+                        EdgeCurve::Ellipse(e) => axis.dot(e.tangent(t)),
+                        EdgeCurve::NurbsCurve(nc) => axis.dot(nc.derivatives(t, 1)[1]),
+                    };
+                    sum += gp.w * half * u * dv;
+                    u_prev = u;
+                }
+            }
+            last_u = Some(u_near(at(tb), Some(u_prev)));
         }
-        last_u = Some(u_near(at(tb), Some(u_prev)));
     }
     Ok(match (first_u, last_u) {
         (Some(a), Some(b)) if (a - b).abs() <= 1e-6 => Some(sum),

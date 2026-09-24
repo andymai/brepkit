@@ -1070,21 +1070,10 @@ pub(super) fn tessellate_face_with_shared_edges(
                 topo.edge(oe.edge())
                     .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_)))
             });
-            // The structured band also handles wavy mixed rims (winding-chain
-            // separators carry marched-NURBS pieces); it verifies the cycle
-            // structure itself and declines anything else.
-            let be = lc
-                || wire.edges().iter().all(|oe| {
-                    topo.edge(oe.edge()).is_ok_and(|e| {
-                        matches!(
-                            e.curve(),
-                            EdgeCurve::Line
-                                | EdgeCurve::Circle(_)
-                                | EdgeCurve::Ellipse(_)
-                                | EdgeCurve::NurbsCurve(_)
-                        )
-                    })
-                });
+            // The structured band takes any rim, wavy mixed ones included
+            // (winding-chain separators carry marched-NURBS pieces); it
+            // verifies the cycle structure itself and declines anything else.
+            let be = wire.edges().iter().all(|oe| topo.edge(oe.edge()).is_ok());
             (lc, be)
         };
         let is_standard_rect =

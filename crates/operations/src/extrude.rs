@@ -207,11 +207,15 @@ pub fn split_closed_edge(
     let edge = topo.edge(edge_id)?;
     let start_vid = edge.start();
     let curve = edge.curve().clone();
+    let start = topo.vertex(start_vid)?.point();
 
+    // A conic's vertex need not sit at its frame's origin (a plane section
+    // starts where it meets its wall's seam), so the turn runs from it.
+    let turn_from = |t: f64| (t, t + std::f64::consts::TAU);
     let (u0, u1) = match &curve {
         EdgeCurve::NurbsCurve(nc) => nc.domain(),
-        EdgeCurve::Circle(_) => (0.0, std::f64::consts::TAU),
-        EdgeCurve::Ellipse(_) => (0.0, std::f64::consts::TAU),
+        EdgeCurve::Circle(c) => turn_from(c.project(start)),
+        EdgeCurve::Ellipse(e) => turn_from(e.project(start)),
         EdgeCurve::Line => {
             // Lines can't be closed with start==end in a meaningful way.
             return Ok(vec![edge_id]);
