@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790224874840,
+  "lastUpdate": 1790228526801,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36071,6 +36071,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42263614,
             "range": "± 116315",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b48f771e714823111ed2b879f40bb4f3662157fb",
+          "message": "feat(operations): make assemblies stable (#1692)\n\n## What was wrong\n\n`Assembly::flatten` emitted only leaf components. A component with\nchildren lost its own solid, and the bounding box skipped it, while the\nbill of materials still counted it.\n\nComponents lived in a `HashMap`, so the bill of materials used hash\norder. A shared solid's entry took the name of whichever component the\nhash visited first.\n\nBounding boxes transformed the eight corners of each instance's local\nbox, producing loose bounds for rotated instances. A cylinder spun 45\ndegrees about its own axis reported a box reaching `sqrt(2)` times its\nradius. Empty assemblies returned an inverted box with an `f64::MAX`\nminimum instead of an error.\n\n## What this does\n\n- Stores components in a `Vec` indexed by ID.\n- Flattens every component in tree order: roots follow insertion order,\nwith each component before its children.\n- Produces the bill of materials in the same order, names each entry\nafter its first component, and counts every instance.\n- Adds public `measure::solid_bounding_box_transformed(topo, solid,\n&Mat4)`, which bounds a solid in a placed frame without copying it.\nConic edge extremes, NURBS edge hulls, and whole-sphere and whole-torus\nextents are evaluated in that frame.\n- Uses the transformed solid bounding box for assemblies and returns an\nerror for an empty assembly.\n- Marks Assemblies as Stable in the README, removes assemblies from the\nBeta subsystems limitation, and records the roadmap close.\n- This PR is stacked on `fix/transform-surface-frames`, the analytic\nsurface frames fix. Merge that first.\n\n## Verification\n\n- An oracle test compares transformed-frame bounds against a transformed\ncopy for a box, cylinder, sphere, torus, and arc-cornered extrusion\nunder translation, rotation, compound rotation, and rotation with\nuniform scale, to `1e-9`.\n- Tests cover tree-order flattening with a parent's own solid, a\nsix-link `world_transform` chain, parent-after-child transform order\nunder rotation, bill of materials ordering and names, a tight\nspun-cylinder box, and empty-assembly errors.\n- A wasm test pins flattened JSON and bill of materials order through\nthe bindings.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes assembly flattening, bill of materials, and bounding boxes so\ngeometry, counts, and bounds agree. Assembly behavior is now\ndeterministic, and assemblies are marked Stable.\n\n**Bug Fixes**\n- `flatten` placed only leaf components, dropping a parent's own solid;\nit now places every component once, before its children.\n- Bill of materials entries and names followed `HashMap` order; they now\nfollow tree order and take the first component's name.\n- The assembly box transformed the corners of each instance's local box\n(a cylinder spun 45° reported `sqrt(2)` times its radius); new\n`measure::solid_bounding_box_transformed` bounds each instance in its\nplaced frame.\n- Empty assemblies now return an error instead of an inverted box with\nan `f64::MAX` minimum.\n\n**Refactors**\n- Components moved from a `HashMap` to a `Vec` indexed by insertion\norder.\n- Assemblies are marked Stable in the README, removed from the Beta\nsubsystems list, and the roadmap entry is closed.\n- Tests pin the transformed box against a transformed copy under\nrotation, uniform and non-uniform scale, shear, and mirror.\n- A wasm test pins flattened JSON and bill of materials order through\nthe bindings.\n- This PR is stacked on `fix/transform-surface-frames`; merge that\nfirst.\n\n<sup>Written for commit 0b498957082bc52e30160d848549e0db2edb7516.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1692?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-23T22:40:07-07:00",
+          "tree_id": "9f50e69cc63303cb3fb0f22e12789f20417f57fe",
+          "url": "https://github.com/andymai/brepkit/commit/b48f771e714823111ed2b879f40bb4f3662157fb"
+        },
+        "date": 1790228523309,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 537993,
+            "range": "± 1177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 590993,
+            "range": "± 1931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7848,
+            "range": "± 166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 399149,
+            "range": "± 11292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26408260,
+            "range": "± 143197",
             "unit": "ns/iter"
           }
         ]
