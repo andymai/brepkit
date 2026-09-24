@@ -1,0 +1,61 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_b4eefc0fdeab64 658,747-748,753,758-788,821-825,853-870,882-886
+  s_ba2f7b5c6902b6::t_5e5028207a7f76 614,619-622,738-739
+  s_ba2f7b5c6902b6::t_fe68d0f251d6ac 616
+  s_ba2f7b5c6902b6::t_5739c642134501 3387-3393
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_45b87f9e56ce24 174,193-206
+  s_ba2f7b5c6902b6::t_f20563e02e1937 175
+  s_ba2f7b5c6902b6::t_6953d315082d05 207
+crates/operations/tests/torus_plane_cut.rs
+  s_ba2f7b5c6902b6::t_10d980857d920b 6-7,249,251-252,254,257,259,262-263,266,288,292-311,314-316,333-335,337-367,386-395,412-417,422-425,427,429-430,432-436,458-477,503,507-508,510,513,523-535,548-549
+  s_ba2f7b5c6902b6::t_6b96cea887bfd2 24,368-385,418-421,437-457,551-556
+  s_ba2f7b5c6902b6::t_06b8b5869c4f12 289-291,336
+  s_ba2f7b5c6902b6::t_95501a8321a2b1 272-287,312-313,317-332,396-411,479-502,504-506,509,512,514-522,536-547
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_054761b45d9389 4746-4747
+  s_ba2f7b5c6902b6::t_714c9189750041 4606-4609,4661-4662,4668-4669,4705-4745
+  s_ba2f7b5c6902b6::t_5e5028207a7f76 4549-4553,4602,4604,4611
+  s_ba2f7b5c6902b6::t_62967496f4917b 5530-5543
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_005a717e6e7d9d 2717-2725
+  s_ba2f7b5c6902b6::t_33d889cead2cbc 1610-1611,1618-1619
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_8e006c4af82e9e 1049-1097
+  s_ba2f7b5c6902b6::t_70554ec4f92c06 52-57
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_9c840c5d6d463a 358-359
+  s_ba2f7b5c6902b6::t_005a717e6e7d9d 130-133,300-329
+  s_ba2f7b5c6902b6::t_97610e62ea8681 203-205,242,295,330-357,438-446,474,510,514,517-518,520
+  s_ba2f7b5c6902b6::t_90498b3b56e968 475-476,478-488,491-494
+  s_ba2f7b5c6902b6::t_8b19b07d6aaeec 489-490
+  s_ba2f7b5c6902b6::t_56bfdf09efc17c 330-334,336-357
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_ba2f7b5c6902b6::t_8b5f253b3c94fa 1122-1130,1132-1138
+  s_ba2f7b5c6902b6::t_e94f8fda47e22e 1107-1121,1131,1139-1142,1144,1146-1172
+  s_ba2f7b5c6902b6::t_7a6f8a834cd222 1262-1263,1284-1287
+  s_ba2f7b5c6902b6::t_1b4129bb962c06 1143,1145,1189-1191,1194,1200
+  s_ba2f7b5c6902b6::t_f20563e02e1937 991,1173
+  s_ba2f7b5c6902b6::t_43f8c97d753085 1931-2023,2601-2614,2680-2682,2812-2814
+crates/operations/tests/ball_and_ring_drills.rs
+  s_ba2f7b5c6902b6::t_95501a8321a2b1 12,140-156
+  s_ba2f7b5c6902b6::t_fe8b1f36e21677 157
+crates/algo/src/builder/mod.rs
+  s_ba2f7b5c6902b6::t_43619db1d445d0 1070-1076,1078,1087
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7d02dc9f0c5afc7fc9bedfea9b8d9e6c0826e9d7",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
