@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790224312064,
+  "lastUpdate": 1790224874840,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36017,6 +36017,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42162424,
             "range": "± 198475",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0df1ac54134d4af24dbaa50fc84198fcbd7d1195",
+          "message": "chore(main): release 3.4.19 (#1695)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[3.4.19](https://github.com/andymai/brepkit/compare/v3.4.18...v3.4.19)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **operations:** keep analytic surface frames under transform\n([#1691](https://github.com/andymai/brepkit/issues/1691))\n([bd547fa](https://github.com/andymai/brepkit/commit/bd547fa8fbf4760c54a624ce4cc48093e1089d67))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 3.4.19, which fixes a bug where analytic surface frames\nwere lost when applying transforms in operations.\n\n<sup>Written for commit 1233003cdf3c489c3696322ee7d7710248f19518.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1695?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T04:38:47Z",
+          "tree_id": "d4d19c50c27687416736e25675834360f0815aa1",
+          "url": "https://github.com/andymai/brepkit/commit/0df1ac54134d4af24dbaa50fc84198fcbd7d1195"
+        },
+        "date": 1790224870676,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000464,
+            "range": "± 9794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1080919,
+            "range": "± 4638",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13211,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 749148,
+            "range": "± 3832",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42263614,
+            "range": "± 116315",
             "unit": "ns/iter"
           }
         ]
