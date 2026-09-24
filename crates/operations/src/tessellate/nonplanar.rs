@@ -2872,7 +2872,7 @@ pub(super) fn tessellate_holed_face_local(
         }
     }
     let meshed = match face_data.surface() {
-        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Nurbs(_) => {
             tessellate_nonplanar_cdt(
                 topo,
                 face_id,
@@ -2895,7 +2895,7 @@ pub(super) fn tessellate_holed_face_local(
             &mut merged,
             &mut point_to_global,
         )?,
-        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => false,
+        FaceSurface::Plane { .. } => false,
     };
     if !meshed {
         merged.indices.clear();

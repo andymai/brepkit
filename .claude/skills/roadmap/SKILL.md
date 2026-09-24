@@ -180,12 +180,22 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 
 
-| **Stable row defect: per-face NURBS meshes ignore the trim** | `tessellate::tessellate` meshes a NURBS face over its whole surface, so `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY writers read a trimmed NURBS face as its whole patch (a converted napkin ring: `solid_volume` 1613 against 587.7). A trimmed CDT for NURBS faces whose boundary leaves the domain edges is parked on branch `wip/per-face-nurbs-trim`. It waits on `sweep_smooth`: its rail edges are straight chords between the first and last rings while the side surfaces curve along the path, so a trimmed mesh follows the chords (a quarter-circle sweep reads 6.87 against 7.85); build its rails as #1700 built `loft_smooth`'s. The parked branch also holds a surface-measured refinement of long interior edges that moved an uneven loft's mesh 0.3% off its exact 32.0686, unexplained |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Per-face NURBS meshes ignored the trim (CLOSED 2026-09-24; pins in `crates/operations/tests/bspline_conversion_mesh.rs`)**:
+  `tessellate::tessellate` meshed a NURBS face over its whole surface, so
+  `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY
+  writers read a trimmed face as its whole patch (the converted napkin
+  ring: `solid_volume` 1613 against 587.7). A NURBS face whose boundary
+  leaves its surface's domain edges now meshes through the trimmed CDT,
+  587.60. The analytic sphere `face_area` never subtracted a face's holes
+  (the unconverted ring read 648.28 against 587.67); a hole takes
+  `R² |∮ sin v du|`, or the cap beyond it when it winds round the pole. The
+  L-lip fuse's `solid_volume` pin moved with the meshes, 28993 to 29034.
 
 - **Drills into a ball and a ring, a pocket into a pointed cone (CLOSED 2026-09-24; pins in `crates/operations/tests/ball_and_ring_drills.rs` and `cone_pocket.rs`)**:
   `make_sphere(2, 16)` less an r=0.2 drill from (0.5, 0, 1) up and
