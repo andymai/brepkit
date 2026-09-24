@@ -29,7 +29,8 @@ impl EdgeCurve {
     ///
     /// A circle or ellipse runs counter-clockwise about its normal, so
     /// negating the normal and `v_axis` reverses it; a NURBS curve reverses
-    /// its control net and weights and mirrors its knot vector.
+    /// its control net and weights and mirrors its knot vector about its
+    /// domain.
     ///
     /// # Errors
     ///
@@ -54,8 +55,11 @@ impl EdgeCurve {
                 -e.v_axis(),
             )?),
             Self::NurbsCurve(nc) => {
+                // Mirror about the valid domain, which an unclamped knot
+                // vector's end knots overhang, so the domain maps onto itself.
+                let (d0, d1) = ParametricCurve::domain(nc);
+                let span = d0 + d1;
                 let knots = nc.knots();
-                let span = knots[0] + knots[knots.len() - 1];
                 Self::NurbsCurve(NurbsCurve::new(
                     nc.degree(),
                     knots.iter().rev().map(|&k| span - k).collect(),
@@ -512,17 +516,33 @@ mod tests {
         let EdgeCurve::NurbsCurve(n) = open_nurbs() else {
             unreachable!()
         };
-        let EdgeCurve::NurbsCurve(r) = EdgeCurve::NurbsCurve(n.clone()).reversed().unwrap() else {
-            unreachable!()
-        };
-        let (d0, d1) = ParametricCurve::domain(&n);
-        for f in [0.0, 0.3, 0.8, 1.0] {
-            let t = d0 + f * (d1 - d0);
-            let (a, b) = (
-                ParametricCurve::evaluate(&n, t),
-                ParametricCurve::evaluate(&r, d0 + d1 - t),
-            );
-            assert!((a - b).length() < 1e-12, "{a:?} vs {b:?}");
+        let unclamped = NurbsCurve::new(
+            2,
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(3.0, 2.0, 1.0),
+                Point3::new(4.0, 0.0, 0.0),
+            ],
+            vec![1.0, 0.8, 1.2, 1.0],
+        )
+        .unwrap();
+        for n in [n, unclamped] {
+            let EdgeCurve::NurbsCurve(r) = EdgeCurve::NurbsCurve(n.clone()).reversed().unwrap()
+            else {
+                unreachable!()
+            };
+            let (d0, d1) = ParametricCurve::domain(&n);
+            assert_eq!(ParametricCurve::domain(&r), (d0, d1));
+            for f in [0.0, 0.3, 0.8, 1.0] {
+                let t = d0 + f * (d1 - d0);
+                let (a, b) = (
+                    ParametricCurve::evaluate(&n, t),
+                    ParametricCurve::evaluate(&r, d0 + d1 - t),
+                );
+                assert!((a - b).length() < 1e-12, "{a:?} vs {b:?}");
+            }
         }
     }
 }
