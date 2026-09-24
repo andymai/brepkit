@@ -254,9 +254,22 @@ pub fn project_point_to_surface(
     let v_min = knots_v[pv];
     let v_max = knots_v[knots_v.len() - pv - 1];
 
+    // Wrapping lets Newton cross a closed direction's seam from a seed on
+    // the far copy of it; where the seam has a kink it can bounce across
+    // without converging, so a failed wrapped solve retries clamped.
+    let wraps = surface.is_periodic_u() || surface.is_periodic_v();
     let (u_final, v_final, pt_final) = surface_newton_refine(
-        surface, point, u_guess, v_guess, u_min, u_max, v_min, v_max, tolerance,
-    )?;
+        surface, point, u_guess, v_guess, u_min, u_max, v_min, v_max, tolerance, wraps,
+    )
+    .or_else(|err| {
+        if wraps {
+            surface_newton_refine(
+                surface, point, u_guess, v_guess, u_min, u_max, v_min, v_max, tolerance, false,
+            )
+        } else {
+            Err(err)
+        }
+    })?;
     let dist = (pt_final - point).length();
 
     Ok(SurfaceProjection {
@@ -318,6 +331,7 @@ fn surface_newton_refine(
     v_min: f64,
     v_max: f64,
     tolerance: f64,
+    wrap_closed: bool,
 ) -> Result<(f64, f64, Point3), MathError> {
     let mut u = u_init;
     let mut v = v_init;
@@ -333,7 +347,10 @@ fn surface_newton_refine(
             (next, next - x)
         }
     };
-    let (closed_u, closed_v) = (surface.is_periodic_u(), surface.is_periodic_v());
+    let (closed_u, closed_v) = (
+        wrap_closed && surface.is_periodic_u(),
+        wrap_closed && surface.is_periodic_v(),
+    );
 
     for _ in 0..MAX_ITERATIONS {
         let ders = surface.derivatives(u, v, 1);

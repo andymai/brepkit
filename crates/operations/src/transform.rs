@@ -78,11 +78,12 @@ fn transform_topology(
         let new_point = matrix.mul_point(vertex.point());
         vertex.set_point(new_point);
     }
-    transform_edges(topo, edge_ids, matrix)?;
+    let moved_origins = transform_edges(topo, edge_ids, matrix)?;
     if matrix.determinant() < 0.0 {
         reverse_face_wires(topo, face_ids)?;
     }
     topo.pcurves_mut().remove_faces(&stale_pcurves);
+    topo.pcurves_mut().remove_edges(&moved_origins);
     Ok(())
 }
 
@@ -260,21 +261,32 @@ fn revolution_scale(x: Vec3, y: Vec3, z: Vec3) -> Option<f64> {
     .then_some(s)
 }
 
-/// Transform a single face's surface to its exact image under `matrix`.
+/// The image of one face's surface under an affine map.
+pub(crate) struct SurfaceImage {
+    /// The mapped surface.
+    pub surface: FaceSurface,
+    /// Whether the face's `(u, v)` parameterization carries over unchanged,
+    /// i.e. whether its stored pcurves remain valid.
+    pub keeps_parameterization: bool,
+    /// Whether the face's `reversed` flag must flip to keep it outward: a
+    /// NURBS normal is the cross product of its partials, which a mirror
+    /// turns inward.
+    pub flips_face: bool,
+}
+
+/// The exact image of face `fid`'s surface under `matrix`.
 ///
-/// Reads the face's boundary vertices in their untransformed positions (the
-/// NURBS fallbacks take their parameter range from them). Returns whether
-/// the face's `(u, v)` parameterization is carried over unchanged, i.e.
-/// whether its stored pcurves remain valid.
+/// Reads the face's boundary in its untransformed position (the NURBS
+/// fallbacks take their parameter range from it).
 #[allow(clippy::too_many_lines)]
-fn transform_face_surface(
-    topo: &mut Topology,
+pub(crate) fn surface_image(
+    topo: &Topology,
     fid: FaceId,
     matrix: &Mat4,
     inverse: &Mat4,
-) -> Result<bool, crate::OperationsError> {
+) -> Result<SurfaceImage, crate::OperationsError> {
     use brepkit_heal::construct::convert_surface::{
-        cone_to_nurbs, cylinder_to_nurbs, torus_to_nurbs,
+        cone_to_nurbs, cylinder_to_nurbs, sphere_band_to_nurbs, torus_to_nurbs,
     };
     use brepkit_math::surfaces::{
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
@@ -285,8 +297,6 @@ fn transform_face_surface(
         reason: format!("{what} failed: {e}"),
     };
     let face = topo.face(fid)?;
-    // A NURBS normal is the cross product of its partials, which a mirror
-    // turns inward; the face flag flips to keep the face's normal outward.
     let (surface, preserved) = match face.surface().clone() {
         FaceSurface::Plane { normal, d } => {
             let origin = brepkit_math::vec::Point3::new(0.0, 0.0, 0.0);
@@ -323,7 +333,7 @@ fn transform_face_surface(
                     !mirrored && nearly_equal(z.length(), 1.0),
                 )
             } else {
-                let v_range = analytic_face_v_range(topo, fid, |pt| cyl.project_point(pt).1)?;
+                let v_range = face_v_range(topo, fid, |pt| cyl.project_point(pt).1, None)?;
                 let nurbs = cylinder_to_nurbs(&cyl, v_range)
                     .map_err(|e| heal_err("cylinder_to_nurbs", e))?;
                 (
@@ -350,7 +360,7 @@ fn transform_face_surface(
                     !mirrored && nearly_equal(s, 1.0) && nearly_equal(z.length(), 1.0),
                 )
             } else {
-                let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
+                let v_range = face_v_range(topo, fid, |pt| cone.project_point(pt).1, Some(0.0))?;
                 let nurbs =
                     cone_to_nurbs(&cone, v_range).map_err(|e| heal_err("cone_to_nurbs", e))?;
                 (
@@ -370,8 +380,12 @@ fn transform_face_surface(
                 (FaceSurface::Sphere(image), !mirrored)
             } else {
                 let (v_min, v_max) = sphere_face_v_range(topo, fid, &sph)?;
-                let nurbs = sphere_to_transformed_nurbs(&sph, matrix, v_min, v_max)?;
-                (FaceSurface::Nurbs(nurbs), false)
+                let nurbs = sphere_band_to_nurbs(&sph, v_min, v_max)
+                    .map_err(|e| heal_err("sphere_band_to_nurbs", e))?;
+                (
+                    FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
+                    false,
+                )
             }
         }
         FaceSurface::Torus(tor) => {
@@ -393,40 +407,74 @@ fn transform_face_surface(
             }
         }
     };
-    let flip = mirrored && matches!(surface, FaceSurface::Nurbs(_));
+    let flips_face = mirrored && matches!(surface, FaceSurface::Nurbs(_));
+    Ok(SurfaceImage {
+        surface,
+        keeps_parameterization: preserved,
+        flips_face,
+    })
+}
+
+/// Transform a single face's surface to its exact image under `matrix`.
+/// Returns whether the face's stored pcurves remain valid.
+fn transform_face_surface(
+    topo: &mut Topology,
+    fid: FaceId,
+    matrix: &Mat4,
+    inverse: &Mat4,
+) -> Result<bool, crate::OperationsError> {
+    let image = surface_image(topo, fid, matrix, inverse)?;
     let face = topo.face_mut(fid)?;
-    if flip {
+    if image.flips_face {
         let reversed = face.is_reversed();
         face.set_reversed(!reversed);
     }
-    face.set_surface(surface);
-    Ok(preserved)
+    face.set_surface(image.surface);
+    Ok(image.keeps_parameterization)
 }
 
-/// Compute the v-parameter range for an analytic surface face.
-///
-/// Projects boundary vertices using `project_v` and returns (v_min, v_max).
-fn analytic_face_v_range(
+/// The v-parameter range a face's boundary covers, sampled along every edge
+/// of every wire and padded by a twentieth of its span on each side, so a
+/// NURBS patch built on it reaches past the face everywhere. `floor` keeps the
+/// padded range strictly above it (a cone's apex).
+fn face_v_range(
     topo: &Topology,
     face_id: FaceId,
     project_v: impl Fn(brepkit_math::vec::Point3) -> f64,
+    floor: Option<f64>,
 ) -> Result<(f64, f64), crate::OperationsError> {
     let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
     let mut v_min = f64::INFINITY;
     let mut v_max = f64::NEG_INFINITY;
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let pt = topo.vertex(edge.start())?.point();
-        let v = project_v(pt);
-        v_min = v_min.min(v);
-        v_max = v_max.max(v);
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let n = if matches!(edge.curve(), EdgeCurve::Line) {
+                1
+            } else {
+                32
+            };
+            for k in 0..=n {
+                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(n);
+                let v = project_v(edge.curve().evaluate_with_endpoints(t, sp, ep));
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+        }
     }
-    if v_min >= v_max {
-        v_min = 0.0;
-        v_max = 1.0;
+    if v_min.partial_cmp(&v_max) != Some(std::cmp::Ordering::Less) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("face {face_id:?} spans no parameter range along v"),
+        });
     }
-    Ok((v_min, v_max))
+    let pad = 0.05 * (v_max - v_min);
+    let low = floor.map_or(v_min - pad, |f| (v_min - pad).max(f64::midpoint(f, v_min)));
+    Ok((low, v_max + pad))
 }
 
 /// Transform a NURBS surface's control points by a matrix.
@@ -449,81 +497,69 @@ fn transform_nurbs_surface(
     )?)
 }
 
-/// Sample a spherical surface over a given v-range, transform the points
-/// with a matrix, and refit as a NURBS surface. This preserves the correct
-/// geometry when a non-uniform scale is applied (sphere → ellipsoid).
-#[allow(clippy::cast_precision_loss)]
-fn sphere_to_transformed_nurbs(
-    sph: &brepkit_math::surfaces::SphericalSurface,
+/// The image of an edge curve under `matrix`, and whether its parameter
+/// origin moved off the image of the old one (a conic re-expressed on new
+/// principal axes). Line geometry lives in the vertices, so a line maps to
+/// itself.
+pub(crate) fn curve_image(
+    curve: &EdgeCurve,
     matrix: &Mat4,
-    v_min: f64,
-    v_max: f64,
-) -> Result<NurbsSurface, crate::OperationsError> {
-    use std::f64::consts::TAU;
-
-    let n_u = 33; // Longitude samples (0 to 2π)
-    let n_v = 17; // Latitude samples
-
-    let mut rows: Vec<Vec<brepkit_math::vec::Point3>> = Vec::with_capacity(n_v);
-    for iv in 0..n_v {
-        let v = v_min + (v_max - v_min) * (iv as f64) / ((n_v - 1) as f64);
-        let mut row = Vec::with_capacity(n_u);
-        for iu in 0..n_u {
-            let u = TAU * (iu as f64) / ((n_u - 1) as f64);
-            let pt = sph.evaluate(u, v);
-            row.push(matrix.mul_point(pt));
+) -> Result<(EdgeCurve, bool), crate::OperationsError> {
+    Ok(match curve {
+        EdgeCurve::Line => (EdgeCurve::Line, false),
+        EdgeCurve::NurbsCurve(c) => {
+            let control_points: Vec<_> = c
+                .control_points()
+                .iter()
+                .map(|pt| matrix.mul_point(*pt))
+                .collect();
+            (
+                EdgeCurve::NurbsCurve(NurbsCurve::new(
+                    c.degree(),
+                    c.knots().to_vec(),
+                    control_points,
+                    c.weights().to_vec(),
+                )?),
+                false,
+            )
         }
-        rows.push(row);
-    }
-
-    let nurbs = brepkit_math::nurbs::surface_fitting::interpolate_surface(&rows, 3, 3)?;
-    Ok(nurbs)
+        EdgeCurve::Circle(c) => transform_conic(
+            matrix,
+            c.center(),
+            c.u_axis() * c.radius(),
+            c.v_axis() * c.radius(),
+        )?,
+        EdgeCurve::Ellipse(e) => transform_conic(
+            matrix,
+            e.center(),
+            e.u_axis() * e.semi_major(),
+            e.v_axis() * e.semi_minor(),
+        )?,
+    })
 }
 
-/// Transform a set of edge curves in place.
-///
-/// Line edges need no update — their geometry is defined by vertices.
-#[allow(clippy::too_many_lines)]
+/// Transform a set of edge curves in place. Returns the closed edges whose
+/// parameter origin moved: a pcurve of one no longer starts where the edge
+/// does.
 fn transform_edges(
     topo: &mut Topology,
     edge_ids: &HashSet<EdgeId>,
     matrix: &Mat4,
-) -> Result<(), crate::OperationsError> {
+) -> Result<HashSet<EdgeId>, crate::OperationsError> {
+    let mut moved = HashSet::new();
     for &eid in edge_ids {
         let edge = topo.edge(eid)?;
-        let new_curve = match edge.curve() {
-            EdgeCurve::Line => None,
-            EdgeCurve::NurbsCurve(c) => {
-                let new_control_points: Vec<_> = c
-                    .control_points()
-                    .iter()
-                    .map(|pt| matrix.mul_point(*pt))
-                    .collect();
-                Some(EdgeCurve::NurbsCurve(NurbsCurve::new(
-                    c.degree(),
-                    c.knots().to_vec(),
-                    new_control_points,
-                    c.weights().to_vec(),
-                )?))
-            }
-            EdgeCurve::Circle(c) => Some(transform_conic(
-                matrix,
-                c.center(),
-                c.u_axis() * c.radius(),
-                c.v_axis() * c.radius(),
-            )?),
-            EdgeCurve::Ellipse(e) => Some(transform_conic(
-                matrix,
-                e.center(),
-                e.u_axis() * e.semi_major(),
-                e.v_axis() * e.semi_minor(),
-            )?),
-        };
-        if let Some(curve) = new_curve {
-            topo.edge_mut(eid)?.set_curve(curve);
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            continue;
         }
+        let closed = edge.start() == edge.end();
+        let (curve, origin_moved) = curve_image(edge.curve(), matrix)?;
+        if closed && origin_moved {
+            moved.insert(eid);
+        }
+        topo.edge_mut(eid)?.set_curve(curve);
     }
-    Ok(())
+    Ok(moved)
 }
 
 /// The exact image of the conic `center + p·cos(t) + q·sin(t)`.
@@ -538,12 +574,12 @@ fn transform_conic(
     center: brepkit_math::vec::Point3,
     p: Vec3,
     q: Vec3,
-) -> Result<EdgeCurve, crate::OperationsError> {
+) -> Result<(EdgeCurve, bool), crate::OperationsError> {
     use brepkit_math::curves::{Circle3D, Ellipse3D};
 
     let (p, q) = (linear(matrix, p), linear(matrix, q));
     let (a1, a2) = if nearly_orthogonal(p, q) {
-        if q.length() > p.length() {
+        if !nearly_equal(p.length(), q.length()) && q.length() > p.length() {
             (q, -p)
         } else {
             (p, q)
@@ -557,11 +593,13 @@ fn transform_conic(
     let center = matrix.mul_point(center);
     let normal = a1.cross(a2).normalize()?;
     let (u, v) = (a1.normalize()?, a2.normalize()?);
-    Ok(if nearly_equal(l1, l2) {
+    let origin_moved = a1 != p;
+    let curve = if nearly_equal(l1, l2) {
         EdgeCurve::Circle(Circle3D::with_axes(center, normal, l1, u, v)?)
     } else {
         EdgeCurve::Ellipse(Ellipse3D::with_axes(center, normal, l1, l2, u, v)?)
-    })
+    };
+    Ok((curve, origin_moved))
 }
 
 /// Apply an affine transform to a wire, modifying vertex positions and
@@ -585,9 +623,8 @@ pub fn transform_wire(
         vertex.set_point(new_point);
     }
 
-    // Transform edge curves.
-    transform_edges(topo, &edge_ids, matrix)?;
-
+    let moved_origins = transform_edges(topo, &edge_ids, matrix)?;
+    topo.pcurves_mut().remove_edges(&moved_origins);
     Ok(())
 }
 

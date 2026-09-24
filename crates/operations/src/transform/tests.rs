@@ -3,6 +3,7 @@
 use brepkit_math::mat::Mat4;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
@@ -622,7 +623,8 @@ fn mesh_is_watertight_with_volume(topo: &Topology, solid: SolidId) -> f64 {
 /// A rigid motion must move every curved surface WITH its frame: a torus or
 /// sphere rebuilt around the world z axis leaves its boundary edges off the
 /// surface. The pose also spins each primitive about its own axis, which
-/// used to put a rim sample on the cylinder's u seam and twist the band mesh.
+/// puts a rim sample on the cylinder's u seam, where the band mesher must
+/// still pair the two rims in phase.
 #[test]
 fn rigid_motion_keeps_curved_surfaces_on_their_boundaries() {
     use crate::primitives::{make_cone, make_cylinder, make_sphere, make_torus};
@@ -859,4 +861,212 @@ fn transform_drops_pcurves_that_no_longer_fit_their_surface() {
     transform_solid(&mut topo, curved, &Mat4::rotation_x(0.4)).unwrap();
     assert!(!topo.pcurves().contains(plane_edge, plane));
     assert!(topo.pcurves().contains(nurbs_edge, nurbs));
+}
+
+/// A rigid motion keeps every circle's parameter origin on the image of the
+/// old one: the image axes' lengths differ only by rounding, and that must
+/// not trade the circle's axes for a quarter-turn-rotated pair.
+#[test]
+fn rigid_motion_keeps_circle_parameter_origins() {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let poses = [
+        Mat4::rotation_x(0.3) * Mat4::rotation_y(0.1),
+        Mat4::rotation_z(2.2) * Mat4::rotation_x(-1.1),
+        Mat4::translation(4.0, -1.0, 2.0) * Mat4::rotation_y(0.77) * Mat4::rotation_z(0.31),
+    ];
+    for pose in poses {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.5, 4.0).unwrap();
+        let circles = |topo: &Topology| -> Vec<(EdgeId, brepkit_math::vec::Point3)> {
+            brepkit_topology::explorer::solid_edges(topo, solid)
+                .unwrap()
+                .into_iter()
+                .filter_map(|e| match topo.edge(e).unwrap().curve() {
+                    EdgeCurve::Circle(c) => Some((e, c.evaluate(0.0))),
+                    _ => None,
+                })
+                .collect()
+        };
+        let before = circles(&topo);
+        assert!(!before.is_empty());
+        transform_solid(&mut topo, solid, &pose).unwrap();
+        for ((_, origin), (_, moved)) in before.iter().zip(circles(&topo)) {
+            assert!(
+                (pose.mul_point(*origin) - moved).length() < 1e-12,
+                "a circle's origin moved off its image"
+            );
+        }
+    }
+}
+
+/// A NURBS face keeps its parameterization under any map, but a closed
+/// circle on it re-expressed on the principal axes of its image starts
+/// somewhere new; that edge's pcurve must go.
+#[test]
+fn closed_circle_whose_origin_moves_loses_its_pcurve() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves2d::{Circle2D, Curve2D};
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::{Point2, Point3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::pcurve::PCurve;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::Wire;
+
+    let build = |topo: &mut Topology| {
+        let patch = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(-2.0, -2.0, 0.0), Point3::new(-2.0, 2.0, 0.0)],
+                vec![Point3::new(2.0, -2.0, 0.0), Point3::new(2.0, 2.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let f = topo.add_face(Face::new(w, vec![], FaceSurface::Nurbs(patch)));
+        let pcurve = PCurve::new(
+            Curve2D::Circle(Circle2D::new(Point2::new(0.5, 0.5), 0.25).unwrap()),
+            0.0,
+            std::f64::consts::TAU,
+        );
+        topo.pcurves_mut().set(e, f, pcurve);
+        (e, f)
+    };
+
+    let mut topo = Topology::new();
+    let (edge, face) = build(&mut topo);
+    transform_face(&mut topo, face, &Mat4::scale(2.0, 2.0, 2.0)).unwrap();
+    assert!(topo.pcurves().contains(edge, face), "a similarity keeps it");
+
+    let (edge, face) = build(&mut topo);
+    transform_face(&mut topo, face, &Mat4::scale(2.0, 1.0, 1.0)).unwrap();
+    assert!(
+        !topo.pcurves().contains(edge, face),
+        "the squashed circle starts at its major vertex now"
+    );
+}
+
+/// A non-uniform scale turns a sphere into an ellipsoid, which only NURBS can
+/// carry; the patch must be the exact image and face outward.
+#[test]
+fn non_uniform_scale_makes_a_sphere_an_exact_ellipsoid() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_sphere(&mut topo, 2.0, 16).unwrap();
+    transform_solid(&mut topo, solid, &Mat4::scale(2.0, 1.0, 0.5)).unwrap();
+    let mut patches = 0;
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let FaceSurface::Nurbs(n) = face.surface().clone() else {
+            continue;
+        };
+        patches += 1;
+        let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
+        for i in 0..=8 {
+            for j in 1..8 {
+                let (u, v) = (
+                    u0 + (u1 - u0) * f64::from(i) / 8.0,
+                    v0 + (v1 - v0) * f64::from(j) / 8.0,
+                );
+                let p = n.evaluate(u, v);
+                let implicit = (p.x() / 4.0).powi(2) + (p.y() / 2.0).powi(2) + p.z().powi(2);
+                assert!(
+                    (implicit - 1.0).abs() < 1e-9,
+                    "off the ellipsoid: {implicit}"
+                );
+                let normal = brepkit_math::traits::ParametricSurface::normal(&n, u, v);
+                let normal = if face.is_reversed() { -normal } else { normal };
+                let outward = p - brepkit_math::vec::Point3::new(0.0, 0.0, 0.0);
+                assert!(normal.dot(outward) > 0.0, "ellipsoid face points inward");
+            }
+        }
+    }
+    assert!(patches > 0, "the ellipsoid faces are NURBS");
+}
+
+/// The fused copy-and-transform maps every surface, curve and wire exactly
+/// as copying and then transforming does.
+#[test]
+fn fused_copy_transform_matches_copy_then_transform() {
+    use crate::primitives::{make_cone, make_cylinder, make_sphere, make_torus};
+
+    type Make = fn(&mut Topology) -> SolidId;
+    let shapes: [Make; 4] = [
+        |t| make_cylinder(t, 1.5, 4.0).unwrap(),
+        |t| make_cone(t, 2.0, 1.0, 3.0).unwrap(),
+        |t| make_sphere(t, 2.0, 16).unwrap(),
+        |t| make_torus(t, 6.0, 1.5, 16).unwrap(),
+    ];
+    // The squashing pose turns spheres, tori and cones into NURBS faces whose
+    // meshing is a separate gap; it is compared by geometry alone.
+    let squash = Mat4::rotation_z(0.3) * Mat4::scale(2.0, 1.0, 1.0);
+    let poses = [
+        Mat4::translation(1.0, 2.0, 3.0) * Mat4::rotation_x(0.9) * Mat4::rotation_y(-0.4),
+        Mat4::rotation_x(0.7) * Mat4::scale(1.0, -1.0, 1.0),
+        squash,
+    ];
+    for make in shapes {
+        for pose in &poses {
+            let mut topo = Topology::new();
+            let source = make(&mut topo);
+            let fused = crate::copy::copy_and_transform_solid(&mut topo, source, pose).unwrap();
+            let staged = crate::copy::copy_solid(&mut topo, source).unwrap();
+            transform_solid(&mut topo, staged, pose).unwrap();
+            let (a, b) = (
+                crate::measure::solid_bounding_box(&topo, fused).unwrap(),
+                crate::measure::solid_bounding_box(&topo, staged).unwrap(),
+            );
+            assert!((a.min - b.min).length() < 1e-9 && (a.max - b.max).length() < 1e-9);
+            assert!(
+                (worst_boundary_offset(&topo, fused) - worst_boundary_offset(&topo, staged)).abs()
+                    < 1e-9
+            );
+            if *pose == squash {
+                continue;
+            }
+            let (va, vb) = (
+                mesh_is_watertight_with_volume(&topo, fused),
+                mesh_is_watertight_with_volume(&topo, staged),
+            );
+            assert!((va - vb).abs() < 1e-9 * vb.abs(), "{va} vs {vb}");
+            assert!(va > 0.0);
+            assert!(
+                crate::validate::validate_solid(&topo, fused)
+                    .unwrap()
+                    .is_valid()
+            );
+        }
+    }
+}
+
+/// A cylinder face whose vertices do not reach the extremes of its edges (a
+/// tilted rim, closed at one seam vertex) still sits on its NURBS image
+/// after a non-uniform scale.
+#[test]
+fn cylinder_nurbs_image_covers_its_whole_boundary() {
+    let mut topo = Topology::new();
+    let tube = crate::primitives::make_cylinder(&mut topo, 1.5, 4.0).unwrap();
+    let slab = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    transform_solid(
+        &mut topo,
+        slab,
+        &(Mat4::translation(0.0, 0.0, 3.0)
+            * Mat4::rotation_x(0.4)
+            * Mat4::translation(-5.0, -5.0, 0.0)),
+    )
+    .unwrap();
+    let cut =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, tube, slab).unwrap();
+    transform_solid(&mut topo, cut, &Mat4::scale(2.0, 1.0, 1.0)).unwrap();
+    let offset = worst_boundary_offset(&topo, cut);
+    assert!(offset < 1e-6, "boundary {offset} off its surfaces");
 }
