@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790271476211,
+  "lastUpdate": 1790271601830,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38015,6 +38015,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42155078,
             "range": "± 223470",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bfcf68559bf059673f69f78fbe19d60c162dff09",
+          "message": "fix(operations): mesh a pointed cone as a fan over its shared rim samples (#1723)\n\n## What was wrong\n\nPointed apex-up cones could produce open meshes at deflections where the\nrim had an odd segment count. On main, `tessellate_solid` produces 46,\n78, and 142 open edges for `make_cone(3, 0, 6)` at deflections 0.03,\n0.01, and 0.003. It is watertight at 0.1 and 0.001.\n\nThe cone previously took the snap mesher, which uses its own angular\ngrid and welds grid points to shared edge samples within 1e-6. The rim\ncircle's frame is built from its +z normal, so its samples start on +y,\nwhile an apex-up cone's surface frame is built from its -z axis, so its\ngrid starts on -y and runs the other way. They coincide only for even\nrim segment counts. The open cases have 23, 39, and 71 segments, while\nthe closed cases have 18 and 122. Apex-down cones build both frames from\n+z.\n\n## What this does\n\n- Extends `tessellate_revolution_band_shared` to accept a pointed cone\nwith one closed rim, one seam from a rim vertex to the apex, and no\ninner wires.\n- Fans the rim's shared samples to the apex sample. Every ruling is\nstraight, so deviation from the surface comes only from the rim chords.\n- Takes only the apex from the seam samples, because the rim samples\nneed not include the seam's rim vertex.\n\n## Verification\n\n- Adds `pointed_cone_tessellation_is_watertight_at_every_deflection`,\ncovering `make_cone(3, 0, 6)`, `make_cone(1, 0, 2)`, `make_cone(5, 0,\n1)`, and `make_cone(0, 3, 6)` at deflections 0.1, 0.03, 0.01, 0.003, and\n0.001. It checks for no open or non-manifold edges after welding and\nverifies the mesh volume is at most the exact volume, with a relative\nshortfall below `3 * deflection / radius`. The test fails on main.\n- Triangle counts and mesh volumes remain unchanged at every tested\ndeflection for all four cones, including 76 triangles at 0.01 for\n`make_cone(3, 0, 6)`.\n- The operations and io suites pass, totaling 1474 tests.\n- Closes the roadmap row for the pointed cone mesh at deflection 0.01\nwith a Closed entry.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFix pointed apex-up cones producing open meshes at deflections where the\nrim takes an odd segment count. The band mesher now fans the rim's\nshared samples to the apex instead of relying on the snap mesher path,\nwhich only welded when rim segment counts were even.\n\n- `make_cone(3, 0, 6)` previously produced 46, 78, and 142 open edges at\ndeflections 0.03, 0.01, and 0.003.\n- Adds `pointed_cone_tessellation_is_watertight_at_every_deflection`,\nwhich fails on main and checks watertightness and volume shortfall for\nfour cones, pointing up and down, at five deflections.\n- Triangle counts and mesh volumes are unchanged.\n\n<sup>Written for commit 53938a5620e027f7a05baedf4008cd389375e373.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1723?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T17:36:04Z",
+          "tree_id": "e1857f1639017fa1a01436e91e273e26bcfe52c7",
+          "url": "https://github.com/andymai/brepkit/commit/bfcf68559bf059673f69f78fbe19d60c162dff09"
+        },
+        "date": 1790271599107,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 529432,
+            "range": "± 9436",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 582715,
+            "range": "± 1299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7737,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 398501,
+            "range": "± 1334",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26090516,
+            "range": "± 34407",
             "unit": "ns/iter"
           }
         ]
