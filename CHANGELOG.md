@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.4.19](https://github.com/andymai/brepkit/compare/v3.4.18...v3.4.19) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** keep analytic surface frames under transform ([#1691](https://github.com/andymai/brepkit/issues/1691)) ([bd547fa](https://github.com/andymai/brepkit/commit/bd547fa8fbf4760c54a624ce4cc48093e1089d67))
+
 ## [3.4.18](https://github.com/andymai/brepkit/compare/v3.4.17...v3.4.18) (2026-09-17)
 
 
