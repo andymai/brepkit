@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.3](https://github.com/andymai/brepkit/compare/v4.0.2...v4.0.3) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** cut a round bore through a rod's wall, across its seam or clear of it ([#1716](https://github.com/andymai/brepkit/issues/1716)) ([1b917a5](https://github.com/andymai/brepkit/commit/1b917a5ee94424e8d25243732ced22ba80679689))
+
 ## [4.0.2](https://github.com/andymai/brepkit/compare/v4.0.1...v4.0.2) (2026-09-24)
 
 
