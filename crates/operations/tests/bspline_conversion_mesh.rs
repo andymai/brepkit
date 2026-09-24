@@ -7,7 +7,7 @@ use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::heal::convert_to_bspline;
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::{make_cylinder, make_sphere};
-use brepkit_operations::tessellate::{boundary_edge_count, tessellate_solid};
+use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -28,10 +28,9 @@ fn assert_keeps(
     assert!(report.is_valid(), "{what}: {:?}", report.issues);
     for &(deflection, bound) in bounds {
         let mesh = tessellate_solid(topo, solid, deflection).unwrap();
-        assert_eq!(
-            boundary_edge_count(&mesh),
-            0,
-            "{what}: open mesh at {deflection}"
+        assert!(
+            is_watertight(&mesh),
+            "{what}: open or non-manifold mesh at {deflection}"
         );
         let volume = oriented_solid_volume(topo, solid, deflection).unwrap();
         assert!(
