@@ -183,6 +183,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: volumes far from the origin** | `solid_volume` and `oriented_solid_volume` sum divergence terms about the world origin (`d · A`, `a · (b × c)`), so a solid far from it cancels away its own volume: a 4 x 3 x 2 box with one side drafted 5 degrees, translated by 1e6 on each axis, reads 57.43 and 68.91 against 23.475 (its geometry is right to 1e-10; the untranslated box's fast path still reads 24). Every path needs a reference point near the solid (its first vertex or bounding-box centre) |
 
 
+| **Stable row defect: per-face NURBS meshes ignore the trim** | `tessellate::tessellate` meshes a NURBS face over its whole surface, so `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY writers read a trimmed NURBS face as its whole patch (a converted napkin ring: `solid_volume` 1613 against 587.7). A trimmed CDT for NURBS faces whose boundary leaves the domain edges is parked on branch `wip/per-face-nurbs-trim`. It waits on `sweep_smooth`: its rail edges are straight chords between the first and last rings while the side surfaces curve along the path, so a trimmed mesh follows the chords (a quarter-circle sweep reads 6.87 against 7.85); build its rails as #1700 built `loft_smooth`'s. The parked branch also holds a surface-measured refinement of long interior edges that moved an uneven loft's mesh 0.3% off its exact 32.0686, unexplained |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
@@ -195,23 +196,13 @@ One line each; the fixture/PR carries the story. Newest first.
   rather than their vertex, and cylinder, cone and plane patches were sized
   from vertices alone (a disc's one vertex left its cap patch short of the
   disc). Faces now take the exact rational forms over their boundary's
-  sampled range. The meshes needed five more fixes: seam runs spaced by
-  index, a band between two loops winding the period (the napkin ring's
-  zones, now joined along a virtual seam), the per-face mesher meshing a
-  trimmed NURBS face's whole surface (`solid_volume`, `face_area` and the
-  glTF, OBJ and PLY writers; now a trimmed CDT unless the boundary runs
-  along the domain's edges), straight NURBS edges sampled like curves (now
-  one segment), and a NURBS CDT measured in knot values (now in surface
-  speeds, with long interior edges split while the surface sags off them).
-- **NURBS faces meshed far outside their deflection (CLOSED 2026-09-24; pin `squashed_walls_mesh_within_their_deflection` in `crates/operations/tests/non_uniform_scale_mesh.rs`)**:
-  `interior_grid_resolution` fed a NURBS face's knot spans to a circle-chord
-  formula with radius 1, so a squashed cylinder's wall meshed 6.2e-3 low in
-  volume at deflection 0.001. The grid now follows the chords of the face's
-  own iso-lines across its (u, v) box (one division along a ruling, the
-  normals' turn weighed on every chord but one ending on a pole, at
-  most 1024 per direction and 65,536 cells in all, with a warning when
-  that binds): 8.9e-5 at 0.001. The diagnostic volume pin in
-  `cross_one_row_fillet_inmem.rs` moved with the meshes.
+  sampled range. Their meshes needed four NURBS CDT fixes: seam runs keep
+  their projected v (spaced by index they assumed both seam vertices, which
+  a rim usually keeps), a straight seam drops its interior samples (they
+  fanned across a ruled wall with no interior rows), a band between two
+  loops winding the period (the napkin ring's zones) is joined along a
+  virtual seam, and the triangulation measures in surface speeds rather
+  than knot values (a converted cylinder's u spans 1, its v 4).
 
 - **The walking-engine chamfer left every chamfered edge open (CLOSED 2026-09-24; pins `chamfer_v2_closes_on_every_box_edge`, `chamfer_v2_closes_two_parallel_edges`, `chamfer_v2_concave_notch_adds_only_the_chamfer_sliver` in `crates/operations/tests/regress_chamfer_obtuse_ridge.rs`)**:
   `ChamferBuilder` trimmed the two chamfered faces but not the end faces,

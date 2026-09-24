@@ -1963,29 +1963,24 @@ fn tessellate_nonplanar_cdt_uv(
                     continue;
                 }
 
-                // Rim samples on both sides fix the run's ends: a seam
-                // vertex is usually kept by the rim it closes, so the run
-                // holds only the seam's interior samples, spaced along it.
-                let after = (run.indices[n_pts - 1] + 1) % n_boundary;
-                let on_rim = |i: usize| !seam_edge_indices.contains(&boundary_3d[i].2.index());
-                if on_rim(before) && on_rim(after) {
-                    let mut reach = Vec::with_capacity(n_pts);
-                    let mut walked = 0.0;
-                    let mut prev = boundary_3d[before].0;
+                // A seam point's projected v is exact where the projection is
+                // well behaved (only u is ambiguous across the seam), so the
+                // run keeps it when it climbs steadily within the rims' span.
+                // Spacing the run evenly by index assumes the run holds both
+                // seam vertices, but a rim usually keeps the vertex it closes.
+                let (v_lo, v_hi) = (v_min_bnd.min(v_max_bnd), v_min_bnd.max(v_max_bnd));
+                let slack = 1e-9 * (v_hi - v_lo).max(1.0);
+                let projected: Vec<f64> = run.indices.iter().map(|&i| boundary_uv[i].1).collect();
+                let within = projected
+                    .iter()
+                    .all(|&v| v >= v_lo - slack && v <= v_hi + slack);
+                let steady = projected.windows(2).all(|w| w[1] > w[0])
+                    || projected.windows(2).all(|w| w[1] < w[0]);
+                if within && steady {
                     for &i in &run.indices {
-                        walked += (boundary_3d[i].0 - prev).length();
-                        reach.push(walked);
-                        prev = boundary_3d[i].0;
+                        boundary_uv[i].0 = u_assign;
                     }
-                    let total = walked + (boundary_3d[after].0 - prev).length();
-                    if total > 0.0 {
-                        let (v_from, v_to) = (boundary_uv[before].1, boundary_uv[after].1);
-                        for (k, &i) in run.indices.iter().enumerate() {
-                            boundary_uv[i] =
-                                (u_assign, v_from + (v_to - v_from) * reach[k] / total);
-                        }
-                        continue;
-                    }
+                    continue;
                 }
 
                 let v_first = boundary_uv[run.indices[0]].1;
@@ -2005,6 +2000,48 @@ fn tessellate_nonplanar_cdt_uv(
                     let v = v_start + t * (v_end - v_start);
                     boundary_uv[i] = (u_assign, v);
                 }
+            }
+
+            // A straight seam on a NURBS face belongs to this face alone and
+            // needs no samples between its vertices. Left in where the rulings
+            // get no interior rows, each one would fan out across the face to
+            // the rims.
+            let mut drop: DetHashSet<usize> = DetHashSet::default();
+            let nurbs = matches!(face_data.surface(), FaceSurface::Nurbs(_));
+            for run in seam_runs.iter().filter(|_| nurbs) {
+                let edge = topo.edge(boundary_3d[run.indices[0]].2)?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let length = (b - a).length();
+                if length <= 0.0 {
+                    continue;
+                }
+                let dir = (b - a) * (1.0 / length);
+                let off_line = |p: Point3| {
+                    let r = p - a;
+                    (r - dir * r.dot(dir)).length()
+                };
+                if run
+                    .indices
+                    .iter()
+                    .all(|&i| off_line(boundary_3d[i].0) <= 1e-9 * length)
+                {
+                    for &i in &run.indices {
+                        let p = boundary_3d[i].0;
+                        if (p - a).length() > 1e-9 * length && (p - b).length() > 1e-9 * length {
+                            drop.insert(i);
+                        }
+                    }
+                }
+            }
+            if !drop.is_empty() {
+                let keep: Vec<usize> = (0..boundary_uv.len())
+                    .filter(|i| !drop.contains(i))
+                    .collect();
+                boundary_uv = keep.iter().map(|&i| boundary_uv[i]).collect();
+                boundary_3d = keep.iter().map(|&i| boundary_3d[i]).collect();
             }
         }
 
@@ -2223,7 +2260,6 @@ fn tessellate_nonplanar_cdt_uv(
         hole_ranges.push((start, hole_seed_pts.len()));
     }
 
-    let mut grid_cell = (du, dv);
     if du > 1e-15 && dv > 1e-15 {
         let (n_u, n_v) = interior_grid_resolution(
             face_data.surface(),
@@ -2233,7 +2269,6 @@ fn tessellate_nonplanar_cdt_uv(
             angular_tol,
             circle_floor,
         );
-        grid_cell = (du / n_u as f64, dv / n_v as f64);
 
         let boundary_uv_ref = &boundary_uv;
         let hole_polys = &hole_polys;
@@ -2381,101 +2416,6 @@ fn tessellate_nonplanar_cdt_uv(
             return Err(crate::OperationsError::InvalidInput {
                 reason: "developable CDT did not reach the requested deflection".to_string(),
             });
-        }
-    }
-    // A NURBS face has no radius to bound a triangle's sag by, so each
-    // retained triangle is measured on the surface: its longest interior edge
-    // whose chord leaves the surface by more than twice the deflection, or
-    // across which the normal turns past twice the angular tolerance, splits
-    // at its middle. The boundary is sampled right up to those tolerances and
-    // stays whole (its edges are shared with the neighbouring faces), and an
-    // interior edge spanning one boundary step sags as much as that step, so
-    // only a margin past them marks an edge as coarser than the boundary. The
-    // interior grid already holds an edge within one of its cells, so only
-    // an edge reaching further is measured.
-    if matches!(face_data.surface(), FaceSurface::Nurbs(_)) && !constraints_added_steiner_vertices {
-        const MAX_HALVING_PASSES: usize = 12;
-        let surface = face_data.surface();
-        let at = |p: Point2| eval_surface_point(surface, p.x(), p.y());
-        let normal_at = |p: Point2| {
-            let (u, v) = wrap_to_domain(surface, p.x(), p.y());
-            surface.normal(u, v)
-        };
-        let in_hole = |p: Point2| {
-            hole_polys
-                .iter()
-                .filter(|h| point_in_polygon_2d(h, p))
-                .count()
-                % 2
-                == 1
-        };
-        // A boundary that leaves the surface (a chordal rim) holds its
-        // neighbouring edges off it however finely they split, so the passes
-        // stop once they stop shrinking the set of coarse edges.
-        let mut last_splits = usize::MAX;
-        for _ in 0..MAX_HALVING_PASSES {
-            let vertices = cdt.vertices();
-            let constraints = cdt.constraint_edges();
-            let mut chosen: DetHashSet<(usize, usize)> = DetHashSet::default();
-            let mut splits = Vec::new();
-            for (i0, i1, i2) in cdt.triangles() {
-                if i0 < 3 || i1 < 3 || i2 < 3 {
-                    continue;
-                }
-                let ids = [i0, i1, i2];
-                let corners = ids.map(|id| from_cdt(vertices[id]));
-                let mut worst: Option<(f64, (usize, usize), Point2)> = None;
-                for e in 0..3 {
-                    let (a, b) = (e, (e + 1) % 3);
-                    let key = (ids[a].min(ids[b]), ids[a].max(ids[b]));
-                    if constraints.contains(&key) {
-                        continue;
-                    }
-                    let (pa, pb) = (corners[a], corners[b]);
-                    if (pb.x() - pa.x()).abs() <= 1.5 * grid_cell.0
-                        && (pb.y() - pa.y()).abs() <= 1.5 * grid_cell.1
-                    {
-                        continue;
-                    }
-                    let mid = Point2::new(0.5 * (pa.x() + pb.x()), 0.5 * (pa.y() + pb.y()));
-                    let (sa, sb) = (at(pa), at(pb));
-                    let sag = (at(mid) - (sa + (sb - sa) * 0.5)).length();
-                    let turn = normal_at(pa).dot(normal_at(pb)).clamp(-1.0, 1.0).acos();
-                    let coarse =
-                        sag > 2.0 * deflection || (angular_tol > 0.0 && turn > 2.0 * angular_tol);
-                    let length = (sb - sa).length();
-                    if coarse && worst.is_none_or(|(l, _, _)| length > l) {
-                        worst = Some((length, key, mid));
-                    }
-                }
-                let Some((_, key, mid)) = worst else {
-                    continue;
-                };
-                // Triangles outside the trimmed boundary or inside a hole are
-                // dropped below, so their sag never ships.
-                let centroid = Point2::new(
-                    (corners[0].x() + corners[1].x() + corners[2].x()) / 3.0,
-                    (corners[0].y() + corners[1].y() + corners[2].y()) / 3.0,
-                );
-                if point_in_polygon_2d(&boundary_uv, centroid)
-                    && !in_hole(centroid)
-                    && point_in_polygon_2d(&boundary_uv, mid)
-                    && !in_hole(mid)
-                    && chosen.insert(key)
-                {
-                    splits.push(to_cdt(mid));
-                }
-            }
-            if splits.is_empty() || splits.len() >= last_splits {
-                break;
-            }
-            last_splits = splits.len();
-            let before = cdt.vertices().len();
-            cdt.insert_points_hilbert(&splits)
-                .map_err(crate::OperationsError::Math)?;
-            if cdt.vertices().len() == before {
-                break;
-            }
         }
     }
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)

@@ -80,47 +80,6 @@ fn covers_whole_domain(
     Ok(true)
 }
 
-/// Whether a NURBS face's boundary runs along its surface's domain edges
-/// (seams and poles included), so the face is the whole patch and its grid
-/// needs no trim.
-fn bounded_by_domain(
-    topo: &Topology,
-    face_data: &brepkit_topology::face::Face,
-    surface: &brepkit_math::nurbs::surface::NurbsSurface,
-) -> Result<bool, crate::OperationsError> {
-    const SAMPLES: u32 = 8;
-    if !face_data.inner_wires().is_empty() {
-        return Ok(false);
-    }
-    let ((u_lo, u_hi), (v_lo, v_hi)) = (surface.domain_u(), surface.domain_v());
-    let (tol_u, tol_v) = (1e-6 * (u_hi - u_lo), 1e-6 * (v_hi - v_lo));
-    for oe in topo.wire(face_data.outer_wire())?.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let (start, end) = (
-            topo.vertex(edge.start())?.point(),
-            topo.vertex(edge.end())?.point(),
-        );
-        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-        for k in 0..=SAMPLES {
-            let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
-            let p = edge.curve().evaluate_with_endpoints(t, start, end);
-            let Ok(at) =
-                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-6)
-            else {
-                return Ok(false);
-            };
-            let on_edge = (at.u - u_lo).abs() <= tol_u
-                || (u_hi - at.u).abs() <= tol_u
-                || (at.v - v_lo).abs() <= tol_v
-                || (v_hi - at.v).abs() <= tol_v;
-            if !on_edge {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
-}
-
 /// Like [`tessellate_with_uvs_a`] with an explicit curvature-floor selector.
 ///
 /// `curvature_floor` keeps the legacy dense sampling on doubly-curved
@@ -137,28 +96,17 @@ pub(super) fn tessellate_with_uvs_floor(
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
-    // A holed curved face goes through the solid mesher's hole-aware paths,
-    // and so does a NURBS face, which is a trimmed patch of its surface
-    // unless it closes over the whole of a doubly periodic domain. One they
-    // cannot take keeps the grid below, which covers the whole surface.
-    let holed_analytic = !face_data.inner_wires().is_empty()
+    // A holed curved face goes through the solid mesher's hole-aware paths.
+    // One they cannot take keeps the analytic grid below, which covers the
+    // whole face.
+    let holed_wall = if !face_data.inner_wires().is_empty()
         && matches!(
             face_data.surface(),
             FaceSurface::Cylinder(_)
                 | FaceSurface::Cone(_)
                 | FaceSurface::Sphere(_)
                 | FaceSurface::Torus(_)
-        );
-    let trimmed_nurbs = match face_data.surface() {
-        FaceSurface::Nurbs(n) => {
-            let whole =
-                (n.is_periodic_u() && n.is_periodic_v() && covers_whole_domain(topo, face_data)?)
-                    || bounded_by_domain(topo, face_data, n)?;
-            !whole
-        }
-        _ => false,
-    };
-    let holed_wall = if holed_analytic || trimmed_nurbs {
+        ) {
         match super::nonplanar::tessellate_holed_face_local(
             topo,
             face,

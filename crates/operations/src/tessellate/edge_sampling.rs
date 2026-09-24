@@ -129,7 +129,6 @@ pub(super) fn edge_sample_count(
             )
             .min(4096)
         }
-        EdgeCurve::NurbsCurve(nurbs) if is_straight(nurbs) => 1,
         EdgeCurve::NurbsCurve(nurbs) => {
             // Adaptive: coarse-pass deviation measurement, then refine if the
             // chord sag OR the per-segment turn exceeds tolerance.
@@ -169,31 +168,6 @@ pub(super) fn edge_sample_count(
             }
         }
     }
-}
-
-/// Whether a NURBS curve's control points lie in order along one line, so
-/// the curve is a segment of it and needs no samples between its ends, like
-/// a line edge.
-fn is_straight(nurbs: &brepkit_math::nurbs::curve::NurbsCurve) -> bool {
-    let points = nurbs.control_points();
-    let (Some(&first), Some(&last)) = (points.first(), points.last()) else {
-        return false;
-    };
-    let span = last - first;
-    let length = span.length();
-    if length <= 0.0 {
-        return false;
-    }
-    let dir = span * (1.0 / length);
-    let mut along = f64::NEG_INFINITY;
-    points.iter().all(|&p| {
-        let offset = p - first;
-        let t = offset.dot(dir);
-        let on_line = (offset - dir * t).length() <= 1e-9 * length;
-        let in_order = t >= along - 1e-9 * length;
-        along = along.max(t);
-        on_line && in_order
-    })
 }
 
 /// Measure the maximum midpoint chord deviation across `n` segments of a NURBS curve.
