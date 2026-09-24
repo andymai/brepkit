@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790272255493,
+  "lastUpdate": 1790272568277,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38123,6 +38123,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41941130,
             "range": "± 141097",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0b7bed689b82a1dea8d0a798a168ff134ed5a9bf",
+          "message": "fix(operations): measure rods cut along their axis exactly, and planar faces bounded by arcs (#1727)\n\n## What was wrong\n\nAxially cut cylindrical rods now use exact volume and planar area paths.\n\nOn main, `make_cylinder(2, 3)` less a box over x < 0 has exact volume 6\npi = 18.84956, but `solid_volume` reads 18.84619 at every deflection\nfrom 0.1 to 0.001. Each half-disc cap reads `face_area` 6.283146 against\n2 pi.\n\n`analytic_revolution_solid_volume` accepted only planar faces\nperpendicular to the axis, so the half rod's cut face selected the\nmesh-based path. Planar `face_area` used Newell's method over the\nsampled boundary.\n\n## What this does\n\n- The revolution path also accepts a planar face parallel to the axis\nwhen every wall is a cylinder. Such a plane meets the walls only in\nrulings, so each wall remains a rectangle in (u, v) and the existing\nwall integrator applies.\n\n- `planar_face_signed_volume` computes the side face's contribution as a\nthird of its plane offset times its exact Green's-theorem area, using\nthe same chord and circular-segment terms as caps.\n\n- With a side face present, `cylinder_wall_is_rectangle` requires every\ncylinder wall to be a rectangle. Each line must be a full-height ruling,\nand each arc must be a bottom or top rim spanning at most a half turn\nbecause the angular-range reader takes an arc's shorter side. A rod\nfused with a bar crossing its rim fails this test and retains the mesh\npath. `fuse_a_rod_with_a_flush_slot_bar_crossing_its_rim` read 24.232\nagainst 21.075 without this guard.\n\n- Planar `face_area` uses Green's-theorem area when every edge is a line\nor circle. Other boundaries retain Newell's method. Closed NURBS loops\nare excluded because the wire area helper skips closed non-circle edges,\nwhich made a filleted fixture's face read 0. `planar_wire_signed_area2`\nnow resides in `measure/helpers.rs` for both paths.\n\n## Verification\n\n- `crates/operations/tests/flat_sided_rods.rs` covers a half rod, a\nD-shaft with its flat at x = 1, and a quarter rod. `solid_volume` is\nwithin 1e-9 relative of each closed form, and every cap's `face_area` is\nwithin 1e-12.\n\n- The operations, io, and wasm suites pass, totaling 1711 tests.\n\n- A cone cut the same way falls back to an open mesh in the boolean\nitself. The roadmap adds it as an open row and records this work with a\nClosed entry.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMeasures cylindrical rods cut along their axis exactly: a half rod's\n`solid_volume` now reads 6π instead of the mesh fallback's 18.84619, and\nplanar faces bounded by lines and circular arcs get exact areas from\nGreen's theorem instead of Newell's method over sampled boundaries.\n\n- The revolution path now accepts planar faces parallel to the axis when\nevery wall is a cylinder, so cut faces no longer force a mesh fallback.\n- Side faces apply only when every cylinder wall is a rectangle in `(u,\nv)`: each line a full-height axis-parallel ruling, each rim arc at most\na half turn. A rod fused with a bar crossing its rim keeps the mesh\npath.\n- Planar `face_area` uses Green's theorem only when every edge is a line\nor circle; otherwise it falls back to Newell's method, so closed NURBS\nloops no longer report zero area.\n- Adds half-rod, D-shaft, and quarter-rod tests against their\nclosed-form volumes and cap areas, and logs the fix and two new mesh\ndefects in the roadmap.\n\n<sup>Written for commit aae9ed41872f7c55a004fb4f9f984ce64bed8b8a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1727?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T17:53:43Z",
+          "tree_id": "40add9cfb3a08f612438842f8af94078a1d8ae1d",
+          "url": "https://github.com/andymai/brepkit/commit/0b7bed689b82a1dea8d0a798a168ff134ed5a9bf"
+        },
+        "date": 1790272564524,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 803811,
+            "range": "± 4253",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 873202,
+            "range": "± 7983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11122,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 584729,
+            "range": "± 1522",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35258493,
+            "range": "± 86631",
             "unit": "ns/iter"
           }
         ]
