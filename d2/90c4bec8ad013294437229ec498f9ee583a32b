@@ -1,0 +1,23 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_79710f5f4f08c3 4600,4603-4604,4649-4655,4658,4660,4663-4664
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_64c0d8658054d2 190-199
+crates/operations/tests/oblique_rod_cut.rs
+  s_ba2f7b5c6902b6::t_b64f909edca52f 4,122-233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d290c4bec8ad013294437229ec498f9ee583a32b",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
