@@ -1,0 +1,25 @@
+crates/operations/src/loft.rs
+  s_ba2f7b5c6902b6::t_73cbb7dbda670b 1155-1184,1188-1197,1201-1204,1234-1260
+  s_ba2f7b5c6902b6::t_6eaa2543eeca9d 1261-1262
+crates/math/src/nurbs/fitting.rs
+  s_ba2f7b5c6902b6::t_bea18fc2bec9e2 58-86
+crates/operations/src/loft/tests.rs
+  s_ba2f7b5c6902b6::t_0f430648bb8a1a 495-497,499-502,1114-1116,1118-1178,1180-1184,1186-1193,1195-1199
+  s_ba2f7b5c6902b6::t_6822ef9c75dcb3 1113,1117,1179,1185,1194,1200-1201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d09d352f7d95060bf5f44a8034cc8c3f855bf98f",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
