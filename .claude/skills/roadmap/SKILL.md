@@ -172,7 +172,6 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
 | **Feature recognition (Beta)** | Dihedrals are signed from outward normals and the edge tangent, adjacency reads every wire and shell, holes are concave cylinders. Pockets group coplanar split faces and open along a floor normal no face in them looks back against, one pocket per floor (a stepped pocket's landing is its own). A fillet is a curved face tangent to two neighbours that are not parallel planes; a chamfer must stand where the edge its two neighbours' planes meet along was cut away (outside it across convex edges, inside across concave ones; a scalene prism's side fails) and be at most half the larger face it bevels (tests in `feature_recognition.rs`). Still heuristic: a chamfer wider than that is missed (a regular prism's sides meet like chamfers, so size is the only discriminant); a full-round edge between parallel faces is not reported as a fillet; an undercut pocket (a face overhanging its floor) is not found; a floor split into patches (coplanar, or within the 0.01 rad flat-edge tolerance) reports its largest patch as the floor and leaves the rest out, since `Feature::Pocket` has one floor |
 | **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
-| **Stable row defect: a pointed cone's mesh at deflection 0.01** | `make_cone(3, 0, 6)` meshes with 78 open edges at 0.01 (closed at 0.1 and 0.001, volume right at each); the whole cone takes the snap mesher. Untraced |
 
 
 | **Stable row defect: walking-engine chamfer at a closed rim or a shared vertex** | `chamfer_v2` on a cylinder's or cone's circular rim builds its cone face but returns a shell whose edges are not all shared by two faces (the endpoint-sampled trims cannot take a closed contact; the corrected fillet builder's periodic-contour machinery is the model). Two chamfered edges meeting at a box corner are refused (`TrimmingFailure`, pin `chamfer_v2_refuses_edges_meeting_at_a_vertex`; unrefused they left 9 edges open): each stripe's end detour lies in the other chamfer's removed region, so the two chamfer planes need a mitre along their intersection line (three at a corner need a corner patch). brepjs calls the planar `chamfer` in `chamfer.rs`, not this builder; the wasm `chamferV2` and `chamferDistanceAngle` bindings reach it |
@@ -184,6 +183,16 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A pointed cone's open mesh (CLOSED 2026-09-24; pin `pointed_cone_tessellation_is_watertight_at_every_deflection` in `crates/operations/tests/tessellate_watertight.rs`)**:
+  `make_cone(3, 0, 6)` meshed with 46, 78 and 142 open edges at 0.03, 0.01
+  and 0.003. The rim circle's frame comes from its +z normal (samples from
+  +y) and the cone's from its apex-to-base axis, -z (grid from -y, running
+  the other way), so the snap mesher's grid met the rim's shared samples only
+  when the rim took an even number of segments; an apex-down cone, both
+  frames from +z, was always closed. The band mesher now fans a pointed
+  cone's shared rim samples to its apex (one closed rim, one seam line up to
+  the apex): exact to the rim's chords, with the same triangle count.
 
 - **Chamfers of round rims (CLOSED 2026-09-24; pins in `crates/operations/tests/chamfer_round_rims.rs`)**:
   the planar `chamfer` (the one brepjs calls) rebuilt every face as a
