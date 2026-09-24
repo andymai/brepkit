@@ -1049,7 +1049,36 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         && planes.len() == 2
     {
         let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
-        let mut ts = cap_t_values(origin_vec, axis, &planes);
+        // A cap bounded only by circles and ellipses crosses the whole wall,
+        // however far it tilts, and the solid between two such caps holds
+        // pi r^2 times their separation along the axis (the height over the
+        // disc is linear, so its mean is the height at the axis).
+        let full_caps = plane_face_ids.iter().all(|&fid| {
+            topo.face(fid)
+                .and_then(|face| topo.wire(face.outer_wire()))
+                .is_ok_and(|wire| {
+                    wire.edges().iter().all(|oe| {
+                        topo.edge(oe.edge()).is_ok_and(|e| {
+                            matches!(
+                                e.curve(),
+                                brepkit_topology::edge::EdgeCurve::Circle(_)
+                                    | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                            )
+                        })
+                    })
+                })
+        });
+        let mut ts = if full_caps {
+            planes
+                .iter()
+                .filter_map(|&(n, d)| {
+                    let nd = n.dot(axis);
+                    (nd.abs() > 1e-9).then(|| (d - n.dot(origin_vec)) / nd)
+                })
+                .collect()
+        } else {
+            cap_t_values(origin_vec, axis, &planes)
+        };
         if ts.len() >= 2 {
             ts.sort_by(f64::total_cmp);
             if let (Some(&t_min), Some(&t_max)) = (ts.first(), ts.last()) {

@@ -139,7 +139,11 @@ impl EdgeCurve {
             }
             Self::Ellipse(e) => {
                 if (start - end).length() < CLOSED_EPS {
-                    ParametricCurve::domain(e)
+                    // A closed ellipse runs a full turn from its vertex, which
+                    // need not be its frame's origin (a plane section is
+                    // anchored where it meets its wall's seam).
+                    let a0 = e.project(start);
+                    (a0, a0 + TAU)
                 } else {
                     let a0 = e.project(start);
                     let delta = (e.project(end) - a0).rem_euclid(TAU);

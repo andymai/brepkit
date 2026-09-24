@@ -187,6 +187,22 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A rod cut by an oblique plane (CLOSED 2026-09-24; pin `crates/operations/tests/oblique_rod_cut.rs`)**:
+  `make_cylinder(3, 6)` less the half-space above a tilted plane fell back
+  to a mesh unless the tilt faced the rod's seam, and where it built,
+  `solid_volume` read 74.43 against 27 pi at slope 0.3 and the wall's
+  `face_area` 73.51 against 18 pi. The plane's ellipse started at its
+  frame's origin, off the wall's seam, so the band never split (it now
+  starts where the seam line crosses the plane, and a closed ellipse's
+  domain runs from its vertex); at slope 0.8 and up, the plane's lines
+  against the rod's caps survived the box-based filter through the caps'
+  box corners (a line missing a disc or ellipse face is now dropped); the
+  band mesher declined ellipse rims, and the CDT chorded through the solid
+  (it takes them now); the pi r^2 h formula skipped caps tilted past 8
+  degrees (any cap bounded only by conics crosses the whole wall); and the
+  wall's area assumed a (u, v) rectangle (a non-rectangular wall now takes
+  r times its (u, v) area by Green's theorem).
+
 - **Point classification ignored cavities (CLOSED 2026-09-24; pins in `crates/operations/tests/classify_cavities.rs`)**:
   the ray-cast `classify_point` of both `brepkit_check::classify` and
   `brepkit_operations::classify` (and their winding variants' boundary

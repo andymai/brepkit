@@ -1078,7 +1078,10 @@ pub(super) fn tessellate_face_with_shared_edges(
                     topo.edge(oe.edge()).is_ok_and(|e| {
                         matches!(
                             e.curve(),
-                            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_)
+                            EdgeCurve::Line
+                                | EdgeCurve::Circle(_)
+                                | EdgeCurve::Ellipse(_)
+                                | EdgeCurve::NurbsCurve(_)
                         )
                     })
                 });
