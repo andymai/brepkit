@@ -7,7 +7,9 @@
 use brepkit_math::mat::Mat4;
 use brepkit_operations::measure::oriented_solid_volume;
 use brepkit_operations::primitives::{make_sphere, make_torus};
-use brepkit_operations::tessellate::{boundary_edge_count, tessellate, tessellate_solid};
+use brepkit_operations::tessellate::{
+    boundary_edge_count, non_manifold_edge_count, tessellate, tessellate_solid,
+};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
@@ -25,6 +27,11 @@ fn ellipsoid_meshes_watertight_at_its_volume() {
         let mesh = tessellate_solid(&topo, ellipsoid, deflection).unwrap();
         assert!(!mesh.indices.is_empty(), "empty mesh at {deflection}");
         assert_eq!(boundary_edge_count(&mesh), 0, "open mesh at {deflection}");
+        assert_eq!(
+            non_manifold_edge_count(&mesh),
+            0,
+            "non-manifold mesh at {deflection}"
+        );
     }
     // The equator is a polygon of chords, so compare against the unit
     // sphere built the same way, scaled by the map's determinant.
@@ -55,6 +62,11 @@ fn squashed_torus_meshes_watertight_at_its_volume() {
         let mesh = tessellate_solid(&topo, torus, deflection).unwrap();
         assert!(!mesh.indices.is_empty(), "empty mesh at {deflection}");
         assert_eq!(boundary_edge_count(&mesh), 0, "open mesh at {deflection}");
+        assert_eq!(
+            non_manifold_edge_count(&mesh),
+            0,
+            "non-manifold mesh at {deflection}"
+        );
     }
     let exact = 2.0 * 2.0 * std::f64::consts::PI.powi(2) * 5.0 * 1.5 * 1.5;
     let volume = oriented_solid_volume(&topo, torus, 0.001).unwrap();

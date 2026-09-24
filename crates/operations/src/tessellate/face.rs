@@ -61,6 +61,25 @@ pub fn tessellate_with_uvs_a(
     tessellate_with_uvs_floor(topo, face, deflection, angular_tol, false)
 }
 
+/// Whether a face is its whole surface: no holes, and an outer wire made of
+/// closed edges only (a torus's seam pair collapsed onto one vertex), which
+/// trims nothing away.
+fn covers_whole_domain(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    if !face_data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    for oe in topo.wire(face_data.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() != edge.end() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Like [`tessellate_with_uvs_a`] with an explicit curvature-floor selector.
 ///
 /// `curvature_floor` keeps the legacy dense sampling on doubly-curved
@@ -128,7 +147,11 @@ pub(super) fn tessellate_with_uvs_floor(
                     .collect();
                 Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
             }
-            FaceSurface::Nurbs(surface) if surface.is_periodic_u() && surface.is_periodic_v() => {
+            FaceSurface::Nurbs(surface)
+                if surface.is_periodic_u()
+                    && surface.is_periodic_v()
+                    && covers_whole_domain(topo, face_data)? =>
+            {
                 Ok(tessellate_periodic_nurbs_grid(
                     surface,
                     deflection,
