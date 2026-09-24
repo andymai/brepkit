@@ -22,9 +22,10 @@ use crate::error::AlgoError;
 /// keys duplicate edges on their endpoint pair, so the two would collapse
 /// into one and every face around the rim would lose its partner (a barrel
 /// whose seam vertex lies on a bracket plane that also crosses the rim once
-/// more). The longer arc is paved at its middle so no two pieces of one edge
-/// share both endpoints; the planar face splitter applies the same rule to
-/// the rims it re-splits itself.
+/// more). Both arcs are paved at their middles, so no two pieces of one
+/// edge share both endpoints, and neither does a piece and a section chord
+/// across the rim (a rod halved by a plane through its seam); the planar
+/// face splitter applies the same rule to the rims it re-splits itself.
 ///
 /// # Errors
 ///
@@ -84,18 +85,19 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                             && (pave.parameter - end.parameter).abs() >= 1e-10
                     })
                     .collect();
-                if closed
-                    && let Some(mid) = midpoint_pave_of_longer_arc(
+                if closed {
+                    let mids = midpoint_paves_of_both_arcs(
                         topo,
                         arena,
                         original_edge,
                         start,
                         end,
                         &interior,
-                    )
-                {
-                    sorted_paves.push(mid);
-                    sorted_paves.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
+                    );
+                    if !mids.is_empty() {
+                        sorted_paves.extend(mids);
+                        sorted_paves.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
+                    }
                 }
 
                 let mut prev_pave = start;
@@ -157,42 +159,60 @@ fn closed_seam_parameter(topo: &Topology, edge_id: brepkit_topology::edge::EdgeI
 /// from the seam vertex: a pave at the middle of the longer of the two arcs
 /// that position and the seam bound, with a fresh vertex on the curve.
 /// Parameters are the block's own (seam-anchored for circles and ellipses).
-fn midpoint_pave_of_longer_arc(
+fn midpoint_paves_of_both_arcs(
     topo: &mut Topology,
     arena: &GfaArena,
     edge_id: brepkit_topology::edge::EdgeId,
     start: Pave,
     end: Pave,
     interior: &[Pave],
-) -> Option<Pave> {
-    let edge = topo.edge(edge_id).ok()?;
-    let seam = topo.vertex(edge.start()).ok()?;
+) -> Vec<Pave> {
+    let Ok(edge) = topo.edge(edge_id) else {
+        return Vec::new();
+    };
+    let Ok(seam) = topo.vertex(edge.start()) else {
+        return Vec::new();
+    };
     let (sp, vtol) = (seam.point(), seam.tolerance());
-    let ep = topo.vertex(edge.end()).ok()?.point();
+    let Ok(ep) = topo
+        .vertex(edge.end())
+        .map(brepkit_topology::vertex::Vertex::point)
+    else {
+        return Vec::new();
+    };
     let mut distinct: Option<(Point3, f64)> = None;
     for pave in interior {
-        let p = topo.vertex(arena.resolve_vertex(pave.vertex)).ok()?.point();
+        let Ok(p) = topo
+            .vertex(arena.resolve_vertex(pave.vertex))
+            .map(brepkit_topology::vertex::Vertex::point)
+        else {
+            return Vec::new();
+        };
         if (p - sp).length() <= vtol {
             continue;
         }
         match distinct {
             None => distinct = Some((p, pave.parameter)),
             Some((q, _)) if (q - p).length() <= vtol => {}
-            Some(_) => return None,
+            Some(_) => return Vec::new(),
         }
     }
-    let (p, p_param) = distinct?;
-    let curve = edge.curve().clone();
-    let t = if p_param - start.parameter >= end.parameter - p_param {
-        f64::midpoint(start.parameter, p_param)
-    } else {
-        f64::midpoint(p_param, end.parameter)
+    let Some((p, p_param)) = distinct else {
+        return Vec::new();
     };
-    let point = curve.evaluate_with_endpoints(t, sp, ep);
-    if (point - sp).length() <= vtol || (point - p).length() <= vtol {
-        return None;
+    let curve = edge.curve().clone();
+    let mut mids = Vec::with_capacity(2);
+    for t in [
+        f64::midpoint(start.parameter, p_param),
+        f64::midpoint(p_param, end.parameter),
+    ] {
+        let point = curve.evaluate_with_endpoints(t, sp, ep);
+        if (point - sp).length() <= vtol || (point - p).length() <= vtol {
+            return Vec::new();
+        }
+        let vid = topo.add_vertex(Vertex::new(point, vtol));
+        log::debug!("MakeBlocks: closed edge {edge_id:?} paved at an arc's middle t={t:.6}");
+        mids.push(Pave::new(vid, t));
     }
-    let vid = topo.add_vertex(Vertex::new(point, vtol));
-    log::debug!("MakeBlocks: closed edge {edge_id:?} paved at its longer arc's middle t={t:.6}");
-    Some(Pave::new(vid, t))
+    mids
 }

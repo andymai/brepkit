@@ -187,6 +187,19 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A rod halved through its seam (CLOSED 2026-09-24; pin `crates/operations/tests/rod_halved_at_every_angle.rs`)**:
+  `make_cylinder(3, 4)` less the half-space y < 0 (a plane through the
+  axis and the seam) came out exact-looking at 87.39 against 18 pi, and the
+  other half (y > 0) fell back to a mesh. The cap's split pieces took the
+  shorter arc between their ends, a coin toss at half a turn, and the
+  walker read a reversed arc's tangent from the wrong end of its pcurve and
+  fell back to its chord, so an arc and the chord across it tied; and a rim
+  split at one point kept one half-turn arc whole, which the edge merge
+  welded to the chord. Split pieces of a boundary arc now run its own
+  sense, the walker reads a pcurve from whichever end sits on the edge's
+  start, and a rim split once is paved at both halves' middles (in
+  `make_blocks` and the planar splitter alike).
+
 - **A cone cut by a plane across its wall (CLOSED 2026-09-24; pin `crates/operations/tests/cone_plane_cut.rs`)**:
   `make_cone(3, 0, 6)` less the half-space above z = 3 fell back to a
   37-face mesh reading 49.21 against 49.48, and keeping the tip fell back

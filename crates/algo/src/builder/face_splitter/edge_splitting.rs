@@ -5,7 +5,8 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceSurface;
 
 use super::super::pcurve_compute::{
-    compute_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface, shorter_arc_delta,
+    compute_boundary_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface,
+    shorter_arc_delta,
 };
 use super::super::plane_frame::PlaneFrame;
 use super::super::split_types::OrientedPCurveEdge;
@@ -50,33 +51,50 @@ pub(super) fn split_boundary_edges_at_3d_points(
             continue;
         }
         // A closed plane rim split once would leave two complementary arcs
-        // sharing both endpoints; pave the longer arc at its middle exactly
-        // as `make_blocks` does for the edge images, so this face's pieces
+        // sharing both endpoints (with each other, and with a chord section
+        // across the rim); pave both at their middles exactly as
+        // `make_blocks` does for the edge images, so this face's pieces
         // match its neighbours' and the assembler's endpoint-keyed merge
         // never conflates the two arcs. Only a holed planar face re-splits a
         // raw closed rim here (its outer wire is not image-expanded); every
         // other face, the wall sharing the rim included, takes the images
         // and so already carries the `make_blocks` midpoint.
-        if frame.is_some()
-            && splits.len() == 1
-            && let EdgeCurve::Circle(c) = &edge.curve_3d
-            && (edge.start_3d - edge.end_3d).length() < tol
-        {
-            let a0 = c.project(edge.start_3d);
-            let a1 = c.project(splits[0].1);
-            let first = (a1 - a0).rem_euclid(std::f64::consts::TAU);
-            let second = std::f64::consts::TAU - first;
-            let m = if first >= second {
-                a0 + 0.5 * first
-            } else {
-                a1 + 0.5 * second
-            };
-            let delta = if edge.forward { m - a0 } else { a0 - m };
-            let t_mid = delta.rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU;
-            if t_mid > tol && t_mid < 1.0 - tol {
-                splits.push((t_mid, c.evaluate(m)));
-                splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        if frame.is_some() && splits.len() == 1 && (edge.start_3d - edge.end_3d).length() < tol {
+            use std::f64::consts::TAU;
+            match &edge.curve_3d {
+                EdgeCurve::Circle(c) => {
+                    let a0 = c.project(edge.start_3d);
+                    let a1 = c.project(splits[0].1);
+                    let first = (a1 - a0).rem_euclid(TAU);
+                    let second = TAU - first;
+                    for m in [a0 + 0.5 * first, a1 + 0.5 * second] {
+                        let delta = if edge.forward { m - a0 } else { a0 - m };
+                        let t_mid = delta.rem_euclid(TAU) / TAU;
+                        if t_mid > tol && t_mid < 1.0 - tol {
+                            splits.push((t_mid, c.evaluate(m)));
+                        }
+                    }
+                }
+                // An ellipse split is placed along its own parameter span
+                // (`find_splits_on_ellipse`), so its midpoints are too.
+                EdgeCurve::Ellipse(e) => {
+                    let (t0, t1) = edge
+                        .curve_3d
+                        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+                    let a0 = e.project(edge.start_3d);
+                    let a1 = e.project(splits[0].1);
+                    let first = (a1 - a0).rem_euclid(TAU);
+                    let second = TAU - first;
+                    for m in [a0 + 0.5 * first, a1 + 0.5 * second] {
+                        let t_mid = normalize_angle_in_span(m, t0, t1 - t0);
+                        if t_mid > tol && t_mid < 1.0 - tol {
+                            splits.push((t_mid, e.evaluate(m)));
+                        }
+                    }
+                }
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {}
             }
+            splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         }
         // Split two or more times, a closed plane rim keeps a piece between
         // every two consecutive splits, and the chord section between those
@@ -128,7 +146,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
             // verbatim gives both faces the identical split vertex.
             let split_3d = if matches!(
                 edge.curve_3d,
-                EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_)
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
             ) {
                 pt
             } else {
@@ -153,8 +171,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
             } else {
                 project_point_on_surface(split_3d, surface, &[], None)
             };
-            let pcurve =
-                compute_pcurve_on_surface(&edge.curve_3d, prev_3d, split_3d, surface, &[], frame);
+            let pcurve = boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame);
             result.push(OrientedPCurveEdge {
                 curve_3d: edge.curve_3d.clone(),
                 pcurve,
@@ -169,8 +186,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
             prev_uv = split_uv;
             prev_3d = split_3d;
         }
-        let pcurve =
-            compute_pcurve_on_surface(&edge.curve_3d, prev_3d, edge.end_3d, surface, &[], frame);
+        let pcurve = boundary_piece_pcurve(&edge, prev_3d, edge.end_3d, surface, frame);
         // The stored `end_uv` of a closed rim follows the CURVE's direction
         // (`sample_edge_to_uv` ignores orientation), so a reverse-traversed ring
         // would close a period on the wrong side of its own start.
@@ -194,6 +210,28 @@ pub(super) fn split_boundary_edges_at_3d_points(
         });
     }
     result
+}
+
+/// The pcurve of the piece of boundary edge `edge` from `from` to `to`
+/// (in traversal order): along the edge's own sense, so a piece of half a
+/// turn or more traces itself rather than its complement.
+fn boundary_piece_pcurve(
+    edge: &OrientedPCurveEdge,
+    from: Point3,
+    to: Point3,
+    surface: &FaceSurface,
+    frame: Option<&PlaneFrame>,
+) -> brepkit_math::curves2d::Curve2D {
+    let (stored_start, stored_end) = if edge.forward { (from, to) } else { (to, from) };
+    compute_boundary_pcurve_on_surface(
+        &edge.curve_3d,
+        stored_start,
+        stored_end,
+        edge.forward,
+        surface,
+        &[],
+        frame,
+    )
 }
 
 /// Find split parameters on a line edge. Returns `(t, split_3d)` sorted by `t`.
@@ -931,5 +969,56 @@ mod tests {
         // Beyond the weld band: rejected.
         let far = Point3::new(4.0, 200.0 * tol, 0.0);
         assert!(find_splits_on_line(&edge, &[far], tol).is_empty());
+    }
+
+    /// A closed planar ellipse split once, away from its vertex, comes out
+    /// in four pieces, so neither half shares both endpoints with the other
+    /// or with a chord across the rim.
+    #[test]
+    fn closed_planar_ellipse_split_once_is_paved_at_both_halves() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::vec::Vec3;
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let ellipse = Ellipse3D::new(Point3::new(0.0, 0.0, 0.0), normal, 4.0, 2.0).unwrap();
+        let vertex = ellipse.evaluate(0.7);
+        let opposite = ellipse.evaluate(0.7 + std::f64::consts::PI);
+        let surface = FaceSurface::Plane { normal, d: 0.0 };
+        let frame = PlaneFrame::from_plane_face(normal, &[vertex, opposite]);
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Ellipse(ellipse.clone()),
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: frame.project(vertex),
+            end_uv: frame.project(vertex),
+            start_3d: vertex,
+            end_3d: vertex,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let pieces = split_boundary_edges_at_3d_points(
+            vec![edge],
+            &[opposite],
+            Some(&frame),
+            &surface,
+            1e-7,
+        );
+        assert_eq!(pieces.len(), 4);
+        for (i, a) in pieces.iter().enumerate() {
+            assert!(
+                (a.start_3d - a.end_3d).length() > 1e-6,
+                "piece {i} is degenerate"
+            );
+            for b in &pieces[i + 1..] {
+                let same = (a.start_3d - b.start_3d).length() < 1e-9
+                    && (a.end_3d - b.end_3d).length() < 1e-9
+                    || (a.start_3d - b.end_3d).length() < 1e-9
+                        && (a.end_3d - b.start_3d).length() < 1e-9;
+                assert!(!same, "two pieces share both endpoints");
+            }
+            for p in [a.start_3d, a.end_3d] {
+                assert!((ellipse.evaluate(ellipse.project(p)) - p).length() < 1e-9);
+            }
+        }
     }
 }
