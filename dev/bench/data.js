@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790229159359,
+  "lastUpdate": 1790229972174,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36179,6 +36179,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45839225,
             "range": "± 308437",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f41d00fdba44ee3346ce83cbc091592d5f9d2d04",
+          "message": "fix: cut windows through cylinder and cone walls (#1693)\n\n## What was wrong\n\nCylinder and cone wall windows now produce valid solids, watertight\nmeshes with the openings carved, and volume measurements that account\nfor the removed material.\n\nThe internal-loops splitter normalized every loop on a curved face to\nclockwise in `(u, v)`, regardless of the face's `reversed` flag. On an\nunreversed wall, the hole therefore ran in the same direction as the\ncutter walls along every shared edge. The planar rule had the\ncorresponding failure for reversed parents: shell validation reads edges\nthrough the face's `reversed` flag, while a face flipped into a cavity\nkeeps its wires, so a hole cut into a reversed face was wound like the\nparent's outer wire.\n\nLoop edges reversed during chaining stored their endpoints in traversal\norder, but five samplers traversed them from `start_3d`. For closed\ncurves this selected the complement arc, moving the removed disc's\ninterior sample to the far side of a cylinder and retaining the disc.\n\nThe tessellators did not read inner wires on cylinder or cone faces, so\nthese holes were skinned over. The direct per-face volume path likewise\nintegrated a holed cylinder as a complete band. Cone windows exposed\nadditional traversal, seam placement, flood seed, and refinement errors.\n\nOn main, a `make_cylinder(1.5, 4)` cut by a `10 x 0.5 x 0.5` prism\nthrough both walls is accepted by `boolean()` without fallback, but\nvalidation reports 8 shared edges with inconsistent face orientations.\nIts mesh volume reads 28.0376, the uncut cylinder's mesh volume, and\n`solid_volume` returns 27.85 instead of 27.5809. A drill into the floor\nof a box cavity fails with 1 inconsistently oriented shared edge.\n\n## What this does\n\n- Winds discs cut from any planar or curved face counter-clockwise about\nthe surface normal and holes clockwise, independent of the parent's\n`reversed` flag. Curved winding uses 3D samples projected into `(u, v)`\nand unwrapped along the loop.\n\n- Closes zero-area loops that wind once around a sphere pole or cone\napex through the pole on the side opposite the face boundary. Reversed\nloop edges are sampled along their own span.\n\n- Sends holed cylinder and cone walls through a constrained CDT. Inner\nwires are unwrapped into the outer boundary's period and flood-removed.\nTriangulation uses the developed metric and angular refinement, with\ncone sag bounded by each triangle's widest corner.\n\n- Corrects seam runs using the rim sample preceding the run, preserves\nthe projected `v` of lone seam samples, and removes near-duplicate\nsamples before selecting hole flood seeds. Interior sampling and\nrefinement handle nested inner wires by odd depth.\n\n- Uses the same CDT for per-face meshes consumed by OBJ, PLY and glTF\nwriters and face-area calculations. It retains the analytic grid if the\nCDT produces no triangles and splits welded seam vertices so every UV\ntriangle has continuous `u`. Holed sphere and torus faces use the\nlatitude-band mesher already used for solid meshes.\n\n- Integrates holed cylinder and cone flux with Green's theorem over\nclosed-form `u` antiderivatives. Each wire uses its own signed `(u, v)`\narea. Pointed-cone seams restart unwrapping at the apex, and bands\nwinding around the axis retain the outer-wire integral.\n\n- Walks volume-integration edges from their traversal-start vertex,\nincluding whole NURBS edges whose curve starts at the edge's end vertex,\nand walks closed edges from their vertex.\n\n## Verification\n\n- `cylinder_wall_windows.rs` covers eight poses: both walls, the `u`\norigin, a blind one-wall pocket, three tilted tubes, and upright and\ntilted frustums. It checks one curved wall face without mesh fallback,\n`validate_solid`, ray classification, watertight meshes at 0.01 and\n0.001, and closed-form volume where available. Two additional tests\ncover per-face area and UV seam continuity.\n\n- The through-wall cylinder is valid with 7 faces and one cylinder.\n`solid_volume` is 27.57885 against 27.5809. The remaining 0.002 comes\nfrom planar tessellation of the top cap's circular edge. Mesh volume is\n27.5763 at deflection 0.0002, and every tested deflection is watertight.\n\n- The bore-wall pocket is valid and watertight, with `solid_volume`\n714.2645 against 714.23. On main it returns 708.92 and has 80 open mesh\nedges at deflection 0.01.\n\n- Upright and tilted frustum windows are watertight at 0.01 and 0.001.\nTheir solid and mesh volumes are 28.5261 and 28.5187 against 28.5275,\nand 28.9658 and 28.9578, respectively.\n\n- `reversed_face_holes.rs` pins the bore-wall pocket and cavity-floor\ndrill. Volume unit tests cover pointed-cone and cylinder wall flux. The\nbored-sphere fixture checks that every face meshes on its own with its\ntunnel mouth open. A bored sphere's band meshed on its own covers 196.09\nagainst a band area of 195.89 (225.89 on main, with the polar cap\nfilled).\n\n- The algo, operations, io, wasm, heal, and check suites pass: 2000\ntests, 0 failures.\n\n- The roadmap closes this case and records the remaining fallbacks:\nunequal-radius crossing-cylinder bores, drills into spheres and tori,\nand pockets into pointed cones.",
+          "timestamp": "2026-09-23T23:03:39-07:00",
+          "tree_id": "fd58b602160c42c420eba4ab1240fbf6706e2754",
+          "url": "https://github.com/andymai/brepkit/commit/f41d00fdba44ee3346ce83cbc091592d5f9d2d04"
+        },
+        "date": 1790229968946,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999616,
+            "range": "± 1337",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1077986,
+            "range": "± 2293",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13163,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 747139,
+            "range": "± 2265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41943998,
+            "range": "± 60017",
             "unit": "ns/iter"
           }
         ]
