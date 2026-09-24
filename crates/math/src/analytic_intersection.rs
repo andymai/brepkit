@@ -1980,9 +1980,18 @@ fn algebraic_cylinder_cylinder(
         if samples2.iter().all(Option::is_some) {
             closed_loops(&samples2)
         } else {
-            // Partial overlap: each cyclic window of c1's rulings that meets
-            // c2 carries one loop, out along one root and back along the
-            // other, the two joined where the discriminant vanishes.
+            // Partial overlap: each cyclic window of the swept cylinder's
+            // rulings that meets the other carries one loop, out along one
+            // root and back along the other, the two joined where the
+            // discriminant vanishes. A window the sampling misses on both
+            // sweeps (near tangency) defers to the general marcher.
+            let (sweep, other, samples) = if samples1.iter().any(Option::is_some) {
+                (c1, c2, samples1)
+            } else if samples2.iter().any(Option::is_some) {
+                (c2, c1, samples2)
+            } else {
+                return Ok(None);
+            };
             let branch_point = |inside: usize, outside: usize| -> Point3 {
                 let (mut lo, mut hi) = (u_at(inside), u_at(outside));
                 if (hi - lo).abs() > std::f64::consts::PI {
@@ -1990,23 +1999,23 @@ fn algebraic_cylinder_cylinder(
                 }
                 for _ in 0..60 {
                     let mid = 0.5 * (lo + hi);
-                    if ruling(c1, c2, mid).0 >= 0.0 {
+                    if ruling(sweep, other, mid).0 >= 0.0 {
                         lo = mid;
                     } else {
                         hi = mid;
                     }
                 }
-                let (_, vp, vm) = ruling(c1, c2, lo);
-                c1.evaluate(lo, 0.5 * (vp + vm))
+                let (_, vp, vm) = ruling(sweep, other, lo);
+                sweep.evaluate(lo, 0.5 * (vp + vm))
             };
-            let Some(first_gap) = samples1.iter().position(Option::is_none) else {
+            let Some(first_gap) = samples.iter().position(Option::is_none) else {
                 return Ok(None);
             };
             let mut loops = Vec::new();
             let mut k = 0;
             while k < SAMPLES {
                 let i = (first_gap + k) % SAMPLES;
-                if samples1[i].is_none() {
+                if samples[i].is_none() {
                     k += 1;
                     continue;
                 }
@@ -2014,7 +2023,7 @@ fn algebraic_cylinder_cylinder(
                 let mut run = Vec::new();
                 while k < SAMPLES {
                     let j = (first_gap + k) % SAMPLES;
-                    let Some(pair) = samples1[j] else { break };
+                    let Some(pair) = samples[j] else { break };
                     run.push(pair);
                     k += 1;
                 }
@@ -2027,6 +2036,9 @@ fn algebraic_cylinder_cylinder(
                 pts.extend(run.iter().rev().map(|p| p.1));
                 pts.push(head);
                 loops.push(pts);
+            }
+            if loops.is_empty() {
+                return Ok(None);
             }
             loops
         }
@@ -3099,6 +3111,51 @@ mod tests {
                 c.points.len()
             );
         }
+    }
+
+    /// Neither cylinder's rulings all meet the other: the curve is one loop
+    /// joined at its two branch points.
+    #[test]
+    fn partially_overlapping_cylinders_meet_in_one_closed_loop() {
+        let cyl_z =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let cyl_x =
+            CylindricalSurface::new(Point3::new(0.0, 1.2, 0.0), Vec3::new(1.0, 0.0, 0.0), 1.0)
+                .unwrap();
+        let curves = algebraic_cylinder_cylinder(&cyl_z, &cyl_x)
+            .unwrap()
+            .unwrap();
+        assert_eq!(curves.len(), 1);
+        let curve = &curves[0].curve;
+        let (t0, t1) = curve.domain();
+        assert!((curve.evaluate(t0) - curve.evaluate(t1)).length() < 1e-9);
+        let off = |p: Point3| {
+            let on_z = (p.x().hypot(p.y()) - 1.0).abs();
+            let on_x = ((p.y() - 1.2).hypot(p.z()) - 1.0).abs();
+            on_z.max(on_x)
+        };
+        let worst = (0..=400)
+            .map(|k| off(curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 400.0)))
+            .fold(0.0, f64::max);
+        assert!(worst < 2e-4, "curve leaves the cylinders by {worst}");
+    }
+
+    /// Near tangency the thick cylinder's window of rulings (0.02 either side
+    /// of a quarter turn) falls between its samples; the thin one's sweep
+    /// finds the loop.
+    #[test]
+    fn near_tangent_cylinders_find_their_loop_on_the_thinner_sweep() {
+        let cyl_z =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let cyl_x =
+            CylindricalSurface::new(Point3::new(0.0, 1.1998, 0.0), Vec3::new(1.0, 0.0, 0.0), 0.2)
+                .unwrap();
+        let curves = algebraic_cylinder_cylinder(&cyl_z, &cyl_x)
+            .unwrap()
+            .expect("the thin cylinder's sweep finds the loop");
+        assert_eq!(curves.len(), 1);
     }
 
     #[test]

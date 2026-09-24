@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
+use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::make_cylinder;
@@ -48,7 +50,28 @@ fn truth(length: impl Fn(f64) -> f64) -> f64 {
     PI * ROD_RADIUS * ROD_RADIUS * ROD_HEIGHT - sum * h / 3.0
 }
 
-fn drill(axis: &Axis, start: f64, length: f64, expected_volume: f64, planes: usize) {
+impl Axis {
+    /// A point `along` the bore's axis and `across` it in the rod's
+    /// horizontal plane, at height `z`.
+    fn point(&self, along: f64, across: f64, z: f64) -> Point3 {
+        match self {
+            Self::X { .. } => Point3::new(along, across, z),
+            Self::Y => Point3::new(across, along, z),
+        }
+    }
+}
+
+/// `carved` lists positions along the bore's axis inside the rod that the
+/// bore removes; `kept` lists `(along, across, z)` points of rod material.
+fn drill(
+    axis: &Axis,
+    start: f64,
+    length: f64,
+    expected_volume: f64,
+    planes: usize,
+    carved: &[f64],
+    kept: &[(f64, f64, f64)],
+) {
     let mut topo = Topology::new();
     let rod = make_cylinder(&mut topo, ROD_RADIUS, ROD_HEIGHT).unwrap();
     let bore = make_cylinder(&mut topo, BORE_RADIUS, length).unwrap();
@@ -77,6 +100,17 @@ fn drill(axis: &Axis, start: f64, length: f64, expected_volume: f64, planes: usi
         "the cut stays analytic"
     );
 
+    let classify =
+        |p: Point3| classify_point(&topo, result, p, &ClassifyOptions::default()).unwrap();
+    for &along in carved {
+        let p = axis.point(along, 0.0, 2.0);
+        assert_eq!(classify(p), PointClassification::Outside, "{p:?} is carved");
+    }
+    for &(along, across, z) in kept {
+        let p = axis.point(along, across, z);
+        assert_eq!(classify(p), PointClassification::Inside, "{p:?} is kept");
+    }
+
     let exact = solid_volume(&topo, result, 0.001).unwrap();
     assert!(
         (exact - expected_volume).abs() < 1e-7 * expected_volume,
@@ -93,14 +127,40 @@ fn drill(axis: &Axis, start: f64, length: f64, expected_volume: f64, planes: usi
 
 fn through(axis: &Axis) {
     let volume = truth(|y| 2.0 * (ROD_RADIUS * ROD_RADIUS - y * y).sqrt());
-    drill(axis, -3.0, 6.0, volume, 2);
+    drill(
+        axis,
+        -3.0,
+        6.0,
+        volume,
+        2,
+        &[-1.4, -0.6, 0.0, 0.6, 1.4],
+        &[
+            (0.0, 0.8, 2.0),
+            (0.0, -0.8, 2.0),
+            (1.2, 0.0, 1.0),
+            (-1.2, 0.0, 3.0),
+        ],
+    );
 }
 
 /// The bore starts inside the rod at 0.8 from its axis and leaves through
 /// the wall.
 fn blind(axis: &Axis) {
     let volume = truth(|y| (ROD_RADIUS * ROD_RADIUS - y * y).sqrt() - 0.8);
-    drill(axis, 0.8, 2.0, volume, 3);
+    drill(
+        axis,
+        0.8,
+        2.0,
+        volume,
+        3,
+        &[0.9, 1.2, 1.45],
+        &[
+            (0.5, 0.0, 2.0),
+            (-1.2, 0.0, 2.0),
+            (1.2, 0.5, 2.0),
+            (1.2, 0.0, 1.5),
+        ],
+    );
 }
 
 #[test]
