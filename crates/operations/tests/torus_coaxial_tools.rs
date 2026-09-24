@@ -36,14 +36,23 @@ fn slices(keep: impl Fn(f64, f64, f64) -> f64) -> f64 {
     sum * h / 3.0
 }
 
-fn check(topo: &Topology, piece: SolidId, faces: usize, truth: f64, label: &str) {
+/// Checks a valid solid of exactly the given faces by surface type, whose
+/// mesh is closed and holds `truth` to 1%.
+fn check(topo: &Topology, piece: SolidId, census: &[(&str, usize)], truth: f64, label: &str) {
     let report = validate_solid(topo, piece).unwrap();
     assert!(report.is_valid(), "{label}: {:?}", report.issues);
-    assert_eq!(
-        solid_faces(topo, piece).unwrap().len(),
-        faces,
-        "{label}: faces"
-    );
+    let mut found: Vec<(&str, usize)> = Vec::new();
+    for face in solid_faces(topo, piece).unwrap() {
+        let tag = topo.face(face).unwrap().surface().type_tag();
+        match found.iter_mut().find(|(t, _)| *t == tag) {
+            Some((_, n)) => *n += 1,
+            None => found.push((tag, 1)),
+        }
+    }
+    found.sort_unstable();
+    let mut census = census.to_vec();
+    census.sort_unstable();
+    assert_eq!(found, census, "{label}: faces");
     let mesh = tessellate_solid(topo, piece, 0.01).unwrap();
     assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
     let meshed = oriented_solid_volume(topo, piece, 0.005).unwrap();
@@ -89,7 +98,9 @@ fn ball_in_a_rings_hole() {
         let a = make_torus(&mut topo, big, small, 32).unwrap();
         let b = make_sphere(&mut topo, ball, 32).unwrap();
         let piece = boolean(&mut topo, op, a, b).unwrap();
-        check(&topo, piece, 3, truth, &label);
+        // The tube and the ball each keep one side of the two circles; the
+        // ball's side of them spans its two hemispheres.
+        check(&topo, piece, &[("sphere", 2), ("torus", 1)], truth, &label);
         let volume = solid_volume(&topo, piece, 0.01).unwrap();
         // The ball's chordal equator leaves a zone of its surface measured
         // short of exact; the lens inside both is exact.
@@ -136,10 +147,12 @@ fn rod_through_a_rings_tube() {
     let outside = 2.0 * PI * segment * (big + reach);
     let ring = 2.0 * PI * PI * big * small * small;
     let cylinder = PI * rod * rod * 10.0;
+    let fuse: &[(&str, usize)] = &[("cylinder", 2), ("plane", 2), ("torus", 1)];
+    let wall: &[(&str, usize)] = &[("cylinder", 1), ("torus", 1)];
     for (op, faces, truth) in [
-        (BooleanOp::Fuse, 5, cylinder + outside),
-        (BooleanOp::Cut, 2, outside),
-        (BooleanOp::Intersect, 2, ring - outside),
+        (BooleanOp::Fuse, fuse, cylinder + outside),
+        (BooleanOp::Cut, wall, outside),
+        (BooleanOp::Intersect, wall, ring - outside),
     ] {
         let label = format!("{op:?}");
         let mut topo = Topology::new();

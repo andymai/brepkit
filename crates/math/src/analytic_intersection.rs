@@ -1672,7 +1672,12 @@ pub fn exact_torus_torus(
     let axis = first.z_axis();
     let scale = first.major_radius() + second.major_radius();
     let offset = second.center() - first.center();
-    if axis.cross(second.z_axis()).length() > 1e-9 || offset.cross(axis).length() > 1e-9 * scale {
+    // A spindle torus's tube also crosses the far side of the axis.
+    if first.minor_radius() >= first.major_radius()
+        || second.minor_radius() >= second.major_radius()
+        || axis.cross(second.z_axis()).length() > 1e-9
+        || offset.cross(axis).length() > 1e-9 * scale
+    {
         return Ok(None);
     }
     let Some(crossings) = meridian_crossings(
@@ -1707,7 +1712,11 @@ pub fn exact_cylinder_torus(
     let axis = torus.z_axis();
     let scale = torus.major_radius() + cylinder.radius();
     let offset = cylinder.origin() - torus.center();
-    if axis.cross(cylinder.axis()).length() > 1e-9 || offset.cross(axis).length() > 1e-9 * scale {
+    // A spindle torus's tube also crosses the far side of the axis.
+    if torus.minor_radius() >= torus.major_radius()
+        || axis.cross(cylinder.axis()).length() > 1e-9
+        || offset.cross(axis).length() > 1e-9 * scale
+    {
         return Ok(None);
     }
     let gap = cylinder.radius() - torus.major_radius();
@@ -1746,7 +1755,8 @@ pub fn exact_sphere_torus(
     let axis = torus.z_axis();
     let scale = torus.major_radius() + sphere.radius();
     let offset = sphere.center() - torus.center();
-    if offset.cross(axis).length() > 1e-9 * scale {
+    // A spindle torus's tube also crosses the far side of the axis.
+    if torus.minor_radius() >= torus.major_radius() || offset.cross(axis).length() > 1e-9 * scale {
         return Ok(None);
     }
     let Some(crossings) = meridian_crossings(
@@ -3559,6 +3569,131 @@ mod tests {
         assert!(
             exact_sphere_cylinder(&sphere, &cyl).unwrap().is_none(),
             "non-coaxial sphere/cylinder defers to the marcher"
+        );
+    }
+
+    /// The circles among exact section curves.
+    fn circles_of(curves: &[ExactIntersectionCurve]) -> Vec<&Circle3D> {
+        curves
+            .iter()
+            .filter_map(|c| match c {
+                ExactIntersectionCurve::Circle(circle) => Some(circle),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Worst distance of a circle's points from a torus and from a second
+    /// surface given by its own distance function.
+    fn worst_off(
+        circles: &[&Circle3D],
+        torus: &ToroidalSurface,
+        other: impl Fn(Point3) -> f64,
+    ) -> f64 {
+        let mut worst = 0.0_f64;
+        for circle in circles {
+            for k in 0..16 {
+                let p = circle.evaluate(TAU * f64::from(k) / 16.0);
+                let q = p - torus.center();
+                let along = q.dot(torus.z_axis());
+                let rho = (q - torus.z_axis() * along).length();
+                let off = ((rho - torus.major_radius()).hypot(along) - torus.minor_radius()).abs();
+                worst = worst.max(off).max(other(p).abs());
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn exact_sphere_torus_meets_a_ball_on_the_axis_in_circles() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        for height in [0.0, 1.0] {
+            let centre = Point3::new(0.0, 0.0, height);
+            let sphere = SphericalSurface::new(centre, 3.0).unwrap();
+            let curves = exact_sphere_torus(&sphere, &torus).unwrap().unwrap();
+            let circles = circles_of(&curves);
+            assert_eq!((curves.len(), circles.len()), (2, 2), "height {height}");
+            let worst = worst_off(&circles, &torus, |p| (p - centre).length() - 3.0);
+            assert!(worst < 1e-9, "height {height}: {worst}");
+        }
+    }
+
+    #[test]
+    fn exact_sphere_torus_misses_touches_and_defers() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let ball = |x: f64, r: f64| SphericalSurface::new(Point3::new(x, 0.0, 0.0), r).unwrap();
+        assert!(
+            exact_sphere_torus(&ball(0.0, 1.0), &torus)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a small ball in the hole misses"
+        );
+        assert!(
+            exact_sphere_torus(&ball(0.0, 2.5), &torus)
+                .unwrap()
+                .is_none(),
+            "a ball touching the inner equator defers"
+        );
+        assert!(
+            exact_sphere_torus(&ball(1.0, 3.0), &torus)
+                .unwrap()
+                .is_none(),
+            "a ball off the axis defers"
+        );
+        let spindle = ToroidalSurface::with_axis_and_ref_dir(
+            Point3::new(0.0, 0.0, 0.0),
+            1.0,
+            2.0,
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        assert!(
+            exact_sphere_torus(&ball(0.0, 2.5), &spindle)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn exact_cylinder_torus_meets_a_coaxial_rod_in_circles() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let rod = |r: f64| CylindricalSurface::new(Point3::new(0.0, 0.0, -5.0), z, r).unwrap();
+        let curves = exact_cylinder_torus(&rod(4.2), &torus).unwrap().unwrap();
+        let circles = circles_of(&curves);
+        assert_eq!((curves.len(), circles.len()), (2, 2));
+        let worst = worst_off(&circles, &torus, |p| p.x().hypot(p.y()) - 4.2);
+        assert!(worst < 1e-9, "{worst}");
+        assert!(
+            exact_cylinder_torus(&rod(2.0), &torus)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a rod clear in the hole misses"
+        );
+        assert!(
+            exact_cylinder_torus(&rod(5.5), &torus).unwrap().is_none(),
+            "a wall touching the outer equator defers"
+        );
+        let tilted =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.1, 1.0), 4.2)
+                .unwrap();
+        let offset = CylindricalSurface::new(Point3::new(0.5, 0.0, 0.0), z, 4.2).unwrap();
+        assert!(exact_cylinder_torus(&tilted, &torus).unwrap().is_none());
+        assert!(exact_cylinder_torus(&offset, &torus).unwrap().is_none());
+        let spindle = ToroidalSurface::with_axis_and_ref_dir(
+            Point3::new(0.0, 0.0, 0.0),
+            1.0,
+            2.0,
+            z,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        assert!(
+            exact_cylinder_torus(&rod(0.5), &spindle).unwrap().is_none(),
+            "a spindle torus's inner lemon also meets the rod"
         );
     }
 
