@@ -223,9 +223,10 @@ fn tube_cut_by_an_oblique_plane() {
                     (a - Point3::new(0.0, 0.0, 0.0)).dot((b - a).cross(c - a)) / 6.0
                 })
                 .sum();
-            // The bore's chords add what the outer wall's take away.
+            // Inscribed: the outer wall's chords take more than the bore's
+            // give back.
             assert!(
-                (meshed - truth).abs() < 5e-3 * truth,
+                meshed <= truth && truth - meshed < 5e-3 * truth,
                 "{label}: mesh volume {meshed}, truth {truth}"
             );
         }

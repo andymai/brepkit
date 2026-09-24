@@ -4546,18 +4546,19 @@ fn loops_have_out_and_back(
 /// If there are no section edges, returns a single sub-face covering
 /// the entire face (pass-through).
 ///
-/// Wraps [`split_face_2d_impl`] to salvage closed-circle *cap* sections on
-/// plane faces (the drilled-socket → bin-body fuse: the socket's screw-hole
-/// rims land as closed circle sections on the body's coincident bottom plane).
+/// Wraps [`split_face_2d_impl`] to salvage closed circle and ellipse *cap*
+/// sections on plane faces (the drilled-socket → bin-body fuse: the socket's
+/// screw-hole rims land as closed circle sections on the body's coincident
+/// bottom plane; a tilted plane across a tube carries two nested ellipses).
 /// The impl drops closed circles in both its arrangement path
 /// ([`arrangement_regions_from_inputs`] discards any input whose UV chord is
 /// zero-length, and a closed circle has `start == end`) and its wire-builder
 /// fallback, leaving the drilled cylinder rims as free edges; the only impl
 /// path that carves a closed circle is the single-closed fast path (exactly
 /// one section, closed), which never fires when the circle is mixed with open
-/// sections or when there are two or more circles. Peel the cap circles off,
-/// split the plane by the remaining sections, then carve each cap circle into
-/// the sub-face that contains it ([`distribute_cap_circles`]).
+/// sections or when there are two or more closed curves. Peel the caps off,
+/// split the plane by the remaining sections, then carve each cap into the
+/// sub-face that contains it ([`distribute_cap_circles`]).
 ///
 /// # Arguments
 /// - `topo` -- the topology arena (immutable read)
@@ -4599,11 +4600,11 @@ pub fn split_face_2d(
 
     // Cheap gate for the common case: no closed conic section, nothing to
     // salvage — skip all frame and polygon work below.
-    let any_closed_circle = sections.iter().any(|s| {
+    let any_closed_conic = sections.iter().any(|s| {
         (s.start - s.end).length() < tol.linear
             && matches!(s.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
     });
-    if !any_closed_circle {
+    if !any_closed_conic {
         return run_impl(sections);
     }
 
@@ -4617,8 +4618,8 @@ pub fn split_face_2d(
         return run_impl(sections);
     }
 
-    // Build the face's outer polygon in UV so a *genuine* cap circle (a full
-    // closed circle strictly interior to the face — a drilled hole rim) can be
+    // Build the face's outer polygon in UV so a *genuine* cap (a full closed
+    // circle or ellipse strictly interior to the face, a drilled hole rim) can be
     // told apart from the zero-span arc remnants that the FF/pave machinery
     // leaves at faceted-corner junctions (those sit ON the boundary, share a
     // point with an open arc section, and their "circle" is the corner cylinder
@@ -4674,14 +4675,14 @@ pub fn split_face_2d(
         }
     }
 
-    // Engage only where the impl would silently drop cap circles: at least one
-    // genuine cap circle AND not the single-closed fast path (exactly one
-    // section, that one circle) which the impl already handles correctly.
+    // Engage only where the impl would silently drop caps: at least one
+    // genuine cap AND not the single-closed fast path (exactly one section,
+    // that one closed curve) which the impl already handles correctly.
     if cap_sections.is_empty() || (cap_sections.len() == 1 && sections.len() == 1) {
         return run_impl(sections);
     }
 
-    // The impl ignores closed circles on plane faces outside its single-closed
+    // The impl ignores closed curves on plane faces outside its single-closed
     // fast path, so withholding the caps does not change how the remaining
     // sections split.
     let base = run_impl(&rest_sections);
@@ -4697,10 +4698,12 @@ pub fn split_face_2d(
     )
 }
 
-/// Slack on the cap-circle interiority test. A genuine drilled hole's centre
-/// clears the face outline by more than its radius, while a corner cylinder's
-/// section circle is exactly tangent (centre exactly one radius out); the 5%
-/// margin keeps float noise on such a tangent circle from reading as interior.
+/// Slack on the cap interiority test. A genuine drilled hole's centre clears
+/// the face outline by more than its radius, while a corner cylinder's section
+/// circle is exactly tangent (centre exactly one radius out); the 5% margin
+/// keeps float noise on such a tangent circle from reading as interior. An
+/// ellipse is held to its semi-major axis, so one that touches the outline
+/// anywhere is refused.
 const CAP_INTERIORITY_MARGIN: f64 = 1.05;
 
 /// Wire points in TRAVERSAL order, honouring each oriented edge's direction.
@@ -4731,7 +4734,8 @@ fn collect_wire_points_oriented(
     pts
 }
 
-/// Carve closed cap circles (see [`split_face_2d`]) into the base sub-faces.
+/// Carve closed cap circles and ellipses (see [`split_face_2d`]) into the
+/// base sub-faces.
 ///
 /// Each cap circle is assigned to the first base sub-face whose outer boundary
 /// contains the circle's centre in UV, then that sub-face is re-split via
