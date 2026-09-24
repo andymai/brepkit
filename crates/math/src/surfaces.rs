@@ -438,6 +438,38 @@ impl SphericalSurface {
         })
     }
 
+    /// Creates a spherical surface with an explicit pole axis and reference
+    /// direction.
+    ///
+    /// `ref_dir` defines the x-axis of the local frame (projected
+    /// perpendicular to `z_axis`), which fixes where `u = 0` lies, as
+    /// [`ToroidalSurface::with_axis_and_ref_dir`] does for a torus.
+    ///
+    /// # Errors
+    /// Returns an error if radius is not positive or `z_axis` is zero.
+    pub fn with_axis_and_ref_dir(
+        center: Point3,
+        radius: f64,
+        z_axis: Vec3,
+        ref_dir: Vec3,
+    ) -> Result<Self, MathError> {
+        if radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let f = Frame3::from_normal_and_ref(center, z_axis, ref_dir)?;
+        Ok(Self {
+            center,
+            radius,
+            x_axis: f.x,
+            y_axis: f.y,
+            z_axis: f.z,
+        })
+    }
+
     /// Evaluates the surface at parameters `(u, v)`.
     #[must_use]
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {

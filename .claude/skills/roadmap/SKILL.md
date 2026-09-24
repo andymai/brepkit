@@ -158,9 +158,46 @@ that does not exist yet; without it, stop.
 | **v1 fillet deprecations entangled with the public wasm API** | `try_fillet` still reaches deprecated `fillet`/`fillet_rolling_ball`; migrating changes public behavior — a product decision, not safe cleanup. See `fillet-blend`, `wasm-bindings` |
 | **crates.io / GTM items** | Andy-only. Publishing infrastructure works (see MEMORY.md for the release-please `continue-on-error` masking gotcha) |
 
+## Stability campaign: every README status row to Stable
+
+A row flips to Stable only when its whole stated scope clears the bar:
+exact result, `validate_solid` clean (orientation on), watertight mesh,
+volume against an independent oracle, tests over that scope including
+transformed and mirrored inputs, and wasm exposure. Auditing the Beta rows
+also turned up defects inside rows the README already calls Stable; those
+come first, since a Stable row that is wrong is worse than a Beta one.
+
+| Row | Status / blocker |
+|---|---|
+| **Assemblies (Beta)** | Branch `feat/assembly-stable`: tree-order `flatten`/BOM, every component placed (a parent's own solid was dropped), exact placed bbox via `measure::solid_bounding_box_transformed`. Lands after the transform fix, which its bbox oracle test depends on |
+| **Evolution (Beta)** | Faithful GFA provenance exists (`boolean_with_evolution`). Gaps: a same-domain merge keeps one origin and marks the other deleted; identical/contained operands and every fallback use `build_evolution_by_geometry`, whose 10-unit centroid cap is scale-dependent; fillet evolution is heuristic only |
+| **Draft (Beta)** | `draft.rs` moves vertices radially from an axis through the neutral point, so a drafted face comes out non-planar and no neighbour is re-intersected. Rewrite as a topology-preserving modification: rotate each drafted plane about its neutral line so the outward normal gets `n·d = sin(angle)`, re-intersect every edge touching a drafted face, re-solve its vertices |
+| **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
+| **Feature recognition (Beta)** | The dihedral is `acos(n1·n2)` with a cylinder's AXIS standing in for its normal, so nothing is ever classed Convex; needs per-edge outward normals and a signed dihedral |
+| **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
+| **Stable row defect: tilted cylinder or cone cut by a box** | A 0.5 x 0.5 prism cut through `make_cylinder(1.5, 4)` rotated `Rx(0.7)` returns a GFA result with 4 inconsistent-orientation shared edges and an open mesh, and `boolean` ACCEPTS it (no fallback). Same for the cone. Probe `zz_cut_probe.rs` in the session scratchpad |
+| **Stable row defect: `loft_smooth`** | Three squares (half 3, 2, 3 at z 0, 2, 4): signed volume 3.4, magnitude 6.7, 8 open mesh edges |
+| **Stable row defect: heal `convert_to_bspline` on a cylinder** | 7 open mesh edges at the seam vertex: the band skips the rim's vertex sample while the cap keeps it |
+| **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
+| **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
+
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Transform lost analytic frames (CLOSED 2026-09-23; pins in `crates/operations/src/transform/tests.rs`)** —
+  `transform_solid` rebuilt a rotated torus or sphere around the world z axis
+  (boundary 5 units off the surface, open sphere meshes), dropped every
+  cylinder/cone reference direction, left a mirror's wires winding clockwise
+  and its NURBS faces facing inward, and mapped a non-uniformly scaled circle
+  to a non-principal ellipse. Surfaces are now exact images of their frames
+  (NURBS where a map breaks circularity), mirrors reverse wires and flip NURBS
+  face flags, and pcurves are dropped where the parameterization changed.
+  Collateral fixes: the equal-count band mesh paired its rims one sample out
+  of phase when a sample sat on the u seam (a twisted band, 1.7% low);
+  NURBS point projection now wraps across a closed direction instead of
+  clamping; the CDT mesher unwraps closed NURBS directions and starts each
+  closed rim at its vertex.
 
 - **Boundary arc crossing window and partially riding line sections (CLOSED 2026-09-15; pin `compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact`)** —
   two roots in `fill_images_faces`: `arc_segment_crossings` windowed a boundary arc by its
@@ -795,6 +832,12 @@ One line each; the fixture/PR carries the story. Newest first.
 
 ## Recurring traps (the distilled, expensive lessons)
 
+- **A closed edge's samples start at its curve's parametric origin, not at its
+  vertex.** An ellipse always starts at its major vertex and a converted or
+  transformed conic starts wherever its new frame puts it, so any consumer
+  that walks a closed rim into a seam must re-sequence the rim at the vertex
+  (`anchor_closed_edges_at_vertices` in the CDT mesher). The band mesher is
+  immune because it orders by angle.
 - **A circular edge has ONE canonical span and it is not the short one.**
   `EdgeCurve::domain_with_endpoints` is the CCW range from start vertex to end vertex,
   routinely a major arc. Any new "which part of the circle does this edge cover" test

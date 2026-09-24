@@ -321,6 +321,19 @@ fn surface_newton_refine(
 ) -> Result<(f64, f64, Point3), MathError> {
     let mut u = u_init;
     let mut v = v_init;
+    // Along a closed direction the step wraps across the seam instead of
+    // stopping at the domain end: a seed on the far copy of the seam (the
+    // coarse grid samples both ends) must still reach a point just short of
+    // it.
+    let advance = |x: f64, delta: f64, lo: f64, hi: f64, closed: bool| -> (f64, f64) {
+        if closed && hi > lo {
+            (lo + (x + delta - lo).rem_euclid(hi - lo), delta)
+        } else {
+            let next = (x + delta).clamp(lo, hi);
+            (next, next - x)
+        }
+    };
+    let (closed_u, closed_v) = (surface.is_periodic_u(), surface.is_periodic_v());
 
     for _ in 0..MAX_ITERATIONS {
         let ders = surface.derivatives(u, v, 1);
@@ -394,11 +407,11 @@ fn surface_newton_refine(
             )
         };
 
-        let u_new = (u + delta_u).clamp(u_min, u_max);
-        let v_new = (v + delta_v).clamp(v_min, v_max);
+        let (u_new, step_u) = advance(u, delta_u, u_min, u_max, closed_u);
+        let (v_new, step_v) = advance(v, delta_v, v_min, v_max, closed_v);
 
         // Convergence check 3: parameter step negligible.
-        let step = (deriv_u * (u_new - u) + deriv_v * (v_new - v)).length();
+        let step = (deriv_u * step_u + deriv_v * step_v).length();
         if step < tolerance {
             let pt = surface.evaluate(u_new, v_new);
             return Ok((u_new, v_new, pt));

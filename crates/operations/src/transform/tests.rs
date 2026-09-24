@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::tolerance::Tolerance;
@@ -350,28 +350,6 @@ fn translate_torus_face_updates_center() {
     assert!(found, "torus face not found after transform");
 }
 
-#[test]
-fn transform_direction_zero_vector_is_error() {
-    // A zero direction vector cannot be normalized and must return an error.
-    // This exercises the normalize() error branch in transform_direction.
-    let result = super::transform_direction(&Mat4::identity(), Vec3::new(0.0, 0.0, 0.0));
-    assert!(
-        result.is_err(),
-        "transform_direction with zero vector should return an error"
-    );
-}
-
-#[test]
-fn transform_direction_unit_z_identity_unchanged() {
-    // Identity matrix should leave a unit direction unchanged.
-    let dir = Vec3::new(0.0, 0.0, 1.0);
-    let result = super::transform_direction(&Mat4::identity(), dir).unwrap();
-    let tol = Tolerance::new();
-    assert!(tol.approx_eq(result.z(), 1.0), "z should remain 1.0");
-    assert!(tol.approx_eq(result.x(), 0.0), "x should remain 0.0");
-    assert!(tol.approx_eq(result.y(), 0.0), "y should remain 0.0");
-}
-
 /// Revolving a face produces NURBS surfaces; translating the result
 /// should move both vertices and NURBS control points.
 #[test]
@@ -563,4 +541,322 @@ fn translate_wire_with_circle_edge() {
             c.center().x()
         );
     }
+}
+
+/// A box whose faces and edges are all exact NURBS.
+fn nurbs_box(topo: &mut Topology) -> SolidId {
+    let solid = crate::primitives::make_box(topo, 2.0, 3.0, 4.0).unwrap();
+    crate::heal::convert_to_bspline(topo, solid).unwrap();
+    solid
+}
+
+/// Worst distance from any vertex or edge sample of `solid` to the surface
+/// of each face it bounds.
+fn worst_boundary_offset(topo: &Topology, solid: SolidId) -> f64 {
+    let mut worst: f64 = 0.0;
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let on_surface = |p: brepkit_math::vec::Point3| -> f64 {
+            match face.surface() {
+                FaceSurface::Plane { normal, d } => {
+                    (normal.dot(p - brepkit_math::vec::Point3::new(0.0, 0.0, 0.0)) - d).abs()
+                }
+                surface => {
+                    let (u, v) = surface.project_point(p).unwrap();
+                    (surface.evaluate(u, v).unwrap() - p).length()
+                }
+            }
+        };
+        let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+        for wid in wires {
+            for oe in topo.wire(wid).unwrap().edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                let p0 = topo.vertex(edge.start()).unwrap().point();
+                let p1 = topo.vertex(edge.end()).unwrap().point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(p0, p1);
+                for k in 0..=8 {
+                    let t = t0 + (t1 - t0) * f64::from(k) / 8.0;
+                    worst = worst.max(on_surface(edge.curve().evaluate_with_endpoints(t, p0, p1)));
+                }
+            }
+        }
+    }
+    worst
+}
+
+/// Signed area vector of a face's outer wire, traversed in wire order.
+fn outer_wire_area_vector(topo: &Topology, fid: FaceId) -> Vec3 {
+    let face = topo.face(fid).unwrap();
+    let wire = topo.wire(face.outer_wire()).unwrap();
+    let pts: Vec<brepkit_math::vec::Point3> = wire
+        .edges()
+        .iter()
+        .map(|oe| {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let v = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            topo.vertex(v).unwrap().point()
+        })
+        .collect();
+    let origin = pts[0];
+    let mut area = Vec3::new(0.0, 0.0, 0.0);
+    for w in pts.windows(2).skip(1) {
+        area += (w[0] - origin).cross(w[1] - origin) * 0.5;
+    }
+    area
+}
+
+fn mesh_is_watertight_with_volume(topo: &Topology, solid: SolidId) -> f64 {
+    let mesh = crate::tessellate::tessellate_solid(topo, solid, 0.01).unwrap();
+    assert_eq!(
+        crate::tessellate::boundary_edge_count(&mesh),
+        0,
+        "mesh must be watertight"
+    );
+    crate::measure::oriented_solid_volume(topo, solid, 0.01).unwrap()
+}
+
+/// A rigid motion must move every curved surface WITH its frame: a torus or
+/// sphere rebuilt around the world z axis leaves its boundary edges off the
+/// surface. The pose also spins each primitive about its own axis, which
+/// used to put a rim sample on the cylinder's u seam and twist the band mesh.
+#[test]
+fn rigid_motion_keeps_curved_surfaces_on_their_boundaries() {
+    use crate::primitives::{make_cone, make_cylinder, make_sphere, make_torus};
+
+    type Make = fn(&mut Topology) -> SolidId;
+    let pose = Mat4::translation(1.0, 2.0, 3.0)
+        * Mat4::rotation_x(0.9)
+        * Mat4::rotation_y(-0.4)
+        * Mat4::rotation_z(1.3);
+    let shapes: [(&str, Make); 4] = [
+        ("cylinder", |t| make_cylinder(t, 1.5, 4.0).unwrap()),
+        ("cone", |t| make_cone(t, 2.0, 1.0, 3.0).unwrap()),
+        ("sphere", |t| make_sphere(t, 2.0, 16).unwrap()),
+        ("torus", |t| make_torus(t, 6.0, 1.5, 16).unwrap()),
+    ];
+    for (name, make) in shapes {
+        let mut topo = Topology::new();
+        let solid = make(&mut topo);
+        let before = mesh_is_watertight_with_volume(&topo, solid);
+        // `make_sphere` bounds its hemispheres with a chordal equator, so the
+        // sphere starts off its own boundary by the sagitta.
+        let offset_before = worst_boundary_offset(&topo, solid);
+        transform_solid(&mut topo, solid, &pose).unwrap();
+        let offset = worst_boundary_offset(&topo, solid);
+        assert!(
+            (offset - offset_before).abs() < 1e-9,
+            "{name}: boundary moved {offset_before} -> {offset} off its surfaces"
+        );
+        let after = mesh_is_watertight_with_volume(&topo, solid);
+        assert!(
+            (after - before).abs() < 1e-9 * before,
+            "{name}: mesh volume {before} became {after}"
+        );
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+    }
+}
+
+/// A mirror keeps every outer wire counter-clockwise around its face's
+/// outward normal. Without the wire reversal the mirrored solid validates
+/// clean but winds every face backwards, which later booleans read as
+/// same-direction shared edges.
+#[test]
+fn mirror_keeps_outer_wires_counter_clockwise() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+    let mirrored = crate::mirror::mirror(
+        &mut topo,
+        solid,
+        brepkit_math::vec::Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    for fid in brepkit_topology::explorer::solid_faces(&topo, mirrored).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            panic!("box faces are planar");
+        };
+        let outward = if face.is_reversed() {
+            -*normal
+        } else {
+            *normal
+        };
+        assert!(
+            outer_wire_area_vector(&topo, fid).dot(outward) > 0.0,
+            "face {fid:?} winds clockwise around its outward normal"
+        );
+    }
+
+    // Fuse the mirror image back onto an overlapping box: the shared walls
+    // must meet with opposite edge senses.
+    let other = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    transform_solid(&mut topo, other, &Mat4::translation(-1.0, 1.0, 1.0)).unwrap();
+    let fused =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, mirrored, other)
+            .unwrap();
+    let report = crate::validate::validate_solid(&topo, fused).unwrap();
+    assert!(
+        report.is_valid(),
+        "fuse of a mirrored box: {:?}",
+        report.issues
+    );
+}
+
+/// A NURBS face's normal is the cross product of its partials, which a
+/// mirror reverses; the face flag must flip so the solid stays outward.
+#[test]
+fn mirror_keeps_nurbs_faces_outward() {
+    let mut topo = Topology::new();
+    let solid = nurbs_box(&mut topo);
+    let mirrored = crate::mirror::mirror(
+        &mut topo,
+        solid,
+        brepkit_math::vec::Point3::new(5.0, 0.0, 0.0),
+        Vec3::new(1.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let volume = mesh_is_watertight_with_volume(&topo, mirrored);
+    assert!(
+        (volume - 24.0).abs() < 1e-9,
+        "mirrored NURBS box volume {volume}"
+    );
+    assert!(
+        crate::validate::validate_solid(&topo, mirrored)
+            .unwrap()
+            .is_valid()
+    );
+}
+
+/// Stretching a cylinder along its axis keeps it a cylinder; stretching it
+/// across the axis makes an elliptic wall, which only NURBS can carry.
+#[test]
+fn non_uniform_scale_keeps_cylinders_exact() {
+    use crate::primitives::make_cylinder;
+    let exact = std::f64::consts::PI * 1.5 * 1.5 * 4.0;
+
+    let mut topo = Topology::new();
+    let along = make_cylinder(&mut topo, 1.5, 4.0).unwrap();
+    transform_solid(&mut topo, along, &Mat4::scale(1.0, 1.0, 3.0)).unwrap();
+    let wall = brepkit_topology::explorer::solid_faces(&topo, along)
+        .unwrap()
+        .into_iter()
+        .find_map(|f| match topo.face(f).unwrap().surface() {
+            FaceSurface::Cylinder(c) => Some(c.radius()),
+            _ => None,
+        })
+        .expect("an axial stretch keeps the cylinder analytic");
+    assert!((wall - 1.5).abs() < 1e-12);
+    let v = crate::measure::solid_volume(&topo, along, 0.001).unwrap();
+    assert!(
+        (v - 3.0 * exact).abs() < 1e-3 * exact,
+        "axial stretch volume {v}"
+    );
+
+    let across = make_cylinder(&mut topo, 1.5, 4.0).unwrap();
+    let squash = Mat4::rotation_z(0.3) * Mat4::scale(2.0, 1.0, 1.0);
+    transform_solid(&mut topo, across, &squash).unwrap();
+    assert!(worst_boundary_offset(&topo, across) < 1e-9);
+    assert!(
+        brepkit_topology::explorer::solid_faces(&topo, across)
+            .unwrap()
+            .iter()
+            .all(|&f| !matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_))),
+        "an elliptic wall cannot stay a circular cylinder"
+    );
+    // The wall's seam lies a quarter turn from the rims' parametric origin
+    // (an ellipse starts at its major vertex); the mesh must still close.
+    mesh_is_watertight_with_volume(&topo, across);
+    let v = crate::measure::solid_volume(&topo, across, 0.01).unwrap();
+    assert!(
+        (v - 2.0 * exact).abs() < 5e-3 * exact,
+        "elliptic cylinder volume {v}"
+    );
+}
+
+/// The image of a circle under a non-uniform scale is an ellipse whose axes
+/// are the image's principal axes, not the images of the circle's own axes.
+#[test]
+fn non_uniform_scale_of_a_tilted_circle_is_its_exact_ellipse() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::Wire;
+
+    let mut topo = Topology::new();
+    let circle = Circle3D::new(
+        Point3::new(1.0, -2.0, 0.5),
+        Vec3::new(0.3, 0.5, 0.8).normalize().unwrap(),
+        2.0,
+    )
+    .unwrap();
+    let start = circle.evaluate(0.0);
+    let v = topo.add_vertex(Vertex::new(start, 1e-7));
+    let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle.clone())));
+    let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+
+    let m = Mat4::scale(2.0, 1.0, 0.5);
+    transform_wire(&mut topo, w, &m).unwrap();
+    let EdgeCurve::Ellipse(ellipse) = topo.edge(e).unwrap().curve().clone() else {
+        panic!("a squashed circle is an ellipse");
+    };
+    assert!(ellipse.u_axis().dot(ellipse.v_axis()).abs() < 1e-12);
+    for k in 0..32 {
+        let p = m.mul_point(circle.evaluate(f64::from(k) * std::f64::consts::TAU / 32.0));
+        let d = p - ellipse.center();
+        let (x, y) = (d.dot(ellipse.u_axis()), d.dot(ellipse.v_axis()));
+        let implicit = (x / ellipse.semi_major()).powi(2) + (y / ellipse.semi_minor()).powi(2);
+        assert!(
+            (implicit - 1.0).abs() < 1e-12,
+            "sample {k} off the ellipse: {implicit}"
+        );
+        assert!(
+            d.dot(ellipse.normal()).abs() < 1e-12,
+            "sample {k} off the ellipse plane"
+        );
+    }
+}
+
+/// Stored pcurves stay only where the face's parameterization is carried
+/// over: always for NURBS, never for a plane (it has no stored frame).
+#[test]
+fn transform_drops_pcurves_that_no_longer_fit_their_surface() {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    use brepkit_topology::pcurve::PCurve;
+
+    let mut topo = Topology::new();
+    let planar = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let curved = nurbs_box(&mut topo);
+    let first_face = |s: SolidId| brepkit_topology::explorer::solid_faces(&topo, s).unwrap()[0];
+    let (plane, nurbs) = (first_face(planar), first_face(curved));
+    let edge_of = |f: FaceId| {
+        topo.wire(topo.face(f).unwrap().outer_wire())
+            .unwrap()
+            .edges()[0]
+            .edge()
+    };
+    let (plane_edge, nurbs_edge) = (edge_of(plane), edge_of(nurbs));
+    let line = || {
+        PCurve::new(
+            Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            0.0,
+            1.0,
+        )
+    };
+    topo.pcurves_mut().set(plane_edge, plane, line());
+    topo.pcurves_mut().set(nurbs_edge, nurbs, line());
+
+    transform_solid(&mut topo, planar, &Mat4::rotation_x(0.4)).unwrap();
+    transform_solid(&mut topo, curved, &Mat4::rotation_x(0.4)).unwrap();
+    assert!(!topo.pcurves().contains(plane_edge, plane));
+    assert!(topo.pcurves().contains(nurbs_edge, nurbs));
 }

@@ -12,195 +12,98 @@ use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
-use brepkit_topology::wire::WireId;
+use brepkit_topology::wire::{OrientedEdge, WireId};
 
 /// Apply an affine transform to a solid, modifying vertex positions and
 /// face surface geometry in place.
 ///
 /// The transform matrix must be non-degenerate (non-zero determinant).
-/// All unique vertices reachable from the solid's shells are transformed,
-/// NURBS edge curves and face surfaces have their control points updated,
-/// and all planar face normals are updated using the inverse transpose.
+/// Every vertex, edge curve, and face surface reachable from the solid's
+/// shells is mapped to its exact image:
+///
+/// - Analytic surfaces keep their full reference frame, so a rotated torus,
+///   sphere, cone, or cylinder is the same surface in its new pose with the
+///   same `(u, v)` parameterization. A map that would stop a surface being
+///   circular (a non-uniform scale across a cylinder's axis, say) converts
+///   that face to the NURBS image of the surface.
+/// - A mirror (negative determinant) reverses every wire and flips the
+///   `reversed` flag of NURBS faces, so each outer wire still winds
+///   counter-clockwise around its face's outward normal.
+/// - Stored pcurves survive only on faces whose parameterization is carried
+///   over exactly; the rest are dropped for consumers to recompute.
 ///
 /// # Errors
 ///
 /// Returns an error if the matrix is degenerate or a referenced entity is missing.
-#[allow(clippy::too_many_lines)]
 pub fn transform_solid(
     topo: &mut Topology,
     solid: SolidId,
     matrix: &Mat4,
 ) -> Result<(), crate::OperationsError> {
+    let inverse = checked_inverse(matrix)?;
+    let (vertex_ids, edge_ids, face_ids) = collect_solid_entities(topo, solid)?;
+    transform_topology(topo, &vertex_ids, &edge_ids, &face_ids, matrix, &inverse)
+}
+
+/// Checks the matrix is invertible and returns its inverse.
+fn checked_inverse(matrix: &Mat4) -> Result<Mat4, crate::OperationsError> {
     let tol = Tolerance::new();
     if tol.approx_eq(matrix.determinant(), 0.0) {
         return Err(crate::OperationsError::InvalidInput {
             reason: "transform matrix is degenerate (zero determinant)".into(),
         });
     }
+    Ok(matrix.inverse()?)
+}
 
-    // Collect all unique vertex IDs, edge IDs, and face IDs in a read phase.
-    let (vertex_ids, edge_ids, face_ids) = collect_solid_entities(topo, solid)?;
-
-    // Mutate phase 1: transform each vertex.
-    for vid in vertex_ids {
+/// Transform a closed set of faces with the edges and vertices they use.
+fn transform_topology(
+    topo: &mut Topology,
+    vertex_ids: &HashSet<VertexId>,
+    edge_ids: &HashSet<EdgeId>,
+    face_ids: &HashSet<FaceId>,
+    matrix: &Mat4,
+    inverse: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    // Surfaces go first: the NURBS fallbacks read a face's parameter range
+    // off its boundary vertices, which must still lie on the source surface.
+    let mut stale_pcurves = HashSet::new();
+    for &fid in face_ids {
+        if !transform_face_surface(topo, fid, matrix, inverse)? {
+            stale_pcurves.insert(fid);
+        }
+    }
+    for &vid in vertex_ids {
         let vertex = topo.vertex_mut(vid)?;
         let new_point = matrix.mul_point(vertex.point());
         vertex.set_point(new_point);
     }
+    transform_edges(topo, edge_ids, matrix)?;
+    if matrix.determinant() < 0.0 {
+        reverse_face_wires(topo, face_ids)?;
+    }
+    topo.pcurves_mut().remove_faces(&stale_pcurves);
+    Ok(())
+}
 
-    // Mutate phase 2: transform edge curves (NURBS, Circle, Ellipse).
-    transform_edges(topo, &edge_ids, matrix)?;
-
-    // Mutate phase 3: transform face surface geometry.
-    // For plane normals, use the inverse transpose: n' = (M⁻¹)ᵀ · n
-    let normal_matrix = matrix.inverse()?.transpose();
-
-    for fid in face_ids {
+/// Reverse every wire of `faces`: order and per-edge sense.
+fn reverse_face_wires(
+    topo: &mut Topology,
+    faces: &HashSet<FaceId>,
+) -> Result<(), crate::OperationsError> {
+    let mut wire_ids = HashSet::new();
+    for &fid in faces {
         let face = topo.face(fid)?;
-        match face.surface() {
-            FaceSurface::Plane { normal, .. } => {
-                let n = *normal;
-                // Transform the normal via the inverse transpose (treating it as
-                // a direction, so we use mul_point on a point at (nx, ny, nz)
-                // and subtract the translation component).
-                let transformed =
-                    normal_matrix.mul_point(brepkit_math::vec::Point3::new(n.x(), n.y(), n.z()));
-                // Extract direction only (ignore any translation component from
-                // the inverse transpose by subtracting the origin transform).
-                let origin = normal_matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
-                let raw = Vec3::new(
-                    transformed.x() - origin.x(),
-                    transformed.y() - origin.y(),
-                    transformed.z() - origin.z(),
-                );
-                let new_normal = raw.normalize()?;
-
-                // Recompute d from a transformed vertex on this face. We use
-                // the first vertex of the outer wire.
-                let wire = topo.wire(face.outer_wire())?;
-                let first_oe = &wire.edges()[0];
-                let edge = topo.edge(first_oe.edge())?;
-                let ref_vid = if first_oe.is_forward() {
-                    edge.start()
-                } else {
-                    edge.end()
-                };
-                let ref_point = topo.vertex(ref_vid)?.point();
-                let new_d = new_normal.dot(Vec3::new(ref_point.x(), ref_point.y(), ref_point.z()));
-
-                let face_mut = topo.face_mut(fid)?;
-                face_mut.set_surface(FaceSurface::Plane {
-                    normal: new_normal,
-                    d: new_d,
-                });
-            }
-            FaceSurface::Nurbs(s) => {
-                let new_control_points: Vec<Vec<_>> = s
-                    .control_points()
-                    .iter()
-                    .map(|row| row.iter().map(|pt| matrix.mul_point(*pt)).collect())
-                    .collect();
-                let new_surface = NurbsSurface::new(
-                    s.degree_u(),
-                    s.degree_v(),
-                    s.knots_u().to_vec(),
-                    s.knots_v().to_vec(),
-                    new_control_points,
-                    s.weights().to_vec(),
-                );
-                topo.face_mut(fid)?
-                    .set_surface(FaceSurface::Nurbs(new_surface?));
-            }
-            FaceSurface::Cylinder(cyl) => {
-                let new_origin = matrix.mul_point(cyl.origin());
-                let new_axis = transform_direction(matrix, cyl.axis())?;
-                // Scale radius: measure how the matrix scales a direction perpendicular to axis
-                let new_radius = scaled_radius(matrix, cyl.axis(), cyl.radius());
-                let new_cyl = brepkit_math::surfaces::CylindricalSurface::new(
-                    new_origin, new_axis, new_radius,
-                )?;
-                topo.face_mut(fid)?
-                    .set_surface(FaceSurface::Cylinder(new_cyl));
-            }
-            FaceSurface::Cone(cone) => {
-                if is_uniform_scale(matrix) {
-                    let new_apex = matrix.mul_point(cone.apex());
-                    let new_axis = transform_direction(matrix, cone.axis())?;
-                    let new_cone = brepkit_math::surfaces::ConicalSurface::new(
-                        new_apex,
-                        new_axis,
-                        cone.half_angle(),
-                    )?;
-                    topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
-                } else {
-                    let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
-                    let cone_clone = cone.clone();
-                    // Use heal's exact rational cone converter (geometry's
-                    // delegates to math's sampled approximation; heal's is
-                    // geometrically exact). v_range is the cone-generator
-                    // distance from apex.
-                    let nurbs = brepkit_heal::construct::convert_surface::cone_to_nurbs(
-                        &cone_clone,
-                        v_range,
-                    )
-                    .map_err(|e| crate::OperationsError::InvalidInput {
-                        reason: format!("cone_to_nurbs failed: {e}"),
-                    })?;
-                    let transformed = transform_nurbs_surface(&nurbs, matrix)?;
-                    topo.face_mut(fid)?
-                        .set_surface(FaceSurface::Nurbs(transformed));
-                }
-            }
-            FaceSurface::Sphere(sph) => {
-                if is_uniform_scale(matrix) {
-                    let new_center = matrix.mul_point(sph.center());
-                    // Extract uniform scale factor from column magnitudes
-                    let m = &matrix.0;
-                    let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-                    let new_sph = brepkit_math::surfaces::SphericalSurface::new(
-                        new_center,
-                        sph.radius() * sx,
-                    )?;
-                    topo.face_mut(fid)?
-                        .set_surface(FaceSurface::Sphere(new_sph));
-                } else {
-                    // Non-uniform scale: sample the face's v-range of the
-                    // sphere and refit as NURBS.
-                    let (v_min, v_max) = sphere_face_v_range(topo, fid, sph)?;
-                    let sph_clone = sph.clone();
-                    let nurbs = sphere_to_transformed_nurbs(&sph_clone, matrix, v_min, v_max)?;
-                    topo.face_mut(fid)?.set_surface(FaceSurface::Nurbs(nurbs));
-                }
-            }
-            FaceSurface::Torus(tor) => {
-                if is_uniform_scale(matrix) {
-                    let new_center = matrix.mul_point(tor.center());
-                    let m = &matrix.0;
-                    let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-                    let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
-                        new_center,
-                        tor.major_radius() * sx,
-                        tor.minor_radius() * sx,
-                    )?;
-                    topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
-                } else {
-                    let tor_clone = tor.clone();
-                    // Use heal's exact rational torus converter (geometry's
-                    // delegates to math's sampled approximation; heal's is
-                    // geometrically exact 9×9 tensor product).
-                    let nurbs =
-                        brepkit_heal::construct::convert_surface::torus_to_nurbs(&tor_clone)
-                            .map_err(|e| crate::OperationsError::InvalidInput {
-                                reason: format!("torus_to_nurbs failed: {e}"),
-                            })?;
-                    let transformed = transform_nurbs_surface(&nurbs, matrix)?;
-                    topo.face_mut(fid)?
-                        .set_surface(FaceSurface::Nurbs(transformed));
-                }
-            }
+        wire_ids.insert(face.outer_wire());
+        wire_ids.extend(face.inner_wires().iter().copied());
+    }
+    for wid in wire_ids {
+        let edges = topo.wire_mut(wid)?.edges_mut();
+        edges.reverse();
+        for oe in edges.iter_mut() {
+            *oe = OrientedEdge::new(oe.edge(), !oe.is_forward());
         }
     }
-
     Ok(())
 }
 
@@ -252,7 +155,7 @@ fn sphere_face_v_range(
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
             let pt = topo.vertex(edge.start())?.point();
-            sum += pt.z() - center.z();
+            sum += (pt - center).dot(sph.z_axis());
         }
         sum / wire.edges().len() as f64
     };
@@ -272,7 +175,7 @@ fn sphere_face_v_range(
             let edge = topo.edge(oe.edge())?;
             if edge.start() == edge.end() {
                 let pt = topo.vertex(edge.start())?.point();
-                let dz = pt.z() - center.z();
+                let dz = (pt - center).dot(sph.z_axis());
                 if dz > 0.0 {
                     has_pole_north = true;
                 } else {
@@ -305,165 +208,199 @@ fn sphere_face_v_range(
     }
 }
 
-/// Check whether a transform matrix has uniform scaling (all axis scale
-/// factors are approximately equal). Non-uniform scaling distorts spheres
-/// into ellipsoids, so analytic representations must be converted to NURBS.
-/// Compute the scaled radius of a circle perpendicular to `axis` after transform.
-fn scaled_radius(matrix: &Mat4, axis: Vec3, radius: f64) -> f64 {
-    // Pick a direction perpendicular to the axis
-    let perp = if axis.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-            .cross(axis)
-            .normalize()
-            .unwrap_or(Vec3::new(1.0, 0.0, 0.0))
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-            .cross(axis)
-            .normalize()
-            .unwrap_or(Vec3::new(0.0, 1.0, 0.0))
-    };
-    // Transform the perpendicular direction and measure its length
-    let origin = brepkit_math::vec::Point3::new(0.0, 0.0, 0.0);
-    let end =
-        brepkit_math::vec::Point3::new(perp.x() * radius, perp.y() * radius, perp.z() * radius);
-    let t_origin = matrix.mul_point(origin);
-    let t_end = matrix.mul_point(end);
-    let diff = t_end - t_origin;
-    diff.length()
+/// The linear part of `matrix` applied to `v` (no translation).
+fn linear(matrix: &Mat4, v: Vec3) -> Vec3 {
+    let m = &matrix.0;
+    Vec3::new(
+        m[0][0].mul_add(v.x(), m[0][1].mul_add(v.y(), m[0][2] * v.z())),
+        m[1][0].mul_add(v.x(), m[1][1].mul_add(v.y(), m[1][2] * v.z())),
+        m[2][0].mul_add(v.x(), m[2][1].mul_add(v.y(), m[2][2] * v.z())),
+    )
 }
 
-/// Transform a single face's surface geometry.
+/// Relative tolerance for "these image vectors are orthogonal and equally
+/// long", the test that a map keeps a circle a circle.
+const SHAPE_REL_TOL: f64 = 1e-9;
+
+fn nearly_orthogonal(a: Vec3, b: Vec3) -> bool {
+    a.dot(b).abs() <= SHAPE_REL_TOL * a.length() * b.length()
+}
+
+fn nearly_equal(a: f64, b: f64) -> bool {
+    (a - b).abs() <= SHAPE_REL_TOL * a.abs().max(b.abs())
+}
+
+/// The scale factor if `matrix` is a similarity (rotation, reflection, and
+/// uniform scale, plus translation), else `None`.
+fn similarity_scale(matrix: &Mat4) -> Option<f64> {
+    let cols = [
+        linear(matrix, Vec3::new(1.0, 0.0, 0.0)),
+        linear(matrix, Vec3::new(0.0, 1.0, 0.0)),
+        linear(matrix, Vec3::new(0.0, 0.0, 1.0)),
+    ];
+    let s = cols[0].length();
+    let similar = nearly_equal(cols[1].length(), s)
+        && nearly_equal(cols[2].length(), s)
+        && nearly_orthogonal(cols[0], cols[1])
+        && nearly_orthogonal(cols[0], cols[2])
+        && nearly_orthogonal(cols[1], cols[2]);
+    similar.then_some(s)
+}
+
+/// For a surface of revolution with frame images `x`, `y` (radial) and `z`
+/// (axis), the radial scale factor if the image is still a surface of
+/// revolution about `z`: the radial images orthogonal, equally long, and
+/// both perpendicular to the axis image.
+fn revolution_scale(x: Vec3, y: Vec3, z: Vec3) -> Option<f64> {
+    let s = x.length();
+    (nearly_equal(y.length(), s)
+        && nearly_orthogonal(x, y)
+        && nearly_orthogonal(x, z)
+        && nearly_orthogonal(y, z))
+    .then_some(s)
+}
+
+/// Transform a single face's surface to its exact image under `matrix`.
 ///
-/// The `normal_matrix` should be `matrix.inverse()?.transpose()`.
+/// Reads the face's boundary vertices in their untransformed positions (the
+/// NURBS fallbacks take their parameter range from them). Returns whether
+/// the face's `(u, v)` parameterization is carried over unchanged, i.e.
+/// whether its stored pcurves remain valid.
 #[allow(clippy::too_many_lines)]
 fn transform_face_surface(
     topo: &mut Topology,
     fid: FaceId,
     matrix: &Mat4,
-    normal_matrix: &Mat4,
-) -> Result<(), crate::OperationsError> {
+    inverse: &Mat4,
+) -> Result<bool, crate::OperationsError> {
+    use brepkit_heal::construct::convert_surface::{
+        cone_to_nurbs, cylinder_to_nurbs, torus_to_nurbs,
+    };
+    use brepkit_math::surfaces::{
+        ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+    };
+
+    let mirrored = matrix.determinant() < 0.0;
+    let heal_err = |what: &str, e: brepkit_heal::HealError| crate::OperationsError::InvalidInput {
+        reason: format!("{what} failed: {e}"),
+    };
     let face = topo.face(fid)?;
-    match face.surface() {
-        FaceSurface::Plane { normal, .. } => {
-            let n = *normal;
-            let transformed =
-                normal_matrix.mul_point(brepkit_math::vec::Point3::new(n.x(), n.y(), n.z()));
-            let origin = normal_matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
-            let raw = Vec3::new(
-                transformed.x() - origin.x(),
-                transformed.y() - origin.y(),
-                transformed.z() - origin.z(),
-            );
-            let new_normal = raw.normalize()?;
-            let wire = topo.wire(face.outer_wire())?;
-            let first_oe =
-                wire.edges()
-                    .first()
-                    .ok_or_else(|| crate::OperationsError::InvalidInput {
-                        reason: "face has empty outer wire".into(),
-                    })?;
-            let edge = topo.edge(first_oe.edge())?;
-            let ref_vid = if first_oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
-            let ref_point = topo.vertex(ref_vid)?.point();
-            let new_d = new_normal.dot(Vec3::new(ref_point.x(), ref_point.y(), ref_point.z()));
-            topo.face_mut(fid)?.set_surface(FaceSurface::Plane {
-                normal: new_normal,
-                d: new_d,
-            });
+    // A NURBS normal is the cross product of its partials, which a mirror
+    // turns inward; the face flag flips to keep the face's normal outward.
+    let (surface, preserved) = match face.surface().clone() {
+        FaceSurface::Plane { normal, d } => {
+            let origin = brepkit_math::vec::Point3::new(0.0, 0.0, 0.0);
+            let new_normal = linear(&inverse.transpose(), normal).normalize()?;
+            let on_plane = origin + normal * (d / normal.dot(normal));
+            let new_d = new_normal.dot(matrix.mul_point(on_plane) - origin);
+            (
+                FaceSurface::Plane {
+                    normal: new_normal,
+                    d: new_d,
+                },
+                false,
+            )
         }
-        FaceSurface::Nurbs(s) => {
-            let new_control_points: Vec<Vec<_>> = s
-                .control_points()
-                .iter()
-                .map(|row| row.iter().map(|pt| matrix.mul_point(*pt)).collect())
-                .collect();
-            let new_surface = NurbsSurface::new(
-                s.degree_u(),
-                s.degree_v(),
-                s.knots_u().to_vec(),
-                s.knots_v().to_vec(),
-                new_control_points,
-                s.weights().to_vec(),
-            );
-            topo.face_mut(fid)?
-                .set_surface(FaceSurface::Nurbs(new_surface?));
-        }
+        FaceSurface::Nurbs(s) => (
+            FaceSurface::Nurbs(transform_nurbs_surface(&s, matrix)?),
+            true,
+        ),
         FaceSurface::Cylinder(cyl) => {
-            let new_origin = matrix.mul_point(cyl.origin());
-            let new_axis = transform_direction(matrix, cyl.axis())?;
-            let new_radius = scaled_radius(matrix, cyl.axis(), cyl.radius());
-            let new_cyl =
-                brepkit_math::surfaces::CylindricalSurface::new(new_origin, new_axis, new_radius)?;
-            topo.face_mut(fid)?
-                .set_surface(FaceSurface::Cylinder(new_cyl));
+            let (x, y, z) = (
+                linear(matrix, cyl.x_axis()),
+                linear(matrix, cyl.y_axis()),
+                linear(matrix, cyl.axis()),
+            );
+            if let Some(s) = revolution_scale(x, y, z) {
+                let image = CylindricalSurface::with_ref_dir(
+                    matrix.mul_point(cyl.origin()),
+                    z,
+                    cyl.radius() * s,
+                    x,
+                )?;
+                (
+                    FaceSurface::Cylinder(image),
+                    !mirrored && nearly_equal(z.length(), 1.0),
+                )
+            } else {
+                let v_range = analytic_face_v_range(topo, fid, |pt| cyl.project_point(pt).1)?;
+                let nurbs = cylinder_to_nurbs(&cyl, v_range)
+                    .map_err(|e| heal_err("cylinder_to_nurbs", e))?;
+                (
+                    FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
+                    false,
+                )
+            }
         }
         FaceSurface::Cone(cone) => {
-            if is_uniform_scale(matrix) {
-                let new_apex = matrix.mul_point(cone.apex());
-                let new_axis = transform_direction(matrix, cone.axis())?;
-                let new_cone = brepkit_math::surfaces::ConicalSurface::new(
-                    new_apex,
-                    new_axis,
-                    cone.half_angle(),
-                )?;
-                topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+            let (x, y, z) = (
+                linear(matrix, cone.x_axis()),
+                linear(matrix, cone.y_axis()),
+                linear(matrix, cone.axis()),
+            );
+            if let Some(s) = revolution_scale(x, y, z) {
+                // The generator cos(a)·radial + sin(a)·axis maps to
+                // s·cos(a)·radial' + |z'|·sin(a)·axis'.
+                let (sin_a, cos_a) = cone.half_angle().sin_cos();
+                let half_angle = (z.length() * sin_a).atan2(s * cos_a);
+                let image =
+                    ConicalSurface::with_ref_dir(matrix.mul_point(cone.apex()), z, half_angle, x)?;
+                (
+                    FaceSurface::Cone(image),
+                    !mirrored && nearly_equal(s, 1.0) && nearly_equal(z.length(), 1.0),
+                )
             } else {
                 let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
-                let cone_clone = cone.clone();
                 let nurbs =
-                    brepkit_heal::construct::convert_surface::cone_to_nurbs(&cone_clone, v_range)
-                        .map_err(|e| crate::OperationsError::InvalidInput {
-                        reason: format!("cone_to_nurbs failed: {e}"),
-                    })?;
-                let transformed = transform_nurbs_surface(&nurbs, matrix)?;
-                topo.face_mut(fid)?
-                    .set_surface(FaceSurface::Nurbs(transformed));
+                    cone_to_nurbs(&cone, v_range).map_err(|e| heal_err("cone_to_nurbs", e))?;
+                (
+                    FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
+                    false,
+                )
             }
         }
         FaceSurface::Sphere(sph) => {
-            if is_uniform_scale(matrix) {
-                let new_center = matrix.mul_point(sph.center());
-                let m = &matrix.0;
-                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-                let new_sph =
-                    brepkit_math::surfaces::SphericalSurface::new(new_center, sph.radius() * sx)?;
-                topo.face_mut(fid)?
-                    .set_surface(FaceSurface::Sphere(new_sph));
+            if let Some(s) = similarity_scale(matrix) {
+                let image = SphericalSurface::with_axis_and_ref_dir(
+                    matrix.mul_point(sph.center()),
+                    sph.radius() * s,
+                    linear(matrix, sph.z_axis()),
+                    linear(matrix, sph.x_axis()),
+                )?;
+                (FaceSurface::Sphere(image), !mirrored)
             } else {
-                let (v_min, v_max) = sphere_face_v_range(topo, fid, sph)?;
-                let sph_clone = sph.clone();
-                let nurbs = sphere_to_transformed_nurbs(&sph_clone, matrix, v_min, v_max)?;
-                topo.face_mut(fid)?.set_surface(FaceSurface::Nurbs(nurbs));
+                let (v_min, v_max) = sphere_face_v_range(topo, fid, &sph)?;
+                let nurbs = sphere_to_transformed_nurbs(&sph, matrix, v_min, v_max)?;
+                (FaceSurface::Nurbs(nurbs), false)
             }
         }
         FaceSurface::Torus(tor) => {
-            if is_uniform_scale(matrix) {
-                let new_center = matrix.mul_point(tor.center());
-                let m = &matrix.0;
-                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-                let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
-                    new_center,
-                    tor.major_radius() * sx,
-                    tor.minor_radius() * sx,
+            if let Some(s) = similarity_scale(matrix) {
+                let image = ToroidalSurface::with_axis_and_ref_dir(
+                    matrix.mul_point(tor.center()),
+                    tor.major_radius() * s,
+                    tor.minor_radius() * s,
+                    linear(matrix, tor.z_axis()),
+                    linear(matrix, tor.x_axis()),
                 )?;
-                topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+                (FaceSurface::Torus(image), !mirrored)
             } else {
-                let tor_clone = tor.clone();
-                let nurbs = brepkit_heal::construct::convert_surface::torus_to_nurbs(&tor_clone)
-                    .map_err(|e| crate::OperationsError::InvalidInput {
-                        reason: format!("torus_to_nurbs failed: {e}"),
-                    })?;
-                let transformed = transform_nurbs_surface(&nurbs, matrix)?;
-                topo.face_mut(fid)?
-                    .set_surface(FaceSurface::Nurbs(transformed));
+                let nurbs = torus_to_nurbs(&tor).map_err(|e| heal_err("torus_to_nurbs", e))?;
+                (
+                    FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
+                    false,
+                )
             }
         }
+    };
+    let flip = mirrored && matches!(surface, FaceSurface::Nurbs(_));
+    let face = topo.face_mut(fid)?;
+    if flip {
+        let reversed = face.is_reversed();
+        face.set_reversed(!reversed);
     }
-    Ok(())
+    face.set_surface(surface);
+    Ok(preserved)
 }
 
 /// Compute the v-parameter range for an analytic surface face.
@@ -512,17 +449,6 @@ fn transform_nurbs_surface(
     )?)
 }
 
-fn is_uniform_scale(matrix: &Mat4) -> bool {
-    let m = &matrix.0;
-    // Column vector magnitudes of the upper-left 3×3
-    let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-    let sy = (m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1]).sqrt();
-    let sz = (m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2]).sqrt();
-    let avg = (sx + sy + sz) / 3.0;
-    let rel = 0.01; // 1% tolerance
-    (sx - avg).abs() < avg * rel && (sy - avg).abs() < avg * rel && (sz - avg).abs() < avg * rel
-}
-
 /// Sample a spherical surface over a given v-range, transform the points
 /// with a matrix, and refit as a NURBS surface. This preserves the correct
 /// geometry when a non-uniform scale is applied (sphere → ellipsoid).
@@ -554,19 +480,6 @@ fn sphere_to_transformed_nurbs(
     Ok(nurbs)
 }
 
-/// Transforms a direction vector by applying the matrix and subtracting the
-/// translation component, then normalizing.
-fn transform_direction(matrix: &Mat4, dir: Vec3) -> Result<Vec3, crate::OperationsError> {
-    let origin = matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
-    let tip = matrix.mul_point(brepkit_math::vec::Point3::new(dir.x(), dir.y(), dir.z()));
-    let raw = Vec3::new(
-        tip.x() - origin.x(),
-        tip.y() - origin.y(),
-        tip.z() - origin.z(),
-    );
-    Ok(raw.normalize()?)
-}
-
 /// Transform a set of edge curves in place.
 ///
 /// Line edges need no update — their geometry is defined by vertices.
@@ -576,10 +489,6 @@ fn transform_edges(
     edge_ids: &HashSet<EdgeId>,
     matrix: &Mat4,
 ) -> Result<(), crate::OperationsError> {
-    let origin = matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
-    let transform_dir = |d: Vec3| -> Vec3 {
-        matrix.mul_point(brepkit_math::vec::Point3::new(d.x(), d.y(), d.z())) - origin
-    };
     for &eid in edge_ids {
         let edge = topo.edge(eid)?;
         let new_curve = match edge.curve() {
@@ -597,68 +506,62 @@ fn transform_edges(
                     c.weights().to_vec(),
                 )?))
             }
-            EdgeCurve::Circle(c) => {
-                let new_center = matrix.mul_point(c.center());
-                let new_u = transform_dir(c.u_axis());
-                let new_v = transform_dir(c.v_axis());
-                let su = new_u.length();
-                let sv = new_v.length();
-                let new_normal = new_u.cross(new_v).normalize()?;
-                if (su - sv).abs() < 1e-12 * su.max(sv).max(1.0) {
-                    Some(EdgeCurve::Circle(
-                        brepkit_math::curves::Circle3D::with_axes(
-                            new_center,
-                            new_normal,
-                            c.radius() * su,
-                            new_u.normalize()?,
-                            new_v.normalize()?,
-                        )?,
-                    ))
-                } else {
-                    let (semi_major, semi_minor, u_dir, v_dir) = if su >= sv {
-                        (
-                            c.radius() * su,
-                            c.radius() * sv,
-                            new_u.normalize()?,
-                            new_v.normalize()?,
-                        )
-                    } else {
-                        (
-                            c.radius() * sv,
-                            c.radius() * su,
-                            new_v.normalize()?,
-                            new_u.normalize()?,
-                        )
-                    };
-                    Some(EdgeCurve::Ellipse(
-                        brepkit_math::curves::Ellipse3D::with_axes(
-                            new_center, new_normal, semi_major, semi_minor, u_dir, v_dir,
-                        )?,
-                    ))
-                }
-            }
-            EdgeCurve::Ellipse(e) => {
-                let new_center = matrix.mul_point(e.center());
-                let new_u = transform_dir(e.u_axis());
-                let new_v = transform_dir(e.v_axis());
-                let new_normal = new_u.cross(new_v).normalize()?;
-                Some(EdgeCurve::Ellipse(
-                    brepkit_math::curves::Ellipse3D::with_axes(
-                        new_center,
-                        new_normal,
-                        e.semi_major() * new_u.length(),
-                        e.semi_minor() * new_v.length(),
-                        new_u.normalize()?,
-                        new_v.normalize()?,
-                    )?,
-                ))
-            }
+            EdgeCurve::Circle(c) => Some(transform_conic(
+                matrix,
+                c.center(),
+                c.u_axis() * c.radius(),
+                c.v_axis() * c.radius(),
+            )?),
+            EdgeCurve::Ellipse(e) => Some(transform_conic(
+                matrix,
+                e.center(),
+                e.u_axis() * e.semi_major(),
+                e.v_axis() * e.semi_minor(),
+            )?),
         };
         if let Some(curve) = new_curve {
             topo.edge_mut(eid)?.set_curve(curve);
         }
     }
     Ok(())
+}
+
+/// The exact image of the conic `center + p·cos(t) + q·sin(t)`.
+///
+/// An affine map sends it to `center' + p'·cos(t) + q'·sin(t)` with `p'`,
+/// `q'` conjugate semi-diameters; the result is re-expressed on its principal
+/// axes, a phase shift of `t` that keeps the direction of travel. A circle
+/// whose image axes are still orthogonal and equal keeps them unchanged, so a
+/// rigid motion preserves its parameterization exactly.
+fn transform_conic(
+    matrix: &Mat4,
+    center: brepkit_math::vec::Point3,
+    p: Vec3,
+    q: Vec3,
+) -> Result<EdgeCurve, crate::OperationsError> {
+    use brepkit_math::curves::{Circle3D, Ellipse3D};
+
+    let (p, q) = (linear(matrix, p), linear(matrix, q));
+    let (a1, a2) = if nearly_orthogonal(p, q) {
+        if q.length() > p.length() {
+            (q, -p)
+        } else {
+            (p, q)
+        }
+    } else {
+        let t0 = 0.5 * (2.0 * p.dot(q)).atan2(p.dot(p) - q.dot(q));
+        let (sin_t, cos_t) = t0.sin_cos();
+        (p * cos_t + q * sin_t, q * cos_t - p * sin_t)
+    };
+    let (l1, l2) = (a1.length(), a2.length());
+    let center = matrix.mul_point(center);
+    let normal = a1.cross(a2).normalize()?;
+    let (u, v) = (a1.normalize()?, a2.normalize()?);
+    Ok(if nearly_equal(l1, l2) {
+        EdgeCurve::Circle(Circle3D::with_axes(center, normal, l1, u, v)?)
+    } else {
+        EdgeCurve::Ellipse(Ellipse3D::with_axes(center, normal, l1, l2, u, v)?)
+    })
 }
 
 /// Apply an affine transform to a wire, modifying vertex positions and
@@ -672,13 +575,7 @@ pub fn transform_wire(
     wire_id: WireId,
     matrix: &Mat4,
 ) -> Result<(), crate::OperationsError> {
-    let tol = Tolerance::new();
-    if tol.approx_eq(matrix.determinant(), 0.0) {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "transform matrix is degenerate (zero determinant)".into(),
-        });
-    }
-
+    checked_inverse(matrix)?;
     let (vertex_ids, edge_ids) = collect_wire_entities(topo, wire_id)?;
 
     // Transform vertices.
@@ -697,43 +594,27 @@ pub fn transform_wire(
 /// Apply an affine transform to a face, modifying vertex positions, edge
 /// curve geometry, and the face surface in place.
 ///
-/// Transforms all vertices/edges in the face's outer and inner wires, then
-/// updates the face surface geometry (plane normal, NURBS CPs, etc.).
+/// Transforms all vertices/edges in the face's outer and inner wires and the
+/// face surface, with the same exact-image rules as [`transform_solid`].
 ///
 /// # Errors
 ///
 /// Returns an error if the matrix is degenerate or a referenced entity is missing.
-#[allow(clippy::too_many_lines)]
 pub fn transform_face(
     topo: &mut Topology,
     face_id: FaceId,
     matrix: &Mat4,
 ) -> Result<(), crate::OperationsError> {
-    let tol = Tolerance::new();
-    if tol.approx_eq(matrix.determinant(), 0.0) {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "transform matrix is degenerate (zero determinant)".into(),
-        });
-    }
-
-    // Collect all vertices and edges from the face's wires.
+    let inverse = checked_inverse(matrix)?;
     let (vertex_ids, edge_ids) = collect_face_entities(topo, face_id)?;
-
-    // Transform vertices.
-    for vid in vertex_ids {
-        let vertex = topo.vertex_mut(vid)?;
-        let new_point = matrix.mul_point(vertex.point());
-        vertex.set_point(new_point);
-    }
-
-    // Transform edge curves.
-    transform_edges(topo, &edge_ids, matrix)?;
-
-    // Transform face surface.
-    let normal_matrix = matrix.inverse()?.transpose();
-    transform_face_surface(topo, face_id, matrix, &normal_matrix)?;
-
-    Ok(())
+    transform_topology(
+        topo,
+        &vertex_ids,
+        &edge_ids,
+        &HashSet::from([face_id]),
+        matrix,
+        &inverse,
+    )
 }
 
 /// Traverses face → wires → edges → vertices and returns deduplicated sets.
