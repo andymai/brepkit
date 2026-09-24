@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790248136244,
+  "lastUpdate": 1790248811952,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36827,6 +36827,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41543419,
             "range": "± 125303",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "932e810a28785bb85e2e83919924998f53cdb25e",
+          "message": "fix(operations): sum volume fluxes about a point near the solid (#1707)\n\n## What was wrong\n\nSolid volume measurements are now stable far from the world origin.\nPreviously, every divergence volume sum ran about the origin,\nmultiplying large coordinates into each face flux and losing the volume.\n\nAfter translation by `(1e6, 2e6, -3e6)`, a slanted triangular prism of\nvolume 11 read 235.69 from `solid_volume` and 56.37 from\n`oriented_solid_volume`. A radius 1.5, height 4 tube with a window cut\nthrough its wall, volume 27.581, read 46.38 and 2940.4. A napkin ring,\n`make_sphere(6, 24)` less a radius 3 bore, changed from 587.67 at the\norigin to 2599.03.\n\n## What this does\n\n- Exact paths sum about the origin when a solid lies within ten of its\nhalf-diagonals of it, and about the centre of its box otherwise. This\ncovers the all-planar path, surfaces of revolution, the direct per-face\npath, and the check crate face integrator used by `solid_volume` for\nbored quadrics.\n\n- The check crate threads the selected point through crate-private\n`integrate_face_about`. `integrate_face` retains its signature.\n\n- Triangle terms take differences before multiplying: `a · ((b − a) × (c\n− a))`. The all-planar ring area uses `(q − f) × (p − f)` about the\nring's first vertex. Planar Green's-theorem flux measures each wire\nabout its own first point.\n\n- Mesh-only paths retain the origin because an open mesh's volume\ndepends on the point and meshes remain comparable only about one fixed\npoint.\n\n- The near-origin rule preserves existing readings for nearby solids.\nThis matters for the faulty `chamfer_v2` solid in\n`regress_chamfer_obtuse_ridge.rs`, whose inward-facing chamfer face\nproduces 232.1498 about the origin and 231.9235 about its box centre,\nagainst a true 232.0016. The roadmap records this separately as a\nStable-row defect.\n\n## Verification\n\n- `far_from_origin_volume.rs` pins both prism paths within `1e-8`, the\nwindowed tube within `1e-7` for `solid_volume` and `1e-3` for\n`oriented_solid_volume`, and the translated napkin ring against its\nuntranslated result within `1e-6`.\n\n- The algo, operations, io, wasm, heal, check, offset, and blend suites\npass: 2195 tests, 0 failures.\n\n- The `cylinder_r5_h20` golden now prints a roundoff-sized `-0.000000`\nfor centre-of-mass y. The roadmap closes the far-from-origin volume\ndefect.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes solid volume measurements stable far from the world origin. Volume\nsums previously ran about the origin, so a solid millions of units out\nmultiplied its large coordinates into each face's flux and lost the\nvolume (an 11-unit prism read 235.69, a windowed tube 46.38 instead of\n27.581).\n\n- Exact paths sum about the origin when a solid is near it, and about\nits box centre when more than ten half-diagonals away: all-planar,\nsurfaces of revolution, the direct per-face path, and the check crate's\nface integrator.\n- Triangle terms take differences before multiplying (`a · ((b − a) × (c\n− a))`); planar ring, shoelace, and conic terms anchor at their first\nvertex or the wire's first point.\n- Mesh-only paths keep the origin, since an open mesh's volume is only\ncomparable about one fixed point. Empty solids, which have no vertices\nand no box, also sum about the origin.\n- The check crate threads the anchor through crate-private\n`integrate_face_about`; `integrate_face` keeps its signature.\n- New `far_from_origin_volume.rs` pins the prism, windowed tube, open\nshell, and translated napkin ring volumes; the `cylinder_r5_h20` golden\nreports a roundoff-sized `-0.000000` centre-of-mass y.\n\n<sup>Written for commit 32098a21538ee76dbf7e781c9e8ef503a2b1a938.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1707?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T04:17:38-07:00",
+          "tree_id": "4fedf899045e80c3f6d6c9106d6a01bc917b91c6",
+          "url": "https://github.com/andymai/brepkit/commit/932e810a28785bb85e2e83919924998f53cdb25e"
+        },
+        "date": 1790248807909,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 837653,
+            "range": "± 21902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 898105,
+            "range": "± 6369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10515,
+            "range": "± 129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 622689,
+            "range": "± 10680",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 38610791,
+            "range": "± 1172370",
             "unit": "ns/iter"
           }
         ]
