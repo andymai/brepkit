@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790242178900,
+  "lastUpdate": 1790242768295,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36557,6 +36557,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41498707,
             "range": "± 210098",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "26189982406572762923bd5a4bd85288a2149e11",
+          "message": "chore(main): release 3.5.4 (#1706)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.5.4](https://github.com/andymai/brepkit/compare/v3.5.3...v3.5.4)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **operations:** integrate planar faces exactly in solid_volume\n([#1697](https://github.com/andymai/brepkit/issues/1697))\n([d38e20a](https://github.com/andymai/brepkit/commit/d38e20a7d470cfe462ce70b845a6b644a8e98c87))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases brepkit 3.5.4, bumping all workspace crates to match. This\nrelease fixes planar face integration in `solid_volume` so it computes\nexact instead of approximated volumes.\n\n<sup>Written for commit 2ad7c5c5dcda6d85b9cb5eb8e589532cd683bc66.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1706?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T09:36:52Z",
+          "tree_id": "8f8901e73baf0106cbb57144ff38b2155a5e8439",
+          "url": "https://github.com/andymai/brepkit/commit/26189982406572762923bd5a4bd85288a2149e11"
+        },
+        "date": 1790242764054,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000093,
+            "range": "± 814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1077124,
+            "range": "± 5632",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12972,
+            "range": "± 178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 744710,
+            "range": "± 28329",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41945273,
+            "range": "± 196449",
             "unit": "ns/iter"
           }
         ]
