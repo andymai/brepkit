@@ -632,6 +632,60 @@ fn sweep_smooth_curved_path() {
     );
 }
 
+/// Each rail is an iso-line of both side faces that share it, so every edge
+/// of the smooth sweep lies on its faces, the solid is valid and closed, and
+/// its volume is the profile area times the quarter arc (Pappus), to the
+/// rails' interpolation.
+#[test]
+fn sweep_smooth_rails_lie_on_their_faces() {
+    use brepkit_math::nurbs::projection::project_point_to_surface;
+    use brepkit_topology::explorer::solid_faces;
+
+    let mut topo = Topology::new();
+    let profile = make_unit_square_face(&mut topo);
+    let solid = sweep_smooth(&mut topo, profile, &quarter_circle_xz_path(5.0)).unwrap();
+    let report = crate::validate::validate_solid(&topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+
+    for face_id in solid_faces(&topo, solid).unwrap() {
+        let face = topo.face(face_id).unwrap();
+        let FaceSurface::Nurbs(surface) = face.surface() else {
+            continue;
+        };
+        for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let (start, end) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            for k in 0..=16 {
+                let t = t0 + (t1 - t0) * f64::from(k) / 16.0;
+                let p = edge.curve().evaluate_with_endpoints(t, start, end);
+                let on = project_point_to_surface(surface, p, 1e-12).unwrap();
+                assert!(
+                    on.distance < 1e-7,
+                    "edge point {p:?} is {} off its face",
+                    on.distance
+                );
+            }
+        }
+    }
+
+    let pappus = std::f64::consts::FRAC_PI_2 * 5.0;
+    let mesh = crate::tessellate::tessellate_solid(&topo, solid, 0.001).unwrap();
+    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+    for volume in [
+        crate::measure::solid_volume(&topo, solid, 0.001).unwrap(),
+        crate::measure::oriented_solid_volume(&topo, solid, 0.001).unwrap(),
+    ] {
+        assert!(
+            (volume - pappus).abs() < 1e-3 * pappus,
+            "volume {volume}, Pappus {pappus}"
+        );
+    }
+}
+
 /// Helper: create a closed circular NURBS path (full circle in XZ plane).
 ///
 /// Uses the XZ plane so that a profile in XY sweeps with full 3D extent

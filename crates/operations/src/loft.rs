@@ -1231,7 +1231,7 @@ pub fn loft_smooth(
 /// Interpolate a non-rational B-spline through `points` at the increasing
 /// `params`, with knots averaged from the parameters (The NURBS Book, eq.
 /// 9.8): curves fitted at the same parameters share one knot vector.
-fn interpolate_at(
+pub(crate) fn interpolate_at(
     points: &[Point3],
     degree: usize,
     params: &[f64],
@@ -1315,7 +1315,7 @@ fn interpolate_at(
 /// Chord-length parameters in `[0, 1]` averaged over several point rows of
 /// equal length. A row whose points all coincide carries no spacing and is
 /// left out; if every row does, the parameters are uniform.
-fn mean_chord_params(rows: &[Vec<Point3>]) -> Vec<f64> {
+pub(crate) fn mean_chord_params(rows: &[Vec<Point3>]) -> Vec<f64> {
     let len = rows.first().map_or(0, Vec::len);
     let mut sum = vec![0.0; len];
     let mut counted = 0_u32;
