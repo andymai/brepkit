@@ -1624,7 +1624,7 @@ fn cdt_trace() -> bool {
 /// re-meshing the face with `tessellate_nonplanar_snap`, which is watertight
 /// but honours no deflection bound, so the stripe case logs a warning first
 /// and the sag leaves a trace.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn tessellate_nonplanar_cdt(
     topo: &Topology,
     face_id: FaceId,
@@ -1635,6 +1635,35 @@ pub(super) fn tessellate_nonplanar_cdt(
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
     point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<(), crate::OperationsError> {
+    tessellate_nonplanar_cdt_uv(
+        topo,
+        face_id,
+        face_data,
+        deflection,
+        angular_tol,
+        circle_floor,
+        edge_global_indices,
+        merged,
+        point_to_global,
+        None,
+    )
+}
+
+/// [`tessellate_nonplanar_cdt`] that also reports each emitted vertex's
+/// `(u, v)`, wrapped into a NURBS surface's domain, into `uvs`.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn tessellate_nonplanar_cdt_uv(
+    topo: &Topology,
+    face_id: FaceId,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    circle_floor: bool,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+    uvs: Option<&mut DetHashMap<u32, (f64, f64)>>,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -2084,7 +2113,7 @@ pub(super) fn tessellate_nonplanar_cdt(
             let cell = radius * du / divisions as f64;
             (radius, cell / dv)
         }
-        _ => (1.0, 1.0),
+        _ => nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv)).unwrap_or((1.0, 1.0)),
     };
     let to_cdt = |point: Point2| Point2::new(point.x() * cdt_u_scale, point.y() * cdt_v_scale);
     let from_cdt = |point: Point2| Point2::new(point.x() / cdt_u_scale, point.y() / cdt_v_scale);
@@ -2194,6 +2223,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         hole_ranges.push((start, hole_seed_pts.len()));
     }
 
+    let mut grid_cell = (du, dv);
     if du > 1e-15 && dv > 1e-15 {
         let (n_u, n_v) = interior_grid_resolution(
             face_data.surface(),
@@ -2203,6 +2233,7 @@ pub(super) fn tessellate_nonplanar_cdt(
             angular_tol,
             circle_floor,
         );
+        grid_cell = (du / n_u as f64, dv / n_v as f64);
 
         let boundary_uv_ref = &boundary_uv;
         let hole_polys = &hole_polys;
@@ -2352,6 +2383,101 @@ pub(super) fn tessellate_nonplanar_cdt(
             });
         }
     }
+    // A NURBS face has no radius to bound a triangle's sag by, so each
+    // retained triangle is measured on the surface: its longest interior edge
+    // whose chord leaves the surface by more than twice the deflection, or
+    // across which the normal turns past twice the angular tolerance, splits
+    // at its middle. The boundary is sampled right up to those tolerances and
+    // stays whole (its edges are shared with the neighbouring faces), and an
+    // interior edge spanning one boundary step sags as much as that step, so
+    // only a margin past them marks an edge as coarser than the boundary. The
+    // interior grid already holds an edge within one of its cells, so only
+    // an edge reaching further is measured.
+    if matches!(face_data.surface(), FaceSurface::Nurbs(_)) && !constraints_added_steiner_vertices {
+        const MAX_HALVING_PASSES: usize = 12;
+        let surface = face_data.surface();
+        let at = |p: Point2| eval_surface_point(surface, p.x(), p.y());
+        let normal_at = |p: Point2| {
+            let (u, v) = wrap_to_domain(surface, p.x(), p.y());
+            surface.normal(u, v)
+        };
+        let in_hole = |p: Point2| {
+            hole_polys
+                .iter()
+                .filter(|h| point_in_polygon_2d(h, p))
+                .count()
+                % 2
+                == 1
+        };
+        // A boundary that leaves the surface (a chordal rim) holds its
+        // neighbouring edges off it however finely they split, so the passes
+        // stop once they stop shrinking the set of coarse edges.
+        let mut last_splits = usize::MAX;
+        for _ in 0..MAX_HALVING_PASSES {
+            let vertices = cdt.vertices();
+            let constraints = cdt.constraint_edges();
+            let mut chosen: DetHashSet<(usize, usize)> = DetHashSet::default();
+            let mut splits = Vec::new();
+            for (i0, i1, i2) in cdt.triangles() {
+                if i0 < 3 || i1 < 3 || i2 < 3 {
+                    continue;
+                }
+                let ids = [i0, i1, i2];
+                let corners = ids.map(|id| from_cdt(vertices[id]));
+                let mut worst: Option<(f64, (usize, usize), Point2)> = None;
+                for e in 0..3 {
+                    let (a, b) = (e, (e + 1) % 3);
+                    let key = (ids[a].min(ids[b]), ids[a].max(ids[b]));
+                    if constraints.contains(&key) {
+                        continue;
+                    }
+                    let (pa, pb) = (corners[a], corners[b]);
+                    if (pb.x() - pa.x()).abs() <= 1.5 * grid_cell.0
+                        && (pb.y() - pa.y()).abs() <= 1.5 * grid_cell.1
+                    {
+                        continue;
+                    }
+                    let mid = Point2::new(0.5 * (pa.x() + pb.x()), 0.5 * (pa.y() + pb.y()));
+                    let (sa, sb) = (at(pa), at(pb));
+                    let sag = (at(mid) - (sa + (sb - sa) * 0.5)).length();
+                    let turn = normal_at(pa).dot(normal_at(pb)).clamp(-1.0, 1.0).acos();
+                    let coarse =
+                        sag > 2.0 * deflection || (angular_tol > 0.0 && turn > 2.0 * angular_tol);
+                    let length = (sb - sa).length();
+                    if coarse && worst.is_none_or(|(l, _, _)| length > l) {
+                        worst = Some((length, key, mid));
+                    }
+                }
+                let Some((_, key, mid)) = worst else {
+                    continue;
+                };
+                // Triangles outside the trimmed boundary or inside a hole are
+                // dropped below, so their sag never ships.
+                let centroid = Point2::new(
+                    (corners[0].x() + corners[1].x() + corners[2].x()) / 3.0,
+                    (corners[0].y() + corners[1].y() + corners[2].y()) / 3.0,
+                );
+                if point_in_polygon_2d(&boundary_uv, centroid)
+                    && !in_hole(centroid)
+                    && point_in_polygon_2d(&boundary_uv, mid)
+                    && !in_hole(mid)
+                    && chosen.insert(key)
+                {
+                    splits.push(to_cdt(mid));
+                }
+            }
+            if splits.is_empty() || splits.len() >= last_splits {
+                break;
+            }
+            last_splits = splits.len();
+            let before = cdt.vertices().len();
+            cdt.insert_points_hilbert(&splits)
+                .map_err(crate::OperationsError::Math)?;
+            if cdt.vertices().len() == before {
+                break;
+            }
+        }
+    }
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
@@ -2413,6 +2539,15 @@ pub(super) fn tessellate_nonplanar_cdt(
                 idx
             });
             final_global_ids[i] = gid;
+        }
+    }
+    if let Some(uvs) = uvs {
+        for i in 3..cdt_to_global.len().min(cdt_verts.len()) {
+            let p = from_cdt(cdt_verts[i]);
+            uvs.insert(
+                final_global_ids[i],
+                wrap_to_domain(face_data.surface(), p.x(), p.y()),
+            );
         }
     }
 
@@ -2667,9 +2802,13 @@ pub(super) fn tessellate_holed_face_local(
             pool.insert(oe.edge().index(), gids);
         }
     }
+    // The CDT knows every vertex's (u, v); a NURBS face takes them from it
+    // rather than projecting each vertex back onto the surface.
+    let mut known_uvs: DetHashMap<u32, (f64, f64)> = DetHashMap::default();
     let meshed = match face_data.surface() {
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Nurbs(_) => {
-            tessellate_nonplanar_cdt(
+            let record = matches!(face_data.surface(), FaceSurface::Nurbs(_));
+            tessellate_nonplanar_cdt_uv(
                 topo,
                 face_id,
                 face_data,
@@ -2679,6 +2818,7 @@ pub(super) fn tessellate_holed_face_local(
                 &pool,
                 &mut merged,
                 &mut point_to_global,
+                record.then_some(&mut known_uvs),
             )?;
             true
         }
@@ -2699,7 +2839,11 @@ pub(super) fn tessellate_holed_face_local(
     let surface = face_data.surface();
     let mut uvs = Vec::with_capacity(merged.positions.len());
     for (i, &p) in merged.positions.iter().enumerate() {
-        let (u, v) = project_to_surface_uv(surface, p)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let (u, v) = match known_uvs.get(&(i as u32)) {
+            Some(&uv) => uv,
+            None => project_to_surface_uv(surface, p)?,
+        };
         merged.normals[i] = surface.normal(u, v);
         uvs.push([u, v]);
     }
@@ -2941,6 +3085,39 @@ fn close_loop_at_pole(
         boundary_3d.push((pole, gid, edge, true));
     }
     Ok(())
+}
+
+/// A NURBS face's average speeds along u and v over its parameter box. Its
+/// knot values carry no common scale (a converted cylinder's u spans 1 around
+/// a circumference its v spans 4 along), so the CDT measures in lengths:
+/// raw, it would pick diagonals running far round the surface and chord
+/// through the solid.
+fn nurbs_speeds(
+    surface: &FaceSurface,
+    (u_min, du): (f64, f64),
+    (v_min, dv): (f64, f64),
+) -> Option<(f64, f64)> {
+    const ROWS: u32 = 5;
+    let FaceSurface::Nurbs(nurbs) = surface else {
+        return None;
+    };
+    if du <= 1e-15 || dv <= 1e-15 {
+        return None;
+    }
+    let (mut speed_u, mut speed_v) = (0.0, 0.0);
+    for i in 0..ROWS {
+        for j in 0..ROWS {
+            let (u, v) = wrap_to_domain(
+                surface,
+                u_min + du * (f64::from(i) + 0.5) / f64::from(ROWS),
+                v_min + dv * (f64::from(j) + 0.5) / f64::from(ROWS),
+            );
+            let d = nurbs.derivatives(u, v, 1);
+            speed_u += d[1][0].length();
+            speed_v += d[0][1].length();
+        }
+    }
+    (speed_u > 0.0 && speed_v > 0.0).then_some((speed_u, speed_v))
 }
 
 /// A NURBS band bounded by two loops that each wind once around the periodic
