@@ -1662,6 +1662,53 @@ impl BrepKernel {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    /// Drafting a box side by 5 degrees about its base through the batch
+    /// dispatcher cuts the exact wedge `d h^2 tan(a) / 2`; an angle of 90
+    /// degrees or more is refused.
+    #[test]
+    fn draft_batch_cuts_the_exact_wedge() {
+        use brepkit_topology::face::FaceSurface;
+
+        let mut k = crate::kernel::BrepKernel::new();
+        let r = k
+            .execute_batch(r#"[{"op": "makeBox", "args": {"width": 4, "height": 3, "depth": 2}}]"#);
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let solid = u32::try_from(parsed[0]["ok"].as_u64().unwrap()).unwrap();
+        let right = k
+            .get_solid_faces(solid)
+            .unwrap()
+            .into_iter()
+            .find(|&h| {
+                let face = k.topo.face(k.resolve_face(h).unwrap()).unwrap();
+                matches!(face.surface(), FaceSurface::Plane { normal, .. } if normal.x() > 0.5)
+            })
+            .unwrap();
+        let angle = 5.0_f64.to_radians();
+        let batch = format!(
+            r#"[
+                {{"op": "draft", "args": {{"solid": {solid}, "faces": [{right}], "angle": {angle}}}}},
+                {{"op": "draft", "args": {{"solid": {solid}, "faces": [{right}], "angle": 1.6}}}}
+            ]"#
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch)).unwrap();
+        let drafted = u32::try_from(parsed[0]["ok"].as_u64().expect("draft result")).unwrap();
+        assert!(parsed[1]["error"].is_string(), "{}", parsed[1]);
+        let truth = 24.0 - 3.0 * 4.0 * angle.tan() / 2.0;
+        // The public binding takes degrees and spells out the batch's
+        // default pull and neutral point.
+        let bound = k
+            .draft_solid(solid, vec![right], 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 5.0)
+            .unwrap();
+        for handle in [drafted, bound] {
+            let id = k.resolve_solid(handle).unwrap();
+            let volume = brepkit_operations::measure::solid_volume(&k.topo, id, 0.001).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-9 * truth,
+                "volume {volume}, expected {truth}"
+            );
+        }
+    }
+
     use brepkit_math::vec::Point3;
     use brepkit_topology::builder::make_polygon_wire;
 

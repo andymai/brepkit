@@ -78,7 +78,7 @@ The table below rates *features*. For *API* stability per crate, and what the sh
 | **Modifiers**           | Fillet (constant + variable radius), chamfer (walking engine)                | Stable       |
 | **Modifiers**           | Shell (hollow solid)                                                         | Stable       |
 | **Modifiers**           | Offset face, offset solid, thicken, mirror, pattern                          | Stable       |
-| **Modifiers**           | Draft (planar faces)                                                         | Beta         |
+| **Modifiers**           | Draft (planar faces meeting planar neighbours)                               | Stable       |
 | **Sweeps**              | Extrude (planar + NURBS profiles)                                            | Stable       |
 | **Sweeps**              | Revolve, sweep, loft, pipe (planar profiles)                                 | Stable       |
 | **Sweeps**              | Helical sweep                                                                | Stable       |

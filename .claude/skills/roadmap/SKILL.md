@@ -170,7 +170,6 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | Row | Status / blocker |
 |---|---|
 | **Evolution (Beta)** | Faithful GFA provenance exists (`boolean_with_evolution`). Gaps: a same-domain merge keeps one origin and marks the other deleted; identical/contained operands and every fallback use `build_evolution_by_geometry`, whose 10-unit centroid cap is scale-dependent; fillet evolution is heuristic only |
-| **Draft (Beta)** | `draft.rs` moves vertices radially from an axis through the neutral point, so a drafted face comes out non-planar and no neighbour is re-intersected. Rewrite as a topology-preserving modification: rotate each drafted plane about its neutral line so the outward normal gets `n·d = sin(angle)`, re-intersect every edge touching a drafted face, re-solve its vertices |
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
 | **Feature recognition (Beta)** | The dihedral is `acos(n1·n2)` with a cylinder's AXIS standing in for its normal, so nothing is ever classed Convex; needs per-edge outward normals and a signed dihedral |
 | **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
@@ -179,11 +178,19 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 | **Stable row defect: heal `convert_to_bspline` on a cylinder or a bored sphere** | Cylinder: 7 open mesh edges at the seam vertex, the band skips the rim's vertex sample while the cap keeps it. Bored sphere (`make_sphere(6, 24)` less an r=3 bore along z): 9141 open mesh edges at 0.01, the tunnel mouths filled, `solid_volume` 1533.7 against 587.6 before the conversion |
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
+| **Stable row defect: volumes far from the origin** | `solid_volume` and `oriented_solid_volume` sum divergence terms about the world origin (`d · A`, `a · (b × c)`), so a solid far from it cancels away its own volume: a 4 x 3 x 2 box with one side drafted 5 degrees, translated by 1e6 on each axis, reads 57.43 and 68.91 against 23.475 (its geometry is right to 1e-10; the untranslated box's fast path still reads 24). Every path needs a reference point near the solid (its first vertex or bounding-box centre) |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Draft to Stable (CLOSED 2026-09-24; pins in `crates/operations/src/draft.rs` tests and `draft_batch_cuts_the_exact_wedge` in `crates/wasm/src/bindings/operations.rs`)**:
+  `draft` pushed a drafted face's vertices radially from an axis, bending the
+  face and leaving its neighbours on the old vertices. It now turns each
+  drafted plane about its neutral line until `n · pull = sin(angle)` and
+  moves every vertex of a drafted face to its planes' meeting point; a
+  vertex that meets a curved face, or would split, is refused.
 
 - **`loft_smooth` did not close its shell (CLOSED 2026-09-23; pins `loft_smooth_waisted_squares_close_at_their_volume`, `loft_smooth_uneven_profiles_share_their_rails` in `crates/operations/src/loft/tests.rs`)**:
   each side face had its own straight rails while its surface curved through
