@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -223,9 +222,11 @@ pub fn copy_solid(
 
 /// Create a deep copy of a solid with a simultaneous affine transform.
 ///
-/// Equivalent to `copy_solid` followed by `transform_solid`, but performs both
-/// in a single traversal — applying the matrix during the write phase instead
-/// of allocating untransformed entities and then mutating them.
+/// Equivalent to `copy_solid` followed by `transform_solid` (the same exact
+/// surface and curve images, the same mirror handling), but performs both in
+/// a single traversal: the matrix is applied during the write phase instead
+/// of allocating untransformed entities and then mutating them. The copy
+/// carries no pcurves, like `copy_solid`.
 ///
 /// # Errors
 ///
@@ -236,8 +237,7 @@ pub fn copy_and_transform_solid(
     solid_id: SolidId,
     matrix: &brepkit_math::mat::Mat4,
 ) -> Result<SolidId, crate::OperationsError> {
-    use brepkit_math::nurbs::{NurbsCurve, NurbsSurface};
-    use brepkit_math::vec::Vec3;
+    use crate::transform::{curve_image, surface_image};
 
     let tol = brepkit_math::tolerance::Tolerance::new();
     if tol.approx_eq(matrix.determinant(), 0.0) {
@@ -245,32 +245,11 @@ pub fn copy_and_transform_solid(
             reason: "transform matrix is degenerate (zero determinant)".into(),
         });
     }
-    let normal_matrix = matrix.inverse()?.transpose();
+    let inverse = matrix.inverse()?;
+    let mirrored = matrix.determinant() < 0.0;
 
-    let transform_dir = |dir: Vec3| -> Result<Vec3, crate::OperationsError> {
-        let origin = matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
-        let tip = matrix.mul_point(Point3::new(dir.x(), dir.y(), dir.z()));
-        let raw = Vec3::new(
-            tip.x() - origin.x(),
-            tip.y() - origin.y(),
-            tip.z() - origin.z(),
-        );
-        Ok(raw.normalize()?)
-    };
-
-    // Transform a plane normal via inverse transpose.
-    let transform_normal = |n: Vec3| -> Result<Vec3, crate::OperationsError> {
-        let transformed = normal_matrix.mul_point(Point3::new(n.x(), n.y(), n.z()));
-        let origin = normal_matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
-        let raw = Vec3::new(
-            transformed.x() - origin.x(),
-            transformed.y() - origin.y(),
-            transformed.z() - origin.z(),
-        );
-        Ok(raw.normalize()?)
-    };
-
-    // Read phase mirrors copy_solid.
+    // Read phase mirrors copy_solid, and maps each surface while the source
+    // face's boundary is still in place.
     let solid = topo.solid(solid_id)?;
     let outer_shell_id = solid.outer_shell();
     let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
@@ -294,7 +273,7 @@ pub fn copy_and_transform_solid(
 
         for &face_id in shell.faces() {
             let face = topo.face(face_id)?;
-            let surface = face.surface().clone();
+            let image = surface_image(topo, face_id, matrix, &inverse)?;
             let outer_wire_index = face.outer_wire().index();
             let inner_wire_indices: Vec<usize> =
                 face.inner_wires().iter().map(|w| w.index()).collect();
@@ -354,8 +333,8 @@ pub fn copy_and_transform_solid(
             face_snaps.push(FaceSnap {
                 outer_wire_index,
                 inner_wire_indices,
-                surface,
-                reversed: face.is_reversed(),
+                surface: image.surface,
+                reversed: face.is_reversed() != image.flips_face,
             });
         }
 
@@ -385,80 +364,7 @@ pub fn copy_and_transform_solid(
     for esnap in &edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
         let new_end = vertex_map[&esnap.end_index];
-        let new_curve = match &esnap.curve {
-            EdgeCurve::Line => EdgeCurve::Line,
-            EdgeCurve::NurbsCurve(c) => {
-                let new_cps: Vec<_> = c
-                    .control_points()
-                    .iter()
-                    .map(|pt| matrix.mul_point(*pt))
-                    .collect();
-                EdgeCurve::NurbsCurve(NurbsCurve::new(
-                    c.degree(),
-                    c.knots().to_vec(),
-                    new_cps,
-                    c.weights().to_vec(),
-                )?)
-            }
-            EdgeCurve::Circle(c) => {
-                let new_center = matrix.mul_point(c.center());
-                let origin = matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
-                let transform_dir = |d: brepkit_math::vec::Vec3| -> brepkit_math::vec::Vec3 {
-                    matrix.mul_point(Point3::new(d.x(), d.y(), d.z())) - origin
-                };
-                let new_u = transform_dir(c.u_axis());
-                let new_v = transform_dir(c.v_axis());
-                let su = new_u.length();
-                let sv = new_v.length();
-                let new_normal = new_u.cross(new_v).normalize()?;
-                if (su - sv).abs() < 1e-12 * su.max(sv).max(1.0) {
-                    EdgeCurve::Circle(Circle3D::with_axes(
-                        new_center,
-                        new_normal,
-                        c.radius() * su,
-                        new_u.normalize()?,
-                        new_v.normalize()?,
-                    )?)
-                } else {
-                    let (semi_major, semi_minor, u_dir, v_dir) = if su >= sv {
-                        (
-                            c.radius() * su,
-                            c.radius() * sv,
-                            new_u.normalize()?,
-                            new_v.normalize()?,
-                        )
-                    } else {
-                        (
-                            c.radius() * sv,
-                            c.radius() * su,
-                            new_v.normalize()?,
-                            new_u.normalize()?,
-                        )
-                    };
-                    EdgeCurve::Ellipse(Ellipse3D::with_axes(
-                        new_center, new_normal, semi_major, semi_minor, u_dir, v_dir,
-                    )?)
-                }
-            }
-            EdgeCurve::Ellipse(e) => {
-                let new_center = matrix.mul_point(e.center());
-                let origin = matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
-                let transform_dir = |d: brepkit_math::vec::Vec3| -> brepkit_math::vec::Vec3 {
-                    matrix.mul_point(Point3::new(d.x(), d.y(), d.z())) - origin
-                };
-                let new_u = transform_dir(e.u_axis());
-                let new_v = transform_dir(e.v_axis());
-                let new_normal = new_u.cross(new_v).normalize()?;
-                EdgeCurve::Ellipse(Ellipse3D::with_axes(
-                    new_center,
-                    new_normal,
-                    e.semi_major() * new_u.length(),
-                    e.semi_minor() * new_v.length(),
-                    new_u.normalize()?,
-                    new_v.normalize()?,
-                )?)
-            }
-        };
+        let (new_curve, _) = curve_image(&esnap.curve, matrix)?;
         let copied_edge = topo.add_edge(Edge::with_tolerance(
             new_start,
             new_end,
@@ -468,114 +374,39 @@ pub fn copy_and_transform_solid(
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
-    // Wires carry no geometry to transform.
+    // A mirror reverses every wire so each still winds counter-clockwise
+    // around its face's outward normal.
     let mut wire_map: HashMap<usize, WireId> = HashMap::new();
     for wsnap in &wire_snaps {
-        let new_edges: Vec<OrientedEdge> = wsnap
+        let mut new_edges: Vec<OrientedEdge> = wsnap
             .edges
             .iter()
-            .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd))
+            .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd != mirrored))
             .collect();
+        if mirrored {
+            new_edges.reverse();
+        }
         let new_wire =
             Wire::new(new_edges, wsnap.closed).map_err(crate::OperationsError::Topology)?;
         wire_map.insert(wsnap.old_index, topo.add_wire(new_wire));
     }
 
     let mut new_shell_ids = Vec::new();
-    for ssnap in &shell_snaps {
+    for ssnap in shell_snaps {
         let mut new_face_ids = Vec::new();
-        for fsnap in &ssnap.faces {
+        for fsnap in ssnap.faces {
             let new_outer = wire_map[&fsnap.outer_wire_index];
             let new_inner: Vec<WireId> = fsnap
                 .inner_wire_indices
                 .iter()
                 .map(|idx| wire_map[idx])
                 .collect();
-
-            let new_surface = match &fsnap.surface {
-                FaceSurface::Plane { normal, .. } => {
-                    let new_normal = transform_normal(*normal)?;
-                    // Recompute d from a transformed vertex on this face.
-                    let wire_ow = &wire_snaps
-                        .iter()
-                        .find(|w| w.old_index == fsnap.outer_wire_index);
-                    let first_edge_idx = wire_ow.map(|w| w.edges[0].0).ok_or_else(|| {
-                        crate::OperationsError::InvalidInput {
-                            reason: "face has no outer wire edges".into(),
-                        }
-                    })?;
-                    let esnap = edge_snaps.iter().find(|e| e.old_index == first_edge_idx);
-                    let ref_old_vertex = esnap.map(|e| e.start_index).ok_or_else(|| {
-                        crate::OperationsError::InvalidInput {
-                            reason: "wire references unknown edge".into(),
-                        }
-                    })?;
-                    let ref_vid = vertex_map[&ref_old_vertex];
-                    let ref_point = topo.vertex(ref_vid)?.point();
-                    let new_d =
-                        new_normal.dot(Vec3::new(ref_point.x(), ref_point.y(), ref_point.z()));
-                    FaceSurface::Plane {
-                        normal: new_normal,
-                        d: new_d,
-                    }
-                }
-                FaceSurface::Nurbs(s) => {
-                    let new_cps: Vec<Vec<_>> = s
-                        .control_points()
-                        .iter()
-                        .map(|row| row.iter().map(|pt| matrix.mul_point(*pt)).collect())
-                        .collect();
-                    FaceSurface::Nurbs(NurbsSurface::new(
-                        s.degree_u(),
-                        s.degree_v(),
-                        s.knots_u().to_vec(),
-                        s.knots_v().to_vec(),
-                        new_cps,
-                        s.weights().to_vec(),
-                    )?)
-                }
-                FaceSurface::Cylinder(cyl) => {
-                    let new_origin = matrix.mul_point(cyl.origin());
-                    let new_axis = transform_dir(cyl.axis())?;
-                    FaceSurface::Cylinder(brepkit_math::surfaces::CylindricalSurface::new(
-                        new_origin,
-                        new_axis,
-                        cyl.radius(),
-                    )?)
-                }
-                FaceSurface::Cone(cone) => {
-                    let new_apex = matrix.mul_point(cone.apex());
-                    let new_axis = transform_dir(cone.axis())?;
-                    FaceSurface::Cone(brepkit_math::surfaces::ConicalSurface::new(
-                        new_apex,
-                        new_axis,
-                        cone.half_angle(),
-                    )?)
-                }
-                FaceSurface::Sphere(sph) => {
-                    let new_center = matrix.mul_point(sph.center());
-                    FaceSurface::Sphere(brepkit_math::surfaces::SphericalSurface::new(
-                        new_center,
-                        sph.radius(),
-                    )?)
-                }
-                FaceSurface::Torus(tor) => {
-                    let new_center = matrix.mul_point(tor.center());
-                    FaceSurface::Torus(brepkit_math::surfaces::ToroidalSurface::new(
-                        new_center,
-                        tor.major_radius(),
-                        tor.minor_radius(),
-                    )?)
-                }
-            };
-
             let new_face = if fsnap.reversed {
-                Face::new_reversed(new_outer, new_inner, new_surface)
+                Face::new_reversed(new_outer, new_inner, fsnap.surface)
             } else {
-                Face::new(new_outer, new_inner, new_surface)
+                Face::new(new_outer, new_inner, fsnap.surface)
             };
-            let new_fid = topo.add_face(new_face);
-            new_face_ids.push(new_fid);
+            new_face_ids.push(topo.add_face(new_face));
         }
         let new_shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
         new_shell_ids.push(topo.add_shell(new_shell));

@@ -121,6 +121,20 @@ impl PCurveRegistry {
         self.curves.remove(&PCurveKey::new(edge, face))
     }
 
+    /// Removes every pcurve that lives on one of `faces`.
+    pub fn remove_faces(&mut self, faces: &std::collections::HashSet<FaceId>) {
+        if !faces.is_empty() {
+            self.curves.retain(|key, _| !faces.contains(&key.face));
+        }
+    }
+
+    /// Removes every pcurve of one of `edges`, on any face.
+    pub fn remove_edges(&mut self, edges: &std::collections::HashSet<EdgeId>) {
+        if !edges.is_empty() {
+            self.curves.retain(|key, _| !edges.contains(&key.edge));
+        }
+    }
+
     /// Returns the number of pcurves in the registry.
     #[must_use]
     pub fn len(&self) -> usize {

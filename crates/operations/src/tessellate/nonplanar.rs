@@ -462,7 +462,26 @@ pub(super) fn tessellate_revolution_band_shared(
     let m = rims[1].len();
     if n == m {
         // Equal counts: the historical index-paired sweep (kept byte-identical
-        // for the calibrated closed-rim cases).
+        // for the calibrated closed-rim cases). A sample on the surface's u
+        // seam projects to either end of [0, 2π), so the two sorted rings can
+        // start one sample out of phase; pairing them as-is twists the band
+        // through the solid. Rotate ring 1 to start at ring 0's angular
+        // partner, keeping index 0 unless another sample is strictly closer.
+        let circular = |a: f64, b: f64| {
+            let d = (a - b).rem_euclid(TAU);
+            d.min(TAU - d)
+        };
+        let base = angle_of(rims[0][0], merged);
+        let mut phase = 0;
+        let mut phase_gap = circular(angle_of(rims[1][0], merged), base);
+        for k in 1..m {
+            let gap = circular(angle_of(rims[1][k], merged), base);
+            if gap < phase_gap - 1e-9 {
+                phase = k;
+                phase_gap = gap;
+            }
+        }
+        rims[1].rotate_left(phase);
         for i in 0..n {
             let j = (i + 1) % n;
             let (b0, b1) = (rims[0][i], rims[0][j]);
@@ -1624,13 +1643,18 @@ pub(super) fn tessellate_nonplanar_cdt(
     let wire = topo.wire(face_data.outer_wire())?;
     let tol_dup = 1e-10;
 
+    let anchored = anchor_closed_edges_at_vertices(topo, wire, edge_global_indices, merged)?;
+
     // Fourth element: is_forward flag -- needed for seam UV assignment.
     let mut boundary_3d: Vec<(Point3, u32, EdgeId, bool)> = Vec::new();
     for oe in wire.edges() {
         let edge_id_local = oe.edge();
         let edge_idx = edge_id_local.index();
         let is_fwd = oe.is_forward();
-        if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
+        if let Some(global_ids) = anchored
+            .get(&edge_idx)
+            .or_else(|| edge_global_indices.get(&edge_idx))
+        {
             if cdt_trace() {
                 log::debug!(
                     "cdt {face_id:?} edge e{edge_idx} SHARED n={} gids {}..{}",
@@ -1721,14 +1745,10 @@ pub(super) fn tessellate_nonplanar_cdt(
 
     // Step 2a: Unwrap periodic u across the seam for polyline boundaries.
     {
-        let is_periodic = matches!(
-            face_data.surface(),
-            FaceSurface::Cylinder(_)
-                | FaceSurface::Cone(_)
-                | FaceSurface::Sphere(_)
-                | FaceSurface::Torus(_)
-        );
-        if is_periodic && !boundary_uv.is_empty() {
+        let (u_period, v_period) = surface_periods(face_data.surface());
+        if let Some((u_origin, u_period)) = u_period
+            && !boundary_uv.is_empty()
+        {
             // A point on the surface's degenerate locus has no meaningful u
             // (a horn torus pinches onto its axis at tube angle v = pi; the
             // projection returns an arbitrary ring angle there). Left as
@@ -1763,16 +1783,16 @@ pub(super) fn tessellate_nonplanar_cdt(
                 }
                 let mut u = boundary_uv[i].0;
                 let diff = u - prev_u;
-                let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
-                u -= shifts * std::f64::consts::TAU;
+                let shifts = (diff / u_period + 0.5).floor();
+                u -= shifts * u_period;
                 boundary_uv[i].0 = u;
             }
             let first_u = boundary_uv[0].0;
             let last_u = boundary_uv.last().map_or(first_u, |p| p.0);
             let close_diff = first_u - last_u;
-            if close_diff.abs() > std::f64::consts::PI {
+            if close_diff.abs() > u_period / 2.0 {
                 let u_mid = boundary_uv.iter().map(|p| p.0).sum::<f64>() / boundary_uv.len() as f64;
-                let target_mid = std::f64::consts::PI;
+                let target_mid = u_origin + u_period / 2.0;
                 let shift = target_mid - u_mid;
                 for pt in &mut boundary_uv {
                     pt.0 += shift;
@@ -1787,13 +1807,15 @@ pub(super) fn tessellate_nonplanar_cdt(
         // arc, and the interior CDT samples cover the wrong side. Unwrap v the
         // same way u is unwrapped so consecutive boundary points stay within
         // half a turn, collapsing the band to its true (short-arc) v-extent.
-        if matches!(face_data.surface(), FaceSurface::Torus(_)) && !boundary_uv.is_empty() {
+        if let Some((_, v_period)) = v_period
+            && !boundary_uv.is_empty()
+        {
             for i in 1..boundary_uv.len() {
                 let prev_v = boundary_uv[i - 1].1;
                 let mut v = boundary_uv[i].1;
                 let diff = v - prev_v;
-                let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
-                v -= shifts * std::f64::consts::TAU;
+                let shifts = (diff / v_period + 0.5).floor();
+                v -= shifts * v_period;
                 boundary_uv[i].1 = v;
             }
         }
@@ -2142,7 +2164,8 @@ pub(super) fn tessellate_nonplanar_cdt(
             let pt2 = from_cdt(cdt_verts[i]);
             let surface = face_data.surface();
             let pt3 = eval_surface_point(surface, pt2.x(), pt2.y());
-            let nrm = surface.normal(pt2.x(), pt2.y());
+            let (u, v) = wrap_to_domain(surface, pt2.x(), pt2.y());
+            let nrm = surface.normal(u, v);
 
             let key = point_merge_key(pt3, MERGE_GRID);
             let gid = *point_to_global.entry(key).or_insert_with(|| {
@@ -2182,6 +2205,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         );
         let uc = (uv0.x() + uv1.x() + uv2.x()) / 3.0;
         let vc = (uv0.y() + uv1.y() + uv2.y()) / 3.0;
+        let (uc, vc) = wrap_to_domain(face_data.surface(), uc, vc);
         let outward = face_data.surface().normal(uc, vc);
         vote += geo.dot(outward);
     }
@@ -2277,9 +2301,124 @@ fn project_via_pcurve(
     }
 }
 
+/// Re-sequence a wire's closed edges so each cycle starts and ends at the
+/// sample nearest its vertex, and end the wire's seam edges on those samples.
+///
+/// A closed edge's pool samples run from its curve's own parametric origin,
+/// which need not be its vertex: an ellipse's origin is always a major-axis
+/// end, and a converted or transformed conic keeps whatever origin its new
+/// frame gives it. Walked as-is, the rim leaves the boundary loop at the
+/// origin while the seam joins it at the vertex, and the loop crosses
+/// itself. A seam edge appears twice in this face's wire and in no other
+/// face, so moving its ends along the rim by less than one sample spacing
+/// opens no crack against a neighbour. Returns only the edges it changed.
+fn anchor_closed_edges_at_vertices(
+    topo: &Topology,
+    wire: &brepkit_topology::wire::Wire,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &TriangleMesh,
+) -> Result<DetHashMap<usize, Vec<u32>>, crate::OperationsError> {
+    let mut uses: DetHashMap<usize, usize> = DetHashMap::default();
+    for oe in wire.edges() {
+        *uses.entry(oe.edge().index()).or_default() += 1;
+    }
+    let mut anchors: DetHashMap<brepkit_topology::vertex::VertexId, u32> = DetHashMap::default();
+    let mut changed: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if !edge.is_closed() || changed.contains_key(&oe.edge().index()) {
+            continue;
+        }
+        let Some(gids) = edge_global_indices.get(&oe.edge().index()) else {
+            continue;
+        };
+        let cycle = match gids.split_last() {
+            Some((last, rest)) if !rest.is_empty() && rest.first() == Some(last) => rest,
+            _ => gids.as_slice(),
+        };
+        let vertex = topo.vertex(edge.start())?.point();
+        let Some(k) = (0..cycle.len()).min_by(|&a, &b| {
+            let da = (merged.positions[cycle[a] as usize] - vertex).length();
+            let db = (merged.positions[cycle[b] as usize] - vertex).length();
+            da.total_cmp(&db)
+        }) else {
+            continue;
+        };
+        anchors.insert(edge.start(), cycle[k]);
+        if k != 0 {
+            let mut rotated = cycle.to_vec();
+            rotated.rotate_left(k);
+            rotated.push(cycle[k]);
+            changed.insert(oe.edge().index(), rotated);
+        }
+    }
+    if anchors.is_empty() {
+        return Ok(changed);
+    }
+    for oe in wire.edges() {
+        let idx = oe.edge().index();
+        let edge = topo.edge(oe.edge())?;
+        if edge.is_closed() || uses.get(&idx).copied() != Some(2) || changed.contains_key(&idx) {
+            continue;
+        }
+        let Some(gids) = edge_global_indices.get(&idx) else {
+            continue;
+        };
+        let mut snapped = gids.clone();
+        if let (Some(&a), Some(first)) = (anchors.get(&edge.start()), snapped.first_mut()) {
+            *first = a;
+        }
+        if let (Some(&a), Some(last)) = (anchors.get(&edge.end()), snapped.last_mut()) {
+            *last = a;
+        }
+        if &snapped != gids {
+            changed.insert(idx, snapped);
+        }
+    }
+    Ok(changed)
+}
+
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
 fn eval_surface_point(surface: &FaceSurface, u: f64, v: f64) -> Point3 {
+    let (u, v) = wrap_to_domain(surface, u, v);
     surface.evaluate(u, v).unwrap_or(Point3::new(0.0, 0.0, 0.0))
+}
+
+/// The `(origin, period)` of each periodic parameter direction.
+///
+/// Analytic surfaces are periodic in their angles over `[0, 2π)` (the torus
+/// in both). A NURBS surface is periodic in a direction when it closes on
+/// itself there, with its knot domain as the period: a cylinder or cone
+/// converted to NURBS wraps its u domain exactly like the analytic angle.
+type Period = Option<(f64, f64)>;
+fn surface_periods(surface: &FaceSurface) -> (Period, Period) {
+    let turn = Some((0.0, std::f64::consts::TAU));
+    match surface {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => (turn, None),
+        FaceSurface::Torus(_) => (turn, turn),
+        FaceSurface::Nurbs(n) => {
+            let period =
+                |closed: bool, (lo, hi): (f64, f64)| (closed && hi > lo).then_some((lo, hi - lo));
+            (
+                period(n.is_periodic_u(), n.domain_u()),
+                period(n.is_periodic_v(), n.domain_v()),
+            )
+        }
+        FaceSurface::Plane { .. } => (None, None),
+    }
+}
+
+/// Map an unwrapped `(u, v)` back into a NURBS surface's knot domain along
+/// its periodic directions. Analytic surfaces evaluate any angle directly.
+fn wrap_to_domain(surface: &FaceSurface, u: f64, v: f64) -> (f64, f64) {
+    let FaceSurface::Nurbs(_) = surface else {
+        return (u, v);
+    };
+    let (u_period, v_period) = surface_periods(surface);
+    let wrap = |x: f64, period: Period| {
+        period.map_or(x, |(origin, len)| origin + (x - origin).rem_euclid(len))
+    };
+    (wrap(u, u_period), wrap(v, v_period))
 }
 
 /// Estimate the effective radius of a surface for sample density calculation.

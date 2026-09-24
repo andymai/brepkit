@@ -289,6 +289,115 @@ pub fn sphere_to_nurbs(sphere: &SphericalSurface) -> Result<NurbsSurface, HealEr
     Ok(NurbsSurface::new(2, 2, knots_u, knots_v, cps, ws)?)
 }
 
+/// Convert the latitude band `[v_min, v_max]` of a spherical surface to a
+/// **geometrically exact** rational NURBS surface.
+///
+/// The construction of [`sphere_to_nurbs`] with the meridian trimmed to the
+/// band: the meridian arc is split into equal pieces of at most a quarter
+/// turn, each an exact rational quadratic whose middle control point sits on
+/// the tangents' intersection with weight `cos(half-span)`. The result has
+/// `domain_u = [0, 2π)` and `domain_v = [v_min, v_max]`, with the same
+/// outward orientation as [`sphere_to_nurbs`].
+///
+/// # Errors
+///
+/// Returns [`HealError`] if the band is empty or leaves `[-π/2, π/2]`, or if
+/// NURBS construction fails.
+pub fn sphere_band_to_nurbs(
+    sphere: &SphericalSurface,
+    v_min: f64,
+    v_max: f64,
+) -> Result<NurbsSurface, HealError> {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    const EPS: f64 = 1e-12;
+    if v_min < -FRAC_PI_2 - EPS || v_max > FRAC_PI_2 + EPS || v_max <= v_min {
+        return Err(brepkit_math::MathError::ParameterOutOfRange {
+            value: v_max - v_min,
+            min: f64::EPSILON,
+            max: std::f64::consts::PI,
+        }
+        .into());
+    }
+    let (v_min, v_max) = (v_min.max(-FRAC_PI_2), v_max.min(FRAC_PI_2));
+    let r = sphere.radius();
+    let center = sphere.center();
+    let (x_axis, y_axis, z_axis) = (sphere.x_axis(), sphere.y_axis(), sphere.z_axis());
+
+    let dirs_u: [(f64, f64); 9] = [
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 0.0),
+    ];
+    let weights_u: [f64; 9] = [
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+    ];
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pieces = ((v_max - v_min) / FRAC_PI_2 - EPS).ceil().max(1.0) as usize;
+    #[allow(clippy::cast_precision_loss)]
+    let span = (v_max - v_min) / pieces as f64;
+    let half_cos = (span / 2.0).cos();
+    let mut merid: Vec<((f64, f64), f64)> = vec![((r * v_min.cos(), r * v_min.sin()), 1.0)];
+    let mut knots_v = vec![v_min; 3];
+    for k in 0..pieces {
+        #[allow(clippy::cast_precision_loss)]
+        let lo = v_min + span * k as f64;
+        let hi = if k + 1 == pieces { v_max } else { lo + span };
+        let mid = 0.5 * (lo + hi);
+        merid.push((
+            (r * mid.cos() / half_cos, r * mid.sin() / half_cos),
+            half_cos,
+        ));
+        merid.push(((r * hi.cos(), r * hi.sin()), 1.0));
+        if k + 1 < pieces {
+            knots_v.extend([hi, hi]);
+        }
+    }
+    knots_v.extend([v_max; 3]);
+
+    let mut cps: Vec<Vec<Point3>> = Vec::with_capacity(9);
+    let mut ws: Vec<Vec<f64>> = Vec::with_capacity(9);
+    for (i, &(dx, dy)) in dirs_u.iter().enumerate() {
+        let mut row = Vec::with_capacity(merid.len());
+        let mut wrow = Vec::with_capacity(merid.len());
+        for &((r_merid, z_merid), w) in &merid {
+            row.push(center + x_axis * (dx * r_merid) + y_axis * (dy * r_merid) + z_axis * z_merid);
+            wrow.push(weights_u[i] * w);
+        }
+        cps.push(row);
+        ws.push(wrow);
+    }
+    let knots_u = vec![
+        0.0,
+        0.0,
+        0.0,
+        TAU * 0.25,
+        TAU * 0.25,
+        TAU * 0.5,
+        TAU * 0.5,
+        TAU * 0.75,
+        TAU * 0.75,
+        TAU,
+        TAU,
+        TAU,
+    ];
+    Ok(NurbsSurface::new(2, 2, knots_u, knots_v, cps, ws)?)
+}
+
 /// Convert a toroidal surface to a **geometrically exact** rational
 /// NURBS surface.
 ///
