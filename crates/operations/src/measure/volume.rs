@@ -1668,18 +1668,13 @@ fn planar_face_flux(
     };
     // The fast path reads x·n as the plane offset everywhere on the face, so
     // a boundary off its stored plane (a skewed miter-sweep quad) keeps the
-    // mesh; so does a NURBS edge whose weights leave its control hull.
+    // mesh.
     let d_unit = d / len;
     let normal_unit = normal * (1.0 / len);
     let planar_eps = 1e-6 * (1.0 + d_unit.abs());
     for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         for oe in topo.wire(wire_id)?.edges() {
             let edge = topo.edge(oe.edge())?;
-            if let EdgeCurve::NurbsCurve(n) = edge.curve()
-                && n.weights().iter().any(|&w| w <= 0.0)
-            {
-                return Ok(None);
-            }
             let (sp, ep) = (
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
@@ -1699,6 +1694,17 @@ fn planar_face_flux(
     // Holes subtract only while no two can nest: an island inside a hole is
     // material again, which the mesher's odd-depth rule handles.
     if face.inner_wires().len() > 1 {
+        // The boxes bound a NURBS edge by its control points, which holds
+        // only while its weights are positive.
+        for &iw in face.inner_wires() {
+            for oe in topo.wire(iw)?.edges() {
+                if let EdgeCurve::NurbsCurve(n) = topo.edge(oe.edge())?.curve()
+                    && n.weights().iter().any(|&w| w <= 0.0)
+                {
+                    return Ok(None);
+                }
+            }
+        }
         let boxes = face
             .inner_wires()
             .iter()
@@ -1720,7 +1726,9 @@ fn planar_face_flux(
         return Ok(None);
     }
     let d_out = if face.is_reversed() { -d_unit } else { d_unit };
-    Ok(Some(d_out * area2 / 6.0))
+    let flux = d_out * area2 / 6.0;
+    // A rational edge whose weights vanish on its span has a pole there.
+    Ok(flux.is_finite().then_some(flux))
 }
 
 /// A `(min x, min y, max x, max y)` box of a wire in a plane's frame that
@@ -3653,10 +3661,19 @@ mod tests {
     }
 
     /// A rational edge with a negative weight can leave its control hull, so
-    /// the nesting boxes cannot bound it.
+    /// the nesting boxes cannot bound a hole it closes.
     #[test]
     fn planar_flux_leaves_negative_weights_to_the_mesh() {
         let mut topo = Topology::new();
+        let outer = polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(-5.0, -5.0, 0.0),
+                Point3::new(15.0, -5.0, 0.0),
+                Point3::new(15.0, 15.0, 0.0),
+                Point3::new(-5.0, 15.0, 0.0),
+            ],
+        );
         let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 0.0, 0.0));
         let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
             2,
@@ -3665,21 +3682,23 @@ mod tests {
             vec![1.0, -0.5, 1.0],
         )
         .unwrap();
-
         let (va, vb) = (
             topo.add_vertex(Vertex::new(a, 1e-7)),
             topo.add_vertex(Vertex::new(b, 1e-7)),
         );
         let arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(curve)));
         let chord = topo.add_edge(Edge::new(vb, va, EdgeCurve::Line));
-        let face = planar_face(
+        let bulge = vec![OrientedEdge::new(arc, true), OrientedEdge::new(chord, true)];
+        let square = polygon_wire(
             &mut topo,
-            vec![vec![
-                OrientedEdge::new(arc, true),
-                OrientedEdge::new(chord, true),
-            ]],
-            0.0,
+            &[
+                Point3::new(8.0, 8.0, 0.0),
+                Point3::new(9.0, 8.0, 0.0),
+                Point3::new(9.0, 9.0, 0.0),
+                Point3::new(8.0, 9.0, 0.0),
+            ],
         );
+        let face = planar_face(&mut topo, vec![outer, bulge, square], 0.0);
         assert!(planar_face_flux(&topo, face).unwrap().is_none());
     }
 
