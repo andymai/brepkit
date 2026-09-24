@@ -1,0 +1,36 @@
+crates/operations/tests/ball_and_ring_drills.rs
+  s_ba2f7b5c6902b6::t_50b5f8292ba020 161-166
+crates/operations/tests/torus_coaxial_tools.rs
+  s_ba2f7b5c6902b6::t_58e4537d591cd5 39-41,44-55,101-103,150-151,153-155
+crates/check/src/properties/face_integrator.rs
+  s_ba2f7b5c6902b6::t_2847b386520a47 94,115,137,155,621,714,737,767-779,803-811
+  s_ba2f7b5c6902b6::t_58e4537d591cd5 166-172,181,874-875
+crates/algo/src/builder/builder_solid.rs
+  s_ba2f7b5c6902b6::t_c2886aa24cacef 1122,1131
+crates/operations/tests/torus_plane_cut.rs
+  s_ba2f7b5c6902b6::t_50b5f8292ba020 246-307
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_708e7b1f030c27 3575-3651,3657-3699
+  s_ba2f7b5c6902b6::t_c2886aa24cacef 1675-1680,1715-1719,1758-1759
+  s_ba2f7b5c6902b6::t_fd7e9cbffe16c1 3652-3656
+crates/algo/src/builder/mod.rs
+  s_ba2f7b5c6902b6::t_1917c0dbb342bb 744-751,755-761,764,768-771,1040-1056,1061-1107
+  s_ba2f7b5c6902b6::t_fd7e9cbffe16c1 1057-1060
+  s_ba2f7b5c6902b6::t_ec256d48b8ae8b 1108
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6b412c1580cedee7ea3190ef96e78c2295f6aede",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
