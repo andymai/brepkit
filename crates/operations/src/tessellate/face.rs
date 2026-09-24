@@ -77,7 +77,23 @@ pub(super) fn tessellate_with_uvs_floor(
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
+    let holed_curved = !face_data.inner_wires().is_empty()
+        && matches!(
+            face_data.surface(),
+            FaceSurface::Cylinder(_)
+                | FaceSurface::Cone(_)
+                | FaceSurface::Sphere(_)
+                | FaceSurface::Torus(_)
+        );
     let mut result = match face_data.surface() {
+        _ if holed_curved => super::nonplanar::tessellate_holed_face_local(
+            topo,
+            face,
+            face_data,
+            deflection,
+            angular_tol,
+            curvature_floor,
+        ),
         FaceSurface::Plane { normal, .. } => {
             let mesh = tessellate_planar(topo, face_data, *normal, deflection, angular_tol)?;
             let (u_axis, v_axis) = plane_axes(*normal);

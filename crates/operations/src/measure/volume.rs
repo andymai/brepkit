@@ -1423,6 +1423,100 @@ fn volume_from_per_face_tessellation(
 /// where `ox = O.ex`, `oy = O.ey`, `h = v2 - v1`.
 ///
 /// For a reversed face the contribution is negated.
+/// Divergence-theorem flux `(1/3) ∫ P·N dA` of a cylinder or cone face over
+/// its trimmed domain, holes included.
+///
+/// On both surfaces the flux density `g(u, v)` in the face's own `(u, v)` has
+/// a closed-form u-antiderivative `G`, so Green's theorem turns the area
+/// integral into `∮ G dv` along every wire. Wires run counter-clockwise in
+/// `(u, v)` about the surface normal (holes clockwise); a reversed face's
+/// flux is negated. `u` is unwrapped continuously along each wire, which is
+/// what makes a full band come out right: its seam is walked up at `u + 2π`
+/// and down at `u`.
+///
+/// - Cylinder `O + r·n(u) + v·a`: `g = r (r + O·n(u)) / 3`, independent of v.
+/// - Cone `A + v (cos α n(u) + sin α a)`:
+///   `g = v cos α (sin α A·n(u) − cos α A·a) / 3`.
+fn developable_face_flux(topo: &Topology, face_id: FaceId) -> Result<f64, crate::OperationsError> {
+    use std::f64::consts::TAU;
+
+    let face = topo.face(face_id)?;
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let surface = face.surface().clone();
+    let antiderivative: Box<dyn Fn(f64, f64) -> f64> = match &surface {
+        FaceSurface::Cylinder(c) => {
+            let (r, o) = (c.radius(), c.origin() - origin);
+            let (ox, oy) = (o.dot(c.x_axis()), o.dot(c.y_axis()));
+            Box::new(move |u: f64, _v: f64| r * (r * u + u.sin() * ox - u.cos() * oy) / 3.0)
+        }
+        FaceSurface::Cone(c) => {
+            let (sin_a, cos_a) = c.half_angle().sin_cos();
+            let a = c.apex() - origin;
+            let (ax, ay, az) = (a.dot(c.x_axis()), a.dot(c.y_axis()), a.dot(c.axis()));
+            Box::new(move |u: f64, v: f64| {
+                v * cos_a * (sin_a * (u.sin() * ax - u.cos() * ay) - cos_a * az * u) / 3.0
+            })
+        }
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "developable_face_flux requires a cylinder or cone face".into(),
+            });
+        }
+    };
+    let project = |p: Point3| -> (f64, f64) { surface.project_point(p).unwrap_or((0.0, 0.0)) };
+
+    let mut flux = 0.0;
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let wire = topo.wire(wire_id)?;
+        let mut prev_u: Option<f64> = None;
+        let unwrap = |prev: &mut Option<f64>, u: f64| -> f64 {
+            let u = prev.map_or(u, |pu| u - ((u - pu) / TAU).round() * TAU);
+            *prev = Some(u);
+            u
+        };
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+            let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep);
+            // Midpoint Stieltjes sum of G against dv at `n` steps. A straight
+            // edge on either surface is a ruling (constant u), so one step is
+            // exact; curved edges take two resolutions and a Richardson step.
+            let stieltjes = |n: usize, prev: &mut Option<f64>| -> f64 {
+                let mut sum = 0.0;
+                #[allow(clippy::cast_precision_loss)]
+                let step = (to - from) / n as f64;
+                let (u0, mut v_prev) = project(at(from));
+                unwrap(prev, u0);
+                for k in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let tk = from + step * k as f64;
+                    let (um, vm) = project(at(tk + 0.5 * step));
+                    let um = unwrap(prev, um);
+                    let (un, vn) = project(at(tk + step));
+                    unwrap(prev, un);
+                    sum += antiderivative(um, vm) * (vn - v_prev);
+                    v_prev = vn;
+                }
+                sum
+            };
+            if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                flux += stieltjes(1, &mut prev_u);
+            } else {
+                let mut coarse_prev = prev_u;
+                let coarse = stieltjes(128, &mut coarse_prev);
+                let fine = stieltjes(256, &mut prev_u);
+                flux += (4.0 * fine - coarse) / 3.0;
+            }
+        }
+    }
+    Ok(if face.is_reversed() { -flux } else { flux })
+}
+
 fn analytic_cylinder_signed_volume(
     topo: &Topology,
     face_id: FaceId,
@@ -2169,6 +2263,14 @@ pub fn volume_from_direct_face_tessellation(
 
         // Use exact analytical volume for analytic surface faces.
         match face.surface() {
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) if !face.inner_wires().is_empty() => {
+                let v = developable_face_flux(topo, fid)? * 6.0;
+                if vol_trace_enabled() {
+                    log::debug!("VOL_TRACE holed developable face {:?} -> {}", fid, v / 6.0);
+                }
+                total += v;
+                continue;
+            }
             FaceSurface::Cylinder(_) => {
                 let v = analytic_cylinder_signed_volume(topo, fid)? * 6.0;
                 if vol_trace_enabled() {
