@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790239655453,
+  "lastUpdate": 1790242178900,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36503,6 +36503,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42020432,
             "range": "± 77393",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d38e20a7d470cfe462ce70b845a6b644a8e98c87",
+          "message": "fix(operations): integrate planar faces exactly in solid_volume (#1697)\n\n## What was wrong\n\n`solid_volume` now integrates planar faces with curved boundaries\nexactly. Its direct per-face path,\n`volume_from_direct_face_tessellation`, previously meshed every planar\nface, so a face bounded by a circle, ellipse, or NURBS edge lost the\nsegments between those edges and their chords.\n\nA 10 mm box less a centred `r=3` through-bore measured `717.292793`, the\nrecorded golden value, against `1000 - 90π = 717.256661`.\n\n## What this does\n\n- Adds `planar_face_flux`, which computes a planar face's divergence\nflux as its plane's offset along the outward normal times its area, over\nthree.\n- Computes area using Green's theorem along every wire in the plane's\nframe.\n- Uses closed-form integration for lines, circles, and ellipses of the\nform `P = c + A cos t + B sin t`.\n- Uses 16-point Gauss-Legendre quadrature per knot span for NURBS edges.\n- Walks each edge from its traversal-start vertex using\n`traversal_spans`, added in #1693.\n- Subtracts holes by magnitude because a boolean can emit a hole wound\nlike its outer wire.\n- Keeps mesh integration when a face has more than one hole and two\nholes' bounding boxes overlap, since an island could sit inside a hole.\nThe boxes never fall inside a wire: line endpoints, a conic arc's\nendpoints plus every axis extreme inside its span, and a NURBS curve's\ncontrol points.\n- Keeps mesh integration for a face whose boundary leaves its stored\nplane (a skewed miter-sweep quad, as the all-planar path already\nguards), and for a face with a NURBS edge whose weights are not all\npositive (its denominator can pass near zero, too sharp for the fixed\nquadrature, and it can leave the control hull the boxes rely on).\n`boolean::tests::fuse_ring_inside_shelled_cylinder`, with three nested\ninner wires, requires this case.\n\n## Verification\n\n- The `boolean_box_minus_cylinder` golden now records `717.256661`.\n- The `solid_volume` checks from #1693 for window cuts through tubes and\nfrustums, the bore-wall pocket, and the cavity-floor drill are tightened\nfrom `2e-4` and `2e-5` relative to `1e-9` and pass.\n- The frustum case is checked against a Simpson-integrated volume.\n- Unit tests check the ellipse branch (a whole ellipse, and a half\nellipse walked backwards against its chord), the NURBS branch (a\nfour-span rational circle with an off-centre elliptical hole, against\nπr² less πab), two half-disc holes on overlapping circles that stay\nexact, and the fallbacks for nested holes, a skewed face and a negative\nweight on the outer wire or a hole.\n- The operations, io and wasm suites pass: 1656 tests, 0 failures.\n- The roadmap records the case as closed.",
+          "timestamp": "2026-09-24T02:26:55-07:00",
+          "tree_id": "df07ebad60845ff089243b43ee0632cb7ee6901d",
+          "url": "https://github.com/andymai/brepkit/commit/d38e20a7d470cfe462ce70b845a6b644a8e98c87"
+        },
+        "date": 1790242174647,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 998258,
+            "range": "± 5234",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1075513,
+            "range": "± 13037",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13186,
+            "range": "± 390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 743241,
+            "range": "± 1092",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41498707,
+            "range": "± 210098",
             "unit": "ns/iter"
           }
         ]
