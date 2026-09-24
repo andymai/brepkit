@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790237935724,
+  "lastUpdate": 1790238974308,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36395,6 +36395,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 34691781,
             "range": "± 308834",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9bac3b8434aea787368b6abf0effdfbac135855c",
+          "message": "fix(operations): mesh non-uniformly scaled spheres and tori (#1694)\n\n## What was wrong\n\nNon-uniformly scaled spheres and tori now produce watertight meshes.\n`makeEllipsoid` scales a unit sphere non-uniformly, and\n`transform_solid` converts each hemisphere into an exact NURBS cap. Its\nonly wire is the equator, which winds periodic u once without a seam\nedge. The curved-face CDT treated this equator as an open polygon in\n`(u, v)`, so exterior removal cleared every triangle.\n\nA torus face is bounded by four zero-length closed edges, its seam pair\ncollapsed onto one vertex. After `rotation_z(0.3) * scale(2, 1, 1)`, it\nbecomes doubly periodic. The CDT received four identical boundary\npoints, emitted no triangles, and returned `Ok`, preventing the solid\nmesher fallback.\n\n## What this does\n\n- `close_loop_at_pole` detects eligible NURBS caps and continues the\nboundary into the first sample's image one winding later. It then\nreturns along the degenerate v edge on the loop's left, welding every\nsample to the pole. This applies only when u is periodic, there are no\ninner wires or seam edges, the loop winds exactly one period, and the\nfar v edge evaluates to one point. Holed faces are excluded because a\nhole around the pole makes the face a band. Triangles collapsed onto the\npole are discarded.\n\n- The solid mesher now falls back to the snap mesher when the CDT\nreturns no triangles as well as when it fails.\n\n- Doubly periodic NURBS faces that trim nothing away (no inner wires, an\nouter wire of closed edges only) use a structured grid sized along their\niso-lines using half the deflection per iso-line chord and the angular\ntolerance. Far seam rows copy the near rows' positions so the solid\nmesher welds them exactly. This avoids the adaptive quadtree path, whose\none-level transitions leave T-junction cracks and cannot identify\nopposite domain edges. That path produced 1032 open mesh edges at\ndeflection `0.01`.\n\n## Verification\n\n- `crates/operations/tests/non_uniform_scale_mesh.rs` meshes the `(2, 3,\n4)` ellipsoid watertight at deflections `0.01` and `0.001`, within 0.5%\nof 24 times the identically built unit sphere, with each face also\nmeshing independently. On main, it fails at the empty-mesh check.\n\n- A third test meshes the ellipsoid mirrored by `scale(-2, 3, 4)`,\nrelying on #1699's mirror rule (a NURBS face keeps its wires and flips\nits flag, so the pole closure still finds the cap on the loop's left),\nwatertight at both deflections within 0.5% of the same volume. Every\nmesh check also rejects non-manifold edges.\n\n- A second test meshes the squashed torus watertight at both deflections\nand within 0.1% of `4π²Rr²`, where `R = 5`, `r = 1.5`, and the map\ndoubles the volume.\n\n- The operations, io, wasm, and heal suites pass: 1741 tests, 0\nfailures.\n\n- Squashed cylinder, cone, and sphere probes also mesh watertight. The\nroadmap closes the ellipsoid and torus case and records a `heal`\n`convert_to_bspline` defect found on a bored sphere, with 9141 open mesh\nedges both here and on main.",
+          "timestamp": "2026-09-24T01:33:33-07:00",
+          "tree_id": "3c150fd566c90c3e3aed2d59383cc040720f4aa7",
+          "url": "https://github.com/andymai/brepkit/commit/9bac3b8434aea787368b6abf0effdfbac135855c"
+        },
+        "date": 1790238971778,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 996223,
+            "range": "± 2529",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1078371,
+            "range": "± 9641",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13141,
+            "range": "± 54",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 747014,
+            "range": "± 1694",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42022755,
+            "range": "± 101003",
             "unit": "ns/iter"
           }
         ]
