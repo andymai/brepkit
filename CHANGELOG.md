@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.1](https://github.com/andymai/brepkit/compare/v3.5.0...v3.5.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* cut windows through cylinder and cone walls ([#1693](https://github.com/andymai/brepkit/issues/1693)) ([f41d00f](https://github.com/andymai/brepkit/commit/f41d00fdba44ee3346ce83cbc091592d5f9d2d04))
+
 ## [3.5.0](https://github.com/andymai/brepkit/compare/v3.4.19...v3.5.0) (2026-09-24)
 
 
