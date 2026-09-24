@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
@@ -364,4 +364,125 @@ pub(super) fn compute_angular_range(u_vals: &mut Vec<f64>) -> (f64, f64) {
             (u_start, u_end + TAU)
         }
     }
+}
+
+/// Green's-theorem signed doubled area (`∮(x dy − y dx)`) of one planar wire in
+/// the `(ex, ey)` frame, plus its circular-arc edge count. `Ok(None)` when an
+/// edge is neither a line nor a circular arc, so the caller falls back to
+/// tessellation.
+pub(super) fn planar_wire_signed_area2(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    ex: Vec3,
+    ey: Vec3,
+) -> Result<Option<(f64, usize)>, crate::OperationsError> {
+    let to_2d = |p: Point3| {
+        let v = Vec3::new(p.x(), p.y(), p.z());
+        (v.dot(ex), v.dot(ey))
+    };
+    let tol_lin = brepkit_math::tolerance::Tolerance::default().linear;
+    let mut area2: f64 = 0.0; // accumulates 2·A (Green's ∮(x dy − y dx))
+    let mut arc_edges = 0_usize;
+    let mut anchor: Option<(f64, f64)> = None;
+    {
+        let wire = topo.wire(wire_id)?;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (sv, ev) = if oe.is_forward() {
+                (edge.start(), edge.end())
+            } else {
+                (edge.end(), edge.start())
+            };
+            let pa = topo.vertex(sv)?.point();
+            let pb = topo.vertex(ev)?.point();
+            let (ax, ay) = to_2d(pa);
+            let (bx, by) = to_2d(pb);
+            // Chord term: triangle (anchor, a, b) doubled, about the wire's
+            // first vertex so far-off coordinates do not cancel the area.
+            let (qx, qy) = *anchor.get_or_insert((ax, ay));
+            area2 += (ax - qx) * (by - qy) - (bx - qx) * (ay - qy);
+
+            // A degenerate edge collapsed to a point that is NOT a closed circle
+            // (e.g. the inner "arc" at the axis where a disc cap reaches r = 0, or
+            // a zero-length line) contributes no chord and no bulge — skip it (and
+            // do NOT let curve recognition on a zero-length arc decline the whole
+            // cap). A CLOSED `Circle` rim also has coincident endpoints but bounds
+            // a full disc, so it falls through to the arc handler below.
+            let is_closed_circle =
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+                    && edge.start() == edge.end();
+            if (pa - pb).length() < tol_lin && !is_closed_circle {
+                continue;
+            }
+
+            // Circular-arc bulge correction (segment between the arc and its
+            // chord). A `Line` has no bulge. A `Circle`/arc-`NurbsCurve` adds
+            // sign·ρ²·(|α| − sin|α|), α the signed sweep about the arc centre.
+            let arc = match edge.curve() {
+                brepkit_topology::edge::EdgeCurve::Line => None,
+                brepkit_topology::edge::EdgeCurve::Ellipse(_) => return Ok(None),
+                brepkit_topology::edge::EdgeCurve::Circle(c) => Some((c.center(), c.radius())),
+                brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => {
+                    let tol = brepkit_math::tolerance::Tolerance::default().linear * 100.0;
+                    match brepkit_geometry::convert::recognize_curve(nc, tol) {
+                        brepkit_geometry::convert::RecognizedCurve::Circle {
+                            center,
+                            radius,
+                            ..
+                        } => Some((center, radius)),
+                        brepkit_geometry::convert::RecognizedCurve::Line { .. } => None,
+                        _ => return Ok(None),
+                    }
+                }
+            };
+
+            if let Some((center, radius)) = arc {
+                arc_edges += 1;
+                // The bulge correction (circular segment between the arc and its
+                // chord) is `sign·ρ²·(|α| − sin|α|)`. Compute the sweep in the
+                // curve's NATURAL direction (start→mid→end), then flip its sign for
+                // a reversed `OrientedEdge`, so the bulge is consistent with the
+                // chord term above (which uses the oriented endpoints). Without the
+                // flip, a reversed inner rim of an annulus ADDS its segment instead
+                // of subtracting it (inflated area).
+                let nat_alpha = if is_closed_circle {
+                    // A full circle sweeps 2π in its natural (CCW) direction → the
+                    // bulge gives the disc area πρ². (The seam endpoint's antipode is
+                    // NOT the domain midpoint, so the open-arc disambiguation below
+                    // does not apply.)
+                    std::f64::consts::TAU
+                } else {
+                    // Sample the arc at its DOMAIN midpoint (the domain need not be
+                    // [0,1]) to disambiguate the signed sweep > π for a major arc.
+                    let nat_start = topo.vertex(edge.start())?.point();
+                    let nat_end = topo.vertex(edge.end())?.point();
+                    let (t0, t1) = edge.curve().domain_with_endpoints(nat_start, nat_end);
+                    let mid_pt = edge.curve().evaluate_with_endpoints(
+                        f64::midpoint(t0, t1),
+                        nat_start,
+                        nat_end,
+                    );
+                    let (cx, cy) = to_2d(center);
+                    let (sx, sy) = to_2d(nat_start);
+                    let (ex, ey) = to_2d(nat_end);
+                    let (mx, my) = to_2d(mid_pt);
+                    let va = (sx - cx, sy - cy);
+                    let vm = (mx - cx, my - cy);
+                    let vb = (ex - cx, ey - cy);
+                    // Signed sweep start→mid→end (each leg in (−π, π]).
+                    let ang = |u: (f64, f64), w: (f64, f64)| -> f64 {
+                        (u.0 * w.1 - u.1 * w.0).atan2(u.0 * w.0 + u.1 * w.1)
+                    };
+                    ang(va, vm) + ang(vm, vb)
+                };
+                let alpha = if oe.is_forward() {
+                    nat_alpha
+                } else {
+                    -nat_alpha
+                };
+                area2 += alpha.signum() * radius * radius * (alpha.abs() - alpha.abs().sin());
+            }
+        }
+    }
+    Ok(Some((area2, arc_edges)))
 }

@@ -7,7 +7,9 @@ use brepkit_topology::solid::SolidId;
 
 use crate::tessellate;
 
-use super::helpers::{collect_solid_face_ids, collect_wire_positions, compute_angular_range};
+use super::helpers::{
+    collect_solid_face_ids, collect_wire_positions, compute_angular_range, planar_wire_signed_area2,
+};
 
 /// Compute the area of a single face.
 ///
@@ -393,10 +395,44 @@ fn analytic_torus_face_area(
     Ok(area.abs())
 }
 
-/// Newell's method: compute the area of a planar polygon from its
-/// boundary vertices, subtracting inner wire (hole) areas.
+/// The area of a planar face, less its holes: exact by Green's theorem when
+/// every edge is a line or a circle, else by Newell's method over the
+/// sampled boundary.
 fn planar_face_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
     let face = topo.face(face_id)?;
+    let mut lines_and_circles = true;
+    for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire)?.edges() {
+            lines_and_circles &= matches!(
+                topo.edge(oe.edge())?.curve(),
+                EdgeCurve::Line | EdgeCurve::Circle(_)
+            );
+        }
+    }
+    if lines_and_circles
+        && let FaceSurface::Plane { normal, .. } = face.surface()
+        && let Ok(frame) =
+            brepkit_math::frame::Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), *normal)
+    {
+        let mut exact = Some(0.0);
+        for (k, wire) in std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .enumerate()
+        {
+            exact = match (
+                exact,
+                planar_wire_signed_area2(topo, wire, frame.x, frame.y)?,
+            ) {
+                (Some(total), Some((area2, _))) if k == 0 => Some(total + area2.abs() / 2.0),
+                (Some(total), Some((area2, _))) => Some(total - area2.abs() / 2.0),
+                _ => None,
+            };
+        }
+        if let Some(area) = exact {
+            return Ok(area.abs());
+        }
+    }
     let outer_wire = topo.wire(face.outer_wire())?;
     let outer_positions = collect_wire_positions(topo, outer_wire)?;
 

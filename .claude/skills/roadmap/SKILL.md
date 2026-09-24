@@ -178,11 +178,26 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 
 
+| **Stable row defect: per-face NURBS meshes ignore the trim** | `tessellate::tessellate` meshes a NURBS face over its whole surface, so `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY writers read a trimmed NURBS face as its whole patch (a converted napkin ring: `solid_volume` 1613 against 587.7). A trimmed CDT for NURBS faces whose boundary leaves the domain edges is parked on branch `wip/per-face-nurbs-trim`. It waits on `sweep_smooth`: its rail edges are straight chords between the first and last rings while the side surfaces curve along the path, so a trimmed mesh follows the chords (a quarter-circle sweep reads 6.87 against 7.85); build its rails as #1700 built `loft_smooth`'s. The parked branch also holds a surface-measured refinement of long interior edges that moved an uneven loft's mesh 0.3% off its exact 32.0686, unexplained |
+| **Stable row defect: a cone cut by a plane parallel to its axis falls back to an open mesh** (`make_cone(3, 0, 6)` or `make_cone(3, 1, 4)` less a box over x < 0, or x < 0.5) | Every case falls back and the fallback mesh is open (27 to 29 boundary edges). Through the apex (any cut through the axis), `sample_plane_cone` solves v = e / (n·g) = 0 on every generator and the section collapses onto the apex; the true section is the two rulings with n·g(u) = 0. Branch `fix/cone-meridian-cut` emits them as lines in phase FF (`plane_cone_apex_rulings`); past that the frustum's x = 0 cut builds its four faces but the cone face carries both rulings reversed and out of order (its surface frame puts u = 0 on -y, where one ruling lies), and a y = 0 cut drops the cone face entirely. Off the axis the section is a sampled hyperbola; undug |
+
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Rods cut along their axis measured by mesh (CLOSED 2026-09-24; pins `crates/operations/tests/flat_sided_rods.rs`)**:
+  a half rod read `solid_volume` 18.84619 against 6 pi at any deflection
+  from 0.1 to 0.001, and its half-disc caps `face_area` 6.283146 against
+  2 pi. The revolution path took only caps perpendicular to the axis, so a
+  face parallel to it (a half rod's cut, a D-shaft's flat) sent the solid
+  to the mesh, and planar areas came from the sampled boundary. Faces
+  parallel to the axis of cylinder walls now integrate exactly when every
+  wall is a rectangle in (u, v) with rim arcs of at most a half turn (the
+  angular-range reader takes an arc's shorter side; a rod fused with a bar
+  keeps the mesh), and a planar face bounded by lines and circles takes its
+  area by Green's theorem.
 
 - **A pointed cone's open mesh (CLOSED 2026-09-24; pin `pointed_cone_tessellation_is_watertight_at_every_deflection` in `crates/operations/tests/tessellate_watertight.rs`)**:
   `make_cone(3, 0, 6)` meshed with 46, 78 and 142 open edges at 0.03, 0.01
