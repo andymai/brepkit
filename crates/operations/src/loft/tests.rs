@@ -1199,3 +1199,24 @@ fn loft_smooth_uneven_profiles_share_their_rails() {
         "solid_volume {volume}, mesh {mesh}"
     );
 }
+
+/// The banded rail solve on many unevenly spaced profiles: the cubic through
+/// forty points of a helix passes through each at its own parameter.
+#[test]
+fn rail_interpolation_hits_every_point_across_many_profiles() {
+    let params: Vec<f64> = (0..40_i32)
+        .map(|i| {
+            let t = f64::from(i) / 39.0;
+            t * t * 0.7 + t * 0.3
+        })
+        .collect();
+    let points: Vec<Point3> = params
+        .iter()
+        .map(|&t| Point3::new((9.0 * t).cos(), (9.0 * t).sin(), 2.0 * t))
+        .collect();
+    let rail = interpolate_at(&points, 3, &params).unwrap();
+    for (&t, &q) in params.iter().zip(&points) {
+        let at = rail.evaluate(t);
+        assert!((at - q).length() < 1e-9, "rail misses {q:?} at {t}: {at:?}");
+    }
+}

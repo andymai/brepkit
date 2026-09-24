@@ -1252,19 +1252,28 @@ fn interpolate_at(
     }
     knots.extend(std::iter::repeat_n(params[n - 1], p + 1));
 
-    // Collocation: row i holds N_{j,p}(params[i]).
+    // Collocation: row i holds N_{j,p}(params[i]), nonzero only across its
+    // span's p + 1 columns. `last[c]` is the lowest row reaching column c.
     let mut rows = vec![vec![0.0; n]; n];
-    for (row, &u) in rows.iter_mut().zip(params) {
+    let mut last: Vec<usize> = (0..n).collect();
+    for (i, (row, &u)) in rows.iter_mut().zip(params).enumerate() {
         let span = find_span(n, p, u, &knots);
         for (k, value) in basis_funs(span, u, p, &knots).into_iter().enumerate() {
             row[span - p + k] = value;
+            last[span - p + k] = last[span - p + k].max(i);
         }
     }
+    for c in 1..n {
+        last[c] = last[c].max(last[c - 1]);
+    }
     let mut rhs: Vec<[f64; 3]> = points.iter().map(|q| [q.x(), q.y(), q.z()]).collect();
-    // Gaussian elimination with partial pivoting; the system is small (one
-    // row per profile) and banded.
+    // Gaussian elimination with partial pivoting. Spans never decrease with
+    // the parameter, so no row below `last[col]` reaches column `col`, and
+    // eliminating (or swapping) within that window only fills columns whose
+    // windows reach at least as far: the band holds, and the solve stays
+    // quadratic in the profile count.
     for col in 0..n {
-        let pivot = (col..n)
+        let pivot = (col..=last[col])
             .max_by(|&a, &b| rows[a][col].abs().total_cmp(&rows[b][col].abs()))
             .unwrap_or(col);
         if rows[pivot][col].abs() < 1e-14 {
@@ -1274,7 +1283,7 @@ fn interpolate_at(
         }
         rows.swap(col, pivot);
         rhs.swap(col, pivot);
-        for r in col + 1..n {
+        for r in col + 1..=last[col] {
             let f = rows[r][col] / rows[col][col];
             for c in col..n {
                 rows[r][c] -= f * rows[col][c];
