@@ -914,6 +914,85 @@ fn cylinders_perpendicular_and_intersecting(
     }
 }
 
+/// A ball less caps cut off by planes, each plane face a full disc (so no
+/// two caps meet). About the centre, a sphere face adds `r/3` of its area and
+/// a disc `d/3` of its own, `d` the centre's distance to the disc's plane
+/// along its outward normal; a cap `r - d` high takes `2 pi r (r - d)` of the
+/// sphere.
+fn ball_less_caps_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
+    use std::f64::consts::PI;
+
+    let solid_data = topo.solid(solid).ok()?;
+    if !solid_data.inner_shells().is_empty() {
+        return None;
+    }
+    let mut ball: Option<(Point3, f64)> = None;
+    // Each disc's outward unit normal and its plane's offset along it.
+    let mut discs: Vec<(Vec3, f64)> = Vec::new();
+    let mut on_sphere: Vec<Point3> = Vec::new();
+    for &fid in topo.shell(solid_data.outer_shell()).ok()?.faces() {
+        let face = topo.face(fid).ok()?;
+        match face.surface() {
+            FaceSurface::Sphere(s) => {
+                if let Some((c, r)) = ball {
+                    if (s.center() - c).length() > 1e-9 * r || (s.radius() - r).abs() > 1e-9 * r {
+                        return None;
+                    }
+                } else {
+                    ball = Some((s.center(), s.radius()));
+                }
+                let wires =
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+                for wid in wires {
+                    for oe in topo.wire(wid).ok()?.edges() {
+                        let edge = topo.edge(oe.edge()).ok()?;
+                        on_sphere.push(topo.vertex(edge.start()).ok()?.point());
+                    }
+                }
+            }
+            FaceSurface::Plane { normal, d } => {
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                let [oe] = wire.edges() else {
+                    return None;
+                };
+                let edge = topo.edge(oe.edge()).ok()?;
+                if !face.inner_wires().is_empty()
+                    || edge.start() != edge.end()
+                    || !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+                {
+                    return None;
+                }
+                let len = normal.length();
+                let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+                discs.push((*normal * (sign / len), sign * d / len));
+                on_sphere.push(topo.vertex(edge.start()).ok()?.point());
+            }
+            _ => return None,
+        }
+    }
+    let (center, r) = ball?;
+    // A non-uniform scale moves the vertices off the stored sphere.
+    if discs.is_empty()
+        || on_sphere
+            .iter()
+            .any(|p| ((*p - center).length() - r).abs() > 1e-6 * r)
+    {
+        return None;
+    }
+    let origin = Vec3::new(center.x(), center.y(), center.z());
+    let mut sphere_area = 4.0 * PI * r * r;
+    let mut flux = 0.0;
+    for (n, offset) in discs {
+        let d = offset - n.dot(origin);
+        if d.abs() >= r {
+            return None;
+        }
+        sphere_area -= 2.0 * PI * r * (r - d);
+        flux += d * PI * (r * r - d * d);
+    }
+    Some((r * sphere_area + flux) / 3.0)
+}
+
 /// Try to compute the volume of a solid analytically by detecting known
 /// primitive shapes (sphere, cylinder, cone/frustum, torus).
 ///
@@ -1401,6 +1480,13 @@ pub fn solid_volume(
     solid: SolidId,
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
+    if let Some(v) = ball_less_caps_volume(topo, solid) {
+        if vol_trace_enabled() {
+            log::debug!("VOL_TRACE ball_less_caps -> {v}");
+        }
+        return Ok(v);
+    }
+
     // Fast path: exact analytic formula for known primitives.
     if let Some(v) = try_analytic_solid_volume(topo, solid) {
         if vol_trace_enabled() {

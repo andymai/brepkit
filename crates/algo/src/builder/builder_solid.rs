@@ -3034,6 +3034,10 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
 /// pair with one identical boundary always cancels, so dropping the whole group
 /// is sound. Inner wires are ignored — a doubled hole boundary is not a
 /// manifold defect on its own and removing the holed face would be unsafe.
+///
+/// Two faces on different surfaces whose edges no other face uses are not a
+/// doubling: they close a volume between them, as a sphere's cap does with
+/// the disc across its rim.
 fn remove_doubled_faces(
     topo: &Topology,
     face_ids: &mut Vec<FaceId>,
@@ -3046,6 +3050,7 @@ fn remove_doubled_faces(
     // matches a TRULY identical one — a holed face never collides with a
     // coincident spurious non-holed copy (which would otherwise drop it).
     let mut groups: HashMap<Vec<EdgeId>, Vec<usize>> = HashMap::new();
+    let mut users: HashMap<EdgeId, HashSet<usize>> = HashMap::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let Ok(face) = topo.face(fid) else { continue };
         let Ok(wire) = topo.wire(face.outer_wire()) else {
@@ -3057,13 +3062,35 @@ fn remove_doubled_faces(
                 key.extend(inner.edges().iter().map(OrientedEdge::edge));
             }
         }
+        for &e in &key {
+            users.entry(e).or_default().insert(fi);
+        }
         key.sort_by_key(|e| e.index());
         groups.entry(key).or_default().push(fi);
     }
+    let closes_a_volume = |key: &[EdgeId], members: &[usize]| {
+        let [a, b] = members else {
+            return false;
+        };
+        let isolated = key.iter().all(|e| {
+            users
+                .get(e)
+                .is_some_and(|u| u.iter().all(|fi| members.contains(fi)))
+        });
+        let surfaces = (topo.face(face_ids[*a]), topo.face(face_ids[*b]));
+        isolated
+            && matches!(surfaces, (Ok(fa), Ok(fb))
+                if super::same_domain::surfaces_same_domain(
+                    fa.surface(),
+                    fb.surface(),
+                    brepkit_math::tolerance::Tolerance::new(),
+                )
+                .is_none())
+    };
 
     let mut drop_idx: HashSet<usize> = HashSet::new();
-    for members in groups.values() {
-        if members.len() >= 2 {
+    for (key, members) in &groups {
+        if members.len() >= 2 && !closes_a_volume(key, members) {
             if log::log_enabled!(log::Level::Debug) {
                 let ids: Vec<String> = members
                     .iter()

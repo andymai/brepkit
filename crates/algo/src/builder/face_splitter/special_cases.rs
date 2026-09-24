@@ -2205,11 +2205,20 @@ pub(super) fn split_face_with_internal_loops(
                 }
                 _ => brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0),
             };
-            Point3::new(
+            let offset = Point3::new(
                 centroid.x() + normal_offset.x(),
                 centroid.y() + normal_offset.y(),
                 centroid.z() + normal_offset.z(),
-            )
+            );
+            // A loop on a sphere encloses the smaller cap, whose middle lies
+            // straight out from the centre through the loop's centroid; the
+            // centroid itself is inside the ball, off the face.
+            match &surface {
+                FaceSurface::Sphere(sphere) => (offset - sphere.center())
+                    .normalize()
+                    .map_or(offset, |d| sphere.center() + d * sphere.radius()),
+                _ => offset,
+            }
         };
 
         // The loop as outer wire of the inside sub-face, with the holes it
