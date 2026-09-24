@@ -988,7 +988,7 @@ pub(super) fn split_torus_by_coaxial_circles(
     let center = torus.center();
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
     if let Some(sectors) =
-        split_torus_by_meridian_circles(torus, sections, rank, reversed, face_id, close_tol)
+        split_torus_by_tube_loops(torus, sections, rank, reversed, face_id, close_tol)
     {
         return Some(sectors);
     }
@@ -1104,12 +1104,73 @@ pub(super) fn split_torus_by_coaxial_circles(
     Some(bands)
 }
 
-/// Split a whole torus into sectors around the ring at its tube
-/// cross-sections (meridian circles, from planes through the axis): each
-/// sector is the seam arc along the ring on the circles' common latitude, the
-/// next cross-section up the tube, the arc back and the first cross-section
-/// down.
-fn split_torus_by_meridian_circles(
+/// A closed section that winds once around a torus's tube and not around
+/// its ring (a tube cross-section, or a plane's loop around the tube): its
+/// start as `(u, v)`, whether it runs up the tube, and its `u` half a turn
+/// on, unwrapped from the start's. `None` for any other section.
+fn tube_winding(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    section: &SectionEdge,
+    close_tol: f64,
+) -> Option<(f64, f64, bool, f64)> {
+    use std::f64::consts::{FRAC_PI_4, PI, TAU};
+
+    if (section.start - section.end).length() > close_tol {
+        return None;
+    }
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    // A closed circle's domain starts at its frame's origin, not its vertex.
+    let (t0, t1) = match &section.curve_3d {
+        EdgeCurve::Circle(c) => {
+            let a0 = c.project(section.start);
+            (a0, a0 + TAU)
+        }
+        curve => curve.domain_with_endpoints(section.start, section.end),
+    };
+    if (section
+        .curve_3d
+        .evaluate_with_endpoints(t0, section.start, section.end)
+        - section.start)
+        .length()
+        > close_tol
+    {
+        return None;
+    }
+    let (u0, v0) = torus.project_point(section.start);
+    let (mut u, mut v) = (u0, v0);
+    let (mut du, mut dv) = (0.0_f64, 0.0_f64);
+    let mut half_turn = None;
+    let n = 64_i32;
+    for k in 1..=n {
+        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0);
+        let p = section
+            .curve_3d
+            .evaluate_with_endpoints(t, section.start, section.end);
+        let (pu, pv) = torus.project_point(p);
+        let (step_u, step_v) = (wrap(pu - u), wrap(pv - v));
+        if step_u.abs() > FRAC_PI_4 || step_v.abs() > FRAC_PI_4 {
+            return None;
+        }
+        if half_turn.is_none() && (dv + step_v).abs() >= PI {
+            let f = (PI - dv.abs()) / step_v.abs();
+            half_turn = Some(u0 + du + f * step_u);
+        }
+        (u, v) = (pu, pv);
+        du += step_u;
+        dv += step_v;
+    }
+    if du.abs() > 1e-3 || (dv.abs() - TAU).abs() > 1e-3 {
+        return None;
+    }
+    Some((u0, v0, dv > 0.0, half_turn?))
+}
+
+/// Split a whole torus into sectors around the ring at closed sections that
+/// each wind once around the tube (tube cross-sections from planes through
+/// the axis, or a plane's loops around the tube), all starting on one
+/// latitude: each sector is the seam arc along the ring on that latitude,
+/// the next section up the tube, the arc back and the first section down.
+fn split_torus_by_tube_loops(
     torus: &brepkit_math::surfaces::ToroidalSurface,
     sections: &[SectionEdge],
     rank: Rank,
@@ -1125,34 +1186,18 @@ fn split_torus_by_meridian_circles(
     let center = torus.center();
     let big = torus.major_radius();
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    // (u around the ring, the section, whether it runs +v up the tube)
-    let mut rims: Vec<(f64, &SectionEdge, bool)> = Vec::with_capacity(sections.len());
+    // (u around the ring, the section, whether it runs +v up the tube, its
+    // u half a turn up, relative to its start)
+    let mut rims: Vec<(f64, &SectionEdge, bool, f64)> = Vec::with_capacity(sections.len());
     let mut seam_v: Option<f64> = None;
     for s in sections {
-        let EdgeCurve::Circle(c) = &s.curve_3d else {
-            return None;
-        };
-        let out = c.center() - center;
-        if (s.start - s.end).length() > close_tol
-            || c.normal().dot(axis).abs() > 1e-9
-            || out.dot(axis).abs() > close_tol
-            || (out.length() - big).abs() > close_tol
-        {
-            return None;
-        }
-        let (u, _) = torus.project_point(c.center());
-        let (_, v) = torus.project_point(s.start);
+        let (u, v, up, half_turn) = tube_winding(torus, s, close_tol)?;
         match seam_v {
             None => seam_v = Some(v),
             Some(sv) if wrap(v - sv).abs() > 1e-6 => return None,
             Some(_) => {}
         }
-        let radial = out.normalize().ok()?;
-        rims.push((
-            u.rem_euclid(TAU),
-            s,
-            c.normal().dot(radial.cross(axis)) > 0.0,
-        ));
+        rims.push((u.rem_euclid(TAU), s, up, half_turn - u));
     }
     let seam_v = seam_v?;
     rims.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1214,8 +1259,8 @@ fn split_torus_by_meridian_circles(
     let n = rims.len();
     let mut sectors = Vec::with_capacity(n);
     for i in 0..n {
-        let (u_lo, first, first_up) = rims[i];
-        let (u_next, next, next_up) = rims[(i + 1) % n];
+        let (u_lo, first, first_up, first_turn) = rims[i];
+        let (u_next, next, next_up, next_turn) = rims[(i + 1) % n];
         let u_hi = if i + 1 == n { u_next + TAU } else { u_next };
         // Counterclockwise in (u, v): along the ring, up the next section,
         // back along the ring, down the first. The seam is split at its
@@ -1236,7 +1281,10 @@ fn split_torus_by_meridian_circles(
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: Some(torus.evaluate(f64::midpoint(u_lo, u_hi), seam_v + PI)),
+            precomputed_interior: Some(torus.evaluate(
+                f64::midpoint(u_lo + first_turn, u_hi + next_turn),
+                seam_v + PI,
+            )),
         });
     }
     Some(sectors)

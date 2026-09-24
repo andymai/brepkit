@@ -171,8 +171,8 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Evolution (Beta)** | Faithful GFA provenance exists (`boolean_with_evolution`). Gaps: a same-domain merge keeps one origin and marks the other deleted; identical/contained operands and every fallback use `build_evolution_by_geometry`, whose 10-unit centroid cap is scale-dependent; fillet evolution is heuristic only |
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
 | **Feature recognition (Beta)** | Dihedrals are signed from outward normals and the edge tangent, adjacency reads every wire and shell, holes are concave cylinders. Pockets group coplanar split faces and open along a floor normal no face in them looks back against, one pocket per floor (a stepped pocket's landing is its own). A fillet is a curved face tangent to two neighbours that are not parallel planes; a chamfer must stand where the edge its two neighbours' planes meet along was cut away (outside it across convex edges, inside across concave ones; a scalene prism's side fails) and be at most half the larger face it bevels (tests in `feature_recognition.rs`). Still heuristic: a chamfer wider than that is missed (a regular prism's sides meet like chamfers, so size is the only discriminant); a full-round edge between parallel faces is not reported as a fillet; an undercut pocket (a face overhanging its floor) is not found; a floor split into patches (coplanar, or within the 0.01 rad flat-edge tolerance) reports its largest patch as the floor and leaves the rest out, since `Feature::Pocket` has one floor |
-| **Torus booleans (Beta)** | Audited 2026-09-24 against `make_torus(4, 1.5)` (15 tools x 3 ops, probe `zz_torus_audit` in the session scratchpad): exact for planes across or through the axis, coaxial tori, and balls and rods on the axis; a small box inside the tube and a rod across it build without a fallback (no oracle yet). Every tool that crosses the tube off the axis falls back (row below) |
-| **Torus booleans off the axis: sections that wind around the tube or cut it in a lobe** (`make_torus(4, 1.5)` against a 2x20x4 box through the ring at x in [-1, 1], a slab over x > 1, a 4-cube over x in [3, 7], `make_sphere(1)` at (5, 0, 0), and a second torus (4, 1) turned 90 degrees about x) | All three ops fall back on each (safe meshes, volumes right). A plane parallel to the axis within R - r of it meets the tube in two loops that wind once around it, each a graph u = phi ± acos(rhs(v)) exact per v (`plane_torus_crossings`); the next step is to emit them from v = 0 in `exact_plane_torus` and give `split_torus_by_coaxial_circles` a sector arm for winding loops, as it has for tube cross-sections, then the box's plane faces take the loops as holes. The 4-cube's x = 3 plane cuts a lobe that does not wind (a disc on the torus), and its y = ±2 planes cut winding loops that the cube's edges then trim. The ball and the crossed torus go through the general marcher, whose curves FF drops (721 duplicates for the crossed tori) |
+| **Torus booleans (Beta)** | Audited 2026-09-24 against `make_torus(4, 1.5)` (15 tools x 3 ops, probe `zz_torus_audit` in the session scratchpad): exact for planes across or through the axis, planes whose loops wind around the tube, coaxial tori, and balls and rods on the axis; a small box inside the tube builds without a fallback (no oracle yet), and a rod across the tube reads 2.3230 against a numeric 2.32302. The rest fall back (row below) |
+| **Torus booleans off the axis: a lobe, trimmed loops, and curved tools** (`make_torus(4, 1.5)` against a 4-cube over x in [3, 7], `make_sphere(1)` at (5, 0, 0), and a second torus (4, 1) turned 90 degrees about x) | All three ops fall back on each (safe meshes, volumes right). The 4-cube's x = 3 plane cuts a lobe that does not wind (a disc on the torus), and its y = ±2 planes cut loops around the tube that the cube's edges then trim; `split_torus_by_tube_loops` takes only whole loops that all start on one latitude. The ball and the crossed torus go through the general marcher, whose curves FF drops (721 duplicates for the crossed tori) |
 | **Non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
 
 
@@ -189,6 +189,21 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A plane whose loops wind around a torus's tube (CLOSED 2026-09-24; pins `slab_over_one_side_of_the_ring`, `bar_through_the_ring`, `slab_tilted_off_the_axis` in `crates/operations/tests/torus_plane_cut.rs`)**:
+  a slab over x > 1 and a 2 x 20 x 4 bar through the ring of
+  `make_torus(4, 1.5)` fell back to meshes on every op, the fuses having
+  first dropped the ring. A plane that crosses every tube cross-section
+  twice meets the tube in two loops, each `u = phi ± acos(rhs(v))`; phase
+  FF now samples them exactly from v = 0, the whole-torus sector splitter
+  takes any closed section that winds once around the tube from one
+  latitude (not only tube cross-sections), a plane face carves a closed
+  NURBS loop strictly inside it as a cap, the torus area and flux follow a
+  free-form boundary by Green's theorem (so `solid_volume` takes such a
+  face per face, not off the mesh), and the two-rim band mesher sweeps
+  between rims whose u wanders with v. The volumes hold to the loops' fit
+  (7e-8 on the bar's common part, whose four loops are cubic fits through
+  exact points 2 pi / 128 apart).
 
 - **A ball or a rod on a torus's axis (CLOSED 2026-09-24; pins in `crates/operations/tests/torus_coaxial_tools.rs`)**:
   `make_torus(4, 1.5)` fused with `make_sphere(3)` at its centre spent

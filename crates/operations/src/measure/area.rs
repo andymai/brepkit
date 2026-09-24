@@ -127,7 +127,10 @@ pub fn face_area(
             Some(area) => Ok(area),
             None => analytic_cone_face_area(topo, face_id),
         },
-        FaceSurface::Torus(_) => analytic_torus_face_area(topo, face_id),
+        FaceSurface::Torus(tor) => match torus_face_uv_area(topo, face_id, tor)? {
+            Some(area) => Ok(area),
+            None => analytic_torus_face_area(topo, face_id),
+        },
         FaceSurface::Nurbs(_) => {
             let mesh = tessellate::tessellate(topo, face_id, deflection)?;
             Ok(triangle_mesh_area(&mesh))
@@ -285,6 +288,48 @@ fn cone_face_uv_area(
             grad_v: &grad_v,
             weight: &weight,
             pole: Some(apex),
+        },
+    )
+}
+
+/// The area of a torus face trimmed by a free-form curve (a plane's loop
+/// around the tube), where the area element is `r (R + r cos v) du dv`.
+/// `Ok(None)` for a face bounded only by circles and seam placeholders,
+/// which [`analytic_torus_face_area`] measures, or when a wire's unwrapped
+/// `u` does not close.
+fn torus_face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let circular = face_edges_all(topo, face_id, |edge, _, _| {
+        Ok(matches!(
+            edge.curve(),
+            EdgeCurve::Line | EdgeCurve::Circle(_)
+        ))
+    })?;
+    if circular {
+        return Ok(None);
+    }
+    let (big, small) = (torus.major_radius(), torus.minor_radius());
+    let (ex, ey, ez) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
+    let project = |p: Point3| torus.project_point(p);
+    // P_v = r (−sin v ρ̂(u) + cos v ẑ), so ∇v is P_v / r².
+    let grad_v = |p: Point3| {
+        let (u, v) = torus.project_point(p);
+        let ((sin_u, cos_u), (sin_v, cos_v)) = (u.sin_cos(), v.sin_cos());
+        ((ex * cos_u + ey * sin_u) * -sin_v + ez * cos_v) * (1.0 / small)
+    };
+    let weight = |v: f64| small * small.mul_add(v.cos(), big);
+    face_uv_area(
+        topo,
+        face_id,
+        &RevolutionMetric {
+            project: &project,
+            grad_v: &grad_v,
+            weight: &weight,
+            pole: None,
         },
     )
 }

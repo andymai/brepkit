@@ -654,7 +654,7 @@ pub(super) fn tessellate_torus_two_rim_band(
         let e = topo.edge(oe.edge())?;
         let closed = e.start() == e.end();
         match e.curve() {
-            EdgeCurve::Circle(_) if closed => {
+            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) if closed => {
                 let idx = oe.edge().index();
                 if !rim_edge_ids.contains(&idx) {
                     rim_edge_ids.push(idx);
@@ -744,19 +744,48 @@ pub(super) fn tessellate_torus_two_rim_band(
             .collect();
         circ_mean_spread(&angles)
     };
+    // Tube rims may also wander in u as they wind round the tube (a plane's
+    // loops around it), as long as neither winds the ring.
     let (u_stats0, v_stats0) = (spread_of(&raw[0], true), spread_of(&raw[0], false));
     let (u_stats1, v_stats1) = (spread_of(&raw[1], true), spread_of(&raw[1], false));
     let lat_mode = if v_stats0.1 <= 1e-6 && v_stats1.1 <= 1e-6 {
         true
-    } else if u_stats0.1 <= 1e-6 && u_stats1.1 <= 1e-6 {
+    } else if u_stats0.1 < std::f64::consts::FRAC_PI_2 && u_stats1.1 < std::f64::consts::FRAC_PI_2 {
         false
     } else {
         return Ok(false);
     };
-    let (lvl0, lvl1) = if lat_mode {
-        (v_stats0.0, v_stats1.0)
-    } else {
-        (u_stats0.0, u_stats1.0)
+    // Each tube rim's u along its tube angle, unwrapped about its mean and
+    // read between its pool vertices.
+    let wrap = |d: f64| (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+    let tracks: Vec<Vec<(f64, f64)>> = raw
+        .iter()
+        .zip([u_stats0.0, u_stats1.0])
+        .map(|(pts, mean)| {
+            let mut track: Vec<(f64, f64)> = pts
+                .iter()
+                .map(|&(u, v, _)| (v.rem_euclid(TAU), mean + wrap(u - mean)))
+                .collect();
+            track.sort_by(|a, b| a.0.total_cmp(&b.0));
+            track
+        })
+        .collect();
+    let u_at = |k: usize, a: f64| -> f64 {
+        let track = &tracks[k];
+        let a = a.rem_euclid(TAU);
+        let hi = track.partition_point(|&(v, _)| v < a);
+        let (first, last) = (track[0], track[track.len() - 1]);
+        let (p0, p1) = match hi {
+            0 => ((last.0 - TAU, last.1), first),
+            h if h == track.len() => (last, (first.0 + TAU, first.1)),
+            h => (track[h - 1], track[h]),
+        };
+        let gap = p1.0 - p0.0;
+        if gap <= 1e-15 {
+            p0.1
+        } else {
+            p0.1 + (p1.1 - p0.1) * (a - p0.0) / gap
+        }
     };
 
     // Rings keyed by the wrapping parameter, sorted, covering its full circle.
@@ -789,6 +818,11 @@ pub(super) fn tessellate_torus_two_rim_band(
         .evaluate_with_endpoints(f64::midpoint(d0, d1), sp, ep);
     let (mid_u, mid_v) = project(seam_mid);
     let mid = if lat_mode { mid_v } else { mid_u };
+    let (lvl0, lvl1) = if lat_mode {
+        (v_stats0.0, v_stats1.0)
+    } else {
+        (u_at(0, mid_v), u_at(1, mid_v))
+    };
     let fwd_span = (lvl1 - lvl0).rem_euclid(TAU);
     if fwd_span < 1e-9 || (TAU - fwd_span) < 1e-9 {
         return Ok(false);
@@ -813,12 +847,27 @@ pub(super) fn tessellate_torus_two_rim_band(
             torus.minor_radius(),
         )
     };
-    let n_rows =
-        segments_for_chord_deviation_a(sweep_radius, sweep.abs(), deflection, angular_tol, true)
-            .max(1);
     let full_circle_cols =
         segments_for_chord_deviation_a(wrap_radius, TAU, deflection, angular_tol, true);
     let n_cols = rims[0].len().max(rims[1].len()).max(full_circle_cols);
+    // The ring angle a column sweeps between tube rims, the covered way.
+    let span_at = |a: f64| {
+        let fwd = (u_at(1, a) - u_at(0, a)).rem_euclid(TAU);
+        if sweep > 0.0 { fwd } else { fwd - TAU }
+    };
+    let widest = if lat_mode {
+        sweep.abs()
+    } else {
+        (0..n_cols)
+            .map(|j| {
+                #[allow(clippy::cast_precision_loss)]
+                let a = TAU * (j as f64) / (n_cols as f64);
+                span_at(a).abs()
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let n_rows =
+        segments_for_chord_deviation_a(sweep_radius, widest, deflection, angular_tol, true).max(1);
 
     let emit = make_band_emit(&project, &surf_normal);
     let mut prev_ring: LatRing = rims[0].clone();
@@ -830,7 +879,11 @@ pub(super) fn tessellate_torus_two_rim_band(
         for j in 0..n_cols {
             #[allow(clippy::cast_precision_loss)]
             let a = TAU * (j as f64) / (n_cols as f64);
-            let (u, v) = if lat_mode { (a, level) } else { (level, a) };
+            let (u, v) = if lat_mode {
+                (a, level)
+            } else {
+                (span_at(a).mul_add(t, u_at(0, a)), a)
+            };
             let p = surf_eval(u, v);
             let key = point_merge_key(p, MERGE_GRID);
             let gid = *point_to_global.entry(key).or_insert_with(|| {
