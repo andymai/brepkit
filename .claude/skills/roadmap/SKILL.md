@@ -172,7 +172,6 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Evolution (Beta)** | Faithful GFA provenance exists (`boolean_with_evolution`). Gaps: a same-domain merge keeps one origin and marks the other deleted; identical/contained operands and every fallback use `build_evolution_by_geometry`, whose 10-unit centroid cap is scale-dependent; fillet evolution is heuristic only |
 | **Draft (Beta)** | `draft.rs` moves vertices radially from an axis through the neutral point, so a drafted face comes out non-planar and no neighbour is re-intersected. Rewrite as a topology-preserving modification: rotate each drafted plane about its neutral line so the outward normal gets `n·d = sin(angle)`, re-intersect every edge touching a drafted face, re-solve its vertices |
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
-| **Feature recognition (Beta)** | The dihedral is `acos(n1·n2)` with a cylinder's AXIS standing in for its normal, so nothing is ever classed Convex; needs per-edge outward normals and a signed dihedral |
 | **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
 | **Stable row defect: a round bore into a tube wall (crossing cylinders, unequal radii)** | `make_cylinder(1.5, 4)` cut by a perpendicular r=0.3 cylinder through its wall: the through-bore falls back to a 40-face mesh, the blind bore returns the tube UNCUT. Root 1: `algebraic_cylinder_cylinder` sweeps the first cylinder's rulings; when that is the thicker tube only a window of rulings meets the bore, each root traces an open arc, and forcing it closed makes the fit overshoot (curves spanning z -0.24..4.24 for a bore at z 1.7..2.3). Sweeping whichever cylinder's rulings all meet the other (the bore) gives the two true closed loops; a parked patch does that plus joined loops for partial overlap. Root 2, next: each loop winds the bore once, so it is a band separator, but `winding_section_chain` measures endpoint progress only and returns early below two sections, so the bore goes to the internal-loops (disc) path; counting a lone closed section's winding along its curve then sends it to band machinery that cannot take a single closed loop |
 | **Stable row defect: drills into spheres and tori, pockets into pointed cones** | Each falls back to a mesh (the triangle count does not move with deflection), same on main: `make_sphere(2, 16)` less an r=0.2 blind drill from (0.5, 0, 1) up; `make_torus(5, 1, 16)` less an r=0.3 drill along z through (5, 0); `make_cone(3, 0, 6)` less the box x -0.5..0.5, y 1..5, z 1..2, whose fallback is also open (48 mesh edges, volume 53.08 against 55.32). The pointed cone's flux through its apex is pinned in `measure::volume::tests`, ready for when the boolean stays exact |
@@ -184,6 +183,16 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Feature recognition to Stable (CLOSED 2026-09-24; pins in `crates/operations/src/feature_recognition.rs` tests and `recognize_features_finds_a_drilled_hole` in `crates/wasm/src/bindings/heal.rs`)**:
+  the dihedral was `acos(n1·n2)` with a cylinder's axis standing in for its
+  normal, so no edge was ever convex. It is now signed by the edge tangent as
+  the first face traverses it, from outward normals at the edge's parametric
+  midpoint; adjacency reads every wire of every shell; a hole is a concave
+  cylinder (a boss is not); a pocket's floor is its face with the most
+  concave neighbours; a fillet is a curved face tangent to two neighbours;
+  a chamfer must be small beside the faces it bevels (a hexagonal prism has
+  none).
 
 - **`solid_volume` chorded the curved edges of planar faces (CLOSED 2026-09-23; pins: the `boolean_box_minus_cylinder` golden at 1000 − 90π, and the window and reversed-face volume checks at 1e-9)**:
   the direct per-face path meshed every planar face, so a cap bounded by a
