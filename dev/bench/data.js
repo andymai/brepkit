@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790276105681,
+  "lastUpdate": 1790276410961,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38339,6 +38339,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30525417,
             "range": "± 73339",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ca673e295ddb1e645ca0a1b0e3ff8ffabb60bb40",
+          "message": "fix(algo): cut a rod with an oblique plane in any direction, and measure and mesh it exactly (#1734)\n\nOblique plane cuts now produce a valid 3-face rod segment in every\ntested direction, with exact analytic volume and wall area and a\nwatertight mesh.\n\n## What was wrong\n\nOn main, subtracting the half-space above a plane through `(0, 0, 3)`\nfrom `make_cylinder(3, 6)` fell back to a 37-face planar mesh whenever\nthe plane's tilt did not face the rod's seam. At slopes 0.1, 0.3, and\n0.5, this occurred at every 30 degree turn except 0.\n\nWhen the cut did build, measurements were incorrect. At slopes 0.3 and\n0.5, `solid_volume` returned 74.43 and 69.33 instead of `27 pi = 84.82`.\nThe wall's `face_area` was 73.51 instead of `18 pi = 56.55`, and the\nwatertight mesh enclosed 74.37 at deflection 0.01.\n\n## What this does\n\n- Anchors the closed plane-section ellipse on a cylinder or cone wall\nwhere the wall's seam line crosses the plane.\n`EdgeCurve::domain_with_endpoints` now runs a closed ellipse's full turn\nfrom its vertex, so every sampler uses the same start. Ellipses whose\nvertex is at the frame origin are unchanged.\n\n- Drops a plane-plane intersection line when it misses the region of a\nface bounded by a single closed circle or ellipse. This handles slopes\n0.8 and above, where lines against the rod's cap planes passed the\nbox-based filter through box corners while missing the discs.\n\n- Extends `tessellate_revolution_band_shared` to accept ellipse rims,\npreventing the CDT wall mesh from chording through the solid.\n\n- Applies the cylinder's `pi r^2 h` volume formula at any cap tilt when\nboth caps are bounded only by circles and ellipses that cross the whole\nwall.\n\n- Computes cylinder wall area as `r` times its `(u, v)` area when any\nboundary edge is not an axis-parallel line or coaxial circle.\n`cylinder_face_uv_area` uses Green's theorem with Gauss-Legendre\nquadrature in each edge's parameter.\n\n- Makes the cylinder wall's Green's-theorem area walk follow each edge\nin wire order through `traversal_spans`, moved from the volume module to\nthe shared measure helpers. This correctly integrates a NURBS edge whose\ncurve runs from the edge's end vertex to its start, or a closed NURBS\nedge whose vertex is not at its curve's start, and differentiates NURBS\nedges exactly instead of by a central difference.\n\n- Makes `split_closed_edge`, used to split closed profile edges for\nsweeps, revolves, and extrusions, run a closed circle's or ellipse's\nturn from its vertex. The previous parameter 0 assumption failed for an\nanchored plane-section ellipse, doubling the vertex and chording across\nthe profile.\n\n- Adds a Closed roadmap entry.\n\n## Verification\n\n- `crates/operations/tests/oblique_rod_cut.rs` covers slopes 0.1, 0.3,\n0.5, and 0.8, each turned 0, 60, 90, and 200 degrees, for 16 cuts.\n\n- Every cut produces a valid 3-face solid, with `solid_volume` within\n`1e-9` relative of `27 pi` and wall `face_area` within `1e-9` of `18\npi`.\n\n- Two points just below and just above the plane at four locations\nclassify correctly.\n\n- At deflection 0.01, every mesh is watertight, encloses at most `27\npi`, and is short by less than `5e-3` relative.\n\n- A session sweep from slope 0.1 through 0.9 at every 30 degree turn\nbuilds a 3-face solid in every case.\n\n- Adds two unit tests: a quarter cylinder wall whose rising ruling is a\nNURBS edge stored end to start measures r times its (u, v) area within\n1e-9, and a closed ellipse whose vertex sits at a quarter turn splits\ninto four corners at successive quarter turns from it. The topology,\nalgo, operations, io, and wasm suites pass, totaling 2018 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes oblique plane cuts of a rod so every tested tilt and turn produces\na valid 3-face solid with exact analytic volume, wall area, and a\nwatertight mesh.\n\n**Details**\n- Anchors the closed plane-section ellipse at the wall's seam crossing,\nso all samplers share the same starting parameter.\n- Drops a plane-plane intersection line that misses a face bounded by a\nsingle closed circle or ellipse.\n- Tessellates walls that end in ellipse rims, stopping the CDT from\nchording through the solid.\n- Applies the `pi r^2 h` cylinder volume formula to any cap tilt when\ncaps are bounded only by circles and ellipses.\n- Computes non-rectangular cylinder wall area as `r` times the `(u, v)`\narea via Green's theorem, now walking each wall's edges in wire order.\n- Splits closed conics from their vertex rather than their frame origin.\n- Adds a regression test covering slopes 0.1, 0.3, 0.5, and 0.8 at four\nturns, plus a roadmap entry; the topology, algo, operations, io, and\nwasm suites pass.\n\n<sup>Written for commit 5b296c2ed82979ba1352e56b91256842b1e4a9f1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1734?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T18:57:43Z",
+          "tree_id": "082ac12ee45f45db9943e15553c87bb92e1e6c37",
+          "url": "https://github.com/andymai/brepkit/commit/ca673e295ddb1e645ca0a1b0e3ff8ffabb60bb40"
+        },
+        "date": 1790276406244,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 804000,
+            "range": "± 2993",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 872623,
+            "range": "± 7105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11249,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 588371,
+            "range": "± 4059",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35146870,
+            "range": "± 265932",
             "unit": "ns/iter"
           }
         ]
