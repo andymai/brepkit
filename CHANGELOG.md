@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.4](https://github.com/andymai/brepkit/compare/v4.0.3...v4.0.4) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** drill a ball and a ring, and pocket a pointed cone ([#1719](https://github.com/andymai/brepkit/issues/1719)) ([faf833a](https://github.com/andymai/brepkit/commit/faf833a10aa029b2dd87e4b25ca6562ded80355d))
+
 ## [4.0.3](https://github.com/andymai/brepkit/compare/v4.0.2...v4.0.3) (2026-09-24)
 
 
