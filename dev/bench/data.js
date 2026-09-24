@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790271601830,
+  "lastUpdate": 1790272255493,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38069,6 +38069,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26090516,
             "range": "± 34407",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ca91c7a77584eaf916de1ab0a9c295945fb491d6",
+          "message": "chore(main): release 4.0.9 (#1733)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.0.9](https://github.com/andymai/brepkit/compare/v4.0.8...v4.0.9)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **operations:** mesh a pointed cone as a fan over its shared rim\nsamples ([#1723](https://github.com/andymai/brepkit/issues/1723))\n([bfcf685](https://github.com/andymai/brepkit/commit/bfcf68559bf059673f69f78fbe19d60c162dff09))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases brepkit 4.0.9, fixing a bug where pointed cones were not meshed\nas a fan over their shared rim samples.\n\n<sup>Written for commit 2ce81f51c4fe8b0f0da70f8a5def215503e32fac.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1733?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T17:48:12Z",
+          "tree_id": "001237a5f04739ef8fed03a1bfe522411a721b9b",
+          "url": "https://github.com/andymai/brepkit/commit/ca91c7a77584eaf916de1ab0a9c295945fb491d6"
+        },
+        "date": 1790272251775,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999895,
+            "range": "± 2044",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1077937,
+            "range": "± 2254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13270,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 741205,
+            "range": "± 5700",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41941130,
+            "range": "± 141097",
             "unit": "ns/iter"
           }
         ]
