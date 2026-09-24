@@ -3,7 +3,8 @@
 use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
-use brepkit_math::vec::Point3;
+use brepkit_math::mat::Mat4;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
@@ -24,12 +25,71 @@ pub fn solid_bounding_box(
     topo: &Topology,
     solid: SolidId,
 ) -> Result<Aabb3, crate::OperationsError> {
-    let points = collect_solid_vertex_points(topo, solid)?;
-    let mut aabb = Aabb3::try_from_points(points.iter().copied()).ok_or_else(|| {
-        crate::OperationsError::InvalidInput {
-            reason: "solid has no vertices".into(),
+    placed_solid_bounding_box(topo, solid, Placement(None))
+}
+
+/// Compute the axis-aligned bounding box of a solid as it would sit after
+/// applying the affine `transform`, without modifying the topology.
+///
+/// The box is as tight as [`solid_bounding_box`] of a transformed copy: conic
+/// edge extremes, NURBS hulls, and whole-sphere and whole-torus extents are
+/// all evaluated in the placed frame, so a rotated cylinder is not bounded by
+/// the rotated corners of its local box.
+///
+/// # Errors
+///
+/// Returns an error if the solid has no vertices or a topology lookup fails.
+pub fn solid_bounding_box_transformed(
+    topo: &Topology,
+    solid: SolidId,
+    transform: &Mat4,
+) -> Result<Aabb3, crate::OperationsError> {
+    placed_solid_bounding_box(topo, solid, Placement(Some(transform)))
+}
+
+/// An optional affine map applied to geometry before it enters a box.
+#[derive(Clone, Copy)]
+struct Placement<'a>(Option<&'a Mat4>);
+
+impl Placement<'_> {
+    fn point(self, p: Point3) -> Point3 {
+        self.0.map_or(p, |m| m.mul_point(p))
+    }
+
+    fn vector(self, v: Vec3) -> Vec3 {
+        if self.0.is_some() {
+            Vec3::new(self.row(0).dot(v), self.row(1).dot(v), self.row(2).dot(v))
+        } else {
+            v
         }
-    })?;
+    }
+
+    /// Row `k` of the linear part: the direction whose dot product with a
+    /// source-frame offset gives the placed offset's `k`-th coordinate.
+    fn row(self, k: usize) -> Vec3 {
+        self.0.map_or_else(
+            || {
+                let mut e = [0.0; 3];
+                e[k] = 1.0;
+                Vec3::new(e[0], e[1], e[2])
+            },
+            |m| Vec3::new(m.0[k][0], m.0[k][1], m.0[k][2]),
+        )
+    }
+}
+
+fn placed_solid_bounding_box(
+    topo: &Topology,
+    solid: SolidId,
+    placement: Placement<'_>,
+) -> Result<Aabb3, crate::OperationsError> {
+    let points = collect_solid_vertex_points(topo, solid)?;
+    let mut aabb =
+        Aabb3::try_from_points(points.iter().map(|&p| placement.point(p))).ok_or_else(|| {
+            crate::OperationsError::InvalidInput {
+                reason: "solid has no vertices".into(),
+            }
+        })?;
 
     // Expand AABB for non-planar faces by sampling edge midpoints on the
     // actual surface. This captures curvature (e.g., the arc midpoint of a
@@ -38,7 +98,7 @@ pub fn solid_bounding_box(
     let shell = topo.shell(solid_data.outer_shell())?;
     for &fid in shell.faces() {
         if let Ok(face) = topo.face(fid) {
-            expand_aabb_for_face(topo, &mut aabb, fid, face.surface());
+            expand_aabb_for_face(topo, &mut aabb, fid, face.surface(), placement);
         }
     }
 
@@ -88,7 +148,7 @@ pub fn face_set_bounding_box(
 
     for &fid in faces {
         if let Ok(face) = topo.face(fid) {
-            expand_aabb_for_face(topo, &mut aabb, fid, face.surface());
+            expand_aabb_for_face(topo, &mut aabb, fid, face.surface(), Placement(None));
         }
     }
 
@@ -116,14 +176,15 @@ fn expand_aabb_for_face(
     aabb: &mut Aabb3,
     face_id: brepkit_topology::face::FaceId,
     surface: &FaceSurface,
+    placement: Placement<'_>,
 ) {
     // Always sample wire midpoints — captures curvature of curved boundary
     // edges (Circle, Ellipse, NurbsCurve) regardless of surface type.
     // Critical for: cone base discs (Plane face with circle edge), partial
     // arcs whose extremes lie between vertices, and any curved edge on a
     // planar face.
-    sample_face_wire_midpoints(topo, aabb, face_id);
-    expand_boundary_edges_exact(topo, aabb, face_id);
+    sample_face_wire_midpoints(topo, aabb, face_id, placement);
+    expand_boundary_edges_exact(topo, aabb, face_id, placement);
 
     match surface {
         FaceSurface::Plane { .. } => {}
@@ -131,24 +192,30 @@ fn expand_aabb_for_face(
         // Spheres are represented as full or near-full surfaces. A torus can
         // also represent a trimmed fillet patch, where expanding to the full
         // analytic torus shifts the public solid bounds by the minor radius.
+        // The placed half-extent along world axis k is the support of the
+        // source surface in direction d = row k of the linear part: r·|d| for
+        // a sphere, R·|d ⊥ axis| + r·|d| for a torus.
         FaceSurface::Sphere(s) => {
-            let c = s.center();
+            let c = placement.point(s.center());
             let r = s.radius();
-            aabb_include(aabb, Point3::new(c.x() - r, c.y() - r, c.z() - r));
-            aabb_include(aabb, Point3::new(c.x() + r, c.y() + r, c.z() + r));
+            let h = [0, 1, 2].map(|k| r * placement.row(k).length());
+            aabb_include(aabb, Point3::new(c.x() - h[0], c.y() - h[1], c.z() - h[2]));
+            aabb_include(aabb, Point3::new(c.x() + h[0], c.y() + h[1], c.z() + h[2]));
         }
         FaceSurface::Torus(t) => {
             if torus_face_is_full_periodic(topo, face_id) {
-                // Per-dim half-extent of a torus = R * sqrt(1 - axis.d²) + r.
-                let c = t.center();
+                let c = placement.point(t.center());
                 let r_major = t.major_radius();
                 let r_minor = t.minor_radius();
                 let axis = t.z_axis();
-                let hx = r_major * (1.0 - axis.x() * axis.x()).max(0.0).sqrt() + r_minor;
-                let hy = r_major * (1.0 - axis.y() * axis.y()).max(0.0).sqrt() + r_minor;
-                let hz = r_major * (1.0 - axis.z() * axis.z()).max(0.0).sqrt() + r_minor;
-                aabb_include(aabb, Point3::new(c.x() - hx, c.y() - hy, c.z() - hz));
-                aabb_include(aabb, Point3::new(c.x() + hx, c.y() + hy, c.z() + hz));
+                let h = [0, 1, 2].map(|k| {
+                    let d = placement.row(k);
+                    let along = d.dot(axis);
+                    let perp = along.mul_add(-along, d.dot(d)).max(0.0).sqrt();
+                    r_major.mul_add(perp, r_minor * d.length())
+                });
+                aabb_include(aabb, Point3::new(c.x() - h[0], c.y() - h[1], c.z() - h[2]));
+                aabb_include(aabb, Point3::new(c.x() + h[0], c.y() + h[1], c.z() + h[2]));
             }
         }
 
@@ -167,7 +234,7 @@ fn expand_aabb_for_face(
                 let u = u_min + (u_max - u_min) * (iu as f64) / (n_samples as f64);
                 for iv in 1..n_samples {
                     let v = v_min + (v_max - v_min) * (iv as f64) / (n_samples as f64);
-                    aabb_include(aabb, nurbs.evaluate(u, v));
+                    aabb_include(aabb, placement.point(nurbs.evaluate(u, v)));
                 }
             }
         }
@@ -211,6 +278,7 @@ fn sample_face_wire_midpoints(
     topo: &Topology,
     aabb: &mut Aabb3,
     face_id: brepkit_topology::face::FaceId,
+    placement: Placement<'_>,
 ) -> bool {
     let Ok(face) = topo.face(face_id) else {
         return false;
@@ -238,7 +306,7 @@ fn sample_face_wire_midpoints(
         for &frac in &[0.25, 0.5, 0.75] {
             let t = t0 + (t1 - t0) * frac;
             let pt = edge.curve().evaluate_with_endpoints(t, p_start, p_end);
-            aabb_include(aabb, pt);
+            aabb_include(aabb, placement.point(pt));
         }
     }
     has_curved
@@ -256,6 +324,7 @@ fn expand_boundary_edges_exact(
     topo: &Topology,
     aabb: &mut Aabb3,
     face_id: brepkit_topology::face::FaceId,
+    placement: Placement<'_>,
 ) {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -279,21 +348,30 @@ fn expand_boundary_edges_exact(
                 EdgeCurve::Line => {}
                 EdgeCurve::Circle(c) => {
                     let r = c.radius();
-                    include_conic_extremes(aabb, c.u_axis(), c.v_axis(), r, r, t0, t1, |t| {
-                        c.evaluate(t)
-                    });
+                    include_conic_extremes(
+                        aabb,
+                        placement.vector(c.u_axis()),
+                        placement.vector(c.v_axis()),
+                        r,
+                        r,
+                        t0,
+                        t1,
+                        |t| placement.point(c.evaluate(t)),
+                    );
                 }
                 EdgeCurve::Ellipse(e) => include_conic_extremes(
                     aabb,
-                    e.u_axis(),
-                    e.v_axis(),
+                    placement.vector(e.u_axis()),
+                    placement.vector(e.v_axis()),
                     e.semi_major(),
                     e.semi_minor(),
                     t0,
                     t1,
-                    |t| e.evaluate(t),
+                    |t| placement.point(e.evaluate(t)),
                 ),
-                EdgeCurve::NurbsCurve(n) => include_nurbs_edge_hull(aabb, n, t0, t1),
+                EdgeCurve::NurbsCurve(n) => {
+                    include_nurbs_edge_hull(aabb, n, t0, t1, placement);
+                }
             }
         }
     }
@@ -312,6 +390,7 @@ fn include_nurbs_edge_hull(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     t0: f64,
     t1: f64,
+    placement: Placement<'_>,
 ) {
     use brepkit_math::nurbs::decompose::curve_to_bezier_segments;
     use brepkit_math::nurbs::knot_ops::curve_split;
@@ -342,7 +421,10 @@ fn include_nurbs_edge_hull(
             .control_points()
             .iter()
             .zip(segment.weights())
-            .map(|(p, &w)| [p.x() * w, p.y() * w, p.z() * w, w])
+            .map(|(&p, &w)| {
+                let p = placement.point(p);
+                [p.x() * w, p.y() * w, p.z() * w, w]
+            })
             .collect();
         include_bezier_hull(aabb, &poles, SUBDIVISIONS);
     }
@@ -575,7 +657,7 @@ mod tests {
             min: seed,
             max: seed,
         };
-        include_nurbs_edge_hull(&mut aabb, &curve, 0.0, 1.0);
+        include_nurbs_edge_hull(&mut aabb, &curve, 0.0, 1.0, Placement(None));
         assert!(
             aabb.max.y() >= r - 1e-9,
             "under-shoots the top: {}",
@@ -589,7 +671,7 @@ mod tests {
             min: seed,
             max: seed,
         };
-        include_nurbs_edge_hull(&mut half, &curve, 0.0, 0.5);
+        include_nurbs_edge_hull(&mut half, &curve, 0.0, 0.5, Placement(None));
         assert!(
             half.min.x() >= -1e-6,
             "left half leaked in: {}",
@@ -650,5 +732,80 @@ mod tests {
         ] {
             assert!((got - want).abs() < 1e-6, "got {got} want {want}");
         }
+    }
+
+    fn assert_boxes_match(got: Aabb3, want: Aabb3, tol: f64, what: &str) {
+        for (g, w) in [
+            (got.min.x(), want.min.x()),
+            (got.min.y(), want.min.y()),
+            (got.min.z(), want.min.z()),
+            (got.max.x(), want.max.x()),
+            (got.max.y(), want.max.y()),
+            (got.max.z(), want.max.z()),
+        ] {
+            assert!((g - w).abs() < tol, "{what}: got {got:?} want {want:?}");
+        }
+    }
+
+    #[test]
+    fn transformed_box_matches_the_box_of_a_transformed_copy() {
+        use crate::copy::copy_solid;
+        use crate::primitives::{make_cylinder, make_sphere, make_torus};
+        use crate::transform::transform_solid;
+
+        let placements = [
+            Mat4::translation(3.0, -2.0, 7.5),
+            Mat4::translation(1.0, 2.0, 3.0) * Mat4::rotation_z(0.7),
+            Mat4::rotation_x(0.9) * Mat4::rotation_y(-0.4) * Mat4::rotation_z(1.3),
+            Mat4::translation(-4.0, 0.5, 2.0) * Mat4::rotation_y(2.1) * Mat4::scale(1.5, 1.5, 1.5),
+        ];
+        let mut topo = Topology::new();
+        let shapes = [
+            ("box", make_box(&mut topo, 2.0, 3.0, 4.0).unwrap()),
+            ("cylinder", make_cylinder(&mut topo, 1.5, 4.0).unwrap()),
+            ("sphere", make_sphere(&mut topo, 2.0, 16).unwrap()),
+            ("torus", make_torus(&mut topo, 6.0, 1.5, 16).unwrap()),
+            ("u-profile", u_profile(&mut topo)),
+        ];
+        for (name, solid) in shapes {
+            for (i, m) in placements.iter().enumerate() {
+                let placed = solid_bounding_box_transformed(&topo, solid, m).unwrap();
+                let copy = copy_solid(&mut topo, solid).unwrap();
+                transform_solid(&mut topo, copy, m).unwrap();
+                let moved = solid_bounding_box(&topo, copy).unwrap();
+                assert_boxes_match(placed, moved, 1e-9, &format!("{name} placement {i}"));
+            }
+        }
+    }
+
+    #[test]
+    fn cylinder_spun_about_its_own_axis_keeps_its_box() {
+        use crate::primitives::make_cylinder;
+
+        let mut topo = Topology::new();
+        let cyl = make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        let spun = Mat4::rotation_z(std::f64::consts::FRAC_PI_4);
+        let got = solid_bounding_box_transformed(&topo, cyl, &spun).unwrap();
+        let want = Aabb3 {
+            min: Point3::new(-1.0, -1.0, 0.0),
+            max: Point3::new(1.0, 1.0, 4.0),
+        };
+        assert_boxes_match(got, want, 1e-9, "spun cylinder");
+    }
+
+    #[test]
+    fn tilted_torus_box_is_its_support_not_its_rotated_local_box() {
+        use crate::primitives::make_torus;
+
+        let mut topo = Topology::new();
+        let torus = make_torus(&mut topo, 10.0, 3.0, 16).unwrap();
+        let tilt = Mat4::rotation_x(std::f64::consts::FRAC_PI_4);
+        let got = solid_bounding_box_transformed(&topo, torus, &tilt).unwrap();
+        let h = 10.0 * std::f64::consts::FRAC_1_SQRT_2 + 3.0;
+        let want = Aabb3 {
+            min: Point3::new(-13.0, -h, -h),
+            max: Point3::new(13.0, h, h),
+        };
+        assert_boxes_match(got, want, 1e-9, "tilted torus");
     }
 }
