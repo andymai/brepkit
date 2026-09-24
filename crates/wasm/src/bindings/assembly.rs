@@ -125,3 +125,72 @@ impl BrepKernel {
         Ok(serde_json::Value::Array(entries).to_string())
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use crate::kernel::BrepKernel;
+
+    fn translation(x: f64, y: f64, z: f64) -> Vec<f64> {
+        vec![
+            1.0, 0.0, 0.0, x, //
+            0.0, 1.0, 0.0, y, //
+            0.0, 0.0, 1.0, z, //
+            0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    #[test]
+    fn flatten_and_bom_follow_the_tree() {
+        let mut k = BrepKernel::new();
+        let chassis = k.make_box_solid(4.0, 2.0, 1.0).unwrap();
+        let wheel = k.make_cylinder_solid(0.5, 0.2).unwrap();
+        let asm = k.assembly_new("cart");
+        let body = k
+            .assembly_add_root(asm, "chassis", chassis, translation(0.0, 0.0, 1.0))
+            .unwrap();
+        k.assembly_add_child(asm, body, "wheel_front", wheel, translation(3.0, 0.0, 0.0))
+            .unwrap();
+        k.assembly_add_child(asm, body, "wheel_rear", wheel, translation(1.0, 0.0, 0.0))
+            .unwrap();
+
+        let flat: serde_json::Value =
+            serde_json::from_str(&k.assembly_flatten(asm).unwrap()).unwrap();
+        let placed: Vec<(u64, [f64; 3])> = flat
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let m: Vec<f64> = e["matrix"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect();
+                (e["solid"].as_u64().unwrap(), [m[3], m[7], m[11]])
+            })
+            .collect();
+        assert_eq!(
+            placed,
+            vec![
+                (u64::from(chassis), [0.0, 0.0, 1.0]),
+                (u64::from(wheel), [3.0, 0.0, 1.0]),
+                (u64::from(wheel), [1.0, 0.0, 1.0]),
+            ]
+        );
+
+        let bom: serde_json::Value = serde_json::from_str(&k.assembly_bom(asm).unwrap()).unwrap();
+        let rows: Vec<(&str, u64)> = bom
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    e["name"].as_str().unwrap(),
+                    e["instanceCount"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(rows, vec![("chassis", 1), ("wheel_front", 2)]);
+    }
+}

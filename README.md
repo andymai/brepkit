@@ -99,7 +99,7 @@ The table below rates *features*. For *API* stability per crate, and what the sh
 | **I/O**                 | IGES import/export                                                           | Experimental |
 | **Sketching**           | 2D constraint solver (DogLeg)                                                | Stable       |
 | **Feature Recognition** | Holes, pockets, chamfers, fillets                                            | Beta         |
-| **Assemblies**          | Hierarchy, transforms, bill of materials                                     | Beta         |
+| **Assemblies**          | Hierarchy, transforms, bill of materials                                     | Stable       |
 | **Evolution**           | Face provenance through booleans                                             | Beta         |
 | **Defeaturing**         | Remove planar faces                                                          | Beta         |
 | **Rendering**           | Offscreen wgpu render to image plus face-id buffer (`brepkit-render`)        | Experimental |
@@ -113,7 +113,7 @@ A few areas are still maturing. Worth knowing before you build on them:
 - **Non-planar profiles.** Loft, sweep, and pipe accept profiles with non-planar surfaces, and close non-planar section boundaries with bilinear caps for four-sided rings (boundaries with more than four edges, or holes on a non-planar section, are not yet supported). Revolve accepts non-planar profile surfaces; a full revolution takes any boundary, but a partial revolution still requires a planar boundary for its caps. The smooth, scaled/guided, and multi-section sweep variants accept non-planar profiles too; only the miter-corner variant still requires planar profiles (its bisector-plane joint faces would otherwise be non-planar).
 - **IGES is experimental.** Export writes planar and NURBS surfaces but skips analytic surfaces and approximates circular and elliptical edges as polylines. Import reconstructs planar placeholder faces only. Use STEP for B-Rep exchange.
 - **Inertia tensor.** Volume, area, bounding box, and center of mass are computed for any solid. A full inertia tensor exists only as closed-form formulas for analytic primitives and is not exposed through the modeling or WASM API.
-- **Beta subsystems.** Feature recognition, assemblies, evolution tracking, and defeaturing work but are still maturing. Defeaturing handles planar faces only.
+- **Beta subsystems.** Feature recognition, evolution tracking, and defeaturing work but are still maturing. Defeaturing handles planar faces only.
 
 ## Scope
 

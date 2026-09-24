@@ -169,7 +169,6 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 | Row | Status / blocker |
 |---|---|
-| **Assemblies (Beta)** | Branch `feat/assembly-stable`: tree-order `flatten`/BOM, every component placed (a parent's own solid was dropped), exact placed bbox via `measure::solid_bounding_box_transformed`. Lands after the transform fix, which its bbox oracle test depends on |
 | **Evolution (Beta)** | Faithful GFA provenance exists (`boolean_with_evolution`). Gaps: a same-domain merge keeps one origin and marks the other deleted; identical/contained operands and every fallback use `build_evolution_by_geometry`, whose 10-unit centroid cap is scale-dependent; fillet evolution is heuristic only |
 | **Draft (Beta)** | `draft.rs` moves vertices radially from an axis through the neutral point, so a drafted face comes out non-planar and no neighbour is re-intersected. Rewrite as a topology-preserving modification: rotate each drafted plane about its neutral line so the outward normal gets `n·d = sin(angle)`, re-intersect every edge touching a drafted face, re-solve its vertices |
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
@@ -185,6 +184,13 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Assemblies to Stable (CLOSED 2026-09-23; pins in `crates/operations/src/assembly.rs` and `crates/wasm/src/bindings/assembly.rs`)** —
+  `flatten` dropped a parent component's own solid, the bill of materials and
+  its names followed `HashMap` order, and the assembly box transformed the
+  corners of each instance's local box. Every component is now placed in tree
+  order and the box bounds each instance in its placed frame
+  (`measure::solid_bounding_box_transformed`).
 
 - **Transform lost analytic frames (CLOSED 2026-09-23; pins in `crates/operations/src/transform/tests.rs`)** —
   `transform_solid` rebuilt a rotated torus or sphere around the world z axis
