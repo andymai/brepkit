@@ -2158,8 +2158,8 @@ pub(super) fn tessellate_nonplanar_cdt(
     if du > 1e-15 && dv > 1e-15 {
         let (n_u, n_v) = interior_grid_resolution(
             face_data.surface(),
-            du,
-            dv,
+            (u_min, du),
+            (v_min, dv),
             deflection,
             angular_tol,
             circle_floor,
@@ -3002,8 +3002,8 @@ fn stripe_span_within_tolerance(
 /// Compute interior grid resolution for `tessellate_nonplanar_cdt`.
 fn interior_grid_resolution(
     surface: &FaceSurface,
-    du: f64,
-    dv: f64,
+    (u_min, du): (f64, f64),
+    (v_min, dv): (f64, f64),
     deflection: f64,
     angular_tol: f64,
     circle_floor: bool,
@@ -3058,7 +3058,41 @@ fn interior_grid_resolution(
             let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol, true).max(2);
             (n_u, 2)
         }
-        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => {
+        // A NURBS face's parameters are knot values, not angles: size the
+        // grid by the chords of its own iso-lines across the face's box.
+        FaceSurface::Nurbs(_) => {
+            const INTERIOR_MAX_DIVISIONS: usize = 1024;
+            let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
+            let normal_at = |u: f64, v: f64| {
+                let (u, v) = wrap_to_domain(surface, u, v);
+                surface.normal(u, v)
+            };
+            let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
+            // The CDT inserts every interior sample, so the grid is bounded
+            // as a whole, not only per direction.
+            super::nurbs::cap_grid(
+                super::nurbs::iso_divisions_over(
+                    &at,
+                    &normal_at,
+                    true,
+                    (u_span, v_span),
+                    deflection,
+                    angular_tol,
+                    INTERIOR_MAX_DIVISIONS,
+                ),
+                super::nurbs::iso_divisions_over(
+                    &at,
+                    &normal_at,
+                    false,
+                    (v_span, u_span),
+                    deflection,
+                    angular_tol,
+                    INTERIOR_MAX_DIVISIONS,
+                ),
+                super::nurbs::GRID_MAX_CELLS,
+            )
+        }
+        FaceSurface::Plane { .. } => {
             let r = estimate_surface_radius(surface);
             let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol, true).max(2);
             let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol, true).max(2);

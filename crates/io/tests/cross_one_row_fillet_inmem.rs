@@ -653,7 +653,7 @@ fn rolling_reference_diagnostic_result_is_measurable() {
     assert_eq!(components(&topo, diagnostic), 10);
     let volume = oriented_solid_volume(&topo, diagnostic, DEFLECTION).unwrap();
     assert!(
-        (volume - 27_435.763_162).abs() < 1e-3,
+        (volume - 27_435.644_932).abs() < 1e-3,
         "rolling volume {volume}"
     );
     let audit = shell_audit::audit_shell(&topo, diagnostic);

@@ -693,8 +693,14 @@ pub(super) fn tessellate_periodic_nurbs_grid(
 ) -> TriangleMeshUV {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
-    let n_u = iso_divisions(surface, true, deflection, angular_tol);
-    let n_v = iso_divisions(surface, false, deflection, angular_tol);
+    // Fewer than three divisions of a closed direction collapse its seam
+    // copies onto the cells' other side.
+    let (n_u, n_v) = cap_grid(
+        iso_divisions(surface, true, deflection, angular_tol).max(3),
+        iso_divisions(surface, false, deflection, angular_tol).max(3),
+        GRID_MAX_CELLS,
+    );
+    let (n_u, n_v) = (n_u.max(3), n_v.max(3));
     let (um, vm) = (0.5 * (u_lo + u_hi), 0.5 * (v_lo + v_hi));
     let duv = surface.derivatives(um, vm, 1);
     let right_handed = duv[1][0].cross(duv[0][1]).dot(safe_normal(surface, um, vm)) >= 0.0;
@@ -743,6 +749,32 @@ pub(super) fn tessellate_periodic_nurbs_grid(
     }
 }
 
+/// The most cells a structured NURBS grid may hold; past it the deflection
+/// gives way to a bounded mesh.
+pub(super) const GRID_MAX_CELLS: usize = 1 << 16;
+
+/// Shrinks a grid's two division counts together, keeping their ratio, until
+/// it holds at most `max_cells` cells. The shrunk grid no longer meets the
+/// deflection it was sized for, so this says so.
+pub(super) fn cap_grid(n_u: usize, n_v: usize, max_cells: usize) -> (usize, usize) {
+    let cells = n_u.saturating_mul(n_v);
+    if cells <= max_cells {
+        return (n_u, n_v);
+    }
+    log::warn!(
+        "NURBS grid of {n_u} x {n_v} cells exceeds {max_cells}; meshing it coarser than the requested deflection"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let scale = (max_cells as f64 / cells as f64).sqrt();
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let shrink = |n: usize| ((n as f64 * scale).floor() as usize).max(1);
+    (shrink(n_u), shrink(n_v))
+}
+
 /// Divisions of one parameter direction that keep every iso-line chord of a
 /// few sampled rows within half the deflection (a grid cell's diagonal sags
 /// further than its sides) and within the angular tolerance.
@@ -752,27 +784,59 @@ fn iso_divisions(
     deflection: f64,
     angular_tol: f64,
 ) -> usize {
-    const ROWS: usize = 8;
-    const MAX_DIVISIONS: usize = 4096;
-    let ((lo, hi), (o_lo, o_hi)) = if along_u {
+    let ranges = if along_u {
         (surface.domain_u(), surface.domain_v())
     } else {
         (surface.domain_v(), surface.domain_u())
     };
-    let at = |t: f64, o: f64| {
+    iso_divisions_over(
+        &|u, v| surface.evaluate(u, v),
+        &|u, v| safe_normal(surface, u, v),
+        along_u,
+        ranges,
+        deflection,
+        angular_tol,
+        4096,
+    )
+}
+
+/// [`iso_divisions`] over a parameter box: `ranges` is the span divided and
+/// the span its sampled rows sit across, and `at` / `normal_at` take
+/// `(u, v)` (a caller on a periodic surface wraps them). A straight direction
+/// (a ruling) needs one division. The normals' turn is weighed across every
+/// chord but one that ends on a pole.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn iso_divisions_over(
+    at: &dyn Fn(f64, f64) -> Point3,
+    normal_at: &dyn Fn(f64, f64) -> Vec3,
+    along_u: bool,
+    ((lo, hi), (o_lo, o_hi)): ((f64, f64), (f64, f64)),
+    deflection: f64,
+    angular_tol: f64,
+    max_divisions: usize,
+) -> usize {
+    const ROWS: usize = 8;
+    let point = |t: f64, o: f64| if along_u { at(t, o) } else { at(o, t) };
+    let normal = |t: f64, o: f64| {
         if along_u {
-            surface.evaluate(t, o)
+            normal_at(t, o)
         } else {
-            surface.evaluate(o, t)
+            normal_at(o, t)
         }
     };
-    let normal_at = |t: f64, o: f64| {
-        if along_u {
-            safe_normal(surface, t, o)
-        } else {
-            safe_normal(surface, o, t)
-        }
+    // An end of the span whose cross iso-line collapses to a point is a
+    // pole: the surface has no normal there, and the one it reports can
+    // point either way.
+    let pole = |t: f64| {
+        let (a, b, c) = (
+            point(t, o_lo),
+            point(t, 0.5 * (o_lo + o_hi)),
+            point(t, o_hi),
+        );
+        let reach = a.x().abs().max(a.y().abs()).max(a.z().abs());
+        (b - a).length().max((c - a).length()) <= 1e3 * f64::EPSILON * (1.0 + reach)
     };
+    let (pole_lo, pole_hi) = (pole(lo), pole(hi));
     let fits = |n: usize| {
         (0..ROWS).all(|row| {
             #[allow(clippy::cast_precision_loss)]
@@ -783,23 +847,23 @@ fn iso_divisions(
                     lo + (hi - lo) * k as f64 / n as f64,
                     lo + (hi - lo) * (k + 1) as f64 / n as f64,
                 );
-                let (p0, p1) = (at(t0, o), at(t1, o));
+                let (p0, p1) = (point(t0, o), point(t1, o));
                 let chord_mid = Point3::new(
                     0.5 * (p0.x() + p1.x()),
                     0.5 * (p0.y() + p1.y()),
                     0.5 * (p0.z() + p1.z()),
                 );
-                let sag = (at(0.5 * (t0 + t1), o) - chord_mid).length();
-                let turn = normal_at(t0, o)
-                    .dot(normal_at(t1, o))
-                    .clamp(-1.0, 1.0)
-                    .acos();
-                sag <= 0.5 * deflection && (angular_tol <= 0.0 || turn <= angular_tol)
+                let sag = (point(0.5 * (t0 + t1), o) - chord_mid).length();
+                let at_pole = (k == 0 && pole_lo) || (k + 1 == n && pole_hi);
+                let turned = angular_tol > 0.0
+                    && !at_pole
+                    && normal(t0, o).dot(normal(t1, o)).clamp(-1.0, 1.0).acos() > angular_tol;
+                sag <= 0.5 * deflection && !turned
             })
         })
     };
-    let mut n = 8;
-    while n < MAX_DIVISIONS && !fits(n) {
+    let mut n = 1;
+    while n < max_divisions && !fits(n) {
         n *= 2;
     }
     n
