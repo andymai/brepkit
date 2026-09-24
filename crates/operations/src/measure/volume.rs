@@ -1668,13 +1668,20 @@ fn planar_face_flux(
     };
     // The fast path reads x·n as the plane offset everywhere on the face, so
     // a boundary off its stored plane (a skewed miter-sweep quad) keeps the
-    // mesh.
+    // mesh. So does a NURBS edge with a weight that is not positive: its
+    // denominator can pass near zero, too sharp for the fixed quadrature,
+    // and it can leave the control hull the nesting boxes rely on.
     let d_unit = d / len;
     let normal_unit = normal * (1.0 / len);
     let planar_eps = 1e-6 * (1.0 + d_unit.abs());
     for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         for oe in topo.wire(wire_id)?.edges() {
             let edge = topo.edge(oe.edge())?;
+            if let EdgeCurve::NurbsCurve(n) = edge.curve()
+                && n.weights().iter().any(|&w| w <= 0.0)
+            {
+                return Ok(None);
+            }
             let (sp, ep) = (
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
@@ -1694,17 +1701,6 @@ fn planar_face_flux(
     // Holes subtract only while no two can nest: an island inside a hole is
     // material again, which the mesher's odd-depth rule handles.
     if face.inner_wires().len() > 1 {
-        // The boxes bound a NURBS edge by its control points, which holds
-        // only while its weights are positive.
-        for &iw in face.inner_wires() {
-            for oe in topo.wire(iw)?.edges() {
-                if let EdgeCurve::NurbsCurve(n) = topo.edge(oe.edge())?.curve()
-                    && n.weights().iter().any(|&w| w <= 0.0)
-                {
-                    return Ok(None);
-                }
-            }
-        }
         let boxes = face
             .inner_wires()
             .iter()
@@ -3660,8 +3656,8 @@ mod tests {
         assert!(planar_face_flux(&topo, face).unwrap().is_none());
     }
 
-    /// A rational edge with a negative weight can leave its control hull, so
-    /// the nesting boxes cannot bound a hole it closes.
+    /// A rational edge with a negative weight keeps the mesh, on the outer
+    /// wire and on a hole alike.
     #[test]
     fn planar_flux_leaves_negative_weights_to_the_mesh() {
         let mut topo = Topology::new();
@@ -3698,8 +3694,10 @@ mod tests {
                 Point3::new(8.0, 9.0, 0.0),
             ],
         );
-        let face = planar_face(&mut topo, vec![outer, bulge, square], 0.0);
+        let face = planar_face(&mut topo, vec![outer, bulge.clone(), square], 0.0);
         assert!(planar_face_flux(&topo, face).unwrap().is_none());
+        let alone = planar_face(&mut topo, vec![bulge], 0.0);
+        assert!(planar_face_flux(&topo, alone).unwrap().is_none());
     }
 
     /// The top cap at z = h carries a third of the volume; the wall the rest.
