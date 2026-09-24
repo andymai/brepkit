@@ -1276,9 +1276,6 @@ fn interpolate_at(
         rhs.swap(col, pivot);
         for r in col + 1..n {
             let f = rows[r][col] / rows[col][col];
-            if f == 0.0 {
-                continue;
-            }
             for c in col..n {
                 rows[r][c] -= f * rows[col][c];
             }
