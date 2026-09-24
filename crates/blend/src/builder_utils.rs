@@ -123,6 +123,29 @@ pub fn create_blend_face_with_contacts(
     contact1_edge: Option<brepkit_topology::edge::EdgeId>,
     contact2_edge: Option<brepkit_topology::edge::EdgeId>,
 ) -> Result<BlendFaceInfo, BlendError> {
+    blend_face_with_contacts(topo, stripe, contact1_edge, contact2_edge, true)
+}
+
+/// [`create_blend_face_with_contacts`] for a chamfer, whose cross edges are
+/// straight: its sections carry the chord's midpoint as their centre, so a
+/// cross-section arc through them would be a semicircle.
+pub fn create_chamfer_face_with_contacts(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    contact1_edge: Option<brepkit_topology::edge::EdgeId>,
+    contact2_edge: Option<brepkit_topology::edge::EdgeId>,
+) -> Result<BlendFaceInfo, BlendError> {
+    blend_face_with_contacts(topo, stripe, contact1_edge, contact2_edge, false)
+}
+
+#[allow(clippy::too_many_lines)]
+fn blend_face_with_contacts(
+    topo: &mut Topology,
+    stripe: &Stripe,
+    contact1_edge: Option<brepkit_topology::edge::EdgeId>,
+    contact2_edge: Option<brepkit_topology::edge::EdgeId>,
+    arcs: bool,
+) -> Result<BlendFaceInfo, BlendError> {
     const WELD: f64 = 1e-5;
     let (t0_1, t1_1) = stripe.contact1.domain();
     let (t0_2, t1_2) = stripe.contact2.domain();
@@ -219,6 +242,7 @@ pub fn create_blend_face_with_contacts(
     let end_curve = stripe
         .sections
         .last()
+        .filter(|_| arcs)
         .and_then(|sec| {
             let r = cross_section_curve(sec, p1_end, p2_end);
             if r.is_none() {
@@ -234,6 +258,7 @@ pub fn create_blend_face_with_contacts(
     let start_curve = stripe
         .sections
         .first()
+        .filter(|_| arcs)
         .and_then(|sec| {
             let r = cross_section_curve(sec, p2_start, p1_start);
             if r.is_none() {
