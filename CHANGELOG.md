@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.12](https://github.com/andymai/brepkit/compare/v4.0.11...v4.0.12) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** cut a rod with an oblique plane in any direction, and measure and mesh it exactly ([#1734](https://github.com/andymai/brepkit/issues/1734)) ([ca673e2](https://github.com/andymai/brepkit/commit/ca673e295ddb1e645ca0a1b0e3ff8ffabb60bb40))
+
 ## [4.0.11](https://github.com/andymai/brepkit/compare/v4.0.10...v4.0.11) (2026-09-24)
 
 
