@@ -108,3 +108,37 @@ fn operations_classifiers_see_cavities() {
         }
     }
 }
+
+/// With planar faces only, the check crate's winding number is exact, so its
+/// winding and robust classifiers are held to cavities too: a block less an
+/// enclosed cube.
+#[test]
+fn check_winding_classifiers_see_a_planar_cavity() {
+    let mut topo = Topology::new();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let cube = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+    transform_solid(&mut topo, cube, &Mat4::translation(3.0, 3.0, 3.0)).unwrap();
+    let hollow = boolean(&mut topo, BooleanOp::Cut, block, cube).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let options = ClassifyOptions::default();
+    let classifiers: [(&str, CheckClassifier); 2] = [
+        ("winding", brepkit_check::classify::classify_point_winding),
+        ("robust", brepkit_check::classify::classify_point_robust),
+    ];
+    for (name, classify) in classifiers {
+        for (x, y, z, expected) in [
+            (1.0, 1.0, 1.0, PointClassification::Inside),
+            (5.0, 5.0, 8.0, PointClassification::Inside),
+            (5.0, 5.0, 5.0, PointClassification::Outside),
+            (4.0, 6.5, 3.5, PointClassification::Outside),
+            (11.0, 5.0, 5.0, PointClassification::Outside),
+        ] {
+            let p = Point3::new(x, y, z);
+            assert_eq!(
+                classify(&topo, hollow, p, &options).unwrap(),
+                expected,
+                "{name} at {p:?}"
+            );
+        }
+    }
+}

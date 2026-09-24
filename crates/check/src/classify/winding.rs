@@ -17,10 +17,12 @@ use crate::CheckError;
 ///
 /// Returns a value close to 1.0 for inside points, 0.0 for outside.
 ///
-/// The algorithm triangulates each face of the solid's outer shell from
-/// its wire polygon, then sums the signed solid angle subtended by each
-/// triangle at the query point. The total is divided by 4pi to yield the
-/// winding number.
+/// The algorithm triangulates each face of every shell of the solid (the
+/// outer one and each cavity's) from its wire polygon, then sums the signed
+/// solid angle subtended by each triangle at the query point. The total is
+/// divided by 4pi to yield the winding number. A fan over the wire polygon
+/// does not cover a curved face, so the result is exact only for planar
+/// faces.
 ///
 /// # Errors
 ///
