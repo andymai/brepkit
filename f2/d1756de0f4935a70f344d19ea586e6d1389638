@@ -1,0 +1,34 @@
+crates/wasm/src/bindings/heal.rs
+  s_ba2f7b5c6902b6::t_f6b718eb47f242 261-292
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_cad3ac46d8f00f 188-196
+  s_ba2f7b5c6902b6::t_6c3353a9e5aa47 197
+crates/operations/src/feature_recognition.rs
+  s_ba2f7b5c6902b6::t_6c2516d4106bde 168,204-205,210-215,220-226,272-274,276-279,285,288-290,292-304,306-313,316-318,321,324-333,335-336,451-452,468-471
+  s_ba2f7b5c6902b6::t_9a6fd1129ee6ec 638
+  s_ba2f7b5c6902b6::t_7f5b240dc04c59 428-429,431-442,782-796,800-819
+  s_ba2f7b5c6902b6::t_122f2a0e52a465 384-390,820-863
+  s_ba2f7b5c6902b6::t_8943ab11468ce9 208-209,522-553,643-760,778-781,864
+  s_ba2f7b5c6902b6::t_11c79d71ba1b57 797-799
+  s_ba2f7b5c6902b6::t_49c3d9aa0759e6 761-777
+  s_ba2f7b5c6902b6::t_86fa0267a09f6a 458
+  s_ba2f7b5c6902b6::t_e8725404886961 865
+README.md
+  s_ba2f7b5c6902b6::t_cad3ac46d8f00f 101,116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f2d1756de0f4935a70f344d19ea586e6d1389638",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
