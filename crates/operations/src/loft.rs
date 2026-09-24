@@ -1166,11 +1166,8 @@ pub fn loft_smooth(
     let params = mean_chord_params(&rail_points);
     let rails = rail_points
         .iter()
-        .map(|points| {
-            brepkit_math::nurbs::fitting::interpolate_with_params(points, degree, &params)
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(crate::OperationsError::Math)?;
+        .map(|points| interpolate_at(points, degree, &params))
+        .collect::<Result<Vec<_>, _>>()?;
     let rail_edges: Vec<EdgeId> = rails
         .iter()
         .enumerate()
@@ -1229,6 +1226,84 @@ pub fn loft_smooth(
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
+}
+
+/// Interpolate a non-rational B-spline through `points` at the increasing
+/// `params`, with knots averaged from the parameters (The NURBS Book, eq.
+/// 9.8): curves fitted at the same parameters share one knot vector.
+fn interpolate_at(
+    points: &[Point3],
+    degree: usize,
+    params: &[f64],
+) -> Result<brepkit_math::nurbs::curve::NurbsCurve, crate::OperationsError> {
+    use brepkit_math::nurbs::basis::{basis_funs, find_span};
+
+    let n = points.len();
+    if n < 2 || params.len() != n || params.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "rail interpolation needs increasing parameters, one per point".into(),
+        });
+    }
+    let p = degree.clamp(1, n - 1);
+    let mut knots = vec![params[0]; p + 1];
+    for j in 1..n - p {
+        #[allow(clippy::cast_precision_loss)]
+        knots.push(params[j..j + p].iter().sum::<f64>() / p as f64);
+    }
+    knots.extend(std::iter::repeat_n(params[n - 1], p + 1));
+
+    // Collocation: row i holds N_{j,p}(params[i]).
+    let mut rows = vec![vec![0.0; n]; n];
+    for (row, &u) in rows.iter_mut().zip(params) {
+        let span = find_span(n, p, u, &knots);
+        for (k, value) in basis_funs(span, u, p, &knots).into_iter().enumerate() {
+            row[span - p + k] = value;
+        }
+    }
+    let mut rhs: Vec<[f64; 3]> = points.iter().map(|q| [q.x(), q.y(), q.z()]).collect();
+    // Gaussian elimination with partial pivoting; the system is small (one
+    // row per profile) and banded.
+    for col in 0..n {
+        let pivot = (col..n)
+            .max_by(|&a, &b| rows[a][col].abs().total_cmp(&rows[b][col].abs()))
+            .unwrap_or(col);
+        if rows[pivot][col].abs() < 1e-14 {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "rail interpolation system is singular".into(),
+            });
+        }
+        rows.swap(col, pivot);
+        rhs.swap(col, pivot);
+        for r in col + 1..n {
+            let f = rows[r][col] / rows[col][col];
+            if f == 0.0 {
+                continue;
+            }
+            for c in col..n {
+                rows[r][c] -= f * rows[col][c];
+            }
+            for k in 0..3 {
+                rhs[r][k] -= f * rhs[col][k];
+            }
+        }
+    }
+    let mut control = vec![[0.0; 3]; n];
+    for r in (0..n).rev() {
+        for k in 0..3 {
+            let tail: f64 = (r + 1..n).map(|c| rows[r][c] * control[c][k]).sum();
+            control[r][k] = (rhs[r][k] - tail) / rows[r][r];
+        }
+    }
+    brepkit_math::nurbs::curve::NurbsCurve::new(
+        p,
+        knots,
+        control
+            .iter()
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect(),
+        vec![1.0; n],
+    )
+    .map_err(crate::OperationsError::Math)
 }
 
 /// Chord-length parameters in `[0, 1]` averaged over several point rows of

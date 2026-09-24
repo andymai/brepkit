@@ -55,35 +55,6 @@ pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathE
     NurbsCurve::new(p, knots, control_points, weights)
 }
 
-/// Interpolate a non-rational B-spline through `points` at the given
-/// increasing parameters, so curves fitted to different point sets share one
-/// knot vector (the rails of a lofted skin, for instance).
-///
-/// # Errors
-///
-/// Returns an error if fewer than 2 points are given, the parameter count
-/// differs from the point count, or the interpolation system is singular.
-pub fn interpolate_with_params(
-    points: &[Point3],
-    degree: usize,
-    params: &[f64],
-) -> Result<NurbsCurve, MathError> {
-    let n = points.len();
-    if n < 2 {
-        return Err(MathError::EmptyInput);
-    }
-    if params.len() != n {
-        return Err(MathError::InvalidKnotVector {
-            expected: n,
-            got: params.len(),
-        });
-    }
-    let p = degree.min(n - 1);
-    let knots = build_interpolation_knots(params, p, n);
-    let control_points = solve_interpolation(points, params, &knots, p)?;
-    NurbsCurve::new(p, knots, control_points, vec![1.0; n])
-}
-
 /// Approximate a set of points with a NURBS curve of specified number
 /// of control points.
 ///
