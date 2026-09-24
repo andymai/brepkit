@@ -1,0 +1,25 @@
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_6bdba187814b02 746-747
+crates/operations/src/boolean/mod.rs
+  s_ba2f7b5c6902b6::t_63fc35dbf95de4 2439-2440,2446-2453,2456,2504-2506,2512,2515,2517-2522
+crates/operations/tests/sphere_plane_cut.rs
+  s_ba2f7b5c6902b6::t_9cbcdcb7beef7a 129-158
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_27701a37533a7d 917-920,985-1001,1004
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9fa08d73b7de31d3f12a60f0eb4655c9066ac130",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
