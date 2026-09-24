@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790278497335,
+  "lastUpdate": 1790279164147,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38555,6 +38555,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35677930,
             "range": "± 681997",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "01b35126d0bc754d00c828b47f19ed9b28cbd289",
+          "message": "chore(main): release 4.0.13 (#1741)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.13](https://github.com/andymai/brepkit/compare/v4.0.12...v4.0.13)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **algo:** cut a cone with a plane across its wall, level or tilted,\nkeeping either side\n([#1736](https://github.com/andymai/brepkit/issues/1736))\n([a1dda4b](https://github.com/andymai/brepkit/commit/a1dda4be86e35682568d53692abde35e50e3f776))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 4.0.13, which fixes cutting a cone with a plane across its wall,\nlevel or tilted, keeping either side.\n\n<sup>Written for commit d85048ffbcee9ceda2d8398d180b483dbfa24b38.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1741?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T19:43:25Z",
+          "tree_id": "269a2ccb34e00f88073fb405be15a1bceb7c2825",
+          "url": "https://github.com/andymai/brepkit/commit/01b35126d0bc754d00c828b47f19ed9b28cbd289"
+        },
+        "date": 1790279159849,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1006768,
+            "range": "± 3381",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1084212,
+            "range": "± 19700",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13147,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 752977,
+            "range": "± 2639",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42038880,
+            "range": "± 115866",
             "unit": "ns/iter"
           }
         ]
