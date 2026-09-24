@@ -4597,10 +4597,11 @@ pub fn split_face_2d(
         )
     };
 
-    // Cheap gate for the common case: no closed-circle section, nothing to
+    // Cheap gate for the common case: no closed conic section, nothing to
     // salvage — skip all frame and polygon work below.
     let any_closed_circle = sections.iter().any(|s| {
-        (s.start - s.end).length() < tol.linear && matches!(s.curve_3d, EdgeCurve::Circle(_))
+        (s.start - s.end).length() < tol.linear
+            && matches!(s.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
     });
     if !any_closed_circle {
         return run_impl(sections);
@@ -4645,15 +4646,22 @@ pub fn split_face_2d(
     let mut cap_centers: Vec<Point3> = Vec::new();
     let mut rest_sections: Vec<SectionEdge> = Vec::new();
     for s in sections {
+        // An oblique plane's ellipse lies within its semi-major axis of its
+        // centre, so it clears the outline when that circle would.
+        let conic = match &s.curve_3d {
+            EdgeCurve::Circle(c) => Some((c.center(), c.radius())),
+            EdgeCurve::Ellipse(e) => Some((e.center(), e.semi_major())),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+        };
         let cap_center = if (s.start - s.end).length() < tol.linear
             && outer_poly.len() >= 3
-            && let EdgeCurve::Circle(circle) = &s.curve_3d
+            && let Some((center, reach)) = conic
         {
-            let center_uv = cap_frame.project(circle.center());
+            let center_uv = cap_frame.project(center);
             (super::classify_2d::point_in_polygon_2d(center_uv, &outer_poly)
                 && super::classify_2d::distance_to_polygon_boundary(center_uv, &outer_poly)
-                    > circle.radius() * CAP_INTERIORITY_MARGIN)
-                .then(|| circle.center())
+                    > reach * CAP_INTERIORITY_MARGIN)
+                .then_some(center)
         } else {
             None
         };
