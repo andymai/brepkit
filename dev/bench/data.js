@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790273351540,
+  "lastUpdate": 1790275397888,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38231,6 +38231,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41588040,
             "range": "± 99926",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "52543c4f219dffa8e596fea118f558b91d5e3dc4",
+          "message": "fix(check): classify points against every shell, so a cavity reads outside (#1732)\n\n## What was wrong\n\nPoint classification now correctly reads the interior of a closed cavity\nas Outside.\n\nThe affected check and operations classifiers, including their winding\nhelpers, gathered faces only from a solid's outer shell. They therefore\nclassified every point inside an inner shell as Inside. This was found\nwhile adding a chamfer test on a cavity's rim.\n\n## What this does\n\n- Gathers faces with `explorer::solid_faces`, including faces from inner\nshells.\n- Applies ray parity across cavity faces, placing the cavity interior\noutside the solid.\n- Adds a Closed entry to the roadmap.\n\nThe check crate's winding number fan-triangulates each face's wire\npolygon, which does not cover a curved face. Its winding and robust\nclassifiers remain unreliable on curved faces, so the new test holds\nonly its ray classifier to cavity points.\n\n## Verification\n\n- Added `crates/operations/tests/classify_cavities.rs`.\n- The tests cut a cylinder with `r = 1.5` and a 3-unit cube out of a\n10-unit block, with both cavities fully enclosed.\n- They check 4 material points as Inside and 5 points, located in each\ncavity and beyond the block, as Outside.\n- Coverage includes the check crate's ray classifier and all three\noperations classifiers.\n- Both tests fail on main.\n- The check, operations, io, and wasm suites pass, totaling 1762 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes point classification so points inside a closed cavity read as\nOutside instead of Inside. The ray and boundary classifiers in\n`brepkit_check` and `brepkit_operations` gathered faces only from a\nsolid's outer shell, so every point in an inner shell read Inside; they\nnow classify against every shell via `explorer::solid_faces`, and all\nwinding variants were updated to match.\n\n**Bug Fixes**\n- Added `crates/operations/tests/classify_cavities.rs`, which asserts\ncavity interiors read as Outside across the check ray classifier and all\nthree operations classifiers.\n- The check crate's winding and robust variants remain unreliable on\ncurved faces because the winding number fan-triangulates wire polygons,\nso the cavity test holds them only to a planar cavity.\n\n<sup>Written for commit ea064cae10ef38c5a88a71fae149ecfded0b55c2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1732?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T18:40:30Z",
+          "tree_id": "4e8e6ecebc4836bcdc7842c61b391c15200e32a7",
+          "url": "https://github.com/andymai/brepkit/commit/52543c4f219dffa8e596fea118f558b91d5e3dc4"
+        },
+        "date": 1790275394781,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 995066,
+            "range": "± 2726",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1075510,
+            "range": "± 1211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13353,
+            "range": "± 72",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 741846,
+            "range": "± 1750",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41824537,
+            "range": "± 145892",
             "unit": "ns/iter"
           }
         ]
