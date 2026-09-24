@@ -170,7 +170,6 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | Row | Status / blocker |
 |---|---|
 | **Evolution (Beta)** | Faithful GFA provenance exists (`boolean_with_evolution`). Gaps: a same-domain merge keeps one origin and marks the other deleted; identical/contained operands and every fallback use `build_evolution_by_geometry`, whose 10-unit centroid cap is scale-dependent; fillet evolution is heuristic only |
-| **Draft (Beta)** | `draft.rs` moves vertices radially from an axis through the neutral point, so a drafted face comes out non-planar and no neighbour is re-intersected. Rewrite as a topology-preserving modification: rotate each drafted plane about its neutral line so the outward normal gets `n·d = sin(angle)`, re-intersect every edge touching a drafted face, re-solve its vertices |
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
 | **Feature recognition (Beta)** | The dihedral is `acos(n1·n2)` with a cylinder's AXIS standing in for its normal, so nothing is ever classed Convex; needs per-edge outward normals and a signed dihedral |
 | **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
@@ -184,6 +183,13 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Draft to Stable (CLOSED 2026-09-24; pins in `crates/operations/src/draft.rs` tests and `draft_binding_cuts_the_exact_wedge` in `crates/wasm/src/bindings/operations.rs`)**:
+  `draft` pushed a drafted face's vertices radially from an axis, bending the
+  face and leaving its neighbours on the old vertices. It now turns each
+  drafted plane about its neutral line until `n · pull = sin(angle)` and
+  moves every vertex of a drafted face to its planes' meeting point; a
+  vertex that meets a curved face, or would split, is refused.
 
 - **`loft_smooth` did not close its shell (CLOSED 2026-09-23; pins `loft_smooth_waisted_squares_close_at_their_volume`, `loft_smooth_uneven_profiles_share_their_rails` in `crates/operations/src/loft/tests.rs`)**:
   each side face had its own straight rails while its surface curved through

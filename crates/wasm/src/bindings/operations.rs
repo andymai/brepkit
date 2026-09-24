@@ -1662,6 +1662,35 @@ impl BrepKernel {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    /// Drafting a box side by 5 degrees about its base through the binding
+    /// cuts the exact wedge `d h^2 tan(a) / 2`.
+    #[test]
+    fn draft_binding_cuts_the_exact_wedge() {
+        use brepkit_topology::face::FaceSurface;
+
+        let mut k = crate::kernel::BrepKernel::new();
+        let solid = k.make_box_solid(4.0, 3.0, 2.0).unwrap();
+        let right = k
+            .get_solid_faces(solid)
+            .unwrap()
+            .into_iter()
+            .find(|&h| {
+                let face = k.topo.face(k.resolve_face(h).unwrap()).unwrap();
+                matches!(face.surface(), FaceSurface::Plane { normal, .. } if normal.x() > 0.5)
+            })
+            .unwrap();
+        let drafted = k
+            .draft_solid(solid, vec![right], 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 5.0)
+            .unwrap();
+        let id = k.resolve_solid(drafted).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&k.topo, id, 0.001).unwrap();
+        let truth = 24.0 - 3.0 * 4.0 * 5.0_f64.to_radians().tan() / 2.0;
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "volume {volume}, expected {truth}"
+        );
+    }
+
     use brepkit_math::vec::Point3;
     use brepkit_topology::builder::make_polygon_wire;
 
