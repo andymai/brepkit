@@ -239,7 +239,7 @@ fn window_cut_meshes_watertight_at_the_right_volume() {
         let exact = solid_volume(&topo, result, 0.001).unwrap();
         if let Some(truth) = case.exact_volume {
             assert!(
-                (exact - truth).abs() < 2e-4 * truth,
+                (exact - truth).abs() < 1e-9 * truth,
                 "{}: solid_volume {exact}, closed form {truth}",
                 case.name
             );

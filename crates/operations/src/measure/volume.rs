@@ -1580,6 +1580,146 @@ fn developable_face_flux(
     Ok(Some(if face.is_reversed() { -flux } else { flux }))
 }
 
+/// Divergence-theorem flux `(1/3) ∫ P·N dA` of a planar face: its plane's
+/// offset along the outward normal times its area, over three. The area is
+/// Green's `½ ∮ (x dy − y dx)` along every wire in the plane's frame, in
+/// closed form on lines, circles and ellipses and by Gauss quadrature per knot
+/// span on NURBS edges, so a curved boundary is never chorded. Holes subtract
+/// by magnitude: a boolean can emit one wound like the outer wire. `None` for
+/// a face that is not a plane or whose holes outweigh its outer wire.
+fn planar_face_flux(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::FRAC_PI_2;
+
+    let face = topo.face(face_id)?;
+    let FaceSurface::Plane { normal, d } = face.surface() else {
+        return Ok(None);
+    };
+    let (normal, d) = (*normal, *d);
+    let len = normal.length();
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(origin, normal) else {
+        return Ok(None);
+    };
+    let (ex, ey) = (frame.x, frame.y);
+    let flat = |v: Vec3| (v.dot(ex), v.dot(ey));
+    let cross = |(ax, ay): (f64, f64), (bx, by): (f64, f64)| ax.mul_add(by, -(ay * bx));
+    // `∫ P × P′ dt` over `[t0, t1]` for `P(t) = c + A cos t + B sin t`.
+    let conic = |c: Point3, a: Vec3, b: Vec3, t0: f64, t1: f64| {
+        let (c, a, b) = (flat(c - origin), flat(a), flat(b));
+        cross(c, a).mul_add(
+            t1.cos() - t0.cos(),
+            cross(c, b).mul_add(t1.sin() - t0.sin(), cross(a, b) * (t1 - t0)),
+        )
+    };
+    let gauss = brepkit_math::quadrature::gauss_legendre_points(16);
+    let wire_area2 = |wire_id| -> Result<f64, crate::OperationsError> {
+        let mut sum = 0.0;
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            for (t0, t1) in traversal_spans(edge, oe.is_forward(), sp, ep) {
+                sum += match edge.curve() {
+                    EdgeCurve::Line => {
+                        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep) - origin;
+                        cross(flat(at(t0)), flat(at(t1)))
+                    }
+                    EdgeCurve::Circle(c) => conic(
+                        c.center(),
+                        c.evaluate(0.0) - c.center(),
+                        c.evaluate(FRAC_PI_2) - c.center(),
+                        t0,
+                        t1,
+                    ),
+                    EdgeCurve::Ellipse(e) => conic(
+                        e.center(),
+                        e.evaluate(0.0) - e.center(),
+                        e.evaluate(FRAC_PI_2) - e.center(),
+                        t0,
+                        t1,
+                    ),
+                    EdgeCurve::NurbsCurve(n) => {
+                        let (lo, hi) = (t0.min(t1), t0.max(t1));
+                        let mut cuts: Vec<f64> = std::iter::once(lo)
+                            .chain(n.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                            .chain(std::iter::once(hi))
+                            .collect();
+                        cuts.dedup();
+                        let mut part = 0.0;
+                        for w in cuts.windows(2) {
+                            let (mid, half) = (0.5 * (w[0] + w[1]), 0.5 * (w[1] - w[0]));
+                            for g in gauss {
+                                let ders = n.derivatives(half.mul_add(g.x, mid), 1);
+                                part += g.w * half * cross(flat(ders[0]), flat(ders[1]));
+                            }
+                        }
+                        if t1 < t0 { -part } else { part }
+                    }
+                };
+            }
+        }
+        Ok(sum)
+    };
+    let mut area2 = wire_area2(face.outer_wire())?.abs();
+    // Holes subtract only while no two can nest: an island inside a hole is
+    // material again, which the mesher's odd-depth rule handles.
+    if face.inner_wires().len() > 1 {
+        let boxes = face
+            .inner_wires()
+            .iter()
+            .map(|&iw| wire_box(topo, iw, &flat))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (k, a) in boxes.iter().enumerate() {
+            if boxes[k + 1..]
+                .iter()
+                .any(|b| a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3)
+            {
+                return Ok(None);
+            }
+        }
+    }
+    for &iw in face.inner_wires() {
+        area2 -= wire_area2(iw)?.abs();
+    }
+    if area2 < 0.0 || len <= 0.0 {
+        return Ok(None);
+    }
+    let d_out = (if face.is_reversed() { -d } else { d }) / len;
+    Ok(Some(d_out * area2 / 6.0))
+}
+
+/// The `(min x, min y, max x, max y)` box of a wire in a plane's frame, from
+/// a few samples per edge.
+fn wire_box(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    flat: &dyn Fn(Vec3) -> (f64, f64),
+) -> Result<(f64, f64, f64, f64), crate::OperationsError> {
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let mut b = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        for (t0, t1) in traversal_spans(edge, oe.is_forward(), sp, ep) {
+            for k in 0..=8 {
+                let t = t0 + (t1 - t0) * f64::from(k) / 8.0;
+                let (x, y) = flat(edge.curve().evaluate_with_endpoints(t, sp, ep) - origin);
+                b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+        }
+    }
+    Ok(b)
+}
+
 /// Parameter spans that walk `edge` from its traversal-start vertex to its
 /// traversal-end vertex. `domain_with_endpoints` gives a whole NURBS edge its
 /// curve's own domain even where the curve runs from the edge's end vertex,
@@ -2418,7 +2558,13 @@ pub fn volume_from_direct_face_tessellation(
                 total += analytic_torus_signed_volume(topo, fid)? * 6.0;
                 continue;
             }
-            FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => {}
+            FaceSurface::Plane { .. } => {
+                if let Some(flux) = planar_face_flux(topo, fid)? {
+                    total += flux * 6.0;
+                    continue;
+                }
+            }
+            FaceSurface::Nurbs(_) => {}
         }
 
         let mesh = tessellate::tessellate(topo, fid, deflection)?;

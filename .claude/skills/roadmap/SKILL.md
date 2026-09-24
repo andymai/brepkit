@@ -185,6 +185,13 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **`solid_volume` chorded the curved edges of planar faces (CLOSED 2026-09-23; pins: the `boolean_box_minus_cylinder` golden at 1000 − 90π, and the window and reversed-face volume checks at 1e-9)**:
+  the direct per-face path meshed every planar face, so a cap bounded by a
+  circle, ellipse or NURBS edge lost its chord segments (0.036 mm³ on a
+  10 mm block less an r=3 bore). `planar_face_flux` integrates the face's
+  exact area by Green's theorem (closed form on conics, Gauss per knot span
+  on NURBS); a face whose holes might nest keeps the mesh.
+
 - **The ellipsoid primitive and a squashed torus meshed to nothing (CLOSED 2026-09-23; pins `crates/operations/tests/non_uniform_scale_mesh.rs`)**:
   `makeEllipsoid` scales a unit sphere non-uniformly, so each hemisphere
   becomes an exact NURBS cap whose only wire is the equator, winding the
