@@ -326,14 +326,12 @@ pub(super) fn tessellate_revolution_band_shared(
             // A closed single-edge NURBS loop has no by-construction winding
             // (unlike a closed circle) — decline rather than guess.
             EdgeCurve::NurbsCurve(_) if e.start() == e.end() => return Ok(false),
-            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) => {
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
                 if seen.insert(oe.edge().index()) {
                     curved.push((oe.edge().index(), e.start(), e.end()));
                 }
             }
             EdgeCurve::Line => {}
-            // Ellipse rims keep the CDT path.
-            EdgeCurve::Ellipse(_) => return Ok(false),
         }
     }
     // Walk cycles by shared vertices (vertex→edge adjacency built once).

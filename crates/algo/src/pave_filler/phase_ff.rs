@@ -541,6 +541,18 @@ pub fn perform(
                     if banded_partner && matches!(raw.curve, EdgeCurve::Line) {
                         return segment_meets_both_boxes(raw.p_start, raw.p_end, bb_a, bb_b);
                     }
+                    // A disc or ellipse face (one closed conic bounding it) has
+                    // an exact extent: a line missing that region misses the
+                    // face, however far into its box's corner it runs (a rod's
+                    // cap against an oblique cut's plane).
+                    if matches!(raw.curve, EdgeCurve::Line)
+                        && matches!(surf_a, FaceSurface::Plane { .. })
+                        && matches!(surf_b, FaceSurface::Plane { .. })
+                        && (line_misses_conic_face(topo, fa, raw.p_start, raw.p_end)
+                            || line_misses_conic_face(topo, fb, raw.p_start, raw.p_end))
+                    {
+                        return false;
+                    }
                     if (0..=N).map(|i| sample(i, N)).any(in_both) {
                         return true;
                     }
@@ -723,6 +735,18 @@ pub fn perform(
                     _ => None,
                 };
                 if let Some((_, t_seam, p_seam)) = adopted_seam {
+                    let span = raw.t_range.1 - raw.t_range.0;
+                    raw.t_range = (t_seam, t_seam + span);
+                    raw.p_start = p_seam;
+                    raw.p_end = p_seam;
+                } else if is_closed
+                    && let Some((t_seam, p_seam)) =
+                        ellipse_seam_crossing(topo, fa, fb, surf_a, surf_b, &raw.curve)
+                {
+                    // An oblique plane's ellipse around a whole wall starts
+                    // at its frame's origin; the wall's seam line crosses it
+                    // elsewhere, and the band splitter needs the loop to
+                    // start where it meets the seam.
                     let span = raw.t_range.1 - raw.t_range.0;
                     raw.t_range = (t_seam, t_seam + span);
                     raw.p_start = p_seam;
@@ -2519,6 +2543,96 @@ fn circle_arc_plane_crossings(
         out.push(circle.evaluate(t));
     }
     out
+}
+
+/// Whether the line through `p0` and `p1`, lying in a planar face's plane,
+/// misses the region of the single closed circle or ellipse bounding that
+/// face. `false` for any other face.
+fn line_misses_conic_face(topo: &Topology, face: FaceId, p0: Point3, p1: Point3) -> bool {
+    let Ok(f) = topo.face(face) else {
+        return false;
+    };
+    let Ok(wire) = topo.wire(f.outer_wire()) else {
+        return false;
+    };
+    let [oe] = wire.edges() else {
+        return false;
+    };
+    let Ok(edge) = topo.edge(oe.edge()) else {
+        return false;
+    };
+    if edge.start() != edge.end() {
+        return false;
+    }
+    let (center, u, v, a, b) = match edge.curve() {
+        EdgeCurve::Circle(c) => (c.center(), c.u_axis(), c.v_axis(), c.radius(), c.radius()),
+        EdgeCurve::Ellipse(e) => (
+            e.center(),
+            e.u_axis(),
+            e.v_axis(),
+            e.semi_major(),
+            e.semi_minor(),
+        ),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+    };
+    // In the conic's frame, scaled to the unit circle: the line meets the
+    // region iff its distance from the origin is at most 1.
+    let (q, d) = (p0 - center, p1 - p0);
+    let (x, y) = (q.dot(u) / a, q.dot(v) / b);
+    let (dx, dy) = (d.dot(u) / a, d.dot(v) / b);
+    let len = dx.hypot(dy);
+    if len < 1e-15 {
+        return false;
+    }
+    let distance = (x * dy - y * dx).abs() / len;
+    distance > 1.0 + 1e-9
+}
+
+/// Where a closed plane-section ellipse on a cylinder or cone wall meets
+/// that wall's seam line (a line its outer wire uses twice): the ellipse's
+/// parameter there and the point.
+fn ellipse_seam_crossing(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    surf_a: &FaceSurface,
+    surf_b: &FaceSurface,
+    curve: &EdgeCurve,
+) -> Option<(f64, Point3)> {
+    let EdgeCurve::Ellipse(ellipse) = curve else {
+        return None;
+    };
+    let (wall, normal, d) = match (surf_a, surf_b) {
+        (FaceSurface::Plane { normal, d }, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) => {
+            (fb, *normal, *d)
+        }
+        (FaceSurface::Cylinder(_) | FaceSurface::Cone(_), FaceSurface::Plane { normal, d }) => {
+            (fa, *normal, *d)
+        }
+        _ => return None,
+    };
+    let wire = topo.wire(topo.face(wall).ok()?.outer_wire()).ok()?;
+    for oe in wire.edges() {
+        let uses = wire
+            .edges()
+            .iter()
+            .filter(|o| o.edge() == oe.edge())
+            .count();
+        let edge = topo.edge(oe.edge()).ok()?;
+        if uses != 2 || !matches!(edge.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let (sp, ep) = (
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        );
+        let p = line_segment_plane_crossing(sp, ep, normal, d)?;
+        let t = ellipse.project(p);
+        if (ellipse.evaluate(t) - p).length() <= 1e-6 {
+            return Some((t, p));
+        }
+    }
+    None
 }
 
 /// Crossing of a line SEGMENT `[sp, ep]` with the plane `normal·p = d`.

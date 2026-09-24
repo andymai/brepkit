@@ -9,7 +9,7 @@ use crate::tessellate;
 
 use super::helpers::{
     angular_range_from_wire_arcs, collect_solid_vertex_points, compute_angular_range,
-    planar_wire_signed_area2,
+    planar_wire_signed_area2, traversal_spans,
 };
 
 /// Volume of a solid that contains a bored quadric — a sphere (or torus) face
@@ -1049,7 +1049,36 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         && planes.len() == 2
     {
         let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
-        let mut ts = cap_t_values(origin_vec, axis, &planes);
+        // A cap bounded only by circles and ellipses crosses the whole wall,
+        // however far it tilts, and the solid between two such caps holds
+        // pi r^2 times their separation along the axis (the height over the
+        // disc is linear, so its mean is the height at the axis).
+        let full_caps = plane_face_ids.iter().all(|&fid| {
+            topo.face(fid)
+                .and_then(|face| topo.wire(face.outer_wire()))
+                .is_ok_and(|wire| {
+                    wire.edges().iter().all(|oe| {
+                        topo.edge(oe.edge()).is_ok_and(|e| {
+                            matches!(
+                                e.curve(),
+                                brepkit_topology::edge::EdgeCurve::Circle(_)
+                                    | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                            )
+                        })
+                    })
+                })
+        });
+        let mut ts = if full_caps {
+            planes
+                .iter()
+                .filter_map(|&(n, d)| {
+                    let nd = n.dot(axis);
+                    (nd.abs() > 1e-9).then(|| (d - n.dot(origin_vec)) / nd)
+                })
+                .collect()
+        } else {
+            cap_t_values(origin_vec, axis, &planes)
+        };
         if ts.len() >= 2 {
             ts.sort_by(f64::total_cmp);
             if let (Some(&t_min), Some(&t_max)) = (ts.first(), ts.last()) {
@@ -1965,54 +1994,6 @@ fn wire_box(
         }
     }
     Ok(b)
-}
-
-/// Parameter spans that walk `edge` from its traversal-start vertex to its
-/// traversal-end vertex. `domain_with_endpoints` gives a whole NURBS edge its
-/// curve's own domain even where the curve runs from the edge's end vertex,
-/// and a closed edge the span from its curve's origin; either would walk a
-/// wire out of order in the unwrapped `(u, v)` plane.
-fn traversal_spans(
-    edge: &brepkit_topology::edge::Edge,
-    forward: bool,
-    sp: Point3,
-    ep: Point3,
-) -> Vec<(f64, f64)> {
-    use brepkit_topology::edge::EdgeCurve;
-
-    let curve = edge.curve();
-    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
-    let spans = if edge.start() == edge.end() {
-        match curve {
-            EdgeCurve::Circle(c) => {
-                let tv = c.project(sp);
-                vec![(tv, tv + (t1 - t0))]
-            }
-            EdgeCurve::Ellipse(e) => {
-                let tv = e.project(sp);
-                vec![(tv, tv + (t1 - t0))]
-            }
-            EdgeCurve::NurbsCurve(n) => {
-                match brepkit_math::nurbs::projection::project_point_to_curve(n, sp, 1e-9) {
-                    Ok(hit) => vec![(hit.parameter, t1), (t0, hit.parameter)],
-                    Err(_) => vec![(t0, t1)],
-                }
-            }
-            EdgeCurve::Line => vec![(t0, t1)],
-        }
-    } else {
-        let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
-        if (at(t0) - sp).length() <= (at(t0) - ep).length() {
-            vec![(t0, t1)]
-        } else {
-            vec![(t1, t0)]
-        }
-    };
-    if forward {
-        spans
-    } else {
-        spans.into_iter().rev().map(|(a, b)| (b, a)).collect()
-    }
 }
 
 /// Exact signed volume contribution of a cylindrical face via the

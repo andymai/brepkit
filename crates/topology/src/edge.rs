@@ -104,8 +104,9 @@ impl EdgeCurve {
 
     /// Parameter domain of this curve.
     ///
-    /// `Line` uses `[0, 1]`. Closed Circle and Ellipse edges (`start ≈ end`)
-    /// use the full `[0, 2π]` domain. Open arcs project both endpoints onto
+    /// `Line` uses `[0, 1]`. A closed Circle edge (`start ≈ end`) uses the
+    /// full `[0, 2π]` domain from its frame's origin, and a closed Ellipse
+    /// edge a full turn from its vertex. Open arcs project both endpoints onto
     /// the curve and return the CCW angular range `[a₀, a₁]` with `a₁ > a₀`,
     /// so sampling the domain traces exactly the trimmed arc rather than the
     /// full curve. NURBS edges whose endpoints sit at the curve's natural
@@ -139,7 +140,11 @@ impl EdgeCurve {
             }
             Self::Ellipse(e) => {
                 if (start - end).length() < CLOSED_EPS {
-                    ParametricCurve::domain(e)
+                    // A closed ellipse runs a full turn from its vertex, which
+                    // need not be its frame's origin (a plane section is
+                    // anchored where it meets its wall's seam).
+                    let a0 = e.project(start);
+                    (a0, a0 + TAU)
                 } else {
                     let a0 = e.project(start);
                     let delta = (e.project(end) - a0).rem_euclid(TAU);

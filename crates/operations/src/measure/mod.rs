@@ -831,4 +831,64 @@ mod tests {
         // so discretization error is O(1/n^2) ~ 2e-5 per cap.
         assert_rel(cap_area, 2.0 * PI * 9.0, 2e-4, "cylinder cap area");
     }
+
+    /// A NURBS edge may run from its end vertex to its start; the wall's
+    /// Green's-theorem walk has to follow the wire, not the curve.
+    #[test]
+    fn cylinder_wall_area_follows_a_nurbs_ruling_stored_end_to_start() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::{FRAC_PI_4, PI};
+
+        // The quarter of a radius-2, 3-tall wall between u = pi/4 and 3pi/4.
+        let (r, h) = (2.0, 3.0);
+        let (u_lo, u_hi) = (FRAC_PI_4, 3.0 * FRAC_PI_4);
+        let at = |u: f64, z: f64| Point3::new(r * u.cos(), r * u.sin(), z);
+        let mut topo = Topology::new();
+        let tol = Tolerance::new().linear;
+        let [v0, v1, v2, v3] = [at(u_lo, 0.0), at(u_hi, 0.0), at(u_hi, h), at(u_lo, h)]
+            .map(|p| topo.add_vertex(Vertex::new(p, tol)));
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let bottom = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, r).unwrap();
+        let top = Circle3D::new(Point3::new(0.0, 0.0, h), z, r).unwrap();
+        let e_bottom = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Circle(bottom)));
+        // The rising ruling, stored from v2 to v1 as a curve running v1 -> v2.
+        let rise = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![at(u_hi, 0.0), at(u_hi, h)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let e_rise = topo.add_edge(Edge::new(v2, v1, EdgeCurve::NurbsCurve(rise)));
+        let e_top = topo.add_edge(Edge::new(v3, v2, EdgeCurve::Circle(top)));
+        let e_fall = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bottom, true),
+                OrientedEdge::new(e_rise, false),
+                OrientedEdge::new(e_top, false),
+                OrientedEdge::new(e_fall, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+
+        assert_rel(
+            face_area(&topo, face, 0.01).unwrap(),
+            r * (u_hi - u_lo) * h,
+            1e-9,
+            "quarter wall",
+        );
+        assert!((u_hi - u_lo - PI / 2.0).abs() < 1e-15);
+    }
 }

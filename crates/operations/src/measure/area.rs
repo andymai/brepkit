@@ -8,7 +8,8 @@ use brepkit_topology::solid::SolidId;
 use crate::tessellate;
 
 use super::helpers::{
-    collect_solid_face_ids, collect_wire_positions, compute_angular_range, planar_wire_signed_area2,
+    collect_solid_face_ids, collect_wire_positions, compute_angular_range,
+    planar_wire_signed_area2, traversal_spans,
 };
 
 /// Compute the area of a single face.
@@ -29,6 +30,9 @@ pub fn face_area(
     match face.surface() {
         FaceSurface::Plane { .. } => planar_face_area(topo, face_id),
         FaceSurface::Cylinder(cyl) => {
+            if let Some(area) = cylinder_face_uv_area(topo, face_id, cyl)? {
+                return Ok(area);
+            }
             // Cylinder lateral area: integrate r * du * dv over the face domain.
             // Use face_polygon to sample curved edges (circle caps give 32 points).
             let r = cyl.radius();
@@ -164,6 +168,114 @@ fn sphere_hole_area(
         r2 * (TAU - sweep.abs())
     } else {
         r2 * sweep.abs()
+    })
+}
+
+/// The area of a cylinder face whose boundary is not a rectangle in
+/// `(u, v)` (a wall trimmed by an oblique plane's ellipse, say): `r` times
+/// the region's area in `(u, v)`, by Green's theorem `A = ∮ u dv` along
+/// each wire, less its holes. `Ok(None)` for a face bounded only by rulings
+/// and rims, which the rectangle below measures exactly, or when a wire's
+/// unwrapped `u` does not close.
+fn cylinder_face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let face = topo.face(face_id)?;
+    let wires: Vec<_> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    let axis = cyl.axis();
+    let mut rectangular = true;
+    for &wid in &wires {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            rectangular &= match edge.curve() {
+                EdgeCurve::Line => {
+                    let a = topo.vertex(edge.start())?.point();
+                    let b = topo.vertex(edge.end())?.point();
+                    (b - a).cross(axis).length() <= 1e-9 * (b - a).length().max(1.0)
+                }
+                EdgeCurve::Circle(c) => c.normal().cross(axis).length() <= 1e-9,
+                EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+            };
+        }
+    }
+    if rectangular {
+        return Ok(None);
+    }
+    let mut total = 0.0;
+    for (k, &wid) in wires.iter().enumerate() {
+        let Some(signed) = wire_uv_area_on_cylinder(topo, wid, cyl)? else {
+            return Ok(None);
+        };
+        if k == 0 {
+            total += signed.abs();
+        } else {
+            total -= signed.abs();
+        }
+    }
+    Ok(Some(cyl.radius() * total))
+}
+
+/// `∮ u dv` along one wire on a cylinder, with `u` unwrapped continuously,
+/// by Gauss-Legendre quadrature in each edge's own parameter; `None` when
+/// the unwrapped `u` does not return to its start.
+fn wire_uv_area_on_cylinder(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::{PI, TAU};
+    const SEGMENTS: usize = 16;
+    const ORDER: usize = 8;
+    let axis = cyl.axis();
+    let u_near = |p: Point3, near: Option<f64>| {
+        let (u, _) = cyl.project_point(p);
+        near.map_or(u, |n| u - ((u - n + PI) / TAU).floor() * TAU)
+    };
+    let points = brepkit_math::quadrature::gauss_legendre_points(ORDER);
+    let mut sum = 0.0;
+    let mut first_u = None;
+    let mut last_u: Option<f64> = None;
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        let at = |t: f64| curve.evaluate_with_endpoints(t, start, end);
+        for (ta, tb) in traversal_spans(edge, oe.is_forward(), start, end) {
+            let mut u_prev = u_near(at(ta), last_u);
+            if first_u.is_none() {
+                first_u = Some(u_prev);
+            }
+            #[allow(clippy::cast_precision_loss)]
+            for seg in 0..SEGMENTS {
+                let a = ta + (tb - ta) * seg as f64 / SEGMENTS as f64;
+                let b = ta + (tb - ta) * (seg + 1) as f64 / SEGMENTS as f64;
+                let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
+                for gp in points {
+                    let t = mid + half * gp.x;
+                    let u = u_near(at(t), Some(u_prev));
+                    let dv = match curve {
+                        EdgeCurve::Line => axis.dot(end - start),
+                        EdgeCurve::Circle(c) => c.radius() * axis.dot(c.tangent(t)),
+                        EdgeCurve::Ellipse(e) => axis.dot(e.tangent(t)),
+                        EdgeCurve::NurbsCurve(nc) => axis.dot(nc.derivatives(t, 1)[1]),
+                    };
+                    sum += gp.w * half * u * dv;
+                    u_prev = u;
+                }
+            }
+            last_u = Some(u_near(at(tb), Some(u_prev)));
+        }
+    }
+    Ok(match (first_u, last_u) {
+        (Some(a), Some(b)) if (a - b).abs() <= 1e-6 => Some(sum),
+        _ => None,
     })
 }
 

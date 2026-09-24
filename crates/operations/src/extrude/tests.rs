@@ -1492,3 +1492,39 @@ fn extrude_reversed_spline_arc_profile_recovers_analytic_walls() {
         "reversed-arc prism volume {vol:.9} != exact {expected:.9}"
     );
 }
+
+/// A plane section's ellipse starts where it meets its wall's seam, not at
+/// its frame's origin; splitting it has to run the turn from that vertex.
+#[test]
+fn split_closed_edge_runs_the_turn_from_the_vertex() {
+    use brepkit_math::curves::Ellipse3D;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+    use std::f64::consts::FRAC_PI_2;
+
+    let mut topo = Topology::new();
+    let ellipse = Ellipse3D::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        3.0,
+        2.0,
+    )
+    .unwrap();
+    let tol = Tolerance::new().linear;
+    let v = topo.add_vertex(Vertex::new(ellipse.evaluate(FRAC_PI_2), tol));
+    let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Ellipse(ellipse.clone())));
+
+    let pieces = split_closed_edge(&mut topo, edge, 4, tol).unwrap();
+    let corners: Vec<Point3> = pieces
+        .iter()
+        .map(|&e| topo.vertex(topo.edge(e).unwrap().start()).unwrap().point())
+        .collect();
+    for (k, corner) in corners.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let expected = ellipse.evaluate(FRAC_PI_2 * (1.0 + k as f64));
+        assert!(
+            (*corner - expected).length() < 1e-9,
+            "corner {k} at {corner:?}, expected {expected:?}"
+        );
+    }
+}
