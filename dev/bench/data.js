@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790269009510,
+  "lastUpdate": 1790269626275,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37745,6 +37745,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41987489,
             "range": "± 326636",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fe77e13da7a9024aae8ebb111daff794a1d6d6da",
+          "message": "chore(main): release 4.0.6 (#1728)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.0.6](https://github.com/andymai/brepkit/compare/v4.0.5...v4.0.6)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **io:** honour an EDGE_CURVE's same_sense flag when reading STEP\n([#1724](https://github.com/andymai/brepkit/issues/1724))\n([a1e2c71](https://github.com/andymai/brepkit/commit/a1e2c7141791dff8ad9bd9ce3f11e64f3afbb1ac))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases 4.0.6, fixing STEP reading to honour an `EDGE_CURVE`'s\n`same_sense` flag so edge direction matches the file's intent.\n\n<sup>Written for commit 52d422afd169fc510318cb400e125bc62726e5fd.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1728?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T17:04:34Z",
+          "tree_id": "620bfaefccdcd06a470ff24705f60d0f1cb1848a",
+          "url": "https://github.com/andymai/brepkit/commit/fe77e13da7a9024aae8ebb111daff794a1d6d6da"
+        },
+        "date": 1790269622997,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 807201,
+            "range": "± 1863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 883689,
+            "range": "± 3051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10327,
+            "range": "± 65",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 602591,
+            "range": "± 1063",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35454255,
+            "range": "± 107837",
             "unit": "ns/iter"
           }
         ]
