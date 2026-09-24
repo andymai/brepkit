@@ -2827,7 +2827,9 @@ fn inner_wire_uv_loops(
 /// the surface normal, so the cap lies on its left, at the far v edge for a
 /// loop run toward +u. That edge is appended as virtual boundary samples, all
 /// welded to the pole, so the region closes in (u, v); a loop that winds
-/// toward a non-degenerate edge is left alone.
+/// toward a non-degenerate edge is left alone. So is a face with inner
+/// wires: a hole around the pole makes it a band, which the pole row would
+/// cap over.
 fn close_loop_at_pole(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -2839,6 +2841,9 @@ fn close_loop_at_pole(
     let FaceSurface::Nurbs(nurbs) = face_data.surface() else {
         return Ok(());
     };
+    if !face_data.inner_wires().is_empty() {
+        return Ok(());
+    }
     let (Some((_, period)), _) = surface_periods(face_data.surface()) else {
         return Ok(());
     };
