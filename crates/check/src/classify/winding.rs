@@ -17,19 +17,19 @@ use crate::CheckError;
 ///
 /// Returns a value close to 1.0 for inside points, 0.0 for outside.
 ///
-/// The algorithm triangulates each face of the solid's outer shell from
-/// its wire polygon, then sums the signed solid angle subtended by each
-/// triangle at the query point. The total is divided by 4pi to yield the
-/// winding number.
+/// The algorithm triangulates each face of every shell of the solid (the
+/// outer one and each cavity's) from its wire polygon, then sums the signed
+/// solid angle subtended by each triangle at the query point. The total is
+/// divided by 4pi to yield the winding number. A fan over the wire polygon
+/// does not cover a curved face, so the result is exact only for planar
+/// faces.
 ///
 /// # Errors
 ///
 /// Returns an error if the solid or its faces contain invalid topology
 /// references.
 pub fn winding_number(topo: &Topology, solid: SolidId, point: Point3) -> Result<f64, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let faces = shell.faces().to_vec();
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
 
     let mut total = 0.0;
     for fid in &faces {

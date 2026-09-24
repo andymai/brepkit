@@ -187,6 +187,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **Point classification ignored cavities (CLOSED 2026-09-24; pins in `crates/operations/tests/classify_cavities.rs`)**:
+  the ray-cast `classify_point` of both `brepkit_check::classify` and
+  `brepkit_operations::classify` (and their winding variants' boundary
+  test) walked only the outer shell, so every point in a closed cavity
+  read Inside. They cast against every shell now. The check crate's
+  winding number still fan-triangulates wire polygons, which does not cover
+  a curved face, so its winding and robust variants stay unreliable there.
+
 - **Rods cut along their axis measured by mesh (CLOSED 2026-09-24; pins `crates/operations/tests/flat_sided_rods.rs`)**:
   a half rod read `solid_volume` 18.84619 against 6 pi at any deflection
   from 0.1 to 0.001, and its half-disc caps `face_area` 6.283146 against
