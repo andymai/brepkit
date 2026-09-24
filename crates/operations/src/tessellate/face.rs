@@ -77,14 +77,16 @@ pub(super) fn tessellate_with_uvs_floor(
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
-    // A holed wall goes through the curved CDT, which carves its holes. A
-    // face that CDT cannot take (a sphere band whose outer wire is a
-    // constant-v chain has no area in (u, v)) keeps the analytic grid below,
-    // which covers the whole band.
+    // A holed curved face goes through the solid mesher's hole-aware paths.
+    // One they cannot take keeps the analytic grid below, which covers the
+    // whole face.
     let holed_wall = if !face_data.inner_wires().is_empty()
         && matches!(
             face_data.surface(),
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+            FaceSurface::Cylinder(_)
+                | FaceSurface::Cone(_)
+                | FaceSurface::Sphere(_)
+                | FaceSurface::Torus(_)
         ) {
         match super::nonplanar::tessellate_holed_face_local(
             topo,

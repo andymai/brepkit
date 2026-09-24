@@ -1901,8 +1901,28 @@ pub(super) fn tessellate_nonplanar_cdt(
             }
 
             for run in &seam_runs {
-                let u_assign = if run.is_forward { u_max_bnd } else { u_min_bnd };
+                // The rim sample just before the run is the seam's own vertex
+                // on that rim, already unwrapped to the seam's side of the
+                // span; the edge's sense only says which side for one wire
+                // orientation.
+                let before = (run.indices[0] + n_boundary - 1) % n_boundary;
+                let u_assign = if seam_edge_indices.contains(&boundary_3d[before].2.index()) {
+                    if run.is_forward { u_max_bnd } else { u_min_bnd }
+                } else if (boundary_uv[before].0 - u_min_bnd).abs()
+                    < (boundary_uv[before].0 - u_max_bnd).abs()
+                {
+                    u_min_bnd
+                } else {
+                    u_max_bnd
+                };
                 let n_pts = run.indices.len();
+                if n_pts == 1 {
+                    // A lone sample is one of the seam's ends; its projected
+                    // v is exact there.
+                    let i = run.indices[0];
+                    boundary_uv[i] = (u_assign, boundary_uv[i].1.clamp(v_min_bnd, v_max_bnd));
+                    continue;
+                }
 
                 let v_first = boundary_uv[run.indices[0]].1;
                 let (v_start, v_end) = if (v_first - v_min_bnd).abs() < (v_first - v_max_bnd).abs()
@@ -2087,8 +2107,41 @@ pub(super) fn tessellate_nonplanar_cdt(
                 hole_pairs.push((a, b));
             }
         }
+        // The seed steps a fraction of its vertex's shorter edge inside the
+        // loop; a near-duplicate sample (a loop closing on its own first
+        // point) would shrink that step below what the flood can resolve.
+        let (lo, hi) = pts.iter().fold(
+            (
+                Point2::new(f64::MAX, f64::MAX),
+                Point2::new(f64::MIN, f64::MIN),
+            ),
+            |(lo, hi), p| {
+                (
+                    Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                    Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+                )
+            },
+        );
+        let merge = 1e-6 * (hi.x() - lo.x()).hypot(hi.y() - lo.y());
+        let mut distinct: Vec<Point2> = Vec::with_capacity(pts.len());
+        for p in pts {
+            if distinct
+                .last()
+                .is_none_or(|q| (p.x() - q.x()).hypot(p.y() - q.y()) > merge)
+            {
+                distinct.push(p);
+            }
+        }
+        while distinct.len() > 1
+            && distinct
+                .first()
+                .zip(distinct.last())
+                .is_some_and(|(a, b)| (a.x() - b.x()).hypot(a.y() - b.y()) <= merge)
+        {
+            distinct.pop();
+        }
         let start = hole_seed_pts.len();
-        hole_seed_pts.extend(pts);
+        hole_seed_pts.extend(distinct);
         hole_ranges.push((start, hole_seed_pts.len()));
     }
 
@@ -2110,7 +2163,14 @@ pub(super) fn tessellate_nonplanar_cdt(
                     let u = u_min + du * (iu as f64 / n_u as f64);
                     let v = v_min + dv * (iv as f64 / n_v as f64);
                     let parameter = Point2::new(u, v);
-                    let in_hole = hole_polys.iter().any(|h| point_in_polygon_2d(h, parameter));
+                    // Nested inner wires alternate void and island, so a
+                    // point is void at odd depth.
+                    let in_hole = hole_polys
+                        .iter()
+                        .filter(|h| point_in_polygon_2d(h, parameter))
+                        .count()
+                        % 2
+                        == 1;
                     (point_in_polygon_2d(boundary_uv_ref, parameter) && !in_hole)
                         .then_some(to_cdt(parameter))
                 })
@@ -2161,8 +2221,20 @@ pub(super) fn tessellate_nonplanar_cdt(
                         hi = corner;
                     }
                 }
+                // A cone's rims are sampled at their own radius, so a
+                // triangle's sag is bounded by its widest corner (the radius
+                // is linear in v), not the face's widest end.
+                let local_radius = if let FaceSurface::Cone(cone) = face_data.surface() {
+                    corners
+                        .iter()
+                        .map(|c| cone.radius_at(c.y()).abs())
+                        .fold(0.0, f64::max)
+                        .min(radius)
+                } else {
+                    radius
+                };
                 if stripe_span_within_tolerance(
-                    radius,
+                    local_radius,
                     corners[hi].x() - corners[lo].x(),
                     deflection,
                     angular_tol,
@@ -2185,7 +2257,14 @@ pub(super) fn tessellate_nonplanar_cdt(
                 );
                 // Triangles outside the trimmed boundary or inside a hole are
                 // dropped below, so their sag never ships.
-                let in_hole = |p: Point2| hole_polys.iter().any(|h| point_in_polygon_2d(h, p));
+                let in_hole = |p: Point2| {
+                    hole_polys
+                        .iter()
+                        .filter(|h| point_in_polygon_2d(h, p))
+                        .count()
+                        % 2
+                        == 1
+                };
                 if !point_in_polygon_2d(&boundary_uv, centroid) || in_hole(centroid) {
                     continue;
                 }
@@ -2228,14 +2307,30 @@ pub(super) fn tessellate_nonplanar_cdt(
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
     cdt.remove_exterior(&boundary_pairs);
+    if cdt_trace() {
+        log::debug!(
+            "cdt {face_id:?} after remove_exterior: {} tris",
+            cdt.triangles().len()
+        );
+    }
     if !hole_pairs.is_empty() {
-        let barrier: DetHashSet<(usize, usize)> = boundary_pairs
+        // Recovery can split a constraint at a Steiner point or at a vertex
+        // it passes through, so the barrier is the CDT's own constrained
+        // edges rather than the pairs as inserted.
+        let barrier: DetHashSet<(usize, usize)> = cdt
+            .constraint_edges()
             .iter()
-            .chain(&hole_pairs)
             .flat_map(|&(a, b)| [(a, b), (b, a)])
             .collect();
         for seed in super::planar::hole_removal_seeds(&hole_seed_pts, &hole_ranges) {
             cdt.flood_remove_from_point(seed, &barrier);
+            if cdt_trace() {
+                log::debug!(
+                    "cdt {face_id:?} flood from {:?}: {} tris left",
+                    from_cdt(seed),
+                    cdt.triangles().len()
+                );
+            }
         }
     }
 
@@ -2472,10 +2567,13 @@ fn anchor_closed_edges_at_vertices(
     Ok(changed)
 }
 
-/// Mesh one curved face with holes on its own, through the same constrained
-/// CDT the solid mesher uses: every edge of the face is sampled into a local
-/// pool first, so closed rims are anchored at their vertices exactly as they
-/// are against the solid's shared pool.
+/// Mesh one curved face with holes on its own, the way the solid mesher does:
+/// every edge of the face is sampled into a local pool first, so closed rims
+/// are anchored at their vertices exactly as they are against the solid's
+/// shared pool. A cylinder or cone wall goes through the constrained CDT; a
+/// sphere or torus face only through the latitude-band mesher, since its
+/// constant-v rims enclose no area in (u, v). A face neither takes comes back
+/// without triangles.
 pub(super) fn tessellate_holed_face_local(
     topo: &Topology,
     face_id: FaceId,
@@ -2512,17 +2610,35 @@ pub(super) fn tessellate_holed_face_local(
             pool.insert(oe.edge().index(), gids);
         }
     }
-    tessellate_nonplanar_cdt(
-        topo,
-        face_id,
-        face_data,
-        deflection,
-        angular_tol,
-        circle_floor,
-        &pool,
-        &mut merged,
-        &mut point_to_global,
-    )?;
+    let meshed = match face_data.surface() {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {
+            tessellate_nonplanar_cdt(
+                topo,
+                face_id,
+                face_data,
+                deflection,
+                angular_tol,
+                circle_floor,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )?;
+            true
+        }
+        FaceSurface::Sphere(_) | FaceSurface::Torus(_) => tessellate_latitude_band_shared(
+            topo,
+            face_data,
+            deflection,
+            angular_tol,
+            &pool,
+            &mut merged,
+            &mut point_to_global,
+        )?,
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => false,
+    };
+    if !meshed {
+        merged.indices.clear();
+    }
     let surface = face_data.surface();
     let mut uvs = Vec::with_capacity(merged.positions.len());
     for (i, &p) in merged.positions.iter().enumerate() {

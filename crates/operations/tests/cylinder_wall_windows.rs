@@ -1,5 +1,5 @@
-//! A rectangular window cut through a tube wall leaves the cylinder face with
-//! holes. Four layers each had to get it right: the face splitter winds the
+//! A rectangular window cut through a tube or cone wall leaves the wall face
+//! with holes. Four layers each had to get it right: the face splitter winds the
 //! hole against the outward normal, the CDT mesher constrains and removes it,
 //! the per-face mesher (exports, areas) does the same, and the volume
 //! integrator subtracts it.
@@ -9,7 +9,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
-use brepkit_operations::primitives::{make_box, make_cylinder};
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::tessellate::{
     boundary_edge_count, tessellate, tessellate_solid, tessellate_with_uvs,
 };
@@ -23,14 +23,54 @@ use brepkit_topology::solid::SolidId;
 const R: f64 = 1.5;
 const H: f64 = 4.0;
 
-/// `∫ 2 sqrt(r² - y²) dy` over `[y0, y1]`: the chord area of a disc strip.
-fn strip_area(y0: f64, y1: f64) -> f64 {
-    let f = |y: f64| y * (R * R - y * y).sqrt() + R * R * (y / R).asin();
+/// Frustum radii for the cone cases: `R0` at z = 0 down to `R1` at z = `H`.
+const R0: f64 = 2.0;
+const R1: f64 = 1.0;
+
+/// `∫ 2 sqrt(r² - y²) dy` over `[y0, y1]`: the chord area of a strip of a
+/// disc of radius `r`.
+fn disc_strip(r: f64, y0: f64, y1: f64) -> f64 {
+    let f = |y: f64| y * (r * r - y * y).sqrt() + r * r * (y / r).asin();
     f(y1) - f(y0)
+}
+
+fn strip_area(y0: f64, y1: f64) -> f64 {
+    disc_strip(R, y0, y1)
+}
+
+/// The frustum's material in the slab `y0..y1`, `z0..z1`, by Simpson's rule
+/// over z (the chord strip is smooth in z there).
+fn frustum_slab(y0: f64, y1: f64, z0: f64, z1: f64) -> f64 {
+    let n = 200;
+    let h = (z1 - z0) / f64::from(n);
+    (0..=n)
+        .map(|i| {
+            let z = z0 + h * f64::from(i);
+            let w = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            w * disc_strip(R0 + (R1 - R0) * z / H, y0, y1)
+        })
+        .sum::<f64>()
+        * h
+        / 3.0
+}
+
+fn tube(topo: &mut Topology) -> SolidId {
+    make_cylinder(topo, R, H).unwrap()
+}
+
+fn frustum(topo: &mut Topology) -> SolidId {
+    make_cone(topo, R0, R1, H).unwrap()
 }
 
 struct Case {
     name: &'static str,
+    solid: fn(&mut Topology) -> SolidId,
     pose: Mat4,
     /// Cutter box: origin corner, then extents.
     cutter: [f64; 6],
@@ -45,6 +85,7 @@ fn cases() -> Vec<Case> {
     let cylinder = std::f64::consts::PI * R * R * H;
     vec![
         Case {
+            solid: tube,
             name: "prism through both walls",
             pose: Mat4::identity(),
             cutter: [-5.0, 0.3, 1.0, 10.0, 0.5, 0.5],
@@ -53,6 +94,7 @@ fn cases() -> Vec<Case> {
             exact_volume: Some(cylinder - 0.5 * strip_area(0.3, 0.8)),
         },
         Case {
+            solid: tube,
             name: "prism through the u origin",
             pose: Mat4::identity(),
             cutter: [-0.25, -5.0, 1.0, 0.5, 10.0, 0.5],
@@ -61,6 +103,7 @@ fn cases() -> Vec<Case> {
             exact_volume: Some(cylinder - 0.5 * strip_area(-0.25, 0.25)),
         },
         Case {
+            solid: tube,
             name: "blind pocket through one wall",
             pose: Mat4::identity(),
             cutter: [0.0, 0.3, 1.0, 5.0, 0.5, 0.5],
@@ -69,6 +112,7 @@ fn cases() -> Vec<Case> {
             exact_volume: Some(cylinder - 0.25 * strip_area(0.3, 0.8)),
         },
         Case {
+            solid: tube,
             name: "tilted tube, cap to wall",
             pose: Mat4::rotation_x(0.7),
             cutter: [0.3, 0.3, -25.0, 0.5, 0.5, 50.0],
@@ -77,6 +121,7 @@ fn cases() -> Vec<Case> {
             exact_volume: None,
         },
         Case {
+            solid: tube,
             name: "shallow tilt",
             pose: Mat4::rotation_x(0.3),
             cutter: [0.3, 0.3, -25.0, 0.5, 0.5, 50.0],
@@ -85,6 +130,7 @@ fn cases() -> Vec<Case> {
             exact_volume: None,
         },
         Case {
+            solid: tube,
             name: "tilted tube, centred prism",
             pose: Mat4::rotation_x(0.7),
             cutter: [-0.25, -0.25, -25.0, 0.5, 0.5, 50.0],
@@ -92,11 +138,32 @@ fn cases() -> Vec<Case> {
             material: Point3::new(0.8, -0.6, 1.8),
             exact_volume: None,
         },
+        Case {
+            name: "frustum, prism through both walls",
+            solid: frustum,
+            pose: Mat4::identity(),
+            cutter: [-5.0, 0.3, 1.0, 10.0, 0.5, 0.5],
+            window: Point3::new(0.0, 0.55, 1.25),
+            material: Point3::new(0.0, -1.2, 2.0),
+            exact_volume: Some(
+                std::f64::consts::PI * H / 3.0 * (R0 * R0 + R0 * R1 + R1 * R1)
+                    - frustum_slab(0.3, 0.8, 1.0, 1.5),
+            ),
+        },
+        Case {
+            name: "tilted frustum, cap to wall",
+            solid: frustum,
+            pose: Mat4::rotation_x(0.7),
+            cutter: [0.3, 0.3, -25.0, 0.5, 0.5, 50.0],
+            window: Point3::new(0.55, 0.55, 0.5),
+            material: Point3::new(-0.8, -0.6, 1.8),
+            exact_volume: None,
+        },
     ]
 }
 
 fn cut(topo: &mut Topology, case: &Case) -> SolidId {
-    let tube = make_cylinder(topo, R, H).unwrap();
+    let tube = (case.solid)(topo);
     transform_solid(topo, tube, &case.pose).unwrap();
     let [x, y, z, dx, dy, dz] = case.cutter;
     let cutter = make_box(topo, dx, dy, dz).unwrap();
@@ -110,11 +177,16 @@ fn window_cut_is_exact_and_valid() {
         let mut topo = Topology::new();
         let result = cut(&mut topo, &case);
         let faces = solid_faces(&topo, result).unwrap();
-        let cylinders = faces
+        let walls = faces
             .iter()
-            .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .filter(|&&f| {
+                matches!(
+                    topo.face(f).unwrap().surface(),
+                    FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+                )
+            })
             .count();
-        assert_eq!(cylinders, 1, "{}: one cylinder wall", case.name);
+        assert_eq!(walls, 1, "{}: one curved wall", case.name);
         assert!(
             faces.len() <= 12,
             "{}: {} faces, a mesh fallback",

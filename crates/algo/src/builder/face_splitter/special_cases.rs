@@ -2394,7 +2394,11 @@ fn close_around_pole(
         FaceSurface::Sphere(_) if cap_above => std::f64::consts::FRAC_PI_2,
         FaceSurface::Sphere(_) => -std::f64::consts::FRAC_PI_2,
         FaceSurface::Cone(_) if !cap_above => 0.0,
-        _ => return,
+        FaceSurface::Cone(_)
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Plane { .. } => return,
     };
     uv.extend([(u0 + winding, v0), (u0 + winding, v_pole), (u0, v_pole)]);
 }

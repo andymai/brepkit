@@ -719,12 +719,22 @@ fn bored_sphere_band_area_and_watertight() {
         "default-deflection bored-sphere area {area} should be ~{analytic} (band), not ~648 (cap-filled)"
     );
 
-    // The per-face mesher behind the exports must keep every band too.
+    // The per-face mesher behind the exports must keep every band, with its
+    // tunnel mouth open, too.
     for fid in brepkit_topology::explorer::solid_faces(&topo, result).unwrap() {
         let face_mesh = tessellate(&topo, fid, 0.1).unwrap();
         assert!(
             !face_mesh.indices.is_empty(),
             "face {fid:?} meshes to nothing"
+        );
+        let reach = face_mesh
+            .positions
+            .iter()
+            .map(|p| p.z().abs())
+            .fold(0.0_f64, f64::max);
+        assert!(
+            reach < z_rim + 1e-6,
+            "face {fid:?} fills its tunnel mouth: |z| reaches {reach}"
         );
     }
 }

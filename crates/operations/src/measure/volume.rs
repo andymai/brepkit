@@ -1457,15 +1457,19 @@ fn developable_face_flux(
                 v * cos_a * (sin_a * (u.sin() * ax - u.cos() * ay) - cos_a * az * u) / 3.0
             })
         }
-        _ => {
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => {
             return Err(crate::OperationsError::InvalidInput {
                 reason: "developable_face_flux requires a cylinder or cone face".into(),
             });
         }
     };
-    let apex = match &surface {
-        FaceSurface::Cone(c) => Some(c.apex()),
-        _ => None,
+    let apex = if let FaceSurface::Cone(c) = &surface {
+        Some(c.apex())
+    } else {
+        None
     };
     let tol = brepkit_math::tolerance::Tolerance::new().linear;
     let at_apex = |p: Point3| apex.is_some_and(|a| (p - a).length() <= tol);
@@ -1516,14 +1520,12 @@ fn developable_face_flux(
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
             );
-            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-            let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
             let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep);
             // Midpoint Stieltjes sums of G and of u against dv at `n` steps.
             // A straight edge on either surface is a ruling (constant u), so
             // one step is exact; curved edges take two resolutions and a
             // Richardson step.
-            let stieltjes = |n: usize, prev: &mut Option<f64>| -> (f64, f64) {
+            let stieltjes = |(from, to): (f64, f64), n: usize, prev: &mut Option<f64>| {
                 let (mut g_sum, mut u_sum) = (0.0, 0.0);
                 #[allow(clippy::cast_precision_loss)]
                 let step = (to - from) / n as f64;
@@ -1545,20 +1547,22 @@ fn developable_face_flux(
                 }
                 (g_sum, u_sum)
             };
-            if first_u.is_none() && !through_apex {
-                let p0 = at(from);
-                first_u = Some(unwrap(&mut prev_u, p0, project(p0).0));
+            for span in traversal_spans(edge, oe.is_forward(), sp, ep) {
+                if first_u.is_none() && !through_apex {
+                    let p0 = at(span.0);
+                    first_u = Some(unwrap(&mut prev_u, p0, project(p0).0));
+                }
+                let (g, a) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                    stieltjes(span, 1, &mut prev_u)
+                } else {
+                    let mut coarse_prev = prev_u;
+                    let (gc, ac) = stieltjes(span, 128, &mut coarse_prev);
+                    let (gf, af) = stieltjes(span, 256, &mut prev_u);
+                    ((4.0 * gf - gc) / 3.0, (4.0 * af - ac) / 3.0)
+                };
+                wire_flux += g;
+                wire_area += a;
             }
-            let (g, a) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                stieltjes(1, &mut prev_u)
-            } else {
-                let mut coarse_prev = prev_u;
-                let (gc, ac) = stieltjes(128, &mut coarse_prev);
-                let (gf, af) = stieltjes(256, &mut prev_u);
-                ((4.0 * gf - gc) / 3.0, (4.0 * af - ac) / 3.0)
-            };
-            wire_flux += g;
-            wire_area += a;
         }
         if let (Some(start), Some(end)) = (first_u, prev_u)
             && (end - start).abs() > PI
@@ -1574,6 +1578,54 @@ fn developable_face_flux(
         flux += if wire_index == 0 { region } else { -region };
     }
     Ok(Some(if face.is_reversed() { -flux } else { flux }))
+}
+
+/// Parameter spans that walk `edge` from its traversal-start vertex to its
+/// traversal-end vertex. `domain_with_endpoints` gives a whole NURBS edge its
+/// curve's own domain even where the curve runs from the edge's end vertex,
+/// and a closed edge the span from its curve's origin; either would walk a
+/// wire out of order in the unwrapped `(u, v)` plane.
+fn traversal_spans(
+    edge: &brepkit_topology::edge::Edge,
+    forward: bool,
+    sp: Point3,
+    ep: Point3,
+) -> Vec<(f64, f64)> {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let curve = edge.curve();
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let spans = if edge.start() == edge.end() {
+        match curve {
+            EdgeCurve::Circle(c) => {
+                let tv = c.project(sp);
+                vec![(tv, tv + (t1 - t0))]
+            }
+            EdgeCurve::Ellipse(e) => {
+                let tv = e.project(sp);
+                vec![(tv, tv + (t1 - t0))]
+            }
+            EdgeCurve::NurbsCurve(n) => {
+                match brepkit_math::nurbs::projection::project_point_to_curve(n, sp, 1e-9) {
+                    Ok(hit) => vec![(hit.parameter, t1), (t0, hit.parameter)],
+                    Err(_) => vec![(t0, t1)],
+                }
+            }
+            EdgeCurve::Line => vec![(t0, t1)],
+        }
+    } else {
+        let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
+        if (at(t0) - sp).length() <= (at(t0) - ep).length() {
+            vec![(t0, t1)]
+        } else {
+            vec![(t1, t0)]
+        }
+    };
+    if forward {
+        spans
+    } else {
+        spans.into_iter().rev().map(|(a, b)| (b, a)).collect()
+    }
 }
 
 /// Exact signed volume contribution of a cylindrical face via the
