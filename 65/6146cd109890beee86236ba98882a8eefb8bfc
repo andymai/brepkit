@@ -1,0 +1,77 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_3d1685d700844a 1052-1081
+  s_ba2f7b5c6902b6::t_fe07e10b7a7d38 12
+  s_ba2f7b5c6902b6::t_777d3254efde9b 1108-1110,1112-1124,1323-1343
+  s_ba2f7b5c6902b6::t_6f59d98851f7a2 1344-1345
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_7c363f96362c3e 33-35,190-191,195-200,201,212,256-258,316-317,319-326,328-329,334-335,337,339-341,352-362,363,368,391,392-393,395-398
+  s_ba2f7b5c6902b6::t_dae30c817ebe16 338
+  s_ba2f7b5c6902b6::t_a85b4b6b7bfc39 399-408
+  s_ba2f7b5c6902b6::t_fe07e10b7a7d38 11-12,364-375,383,387-388,390
+  s_ba2f7b5c6902b6::t_4375b79e5ce6c2 638
+  s_ba2f7b5c6902b6::t_954f9436940769 114-117,177-189,192-194,202-211,213-248,251-255,259-284,290-315,318,327,330-333,336,343-351,394
+  s_ba2f7b5c6902b6::t_a60d1f20c7fb42 249-250,285-289,342
+  s_ba2f7b5c6902b6::t_6eea3ce7809b32 628-629,633,636,642
+  s_ba2f7b5c6902b6::t_b66cb0be554972 376-382,384-386
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_a940f1d7e02795 742-753,2585-2627,2632-2633,2637
+  s_ba2f7b5c6902b6::t_bdbbe9c94adc4b 544-555,2548-2584
+  s_ba2f7b5c6902b6::t_77a51ecd502fb6 2628-2631
+  s_ba2f7b5c6902b6::t_dfc2d972a2a9b4 2634-2636
+  s_ba2f7b5c6902b6::t_9e0475999b171a 2638-2640
+crates/operations/tests/oblique_rod_cut.rs
+  s_ba2f7b5c6902b6::t_d23a88322be6b1 1-61,74-121
+  s_ba2f7b5c6902b6::t_ff716809ed3008 62-73
+crates/topology/src/edge.rs
+  s_ba2f7b5c6902b6::t_5168da4743fdf8 143-147
+  s_ba2f7b5c6902b6::t_c37181d4af56e0 107-109
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_4854e9dc805ffd 208-223
+  s_ba2f7b5c6902b6::t_e4796a455c3641 190-207
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_239bab66ac33e6 329
+crates/operations/src/extrude/tests.rs
+  s_ba2f7b5c6902b6::t_f8356384ad5b56 1495-1530
+crates/operations/src/extrude.rs
+  s_ba2f7b5c6902b6::t_6ee756d10259de 210,212-214,217-218
+crates/operations/src/measure/mod.rs
+  s_ba2f7b5c6902b6::t_2584012a58edaa 834-893
+crates/operations/src/measure/helpers.rs
+  s_ba2f7b5c6902b6::t_fe07e10b7a7d38 504-551
+  s_ba2f7b5c6902b6::t_4375b79e5ce6c2 370-372,414-427,438
+  s_ba2f7b5c6902b6::t_6eea3ce7809b32 437
+crates/operations/src/tessellate/solid.rs
+  s_ba2f7b5c6902b6::t_1d80476faea6c0 1073-1076
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_ba2f7b5c6902b6::t_11e0fbf9198847 903,925,931,964-965,968-969,972
+  s_ba2f7b5c6902b6::t_bddf2b42d7f691 821-902,904-924,926-930,932-956,992-999,1002-1010,1095-1097,1099,1101,1108-1111
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_e4a94cddfa3bfb 1360-1367,1506,1518
+  s_ba2f7b5c6902b6::t_5bb024a50fef6a 1309-1310,1315-1320
+crates/operations/tests/cone_plane_cut.rs
+  s_ba2f7b5c6902b6::t_530f2ca8132371 197-198,200
+  s_ba2f7b5c6902b6::t_172309aa766e79 51,61-65,67-73,75,199
+  s_ba2f7b5c6902b6::t_ff716809ed3008 33,48-50,52-60,66,74,91,147-157
+  s_ba2f7b5c6902b6::t_f068165f40f8da 1-32,34-47,76-90,92-146,158-196,201-205
+crates/operations/src/boolean/assembly.rs
+  s_ba2f7b5c6902b6::t_5b4a8c8ce7d33c 782-787
+  s_ba2f7b5c6902b6::t_e6901af1ea23be 720-723,725,728
+  s_ba2f7b5c6902b6::t_147ab6d7fed217 792-793
+  s_ba2f7b5c6902b6::t_f5d05fcbb5c414 726-727,777-781,788-791
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "656146cd109890beee86236ba98882a8eefb8bfc",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
