@@ -2097,7 +2097,31 @@ pub(super) fn tessellate_nonplanar_cdt(
     // its boundary alone fans rim samples to hole samples radians away and
     // chords through the solid. Triangulate it in the developed
     // (radius * u, v) metric and refine by angular extent, like a stripe.
-    let holed_wall_radius = if holes.is_empty() {
+    // A hole straddling the seam is carried by the outer wire instead (the
+    // seam cannot cross it): two closed rims, a seam of lines, and marched
+    // pieces notching the wire between the seam's two copies. It leaves the
+    // same rim-to-hole fans.
+    let notched_wall = nurbs_boundaries > 0 && {
+        let mut uses: DetHashMap<usize, (usize, bool)> = DetHashMap::default();
+        let mut closed_rims = 0;
+        for oriented in wire.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            let use_count = uses
+                .entry(oriented.edge().index())
+                .or_insert_with(|| (0, matches!(edge.curve(), EdgeCurve::Line)));
+            use_count.0 += 1;
+            if matches!(edge.curve(), EdgeCurve::Circle(_)) && edge.start() == edge.end() {
+                closed_rims += 1;
+            }
+        }
+        let repeated: Vec<bool> = uses
+            .values()
+            .filter(|&&(n, _)| n > 1)
+            .map(|&(_, line)| line)
+            .collect();
+        closed_rims == 2 && !repeated.is_empty() && repeated.iter().all(|&line| line)
+    };
+    let holed_wall_radius = if holes.is_empty() && !notched_wall {
         None
     } else {
         developable_stripe_radius(face_data.surface(), v_min, v_max)
