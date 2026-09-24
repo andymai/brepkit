@@ -1,15 +1,15 @@
-crates/algo/src/pave_filler/phase_ff.rs
-  s_ba2f7b5c6902b6::t_42b476850117d6 2636-2638
-crates/check/src/classify/mod.rs
-  s_ba2f7b5c6902b6::t_778a4c029e0bd2 193-194,199-200,216-231
-  s_ba2f7b5c6902b6::t_87061f43fdac4f 232-233
 crates/operations/tests/torus_plane_cut.rs
   s_ba2f7b5c6902b6::t_44959a96e03ce3 209-245
-crates/math/src/analytic_intersection.rs
-  s_ba2f7b5c6902b6::t_42b476850117d6 69
-  s_ba2f7b5c6902b6::t_e41bd88a920b9b 1648-1651,1653-1657
 crates/operations/src/measure/volume.rs
   s_ba2f7b5c6902b6::t_80b9ec5bdf1a52 12,2769-2771,2774,2790-2792,2812
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_42b476850117d6 2636-2638
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_e41bd88a920b9b 1648-1651,1653-1657
+  s_ba2f7b5c6902b6::t_42b476850117d6 69
+crates/check/src/classify/mod.rs
+  s_ba2f7b5c6902b6::t_778a4c029e0bd2 193-194,199-200,216-231
+  s_ba2f7b5c6902b6::t_f603edc9f8f515 232-233
 ---
 {
   "schema_version": "authorship/3.0.0",
