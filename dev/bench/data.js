@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790247982824,
+  "lastUpdate": 1790248136244,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36773,6 +36773,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44823171,
             "range": "± 281760",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3c9f3d50bc1aa0f2eec5ff318d9170eca3a5bdd9",
+          "message": "fix(operations): sign feature-recognition dihedrals and fix its hole, pocket and fillet rules (#1701)\n\n## What was wrong\n\nFeature recognition now uses signed dihedrals and topology aware rules\nfor holes, pockets, fillets, and chamfers.\n\nPreviously, the dihedral angle was `acos(n1·n2)`. Cylinders and cones\nused their axes as normals, spheres, tori, and NURBS used a fixed z\ndirection, and reversed faces were ignored. The result never exceeded\npi, so no edge was ever classified as convex.\n\nAdjacency included only outer wires from the outer shell. A hole wall\ntherefore never met its plate, and every cylindrical face was reported\nas a hole, including bosses. Pockets required non-planar walls, so\nrectangular pockets were not found. Fillets were any face smaller than\none quarter of the mean face area. Chamfers were any planar face at an\nintermediate angle to two planar neighbours.\n\n## What this does\n\n- Computes outward normals at the edge's parametric midpoint, applying\neach face's reversed flag. The edge tangent, following the first face's\ntraversal, signs the angle: convex edges are above pi, concave edges are\nbelow pi, and tangent edges equal pi.\n\n- Builds adjacency from every wire of every shell and skips edges that a\nface shares with itself as seams.\n\n- Identifies a hole as a concave cylinder whose outward normal faces its\naxis.\n\n- Pocket detection treats coplanar pieces a boolean left split (planar\nfaces joined by a flat edge) as one face. A component of faces joined by\nconcave and flat edges opens along the outward normal of a planar face\nthat no face in the component looks back against (a wall's opposite wall\ndoes); of those, the one meeting the most faces along concave edges sets\nthe direction (the larger on a tie). Every planar face facing that way\nis a floor, one pocket per floor, and a floor's walls are the coplanar\ngroups meeting it along concave edges, on at least two planes.\n\n- A fillet is a curved face tangent to at least two neighbours that are\nnot all parallel planes (a channel's round floor between its walls\nblends no corner).\n\n- A chamfer stands where the edge its two neighbours' planes meet along\nwas cut away, outside it when it meets them across convex edges and\ninside across concave ones (a scalene triangular prism's side fails,\nsince its neighbours meet at the prism's own far edge behind it), and it\noccupies at most half the area of the larger face it bevels, so a thin\nplate's narrow side does not hide it while a regular prism's equal sides\nstill do not count.\n\nThe README Feature Recognition row remains Beta. The approach is still\nheuristic: a chamfer wider than half the larger face it bevels is missed\n(a regular prism's sides meet like chamfers, so size is the only\ndiscriminant), a full-round edge between parallel faces is not reported\nas a fillet, an undercut pocket (a face overhanging its floor) is not\nfound, and a floor split into patches (coplanar, or within the 0.01 rad\nflat-edge tolerance) reports its largest patch as the floor and leaves\nthe rest out, since `Feature::Pocket` has one floor.\n\n## Verification\n\n- A box has 12 convex edges at `3pi/2`.\n\n- A rectangular pocket and its mirror have 8 concave and 16 convex\nedges, with a floor at `z = 2` and 4 walls.\n\n- Through holes and their mirrors report diameter 3 with no concave\nedges. A blind hole reports diameter 2 with no pocket. A plain cylinder\nreports no hole.\n\n- A `fillet_v2` box and its mirror report exactly one fillet, the\ncylinder. A regular hexagonal prism reports no chamfers, while the\nexisting chamfered-box test still finds its chamfer.\n\n- A hollow box graph includes 6 cavity faces from the inner shell,\ntotaling 12 nodes, 12 concave edges, and 12 convex edges.\n\n- The wasm test drills a box through `executeBatch` and verifies one\nhole of diameter 3 and no pocket.\n\n- A shallow pocket with a deeper one in its floor, flush with three of\nits walls, reports two pockets, floors at z = 1 and z = 3, and no floor\nlists a flat face as a wall (on the previous rule the same solid\nreported three pockets).\n\n- A 10 x 10 x 1 plate with one top edge chamfered 0.6 by `chamfer_v2`\nreports its chamfer.\n\n- A slot with a half-cylinder floor tangent to both walls reports no\nfillet. Each of these three tests fails with its rule reverted.\n\n- A scalene triangular prism (sides 1, 2 and 2.5, extruded 3) reports no\nchamfer; the test fails with the edge rule removed.\n\n- The operations, io and wasm suites pass: 1670 tests, 0 failures\n(before the edge rule); after it the 27 feature-recognition tests and\nCI's workspace test job pass.",
+          "timestamp": "2026-09-24T04:04:24-07:00",
+          "tree_id": "4ed5e57868eefa1c535300546b141680264cd906",
+          "url": "https://github.com/andymai/brepkit/commit/3c9f3d50bc1aa0f2eec5ff318d9170eca3a5bdd9"
+        },
+        "date": 1790248132660,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 995214,
+            "range": "± 4243",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1078064,
+            "range": "± 3910",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13204,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 739030,
+            "range": "± 3685",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41543419,
+            "range": "± 125303",
             "unit": "ns/iter"
           }
         ]
