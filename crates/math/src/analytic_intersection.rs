@@ -49,6 +49,12 @@ pub fn exact_plane_analytic(
             if let Some(circles) = exact_plane_torus(torus, plane_normal, plane_d)? {
                 return Ok(circles);
             }
+            if let Some(loops) = plane_torus_winding_loops(torus, plane_normal, plane_d, 128) {
+                return Ok(loops
+                    .into_iter()
+                    .map(ExactIntersectionCurve::Points)
+                    .collect());
+            }
             // Other torus sections are degree-4 — fall back to sampling.
             let chains = sample_plane_torus(torus, plane_normal, plane_d)?;
             Ok(chains
@@ -1038,6 +1044,55 @@ fn plane_torus_crossings(
         }
     }
     pts
+}
+
+/// The two sections of a plane that crosses every tube cross-section of a
+/// torus twice (one parallel to the axis within `R − r` of it, or tilted a
+/// little from that): both branches `u = phi ± acos(rhs(v))` of
+/// [`plane_torus_crossings`] are then defined for every `v`, so each closes
+/// into a loop that winds once around the tube. Sampled at `n_v` steps from
+/// `v = 0`, the outer equator, so every such loop on a torus starts on one
+/// latitude, as the tube cross-sections of a plane through the axis do.
+/// `None` when a branch lapses somewhere or the two come close to meeting.
+#[allow(clippy::cast_precision_loss)]
+fn plane_torus_winding_loops(
+    torus: &ToroidalSurface,
+    normal: Vec3,
+    d: f64,
+    n_v: usize,
+) -> Option<Vec<Vec<Point3>>> {
+    let big_r = torus.major_radius();
+    let small_r = torus.minor_radius();
+    let a = normal.dot(torus.x_axis());
+    let b = normal.dot(torus.y_axis());
+    let c = normal.dot(torus.z_axis());
+    let s = a.hypot(b);
+    if s < 1e-12 * normal.length() || small_r >= big_r {
+        return None;
+    }
+    let phi = b.atan2(a);
+    let d_local = d - dot_np(normal, torus.center());
+    let rhs = |v: f64| (d_local - small_r * c * v.sin()) / (s * small_r.mul_add(v.cos(), big_r));
+    let dense = 8 * n_v;
+    if (0..dense).any(|i| rhs(TAU * i as f64 / dense as f64).abs() > 1.0 - 1e-3) {
+        return None;
+    }
+    let mut loops = [Vec::with_capacity(n_v + 1), Vec::with_capacity(n_v + 1)];
+    for i in 0..n_v {
+        let v = TAU * i as f64 / n_v as f64;
+        let delta = rhs(v).acos();
+        loops[0].push(torus.evaluate(phi + delta, v));
+        loops[1].push(torus.evaluate(phi - delta, v));
+    }
+    Some(
+        loops
+            .into_iter()
+            .map(|mut run| {
+                run.push(run[0]);
+                run
+            })
+            .collect(),
+    )
 }
 
 /// Real intersection parameters `t` of the line `origin + t·dir` with a torus.

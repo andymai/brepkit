@@ -127,7 +127,10 @@ pub fn face_area(
             Some(area) => Ok(area),
             None => analytic_cone_face_area(topo, face_id),
         },
-        FaceSurface::Torus(_) => analytic_torus_face_area(topo, face_id),
+        FaceSurface::Torus(tor) => match torus_face_uv_area(topo, face_id, tor)? {
+            Some(area) => Ok(area),
+            None => analytic_torus_face_area(topo, face_id),
+        },
         FaceSurface::Nurbs(_) => {
             let mesh = tessellate::tessellate(topo, face_id, deflection)?;
             Ok(triangle_mesh_area(&mesh))
@@ -197,6 +200,9 @@ struct RevolutionMetric<'a> {
     /// A cone's apex, where the `u` lines collapse: a loop through it may
     /// jump in `u` there, since the weight vanishes on it.
     pole: Option<Point3>,
+    /// Whether `v` wraps too (a torus's tube angle), so a loop must also
+    /// return to its start in `v`.
+    v_periodic: bool,
 }
 
 /// The area of a cylinder face whose boundary is not a rectangle in
@@ -233,6 +239,7 @@ fn cylinder_face_uv_area(
             grad_v: &grad_v,
             weight: &weight,
             pole: None,
+            v_periodic: false,
         },
     )
 }
@@ -285,8 +292,69 @@ fn cone_face_uv_area(
             grad_v: &grad_v,
             weight: &weight,
             pole: Some(apex),
+            v_periodic: false,
         },
     )
+}
+
+/// The area of a torus face trimmed by a free-form curve (a plane's loop
+/// around the tube), where the area element is `r (R + r cos v) du dv`.
+/// `Ok(None)` for a face bounded only by circles and seam placeholders,
+/// which [`analytic_torus_face_area`] measures, or when a wire's unwrapped
+/// `u` does not close.
+fn torus_face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let circular = face_edges_all(topo, face_id, |edge, _, _| {
+        Ok(matches!(
+            edge.curve(),
+            EdgeCurve::Line | EdgeCurve::Circle(_)
+        ))
+    })?;
+    if circular {
+        return Ok(None);
+    }
+    let (big, small) = (torus.major_radius(), torus.minor_radius());
+    let (ex, ey, ez) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
+    let project = |p: Point3| torus.project_point(p);
+    // P_v = r (−sin v ρ̂(u) + cos v ẑ), so ∇v is P_v / r².
+    let grad_v = |p: Point3| {
+        let (u, v) = torus.project_point(p);
+        let ((sin_u, cos_u), (sin_v, cos_v)) = (u.sin_cos(), v.sin_cos());
+        ((ex * cos_u + ey * sin_u) * -sin_v + ez * cos_v) * (1.0 / small)
+    };
+    let weight = |v: f64| small * small.mul_add(v.cos(), big);
+    let metric = RevolutionMetric {
+        project: &project,
+        grad_v: &grad_v,
+        weight: &weight,
+        pole: None,
+        v_periodic: true,
+    };
+    // A whole ring's outer wire is its seam placeholders collapsed onto one
+    // vertex, which encloses nothing in (u, v): the ring less its holes.
+    let face = topo.face(face_id)?;
+    let mut collapsed = true;
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        collapsed &= matches!(edge.curve(), EdgeCurve::Line)
+            && (topo.vertex(edge.start())?.point() - topo.vertex(edge.end())?.point()).length()
+                < 1e-9;
+    }
+    if collapsed {
+        let mut area = 4.0 * std::f64::consts::PI * std::f64::consts::PI * big * small;
+        for &wid in face.inner_wires() {
+            let Some(hole) = wire_uv_area(topo, wid, &metric)? else {
+                return Ok(None);
+            };
+            area -= hole.abs();
+        }
+        return Ok(Some(area));
+    }
+    face_uv_area(topo, face_id, &metric)
 }
 
 /// Whether `test` holds for every edge of a face, given the edge and its
@@ -367,6 +435,15 @@ fn wire_uv_area(
     let mut sum = 0.0;
     let mut first_u = None;
     let mut last_u: Option<f64> = None;
+    // The loop's v, unwrapped along it, for a surface whose v wraps.
+    let mut first_v: Option<f64> = None;
+    let mut v_walk: Option<f64> = None;
+    let mut walk_v = |p: Point3| {
+        let (_, v) = (metric.project)(p);
+        let next = v_walk.map_or(v, |w| v - ((v - w + PI) / TAU).floor() * TAU);
+        first_v.get_or_insert(next);
+        v_walk = Some(next);
+    };
     // The region's u has to jump by a turn somewhere on the loop, which is
     // free only across the pole (the weight vanishes there): walk from it.
     let mut edges = topo.wire(wire_id)?.edges().to_vec();
@@ -394,10 +471,27 @@ fn wire_uv_area(
             if first_u.is_none() {
                 first_u = Some(u_prev);
             }
+            walk_v(at(ta));
+            // A NURBS edge integrates knot span by knot span, where it is
+            // smooth; other curves in even segments.
             #[allow(clippy::cast_precision_loss)]
-            for seg in 0..SEGMENTS {
-                let a = ta + (tb - ta) * seg as f64 / SEGMENTS as f64;
-                let b = ta + (tb - ta) * (seg + 1) as f64 / SEGMENTS as f64;
+            let mut cuts: Vec<f64> = (0..=SEGMENTS)
+                .map(|seg| ta + (tb - ta) * seg as f64 / SEGMENTS as f64)
+                .collect();
+            if let EdgeCurve::NurbsCurve(nc) = curve {
+                let (lo, hi) = (ta.min(tb), ta.max(tb));
+                cuts = std::iter::once(ta)
+                    .chain(nc.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                    .chain(std::iter::once(tb))
+                    .collect();
+                cuts.dedup();
+                if tb < ta {
+                    let last = cuts.len() - 1;
+                    cuts[1..last].reverse();
+                }
+            }
+            for w in cuts.windows(2) {
+                let (a, b) = (w[0], w[1]);
                 let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
                 for gp in points {
                     let t = mid + half * gp.x;
@@ -413,13 +507,17 @@ fn wire_uv_area(
                     let dv = (metric.grad_v)(p).dot(tangent);
                     sum += gp.w * half * u * (metric.weight)(v) * dv;
                     u_prev = u;
+                    walk_v(p);
                 }
             }
             last_u = Some(u_near(at(tb), Some(u_prev)));
+            walk_v(at(tb));
         }
     }
+    let v_closes = !metric.v_periodic
+        || matches!((first_v, v_walk), (Some(a), Some(b)) if (a - b).abs() <= 1e-6);
     Ok(match (first_u, last_u) {
-        (Some(a), Some(b)) if touches_pole || (a - b).abs() <= 1e-6 => Some(sum),
+        (Some(a), Some(b)) if v_closes && (touches_pole || (a - b).abs() <= 1e-6) => Some(sum),
         _ => None,
     })
 }

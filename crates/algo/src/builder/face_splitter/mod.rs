@@ -4546,10 +4546,11 @@ fn loops_have_out_and_back(
 /// If there are no section edges, returns a single sub-face covering
 /// the entire face (pass-through).
 ///
-/// Wraps [`split_face_2d_impl`] to salvage closed circle and ellipse *cap*
-/// sections on plane faces (the drilled-socket → bin-body fuse: the socket's
-/// screw-hole rims land as closed circle sections on the body's coincident
-/// bottom plane; a tilted plane across a tube carries two nested ellipses).
+/// Wraps [`split_face_2d_impl`] to salvage closed circle, ellipse and curved
+/// loop *cap* sections on plane faces (the drilled-socket → bin-body fuse: the
+/// socket's screw-hole rims land as closed circle sections on the body's
+/// coincident bottom plane; a tilted plane across a tube carries two nested
+/// ellipses; a plane across a torus's tube carries its loops around the tube).
 /// The impl drops closed circles in both its arrangement path
 /// ([`arrangement_regions_from_inputs`] discards any input whose UV chord is
 /// zero-length, and a closed circle has `start == end`) and its wire-builder
@@ -4598,13 +4599,16 @@ pub fn split_face_2d(
         )
     };
 
-    // Cheap gate for the common case: no closed conic section, nothing to
+    // Cheap gate for the common case: no closed curved section, nothing to
     // salvage — skip all frame and polygon work below.
-    let any_closed_conic = sections.iter().any(|s| {
+    let any_closed_curve = sections.iter().any(|s| {
         (s.start - s.end).length() < tol.linear
-            && matches!(s.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+            && matches!(
+                s.curve_3d,
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+            )
     });
-    if !any_closed_conic {
+    if !any_closed_curve {
         return run_impl(sections);
     }
 
@@ -4654,15 +4658,15 @@ pub fn split_face_2d(
             EdgeCurve::Ellipse(e) => Some((e.center(), e.semi_major())),
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
         };
-        let cap_center = if (s.start - s.end).length() < tol.linear
-            && outer_poly.len() >= 3
-            && let Some((center, reach)) = conic
-        {
+        let closed = (s.start - s.end).length() < tol.linear && outer_poly.len() >= 3;
+        let cap_center = if closed && let Some((center, reach)) = conic {
             let center_uv = cap_frame.project(center);
             (super::classify_2d::point_in_polygon_2d(center_uv, &outer_poly)
                 && super::classify_2d::distance_to_polygon_boundary(center_uv, &outer_poly)
                     > reach * CAP_INTERIORITY_MARGIN)
                 .then_some(center)
+        } else if closed && matches!(s.curve_3d, EdgeCurve::NurbsCurve(_)) {
+            interior_loop_center(s, cap_frame, &outer_poly)
         } else {
             None
         };
@@ -4696,6 +4700,49 @@ pub fn split_face_2d(
         rank,
         frame,
     )
+}
+
+/// The centroid of a closed curved section's samples when every sample
+/// clears the face outline by a twentieth of the loop's extent (a loop that
+/// touches the outline is no cap).
+fn interior_loop_center(
+    section: &SectionEdge,
+    frame: &PlaneFrame,
+    outer_poly: &[Point2],
+) -> Option<Point3> {
+    let (t0, t1) = section
+        .curve_3d
+        .domain_with_endpoints(section.start, section.end);
+    let n = 32_i32;
+    let pts: Vec<Point3> = (0..n)
+        .map(|k| {
+            section.curve_3d.evaluate_with_endpoints(
+                (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0),
+                section.start,
+                section.end,
+            )
+        })
+        .collect();
+    let uv: Vec<Point2> = pts.iter().map(|&p| frame.project(p)).collect();
+    let (mut lo, mut hi) = (uv[0], uv[0]);
+    for p in &uv {
+        lo = Point2::new(lo.x().min(p.x()), lo.y().min(p.y()));
+        hi = Point2::new(hi.x().max(p.x()), hi.y().max(p.y()));
+    }
+    let margin = 0.05 * (hi - lo).length();
+    if margin <= 0.0
+        || !uv.iter().all(|&p| {
+            super::classify_2d::point_in_polygon_2d(p, outer_poly)
+                && super::classify_2d::distance_to_polygon_boundary(p, outer_poly) > margin
+        })
+    {
+        return None;
+    }
+    let sum = pts.iter().fold(Vec3::new(0.0, 0.0, 0.0), |acc, p| {
+        acc + Vec3::new(p.x(), p.y(), p.z())
+    });
+    let mean = sum * (1.0 / f64::from(n));
+    Some(Point3::new(mean.x(), mean.y(), mean.z()))
 }
 
 /// Slack on the cap interiority test. A genuine drilled hole's centre clears

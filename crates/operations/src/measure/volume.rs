@@ -1607,12 +1607,16 @@ pub fn solid_volume(
     // use direct per-face tessellation with signed-volume summation.
     // tessellate() handles face reversal (flips winding + normals), so raw
     // signed tets are correct even without a globally watertight mesh.
+    // So does a torus face trimmed by a free-form curve, whose flux follows
+    // exactly along its boundary where a mesh would only inscribe it.
     let needs_direct_tessellation = brepkit_topology::explorer::solid_faces(topo, solid)?
         .into_iter()
         .any(|fid| {
             topo.face(fid).is_ok_and(|f| {
                 !f.inner_wires().is_empty()
                     || (f.is_reversed() && !matches!(f.surface(), FaceSurface::Plane { .. }))
+                    || (matches!(f.surface(), FaceSurface::Torus(_))
+                        && has_free_form_boundary(topo, fid).unwrap_or(false))
             })
         });
     if needs_direct_tessellation {
@@ -2708,6 +2712,15 @@ fn analytic_torus_signed_volume(
             * tor.minor_radius()
             * tor.minor_radius();
         let vol = ring - holes;
+        return Ok(if face.is_reversed() { -vol } else { vol });
+    }
+    // A face trimmed by a free-form curve (a plane's loop around the tube) is
+    // no box in (u, v); its boundary walk up one side and down the other
+    // winds neither angle, so its flux follows as a hole's does.
+    if has_free_form_boundary(topo, face_id)?
+        && let Some(outer) = torus_hole_flux(topo, tor, face.outer_wire(), about)?
+    {
+        let vol = outer - holes;
         return Ok(if face.is_reversed() { -vol } else { vol });
     }
     let mut u_vals = Vec::new();
