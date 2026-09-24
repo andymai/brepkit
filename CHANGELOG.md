@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.0](https://github.com/andymai/brepkit/compare/v3.4.19...v3.5.0) (2026-09-24)
+
+
+### Features
+
+* **operations:** make assemblies stable ([#1692](https://github.com/andymai/brepkit/issues/1692)) ([b48f771](https://github.com/andymai/brepkit/commit/b48f771e714823111ed2b879f40bb4f3662157fb))
+
 ## [3.4.19](https://github.com/andymai/brepkit/compare/v3.4.18...v3.4.19) (2026-09-24)
 
 
