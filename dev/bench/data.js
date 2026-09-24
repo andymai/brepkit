@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790248967355,
+  "lastUpdate": 1790250433090,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36935,6 +36935,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42227271,
             "range": "± 91146",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "03b737757df59d25d016057fd6e72ee85bb5bb8f",
+          "message": "fix(blend): close chamfered edges' ends and orient concave chamfers (#1710)\n\n## What was wrong\n\nWalking-engine chamfers now close their end faces, orient concave\nchamfer faces consistently, and keep straight chamfer cross edges\nlinear.\n\n`ChamferBuilder`, behind `chamfer_v2`, `chamfer_distance_angle`,\n`chamferV2`, and `chamferDistanceAngle`, trimmed the two faces adjacent\nto each chamfered edge but not the faces at its ends. Those faces still\npassed through the old corner vertex. Chamfering one 4-long edge of a 4\nx 3 x 2 box by 0.5 produced 6 edges used by one face, an open-shell\n`validate_solid` result, and volume 23.667 instead of 23.5.\n\nThe chamfer plane normal is the spine tangent crossed with the contact\nspan, so its direction follows face order and spine direction rather\nthan material. On the concave ridge in\n`regress_chamfer_obtuse_ridge.rs`, it pointed into the material. Closing\nthe ends exposed 4 shared edges with inconsistent orientations.\n\n`cross_section_curve` constructs a blend face's cross edge as a circle\naround the section centre. For chamfers, that centre is the chord\nmidpoint. The radii should therefore be collinear, but roundoff with\ndistances (0.3, 0.6) left a tiny nonzero normal and produced a\nsemicircle, with volume 23.6499 instead of 23.64.\n\n## What this does\n\n- Replaces each end face's detour from one contact point through the old\ncorner to the other contact point with the chamfer cross edge. The end\nface now shares that edge with the chamfer face. This removes the corner\ntriangle at a convex edge and adds it at a concave edge.\n- A cross edge of an open spine that finds no end-face detour to replace\n(two chamfers meeting at a vertex, or a contact edge that could not be\nmatched to the trimmer's) makes the builder return `TrimmingFailure` on\nthe chamfer face rather than an open shell. A closed rim has no end\nfaces, so its cross edges are not required to splice.\n- Marks the chamfer face reversed when its normal disagrees with the sum\nof its neighbours' outward normals at the contact midpoints.\n- The chamfer builder builds its blend faces through\n`create_chamfer_face_with_contacts`, which gives straight cross edges.\n`create_blend_face_with_contacts` (the fillet builder's path) keeps its\ncross-section arcs, since a real fillet section near 180 degrees can be\na semicircle.\n\n## Verification\n\n- `chamfer_v2_closes_on_every_box_edge` covers all 12 edges of a 4 x 3 x\n2 box, as built and mirrored, using distances (0.5, 0.5) and (0.3, 0.6).\nIt checks two-face edge use, clean solid validation, and volume `24 - d1\nd2 / 2 * length` within 1e-9.\n- `chamfer_v2_closes_two_parallel_edges` covers two parallel chamfers in\none operation.\n- `chamfer_v2_refuses_edges_meeting_at_a_vertex` checks that two\nchamfered edges meeting at a box corner return an error.\n- The concave notch test checks the exact sliver, `0.02^2 / 2 * 8 =\n0.0016`, mesh volume agreement within 1e-9, and clean solid validation.\n- The blend, operations, io, and wasm suites pass: 1824 tests, 0\nfailures.\n- The roadmap records remaining Stable defects: closed cylinder or cone\nrims still return edges not shared by two faces, and two chamfered box\nedges meeting at a corner are refused until the chamfer planes get a\nmitre (unrefused, they left 9 open edges).",
+          "timestamp": "2026-09-24T04:44:41-07:00",
+          "tree_id": "e81e6e33f4c82de8be2e423edb2c8afb1bf1928e",
+          "url": "https://github.com/andymai/brepkit/commit/03b737757df59d25d016057fd6e72ee85bb5bb8f"
+        },
+        "date": 1790250429249,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 995553,
+            "range": "± 6805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1072451,
+            "range": "± 1676",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13333,
+            "range": "± 119",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742071,
+            "range": "± 1227",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41973535,
+            "range": "± 131712",
             "unit": "ns/iter"
           }
         ]
