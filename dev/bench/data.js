@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790277522697,
+  "lastUpdate": 1790278497335,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38501,6 +38501,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44498679,
             "range": "± 504710",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1dda4be86e35682568d53692abde35e50e3f776",
+          "message": "fix(algo): cut a cone with a plane across its wall, level or tilted, keeping either side (#1736)\n\nA plane across a cone's wall, level or tilted, now cuts it into a valid\nsolid on either side, whose volume, wall area and cap areas match closed\nforms within 1e-9.\n\n## What was wrong\n\nFor `make_cone(3, 0, 6)` cut at z = 3, Cut fell back to a 37-face planar\nmesh whose `solid_volume` was 49.21 instead of 18 pi minus 2.25 pi =\n49.48. Intersect fell back to a 36-face mesh reading 7.03 instead of\n2.25 pi = 7.07.\n\nAt slope 0.2, turns of 0, 60, 240, and 300 degrees built an invalid\n3-face solid that failed the Euler check. Its open mesh read 63.72,\nexceeding the whole cone's 56.55. Turns of 120 and 180 degrees fell back\nto a 37-face mesh.\n\nThe measure was also off on the tilted pieces. At slope 0.5, the tip\nwall's `face_area` was 10.12 instead of 17.41, while the base wall was\n53.11 instead of 45.81. The base piece's `solid_volume` was 48.7584\ninstead of 48.7617, and the elliptic cap's `face_area` was 8.7054\ninstead of 8.7061.\n\n## What this does\n\n- Adds `band_stack`, which reads a periodic wall boundary as bands whose\nend may be an apex. `split_periodic_face_into_bands` and\n`split_periodic_face_by_winding_chain` use it. The apex band consists of\nthe seam up, the section, and the seam back down, so the section no\nlonger becomes an internal hole while the wall remains unsplit.\n\n- Counts a cone face with its apex on its boundary as closing the\nresult. This allows the two-face tip, consisting of a wall and a disc,\nthrough the result gate.\n\n- Computes a cone tip's volume as one third of the closed conic section\narea times the apex's distance from the cap plane. A frustum is the\ndifference between two such tips. Circle caps retain their closed forms.\n\n- Uses Green's theorem for a cone wall containing any edge other than a\nruling or coaxial circle. The area is `cos(a)` times the v-weighted (u,\nv) area, evaluated by the cylinder wall quadrature now shared as\n`face_uv_area`. The weight vanishes at the apex, allowing a loop through\nit to jump in u.\n\n- Extends `planar_wire_signed_area2` with the elliptic arc segment `a b\n/ 2 (sweep minus sin(sweep))`, making plane faces bounded by lines,\ncircles, and ellipses exact.\n\n- Starts each cone wall Green's theorem area loop at the edge leaving\nthe apex, allowing the required full-turn jump in `u` where the weight\nvanishes; previously, carrying `u` unchanged through a mid-walk apex\ncaused the seam's two passes to cancel, giving the pocketed\n`make_cone(3, 0, 6)` wall a `face_area` of -1.128.\n\n- Adds a Closed roadmap entry.\n\n## Verification\n\n- `cone_plane_cut.rs` covers a pointed cone and a frustum with base\nradius 3, height 6, and frustum top radius 1.5. It keeps the base with\nCut or the tip with Intersect at slopes 0, 0.3, 0.6, and 0.9, turned 0,\n60, 90, and 200 degrees, for 64 cases.\n\n- Every case produces a valid solid with one cone face and one or two\nplane faces. Volume, wall area, and total plane area match closed forms\nwithin 1e-9 relative error. Eight points around the plane classify\ncorrectly. A deflection 0.01 mesh is watertight, encloses at most the\ntrue volume, and is short by less than 1.5e-2 relative.\n\n- `oblique_rod_cut.rs` checks cap areas within 1e-9.\n\n- `cone_pocket.rs` checks the pocketed wall's `face_area` within `1e-9`\nrelative error of sqrt(5) times its base footprint, the full disc less\nthe strip `|x| <= 0.5` between radii 2 and 2.5, or 62.0958; it measures\n62.0957617171 against 62.0957617177, and the topology, algo, operations,\nio, and wasm suites pass with 2022 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes cone-plane intersections so a plane across a cone's wall—level or\ntilted—now cuts it into a valid solid on either side, with volume and\nface areas matching closed forms within 1e-9. Previously the cut fell\nback to tessellated meshes (wrong volume) or built invalid solids with\nopen, oversized meshes.\n\n- `band_stack` reads a wall's boundary as bands that may end at a\npointed cone's apex, so the section circle no longer gets mistaken for a\nhole.\n- A cone face with its apex on its boundary now counts as closing the\nresult, letting a two-face tip (wall plus disc) through the result gate.\n- Cone wall area uses Green's theorem over the `(u, v)` region (`cos(a)`\ntimes the v-weighted area), walking each loop from the apex, where `u`\nmay jump because the weight vanishes there; the old code assumed a\nrectangular parameter region.\n- Plane face area now handles elliptic arcs exactly (`a b / 2 (sweep −\nsin sweep)`), and a cone tip's volume is computed as one third of its\nclosed conic section's area times the apex's distance to the cap plane.\n\n**Verification**\n- `cone_plane_cut.rs` covers 64 cases: pointed cones and frustums,\nslopes 0–0.9, four turns, each side kept. All produce valid solids with\none cone face and one or two plane faces; volume, wall area, and cap\nareas match closed forms within 1e-9, and tessellated meshes are\nwatertight and inscribed within 1.5e-2 relative error.\n- `oblique_rod_cut.rs` gains the same cap-area checks for cylinders; the\nfull test suite (2017 tests) passes.\n\n<sup>Written for commit e02c43759e73beaebb0c5fc2441150580889af04.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1736?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T19:32:22Z",
+          "tree_id": "348c6b07ad55cfaf5aa36eefb1a0ad50dece5dd9",
+          "url": "https://github.com/andymai/brepkit/commit/a1dda4be86e35682568d53692abde35e50e3f776"
+        },
+        "date": 1790278493205,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 815536,
+            "range": "± 1461",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 888691,
+            "range": "± 1883",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10539,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 612776,
+            "range": "± 16927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35677930,
+            "range": "± 681997",
             "unit": "ns/iter"
           }
         ]
