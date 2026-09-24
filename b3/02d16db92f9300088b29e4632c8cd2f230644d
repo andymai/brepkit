@@ -1,0 +1,55 @@
+crates/operations/src/heal.rs
+  s_ba2f7b5c6902b6::t_aaaeeab8ab02f5 343
+  s_ba2f7b5c6902b6::t_aec2362b10e15a 321-323,351,389-392,401-403,419-440
+  s_ba2f7b5c6902b6::t_952d153285d996 441-442
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_3e062ec460b44b 3264-3266
+  s_ba2f7b5c6902b6::t_ac58c14258a52c 2026,2036-2037,2069,2071,2088-2089
+  s_ba2f7b5c6902b6::t_b7d50183206a2e 2027-2035,2038-2047,2049-2060,2062-2066
+  s_ba2f7b5c6902b6::t_04e60e2bc83287 1962
+  s_ba2f7b5c6902b6::t_e110232c46c15d 1814-1815
+  s_ba2f7b5c6902b6::t_57b75aae0aac41 1939-1940
+  s_ba2f7b5c6902b6::t_d95bbab0350fac 2176-2178,2183,2192-2195
+  s_ba2f7b5c6902b6::t_5192e32646f43d 2275-2276,2278,2280
+  s_ba2f7b5c6902b6::t_aaaeeab8ab02f5 1816,1942,2277
+  s_ba2f7b5c6902b6::t_b062a5461c8cbe 2048,2061,2078-2080
+  s_ba2f7b5c6902b6::t_8a89e7d12b0a82 1935-1938,1941,1943-1944,1961,1963-1978
+  s_ba2f7b5c6902b6::t_6a44e38146e703 2074-2076,2179-2182,2184-2191
+  s_ba2f7b5c6902b6::t_40c2cbc46a0ae3 2067-2068,2070,2072-2073,2077,2081-2087
+crates/algo/src/builder/builder_solid.rs
+  s_ba2f7b5c6902b6::t_aaaeeab8ab02f5 1087-1112,1115,1122
+  s_ba2f7b5c6902b6::t_4108261ae641fe 1128,1149,1181-1203
+  s_ba2f7b5c6902b6::t_aeff6b648b3b56 1204-1205
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_7f26be615c449c 1926-1930,3366-3368
+  s_ba2f7b5c6902b6::t_2c6c902e655e25 1497-1501,1504-1508,1523,1551,1553,1907,1910,1933-1934,1956,1981,1983-1989,3371-3377
+  s_ba2f7b5c6902b6::t_738ee3e7202d6b 1552,1982
+crates/check/src/classify/boundary.rs
+  s_ba2f7b5c6902b6::t_acbf50612ca158 181,190,220-235,345,359,380
+crates/operations/tests/cone_pocket.rs
+  s_ba2f7b5c6902b6::t_37aabbae03b814 24
+  s_ba2f7b5c6902b6::t_6a44e38146e703 62-64,72-73
+  s_ba2f7b5c6902b6::t_ed57126c3e382b 1-23,25-61,65-71,74-88
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_93c901e2f484e9 176,190,211-215,218-220
+  s_ba2f7b5c6902b6::t_f35426c7a99470 216-217
+crates/operations/src/tessellate/edge_sampling.rs
+  s_ba2f7b5c6902b6::t_aaaeeab8ab02f5 318,320-325
+  s_ba2f7b5c6902b6::t_5d6fdb92b3341a 319,326-341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b302d16db92f9300088b29e4632c8cd2f230644d",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
