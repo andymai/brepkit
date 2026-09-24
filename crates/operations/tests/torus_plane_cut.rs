@@ -556,3 +556,115 @@ fn slab_tilted_off_the_axis() {
         "{fused} - {cut}"
     );
 }
+
+/// A 4-cube over `x` in `[3, 7]`, `|y|, |z| < 2`, with the torus, upright
+/// and tipped over. Its `x = 3` wall cuts a lobe of the tube that does not
+/// wind around it, and its `y = ±2` walls cut loops around the tube that
+/// its edges trim, so the common part is a disc of the torus closed by the
+/// three walls. The cut and the common part make up the ring and the fuse
+/// is the cut plus the cube; the common part is checked against a Simpson
+/// integral, which the kinks where the walls take over hold to 1e-5.
+#[test]
+fn cube_over_the_rings_side() {
+    use PointClassification::{Inside, Outside};
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let ring = 2.0 * PI * PI * big * small * small;
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    // Each annulus keeps the angles within both walls: `rho cos > 3` and
+    // `|rho sin| < 2`.
+    let share = |rho: f64| {
+        if rho <= 3.0 {
+            0.0
+        } else {
+            2.0 * (3.0 / rho).acos().min((2.0 / rho).min(1.0).asin())
+        }
+    };
+    let common_truth = simpson(800, -PI / 2.0, PI / 2.0, &|t: f64| {
+        let w = small * t.cos();
+        w * simpson(800, big - w, big + w, &|rho: f64| rho * share(rho))
+    });
+    let tips = [
+        Mat4::identity(),
+        Mat4::rotation_x(0.7) * Mat4::rotation_z(0.3),
+    ];
+    for (k, tip) in tips.iter().enumerate() {
+        let mut volumes = Vec::new();
+        for (op, kept) in [
+            (BooleanOp::Intersect, [Inside, Outside, Outside]),
+            (BooleanOp::Cut, [Outside, Inside, Outside]),
+            (BooleanOp::Fuse, [Inside, Inside, Inside]),
+        ] {
+            let label = format!("tip {k}, {op:?}");
+            let mut topo = Topology::new();
+            let torus = make_torus(&mut topo, big, small, 32).unwrap();
+            let cube = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+            transform_solid(&mut topo, cube, &Mat4::translation(3.0, -2.0, -2.0)).unwrap();
+            transform_solid(&mut topo, torus, tip).unwrap();
+            transform_solid(&mut topo, cube, tip).unwrap();
+            let piece = boolean(&mut topo, op, torus, cube).unwrap();
+            let census: &[(&str, usize)] = if op == BooleanOp::Fuse {
+                &[("plane", 7), ("torus", 1)]
+            } else {
+                &[("plane", 3), ("torus", 1)]
+            };
+            let volume = solid_volume(&topo, piece, 0.01).unwrap();
+            check_piece(&topo, piece, census, true, volume, &label);
+            // The ring in the cube, the ring across from it, the cube alone.
+            let probes = [(big, 0.0, 0.0), (-big, 0.0, 0.0), (6.0, 0.0, 1.8)];
+            for ((x, y, z), class) in probes.into_iter().zip(kept) {
+                let p = tip.mul_point(Point3::new(x, y, z));
+                assert_eq!(at(&topo, piece, p), class, "{label}: ({x}, {y}, {z})");
+            }
+            volumes.push(volume);
+        }
+        let (common, cut, fused) = (volumes[0], volumes[1], volumes[2]);
+        assert!(
+            (common - common_truth).abs() < 1e-5 * common_truth,
+            "tip {k}: common {common}, truth {common_truth}"
+        );
+        assert!(
+            (common + cut - ring).abs() < 1e-9 * ring,
+            "tip {k}: {common} + {cut}"
+        );
+        assert!(
+            (fused - cut - 64.0).abs() < 1e-9 * fused,
+            "tip {k}: {fused} - {cut}"
+        );
+    }
+}
+
+/// A 0.6-cube inside the tube: the cut leaves the whole ring around a box
+/// cavity, the common part is the cube, and the fuse is the ring.
+#[test]
+fn cube_inside_the_tube() {
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let ring = 2.0 * PI * PI * big * small * small;
+    let cube = 0.6_f64.powi(3);
+    for (op, truth) in [
+        (BooleanOp::Cut, ring - cube),
+        (BooleanOp::Intersect, cube),
+        (BooleanOp::Fuse, ring),
+    ] {
+        let mut topo = Topology::new();
+        let torus = make_torus(&mut topo, big, small, 32).unwrap();
+        let tool = make_box(&mut topo, 0.6, 0.6, 0.6).unwrap();
+        transform_solid(&mut topo, tool, &Mat4::translation(3.7, -0.3, -0.3)).unwrap();
+        let piece = boolean(&mut topo, op, torus, tool).unwrap();
+        let report = validate_solid(&topo, piece).unwrap();
+        assert!(report.is_valid(), "{op:?}: {:?}", report.issues);
+        let volume = solid_volume(&topo, piece, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "{op:?}: volume {volume}, truth {truth}"
+        );
+        let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{op:?}: open or non-manifold mesh");
+    }
+}

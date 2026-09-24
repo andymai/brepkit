@@ -1608,7 +1608,8 @@ pub fn solid_volume(
     // tessellate() handles face reversal (flips winding + normals), so raw
     // signed tets are correct even without a globally watertight mesh.
     // So does a torus face trimmed by a free-form curve, whose flux follows
-    // exactly along its boundary where a mesh would only inscribe it.
+    // exactly along its boundary where a mesh would only inscribe it, and a
+    // whole ring (around a cavity, say), whose flux is its volume.
     let needs_direct_tessellation = brepkit_topology::explorer::solid_faces(topo, solid)?
         .into_iter()
         .any(|fid| {
@@ -1616,7 +1617,8 @@ pub fn solid_volume(
                 !f.inner_wires().is_empty()
                     || (f.is_reversed() && !matches!(f.surface(), FaceSurface::Plane { .. }))
                     || (matches!(f.surface(), FaceSurface::Torus(_))
-                        && has_free_form_boundary(topo, fid).unwrap_or(false))
+                        && (is_whole_ring(topo, f)
+                            || has_free_form_boundary(topo, fid).unwrap_or(false)))
             })
         });
     if needs_direct_tessellation {
@@ -2691,20 +2693,8 @@ fn analytic_torus_signed_volume(
         }
     }
     let wire = topo.wire(face.outer_wire())?;
-    // An outer wire of zero-length lines is the seam pair collapsed onto one
-    // vertex: the face is the whole ring, whose flux is its volume about any
-    // point.
-    let whole_ring = wire.edges().iter().all(|oe| {
-        topo.edge(oe.edge()).is_ok_and(|edge| {
-            matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
-                && topo
-                    .vertex(edge.start())
-                    .ok()
-                    .zip(topo.vertex(edge.end()).ok())
-                    .is_some_and(|(a, b)| (a.point() - b.point()).length() < 1e-9)
-        })
-    });
-    if whole_ring {
+    // The whole ring's flux is its volume about any point.
+    if is_whole_ring(topo, face) {
         let ring = 2.0
             * std::f64::consts::PI
             * std::f64::consts::PI
@@ -2983,6 +2973,23 @@ fn torus_hole_flux(
         return Ok(None);
     }
     Ok(Some(if area < 0.0 { -flux } else { flux }))
+}
+
+/// Whether a torus face's outer wire is only zero-length lines: the seam
+/// pair collapsed onto one vertex, bounding the whole ring.
+fn is_whole_ring(topo: &Topology, face: &brepkit_topology::face::Face) -> bool {
+    topo.wire(face.outer_wire()).is_ok_and(|wire| {
+        wire.edges().iter().all(|oe| {
+            topo.edge(oe.edge()).is_ok_and(|edge| {
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                    && topo
+                        .vertex(edge.start())
+                        .ok()
+                        .zip(topo.vertex(edge.end()).ok())
+                        .is_some_and(|(a, b)| (a.point() - b.point()).length() < 1e-9)
+            })
+        })
+    })
 }
 
 /// Whether a face's outer wire holds an edge that is neither a line nor a

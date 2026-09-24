@@ -5527,12 +5527,20 @@ fn split_face_2d_impl(
         // Non-plane faces: check if all section endpoints are off the
         // boundary in UV space.
         let uv_tol = 0.01; // ~0.6 deg in angular coordinates
-        let endpoints_internal = sections.iter().all(|s| {
-            let start_on_boundary =
-                is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol);
-            let end_on_boundary = is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
-            !start_on_boundary && !end_on_boundary
-        });
+        // A whole ring has no boundary: its seam placeholders stand for the
+        // seam lines, which a section may cross like any other point.
+        let whole_ring = matches!(surface, FaceSurface::Torus(_))
+            && boundary_edges
+                .iter()
+                .all(|e| (e.start_3d - e.end_3d).length() < tol.linear * 100.0);
+        let endpoints_internal = whole_ring
+            || sections.iter().all(|s| {
+                let start_on_boundary =
+                    is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol);
+                let end_on_boundary =
+                    is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
+                !start_on_boundary && !end_on_boundary
+            });
         // Winding veto: on a u-periodic lateral, a section chain that winds
         // the full period is a band separator, not a contractible hole — an
         // annulus loop with winding number 1 bounds no disc. Treating it as

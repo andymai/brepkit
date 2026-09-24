@@ -3384,6 +3384,13 @@ fn whole_ring_rectangle(
                 topo.vertex(edge.end())?.point(),
             );
             let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            // A NURBS edge's knot span can run from its end vertex back.
+            let at_t0 = edge.curve().evaluate_with_endpoints(t0, start, end);
+            let (t0, t1) = if (at_t0 - start).length() <= (at_t0 - end).length() {
+                (t0, t1)
+            } else {
+                (t1, t0)
+            };
             for k in 0..=16 {
                 let f = f64::from(k) / 16.0;
                 let f = if oe.is_forward() { f } else { 1.0 - f };
