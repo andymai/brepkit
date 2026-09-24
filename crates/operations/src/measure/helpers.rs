@@ -367,9 +367,9 @@ pub(super) fn compute_angular_range(u_vals: &mut Vec<f64>) -> (f64, f64) {
 }
 
 /// Green's-theorem signed doubled area (`∮(x dy − y dx)`) of one planar wire in
-/// the `(ex, ey)` frame, plus its circular-arc edge count. `Ok(None)` when an
-/// edge is neither a line nor a circular arc, so the caller falls back to
-/// tessellation.
+/// the `(ex, ey)` frame, plus its circular- and elliptic-arc edge count.
+/// `Ok(None)` when an edge is neither a line nor a conic arc, so the caller
+/// falls back to tessellation.
 pub(super) fn planar_wire_signed_area2(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
@@ -411,6 +411,20 @@ pub(super) fn planar_wire_signed_area2(
             let is_closed_circle =
                 matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
                     && edge.start() == edge.end();
+            if let brepkit_topology::edge::EdgeCurve::Ellipse(e) = edge.curve() {
+                // An ellipse is a circle stretched along its minor axis, so the
+                // segment between an arc and its chord is `a b / 2 (Δ − sin Δ)`
+                // over its parametric sweep Δ, counterclockwise about its normal.
+                let nat_start = topo.vertex(edge.start())?.point();
+                let nat_end = topo.vertex(edge.end())?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(nat_start, nat_end);
+                let sweep = t1 - t0;
+                let facing = e.normal().dot(ex.cross(ey)).signum();
+                let turn = if oe.is_forward() { facing } else { -facing };
+                area2 += turn * e.semi_major() * e.semi_minor() * (sweep - sweep.sin());
+                arc_edges += 1;
+                continue;
+            }
             if (pa - pb).length() < tol_lin && !is_closed_circle {
                 continue;
             }
@@ -420,7 +434,8 @@ pub(super) fn planar_wire_signed_area2(
             // sign·ρ²·(|α| − sin|α|), α the signed sweep about the arc centre.
             let arc = match edge.curve() {
                 brepkit_topology::edge::EdgeCurve::Line => None,
-                brepkit_topology::edge::EdgeCurve::Ellipse(_) => return Ok(None),
+                // An ellipse took its bulge above.
+                brepkit_topology::edge::EdgeCurve::Ellipse(_) => None,
                 brepkit_topology::edge::EdgeCurve::Circle(c) => Some((c.center(), c.radius())),
                 brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => {
                     let tol = brepkit_math::tolerance::Tolerance::default().linear * 100.0;

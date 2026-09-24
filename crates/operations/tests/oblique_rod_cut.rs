@@ -59,6 +59,18 @@ fn rod_cut_by_an_oblique_plane() {
                 "{label}: wall area {area}, truth {wall_truth}"
             );
 
+            // The base disc and the ellipse, which leans off it by the tilt.
+            let caps_truth = PI * radius * radius * (1.0 + slope.hypot(1.0));
+            let caps: f64 = faces
+                .iter()
+                .filter(|&&f| topo.face(f).unwrap().surface().is_planar())
+                .map(|&f| face_area(&topo, f, 0.01).unwrap())
+                .sum();
+            assert!(
+                (caps - caps_truth).abs() < 1e-9 * caps_truth,
+                "{label}: cap area {caps}, truth {caps_truth}"
+            );
+
             let (s, c) = turn.sin_cos();
             let plane_z = |x: f64, y: f64| height_at_axis + slope * (x * c + y * s);
             let classify = |x: f64, y: f64, z: f64| {

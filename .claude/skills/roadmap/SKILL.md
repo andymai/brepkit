@@ -187,6 +187,24 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A cone cut by a plane across its wall (CLOSED 2026-09-24; pin `crates/operations/tests/cone_plane_cut.rs`)**:
+  `make_cone(3, 0, 6)` less the half-space above z = 3 fell back to a
+  37-face mesh reading 49.21 against 49.48, and keeping the tip fell back
+  to 36 faces; tilted at slope 0.2, the cut built an invalid 3-face solid
+  with an open mesh reading 63.72, more than the whole cone. The band
+  splitter wanted two rim circles, and a pointed cone's wall has one rim
+  and a seam up to its apex, so the section circle was taken for a hole
+  (the apex now ends the band stack, and the band against it closes on the
+  seam alone), and the result gate wanted 3 faces unless a sphere or torus
+  face closed on itself (a cone face with its apex on its boundary does
+  too). Measured, the wall's area assumed a (u, v) rectangle (the tilted
+  tip's read 10.12 against 17.41; a non-rectangular cone wall now takes
+  cos(a) times its v-weighted (u, v) area by Green's theorem) and an
+  ellipse cap left the cone to tessellation (the cone between the apex and
+  a cap is a third of the section's area times the apex's height over it),
+  and a plane face bounded by an ellipse read its sampled boundary (an
+  elliptic arc's segment is a b / 2 (Δ − sin Δ) over its parametric sweep).
+
 - **A rod cut by an oblique plane (CLOSED 2026-09-24; pin `crates/operations/tests/oblique_rod_cut.rs`)**:
   `make_cylinder(3, 6)` less the half-space above a tilted plane fell back
   to a mesh unless the tilt faced the rod's seam, and where it built,
