@@ -1,0 +1,31 @@
+crates/blend/src/chamfer_builder.rs
+  s_ba2f7b5c6902b6::t_b776775f1319bb 12,325-352,410-411
+  s_ba2f7b5c6902b6::t_197d228495900f 15-16,276,286-291,307,353-409,412
+  s_ba2f7b5c6902b6::t_d3afc6627a93dd 9
+  s_ba2f7b5c6902b6::t_df62692cf5ea09 413
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_f62e798ec88ad3 190-200
+  s_ba2f7b5c6902b6::t_a9162691de8fa8 181
+  s_ba2f7b5c6902b6::t_cea93516b1eb33 201
+crates/blend/src/builder_utils.rs
+  s_ba2f7b5c6902b6::t_ced1bcfdda12ed 32-41
+crates/operations/tests/regress_chamfer_obtuse_ridge.rs
+  s_ba2f7b5c6902b6::t_c3a673c2f99abd 110-210
+  s_ba2f7b5c6902b6::t_b776775f1319bb 14-15,83-88,90,92-93,95-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "573d9328de4dc3df6889d42a7e458942f1a7602e",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
