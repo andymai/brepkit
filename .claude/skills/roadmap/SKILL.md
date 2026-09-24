@@ -173,7 +173,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
 | **Feature recognition (Beta)** | Dihedrals are signed from outward normals and the edge tangent, adjacency reads every wire and shell, holes are concave cylinders. Pockets group coplanar split faces and open along a floor normal no face in them looks back against, one pocket per floor (a stepped pocket's landing is its own). A fillet is a curved face tangent to two neighbours that are not parallel planes; a chamfer must stand where the edge its two neighbours' planes meet along was cut away (outside it across convex edges, inside across concave ones; a scalene prism's side fails) and be at most half the larger face it bevels (tests in `feature_recognition.rs`). Still heuristic: a chamfer wider than that is missed (a regular prism's sides meet like chamfers, so size is the only discriminant); a full-round edge between parallel faces is not reported as a fillet; an undercut pocket (a face overhanging its floor) is not found; a floor split into patches (coplanar, or within the 0.01 rad flat-edge tolerance) reports its largest patch as the floor and leaves the rest out, since `Feature::Pocket` has one floor |
 | **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
-| **Stable row defect: drills into spheres and tori, pockets into pointed cones** | Each falls back to a mesh (the triangle count does not move with deflection), same on main: `make_sphere(2, 16)` less an r=0.2 blind drill from (0.5, 0, 1) up; `make_torus(5, 1, 16)` less an r=0.3 drill along z through (5, 0); `make_cone(3, 0, 6)` less the box x -0.5..0.5, y 1..5, z 1..2, whose fallback is also open (48 mesh edges, volume 53.08 against 55.32). The pointed cone's flux through its apex is pinned in `measure::volume::tests`, ready for when the boolean stays exact |
+| **Stable row defect: a pocket into a pointed cone** | Falls back to a mesh, same on main: `make_cone(3, 0, 6)` less the box x -0.5..0.5, y 1..5, z 1..2, whose fallback is also open (48 mesh edges, volume 53.08 against 55.32). The pointed cone's flux through its apex is pinned in `measure::volume::tests`, ready for when the boolean stays exact |
 
 
 | **Stable row defect: walking-engine chamfer at a closed rim or a shared vertex** | `chamfer_v2` on a cylinder's or cone's circular rim builds its cone face but returns a shell whose edges are not all shared by two faces (the endpoint-sampled trims cannot take a closed contact; the corrected fillet builder's periodic-contour machinery is the model). Two chamfered edges meeting at a box corner are refused (`TrimmingFailure`, pin `chamfer_v2_refuses_edges_meeting_at_a_vertex`; unrefused they left 9 edges open): each stripe's end detour lies in the other chamfer's removed region, so the two chamfer planes need a mitre along their intersection line (three at a corner need a corner patch). brepjs calls the planar `chamfer` in `chamfer.rs`, not this builder; the wasm `chamferV2` and `chamferDistanceAngle` bindings reach it |
@@ -186,6 +186,28 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Drills into a ball and a ring (CLOSED 2026-09-24; pins in `crates/operations/tests/ball_and_ring_drills.rs`)**:
+  `make_sphere(2, 16)` less an r=0.2 drill from (0.5, 0, 1) up and
+  `make_torus(5, 1, 16)` less an r=0.3 drill through its tube fell back to
+  meshes. The pairs went to the grid-seeded marcher (287 s in a debug build
+  for the ball); `algebraic_sphere_cylinder` now sweeps the drill's rulings
+  off the axis, as a parallel-axis torus-cylinder pair does, sharing the
+  cylinder-cylinder sweep's helpers. Then: same-domain grouping took the
+  untouched south hemisphere for a duplicate of the drilled north one (a
+  closed surface's shared boundary bounds two regions, so faces oriented
+  alike must traverse it the same way to coincide); the ring's whole-surface
+  face, bounded by its two zero-length seams at one vertex, was dropped as a
+  sliver, welded seam into seam by the edge merge and rebuilt from fresh
+  edges (it keeps the parent's seams, and the merge leaves one face's
+  zero-length lines alone); and a two-face solid failed the three-face
+  minimum. For measurement, the CDT mesher closes every sphere cap through
+  its pole along a sampled meridian, the loop started clear of any hole (the
+  snap mesher's grid ignored holes, and a cap beside a conforming one cannot
+  keep it), and gives a holed ring a periodic rectangle; the sphere goldens'
+  counts moved. `solid_volume` subtracts a sphere's or torus's
+  contractible holes by boundary integrals and counts the ring's face as
+  the whole ring, and the classifier tests a full-surface face's holes.
 
 - **A round bore into a rod's wall (CLOSED 2026-09-24; pins in `crates/operations/tests/rod_side_bore.rs`)**:
   `make_cylinder(1.5, 4)` less a perpendicular r=0.3 cylinder fell back to a

@@ -172,7 +172,8 @@ where
 /// by projecting to the surface's (u,v) parameter space.
 ///
 /// If the face boundary is degenerate (all vertices coincide, as in a full
-/// torus face with seam edges), every positive-t root is counted as a crossing.
+/// torus face with seam edges), every positive-t root outside the face's
+/// holes is counted as a crossing.
 ///
 /// # Errors
 ///
@@ -204,8 +205,14 @@ where
             .all(|v| (*v - ref_pt).length_squared() < COINCIDENT_SQ)
     };
     if is_full_surface {
-        #[allow(clippy::cast_possible_truncation)]
-        return Ok(roots.iter().filter(|&&t| t > RAY_T_MIN).count() as u32);
+        let mut crossings = 0u32;
+        for &t in roots.iter().filter(|&&t| t > RAY_T_MIN) {
+            let (hit_u, hit_v) = project(origin + direction * t);
+            if !hit_in_inner_wire_uv(topo, face_id, hit_u, hit_v, &project, v_periodic)? {
+                crossings += 1;
+            }
+        }
+        return Ok(crossings);
     }
 
     let uv_boundary = build_uv_boundary(&verts, &project, v_periodic);

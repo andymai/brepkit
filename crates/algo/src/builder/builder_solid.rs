@@ -1986,13 +1986,21 @@ fn is_rebuildable_loop(topo: &Topology, oes: &[OrientedEdge]) -> bool {
 }
 
 /// Whether a face's outer wire is an all-Line loop with fewer than 3
-/// distinct vertex positions (zero enclosed area).
+/// distinct vertex positions (zero enclosed area). A torus face's wire of
+/// that shape is its seam pair collapsed onto one vertex: the whole ring,
+/// less any holes.
 fn is_degenerate_line_sliver(topo: &Topology, fid: FaceId) -> bool {
     use brepkit_topology::edge::EdgeCurve;
 
     let Ok(face) = topo.face(fid) else {
         return false;
     };
+    if matches!(
+        face.surface(),
+        brepkit_topology::face::FaceSurface::Torus(_)
+    ) {
+        return false;
+    }
     let Ok(wire) = topo.wire(face.outer_wire()) else {
         return false;
     };
@@ -2807,6 +2815,24 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
     for entry in &entries {
         groups.entry(entry.qpair).or_default().push(entry.edge_id);
     }
+    // Zero-length lines that one face alone uses are that face's collapsed
+    // seams (a whole torus's u and v seams, each used twice at its single
+    // vertex): distinct edges no position can tell apart, never duplicates.
+    groups.retain(|&(qs, qe), edge_ids| {
+        if qs != qe {
+            return true;
+        }
+        let zero_length_lines = edge_ids.iter().all(|&e| {
+            topo.edge(e)
+                .is_ok_and(|edge| matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line))
+        });
+        let mut faces = entries
+            .iter()
+            .filter(|entry| edge_ids.contains(&entry.edge_id))
+            .map(|entry| entry.face_idx);
+        let first = faces.next();
+        !(zero_length_lines && faces.all(|f| Some(f) == first))
+    });
 
     // Build edge replacement map: duplicate EdgeId → (canonical EdgeId, needs_flip).
     // needs_flip is true when the duplicate's vertex order is reversed vs canonical,

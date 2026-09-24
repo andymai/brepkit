@@ -1499,8 +1499,51 @@ fn try_algebraic_intersection(
             algebraic_sphere_cylinder(s, c)
         }
         (AnalyticSurface::Cone(c1), AnalyticSurface::Cone(c2)) => algebraic_cone_cone(c1, c2),
+        (AnalyticSurface::Torus(t), AnalyticSurface::Cylinder(c))
+        | (AnalyticSurface::Cylinder(c), AnalyticSurface::Torus(t)) => {
+            Ok(parallel_axis_torus_cylinder(t, c))
+        }
         _ => Ok(None),
     }
+}
+
+/// A torus and a cylinder whose axes are parallel but distinct (a drill
+/// through a ring parallel to its axis), traced along the cylinder's
+/// rulings. A ruling stays at one distance `ρ` from the torus axis, so it
+/// meets the tube where `(ρ − R)² + z² = r²`: a quadratic in its axial
+/// parameter. `None` for any other pair (tilted or coaxial axes) and when
+/// the sampling misses a window narrower than itself.
+fn parallel_axis_torus_cylinder(
+    torus: &ToroidalSurface,
+    cyl: &CylindricalSurface,
+) -> Option<Vec<IntersectionCurve>> {
+    let axis = torus.z_axis();
+    let along = cyl.axis().dot(axis);
+    if along.abs() < 1.0 - 1e-10 {
+        return None;
+    }
+    let offset = cyl.origin() - torus.center();
+    if (offset - axis * offset.dot(axis)).length() < Tolerance::new().linear {
+        return None;
+    }
+    let (major, minor) = (torus.major_radius(), torus.minor_radius());
+    let roots = |u: f64| {
+        let q = cyl.evaluate(u, 0.0) - torus.center();
+        let height = q.dot(axis);
+        let rho = (q - axis * height).length();
+        let reach = minor * minor - (rho - major) * (rho - major);
+        ruling_quadratic(1.0, 2.0 * along.signum() * height, height * height - reach)
+    };
+    let samples = ruling_samples(cyl, &roots);
+    let loops = if samples.iter().all(Option::is_some) {
+        closed_ruling_loops(&samples)
+    } else {
+        partial_ruling_loops(cyl, &roots, &samples)
+    };
+    if loops.is_empty() {
+        return None;
+    }
+    Some(fit_ruling_loops(&loops, |_| ((0.0, 0.0), (0.0, 0.0))))
 }
 
 /// Exact coaxial cone-cone intersection: returns the shared circle.
@@ -1844,18 +1887,19 @@ pub fn exact_sphere_cylinder(
 }
 
 /// Algebraic sphere-cylinder intersection (NURBS form for the general bounded
-/// path). Delegates to [`exact_sphere_cylinder`] and samples each exact circle
-/// into an interpolated NURBS `IntersectionCurve`. phase FF prefers the exact
-/// circle form directly (so the section edge links to the coincident boundary
-/// and the closed-circle splitter can carve the spherical band), but a caller
-/// of `intersect_analytic_analytic_bounded` still gets clean curves instead of
-/// the marcher's fragments.
+/// path). A coaxial pair delegates to [`exact_sphere_cylinder`] and samples
+/// each exact circle into an interpolated NURBS `IntersectionCurve`. phase FF
+/// prefers the exact circle form directly (so the section edge links to the
+/// coincident boundary and the closed-circle splitter can carve the spherical
+/// band), but a caller of `intersect_analytic_analytic_bounded` still gets
+/// clean curves instead of the marcher's fragments. Any other pair is traced
+/// along the cylinder's rulings ([`off_axis_sphere_cylinder`]).
 fn algebraic_sphere_cylinder(
     sphere: &SphericalSurface,
     cyl: &CylindricalSurface,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
     let Some(exacts) = exact_sphere_cylinder(sphere, cyl)? else {
-        return Ok(None);
+        return Ok(off_axis_sphere_cylinder(sphere, cyl));
     };
 
     let mut curves = Vec::new();
@@ -1885,6 +1929,44 @@ fn algebraic_sphere_cylinder(
     Ok(Some(curves))
 }
 
+/// A sphere and a cylinder whose axis misses the sphere's centre (a drill
+/// entering a ball off its axis), traced along the cylinder's rulings: the
+/// ruling `c(u) + v·a` meets the sphere where `v² + 2(q·a)·v + |q|² − R² = 0`,
+/// with `q = c(u) − C`. When every ruling meets the sphere (the cylinder
+/// passes wholly through it) the roots trace an entry and an exit loop;
+/// otherwise each window of meeting rulings carries one loop. `Some(empty)`
+/// when the two cannot meet, `None` when the sampling misses a window
+/// narrower than itself.
+fn off_axis_sphere_cylinder(
+    sphere: &SphericalSurface,
+    cyl: &CylindricalSurface,
+) -> Option<Vec<IntersectionCurve>> {
+    let (centre, radius) = (sphere.center(), sphere.radius());
+    let axis = cyl.axis();
+    let offset = centre - cyl.origin();
+    let axis_distance = (offset - axis * offset.dot(axis)).length();
+    let lin_tol = Tolerance::new().linear;
+    if axis_distance > radius + cyl.radius() + lin_tol
+        || axis_distance + radius < cyl.radius() - lin_tol
+    {
+        return Some(Vec::new());
+    }
+    let roots = |u: f64| {
+        let q = cyl.evaluate(u, 0.0) - centre;
+        ruling_quadratic(1.0, 2.0 * q.dot(axis), q.dot(q) - radius * radius)
+    };
+    let samples = ruling_samples(cyl, &roots);
+    let loops = if samples.iter().all(Option::is_some) {
+        closed_ruling_loops(&samples)
+    } else {
+        partial_ruling_loops(cyl, &roots, &samples)
+    };
+    if loops.is_empty() {
+        return None;
+    }
+    Some(fit_ruling_loops(&loops, |_| ((0.0, 0.0), (0.0, 0.0))))
+}
+
 /// Algebraic cylinder-cylinder intersection for non-coaxial cylinders.
 ///
 /// For two cylinders with axes that are NOT parallel, the intersection
@@ -1903,7 +1985,6 @@ fn algebraic_cylinder_cylinder(
     c1: &CylindricalSurface,
     c2: &CylindricalSurface,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
-    const SAMPLES: usize = 128;
     let alpha = c1.axis().dot(c2.axis());
     let a_coeff = 1.0 - alpha * alpha;
 
@@ -1931,133 +2012,165 @@ fn algebraic_cylinder_cylinder(
         }
     }
 
-    // Solve every ruling of one cylinder against the other: a ruling
-    // `c(u) + v·a` meets the other cylinder where the quadratic in v has real
-    // roots. When EVERY ruling of the swept cylinder meets the other (the
-    // thinner of two crossing tubes), the two roots trace two whole closed
-    // loops, the curve's two components. Swept the other way only a window
-    // of rulings meets, and each root traces an open arc of one loop. The
-    // samples sit half a step off u = 0 so the branches of a self-touching
-    // curve (equal radii) do not share a sample.
-    let lin_tol = Tolerance::new().linear;
-    let ruling = |sweep: &CylindricalSurface, other: &CylindricalSurface, u: f64| {
-        let (o, a, r2) = (other.origin(), other.axis(), other.radius());
+    // Solve every ruling of one cylinder against the other. When EVERY
+    // ruling of the swept cylinder meets the other (the thinner of two
+    // crossing tubes), the two roots trace the curve's two closed loops.
+    // Swept the other way only a window of rulings meets, and each root
+    // traces an open arc of one loop.
+    let roots = |sweep: &CylindricalSurface, other: &CylindricalSurface| {
+        let (o, a, radius) = (other.origin(), other.axis(), other.radius());
         let alpha = sweep.axis().dot(a);
         let quad = 1.0 - alpha * alpha;
-        let base = sweep.evaluate(u, 0.0);
-        let q = Vec3::new(base.x() - o.x(), base.y() - o.y(), base.z() - o.z());
-        let (q_a1, q_a2) = (q.dot(sweep.axis()), q.dot(a));
-        let b = 2.0 * (q_a1 - alpha * q_a2);
-        let c = q.dot(q) - q_a2 * q_a2 - r2 * r2;
-        let disc = b * b - 4.0 * quad * c;
-        let root = disc.max(0.0).sqrt();
-        (disc, (-b + root) / (2.0 * quad), (-b - root) / (2.0 * quad))
-    };
-    #[allow(clippy::cast_precision_loss)]
-    let u_at = |i: usize| TAU * (i as f64 + 0.5) / SAMPLES as f64;
-    let sweep_samples = |sweep: &CylindricalSurface, other: &CylindricalSurface| {
-        (0..SAMPLES)
-            .map(|i| {
-                let (disc, vp, vm) = ruling(sweep, other, u_at(i));
-                (disc >= -lin_tol)
-                    .then(|| (sweep.evaluate(u_at(i), vp), sweep.evaluate(u_at(i), vm)))
-            })
-            .collect::<Vec<_>>()
-    };
-    let closed_loops = |samples: &[Option<(Point3, Point3)>]| -> Vec<Vec<Point3>> {
-        let mut plus: Vec<Point3> = samples.iter().flatten().map(|s| s.0).collect();
-        let mut minus: Vec<Point3> = samples.iter().flatten().map(|s| s.1).collect();
-        plus.push(plus[0]);
-        minus.push(minus[0]);
-        vec![plus, minus]
-    };
-
-    let samples1 = sweep_samples(c1, c2);
-    let loops = if samples1.iter().all(Option::is_some) {
-        closed_loops(&samples1)
-    } else {
-        let samples2 = sweep_samples(c2, c1);
-        if samples2.iter().all(Option::is_some) {
-            closed_loops(&samples2)
-        } else {
-            // Partial overlap: each cyclic window of the swept cylinder's
-            // rulings that meets the other carries one loop, out along one
-            // root and back along the other, the two joined where the
-            // discriminant vanishes. A window the sampling misses on both
-            // sweeps (near tangency) defers to the general marcher.
-            let (sweep, other, samples) = if samples1.iter().any(Option::is_some) {
-                (c1, c2, samples1)
-            } else if samples2.iter().any(Option::is_some) {
-                (c2, c1, samples2)
-            } else {
-                return Ok(None);
-            };
-            let branch_point = |inside: usize, outside: usize| -> Point3 {
-                let (mut lo, mut hi) = (u_at(inside), u_at(outside));
-                if (hi - lo).abs() > std::f64::consts::PI {
-                    hi += if hi < lo { TAU } else { -TAU };
-                }
-                for _ in 0..60 {
-                    let mid = 0.5 * (lo + hi);
-                    if ruling(sweep, other, mid).0 >= 0.0 {
-                        lo = mid;
-                    } else {
-                        hi = mid;
-                    }
-                }
-                let (_, vp, vm) = ruling(sweep, other, lo);
-                sweep.evaluate(lo, 0.5 * (vp + vm))
-            };
-            let Some(first_gap) = samples.iter().position(Option::is_none) else {
-                return Ok(None);
-            };
-            let mut loops = Vec::new();
-            let mut k = 0;
-            while k < SAMPLES {
-                let i = (first_gap + k) % SAMPLES;
-                if samples[i].is_none() {
-                    k += 1;
-                    continue;
-                }
-                let start = i;
-                let mut run = Vec::new();
-                while k < SAMPLES {
-                    let j = (first_gap + k) % SAMPLES;
-                    let Some(pair) = samples[j] else { break };
-                    run.push(pair);
-                    k += 1;
-                }
-                let end = (start + run.len() - 1) % SAMPLES;
-                let head = branch_point(start, (start + SAMPLES - 1) % SAMPLES);
-                let tail = branch_point(end, (end + 1) % SAMPLES);
-                let mut pts = vec![head];
-                pts.extend(run.iter().map(|p| p.0));
-                pts.push(tail);
-                pts.extend(run.iter().rev().map(|p| p.1));
-                pts.push(head);
-                loops.push(pts);
-            }
-            if loops.is_empty() {
-                return Ok(None);
-            }
-            loops
+        let (axis, sweep) = (sweep.axis(), sweep.clone());
+        move |u: f64| {
+            let q = sweep.evaluate(u, 0.0) - o;
+            let (q_a1, q_a2) = (q.dot(axis), q.dot(a));
+            let b = 2.0 * (q_a1 - alpha * q_a2);
+            let c = q.dot(q) - q_a2 * q_a2 - radius * radius;
+            ruling_quadratic(quad, b, c)
         }
     };
+    let (roots1, roots2) = (roots(c1, c2), roots(c2, c1));
+    let samples1 = ruling_samples(c1, &roots1);
+    let loops = if samples1.iter().all(Option::is_some) {
+        closed_ruling_loops(&samples1)
+    } else {
+        let samples2 = ruling_samples(c2, &roots2);
+        if samples2.iter().all(Option::is_some) {
+            closed_ruling_loops(&samples2)
+        } else if samples1.iter().any(Option::is_some) {
+            partial_ruling_loops(c1, &roots1, &samples1)
+        } else {
+            partial_ruling_loops(c2, &roots2, &samples2)
+        }
+    };
+    if loops.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(fit_ruling_loops(&loops, |p| {
+        (c1.project_point(p), c2.project_point(p))
+    })))
+}
 
+/// Rulings sampled around a swept cylinder, half a step off u = 0 so the
+/// branches of a self-touching curve (equal crossing cylinders) do not share
+/// a sample.
+const RULING_SAMPLES: usize = 128;
+
+#[allow(clippy::cast_precision_loss)]
+fn ruling_u(i: usize) -> f64 {
+    TAU * (i as f64 + 0.5) / RULING_SAMPLES as f64
+}
+
+/// The discriminant and roots of `quad·v² + b·v + c = 0`.
+fn ruling_quadratic(quad: f64, b: f64, c: f64) -> (f64, f64, f64) {
+    let disc = b * b - 4.0 * quad * c;
+    let root = disc.max(0.0).sqrt();
+    (disc, (-b + root) / (2.0 * quad), (-b - root) / (2.0 * quad))
+}
+
+/// The two points where each sampled ruling of `sweep` meets the other
+/// surface, from `roots(u)` (the discriminant and the two axial parameters),
+/// or `None` for a ruling that misses it.
+fn ruling_samples(
+    sweep: &CylindricalSurface,
+    roots: &impl Fn(f64) -> (f64, f64, f64),
+) -> Vec<Option<(Point3, Point3)>> {
+    let lin_tol = Tolerance::new().linear;
+    (0..RULING_SAMPLES)
+        .map(|i| {
+            let u = ruling_u(i);
+            let (disc, vp, vm) = roots(u);
+            (disc >= -lin_tol).then(|| (sweep.evaluate(u, vp), sweep.evaluate(u, vm)))
+        })
+        .collect()
+}
+
+/// Every ruling meets the other surface: each root traces a closed loop.
+fn closed_ruling_loops(samples: &[Option<(Point3, Point3)>]) -> Vec<Vec<Point3>> {
+    let mut plus: Vec<Point3> = samples.iter().flatten().map(|s| s.0).collect();
+    let mut minus: Vec<Point3> = samples.iter().flatten().map(|s| s.1).collect();
+    plus.push(plus[0]);
+    minus.push(minus[0]);
+    vec![plus, minus]
+}
+
+/// Only windows of rulings meet the other surface: each cyclic window
+/// carries one loop, out along one root and back along the other, the two
+/// joined where the discriminant vanishes. Empty when no sample meets it (a
+/// window narrower than the sampling).
+fn partial_ruling_loops(
+    sweep: &CylindricalSurface,
+    roots: &impl Fn(f64) -> (f64, f64, f64),
+    samples: &[Option<(Point3, Point3)>],
+) -> Vec<Vec<Point3>> {
+    let branch_point = |inside: usize, outside: usize| -> Point3 {
+        let (mut lo, mut hi) = (ruling_u(inside), ruling_u(outside));
+        if (hi - lo).abs() > std::f64::consts::PI {
+            hi += if hi < lo { TAU } else { -TAU };
+        }
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if roots(mid).0 >= 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let (_, vp, vm) = roots(lo);
+        sweep.evaluate(lo, 0.5 * (vp + vm))
+    };
+    let Some(first_gap) = samples.iter().position(Option::is_none) else {
+        return Vec::new();
+    };
+    let mut loops = Vec::new();
+    let mut k = 0;
+    while k < RULING_SAMPLES {
+        let i = (first_gap + k) % RULING_SAMPLES;
+        if samples[i].is_none() {
+            k += 1;
+            continue;
+        }
+        let start = i;
+        let mut run = Vec::new();
+        while k < RULING_SAMPLES {
+            let j = (first_gap + k) % RULING_SAMPLES;
+            let Some(pair) = samples[j] else { break };
+            run.push(pair);
+            k += 1;
+        }
+        let end = (start + run.len() - 1) % RULING_SAMPLES;
+        let head = branch_point(start, (start + RULING_SAMPLES - 1) % RULING_SAMPLES);
+        let tail = branch_point(end, (end + 1) % RULING_SAMPLES);
+        let mut pts = vec![head];
+        pts.extend(run.iter().map(|p| p.0));
+        pts.push(tail);
+        pts.extend(run.iter().rev().map(|p| p.1));
+        pts.push(head);
+        loops.push(pts);
+    }
+    loops
+}
+
+/// Cubic interpolants through the swept loops, with `params(p)` giving each
+/// point's parameters on the two surfaces.
+fn fit_ruling_loops(
+    loops: &[Vec<Point3>],
+    params: impl Fn(Point3) -> ((f64, f64), (f64, f64)),
+) -> Vec<IntersectionCurve> {
     let mut curves = Vec::new();
-    for pts in &loops {
+    for pts in loops {
         if pts.len() < 4 {
             continue;
         }
         let ipts: Vec<IntersectionPoint> = pts
             .iter()
             .map(|&p| {
-                let (u1, v1) = c1.project_point(p);
-                let (u2, v2) = c2.project_point(p);
+                let (param1, param2) = params(p);
                 IntersectionPoint {
                     point: p,
-                    param1: (u1, v1),
-                    param2: (u2, v2),
+                    param1,
+                    param2,
                 }
             })
             .collect();
@@ -2069,8 +2182,7 @@ fn algebraic_cylinder_cylinder(
             });
         }
     }
-
-    Ok(Some(curves))
+    curves
 }
 
 /// Algebraic cone-cylinder intersection for PARALLEL (or antiparallel) axes.
@@ -3220,6 +3332,48 @@ mod tests {
             exact_sphere_cylinder(&sphere, &cyl).unwrap().is_none(),
             "non-coaxial sphere/cylinder defers to the marcher"
         );
+    }
+
+    /// Loops of an off-axis sphere-cylinder pair: `(count, worst distance
+    /// from either surface)`.
+    fn off_axis_loops(cylinder_origin: Point3, cylinder_radius: f64) -> (usize, f64) {
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0).unwrap();
+        let cyl =
+            CylindricalSurface::new(cylinder_origin, Vec3::new(0.0, 0.0, 1.0), cylinder_radius)
+                .unwrap();
+        let curves = algebraic_sphere_cylinder(&sphere, &cyl).unwrap().unwrap();
+        let mut worst: f64 = 0.0;
+        for c in &curves {
+            let (t0, t1) = c.curve.domain();
+            assert!((c.curve.evaluate(t0) - c.curve.evaluate(t1)).length() < 1e-9);
+            for k in 0..=400 {
+                let p = c.curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 400.0);
+                let on_sphere = ((p - Point3::new(0.0, 0.0, 0.0)).length() - 2.0).abs();
+                let on_cylinder = ((p.x() - cylinder_origin.x())
+                    .hypot(p.y() - cylinder_origin.y())
+                    - cylinder_radius)
+                    .abs();
+                worst = worst.max(on_sphere).max(on_cylinder);
+            }
+        }
+        (curves.len(), worst)
+    }
+
+    /// A drill off the ball's axis passes through it: an entry and an exit
+    /// loop.
+    #[test]
+    fn off_axis_drill_through_a_sphere_meets_it_in_two_loops() {
+        let (count, worst) = off_axis_loops(Point3::new(0.5, 0.0, 0.0), 0.2);
+        assert_eq!(count, 2);
+        assert!(worst < 1e-5, "loops leave the surfaces by {worst}");
+    }
+
+    /// A cylinder over the ball's side: one loop joined at its branch points.
+    #[test]
+    fn cylinder_over_a_spheres_side_meets_it_in_one_loop() {
+        let (count, worst) = off_axis_loops(Point3::new(1.8, 0.0, 0.0), 0.5);
+        assert_eq!(count, 1);
+        assert!(worst < 5e-4, "loop leaves the surfaces by {worst}");
     }
 
     #[test]

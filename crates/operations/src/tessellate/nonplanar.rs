@@ -1723,6 +1723,20 @@ pub(super) fn tessellate_nonplanar_cdt(
         boundary_3d.pop();
     }
 
+    let ring = whole_ring_rectangle(
+        topo,
+        face_data,
+        &boundary_3d,
+        deflection,
+        angular_tol,
+        circle_floor,
+        merged,
+        point_to_global,
+    )?;
+    if let Some((_, samples)) = &ring {
+        boundary_3d.clone_from(samples);
+    }
+
     let n_boundary = boundary_3d.len();
     if n_boundary < 3 {
         return Err(crate::OperationsError::InvalidInput {
@@ -1730,18 +1744,22 @@ pub(super) fn tessellate_nonplanar_cdt(
         });
     }
 
-    let mut boundary_uv: Vec<(f64, f64)> = boundary_3d
-        .iter()
-        .map(|(pt, _, edge_id_local, _)| {
-            if let Some(pcurve) = topo.pcurves().get(*edge_id_local, face_id) {
-                let uv = project_via_pcurve(pcurve, *pt, face_data.surface());
-                if let Some(uv) = uv {
-                    return Ok(uv);
+    let mut boundary_uv: Vec<(f64, f64)> = if let Some((uvs, _)) = ring.as_ref() {
+        uvs.clone()
+    } else {
+        boundary_3d
+            .iter()
+            .map(|(pt, _, edge_id_local, _)| {
+                if let Some(pcurve) = topo.pcurves().get(*edge_id_local, face_id) {
+                    let uv = project_via_pcurve(pcurve, *pt, face_data.surface());
+                    if let Some(uv) = uv {
+                        return Ok(uv);
+                    }
                 }
-            }
-            project_to_surface_uv(face_data.surface(), *pt)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+                project_to_surface_uv(face_data.surface(), *pt)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
 
     // Step 2a: Unwrap periodic u across the seam for polyline boundaries.
     {
@@ -1826,6 +1844,8 @@ pub(super) fn tessellate_nonplanar_cdt(
         face_data,
         &mut boundary_uv,
         &mut boundary_3d,
+        deflection,
+        angular_tol,
         merged,
         point_to_global,
     )?;
@@ -1860,7 +1880,7 @@ pub(super) fn tessellate_nonplanar_cdt(
             .map(|(&idx, _)| idx)
             .collect();
 
-        if !seam_edge_indices.is_empty() {
+        if !seam_edge_indices.is_empty() && ring.is_none() {
             let non_seam_uvs: Vec<(f64, f64)> = boundary_uv
                 .iter()
                 .enumerate()
@@ -2920,29 +2940,55 @@ fn inner_wire_uv_loops(
     Ok(holes)
 }
 
-/// Close a boundary loop that winds a NURBS face's periodic u direction once
-/// with no seam: such a face is a cap over a pole, a v-domain edge that
-/// collapses to one point. The loop runs counter-clockwise in (u, v) about
-/// the surface normal, so the cap lies on its left, at the far v edge for a
-/// loop run toward +u. That edge is appended as virtual boundary samples, all
-/// welded to the pole, so the region closes in (u, v); a loop that winds
-/// toward a non-degenerate edge is left alone. So is a face with inner
-/// wires: a hole around the pole makes it a band, which the pole row would
-/// cap over.
+/// Close a boundary loop that winds a NURBS or sphere face's periodic u
+/// direction once with no seam: such a face is a cap over a pole, a v-domain
+/// edge that collapses to one point (a hemisphere on its equator). The loop
+/// runs counter-clockwise in (u, v) about the face's normal, so the cap lies
+/// on its left, at the far v edge for a loop run toward +u. That edge is
+/// appended as virtual boundary samples, all welded to the pole, so the
+/// region closes in (u, v); a loop that winds toward a non-degenerate edge is
+/// left alone. So is a NURBS face with inner wires, and a sphere face with a
+/// hole around the pole: that makes it a band, which the pole row would cap
+/// over. A sphere's other holes (a drill's entry) are carved as usual, and
+/// its closing meridian is sampled like an edge.
+/// A surface's point at `(u, v)`.
+type SurfacePoint<'a> = Box<dyn Fn(f64, f64) -> Point3 + 'a>;
+
+#[allow(clippy::too_many_arguments)]
 fn close_loop_at_pole(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     boundary_uv: &mut Vec<(f64, f64)>,
     boundary_3d: &mut Vec<(Point3, u32, brepkit_topology::edge::EdgeId, bool)>,
+    deflection: f64,
+    angular_tol: f64,
     merged: &mut TriangleMesh,
     point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
-    let FaceSurface::Nurbs(nurbs) = face_data.surface() else {
-        return Ok(());
-    };
-    if !face_data.inner_wires().is_empty() {
-        return Ok(());
-    }
+    // The closing meridian's radius, for a surface whose seam sides are
+    // sampled along it.
+    let mut meridian_radius = None;
+    let (evaluate, (v_lo, v_hi), flipped): (SurfacePoint<'_>, (f64, f64), bool) =
+        match face_data.surface() {
+            FaceSurface::Nurbs(nurbs) if face_data.inner_wires().is_empty() => (
+                Box::new(|u, v| nurbs.evaluate(u, v)),
+                nurbs.domain_v(),
+                false,
+            ),
+            FaceSurface::Sphere(sphere) => {
+                let Some(spans) = hole_u_spans(topo, face_data, sphere)? else {
+                    return Ok(());
+                };
+                start_loop_clear_of_holes(boundary_uv, boundary_3d, &spans);
+                meridian_radius = Some(sphere.radius());
+                (
+                    Box::new(|u, v| sphere.evaluate(u, v)),
+                    (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+                    face_data.is_reversed(),
+                )
+            }
+            _ => return Ok(()),
+        };
     let (Some((_, period)), _) = surface_periods(face_data.surface()) else {
         return Ok(());
     };
@@ -2967,13 +3013,16 @@ fn close_loop_at_pole(
     if (winding.abs() - period).abs() > 1e-6 * period {
         return Ok(());
     }
-    let (v_lo, v_hi) = nurbs.domain_v();
-    let v_far = if winding > 0.0 { v_hi } else { v_lo };
-    let pole = nurbs.evaluate(first_u, v_far);
-    let scale = (nurbs.evaluate(last_u, last_v) - pole).length().max(1e-12);
+    let v_far = if (winding > 0.0) == flipped {
+        v_lo
+    } else {
+        v_hi
+    };
+    let pole = evaluate(first_u, v_far);
+    let scale = (evaluate(last_u, last_v) - pole).length().max(1e-12);
     let degenerate = (0..8).all(|k| {
         let u = first_u + winding * f64::from(k) / 8.0;
-        (nurbs.evaluate(u, v_far) - pole).length() <= 1e-9 * scale
+        (evaluate(u, v_far) - pole).length() <= 1e-9 * scale
     });
     if !degenerate {
         return Ok(());
@@ -2993,6 +3042,42 @@ fn close_loop_at_pole(
     let first_v = boundary_uv[0].1;
     boundary_uv.push((first_u + winding, first_v));
     boundary_3d.push((first_pt, first_gid, edge, true));
+    // A sphere's closing meridian is a real arc: sampled, one side's points
+    // welding to the other's, so no triangle chords it from rim to pole.
+    let side: Vec<(f64, Point3, u32)> = match meridian_radius {
+        Some(radius) => {
+            let n = segments_for_chord_deviation_a(
+                radius,
+                (v_far - first_v).abs(),
+                deflection,
+                angular_tol,
+                false,
+            )
+            .max(2);
+            (1..n)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let v = first_v + (v_far - first_v) * k as f64 / n as f64;
+                    let p = evaluate(first_u, v);
+                    let id = *point_to_global
+                        .entry(point_merge_key(p, MERGE_GRID))
+                        .or_insert_with(|| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let idx = merged.positions.len() as u32;
+                            merged.positions.push(p);
+                            merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                            idx
+                        });
+                    (v, p, id)
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    };
+    for &(v, p, id) in &side {
+        boundary_uv.push((first_u + winding, v));
+        boundary_3d.push((p, id, edge, true));
+    }
     let steps = boundary_uv.len().max(8);
     for k in 0..=steps {
         #[allow(clippy::cast_precision_loss)]
@@ -3000,7 +3085,246 @@ fn close_loop_at_pole(
         boundary_uv.push((u, v_far));
         boundary_3d.push((pole, gid, edge, true));
     }
+    for &(v, p, id) in side.iter().rev() {
+        boundary_uv.push((first_u, v));
+        boundary_3d.push((p, id, edge, true));
+    }
     Ok(())
+}
+
+/// The boundary of a whole torus ring with holes, whose own wire is its seam
+/// pair collapsed onto one vertex and so bounds nothing in `(u, v)`: the
+/// period rectangle, started at a `u` and a `v` clear of every hole, as
+/// `(uv, samples)`. Opposite sides carry the same 3D points, so they weld to
+/// the same pool ids and the mesh closes across both seams. `None` for any
+/// other face.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn whole_ring_rectangle(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    boundary_3d: &[(Point3, u32, brepkit_topology::edge::EdgeId, bool)],
+    deflection: f64,
+    angular_tol: f64,
+    circle_floor: bool,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<
+    Option<(
+        Vec<(f64, f64)>,
+        Vec<(Point3, u32, brepkit_topology::edge::EdgeId, bool)>,
+    )>,
+    crate::OperationsError,
+> {
+    let FaceSurface::Torus(torus) = face_data.surface() else {
+        return Ok(None);
+    };
+    let (Some(&(anchor, _, seam, _)), false) =
+        (boundary_3d.first(), face_data.inner_wires().is_empty())
+    else {
+        return Ok(None);
+    };
+    if boundary_3d
+        .iter()
+        .any(|&(p, ..)| (p - anchor).length() > 1e-9)
+    {
+        return Ok(None);
+    }
+    let wrap = |d: f64| (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+    // Each hole's span in u and in v, as (middle, half width).
+    let mut spans: (Vec<(f64, f64)>, Vec<(f64, f64)>) = (Vec::new(), Vec::new());
+    for &wire_id in face_data.inner_wires() {
+        let mut walk: Vec<(f64, f64)> = Vec::new();
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            for k in 0..=16 {
+                let t = t0 + (t1 - t0) * f64::from(k) / 16.0;
+                let (u, v) =
+                    torus.project_point(edge.curve().evaluate_with_endpoints(t, start, end));
+                walk.push(
+                    walk.last()
+                        .map_or((u, v), |&(lu, lv)| (lu + wrap(u - lu), lv + wrap(v - lv))),
+                );
+            }
+        }
+        let bounds = |coord: fn(&(f64, f64)) -> f64| {
+            let (lo, hi) = walk
+                .iter()
+                .map(coord)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                    (lo.min(x), hi.max(x))
+                });
+            (f64::midpoint(lo, hi), 0.5 * (hi - lo))
+        };
+        spans.0.push(bounds(|p| p.0));
+        spans.1.push(bounds(|p| p.1));
+    }
+    let clear_of = |spans: &[(f64, f64)]| {
+        (0..64)
+            .map(|k| TAU * f64::from(k) / 64.0)
+            .max_by(|&a, &b| {
+                let clearance = |x: f64| {
+                    spans
+                        .iter()
+                        .map(|&(middle, half)| wrap(x - middle).abs() - half)
+                        .fold(f64::INFINITY, f64::min)
+                };
+                clearance(a).total_cmp(&clearance(b))
+            })
+            .unwrap_or(0.0)
+    };
+    let (u0, v0) = (clear_of(&spans.0), clear_of(&spans.1));
+    let (major, minor) = (torus.major_radius(), torus.minor_radius());
+    let nu =
+        segments_for_chord_deviation_a(major + minor, TAU, deflection, angular_tol, circle_floor)
+            .max(8);
+    let nv =
+        segments_for_chord_deviation_a(minor, TAU, deflection, angular_tol, circle_floor).max(8);
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (TAU / nu as f64, TAU / nv as f64);
+    let mut id_of = |p: Point3| {
+        *point_to_global
+            .entry(point_merge_key(p, MERGE_GRID))
+            .or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(p);
+                merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                idx
+            })
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let along_u: Vec<(f64, Point3)> = (0..nu)
+        .map(|k| {
+            let u = u0 + du * k as f64;
+            (u, torus.evaluate(u, v0))
+        })
+        .collect();
+    #[allow(clippy::cast_precision_loss)]
+    let along_v: Vec<(f64, Point3)> = (0..nv)
+        .map(|k| {
+            let v = v0 + dv * k as f64;
+            (v, torus.evaluate(u0, v))
+        })
+        .collect();
+    let mut uvs = Vec::with_capacity(2 * (nu + nv));
+    let mut samples = Vec::with_capacity(2 * (nu + nv));
+    let mut push = |uv: (f64, f64), p: Point3, samples: &mut Vec<_>| {
+        uvs.push(uv);
+        samples.push((p, id_of(p), seam, true));
+    };
+    for &(u, p) in &along_u {
+        push((u, v0), p, &mut samples);
+    }
+    for &(v, p) in &along_v {
+        push((u0 + TAU, v), p, &mut samples);
+    }
+    for k in 0..nu {
+        let (u, p) = if k == 0 {
+            (u0 + TAU, along_u[0].1)
+        } else {
+            along_u[nu - k]
+        };
+        push((u, v0 + TAU), p, &mut samples);
+    }
+    for k in 0..nv {
+        let (v, p) = if k == 0 {
+            (v0 + TAU, along_v[0].1)
+        } else {
+            along_v[nv - k]
+        };
+        push((u0, v), p, &mut samples);
+    }
+    Ok(Some((uvs, samples)))
+}
+
+/// Rotate a loop that winds u once to start at the sample farthest in u from
+/// every hole span: the pole closure runs a virtual seam up that sample's
+/// meridian, which must not cross a hole. The samples after the old start
+/// shift by the loop's winding so u stays continuous.
+fn start_loop_clear_of_holes(
+    boundary_uv: &mut [(f64, f64)],
+    boundary_3d: &mut [(Point3, u32, brepkit_topology::edge::EdgeId, bool)],
+    spans: &[(f64, f64)],
+) {
+    let wrap = |d: f64| (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+    if spans.is_empty() || boundary_uv.len() < 2 {
+        return;
+    }
+    let clearance = |u: f64| {
+        spans
+            .iter()
+            .map(|&(middle, half)| wrap(u - middle).abs() - half)
+            .fold(f64::INFINITY, f64::min)
+    };
+    let Some(best) = (0..boundary_uv.len())
+        .max_by(|&a, &b| clearance(boundary_uv[a].0).total_cmp(&clearance(boundary_uv[b].0)))
+    else {
+        return;
+    };
+    if best == 0 {
+        return;
+    }
+    let (first_u, last_u) = (boundary_uv[0].0, boundary_uv[boundary_uv.len() - 1].0);
+    let closing = wrap(first_u - last_u);
+    let winding = last_u - first_u + closing;
+    for point in &mut boundary_uv[..best] {
+        point.0 += winding;
+    }
+    boundary_uv.rotate_left(best);
+    boundary_3d.rotate_left(best);
+}
+
+/// Each inner wire's span in a sphere face's u, as its middle and half
+/// width; `None` when one winds u (a hole around a pole).
+fn hole_u_spans(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<Option<Vec<(f64, f64)>>, crate::OperationsError> {
+    const SAMPLES: u32 = 16;
+    let wrap = |d: f64| (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+    let mut spans = Vec::new();
+    for &wire_id in face_data.inner_wires() {
+        let mut unwrapped: Vec<f64> = Vec::new();
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            for k in 0..=SAMPLES {
+                let f = f64::from(k) / f64::from(SAMPLES);
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                let point = edge
+                    .curve()
+                    .evaluate_with_endpoints(t0 + (t1 - t0) * f, start, end);
+                let (u, _) = sphere.project_point(point);
+                let u = unwrapped
+                    .last()
+                    .map_or(u, |&before| before + wrap(u - before));
+                unwrapped.push(u);
+            }
+        }
+        let (Some(&first), Some(&last)) = (unwrapped.first(), unwrapped.last()) else {
+            continue;
+        };
+        if (last - first).abs() > std::f64::consts::PI {
+            return Ok(None);
+        }
+        let (lo, hi) = unwrapped
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &u| {
+                (lo.min(u), hi.max(u))
+            });
+        spans.push((f64::midpoint(lo, hi), 0.5 * (hi - lo)));
+    }
+    Ok(Some(spans))
 }
 
 /// A NURBS face's average speeds along u and v over its parameter box. Its
