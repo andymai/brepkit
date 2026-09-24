@@ -127,23 +127,6 @@ pub fn draft(
         }
     }
 
-    // The solid's size sets how far an extra plane may miss a vertex; the
-    // distance from the origin must not.
-    let (lo, hi) = around.keys().try_fold(
-        (
-            Point3::new(f64::MAX, f64::MAX, f64::MAX),
-            Point3::new(f64::MIN, f64::MIN, f64::MIN),
-        ),
-        |(lo, hi), &vid| -> Result<_, crate::OperationsError> {
-            let p = topo.vertex(vid)?.point();
-            Ok((
-                Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z())),
-                Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z())),
-            ))
-        },
-    )?;
-    let miss = 10.0 * tol.linear + 1e-9 * (hi - lo).length();
-
     // Re-solve every vertex of a drafted face as its planes' meeting point.
     let mut moved: HashMap<VertexId, Point3> = HashMap::new();
     for &fid in &draft_set {
@@ -162,9 +145,11 @@ pub fn draft(
                         };
                         vertex_planes.push(plane);
                     }
-                    let point = meeting_point(&vertex_planes, miss).ok_or_else(|| {
-                        invalid("the draft would split a vertex whose planes no longer meet")
-                    })?;
+                    let old = topo.vertex(vid)?.point();
+                    let point =
+                        meeting_point(&vertex_planes, old, tol.linear).ok_or_else(|| {
+                            invalid("the draft would split a vertex whose planes no longer meet")
+                        })?;
                     moved.insert(vid, point);
                 }
             }
@@ -282,33 +267,46 @@ pub fn draft(
     Ok(copy)
 }
 
-/// The point where planes `(n, d)` (`n · p = d`) meet: the best-conditioned
-/// triple fixes it, and every other plane must pass within `miss` of it.
-fn meeting_point(planes: &[(Vec3, f64)], miss: f64) -> Option<Point3> {
-    let mut best: Option<(f64, Point3)> = None;
-    for i in 0..planes.len() {
-        for j in i + 1..planes.len() {
-            for k in j + 1..planes.len() {
-                let ((n1, d1), (n2, d2), (n3, d3)) = (planes[i], planes[j], planes[k]);
+/// The point where planes `(n, d)` (`n · p = d`, `n` unit) meet near `near`:
+/// the best-conditioned triple fixes it, and every other plane must pass
+/// within `linear` of it. The solve runs about `near`, so a solid's distance
+/// from the origin never multiplies into it; only the offsets' own storage
+/// precision at that distance widens the bound.
+fn meeting_point(planes: &[(Vec3, f64)], near: Point3, linear: f64) -> Option<Point3> {
+    let local: Vec<(Vec3, f64)> = planes
+        .iter()
+        .map(|&(n, d)| (n, d - dot_normal_point(n, near)))
+        .collect();
+    let mut best: Option<(f64, Vec3)> = None;
+    for i in 0..local.len() {
+        for j in i + 1..local.len() {
+            for k in j + 1..local.len() {
+                let ((n1, d1), (n2, d2), (n3, d3)) = (local[i], local[j], local[k]);
                 let det = n1.dot(n2.cross(n3));
                 if best.is_some_and(|(b, _)| det.abs() <= b) || det.abs() < 1e-14 {
                     continue;
                 }
                 let v = (n2.cross(n3) * d1 + n3.cross(n1) * d2 + n1.cross(n2) * d3) * (1.0 / det);
-                best = Some((det.abs(), Point3::new(v.x(), v.y(), v.z())));
+                best = Some((det.abs(), v));
             }
         }
     }
-    let (_, point) = best?;
-    planes
+    let (_, v) = best?;
+    let reach = local
         .iter()
-        .all(|&(n, d)| (dot_normal_point(n, point) - d).abs() <= miss)
-        .then_some(point)
+        .map(|&(_, d)| d.abs())
+        .fold(v.length(), f64::max);
+    let far = near.x().abs().max(near.y().abs()).max(near.z().abs());
+    let miss = 64.0f64.mul_add(f64::EPSILON * (far + reach), 10.0 * linear);
+    local
+        .iter()
+        .all(|&(n, d)| (n.dot(v) - d).abs() <= miss)
+        .then(|| near + v)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_math::vec::{Point3, Vec3};
@@ -337,6 +335,49 @@ mod tests {
             })
             .copied()
             .collect()
+    }
+
+    /// Three coordinate planes and a slanted fourth through the point `at`,
+    /// the fourth shifted off it by `gap`.
+    fn corner(at: Point3, gap: f64) -> Vec<(Vec3, f64)> {
+        let slant = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            slant,
+        ]
+        .into_iter()
+        .map(|n| (n, dot_normal_point(n, at)))
+        .enumerate()
+        .map(|(i, (n, d))| (n, if i == 3 { d + gap } else { d }))
+        .collect()
+    }
+
+    #[test]
+    fn corner_planes_meet_wherever_the_corner_is() {
+        for at in [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0e6, -2.0e6, 3.0e6),
+            Point3::new(1.0e12, -2.0e12, 3.0e12),
+        ] {
+            let point = meeting_point(&corner(at, 0.0), at + Vec3::new(0.5, 0.5, 0.5), 1e-7)
+                .expect("corner rejected");
+            assert!(
+                (point - at).length()
+                    <= 1e-3 * (at - Point3::new(0.0, 0.0, 0.0)).length().max(1e-6)
+            );
+        }
+    }
+
+    #[test]
+    fn a_plane_off_the_corner_is_rejected_near_and_far() {
+        for at in [Point3::new(0.0, 0.0, 0.0), Point3::new(1.0e9, 0.0, 0.0)] {
+            assert!(
+                meeting_point(&corner(at, 1e-3), at, 1e-7).is_none(),
+                "corner at {at:?} accepted a plane 1e-3 off"
+            );
+        }
     }
 
     #[test]

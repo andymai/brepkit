@@ -1693,13 +1693,20 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&k.execute_batch(&batch)).unwrap();
         let drafted = u32::try_from(parsed[0]["ok"].as_u64().expect("draft result")).unwrap();
         assert!(parsed[1]["error"].is_string(), "{}", parsed[1]);
-        let id = k.resolve_solid(drafted).unwrap();
-        let volume = brepkit_operations::measure::solid_volume(&k.topo, id, 0.001).unwrap();
         let truth = 24.0 - 3.0 * 4.0 * angle.tan() / 2.0;
-        assert!(
-            (volume - truth).abs() < 1e-9 * truth,
-            "volume {volume}, expected {truth}"
-        );
+        // The public binding takes degrees and spells out the batch's
+        // default pull and neutral point.
+        let bound = k
+            .draft_solid(solid, vec![right], 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 5.0)
+            .unwrap();
+        for handle in [drafted, bound] {
+            let id = k.resolve_solid(handle).unwrap();
+            let volume = brepkit_operations::measure::solid_volume(&k.topo, id, 0.001).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-9 * truth,
+                "volume {volume}, expected {truth}"
+            );
+        }
     }
 
     use brepkit_math::vec::Point3;
