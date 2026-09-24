@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.6.0](https://github.com/andymai/brepkit/compare/v3.5.5...v3.6.0) (2026-09-24)
+
+
+### Features
+
+* **operations:** draft planar faces by turning their planes ([#1703](https://github.com/andymai/brepkit/issues/1703)) ([59afa95](https://github.com/andymai/brepkit/commit/59afa9538df77d2153437f78aac5afcdd2a3034c))
+
+
+### Bug Fixes
+
+* **operations:** sign feature-recognition dihedrals and fix its hole, pocket and fillet rules ([#1701](https://github.com/andymai/brepkit/issues/1701)) ([3c9f3d5](https://github.com/andymai/brepkit/commit/3c9f3d50bc1aa0f2eec5ff318d9170eca3a5bdd9))
+
 ## [3.5.5](https://github.com/andymai/brepkit/compare/v3.5.4...v3.5.5) (2026-09-24)
 
 
