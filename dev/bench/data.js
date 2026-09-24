@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790268742703,
+  "lastUpdate": 1790269009510,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37691,6 +37691,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 34846337,
             "range": "± 278967",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1e2c7141791dff8ad9bd9ce3f11e64f3afbb1ac",
+          "message": "fix(io): honour an EDGE_CURVE's same_sense flag when reading STEP (#1724)\n\n## What was wrong\n\nSTEP arcs with a false `same_sense` are now read in the correct\ndirection.\n\nAn `EDGE_CURVE` whose `same_sense` is `.F.` runs from its start vertex\nto its end against its curve's own direction. `build_edge_curve` ignored\nthis flag, causing affected arcs to run from start to end the wrong way\nround and their faces to trace the complement of the intended region.\nbrepkit's writer emits `.T.` only, so its own round trips were\nunaffected.\n\n## What this does\n\n- Updates `build_edge_curve` to reverse the curve when `same_sense` is\n`.F.` or `.FALSE.`.\n\n- Adds the public `EdgeCurve::reversed` method. Lines remain unchanged.\nCircles and ellipses negate their normal and `v_axis`. NURBS curves\nreverse their control net and weights, then mirror their knot vector.\n\n- Replaces the private `reverse_edge_curve` helper in `extrude.rs`. Its\ncall site now uses `EdgeCurve::reversed`.\n\n## Verification\n\n- `step_edge_same_sense.rs` writes a half rod (`make_cylinder(2, 3)`\nless a box over `x < 0`) to STEP, rewrites each of its four rim arcs as\nthe equivalent flipped-axis, `.F.` entity, and reads it back.\n\n- The regression test verifies that the solid is valid, every arc\nmidpoint lies on the kept side (`x > 1`), and `solid_volume` matches the\nunmodified file's read within `1e-9` relative. With the previous reader,\nthe first arc midpoint was `(-1.414, 1.414, 0)`.\n\n- `reversed_curves_trace_the_same_points_backwards` checks circle,\nellipse, and NURBS reversal point by point.\n\n- The topology, operations, and io suites pass, totaling 1545 tests.\n\n- The roadmap row is marked Closed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSTEP arcs marked with `same_sense = .F.` now read in the correct\ndirection instead of tracing the complement region of their faces.\n\n- Adds public `EdgeCurve::reversed`; lines stay unchanged, circles and\nellipses negate their normal and `v_axis`, NURBS curves reverse their\ncontrol net and weights and mirror their knots about the domain.\n- `build_edge_curve` calls `reversed` when the STEP flag ends with `.F.`\nor `.FALSE.`; extrude's private `reverse_edge_curve` helper is replaced\nby it.\n- Regression test rewrites a half rod's rim arcs as `.F.` entities and\nverifies validity, arc midpoints, and volume against the unmodified\nread.\n\n<sup>Written for commit 7ecf10a1ce489c43a43b5e03a3a5c3c489f5c3e3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1724?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T09:53:47-07:00",
+          "tree_id": "5002c9449b8a879d8ec61cbf2aee5f0ea9e1a05b",
+          "url": "https://github.com/andymai/brepkit/commit/a1e2c7141791dff8ad9bd9ce3f11e64f3afbb1ac"
+        },
+        "date": 1790269005395,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1004246,
+            "range": "± 17132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1082845,
+            "range": "± 8910",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13204,
+            "range": "± 83",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 749294,
+            "range": "± 2012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41987489,
+            "range": "± 326636",
             "unit": "ns/iter"
           }
         ]
