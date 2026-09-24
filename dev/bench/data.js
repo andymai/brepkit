@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790266509517,
+  "lastUpdate": 1790268084719,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37583,6 +37583,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44844907,
             "range": "± 128692",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "795deed5264c14e2fa8fa62b55e4487a58723704",
+          "message": "fix(operations): mesh a trimmed NURBS face within its trim, and subtract a sphere face's holes from its area (#1720)\n\n## What was wrong\n\nPer-face meshes now respect NURBS trims, and analytic sphere areas now\nexclude holes.\n\n`tessellate::tessellate` previously meshed a NURBS face over its whole\nsurface. As a result, `solid_volume`'s direct path, `face_area`, and the\nglTF, OBJ, and PLY writers read a trimmed NURBS face as its whole patch.\nA napkin ring (`make_sphere(6, 24)` less an `r=3` bore) converted with\n`convert_to_bspline` read `solid_volume` as 1613.4 against 587.7.\n\nAnalytic sphere `face_area` treated each face as a cap from its outer\nboundary to the pole without subtracting holes. The unconverted ring\nread 648.28 against its closed-form area of 587.67.\n\n## What this does\n\n- Meshes a NURBS face through the trimmed nonplanar CDT when its\nboundary does not run along the surface domain edges and it is not a\nwhole doubly periodic patch. `tessellate_holed_face_local` gains the\nNURBS arm.\n\n- Subtracts each sphere face hole as `R^2 |∮ sin v du|`. For a loop\naround the cap's pole, it subtracts the cap beyond the loop as `R^2\n(2*pi - |∮ sin v du|)`.\n\n- Closes the corresponding roadmap row with a Closed entry.\n\n## Verification\n\n- The converted ring's `solid_volume` is 587.60.\n`bspline_conversion_mesh.rs` now checks it within `3e-4` of the volume\nbefore conversion.\n\n- The ring area is checked against `2*pi*(6+3)*2*sqrt(27)`, covering two\nspherical zones and the tunnel wall, each as tall as the tunnel. The\nunconverted ring is within `1e-6`, and the converted ring is within\n`1e-3`.\n\n- The L-lip fuse fixture's `solid_volume` pin moves from 28993.2 to\n29034.3, with the same result at any deflection. The whole-solid mesh\nreads 29046 at 0.01.\n\n- The operations and io suites pass all 1467 tests. The wasm, check, and\nheal suites pass all 374 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMeshes trimmed NURBS faces within their trim and subtracts sphere faces'\nholes from their area, so `solid_volume` and `face_area` no longer\novercount.\n\n`tessellate::tessellate` previously meshed a NURBS face over its whole\nsurface, ignoring trim boundaries (a converted napkin ring read 1613.4\nvs 587.7). A NURBS face whose boundary leaves its surface's domain edges\nnow meshes through the trimmed CDT; one whose boundary runs along the\ndomain edges (checked at twice the mesher's edge density) still meshes\nas the whole patch. Analytic sphere `face_area` treated each face as a\ncap without subtracting holes; each hole now subtracts `R²|∮ sin v du|`,\nor the cap beyond the loop when it winds the pole.\n\nThe L-lip fuse `solid_volume` pin moves 28993.2 → 29034.3, and the\nring's volume and surface area are now pinned to their closed forms\n(`πh³/6` and two zones plus the tunnel wall), with the converted surface\narea checked within `1e-3` of its pre-conversion value.\n\n<sup>Written for commit 789924bd62f8f3147336f9367b36a3524dbd9ecc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1720?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T16:38:47Z",
+          "tree_id": "b9703d9ed29352e0c2e3718e8cc40d3b1618b0ac",
+          "url": "https://github.com/andymai/brepkit/commit/795deed5264c14e2fa8fa62b55e4487a58723704"
+        },
+        "date": 1790268080557,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 992735,
+            "range": "± 4491",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1076930,
+            "range": "± 16427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13063,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742657,
+            "range": "± 1893",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42397379,
+            "range": "± 50938",
             "unit": "ns/iter"
           }
         ]
