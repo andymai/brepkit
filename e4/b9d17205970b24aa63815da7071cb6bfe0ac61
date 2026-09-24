@@ -1,0 +1,31 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_5e5028207a7f76 614,619-622,738-739
+  s_ba2f7b5c6902b6::t_fe68d0f251d6ac 616
+crates/operations/tests/torus_plane_cut.rs
+  s_ba2f7b5c6902b6::t_95501a8321a2b1 272-287,312-313,317-332,396-411,479-502,504-506,509,512,514-522,536-547
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_5e5028207a7f76 4549-4553,4602,4604,4611
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_97610e62ea8681 203-205,242,295,330-357,438-446,474,510,514,517-518,520
+  s_ba2f7b5c6902b6::t_90498b3b56e968 475-476,478-488,491-494
+  s_ba2f7b5c6902b6::t_8b19b07d6aaeec 489-490
+crates/operations/tests/ball_and_ring_drills.rs
+  s_ba2f7b5c6902b6::t_95501a8321a2b1 12,140-156
+  s_ba2f7b5c6902b6::t_fe8b1f36e21677 157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e4b9d17205970b24aa63815da7071cb6bfe0ac61",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
