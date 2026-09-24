@@ -47,8 +47,9 @@ pub fn bounding_box(topo: &Topology, solid: SolidId) -> Result<Aabb3, CheckError
 
 /// Compute the volume of a solid via face integration.
 ///
-/// Uses the divergence theorem: V = (1/3) sum of integral P dot N dA
-/// over every face of the solid, cavity shells included.
+/// Uses the divergence theorem: V = (1/3) sum of integral (P - C) dot N dA
+/// over every face of the solid, cavity shells included, with C the origin
+/// for a solid near it and the centre of its box for one far away.
 ///
 /// # Errors
 ///
@@ -58,12 +59,31 @@ pub fn solid_volume(
     solid: SolidId,
     options: &PropertiesOptions,
 ) -> Result<f64, CheckError> {
+    let about = volume_anchor(topo, solid)?;
     let mut total_volume = 0.0;
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
-        let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
+        let contrib = face_integrator::integrate_face_about(topo, fid, options.gauss_order, about)?;
         total_volume += contrib.volume;
     }
     Ok(total_volume)
+}
+
+/// The point [`solid_volume`] sums about: the origin, as it always has, unless
+/// the solid sits more than ten of its own half-diagonals from it, where the
+/// far-off coordinates would swamp the flux.
+fn volume_anchor(topo: &Topology, solid: SolidId) -> Result<Vec3, CheckError> {
+    let b = bbox::bounding_box(topo, solid)?;
+    let centre = Vec3::new(
+        f64::midpoint(b.min.x(), b.max.x()),
+        f64::midpoint(b.min.y(), b.max.y()),
+        f64::midpoint(b.min.z(), b.max.z()),
+    );
+    let reach = (b.max - b.min).length() * 0.5;
+    Ok(if centre.length() <= 10.0 * reach.max(1.0) {
+        Vec3::new(0.0, 0.0, 0.0)
+    } else {
+        centre
+    })
 }
 
 /// Compute the total surface area of a solid.
