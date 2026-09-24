@@ -1,0 +1,36 @@
+crates/operations/src/extrude/tests.rs
+  s_ba2f7b5c6902b6::t_f8356384ad5b56 1495-1530
+crates/operations/src/extrude.rs
+  s_ba2f7b5c6902b6::t_6ee756d10259de 210,212-214,217-218
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_fe07e10b7a7d38 11-12,250-266,268-271,273
+  s_ba2f7b5c6902b6::t_23bbf479be226e 267
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_9e0475999b171a 2638-2640
+crates/operations/src/measure/mod.rs
+  s_ba2f7b5c6902b6::t_2584012a58edaa 834-893
+crates/operations/src/measure/helpers.rs
+  s_ba2f7b5c6902b6::t_fe07e10b7a7d38 489-536
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_fe07e10b7a7d38 12
+crates/operations/src/tessellate/solid.rs
+  s_ba2f7b5c6902b6::t_1d80476faea6c0 1073-1076
+crates/topology/src/edge.rs
+  s_ba2f7b5c6902b6::t_c37181d4af56e0 107-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2ab46c1d3aea765c8b0454fc4271837068d44d61",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
