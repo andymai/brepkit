@@ -185,6 +185,12 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **`validate_solid` rejected every solid with a cavity (CLOSED 2026-09-24; pin `solids_with_cavities_validate` in `crates/operations/src/validate/tests.rs`)**:
+  its Euler check read V - E + F against 2 + L as if a solid had one
+  shell, so a block with a closed cavity (V - E + F = 4) failed as invalid.
+  It now expects 2(S - g) + L with S counting the cavities, and checks face
+  connectivity within each shell rather than across the solid.
+
 - **STEP `EDGE_CURVE` `same_sense` (CLOSED 2026-09-24; pin `crates/io/tests/step_edge_same_sense.rs`)**:
   the reader dropped the flag, so a `.F.` arc (its circle's axis flipped,
   as another writer may emit it) ran start to end the wrong way round and

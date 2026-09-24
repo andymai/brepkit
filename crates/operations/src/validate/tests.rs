@@ -124,6 +124,26 @@ fn report_not_valid_with_errors() {
     assert_eq!(report.warning_count(), 1);
 }
 
+/// Each closed cavity adds a shell, and each shell adds 2 to V - E + F.
+#[test]
+fn solids_with_cavities_validate() {
+    use brepkit_math::mat::Mat4;
+
+    use crate::boolean::{BooleanOp, boolean};
+
+    let mut topo = Topology::new();
+    let mut solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    for (x, shells) in [(3.0, 1), (7.0, 2)] {
+        let cavity = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        crate::transform::transform_solid(&mut topo, cavity, &Mat4::translation(x, 5.0, 3.0))
+            .unwrap();
+        solid = boolean(&mut topo, BooleanOp::Cut, solid, cavity).unwrap();
+        assert_eq!(topo.solid(solid).unwrap().inner_shells().len(), shells);
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{shells} cavities: {:?}", report.issues);
+    }
+}
+
 #[test]
 fn cylinder_solid_validates() {
     let mut topo = Topology::new();

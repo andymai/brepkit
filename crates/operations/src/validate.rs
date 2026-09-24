@@ -128,7 +128,8 @@ fn face_all_edges_straight(
     Ok(true)
 }
 
-/// 1. **Euler-Poincaré**: V - E + F = 2(1 - g) for genus-g closed solid
+/// 1. **Euler-Poincaré**: V - E + F = 2(S - g) + L for a genus-g closed
+///    solid of S shells whose faces carry L inner loops
 /// 2. **Manifold edges**: each edge shared by exactly 2 faces
 /// 3. **Boundary edges**: no edge shared by only 1 face (open shell)
 /// 4. **Degenerate faces**: each face has at least 3 vertices
@@ -175,10 +176,10 @@ pub fn validate_solid_with_options(
     let (f, e, v) = explorer::solid_entity_counts(topo, solid)?;
 
     // Euler-Poincaré formula for a cell complex with inner loops:
-    //   V - E + F = 2(1 - g) + L
-    // where g is the genus and L is the total number of inner wire loops
-    // across all faces. For a genus-0 solid with no holes: V-E+F = 2.
-    // With L inner wires: V-E+F = 2 + L.
+    //   V - E + F = 2(S - g) + L
+    // where S is the number of shells (the outer one plus each cavity), g is
+    // the total genus and L is the total number of inner wire loops across
+    // all faces. For a genus-0 solid with no cavities or holes: V-E+F = 2.
     let mut total_inner_loops: i64 = 0;
     let faces = explorer::solid_faces(topo, solid)?;
     for fid in &faces {
@@ -193,14 +194,16 @@ pub fn validate_solid_with_options(
     let euler = (v as i64) - (e as i64) + (f as i64);
     // Adjusted Euler: subtract inner loops to get the standard characteristic.
     let adjusted_euler = euler - total_inner_loops;
-    let genus_times_2 = 2 - adjusted_euler;
+    #[allow(clippy::cast_possible_wrap)]
+    let shells = 1 + topo.solid(solid)?.inner_shells().len() as i64;
+    let genus_times_2 = 2 * shells - adjusted_euler;
     if genus_times_2 < 0 || genus_times_2 % 2 != 0 {
         issues.push(ValidationIssue {
             severity: Severity::Error,
             description: format!(
                 "Euler characteristic V-E+F = {euler} is invalid \
-                 (expected V-E+F = 2+L with L={total_inner_loops} inner loops, \
-                 got V={v}, E={e}, F={f})"
+                 (expected V-E+F = 2(S-g)+L for a genus g >= 0, with S={shells} \
+                 shells and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
             ),
         });
     }
@@ -406,40 +409,50 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // Shell connectivity: all faces should be reachable from any face.
-    // For genus-0 solids (sphere-like), all faces must be in one connected
-    // component. Higher-genus solids (e.g. hollow revolves creating a torus)
-    // can legitimately have multiple face-connected components (inner/outer
-    // shells sharing no edges), so we skip this check for genus > 0.
-    if !faces.is_empty() && genus_times_2 == 0 {
-        let face_set: std::collections::HashSet<usize> = faces.iter().map(|f| f.index()).collect();
-        let mut visited = std::collections::HashSet::new();
-        let mut queue = std::collections::VecDeque::new();
+    // Shell connectivity: within each shell, every face must be reachable
+    // from any other across shared edges. A cavity is its own shell and
+    // shares no edge with the outer one. Solids of genus > 0 skip the check.
+    if genus_times_2 == 0 {
+        let solid_data = topo.solid(solid)?;
+        let shells: Vec<_> = std::iter::once(solid_data.outer_shell())
+            .chain(solid_data.inner_shells().iter().copied())
+            .collect();
+        for shell_id in shells {
+            let shell_faces = topo.shell(shell_id)?.faces();
+            let Some(first) = shell_faces.first() else {
+                continue;
+            };
+            let face_set: std::collections::HashSet<usize> =
+                shell_faces.iter().map(|f| f.index()).collect();
+            let mut visited = std::collections::HashSet::new();
+            let mut queue = std::collections::VecDeque::new();
 
-        visited.insert(faces[0].index());
-        queue.push_back(faces[0]);
+            visited.insert(first.index());
+            queue.push_back(*first);
 
-        while let Some(current) = queue.pop_front() {
-            for adj_faces in edge_map.values() {
-                if adj_faces.iter().any(|f| f.index() == current.index()) {
-                    for neighbor in adj_faces {
-                        if face_set.contains(&neighbor.index()) && visited.insert(neighbor.index())
-                        {
-                            queue.push_back(*neighbor);
+            while let Some(current) = queue.pop_front() {
+                for adj_faces in edge_map.values() {
+                    if adj_faces.iter().any(|f| f.index() == current.index()) {
+                        for neighbor in adj_faces {
+                            if face_set.contains(&neighbor.index())
+                                && visited.insert(neighbor.index())
+                            {
+                                queue.push_back(*neighbor);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        let unreachable = face_set.len() - visited.len();
-        if unreachable > 0 {
-            issues.push(ValidationIssue {
-                severity: Severity::Error,
-                description: format!(
-                    "shell is disconnected: {unreachable} face(s) not reachable from first face"
-                ),
-            });
+            let unreachable = face_set.len() - visited.len();
+            if unreachable > 0 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "shell is disconnected: {unreachable} face(s) not reachable from first face"
+                    ),
+                });
+            }
         }
     }
 
