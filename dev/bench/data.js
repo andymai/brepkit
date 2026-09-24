@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790122106200,
+  "lastUpdate": 1790224312064,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -35963,6 +35963,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41919583,
             "range": "± 106539",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd547fa8fbf4760c54a624ce4cc48093e1089d67",
+          "message": "fix(operations): keep analytic surface frames under transform (#1691)\n\n## What was wrong\n\n`transform_solid` rebuilt every cylinder, cone, sphere, and torus\ninstead of mapping its full frame. Rotated tori and spheres were rebuilt\naround the world z axis. For `Rx(0.9)Ry(-0.4)Rz(1.3)`, torus boundary\nedges were about 4.9 units off the surface, while a rotated sphere mesh\nhad 16 open edges and read about 10% low in volume.\n\nCylinders and cones lost their reference direction, changing their\nparameterization under pure rotation. Non-uniform scaling across a\ncylinder axis retained an arbitrary circular radius while its rims\nbecame ellipses. Transformed conics also used mapped axes that were not\ngenerally orthogonal.\n\nMirrors left every wire clockwise around its face's outward normal. Such\nsolids validate and read positive volume, but booleans encounter\nsame-direction shared edges. Mirrored NURBS faces also acquired inward\nnormals from the cross product of their transformed partials.\n\n## What this does\n\n- Maps every analytic surface from its complete frame. Cone half-angles\nfollow the axial and radial scales.\n\n- Converts a face to the exact NURBS image when a transform would make\nits analytic surface non-circular. A face goes to NURBS rather than\nkeeping a wrong analytic radius, because an analytic surface that does\nnot pass through its own boundary edges is an invalid B-Rep.\n\n- Reverses every wire under a mirror and flips the `reversed` flag on\nNURBS faces.\n\n- Maps circles and ellipses to the principal axes of their image.\n\n- Retains stored pcurves only when the parameterization carries over\nexactly: NURBS surfaces and analytic surfaces under proper rigid motion.\nOther pcurves are removed through `PCurveRegistry::remove_faces`.\nPcurves are dropped rather than transformed, because every edge keeps\nits 3D curve and consumers already recompute missing pcurves.\n\n- Adds the public `SphericalSurface::with_axis_and_ref_dir` constructor.\n\n- Aligns equal-count revolution rims by their angular partners before\npairing. This prevents a seam sample represented as 0 on one rim and 2pi\non the other from twisting the band one sample out of phase, which\npreviously produced a closed, consistently oriented mesh about 1.7% low\nin volume.\n\n- Wraps NURBS projection across closed directions instead of clamping\nNewton steps at the domain end.\n\n- Extends CDT periodic handling to closed NURBS knot domains, wraps\nevaluation into the domain, anchors closed rims at the sample nearest\ntheir vertex, and terminates face seam edges there. The seam belongs\nonly to that face, so no neighboring crack opens.\n\n## Verification\n\n- New transform tests cover rigid motions of cylinders, cones, spheres,\nand tori, including surface incidence, watertightness, unchanged mesh\nvolume, and solid validity.\n\n- Tests cover mirrored box winding and fuse validity, a watertight\nmirrored NURBS box at volume 24, analytic axial cylinder stretching, an\nexact watertight NURBS wall under cross-axis stretching with volume\nwithin 0.5%, exact tilted ellipse mapping, and pcurve retention on NURBS\nsurfaces and removal on planes.\n\n- The math, topology, heal, algo, operations, io, and wasm suites,\nincluding gridfinity tests, pass across 132 test binaries with 0\nfailures.\n\n- The roadmap skill now includes a stability campaign covering every\nREADME row below Stable and defects found while auditing Stable rows.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `transform_solid` so analytic surfaces keep their full reference\nframe: a rotated torus or sphere is the same surface in its new pose\ninstead of being rebuilt around the world z-axis, and cylinders and\ncones keep their reference direction. `copy_and_transform_solid` now\nshares the same exact surface and curve images, and mirrors reverse\nevery wire and flip the `reversed` flag on NURBS faces, so each outer\nwire still winds counter-clockwise around its face's outward normal.\n\nA transform that breaks a surface's circularity converts that face to\nits exact NURBS image; a non-uniformly scaled sphere becomes the exact\nrational image of its latitude band. A cap's pole is now taken from its\nouter wire's winding about the sphere axis, so each hemisphere of a\nscaled sphere gets its own patch instead of sharing the north band.\nCircle image axes swap only when their lengths genuinely differ, and\npcurves are dropped wherever the parameterization changes\n(`PCurveRegistry::remove_faces`/`remove_edges`).\n`SphericalSurface::with_axis_and_ref_dir` is now public.\n\n**Collateral meshing fixes**\n- Equal-count revolution rims are paired by angular partner instead of\nindex, fixing a twisted band mesh when a seam sample sits on the u seam.\n- NURBS point projection wraps across closed directions, then retries\nclamped when the wrapped solve fails so a kinked seam cannot leave\nNewton bouncing across it.\n- CDT meshing unwraps closed NURBS knot domains and anchors each closed\nrim at the sample nearest its vertex.\n\n<sup>Written for commit 837450460c8b1e3c6484262e30ce89e7c6089acc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1691?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-23T21:29:19-07:00",
+          "tree_id": "a51a58eccb9bcffacecc278e1f19415a4c7996cc",
+          "url": "https://github.com/andymai/brepkit/commit/bd547fa8fbf4760c54a624ce4cc48093e1089d67"
+        },
+        "date": 1790224308283,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1002117,
+            "range": "± 1772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081495,
+            "range": "± 28298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13046,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 746261,
+            "range": "± 4199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42162424,
+            "range": "± 198475",
             "unit": "ns/iter"
           }
         ]
