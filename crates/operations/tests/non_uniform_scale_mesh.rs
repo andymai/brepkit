@@ -6,7 +6,7 @@
 
 use brepkit_math::mat::Mat4;
 use brepkit_operations::measure::oriented_solid_volume;
-use brepkit_operations::primitives::{make_sphere, make_torus};
+use brepkit_operations::primitives::{make_cylinder, make_sphere, make_torus};
 use brepkit_operations::tessellate::{
     boundary_edge_count, non_manifold_edge_count, tessellate, tessellate_solid,
 };
@@ -103,4 +103,34 @@ fn mirrored_ellipsoid_meshes_watertight_at_its_volume() {
         (volume - expected).abs() < 5e-3 * expected,
         "mirrored ellipsoid volume {volume}, expected {expected}"
     );
+}
+
+/// A squashed cylinder's wall is an exact NURBS elliptic cylinder. Its
+/// interior grid follows the wall's own iso-line chords, so the mesh
+/// converges on the closed-form volume with the deflection.
+#[test]
+fn squashed_cylinder_mesh_follows_its_deflection() {
+    let mut topo = Topology::new();
+    let cylinder = make_cylinder(&mut topo, 1.5, 4.0).unwrap();
+    transform_solid(
+        &mut topo,
+        cylinder,
+        &(Mat4::rotation_z(0.3) * Mat4::scale(2.0, 1.0, 1.0)),
+    )
+    .unwrap();
+    let exact = 2.0 * std::f64::consts::PI * 1.5 * 1.5 * 4.0;
+    for (deflection, bound) in [(0.01, 3e-3), (0.001, 2e-4)] {
+        let mesh = tessellate_solid(&topo, cylinder, deflection).unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "open mesh at {deflection}");
+        assert_eq!(
+            non_manifold_edge_count(&mesh),
+            0,
+            "non-manifold mesh at {deflection}"
+        );
+        let volume = oriented_solid_volume(&topo, cylinder, deflection).unwrap();
+        assert!(
+            (volume - exact).abs() < bound * exact,
+            "volume {volume} at {deflection}, exact {exact}"
+        );
+    }
 }

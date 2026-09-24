@@ -177,6 +177,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: drills into spheres and tori, pockets into pointed cones** | Each falls back to a mesh (the triangle count does not move with deflection), same on main: `make_sphere(2, 16)` less an r=0.2 blind drill from (0.5, 0, 1) up; `make_torus(5, 1, 16)` less an r=0.3 drill along z through (5, 0); `make_cone(3, 0, 6)` less the box x -0.5..0.5, y 1..5, z 1..2, whose fallback is also open (48 mesh edges, volume 53.08 against 55.32). The pointed cone's flux through its apex is pinned in `measure::volume::tests`, ready for when the boolean stays exact |
 
 | **Stable row defect: heal `convert_to_bspline` on a cylinder or a bored sphere** | Cylinder: 7 open mesh edges at the seam vertex, the band skips the rim's vertex sample while the cap keeps it. Bored sphere (`make_sphere(6, 24)` less an r=3 bore along z): 9141 open mesh edges at 0.01, the tunnel mouths filled, `solid_volume` 1533.7 against 587.6 before the conversion |
+
 | **Stable row defect: NURBS interior density** | `interior_grid_resolution` feeds a NURBS face's knot range to a radians chord formula, so a NURBS wall can chord 12x past the deflection (elliptic cylinder: 0.119 at 0.01). Every NURBS face's mesh moves with the fix; budget for the mesh-derived pins |
 | **Stable row defect: walking-engine chamfer at a closed rim or a shared vertex** | `chamfer_v2` on a cylinder's or cone's circular rim builds its cone face but returns a shell whose edges are not all shared by two faces (the endpoint-sampled trims cannot take a closed contact; the corrected fillet builder's periodic-contour machinery is the model). Two chamfered edges meeting at a box corner are refused (`TrimmingFailure`, pin `chamfer_v2_refuses_edges_meeting_at_a_vertex`; unrefused they left 9 edges open): each stripe's end detour lies in the other chamfer's removed region, so the two chamfer planes need a mitre along their intersection line (three at a corner need a corner patch). brepjs calls the planar `chamfer` in `chamfer.rs`, not this builder; the wasm `chamferV2` and `chamferDistanceAngle` bindings reach it |
 
@@ -188,6 +189,15 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **NURBS faces meshed far outside their deflection (CLOSED 2026-09-24; pin `squashed_cylinder_mesh_follows_its_deflection` in `crates/operations/tests/non_uniform_scale_mesh.rs`)**:
+  `interior_grid_resolution` fed a NURBS face's knot spans to a circle-chord
+  formula with radius 1, so a squashed cylinder's wall meshed 6.2e-3 low in
+  volume at deflection 0.001. The grid now follows the chords of the face's
+  own iso-lines across its (u, v) box (one division along a ruling, the
+  normals' turn weighed only across chords longer than the deflection, at
+  most 1024 per direction): 8.9e-5 at 0.001. The diagnostic volume pin in
+  `cross_one_row_fillet_inmem.rs` moved with the meshes.
 
 - **The walking-engine chamfer left every chamfered edge open (CLOSED 2026-09-24; pins `chamfer_v2_closes_on_every_box_edge`, `chamfer_v2_closes_two_parallel_edges`, `chamfer_v2_concave_notch_adds_only_the_chamfer_sliver` in `crates/operations/tests/regress_chamfer_obtuse_ridge.rs`)**:
   `ChamferBuilder` trimmed the two chamfered faces but not the end faces,

@@ -752,25 +752,44 @@ fn iso_divisions(
     deflection: f64,
     angular_tol: f64,
 ) -> usize {
-    const ROWS: usize = 8;
-    const MAX_DIVISIONS: usize = 4096;
-    let ((lo, hi), (o_lo, o_hi)) = if along_u {
+    let ranges = if along_u {
         (surface.domain_u(), surface.domain_v())
     } else {
         (surface.domain_v(), surface.domain_u())
     };
-    let at = |t: f64, o: f64| {
+    iso_divisions_over(
+        &|u, v| surface.evaluate(u, v),
+        &|u, v| safe_normal(surface, u, v),
+        along_u,
+        ranges,
+        deflection,
+        angular_tol,
+        4096,
+    )
+}
+
+/// [`iso_divisions`] over a parameter box: `ranges` is the span divided and
+/// the span its sampled rows sit across, and `at` / `normal_at` take
+/// `(u, v)` (a caller on a periodic surface wraps them). A straight direction
+/// (a ruling) needs one division. The normals' turn is only weighed across
+/// chords longer than the deflection: at a pole the normal is not defined.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn iso_divisions_over(
+    at: &dyn Fn(f64, f64) -> Point3,
+    normal_at: &dyn Fn(f64, f64) -> Vec3,
+    along_u: bool,
+    ((lo, hi), (o_lo, o_hi)): ((f64, f64), (f64, f64)),
+    deflection: f64,
+    angular_tol: f64,
+    max_divisions: usize,
+) -> usize {
+    const ROWS: usize = 8;
+    let point = |t: f64, o: f64| if along_u { at(t, o) } else { at(o, t) };
+    let normal = |t: f64, o: f64| {
         if along_u {
-            surface.evaluate(t, o)
+            normal_at(t, o)
         } else {
-            surface.evaluate(o, t)
-        }
-    };
-    let normal_at = |t: f64, o: f64| {
-        if along_u {
-            safe_normal(surface, t, o)
-        } else {
-            safe_normal(surface, o, t)
+            normal_at(o, t)
         }
     };
     let fits = |n: usize| {
@@ -783,23 +802,22 @@ fn iso_divisions(
                     lo + (hi - lo) * k as f64 / n as f64,
                     lo + (hi - lo) * (k + 1) as f64 / n as f64,
                 );
-                let (p0, p1) = (at(t0, o), at(t1, o));
+                let (p0, p1) = (point(t0, o), point(t1, o));
                 let chord_mid = Point3::new(
                     0.5 * (p0.x() + p1.x()),
                     0.5 * (p0.y() + p1.y()),
                     0.5 * (p0.z() + p1.z()),
                 );
-                let sag = (at(0.5 * (t0 + t1), o) - chord_mid).length();
-                let turn = normal_at(t0, o)
-                    .dot(normal_at(t1, o))
-                    .clamp(-1.0, 1.0)
-                    .acos();
-                sag <= 0.5 * deflection && (angular_tol <= 0.0 || turn <= angular_tol)
+                let sag = (point(0.5 * (t0 + t1), o) - chord_mid).length();
+                let turned = angular_tol > 0.0
+                    && (p1 - p0).length() > deflection
+                    && normal(t0, o).dot(normal(t1, o)).clamp(-1.0, 1.0).acos() > angular_tol;
+                sag <= 0.5 * deflection && !turned
             })
         })
     };
-    let mut n = 8;
-    while n < MAX_DIVISIONS && !fits(n) {
+    let mut n = 1;
+    while n < max_divisions && !fits(n) {
         n *= 2;
     }
     n
