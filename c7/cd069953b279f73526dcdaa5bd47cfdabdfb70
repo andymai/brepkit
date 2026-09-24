@@ -1,0 +1,74 @@
+crates/operations/src/tessellate/nurbs.rs
+  s_ba2f7b5c6902b6::t_16db5d612540e5 799,805,808,816,858,860-861,865-866
+  s_ba2f7b5c6902b6::t_bf57be1f349330 787,792-798,800-804,809-815,817-820,822,824,850,856
+  s_ba2f7b5c6902b6::t_685e69e9b5856a 696-703,752-756,759-763,767-775
+  s_ba2f7b5c6902b6::t_40f6bb8f841dcc 776-777
+  s_ba2f7b5c6902b6::t_d5c9b00774b2a9 757-758,764-766
+  s_ba2f7b5c6902b6::t_5a5d08e6c3a820 806
+  s_ba2f7b5c6902b6::t_84d2f5c99b4061 807,827-839,857,859
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_bf57be1f349330 2200-2201,3153-3154,3209-3211,3213-3218,3222-3228,3230-3237,3239,3241-3243
+  s_ba2f7b5c6902b6::t_16db5d612540e5 3212,3229,3238
+  s_ba2f7b5c6902b6::t_685e69e9b5856a 3219-3221,3240
+  s_ba2f7b5c6902b6::t_ef72427aeaf517 1937-1961
+  s_ba2f7b5c6902b6::t_b27abcc12281d4 1989,2001-2014,2946-3052
+  s_ba2f7b5c6902b6::t_8d9d208c51208c 2671,2694
+  s_ba2f7b5c6902b6::t_f8c8d86a9f08a7 3053-3054
+crates/operations/tests/non_uniform_scale_mesh.rs
+  s_ba2f7b5c6902b6::t_4a95dee546062e 109,198,200,212
+  s_ba2f7b5c6902b6::t_3170ad9e2f2ccf 214
+  s_ba2f7b5c6902b6::t_4bb7a5cb47623f 132
+  s_ba2f7b5c6902b6::t_ce36b173eb2f80 151
+  s_ba2f7b5c6902b6::t_65fcf080b65b50 120,129,136,142,180-181
+  s_ba2f7b5c6902b6::t_34a46a3a33bb4c 8,10,110-111,115-119,121-128,130-131,134-135,137,139-141,143-148,150,152-179,182-191
+  s_ba2f7b5c6902b6::t_507111c65b3055 13,194-213
+  s_ba2f7b5c6902b6::t_f24daac7b19fc1 112-114,133,138
+  s_ba2f7b5c6902b6::t_11e423bf31313c 214
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_74b900a2b34a0d 194-197,201-202
+  s_ba2f7b5c6902b6::t_0dc9c1aa92f287 193,199-200
+  s_ba2f7b5c6902b6::t_30adfee7d76c3e 198
+crates/io/tests/cross_one_row_fillet_inmem.rs
+  s_ba2f7b5c6902b6::t_d032b1d0b6c06d 656
+crates/heal/src/custom/convert_to_bspline.rs
+  s_ba2f7b5c6902b6::t_7b0bb707a8c8c8 202,215
+  s_ba2f7b5c6902b6::t_d0396b932dba3b 114-115,118-119,131-132
+  s_ba2f7b5c6902b6::t_1a04aa617b869c 22,25,75,79-83,179-182,184,186,188-195,199-200,203-214,237-242
+  s_ba2f7b5c6902b6::t_371a3524e5f62a 473-512
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_8d9d208c51208c 140-144,151-153,158-161
+  s_ba2f7b5c6902b6::t_7558787d15c195 83-123
+  s_ba2f7b5c6902b6::t_3b6d0128425a9f 154-157
+crates/operations/tests/bspline_conversion_mesh.rs
+  s_ba2f7b5c6902b6::t_aefbe11efade55 3-4,7-8,10,12-13,15,58
+  s_ba2f7b5c6902b6::t_9091149e39fe99 27
+  s_ba2f7b5c6902b6::t_51acf5e77ce19c 1-2,14,16-25,28-31,33-43,46-47,49,51,54-57
+  s_ba2f7b5c6902b6::t_4302c13004254c 5-6,9,11,44-45,48,50,52-53
+  s_ba2f7b5c6902b6::t_b27abcc12281d4 26,32
+  s_ba2f7b5c6902b6::t_32b537beb82621 59-61
+  s_010c85ccffde80::t_6fc0729bbdbca6 62-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c7cd069953b279f73526dcdaa5bd47cfdabdfb70",
+  "prompts": {},
+  "sessions": {
+    "s_010c85ccffde80": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "896e57f2-9585-4931-9320-21ad88d4554a",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
