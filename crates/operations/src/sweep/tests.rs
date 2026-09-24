@@ -674,7 +674,7 @@ fn sweep_smooth_rails_lie_on_their_faces() {
 
     let pappus = std::f64::consts::FRAC_PI_2 * 5.0;
     let mesh = crate::tessellate::tessellate_solid(&topo, solid, 0.001).unwrap();
-    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+    assert!(crate::tessellate::is_watertight(&mesh));
     for volume in [
         crate::measure::solid_volume(&topo, solid, 0.001).unwrap(),
         crate::measure::oriented_solid_volume(&topo, solid, 0.001).unwrap(),
