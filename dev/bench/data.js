@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790282567908,
+  "lastUpdate": 1790283642267,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38825,6 +38825,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41884878,
             "range": "± 95969",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "be8ac296fd860d410d688a9cdfb000f4b40bb515",
+          "message": "fix(algo): cut a ball with a plane clear of its equator, keeping either side, and measure it exactly (#1742)\n\nA plane clear of a ball's equator now cuts `make_sphere` into a valid\nsolid on either side, meshed watertight, whose volume and face areas\nmatch closed forms within 1e-9.\n\n## What was wrong\n\n`make_sphere(3, 32)` less the half-space above z = 0.5 fell back to a\n415-face planar mesh whose `solid_volume` was 69.65 instead of 70.55.\nKeeping the upper cap with Intersect also fell back. A tilted cut at z =\n-1.5 + 0.3x returned `EmptyResult`, reporting that the target was fully\ncontained in the tool even though the plane crossed the ball.\n\nSeveral independent assumptions caused these failures. Spherical loop\ninteriors were sampled at off-surface 3D centroids. The doubled-face\npass treated a spherical cap and its closing disc as two copies of one\nface. Containment probes only followed the ball's chordal equator. The\nlatitude-band mesher assumed its level ring was always the inner wire.\nFinally, the existing per-face flux calculation ignored holes in a\nremaining hemisphere.\n\n## What this does\n\n- Projects the centroid used by `split_face_with_internal_loops`\nradially from the sphere centre onto the sphere. The region inside the\nsection circle now classifies against the cutting plane correctly.\n\n- Preserves a pair of selected faces with identical edge sets when no\nother selected face uses those edges and `surfaces_same_domain` does not\nmatch. This keeps the spherical cap and disc that close the result.\n\n- Adds `ball_of` and `outward_plane_normals` containment witnesses.\nBalls are probed at their axial reach and toward each flat face of the\nother solid, preventing false containment for tilted tools whose\nbounding boxes enclose the ball.\n\n- Allows the latitude-band collar case to take the level ring from\neither wire. A hemisphere less a tilted cap now meshes the outside\nequator and inside tilted circle correctly instead of producing an open\n17-triangle per-face CDT result.\n\n- Adds `ball_less_caps_volume` for a ball less plane-cut caps whose\nplane faces are full discs. It evaluates `(r * sphere_area + sum(d *\ndisc_area)) / 3` about the centre, with cap sphere area `2 * pi * r * (r\n- d)`. The tilted case that previously read 121.35 instead of 83.29 now\nuses this exact path.\n\n- Measures a sphere face bounded by one circle as the cap selected by\nthe boundary's Newell normal. The result is `2 * pi * r * h` at any\ntilt. The tilted cap previously read 38.25 instead of 38.07.\n\n- Requires caps handled by `ball_less_caps_volume` to be pairwise apart,\nwith each cap spanning `acos(d / r)` about its disc's outward normal and\ntwo caps apart when their normals are farther apart than the sum of\ntheir spans. A shell can contain two separate pieces of one ball when a\nfuse of two caps takes the disjoint-fuse path, while their full discs\ndescribe overlapping removed caps, causing the formula to return -102.49\ninstead of 10.60. Such solids now take the general volume path.\n\n- Limits the ball containment probe to distinct planes of the other\nsolid that the ball reaches past, where its extreme point along the\nplane's outward normal lies beyond the plane, and tests at most the 16\ndeepest planes. Many-faced tools with one planar face per triangle, such\nas mesh imports, therefore require a bounded number of point\nclassifications.\n\n- `ball_less_caps_volume` reads the shell orientation from its sphere\nfaces: a piece of a ball faces out of the sphere, so if all sphere faces\nare reversed, the whole shell is inside out and each disc's outward side\nis flipped back. Solids with disagreeing sphere faces take the general\npath. Previously, turning every face over measured the complementary\npiece, `4 pi r^3 / 3` minus the volume, contrary to `solid_volume`'s\nmagnitude contract.\n\n- Records the completed support in the roadmap and adds an OPEN row for\nthe remaining per-face limitations.\n\n## Verification\n\n- `crates/operations/tests/sphere_plane_cut.rs` covers `make_sphere(3,\n32)` against eight planes: level z0 values 0.5, -1, 2, and -2.5, plus\nslopes 0.2, 0.3, 0.1, and 0.4 through z0 values 1, -1.5, 0.5, and -2.\n\n- Each plane is turned by 0, 90, and 200 degrees, with both Cut and\nIntersect tested. All 48 cases have section circles within one\nhemisphere.\n\n- Every case produces a valid solid with one plane face. `solid_volume`,\ndisc `face_area`, and total sphere-face `face_area` agree with their\nclosed forms within `1e-9` relative error. Six points, three just below\nand three just above the plane, classify correctly.\n\n- Tessellation at deflection 0.01 is watertight, encloses at most the\ntrue volume, and has a volume deficit below `1e-2`.\n\n- Adds `two_caps_of_one_ball_keep_both_volumes`, which fuses the cap\nabove `z = 2` and the cap below `z = -2.5` of `make_sphere(3, 32)`, then\nchecks that the fused solid's `solid_volume` is within `1e-2` relative\nerror of the two caps' sum, 10.603.\n\n- `inverted_ball_piece_keeps_its_volume` cuts `make_sphere(3, 32)` at `z\n= 1`, keeps either side, turns every face over, and checks that\n`solid_volume` is unchanged within `1e-9` relative tolerance. The\ntopology, algo, operations, io, and wasm suites pass, totaling 2026\ntests.\n\n## Not covered\n\n`volume_from_direct_face_tessellation` still reads only the outer wire\nof a holed sphere face when the solid is not a ball less disc caps.\nPer-face `tessellate` of a sphere face bounded by one tilted circle\nstill meshes the whole sphere, although the solid mesh is correct. Cuts\nwhose plane crosses the chordal equator remain outside this change and\nstay in the roadmap's TERMINAL row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes cutting `make_sphere` with a plane clear of its equator so either\nside now builds as a valid, watertight solid whose volume, face areas,\nand point classifications match closed forms within 1e-9. Previously\nsuch cuts fell back to a 415-face planar mesh (69.65 instead of 70.55)\nand a tilted plane could return `EmptyResult`.\n\n**What changed**\n\n- Projects the loop splitter's centroid radially onto the sphere so loop\ninteriors classify against the cutting plane correctly.\n- Keeps a pair of faces that close a volume when they share an edge set,\nsit on different surfaces, and no other face uses those edges — the\nspherical cap and its closing disc.\n- Probes ball containment toward each flat face of the other solid and\nalong the axes, not just the equator, capped at the deepest 16 planes it\ncrosses.\n- Lets the latitude-band collar mesher take the level ring from either\nwire, fixing a hemisphere less a tilted cap.\n- Measures a ball less plane-cut caps as `(r * sphere_area + sum(d *\ndisc_area)) / 3` about its centre, reading the piece's orientation from\nits sphere faces so an inverted shell still measures the same, and\napplying only when the caps stay apart.\n- Measures a sphere face bounded by one circle as the cap its boundary\nwinds around.\n- Adds `crates/operations/tests/sphere_plane_cut.rs` covering 48\nplane/turn/keep-side combinations plus inverted-shell and\noverlapping-caps guards, and records the change in the roadmap.\n\n**Not covered**\n\nPer-face tessellation of a holed sphere face still reads only its outer\nwire, and a sphere face bounded by one tilted circle still meshes the\nwhole sphere in `tessellate`; cuts crossing the chordal equator remain\nin the roadmap's terminal row.\n\n<sup>Written for commit 1e313cd94e02a614e1dc7c2c25866be78fd2310b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1742?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T20:58:01Z",
+          "tree_id": "d8b1373e57490ee32aef838e8c9c2c6ec52bf8e7",
+          "url": "https://github.com/andymai/brepkit/commit/be8ac296fd860d410d688a9cdfb000f4b40bb515"
+        },
+        "date": 1790283637991,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1009708,
+            "range": "± 5450",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1092211,
+            "range": "± 2689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13158,
+            "range": "± 457",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 747596,
+            "range": "± 2057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42290284,
+            "range": "± 250686",
             "unit": "ns/iter"
           }
         ]
