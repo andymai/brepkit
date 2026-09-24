@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790242768295,
+  "lastUpdate": 1790246617706,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36611,6 +36611,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41945273,
             "range": "± 196449",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6c5acc03fa3754561fe3a1e0c2a3f246530c9e96",
+          "message": "fix(operations): close loft_smooth's shell on shared curved rails (#1700)\n\n## What was wrong\n\n`loft_smooth` now produces closed, outward-oriented solids on shared\ncurved rails.\n\nOn main, lofting three squares with half-sizes 3, 2, and 3 at z 0, 2,\nand 4 produced a signed volume of 3.4 against a magnitude of 6.7, with 8\nopen mesh edges.\n\nEach side face constructed separate straight `Line` rails between the\nfirst and last profiles, so neighbouring faces shared no rail edge. The\ninterpolated side surface curved through the middle profiles, so those\nstraight rails left it. Its parameterization put `Su x Sv` into the\nsolid without marking the face reversed. `interpolate_surface` also\nfitted columns using separate chord-length parameters while retaining\nthe first column's knot vector for both.\n\n## What this does\n\n- Builds one B-spline rail per vertex index through that vertex in every\nprofile.\n\n- Uses mean chord-length parameters for every rail, with knots averaged\nfrom them, so all rails share one knot vector. The interpolation is a\ncollocation solve on the public basis functions, Gaussian elimination\nwith partial pivoting kept inside the matrix's band (each column is\neliminated only down to the last row whose basis span reaches it; spans\nnever decrease with the parameter, so pivoting and fill stay inside that\nwindow), so it runs in time quadratic in the profile count. It rejects\nparameters that do not strictly increase.\n\n- Constructs each side face as the ruled surface between neighbouring\nrails. The u direction follows the ring edge and v follows the rails, so\nthe boundary consists exactly of shared rails and ring edges, with the\nnormal pointing outward.\n\n## Verification\n\n- `loft_smooth_waisted_squares_close_at_their_volume` tests the three\nsquares directly and mirrored. It checks `validate_solid`, watertight\nmeshes at 0.01 and 0.001, and `solid_volume` within 1e-3 of 1328/15.\nEach section is a square of half-size `s = 3 - z + z^2/4`, and its area\n`4s^2` integrates to `1328/15` over z in `[0, 4]`. The loft measures\n88.5556 against 88.5333, with the remainder from tessellating the NURBS\nsides.\n\n- `loft_smooth_uneven_profiles_share_their_rails` checks four offset\nrectangles whose corners travel different distances for validity,\nwatertight meshes, and solid volume against mesh volume.\n\n- `loft_smooth_surface_passes_through_profiles` verifies that a rail\npasses exactly through a middle-profile corner.\n\n- `rail_interpolation_hits_every_point_across_many_profiles`\ninterpolates a cubic through forty unevenly spaced points of a helix and\nchecks it passes through each within 1e-9.\n\n- The operations, io and wasm suites pass: 1663 tests, 0 failures. The\nroadmap loft_smooth row is closed.",
+          "timestamp": "2026-09-24T03:40:58-07:00",
+          "tree_id": "f689187849318b25960c3f0be590262bdae29238",
+          "url": "https://github.com/andymai/brepkit/commit/6c5acc03fa3754561fe3a1e0c2a3f246530c9e96"
+        },
+        "date": 1790246614361,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1038781,
+            "range": "± 5413",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1124360,
+            "range": "± 1796",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14130,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 748584,
+            "range": "± 5072",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45186109,
+            "range": "± 105388",
             "unit": "ns/iter"
           }
         ]
