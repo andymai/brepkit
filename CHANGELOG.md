@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.5](https://github.com/andymai/brepkit/compare/v4.0.4...v4.0.5) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** mesh a trimmed NURBS face within its trim, and subtract a sphere face's holes from its area ([#1720](https://github.com/andymai/brepkit/issues/1720)) ([795deed](https://github.com/andymai/brepkit/commit/795deed5264c14e2fa8fa62b55e4487a58723704))
+
 ## [4.0.4](https://github.com/andymai/brepkit/compare/v4.0.3...v4.0.4) (2026-09-24)
 
 
