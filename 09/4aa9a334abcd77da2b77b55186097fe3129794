@@ -1,0 +1,47 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_ef72427aeaf517 1937-1961
+  s_ba2f7b5c6902b6::t_b27abcc12281d4 1989,2001-2014,2946-3052
+  s_ba2f7b5c6902b6::t_8d9d208c51208c 2671,2694
+  s_ba2f7b5c6902b6::t_f8c8d86a9f08a7 3053-3054
+crates/heal/src/custom/convert_to_bspline.rs
+  s_ba2f7b5c6902b6::t_7b0bb707a8c8c8 202,215
+  s_ba2f7b5c6902b6::t_d0396b932dba3b 114-115,118-119,131-132
+  s_ba2f7b5c6902b6::t_1a04aa617b869c 22,25,75,79-83,179-182,184,186,188-195,199-200,203-214,237-242
+  s_ba2f7b5c6902b6::t_371a3524e5f62a 473-512
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_8d9d208c51208c 140-144,151-153,158-161
+  s_ba2f7b5c6902b6::t_7558787d15c195 83-123
+  s_ba2f7b5c6902b6::t_3b6d0128425a9f 154-157
+crates/operations/tests/bspline_conversion_mesh.rs
+  s_ba2f7b5c6902b6::t_aefbe11efade55 3-4,7-8,10,12-13,15,58
+  s_ba2f7b5c6902b6::t_9091149e39fe99 27
+  s_ba2f7b5c6902b6::t_51acf5e77ce19c 1-2,14,16-25,28-31,33-43,46-47,49,51,54-57
+  s_ba2f7b5c6902b6::t_4302c13004254c 5-6,9,11,44-45,48,50,52-53
+  s_ba2f7b5c6902b6::t_b27abcc12281d4 26,32
+  s_ba2f7b5c6902b6::t_32b537beb82621 59-61
+  s_010c85ccffde80::t_6fc0729bbdbca6 62-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "094aa9a334abcd77da2b77b55186097fe3129794",
+  "prompts": {},
+  "sessions": {
+    "s_010c85ccffde80": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "896e57f2-9585-4931-9320-21ad88d4554a",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
