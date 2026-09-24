@@ -185,7 +185,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **Draft to Stable (CLOSED 2026-09-24; pins in `crates/operations/src/draft.rs` tests and `draft_binding_cuts_the_exact_wedge` in `crates/wasm/src/bindings/operations.rs`)**:
+- **Draft to Stable (CLOSED 2026-09-24; pins in `crates/operations/src/draft.rs` tests and `draft_batch_cuts_the_exact_wedge` in `crates/wasm/src/bindings/operations.rs`)**:
   `draft` pushed a drafted face's vertices radially from an axis, bending the
   face and leaving its neighbours on the old vertices. It now turns each
   drafted plane about its neutral line until `n · pull = sin(angle)` and
