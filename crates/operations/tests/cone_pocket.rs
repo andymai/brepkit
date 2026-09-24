@@ -8,7 +8,7 @@ use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_poi
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
+use brepkit_operations::measure::{face_area, oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::{make_box, make_cone};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
@@ -52,6 +52,22 @@ fn pocket(turn: f64) {
             .or_default() += 1;
     }
     assert_eq!(census, BTreeMap::from([("cone", 1), ("plane", 6)]));
+
+    // The wall's normal makes a fixed angle with the axis, so the pocket
+    // takes sqrt(5) times its footprint on the base: the part of the strip
+    // |x| <= 0.5 between the radii 2 and 2.5 where the wall is 1 to 2 high.
+    let strip = |r: f64| 0.5 * (r * r - 0.25).sqrt() + r * r * (0.5 / r).asin();
+    let wall_truth = 5.0_f64.sqrt() * (9.0 * PI - strip(2.5) + strip(2.0));
+    let wall = solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .find(|&f| topo.face(f).unwrap().surface().type_tag() == "cone")
+        .unwrap();
+    let area = face_area(&topo, wall, 0.001).unwrap();
+    assert!(
+        (area - wall_truth).abs() < 1e-9 * wall_truth,
+        "wall area {area}, truth {wall_truth}"
+    );
 
     let volume = truth();
     let exact = solid_volume(&topo, result, 0.001).unwrap();

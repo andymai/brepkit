@@ -355,7 +355,23 @@ fn wire_uv_area(
     let mut sum = 0.0;
     let mut first_u = None;
     let mut last_u: Option<f64> = None;
-    for oe in topo.wire(wire_id)?.edges() {
+    // The region's u has to jump by a turn somewhere on the loop, which is
+    // free only across the pole (the weight vanishes there): walk from it.
+    let mut edges = topo.wire(wire_id)?.edges().to_vec();
+    let mut leaves_pole = Vec::with_capacity(edges.len());
+    for oe in &edges {
+        let edge = topo.edge(oe.edge())?;
+        let from = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        leaves_pole.push(at_pole(topo.vertex(from)?.point()));
+    }
+    if let Some(k) = leaves_pole.iter().position(|&p| p) {
+        edges.rotate_left(k);
+    }
+    for oe in &edges {
         let edge = topo.edge(oe.edge())?;
         let start = topo.vertex(edge.start())?.point();
         let end = topo.vertex(edge.end())?.point();
