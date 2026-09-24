@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.2](https://github.com/andymai/brepkit/compare/v4.0.1...v4.0.2) (2026-09-24)
+
+
+### Bug Fixes
+
+* **heal:** convert faces and closed conics exactly, and mesh converted NURBS faces ([#1713](https://github.com/andymai/brepkit/issues/1713)) ([3055205](https://github.com/andymai/brepkit/commit/305520547a9d731fe9b3d8980d550aeebb9853b5))
+
 ## [4.0.1](https://github.com/andymai/brepkit/compare/v4.0.0...v4.0.1) (2026-09-24)
 
 
