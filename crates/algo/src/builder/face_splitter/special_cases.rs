@@ -2017,82 +2017,67 @@ pub(super) fn split_face_with_internal_loops(
     };
     let mut all_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
     for loop_edges in &mut loops {
-        // Compute signed area in UV. For single-edge closed curves
-        // (circles), sample points along the pcurve since start_uv ~= end_uv
-        // gives zero area with just the endpoints.
-        // On a plane, take the area in the LOCAL frame from 3D points: the
-        // stored UVs come from the surface's own parameterization, whose
-        // handedness can disagree with the frame on a down-facing plane and
-        // invert this verdict. Non-planar faces keep the stored-UV area the
-        // periodic machinery is calibrated to.
+        // Compute the loop's signed area. On a plane, take it in the LOCAL
+        // frame from 3D points: the stored UVs come from the surface's own
+        // parameterization, whose handedness can disagree with the frame on
+        // a down-facing plane and invert this verdict.
         let signed_area = if let Some(frame) = plane_frame.as_ref() {
             let mut area = 0.0;
             for edge in loop_edges.iter() {
-                let (t0, t1) = edge
-                    .curve_3d
-                    .domain_with_endpoints(edge.start_3d, edge.end_3d);
                 let n = if matches!(edge.curve_3d, EdgeCurve::Line) {
                     1
                 } else {
                     32
                 };
-                for k in 0..n {
-                    #[allow(clippy::cast_precision_loss)]
-                    let ta = t0 + (t1 - t0) * (k as f64 / n as f64);
-                    #[allow(clippy::cast_precision_loss)]
-                    let tb = t0 + (t1 - t0) * ((k + 1) as f64 / n as f64);
-                    let a3 = edge
-                        .curve_3d
-                        .evaluate_with_endpoints(ta, edge.start_3d, edge.end_3d);
-                    let b3 = edge
-                        .curve_3d
-                        .evaluate_with_endpoints(tb, edge.start_3d, edge.end_3d);
-                    let a = frame.project(a3);
-                    let b = frame.project(b3);
+                for w in edge_samples(edge, n).windows(2) {
+                    let a = frame.project(w[0]);
+                    let b = frame.project(w[1]);
                     area += (b.x() - a.x()) * (b.y() + a.y());
                 }
             }
             area
-        } else if loop_edges.len() == 1 {
-            // For single-edge closed curves (circles), sample UV points
-            // along the 3D curve and project to UV. The pcurve evaluation
-            // gives proper UV coordinates for the full circle.
-            let edge = &loop_edges[0];
-            let n = 32;
-            let mut area = 0.0;
-            for k in 0..n {
-                #[allow(clippy::cast_precision_loss)]
-                let t_cur = k as f64 / n as f64;
-                #[allow(clippy::cast_precision_loss)]
-                let t_next = (k + 1) as f64 / n as f64;
-                let uv0 = edge.pcurve.evaluate(t_cur);
-                let uv1 = edge.pcurve.evaluate(t_next);
-                area += (uv1.x() - uv0.x()) * (uv1.y() + uv0.y());
-            }
-            area
         } else {
-            let mut area = 0.0;
+            // Curved faces: 3D samples projected into the surface's own
+            // (u, v) and unwrapped along the loop, so a loop straddling a
+            // parameter origin keeps its true winding. Every surface here
+            // has its normal along ∂u × ∂v, so the sign reads like the
+            // plane frame's.
+            let (u_period, v_period) = parameter_periods(surface);
+            let unwrap = |x: f64, prev: f64, period: Option<f64>| {
+                period.map_or(x, |p| x - ((x - prev) / p).round() * p)
+            };
+            let mut uv: Vec<(f64, f64)> = Vec::new();
             for edge in loop_edges.iter() {
-                area +=
-                    (edge.end_uv.x() - edge.start_uv.x()) * (edge.end_uv.y() + edge.start_uv.y());
+                let n = if matches!(edge.curve_3d, EdgeCurve::Line) {
+                    1
+                } else {
+                    16
+                };
+                for p in edge_samples(edge, n).into_iter().take(n) {
+                    if let Some((u, v)) = surface.project_point(p) {
+                        let (u, v) = uv.last().map_or((u, v), |&(pu, pv)| {
+                            (unwrap(u, pu, u_period), unwrap(v, pv, v_period))
+                        });
+                        uv.push((u, v));
+                    }
+                }
             }
-            area
+            close_around_pole(surface, u_period, boundary_edges, &mut uv);
+            uv.iter()
+                .zip(uv.iter().cycle().skip(1))
+                .map(|(a, b)| (b.0 - a.0) * (b.1 + a.1))
+                .sum::<f64>()
         };
-        // PLANE faces: normalize the disc's outer wire to the face-wire
-        // convention — effective winding CCW about the effective normal.
-        // The trapezoid form Σ(x1−x0)(y1+y0) is NEGATIVE for a CCW loop,
-        // and the plane frame is right-handed with the stored normal, so
-        // the stored winding must be CCW for an unreversed parent and CW
-        // for a reversed one. The hole built from its reverse below then
-        // lands effective-CW automatically, opposing both the disc and
-        // the flipped tool walls that share its edges (the coplanar
-        // pocket-cut orientation defect). Non-planar faces keep the
-        // historic CW normalization: the periodic lateral-face machinery
-        // (seam handling, window cuts) is calibrated to it.
-        let is_plane = matches!(surface, FaceSurface::Plane { .. });
-        let want_ccw = is_plane && !reversed;
-        let is_ccw = signed_area < 0.0;
-        if is_ccw != want_ccw {
+        // Normalize the disc's outer wire to the stored-wire convention: a
+        // face reads its wires through its reversed flag (effective =
+        // stored XOR reversed), so every stored outer wire runs
+        // counter-clockwise about the SURFACE normal, flag or not. The
+        // trapezoid form Σ(x1−x0)(y1+y0) is NEGATIVE for a CCW loop, and the
+        // plane frame and every curved parameterization are right-handed
+        // with the surface normal. The disc inherits the parent's flag, and
+        // the hole built from its reverse below runs against the parent's
+        // outer wire and the tool walls that share its edges.
+        if signed_area >= 0.0 {
             loop_edges.reverse();
             for edge in loop_edges.iter_mut() {
                 std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
@@ -2116,15 +2101,7 @@ pub(super) fn split_face_with_internal_loops(
             let mut sum = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
             let mut count = 0_usize;
             for edge in loop_edges {
-                let (t0, t1) = edge
-                    .curve_3d
-                    .domain_with_endpoints(edge.start_3d, edge.end_3d);
-                for k in 0..n_samples {
-                    #[allow(clippy::cast_precision_loss)]
-                    let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
-                    let pt = edge
-                        .curve_3d
-                        .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d);
+                for pt in edge_samples(edge, n_samples).into_iter().take(n_samples) {
                     sum += brepkit_math::vec::Vec3::new(pt.x(), pt.y(), pt.z());
                     count += 1;
                 }
@@ -2187,10 +2164,10 @@ pub(super) fn split_face_with_internal_loops(
             continue;
         }
         let hole: Vec<OrientedPCurveEdge> = if let Some(u) = union_hole_by_loop[li].take() {
-            // Normalize to hole winding: effective-CW about the effective
-            // normal, i.e. stored CW (positive trapezoid area) for an
-            // unreversed parent, stored CCW for a reversed one. Same local
-            // frame as the disc normalization — stored UVs can be foreign.
+            // Normalize to hole winding: stored CW about the surface normal
+            // (positive trapezoid area), whatever the parent's flag. Same
+            // local frame as the disc normalization: stored UVs can be
+            // foreign.
             let area: f64 = if let Some(frame) = plane_frame.as_ref() {
                 u.iter()
                     .map(|e| {
@@ -2205,7 +2182,7 @@ pub(super) fn split_face_with_internal_loops(
                     .sum()
             };
             let mut u = u;
-            if (area < 0.0) != reversed {
+            if area < 0.0 {
                 u.reverse();
                 for edge in &mut u {
                     std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
@@ -2342,17 +2319,115 @@ pub(super) fn split_face_with_internal_loops(
 fn sample_edges_3d(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
     let mut pts = Vec::new();
     for e in edges {
-        let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
         let n = if matches!(e.curve_3d, EdgeCurve::Line) {
             2
         } else {
             32
         };
-        for k in 0..n {
-            #[allow(clippy::cast_precision_loss)]
-            let t = t0 + (t1 - t0) * ((k as f64 + 0.5) / n as f64);
-            pts.push(e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d));
+        let (from, to) = natural_endpoints(e);
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
+        let mut span: Vec<Point3> = (0..n)
+            .map(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = t0 + (t1 - t0) * ((k as f64 + 0.5) / n as f64);
+                e.curve_3d.evaluate_with_endpoints(t, from, to)
+            })
+            .collect();
+        if !e.forward {
+            span.reverse();
         }
+        pts.extend(span);
+    }
+    pts
+}
+
+/// The parameter period of each periodic direction of a curved surface.
+fn parameter_periods(surface: &FaceSurface) -> (Option<f64>, Option<f64>) {
+    let turn = Some(std::f64::consts::TAU);
+    match surface {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => (turn, None),
+        FaceSurface::Torus(_) => (turn, turn),
+        FaceSurface::Nurbs(n) => {
+            let span = |(lo, hi): (f64, f64)| hi - lo;
+            (
+                n.is_periodic_u().then(|| span(n.domain_u())),
+                n.is_periodic_v().then(|| span(n.domain_v())),
+            )
+        }
+        FaceSurface::Plane { .. } => (None, None),
+    }
+}
+
+/// Close a loop of unwrapped `(u, v)` samples that winds `u` once around a
+/// pole of a sphere or the apex of a cone. Its own polygon telescopes to zero
+/// area there, leaving the winding to rounding. The cap such a loop bounds
+/// lies on the far side from the face's boundary, so the polygon is closed
+/// through that pole: on to the first sample's image one winding on, then
+/// back along the pole's row.
+fn close_around_pole(
+    surface: &FaceSurface,
+    u_period: Option<f64>,
+    boundary_edges: &[OrientedPCurveEdge],
+    uv: &mut Vec<(f64, f64)>,
+) {
+    let (Some(period), Some(&(u0, v0)), Some(&(u1, _))) = (u_period, uv.first(), uv.last()) else {
+        return;
+    };
+    let closing = (u0 - u1 + period / 2.0).rem_euclid(period) - period / 2.0;
+    let winding = u1 - u0 + closing;
+    if (winding.abs() - period).abs() > 0.25 * period {
+        return;
+    }
+    let boundary_v: Vec<f64> = boundary_edges
+        .iter()
+        .flat_map(|e| edge_samples(e, 4))
+        .filter_map(|p| surface.project_point(p).map(|(_, v)| v))
+        .collect();
+    if boundary_v.is_empty() {
+        return;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let mean = |vs: &mut dyn Iterator<Item = f64>, n: usize| vs.sum::<f64>() / n as f64;
+    let loop_v = mean(&mut uv.iter().map(|p| p.1), uv.len());
+    let cap_above = mean(&mut boundary_v.iter().copied(), boundary_v.len()) < loop_v;
+    let v_pole = match surface {
+        FaceSurface::Sphere(_) if cap_above => std::f64::consts::FRAC_PI_2,
+        FaceSurface::Sphere(_) => -std::f64::consts::FRAC_PI_2,
+        FaceSurface::Cone(_) if !cap_above => 0.0,
+        FaceSurface::Cone(_)
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Plane { .. } => return,
+    };
+    uv.extend([(u0 + winding, v0), (u0 + winding, v_pole), (u0, v_pole)]);
+}
+
+/// An edge's endpoints in its curve's own direction. A reversed edge
+/// (`forward == false`) stores them in traversal order, so its curve runs
+/// from `end_3d` to `start_3d`; spanning a closed curve from `start_3d`
+/// instead would take the complement arc.
+fn natural_endpoints(e: &OrientedPCurveEdge) -> (Point3, Point3) {
+    if e.forward {
+        (e.start_3d, e.end_3d)
+    } else {
+        (e.end_3d, e.start_3d)
+    }
+}
+
+/// `n + 1` samples along an edge's own span, in traversal order.
+fn edge_samples(e: &OrientedPCurveEdge, n: usize) -> Vec<Point3> {
+    let (from, to) = natural_endpoints(e);
+    let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
+    let mut pts: Vec<Point3> = (0..=n)
+        .map(|k| {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t0 + (t1 - t0) * (k as f64 / n as f64);
+            e.curve_3d.evaluate_with_endpoints(t, from, to)
+        })
+        .collect();
+    if !e.forward {
+        pts.reverse();
     }
     pts
 }
@@ -2692,15 +2767,7 @@ pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Poin
     for hole in &remainder.inner_wires {
         let mut prev_uv: Option<(f64, f64)> = None;
         for edge in hole {
-            let (t0, t1) = edge
-                .curve_3d
-                .domain_with_endpoints(edge.start_3d, edge.end_3d);
-            for k in 0..=n {
-                #[allow(clippy::cast_precision_loss)]
-                let t = t0 + (t1 - t0) * (k as f64 / f64::from(n));
-                let p = edge
-                    .curve_3d
-                    .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d);
+            for p in edge_samples(edge, n as usize) {
                 hole_pts.push(p);
                 if let Some((u, v)) = remainder.surface.project_point(p) {
                     if let Some((pu, pv)) = prev_uv {
@@ -2739,12 +2806,7 @@ pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Poin
     let mut v_min = f64::INFINITY;
     let mut v_max = f64::NEG_INFINITY;
     for e in &remainder.outer_wire {
-        let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
-        let n = 16;
-        for k in 0..=n {
-            #[allow(clippy::cast_precision_loss)]
-            let t = t0 + (t1 - t0) * (k as f64 / f64::from(n));
-            let p = e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
+        for p in edge_samples(e, 16) {
             if let Some((u, v)) = remainder.surface.project_point(p) {
                 u_samples.push(u);
                 v_min = v_min.min(v);

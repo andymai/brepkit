@@ -77,113 +77,187 @@ pub(super) fn tessellate_with_uvs_floor(
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
-    let mut result = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => {
-            let mesh = tessellate_planar(topo, face_data, *normal, deflection, angular_tol)?;
-            let (u_axis, v_axis) = plane_axes(*normal);
-            let origin = if mesh.positions.is_empty() {
-                brepkit_math::vec::Point3::new(0.0, 0.0, 0.0)
-            } else {
-                mesh.positions[0]
-            };
-            let uvs = mesh
-                .positions
-                .iter()
-                .map(|p| {
-                    let d: brepkit_math::vec::Vec3 = *p - origin;
-                    [d.dot(u_axis), d.dot(v_axis)]
-                })
-                .collect();
-            Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
-        }
-        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection, angular_tol)),
-        FaceSurface::Cylinder(cyl) => {
-            // Check if the boundary is non-standard (e.g., boolean result
-            // with arbitrary polyline boundary instead of circles + seams).
-            let has_non_standard_boundary = {
-                let wire = topo.wire(face_data.outer_wire())?;
-                let mut has_nurbs = false;
-                let mut all_line = true;
-                for oe in wire.edges() {
-                    if let Ok(e) = topo.edge(oe.edge()) {
-                        match e.curve() {
-                            EdgeCurve::NurbsCurve(_) => has_nurbs = true,
-                            EdgeCurve::Line => {}
-                            _ => all_line = false,
-                        }
-                    }
-                }
-                has_nurbs || (all_line && wire.edges().len() > 4)
-            };
-
-            if has_non_standard_boundary {
-                tessellate_analytic_with_boundary(topo, face_data, cyl, deflection, angular_tol)
-            } else {
-                let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
-                let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
-                let nu = segments_for_chord_deviation_a(
-                    cyl.radius(),
-                    u_range.1 - u_range.0,
-                    deflection,
-                    angular_tol,
-                    false,
-                );
-                let nv = 1;
-                let cyl = cyl.clone();
-                Ok(tessellate_analytic(
-                    |u, v| cyl.evaluate(u, v),
-                    |u, v| cyl.normal(u, v),
-                    u_range,
-                    v_range,
-                    nu,
-                    nv,
-                    AnalyticKind::General,
-                ))
+    // A holed curved face goes through the solid mesher's hole-aware paths.
+    // One they cannot take keeps the analytic grid below, which covers the
+    // whole face.
+    let holed_wall = if !face_data.inner_wires().is_empty()
+        && matches!(
+            face_data.surface(),
+            FaceSurface::Cylinder(_)
+                | FaceSurface::Cone(_)
+                | FaceSurface::Sphere(_)
+                | FaceSurface::Torus(_)
+        ) {
+        match super::nonplanar::tessellate_holed_face_local(
+            topo,
+            face,
+            face_data,
+            deflection,
+            angular_tol,
+            curvature_floor,
+        ) {
+            Ok(mesh) if !mesh.mesh.indices.is_empty() => Some(mesh),
+            Ok(_) => None,
+            Err(e) => {
+                log::debug!("holed wall {face:?} falls back to the analytic grid: {e}");
+                None
             }
         }
-        FaceSurface::Cone(cone) => {
-            // Boolean results can bound a cone by a winding chain of marched
-            // NURBS pieces; the plain analytic sweep below ignores the
-            // boundary and skins the full parametric band, so classify
-            // meshes lose the wall lobes. Try the locally sampled cycle-rim
-            // band first; it declines anything that is not a two-rim band.
-            let has_nurbs_boundary = {
-                let wire = topo.wire(face_data.outer_wire())?;
-                wire.edges().iter().any(|oe| {
-                    topo.edge(oe.edge())
-                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)))
-                })
-            };
-            if has_nurbs_boundary
-                && let Some(band) = super::nonplanar::tessellate_band_face_local(
-                    topo,
-                    face_data,
-                    deflection,
-                    angular_tol,
-                )?
-            {
-                Ok(band)
-            } else {
-                let v_range = compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
-                let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
-                let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
-                let nu = segments_for_chord_deviation_a(
-                    max_radius.max(0.01),
-                    u_range.1 - u_range.0,
-                    deflection,
-                    angular_tol,
-                    false,
-                );
-                let nv = 1;
-                let kind = if v_range.0.abs() < 1e-10 {
-                    AnalyticKind::ConeApex
+    } else {
+        None
+    };
+    let mut result = if let Some(mesh) = holed_wall {
+        Ok(mesh)
+    } else {
+        match face_data.surface() {
+            FaceSurface::Plane { normal, .. } => {
+                let mesh = tessellate_planar(topo, face_data, *normal, deflection, angular_tol)?;
+                let (u_axis, v_axis) = plane_axes(*normal);
+                let origin = if mesh.positions.is_empty() {
+                    brepkit_math::vec::Point3::new(0.0, 0.0, 0.0)
                 } else {
-                    AnalyticKind::General
+                    mesh.positions[0]
                 };
-                let cone = cone.clone();
+                let uvs = mesh
+                    .positions
+                    .iter()
+                    .map(|p| {
+                        let d: brepkit_math::vec::Vec3 = *p - origin;
+                        [d.dot(u_axis), d.dot(v_axis)]
+                    })
+                    .collect();
+                Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
+            }
+            FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection, angular_tol)),
+            FaceSurface::Cylinder(cyl) => {
+                // Check if the boundary is non-standard (e.g., boolean result
+                // with arbitrary polyline boundary instead of circles + seams).
+                let has_non_standard_boundary = {
+                    let wire = topo.wire(face_data.outer_wire())?;
+                    let mut has_nurbs = false;
+                    let mut all_line = true;
+                    for oe in wire.edges() {
+                        if let Ok(e) = topo.edge(oe.edge()) {
+                            match e.curve() {
+                                EdgeCurve::NurbsCurve(_) => has_nurbs = true,
+                                EdgeCurve::Line => {}
+                                _ => all_line = false,
+                            }
+                        }
+                    }
+                    has_nurbs || (all_line && wire.edges().len() > 4)
+                };
+
+                if has_non_standard_boundary {
+                    tessellate_analytic_with_boundary(topo, face_data, cyl, deflection, angular_tol)
+                } else {
+                    let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
+                    let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
+                    let nu = segments_for_chord_deviation_a(
+                        cyl.radius(),
+                        u_range.1 - u_range.0,
+                        deflection,
+                        angular_tol,
+                        false,
+                    );
+                    let nv = 1;
+                    let cyl = cyl.clone();
+                    Ok(tessellate_analytic(
+                        |u, v| cyl.evaluate(u, v),
+                        |u, v| cyl.normal(u, v),
+                        u_range,
+                        v_range,
+                        nu,
+                        nv,
+                        AnalyticKind::General,
+                    ))
+                }
+            }
+            FaceSurface::Cone(cone) => {
+                // Boolean results can bound a cone by a winding chain of marched
+                // NURBS pieces; the plain analytic sweep below ignores the
+                // boundary and skins the full parametric band, so classify
+                // meshes lose the wall lobes. Try the locally sampled cycle-rim
+                // band first; it declines anything that is not a two-rim band.
+                let has_nurbs_boundary = {
+                    let wire = topo.wire(face_data.outer_wire())?;
+                    wire.edges().iter().any(|oe| {
+                        topo.edge(oe.edge())
+                            .is_ok_and(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)))
+                    })
+                };
+                if has_nurbs_boundary
+                    && let Some(band) = super::nonplanar::tessellate_band_face_local(
+                        topo,
+                        face_data,
+                        deflection,
+                        angular_tol,
+                    )?
+                {
+                    Ok(band)
+                } else {
+                    let v_range =
+                        compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
+                    let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
+                    let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
+                    let nu = segments_for_chord_deviation_a(
+                        max_radius.max(0.01),
+                        u_range.1 - u_range.0,
+                        deflection,
+                        angular_tol,
+                        false,
+                    );
+                    let nv = 1;
+                    let kind = if v_range.0.abs() < 1e-10 {
+                        AnalyticKind::ConeApex
+                    } else {
+                        AnalyticKind::General
+                    };
+                    let cone = cone.clone();
+                    Ok(tessellate_analytic(
+                        |u, v| cone.evaluate(u, v),
+                        |u, v| cone.normal(u, v),
+                        u_range,
+                        v_range,
+                        nu,
+                        nv,
+                        kind,
+                    ))
+                }
+            }
+            FaceSurface::Sphere(sphere) => {
+                let u_range = compute_angular_range(topo, face_data, |p| sphere.project_point(p));
+                let v_range = compute_sphere_v_range(topo, face_data, sphere);
+                // Both directions are curved at once; the worst-case sag is along
+                // the diagonal, so shrink the step to keep it within tol.
+                // Without the curvature floor: every normal-section curvature of a
+                // sphere is exactly 1/r, and latitude chords are shorter than
+                // great-circle chords at the same angular step, so the diag-shrunk
+                // chord formula already bounds the surface sag in both directions.
+                let (defl_shrink, ang_shrink) = if curvature_floor {
+                    (SPHERE_DIAG_LEGACY, SPHERE_DIAG_LEGACY)
+                } else {
+                    (SPHERE_DIAG_DEFL, SPHERE_DIAG_ANG)
+                };
+                let nu = segments_for_chord_deviation_a(
+                    sphere.radius(),
+                    u_range.1 - u_range.0,
+                    deflection * defl_shrink,
+                    angular_tol * ang_shrink,
+                    curvature_floor,
+                );
+                let nv = segments_for_chord_deviation_a(
+                    sphere.radius(),
+                    v_range.1 - v_range.0,
+                    deflection * defl_shrink,
+                    angular_tol * ang_shrink,
+                    curvature_floor,
+                );
+                let kind = sphere_analytic_kind(v_range);
+                let sphere = sphere.clone();
                 Ok(tessellate_analytic(
-                    |u, v| cone.evaluate(u, v),
-                    |u, v| cone.normal(u, v),
+                    |u, v| sphere.evaluate(u, v),
+                    |u, v| sphere.normal(u, v),
                     u_range,
                     v_range,
                     nu,
@@ -191,74 +265,34 @@ pub(super) fn tessellate_with_uvs_floor(
                     kind,
                 ))
             }
-        }
-        FaceSurface::Sphere(sphere) => {
-            let u_range = compute_angular_range(topo, face_data, |p| sphere.project_point(p));
-            let v_range = compute_sphere_v_range(topo, face_data, sphere);
-            // Both directions are curved at once; the worst-case sag is along
-            // the diagonal, so shrink the step to keep it within tol.
-            // Without the curvature floor: every normal-section curvature of a
-            // sphere is exactly 1/r, and latitude chords are shorter than
-            // great-circle chords at the same angular step, so the diag-shrunk
-            // chord formula already bounds the surface sag in both directions.
-            let (defl_shrink, ang_shrink) = if curvature_floor {
-                (SPHERE_DIAG_LEGACY, SPHERE_DIAG_LEGACY)
-            } else {
-                (SPHERE_DIAG_DEFL, SPHERE_DIAG_ANG)
-            };
-            let nu = segments_for_chord_deviation_a(
-                sphere.radius(),
-                u_range.1 - u_range.0,
-                deflection * defl_shrink,
-                angular_tol * ang_shrink,
-                curvature_floor,
-            );
-            let nv = segments_for_chord_deviation_a(
-                sphere.radius(),
-                v_range.1 - v_range.0,
-                deflection * defl_shrink,
-                angular_tol * ang_shrink,
-                curvature_floor,
-            );
-            let kind = sphere_analytic_kind(v_range);
-            let sphere = sphere.clone();
-            Ok(tessellate_analytic(
-                |u, v| sphere.evaluate(u, v),
-                |u, v| sphere.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                kind,
-            ))
-        }
-        FaceSurface::Torus(torus) => {
-            let u_range = compute_angular_range(topo, face_data, |p| torus.project_point(p));
-            let v_range = compute_torus_v_range(topo, face_data, torus);
-            let nu = segments_for_chord_deviation_a(
-                torus.major_radius(),
-                u_range.1 - u_range.0,
-                deflection,
-                angular_tol,
-                true,
-            );
-            let nv = segments_for_chord_deviation_a(
-                torus.minor_radius(),
-                v_range.1 - v_range.0,
-                deflection,
-                angular_tol,
-                true,
-            );
-            let torus = torus.clone();
-            Ok(tessellate_analytic(
-                |u, v| torus.evaluate(u, v),
-                |u, v| torus.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::General,
-            ))
+            FaceSurface::Torus(torus) => {
+                let u_range = compute_angular_range(topo, face_data, |p| torus.project_point(p));
+                let v_range = compute_torus_v_range(topo, face_data, torus);
+                let nu = segments_for_chord_deviation_a(
+                    torus.major_radius(),
+                    u_range.1 - u_range.0,
+                    deflection,
+                    angular_tol,
+                    true,
+                );
+                let nv = segments_for_chord_deviation_a(
+                    torus.minor_radius(),
+                    v_range.1 - v_range.0,
+                    deflection,
+                    angular_tol,
+                    true,
+                );
+                let torus = torus.clone();
+                Ok(tessellate_analytic(
+                    |u, v| torus.evaluate(u, v),
+                    |u, v| torus.normal(u, v),
+                    u_range,
+                    v_range,
+                    nu,
+                    nv,
+                    AnalyticKind::General,
+                ))
+            }
         }
     }?;
 

@@ -1901,8 +1901,28 @@ pub(super) fn tessellate_nonplanar_cdt(
             }
 
             for run in &seam_runs {
-                let u_assign = if run.is_forward { u_max_bnd } else { u_min_bnd };
+                // The rim sample just before the run is the seam's own vertex
+                // on that rim, already unwrapped to the seam's side of the
+                // span; the edge's sense only says which side for one wire
+                // orientation.
+                let before = (run.indices[0] + n_boundary - 1) % n_boundary;
+                let u_assign = if seam_edge_indices.contains(&boundary_3d[before].2.index()) {
+                    if run.is_forward { u_max_bnd } else { u_min_bnd }
+                } else if (boundary_uv[before].0 - u_min_bnd).abs()
+                    < (boundary_uv[before].0 - u_max_bnd).abs()
+                {
+                    u_min_bnd
+                } else {
+                    u_max_bnd
+                };
                 let n_pts = run.indices.len();
+                if n_pts == 1 {
+                    // A lone sample is one of the seam's ends; its projected
+                    // v is exact there.
+                    let i = run.indices[0];
+                    boundary_uv[i] = (u_assign, boundary_uv[i].1.clamp(v_min_bnd, v_max_bnd));
+                    continue;
+                }
 
                 let v_first = boundary_uv[run.indices[0]].1;
                 let (v_start, v_end) = if (v_first - v_min_bnd).abs() < (v_first - v_max_bnd).abs()
@@ -1927,6 +1947,36 @@ pub(super) fn tessellate_nonplanar_cdt(
         // Recompute UV bounding box after seam fix.
         uv_bounds(&boundary_uv)
     };
+
+    // Inner wires in the outer loop's (u, v): each hole is unwrapped along
+    // itself and shifted by whole periods into the outer loop's span, then
+    // constrained and flood-removed below like a planar face's holes.
+    let holes = inner_wire_uv_loops(
+        topo,
+        face_id,
+        face_data,
+        (u_min, u_max, v_min, v_max),
+        deflection,
+        angular_tol,
+        circle_floor,
+        edge_global_indices,
+        merged,
+        point_to_global,
+    )?;
+    if cdt_trace() {
+        log::debug!("cdt {face_id:?} outer u[{u_min:.4},{u_max:.4}] v[{v_min:.4},{v_max:.4}]");
+        for (hi, h) in holes.iter().enumerate() {
+            let pts: Vec<String> = h
+                .iter()
+                .map(|(u, v, _)| format!("({u:.3},{v:.3})"))
+                .collect();
+            log::debug!("cdt {face_id:?} hole {hi}: {}", pts.join(" "));
+        }
+    }
+    let hole_polys: Vec<Vec<(f64, f64)>> = holes
+        .iter()
+        .map(|h| h.iter().map(|&(u, v, _)| (u, v)).collect())
+        .collect();
     // A fillet stripe is a trimmed developable patch: two marched contacts
     // along the rulings and two transverse cross-section arcs, or, where a
     // mitered end consumed one contact, one contact and two arcs of which at
@@ -1957,6 +2007,15 @@ pub(super) fn tessellate_nonplanar_cdt(
     } else {
         developable_stripe_radius(face_data.surface(), v_min, v_max)
     };
+    // A holed cylinder or cone wall has no rim-to-rim ladder: Delaunay over
+    // its boundary alone fans rim samples to hole samples radians away and
+    // chords through the solid. Triangulate it in the developed
+    // (radius * u, v) metric and refine by angular extent, like a stripe.
+    let holed_wall_radius = if holes.is_empty() {
+        None
+    } else {
+        developable_stripe_radius(face_data.surface(), v_min, v_max)
+    };
 
     let du = u_max - u_min;
     let dv = v_max - v_min;
@@ -1969,7 +2028,7 @@ pub(super) fn tessellate_nonplanar_cdt(
     // already exact along, which lands the stripe on two triangles per angular
     // division. Only the metric moves: boundary identity, the trimmed-domain
     // tests and every surface evaluation stay in the face's parameterization.
-    let (cdt_u_scale, cdt_v_scale) = match stripe_radius {
+    let (cdt_u_scale, cdt_v_scale) = match stripe_radius.or(holed_wall_radius) {
         Some(radius) if du > 1e-15 && dv > 1e-15 => {
             let divisions =
                 segments_for_chord_deviation_a(radius, du, deflection, angular_tol, false);
@@ -2022,6 +2081,70 @@ pub(super) fn tessellate_nonplanar_cdt(
     }
     let constraints_added_steiner_vertices = cdt.vertices().len() > cdt_to_global.len();
 
+    let mut hole_pairs: Vec<(usize, usize)> = Vec::new();
+    let mut hole_seed_pts: Vec<Point2> = Vec::new();
+    let mut hole_ranges: Vec<(usize, usize)> = Vec::new();
+    for hole in &holes {
+        let pts: Vec<Point2> = hole
+            .iter()
+            .map(|&(u, v, _)| to_cdt(Point2::new(u, v)))
+            .collect();
+        let ids = cdt
+            .insert_points_hilbert(&pts)
+            .map_err(crate::OperationsError::Math)?;
+        let max_id = ids.iter().copied().max().unwrap_or(0);
+        if cdt_to_global.len() <= max_id {
+            cdt_to_global.resize(max_id + 1, None);
+        }
+        for (&cid, &(_, _, gid)) in ids.iter().zip(hole) {
+            cdt_to_global[cid] = Some(gid);
+        }
+        for k in 0..ids.len() {
+            let (a, b) = (ids[k], ids[(k + 1) % ids.len()]);
+            if a != b {
+                cdt.insert_constraint(a, b)
+                    .map_err(crate::OperationsError::Math)?;
+                hole_pairs.push((a, b));
+            }
+        }
+        // The seed steps a fraction of its vertex's shorter edge inside the
+        // loop; a near-duplicate sample (a loop closing on its own first
+        // point) would shrink that step below what the flood can resolve.
+        let (lo, hi) = pts.iter().fold(
+            (
+                Point2::new(f64::MAX, f64::MAX),
+                Point2::new(f64::MIN, f64::MIN),
+            ),
+            |(lo, hi), p| {
+                (
+                    Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                    Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+                )
+            },
+        );
+        let merge = 1e-6 * (hi.x() - lo.x()).hypot(hi.y() - lo.y());
+        let mut distinct: Vec<Point2> = Vec::with_capacity(pts.len());
+        for p in pts {
+            if distinct
+                .last()
+                .is_none_or(|q| (p.x() - q.x()).hypot(p.y() - q.y()) > merge)
+            {
+                distinct.push(p);
+            }
+        }
+        while distinct.len() > 1
+            && distinct
+                .first()
+                .zip(distinct.last())
+                .is_some_and(|(a, b)| (a.x() - b.x()).hypot(a.y() - b.y()) <= merge)
+        {
+            distinct.pop();
+        }
+        let start = hole_seed_pts.len();
+        hole_seed_pts.extend(distinct);
+        hole_ranges.push((start, hole_seed_pts.len()));
+    }
+
     if du > 1e-15 && dv > 1e-15 {
         let (n_u, n_v) = interior_grid_resolution(
             face_data.surface(),
@@ -2033,13 +2156,23 @@ pub(super) fn tessellate_nonplanar_cdt(
         );
 
         let boundary_uv_ref = &boundary_uv;
+        let hole_polys = &hole_polys;
         let interior_pts: Vec<Point2> = (1..n_u)
             .flat_map(|iu| {
                 (1..n_v).filter_map(move |iv| {
                     let u = u_min + du * (iu as f64 / n_u as f64);
                     let v = v_min + dv * (iv as f64 / n_v as f64);
                     let parameter = Point2::new(u, v);
-                    point_in_polygon_2d(boundary_uv_ref, parameter).then_some(to_cdt(parameter))
+                    // Nested inner wires alternate void and island, so a
+                    // point is void at odd depth.
+                    let in_hole = hole_polys
+                        .iter()
+                        .filter(|h| point_in_polygon_2d(h, parameter))
+                        .count()
+                        % 2
+                        == 1;
+                    (point_in_polygon_2d(boundary_uv_ref, parameter) && !in_hole)
+                        .then_some(to_cdt(parameter))
                 })
             })
             .collect();
@@ -2064,7 +2197,10 @@ pub(super) fn tessellate_nonplanar_cdt(
     // mints an untracked Steiner vertex, which means the parameter boundary
     // self-intersects: there is no unambiguous trimmed interior left to
     // measure, so that class keeps the pre-existing recovery.
-    if let Some(radius) = stripe_radius.filter(|_| !constraints_added_steiner_vertices) {
+    if let Some(radius) = stripe_radius
+        .filter(|_| !constraints_added_steiner_vertices)
+        .or(holed_wall_radius)
+    {
         const MAX_HALVING_PASSES: usize = 16;
         let mut converged = false;
         for _ in 0..MAX_HALVING_PASSES {
@@ -2085,8 +2221,20 @@ pub(super) fn tessellate_nonplanar_cdt(
                         hi = corner;
                     }
                 }
+                // A cone's rims are sampled at their own radius, so a
+                // triangle's sag is bounded by its widest corner (the radius
+                // is linear in v), not the face's widest end.
+                let local_radius = if let FaceSurface::Cone(cone) = face_data.surface() {
+                    corners
+                        .iter()
+                        .map(|c| cone.radius_at(c.y()).abs())
+                        .fold(0.0, f64::max)
+                        .min(radius)
+                } else {
+                    radius
+                };
                 if stripe_span_within_tolerance(
-                    radius,
+                    local_radius,
                     corners[hi].x() - corners[lo].x(),
                     deflection,
                     angular_tol,
@@ -2107,18 +2255,33 @@ pub(super) fn tessellate_nonplanar_cdt(
                     (corners[0].x() + corners[1].x() + corners[2].x()) / 3.0,
                     (corners[0].y() + corners[1].y() + corners[2].y()) / 3.0,
                 );
-                // Triangles outside the trimmed boundary are dropped by
-                // `remove_exterior` below, so their sag never ships.
-                if !point_in_polygon_2d(&boundary_uv, centroid) {
+                // Triangles outside the trimmed boundary or inside a hole are
+                // dropped below, so their sag never ships.
+                let in_hole = |p: Point2| {
+                    hole_polys
+                        .iter()
+                        .filter(|h| point_in_polygon_2d(h, p))
+                        .count()
+                        % 2
+                        == 1
+                };
+                if !point_in_polygon_2d(&boundary_uv, centroid) || in_hole(centroid) {
                     continue;
                 }
                 let split = Point2::new(
                     0.5 * (corners[lo].x() + corners[hi].x()),
                     0.5 * (corners[lo].y() + corners[hi].y()),
                 );
-                if point_in_polygon_2d(&boundary_uv, split) {
+                if point_in_polygon_2d(&boundary_uv, split) && !in_hole(split) {
                     splits.push(to_cdt(split));
                 }
+            }
+            if cdt_trace() {
+                log::debug!(
+                    "cdt {face_id:?} refine pass: {} splits, {} vertices",
+                    splits.len(),
+                    cdt.vertices().len()
+                );
             }
             if splits.is_empty() {
                 converged = true;
@@ -2133,10 +2296,10 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
         if !converged {
             log::warn!(
-                "{face_id:?}: developable stripe CDT stayed outside deflection {deflection} after {MAX_HALVING_PASSES} passes; the face falls back to the snap mesher"
+                "{face_id:?}: developable CDT stayed outside deflection {deflection} after {MAX_HALVING_PASSES} passes; the face falls back to the snap mesher"
             );
             return Err(crate::OperationsError::InvalidInput {
-                reason: "developable stripe CDT did not reach the requested deflection".to_string(),
+                reason: "developable CDT did not reach the requested deflection".to_string(),
             });
         }
     }
@@ -2144,6 +2307,32 @@ pub(super) fn tessellate_nonplanar_cdt(
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
     cdt.remove_exterior(&boundary_pairs);
+    if cdt_trace() {
+        log::debug!(
+            "cdt {face_id:?} after remove_exterior: {} tris",
+            cdt.triangles().len()
+        );
+    }
+    if !hole_pairs.is_empty() {
+        // Recovery can split a constraint at a Steiner point or at a vertex
+        // it passes through, so the barrier is the CDT's own constrained
+        // edges rather than the pairs as inserted.
+        let barrier: DetHashSet<(usize, usize)> = cdt
+            .constraint_edges()
+            .iter()
+            .flat_map(|&(a, b)| [(a, b), (b, a)])
+            .collect();
+        for seed in super::planar::hole_removal_seeds(&hole_seed_pts, &hole_ranges) {
+            cdt.flood_remove_from_point(seed, &barrier);
+            if cdt_trace() {
+                log::debug!(
+                    "cdt {face_id:?} flood from {:?}: {} tris left",
+                    from_cdt(seed),
+                    cdt.triangles().len()
+                );
+            }
+        }
+    }
 
     let cdt_verts = cdt.vertices();
     let triangles = cdt.triangles();
@@ -2376,6 +2565,242 @@ fn anchor_closed_edges_at_vertices(
         }
     }
     Ok(changed)
+}
+
+/// Mesh one curved face with holes on its own, the way the solid mesher does:
+/// every edge of the face is sampled into a local pool first, so closed rims
+/// are anchored at their vertices exactly as they are against the solid's
+/// shared pool. A cylinder or cone wall goes through the constrained CDT; a
+/// sphere or torus face only through the latitude-band mesher, since its
+/// constant-v rims enclose no area in (u, v). A face neither takes comes back
+/// without triangles.
+pub(super) fn tessellate_holed_face_local(
+    topo: &Topology,
+    face_id: FaceId,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    circle_floor: bool,
+) -> Result<super::TriangleMeshUV, crate::OperationsError> {
+    let mut merged = TriangleMesh::default();
+    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    let mut pool: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
+    for wire_id in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        for oe in topo.wire(wire_id)?.edges() {
+            if pool.contains_key(&oe.edge().index()) {
+                continue;
+            }
+            let edge = topo.edge(oe.edge())?;
+            let gids = sample_edge(topo, edge, deflection, angular_tol, circle_floor)?
+                .into_iter()
+                .map(|pt| {
+                    *point_to_global
+                        .entry(point_merge_key(pt, MERGE_GRID))
+                        .or_insert_with(|| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let idx = merged.positions.len() as u32;
+                            merged.positions.push(pt);
+                            merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                            idx
+                        })
+                })
+                .collect();
+            pool.insert(oe.edge().index(), gids);
+        }
+    }
+    let meshed = match face_data.surface() {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {
+            tessellate_nonplanar_cdt(
+                topo,
+                face_id,
+                face_data,
+                deflection,
+                angular_tol,
+                circle_floor,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )?;
+            true
+        }
+        FaceSurface::Sphere(_) | FaceSurface::Torus(_) => tessellate_latitude_band_shared(
+            topo,
+            face_data,
+            deflection,
+            angular_tol,
+            &pool,
+            &mut merged,
+            &mut point_to_global,
+        )?,
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => false,
+    };
+    if !meshed {
+        merged.indices.clear();
+    }
+    let surface = face_data.surface();
+    let mut uvs = Vec::with_capacity(merged.positions.len());
+    for (i, &p) in merged.positions.iter().enumerate() {
+        let (u, v) = project_to_surface_uv(surface, p)?;
+        merged.normals[i] = surface.normal(u, v);
+        uvs.push([u, v]);
+    }
+    if let (Some((_, period)), _) = surface_periods(surface) {
+        split_uv_seam(&mut merged, &mut uvs, period);
+    }
+    Ok(super::TriangleMeshUV { mesh: merged, uvs })
+}
+
+/// Give every triangle continuous `u`. A vertex welded on the seam carries
+/// one principal `u`, so a triangle beside it can span nearly a period;
+/// such a triangle takes copies of its low-side vertices one period on.
+fn split_uv_seam(mesh: &mut TriangleMesh, uvs: &mut Vec<[f64; 2]>, period: f64) {
+    let mut copies: DetHashMap<u32, u32> = DetHashMap::default();
+    for t in 0..mesh.indices.len() / 3 {
+        let tri = [0, 1, 2].map(|k| mesh.indices[3 * t + k]);
+        let us = tri.map(|i| uvs[i as usize][0]);
+        let high = us.iter().copied().fold(f64::MIN, f64::max);
+        if high - us.iter().copied().fold(f64::MAX, f64::min) <= period / 2.0 {
+            continue;
+        }
+        for (k, &i) in tri.iter().enumerate() {
+            if high - us[k] <= period / 2.0 {
+                continue;
+            }
+            let copy = *copies.entry(i).or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let j = mesh.positions.len() as u32;
+                let [u, v] = uvs[i as usize];
+                mesh.positions.push(mesh.positions[i as usize]);
+                mesh.normals.push(mesh.normals[i as usize]);
+                uvs.push([u + period, v]);
+                j
+            });
+            mesh.indices[3 * t + k] = copy;
+        }
+    }
+}
+
+/// A closed `(u, v, global id)` sample loop.
+type HoleLoop = Vec<(f64, f64, u32)>;
+
+/// Each inner wire of a curved face as a closed `(u, v, global id)` loop in
+/// the frame of the face's unwrapped outer boundary `(u_min, u_max, v_min,
+/// v_max)`.
+///
+/// Samples come from the shared edge pool (resampled and registered when an
+/// edge is missing from it), so the hole's rim is welded to the faces on the
+/// other side. Along a periodic direction the loop is unwrapped sample to
+/// sample and then shifted by whole periods until its centre falls inside
+/// the outer span: a hole straddling the surface's parameter origin keeps
+/// one contiguous image.
+#[allow(clippy::too_many_arguments)]
+fn inner_wire_uv_loops(
+    topo: &Topology,
+    face_id: FaceId,
+    face_data: &brepkit_topology::face::Face,
+    (u_min, u_max, v_min, v_max): (f64, f64, f64, f64),
+    deflection: f64,
+    angular_tol: f64,
+    circle_floor: bool,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<Vec<HoleLoop>, crate::OperationsError> {
+    let tol_dup = 1e-10;
+    let (u_period, v_period) = surface_periods(face_data.surface());
+    let mut holes = Vec::new();
+    for &wire_id in face_data.inner_wires() {
+        let wire = topo.wire(wire_id)?;
+        let mut samples: Vec<(u32, brepkit_topology::edge::EdgeId)> = Vec::new();
+        for oe in wire.edges() {
+            let gids: Vec<u32> = if let Some(pool) = edge_global_indices.get(&oe.edge().index()) {
+                pool.clone()
+            } else {
+                let edge = topo.edge(oe.edge())?;
+                sample_edge(topo, edge, deflection, angular_tol, circle_floor)?
+                    .into_iter()
+                    .map(|pt| {
+                        *point_to_global
+                            .entry(point_merge_key(pt, MERGE_GRID))
+                            .or_insert_with(|| {
+                                #[allow(clippy::cast_possible_truncation)]
+                                let idx = merged.positions.len() as u32;
+                                merged.positions.push(pt);
+                                merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                                idx
+                            })
+                    })
+                    .collect()
+            };
+            let ordered: Vec<u32> = if oe.is_forward() {
+                gids
+            } else {
+                gids.into_iter().rev().collect()
+            };
+            for gid in ordered {
+                let repeats = samples.last().is_some_and(|&(last, _)| {
+                    last == gid
+                        || (merged.positions[last as usize] - merged.positions[gid as usize])
+                            .length()
+                            < tol_dup
+                });
+                if !repeats {
+                    samples.push((gid, oe.edge()));
+                }
+            }
+        }
+        if samples.len() > 2
+            && let (Some(&(first, _)), Some(&(last, _))) = (samples.first(), samples.last())
+            && (first == last
+                || (merged.positions[first as usize] - merged.positions[last as usize]).length()
+                    < tol_dup)
+        {
+            samples.pop();
+        }
+        if samples.len() < 3 {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!("inner wire of {face_id:?} has fewer than 3 samples"),
+            });
+        }
+
+        let mut loop_uv: Vec<(f64, f64, u32)> = Vec::with_capacity(samples.len());
+        for (gid, edge) in samples {
+            let pt = merged.positions[gid as usize];
+            let (mut u, mut v) = match topo.pcurves().get(edge, face_id) {
+                Some(pcurve) => project_via_pcurve(pcurve, pt, face_data.surface()),
+                None => None,
+            }
+            .map_or_else(|| project_to_surface_uv(face_data.surface(), pt), Ok)?;
+            if let Some(&(pu, pv, _)) = loop_uv.last() {
+                if let Some((_, period)) = u_period {
+                    u -= ((u - pu) / period).round() * period;
+                }
+                if let Some((_, period)) = v_period {
+                    v -= ((v - pv) / period).round() * period;
+                }
+            }
+            loop_uv.push((u, v, gid));
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let count = loop_uv.len() as f64;
+        let centre_u = loop_uv.iter().map(|p| p.0).sum::<f64>() / count;
+        let centre_v = loop_uv.iter().map(|p| p.1).sum::<f64>() / count;
+        let shift = |centre: f64, lo: f64, hi: f64, period: Option<(f64, f64)>| {
+            period.map_or(0.0, |(_, p)| {
+                ((f64::midpoint(lo, hi) - centre) / p).round() * p
+            })
+        };
+        let du = shift(centre_u, u_min, u_max, u_period);
+        let dv = shift(centre_v, v_min, v_max, v_period);
+        for p in &mut loop_uv {
+            p.0 += du;
+            p.1 += dv;
+        }
+        holes.push(loop_uv);
+    }
+    Ok(holes)
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
