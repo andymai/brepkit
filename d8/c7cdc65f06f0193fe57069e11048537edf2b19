@@ -1,0 +1,37 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_d711a4a85d3ecc 376-377,391,442,449,463-464,482-485
+  s_ba2f7b5c6902b6::t_079302d245d3dc 12,474-481,486-487,489-490,577,2137-2153,2198
+  s_ba2f7b5c6902b6::t_1242b9d7e2fabb 543-557
+  s_ba2f7b5c6902b6::t_8710e94f968fb5 469,488,500-511,531-542,558-576
+  s_ba2f7b5c6902b6::t_4f6848e141cd63 578
+crates/operations/src/measure/helpers.rs
+  s_ba2f7b5c6902b6::t_75b94d2e5d2b55 368-488
+  s_ba2f7b5c6902b6::t_a6a4abc6bd351e 5
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_09df3fd170d311 182,190-200
+  s_ba2f7b5c6902b6::t_790bbda518b3d9 201
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_9b8f6f4ae2f576 399,402,404-414
+  s_ba2f7b5c6902b6::t_d711a4a85d3ecc 10-12,423-426
+  s_ba2f7b5c6902b6::t_8448f3975d2479 398,400,415-422,427-435
+crates/operations/tests/flat_sided_rods.rs
+  s_ba2f7b5c6902b6::t_b6a2d31a288c25 3-11,13-26,29-41,46-56,58-67,69-76,78
+  s_ba2f7b5c6902b6::t_ce5f3ce92ca43d 27-28,45,57,68,77
+  s_ba2f7b5c6902b6::t_d711a4a85d3ecc 1-2,12,42-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d8c7cdc65f06f0193fe57069e11048537edf2b19",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
