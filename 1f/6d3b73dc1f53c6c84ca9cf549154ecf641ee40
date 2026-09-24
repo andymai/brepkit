@@ -1,0 +1,19 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_c713cfdd0791fb 1671-1673,1680-1684,3659-3660,3697,3699-3700
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1f6d3b73dc1f53c6c84ca9cf549154ecf641ee40",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
