@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790256303007,
+  "lastUpdate": 1790257331000,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37259,6 +37259,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42049344,
             "range": "± 464474",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "305520547a9d731fe9b3d8980d550aeebb9853b5",
+          "message": "fix(heal): convert faces and closed conics exactly, and mesh converted NURBS faces (#1713)\n\n## What was wrong\n\nConverted solids now preserve their analytic surface geometry, align\nclosed conics with their topology, and produce watertight meshes for the\ncylinder and napkin ring cases.\n\nOn main, `convert_to_bspline` converted cones, spheres, and tori to\nsampled approximations: 33 x 9 degree-1 grids with a documented\nchord-height error of about 0.5 to 7% of the radius. Closed circles and\nellipses started at frame angle 0 instead of the edge vertex. Cylinder\nand cone patches used face vertices along the axis, while plane patches\nused vertices alone. A cap bounded by one closed radius 1.5 circle\ntherefore received a default square from -1.2 to 1.2, which did not\ncontain its disc.\n\nThese errors reached tessellation. `make_cylinder(1.5, 4)` produced 7\nopen edges at deflections 0.01 and 0.001, where the seam met the rims.\n`make_sphere(6, 24)` with a radius 3 bore produced 9140 open edges at\n0.01, and projection of its boundary onto the faceted surface failed to\nconverge.\n\n## What this does\n\n- Converts faces through the heal crate's exact rational surface\nconverters in `crate::construct::convert_surface`.\n\n- Starts a full closed circle or ellipse turn at the angle of its\nvertex.\n\n- Sizes cylinder, cone, and plane patches from 32 samples along every\nboundary edge, projected through the surface's own parameterization.\nCone `v` follows the generator.\n\n- Preserves projected `v` for seam runs that climb steadily within the\nrims' span. This avoids assuming that the run contains both seam\nvertices when a rim usually retains them.\n\n- Drops interior samples from straight seams on NURBS faces, preventing\na fan across ruled walls that have no interior rows.\n\n- Joins NURBS bands whose outer loop and single hole each wind once\naround the periodic direction along a virtual seam. The two seam copies\nshare their samples.\n\n- Measures triangulation coordinates using the surface's average speeds\ninstead of knot values. For a converted cylinder, `u` spans 1 around the\ncircumference while `v` spans 4 along the axis.\n\n## Verification\n\n- `bspline_conversion_mesh.rs` verifies that the converted cylinder is\nvalid and watertight at 0.01 and 0.001. Mesh volume is within 5e-3 and\n1e-3 of `pi 1.5^2 4`, accounting for rim chord loss, and `solid_volume`\nis within 3e-4.\n\n- The converted napkin ring is valid and watertight at 0.01. Its mesh\nvolume is within 3e-3 of its pre-conversion volume, 587.67.\n\n- `closed_conics_start_at_their_vertex` checks both ends of converted\nclosed circles and ellipses against their vertex.\n\n- The algo, operations, io, wasm, heal, check, blend, and offset suites\npass: 2229 tests, 0 failures.\n\n- The roadmap closes the conversion row and records a Stable-row defect:\nper-face tessellation still reads trimmed NURBS faces as whole patches,\nincluding `solid_volume`'s direct path, `face_area`, and the glTF, OBJ,\nand PLY writers. The converted ring reads 1613 through `solid_volume`.\nTrimmed handling is parked on `wip/per-face-nurbs-trim`, pending\n`sweep_smooth`, whose rail edges are straight chords while its side\nsurfaces curve along the path.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `convert_to_bspline` so converted solids keep their analytic\nsurface geometry and tessellate watertight, instead of sampling cones,\nspheres, and tori into degree-1 grids 5 to 7% off the surface and\nfailing to close seams at mesh time.\n\n- Converts faces through the heal crate's exact rational surface\nconverters; closed circles and ellipses now start their full turn at\ntheir vertex's angle, not the frame's.\n- Sizes cylinder, cone, and plane patches from 32 samples along every\nboundary edge, projected through the surface's own parameterization, so\na cap bounded by one closed circle reaches its disc; extremes falling\nbetween samples are refined by golden-section search so a slanted rim's\ncrest stays on the patch.\n- Fixes NURBS CDT meshing: seam runs keep their projected v, straight\nseams drop interior samples, bands bounded by two loops winding the\nperiodic direction join along a virtual seam, and triangulation measures\nin surface speeds instead of knot values.\n- Adds tests that the converted cylinder and napkin ring are valid and\nwatertight with volumes near their originals, and that closed conic\ncurves start at their vertex.\n\n<sup>Written for commit c9604aacd6b6c900c04246797371ed0524becae2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1713?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T13:39:24Z",
+          "tree_id": "d3371a009b329c35ecffc7409e3b154371674342",
+          "url": "https://github.com/andymai/brepkit/commit/305520547a9d731fe9b3d8980d550aeebb9853b5"
+        },
+        "date": 1790257326426,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000563,
+            "range": "± 3051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081838,
+            "range": "± 3620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13159,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 749194,
+            "range": "± 4209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42148291,
+            "range": "± 105548",
             "unit": "ns/iter"
           }
         ]
