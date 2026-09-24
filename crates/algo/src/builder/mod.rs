@@ -741,6 +741,50 @@ impl Builder {
                         sf.rank,
                         sf.classification
                     );
+                    // A whole ring reaches the builder unsplit, or less only
+                    // its holes, when no section crossed the rest of it:
+                    // either the other solid misses that rest, or the
+                    // intersection went unfound. Samples around the ring off
+                    // its holes tell the two apart; a ring that crosses the
+                    // other solid can take no single class, so abort the
+                    // analytic split. A hole that winds around the tube or
+                    // the ring bounds nothing on a torus, so it aborts too.
+                    if let Some(torus) = whole_ring(&self.topo, sf.face_id)
+                        && matches!(sf.classification, FaceClass::Inside | FaceClass::Outside)
+                    {
+                        let Some(holes) = ring_hole_polygons(&self.topo, sf.face_id, &torus)?
+                        else {
+                            return Err(AlgoError::ClassificationFailed(format!(
+                                "whole ring {:?} has a hole winding around it",
+                                sf.face_id
+                            )));
+                        };
+                        for k in 0..64_u32 {
+                            let (i, j) = (f64::from(k % 16), f64::from(k / 16));
+                            let (u, v) = (
+                                std::f64::consts::TAU * i / 16.0,
+                                std::f64::consts::TAU * (j + 0.5) / 4.0,
+                            );
+                            if holes.iter().any(|hole| in_uv_hole(hole, u, v)) {
+                                continue;
+                            }
+                            let at = torus.evaluate(u, v);
+                            let class = classifier::classify_point_cached(
+                                &self.topo,
+                                opposing_solid,
+                                opposing_geoms,
+                                at,
+                            )?;
+                            if matches!(class, FaceClass::Inside | FaceClass::Outside)
+                                && class != sf.classification
+                            {
+                                return Err(AlgoError::ClassificationFailed(format!(
+                                    "whole ring {:?} lies on both sides of the other solid",
+                                    sf.face_id
+                                )));
+                            }
+                        }
+                    }
                     if std::env::var("BK_CLS2").is_ok()
                         && let Ok(face) = self.topo.face(sf.face_id)
                     {
@@ -991,6 +1035,100 @@ fn face_interior_candidates(
         }
     }
     Ok(candidates)
+}
+
+/// A whole ring's holes as polygons in its `(u, v)`, each unwrapped along
+/// its walk; `None` when a hole's walk does not close (it winds around the
+/// tube or the ring).
+fn ring_hole_polygons(
+    topo: &Topology,
+    face_id: FaceId,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<Vec<Vec<brepkit_math::vec::Point2>>>, AlgoError> {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let face = topo.face(face_id)?;
+    let mut holes = Vec::with_capacity(face.inner_wires().len());
+    for &wid in face.inner_wires() {
+        let mut poly: Vec<Point2> = Vec::new();
+        let mut push = |p: Point3| {
+            let (u, v) = torus.project_point(p);
+            let next = poly.last().map_or_else(
+                || Point2::new(u, v),
+                |last| Point2::new(last.x() + wrap(u - last.x()), last.y() + wrap(v - last.y())),
+            );
+            poly.push(next);
+        };
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let (a, b) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+            for k in 0..32_u32 {
+                let t = (b - a).mul_add(f64::from(k) / 32.0, a);
+                push(edge.curve().evaluate_with_endpoints(t, sp, ep));
+            }
+        }
+        let (Some(&first), Some(&last)) = (poly.first(), poly.last()) else {
+            continue;
+        };
+        let step_u = last.x() + wrap(first.x() - last.x());
+        let step_v = last.y() + wrap(first.y() - last.y());
+        if (step_u - first.x()).abs() > PI || (step_v - first.y()).abs() > PI {
+            return Ok(None);
+        }
+        holes.push(poly);
+    }
+    Ok(Some(holes))
+}
+
+/// Whether `(u, v)`, shifted by whole turns to the hole's middle, lies inside
+/// a hole polygon from [`ring_hole_polygons`].
+fn in_uv_hole(hole: &[brepkit_math::vec::Point2], u: f64, v: f64) -> bool {
+    use std::f64::consts::{PI, TAU};
+    let Some(first) = hole.first() else {
+        return false;
+    };
+    let (mut lo, mut hi) = (*first, *first);
+    for p in hole {
+        lo = brepkit_math::vec::Point2::new(lo.x().min(p.x()), lo.y().min(p.y()));
+        hi = brepkit_math::vec::Point2::new(hi.x().max(p.x()), hi.y().max(p.y()));
+    }
+    let near = |x: f64, mid: f64| x + TAU * ((mid - x + PI) / TAU).floor();
+    let at = brepkit_math::vec::Point2::new(
+        near(u, f64::midpoint(lo.x(), hi.x())),
+        near(v, f64::midpoint(lo.y(), hi.y())),
+    );
+    classify_2d::point_in_polygon_2d(at, hole)
+}
+
+/// The torus of a face bounded only by its collapsed seam placeholders
+/// (zero-length lines on one vertex): the whole ring.
+pub fn whole_ring(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Option<brepkit_math::surfaces::ToroidalSurface> {
+    let face = topo.face(face_id).ok()?;
+    let brepkit_topology::face::FaceSurface::Torus(torus) = face.surface() else {
+        return None;
+    };
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let collapsed = !wire.edges().is_empty()
+        && wire.edges().iter().all(|oe| {
+            topo.edge(oe.edge()).is_ok_and(|edge| {
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                    && topo
+                        .vertex(edge.start())
+                        .ok()
+                        .zip(topo.vertex(edge.end()).ok())
+                        .is_some_and(|(a, b)| (a.point() - b.point()).length() < 1e-9)
+            })
+        });
+    collapsed.then(|| torus.clone())
 }
 
 /// Sample a point in the interior of a face.

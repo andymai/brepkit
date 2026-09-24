@@ -158,3 +158,9 @@ fn ring_drilled_across_its_seam() {
 fn ring_drilled_clear_of_its_seam() {
     drill_ring(0.0, 5.0);
 }
+
+/// The drill's two holes cover the ring's points at `u = 0`, `v = ±3pi/4`.
+#[test]
+fn ring_drilled_near_its_inner_equator() {
+    drill_ring(4.35, 0.0);
+}

@@ -1117,6 +1117,9 @@ fn excise_out_and_back_spurs(
     let mut drop: Vec<usize> = Vec::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let Ok(face) = topo.face(fid) else { continue };
+        // A whole ring's seam pair collapses onto one vertex, which reads as
+        // an out-and-back spur but bounds the full torus.
+        let ring = super::whole_ring(topo, fid).is_some();
         let outer_wid = face.outer_wire();
         let inner_wids: Vec<WireId> = face.inner_wires().to_vec();
         let seam = pointed_cone_seam(topo, fid);
@@ -1125,7 +1128,7 @@ fn excise_out_and_back_spurs(
             Ok(w) => w.edges().to_vec(),
             Err(_) => continue,
         };
-        if excise(&mut outer, seam) {
+        if !ring && excise(&mut outer, seam) {
             if outer.len() < 3 {
                 drop.push(fi);
                 continue;

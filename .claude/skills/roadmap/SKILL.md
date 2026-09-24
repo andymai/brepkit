@@ -171,7 +171,9 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Evolution (Beta)** | Faithful GFA provenance exists (`boolean_with_evolution`). Gaps: a same-domain merge keeps one origin and marks the other deleted; identical/contained operands and every fallback use `build_evolution_by_geometry`, whose 10-unit centroid cap is scale-dependent; fillet evolution is heuristic only |
 | **Defeaturing (Beta)** | `defeature.rs` drops the faces and reassembles an open shell. Needs the gap closed by extending the neighbouring faces |
 | **Feature recognition (Beta)** | Dihedrals are signed from outward normals and the edge tangent, adjacency reads every wire and shell, holes are concave cylinders. Pockets group coplanar split faces and open along a floor normal no face in them looks back against, one pocket per floor (a stepped pocket's landing is its own). A fillet is a curved face tangent to two neighbours that are not parallel planes; a chamfer must stand where the edge its two neighbours' planes meet along was cut away (outside it across convex edges, inside across concave ones; a scalene prism's side fails) and be at most half the larger face it bevels (tests in `feature_recognition.rs`). Still heuristic: a chamfer wider than that is missed (a regular prism's sides meet like chamfers, so size is the only discriminant); a full-round edge between parallel faces is not reported as a fillet; an undercut pocket (a face overhanging its floor) is not found; a floor split into patches (coplanar, or within the 0.01 rad flat-edge tolerance) reports its largest patch as the floor and leaves the rest out, since `Feature::Pocket` has one floor |
-| **Torus booleans, non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
+| **Torus booleans (Beta)** | Audited 2026-09-24 against `make_torus(4, 1.5)` (15 tools x 3 ops, probe `zz_torus_audit` in the session scratchpad): exact for planes across or through the axis, coaxial tori, and balls and rods on the axis; a small box inside the tube and a rod across it build without a fallback (no oracle yet). Every tool that crosses the tube off the axis falls back (row below) |
+| **Torus booleans off the axis: sections that wind around the tube or cut it in a lobe** (`make_torus(4, 1.5)` against a 2x20x4 box through the ring at x in [-1, 1], a slab over x > 1, a 4-cube over x in [3, 7], `make_sphere(1)` at (5, 0, 0), and a second torus (4, 1) turned 90 degrees about x) | All three ops fall back on each (safe meshes, volumes right). A plane parallel to the axis within R - r of it meets the tube in two loops that wind once around it, each a graph u = phi ± acos(rhs(v)) exact per v (`plane_torus_crossings`); the next step is to emit them from v = 0 in `exact_plane_torus` and give `split_torus_by_coaxial_circles` a sector arm for winding loops, as it has for tube cross-sections, then the box's plane faces take the loops as holes. The 4-cube's x = 3 plane cuts a lobe that does not wind (a disc on the torus), and its y = ±2 planes cut winding loops that the cube's edges then trim. The ball and the crossed torus go through the general marcher, whose curves FF drops (721 duplicates for the crossed tori) |
+| **Non-planar sweep profiles (Beta); IGES, render (Experimental)** | Not yet audited |
 
 
 | **Stable row defect: walking-engine chamfer at a closed rim or a shared vertex** | `chamfer_v2` on a cylinder's or cone's circular rim builds its cone face but returns a shell whose edges are not all shared by two faces (the endpoint-sampled trims cannot take a closed contact; the corrected fillet builder's periodic-contour machinery is the model). Two chamfered edges meeting at a box corner are refused (`TrimmingFailure`, pin `chamfer_v2_refuses_edges_meeting_at_a_vertex`; unrefused they left 9 edges open): each stripe's end detour lies in the other chamfer's removed region, so the two chamfer planes need a mitre along their intersection line (three at a corner need a corner patch). brepjs calls the planar `chamfer` in `chamfer.rs`, not this builder; the wasm `chamferV2` and `chamferDistanceAngle` bindings reach it |
@@ -181,12 +183,31 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: per-face NURBS meshes ignore the trim** | `tessellate::tessellate` meshes a NURBS face over its whole surface, so `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY writers read a trimmed NURBS face as its whole patch (a converted napkin ring: `solid_volume` 1613 against 587.7). A trimmed CDT for NURBS faces whose boundary leaves the domain edges is parked on branch `wip/per-face-nurbs-trim`. It waits on `sweep_smooth`: its rail edges are straight chords between the first and last rings while the side surfaces curve along the path, so a trimmed mesh follows the chords (a quarter-circle sweep reads 6.87 against 7.85); build its rails as #1700 built `loft_smooth`'s. The parked branch also holds a surface-measured refinement of long interior edges that moved an uneven loft's mesh 0.3% off its exact 32.0686, unexplained |
 | **Stable row defect: a cone cut by a plane parallel to its axis falls back to an open mesh** (`make_cone(3, 0, 6)` or `make_cone(3, 1, 4)` less a box over x < 0, or x < 0.5) | Every case falls back and the fallback mesh is open (27 to 29 boundary edges). Through the apex (any cut through the axis), `sample_plane_cone` solves v = e / (n·g) = 0 on every generator and the section collapses onto the apex; the true section is the two rulings with n·g(u) = 0. Branch `fix/cone-meridian-cut` emits them as lines in phase FF (`plane_cone_apex_rulings`); past that the frustum's x = 0 cut builds its four faces but the cone face carries both rulings reversed and out of order (its surface frame puts u = 0 on -y, where one ruling lies), and a y = 0 cut drops the cone face entirely. Off the axis the section is a sampled hyperbola; undug |
 
-| **Sphere face measure and meshing leftovers** | `analytic_sphere_signed_volume` (the per-face flux behind `volume_from_direct_face_tessellation`) reads only a sphere face's outer wire, so a holed sphere face in a solid that is not a ball less disc caps (a ball less a tilted cylinder or a box pocket) counts its hole's cap too; per-face `tessellate` of a sphere face bounded by one tilted circle meshes the whole sphere (the solid mesh is right). Repro: the tilted cases of `sphere_plane_cut.rs` with the ball-less-caps path skipped |
+| **Sphere face measure and meshing leftovers** | `analytic_sphere_signed_volume` (the per-face flux behind `volume_from_direct_face_tessellation`) reads only a sphere face's outer wire, so a holed sphere face in a solid that is not a ball less disc caps (a ball less a tilted cylinder or a box pocket) counts its hole's cap too; per-face `tessellate` of a sphere face bounded by one tilted circle meshes the whole sphere (the solid mesh is right). Repro: the tilted cases of `sphere_plane_cut.rs` with the ball-less-caps path skipped. A solid bounded by a ball zone between the chordal equator and a section circle measures off: `make_torus(4, 1.5)` less `make_sphere(3)` reads 166.4567 against 166.3658 (`torus_coaxial_tools.rs` bounds it at 1e-3), and `classify_point` on that Cut reads (2.8, 0, 0), on the equator plane, Inside where (2.8, 0, 0.3) reads Outside |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A ball or a rod on a torus's axis (CLOSED 2026-09-24; pins in `crates/operations/tests/torus_coaxial_tools.rs`)**:
+  `make_torus(4, 1.5)` fused with `make_sphere(3)` at its centre spent
+  435 s in the general surface marcher and fell back to a 1294-face mesh;
+  a rod of radius 4.2 through the ring's hole fell back on every op, and
+  one of radius 2 standing clear in the hole fused to the rod alone
+  (125.66). A
+  surface of revolution sharing the torus's axis meets it in circles about
+  that axis, where the two cross-sections in a half-plane through the axis
+  cross, so phase FF now intersects those (`meridian_crossings`, which the
+  coaxial-tori arm uses too) and emits the circles; all three ops build
+  exactly. The ring's two zero-length seam placeholders no longer merge
+  into one common block, the out-and-back spur pass leaves a whole ring
+  alone, and the check integrator unwraps a torus boundary in v as well as
+  u (the ball's Cut read 36.02 against 166.37). A whole ring that no
+  section cut is sampled around its tube and sent to the fallback when the
+  samples disagree, so a section FF missed can no longer keep or drop the
+  whole ring: a 2x20x4 box through the ring and a slab over x > 1 had
+  fused to the box alone (160 and 4000) and now fall back with the ring in.
 
 - **A torus cut by a plane across or through its axis (CLOSED 2026-09-24; pins in `crates/operations/tests/torus_plane_cut.rs`)**:
   `make_torus(4, 1.5)` less the half-space above z = 0 or z = 0.5 came
@@ -1349,7 +1370,7 @@ One line each; the fixture/PR carries the story. Newest first.
 
 ## Subsystem trap notes (crates without their own skill)
 
-- **`validate_solid` mis-reports a multi-component shell as an Euler error.** A 2x2
+- **`validate_solid` mis-reports a multi-component shell as an Euler error** (or, when one component is a whole torus, as "shell is disconnected"). A 2x2
   socket assembly is 4 disjoint feet in ONE shell (V-E+F = 8, correct at 2 per
   component); the validator expects 2+L. The ops boolean gates handle this
   (`euler_multi_ok`), the standalone validator does not — never "fix" a fixture to

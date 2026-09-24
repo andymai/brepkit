@@ -243,3 +243,65 @@ fn box_fused_over_half_a_torus() {
     assert_eq!(inside(-big, 0.0, 1.6), PointClassification::Outside);
     assert_eq!(inside(5.0, 5.0, 5.0), PointClassification::Inside);
 }
+
+/// The volume of the `(big, small)` ring within `|x| < half`, for `half`
+/// under `big - small`: over its height (`z = small sin t`), each annulus
+/// keeps the share `1 - (2 / pi) acos(half / rho)` of its circle at `rho`.
+fn ring_within_slab(big: f64, small: f64, half: f64) -> f64 {
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let h = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(h.mul_add(f64::from(k), lo));
+        }
+        sum * h / 3.0
+    };
+    let annulus = |w: f64| {
+        simpson(400, big - w, big + w, &|rho: f64| {
+            2.0 * PI * rho * (1.0 - 2.0 / PI * (half / rho).acos())
+        })
+    };
+    simpson(400, -PI / 2.0, PI / 2.0, &|t: f64| {
+        let w = small * t.cos();
+        w * annulus(w)
+    })
+}
+
+/// A 2 x 20 x 4 bar through the ring's hole and across its tube at
+/// `|x| < 1`, fused with the torus: the bar, plus the ring outside it.
+#[test]
+fn bar_through_the_ring_fuses_with_it() {
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let mut topo = Topology::new();
+    let torus = make_torus(&mut topo, big, small, 32).unwrap();
+    let bar = make_box(&mut topo, 2.0, 20.0, 4.0).unwrap();
+    transform_solid(&mut topo, bar, &Mat4::translation(-1.0, -10.0, -2.0)).unwrap();
+    let both = boolean(&mut topo, BooleanOp::Fuse, torus, bar).unwrap();
+
+    let report = validate_solid(&topo, both).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let ring = 2.0 * PI * PI * big * small * small;
+    let truth = 160.0 + ring - ring_within_slab(big, small, 1.0);
+    let volume = solid_volume(&topo, both, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-2 * truth,
+        "volume {volume}, truth {truth}"
+    );
+    let mesh = tessellate_solid(&topo, both, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "open or non-manifold mesh");
+    let at = |x: f64, y: f64, z: f64| {
+        classify_point(
+            &topo,
+            both,
+            Point3::new(x, y, z),
+            &ClassifyOptions::default(),
+        )
+        .unwrap()
+    };
+    assert_eq!(at(big, 0.0, 0.0), PointClassification::Inside);
+    assert_eq!(at(-big, 0.0, 0.5), PointClassification::Inside);
+    assert_eq!(at(0.0, 0.0, 0.0), PointClassification::Inside);
+    assert_eq!(at(0.0, big, 1.8), PointClassification::Inside);
+    assert_eq!(at(big, 0.0, 1.6), PointClassification::Outside);
+    assert_eq!(at(0.0, 0.0, 2.5), PointClassification::Outside);
+}

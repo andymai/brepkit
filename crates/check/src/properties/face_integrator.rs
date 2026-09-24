@@ -81,7 +81,8 @@ pub(crate) fn integrate_face_about(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -90,6 +91,7 @@ pub(crate) fn integrate_face_about(
                 sign,
                 &uv_boundary,
                 true,
+                false,
                 &[],
                 about,
             ))
@@ -100,7 +102,8 @@ pub(crate) fn integrate_face_about(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -109,6 +112,7 @@ pub(crate) fn integrate_face_about(
                 sign,
                 &uv_boundary,
                 true,
+                false,
                 &[],
                 about,
             ))
@@ -119,7 +123,8 @@ pub(crate) fn integrate_face_about(
                 (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
             let hole_vs = full_revolution_hole_vs(topo, face_id, s);
             Ok(integrate_with_trimming(
                 s,
@@ -129,6 +134,7 @@ pub(crate) fn integrate_face_about(
                 sign,
                 &uv_boundary,
                 true,
+                false,
                 &hole_vs,
                 about,
             ))
@@ -136,7 +142,8 @@ pub(crate) fn integrate_face_about(
         FaceSurface::Torus(s) => {
             let full = ((0.0, std::f64::consts::TAU), (0.0, std::f64::consts::TAU));
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, true, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, true)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -144,6 +151,7 @@ pub(crate) fn integrate_face_about(
                 gauss_order,
                 sign,
                 &uv_boundary,
+                true,
                 true,
                 &[],
                 about,
@@ -155,8 +163,13 @@ pub(crate) fn integrate_face_about(
             let periodic_v = s.is_periodic_v();
             let (u_range, v_range) =
                 face_uv_bounds(topo, face_id, s, periodic_u, periodic_v, full)?;
-            let uv_boundary =
-                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), periodic_u)?;
+            let uv_boundary = build_face_uv_boundary(
+                topo,
+                face_id,
+                |p| s.project_point(p),
+                periodic_u,
+                periodic_v,
+            )?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -165,6 +178,7 @@ pub(crate) fn integrate_face_about(
                 sign,
                 &uv_boundary,
                 periodic_u,
+                periodic_v,
                 &[],
                 about,
             ))
@@ -604,6 +618,7 @@ fn integrate_with_trimming<S: ParametricSurface>(
     sign: f64,
     uv_boundary: &[(f64, f64)],
     u_periodic: bool,
+    v_periodic: bool,
     hole_vs: &[f64],
     about: Vec3,
 ) -> FaceContribution {
@@ -696,6 +711,7 @@ fn integrate_with_trimming<S: ParametricSurface>(
             sign,
             uv_boundary,
             u_periodic,
+            v_periodic,
             about,
         )
     }
@@ -718,6 +734,7 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     sign: f64,
     uv_boundary: &[(f64, f64)],
     u_periodic: bool,
+    v_periodic: bool,
     about: Vec3,
 ) -> FaceContribution {
     use brepkit_math::predicates::point_in_polygon;
@@ -747,6 +764,19 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     } else {
         0.0
     };
+    // The polygon's v can sit a period off the bounds' (a torus sector whose
+    // boundary walk starts on its top arc).
+    let v_bcenter = {
+        let bmin = uv_boundary
+            .iter()
+            .map(|(_, bv)| *bv)
+            .fold(f64::INFINITY, f64::min);
+        let bmax = uv_boundary
+            .iter()
+            .map(|(_, bv)| *bv)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (bmin + bmax) * 0.5
+    };
 
     let mut area = 0.0;
     let mut vol = 0.0;
@@ -770,7 +800,15 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
                 u
             };
 
-            if !point_in_polygon(Point2::new(test_u, v), &uv_poly) {
+            let test_v = if v_periodic {
+                let tau = std::f64::consts::TAU;
+                let diff = v - v_bcenter;
+                v_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
+            } else {
+                v
+            };
+
+            if !point_in_polygon(Point2::new(test_u, test_v), &uv_poly) {
                 continue;
             }
 
@@ -821,6 +859,7 @@ fn build_face_uv_boundary<F>(
     face_id: FaceId,
     project: F,
     u_periodic: bool,
+    v_periodic: bool,
 ) -> Result<Vec<(f64, f64)>, CheckError>
 where
     F: Fn(Point3) -> (f64, f64),
@@ -832,9 +871,14 @@ where
 
     let mut uv: Vec<(f64, f64)> = polygon.iter().map(|&p| project(p)).collect();
 
+    // A band running over a v-periodic surface's v seam (a torus's v = 0
+    // line) keeps a contiguous v only when v is unwrapped too.
     for i in 1..uv.len() {
         if u_periodic {
             uv[i].0 = unwrap_angle(uv[i - 1].0, uv[i].0);
+        }
+        if v_periodic {
+            uv[i].1 = unwrap_angle(uv[i - 1].1, uv[i].1);
         }
     }
 
