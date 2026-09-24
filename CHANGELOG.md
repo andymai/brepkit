@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.6](https://github.com/andymai/brepkit/compare/v4.0.5...v4.0.6) (2026-09-24)
+
+
+### Bug Fixes
+
+* **io:** honour an EDGE_CURVE's same_sense flag when reading STEP ([#1724](https://github.com/andymai/brepkit/issues/1724)) ([a1e2c71](https://github.com/andymai/brepkit/commit/a1e2c7141791dff8ad9bd9ce3f11e64f3afbb1ac))
+
 ## [4.0.5](https://github.com/andymai/brepkit/compare/v4.0.4...v4.0.5) (2026-09-24)
 
 
