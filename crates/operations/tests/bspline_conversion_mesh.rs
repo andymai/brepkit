@@ -75,9 +75,15 @@ fn converted_bored_sphere_keeps_its_tunnel() {
     transform_solid(&mut topo, bore, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
     let ring = boolean(&mut topo, BooleanOp::Cut, sphere, bore).unwrap();
     let truth = solid_volume(&topo, ring, 0.001).unwrap();
+    // A napkin ring's volume depends only on its height: pi h^3 / 6.
+    let tall = 2.0 * 27.0_f64.sqrt();
+    let napkin = std::f64::consts::PI * tall.powi(3) / 6.0;
+    assert!(
+        (truth - napkin).abs() < 1e-6 * napkin,
+        "volume {truth}, napkin ring {napkin}"
+    );
     let area = solid_surface_area(&topo, ring, 0.001).unwrap();
     // Two spherical zones and the tunnel wall, all as tall as the tunnel.
-    let tall = 2.0 * 27.0_f64.sqrt();
     let zones_and_wall = 2.0 * std::f64::consts::PI * (6.0 + 3.0) * tall;
     assert!(
         (area - zones_and_wall).abs() < 1e-6 * zones_and_wall,
