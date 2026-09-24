@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.13](https://github.com/andymai/brepkit/compare/v4.0.12...v4.0.13) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** cut a cone with a plane across its wall, level or tilted, keeping either side ([#1736](https://github.com/andymai/brepkit/issues/1736)) ([a1dda4b](https://github.com/andymai/brepkit/commit/a1dda4be86e35682568d53692abde35e50e3f776))
+
 ## [4.0.12](https://github.com/andymai/brepkit/compare/v4.0.11...v4.0.12) (2026-09-24)
 
 
