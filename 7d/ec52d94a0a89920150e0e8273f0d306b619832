@@ -1,0 +1,26 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_33d889cead2cbc 1610-1611,1618-1619
+crates/operations/tests/torus_plane_cut.rs
+  s_ba2f7b5c6902b6::t_10d980857d920b 6-7,249,251-252,254,257,259,262-263,266,272,276-302,304-334,353-368,373-376,378,380-381,383-387,409-428,430-435,437-456
+  s_ba2f7b5c6902b6::t_6b96cea887bfd2 24,335-352,369-372,388-408,458-463
+  s_ba2f7b5c6902b6::t_06b8b5869c4f12 273-275,303
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_45b87f9e56ce24 174-175,193-206
+  s_ba2f7b5c6902b6::t_6953d315082d05 207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7dec52d94a0a89920150e0e8273f0d306b619832",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
