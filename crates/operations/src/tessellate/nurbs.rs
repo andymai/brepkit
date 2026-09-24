@@ -754,12 +754,16 @@ pub(super) fn tessellate_periodic_nurbs_grid(
 pub(super) const GRID_MAX_CELLS: usize = 1 << 16;
 
 /// Shrinks a grid's two division counts together, keeping their ratio, until
-/// it holds at most `max_cells` cells.
+/// it holds at most `max_cells` cells. The shrunk grid no longer meets the
+/// deflection it was sized for, so this says so.
 pub(super) fn cap_grid(n_u: usize, n_v: usize, max_cells: usize) -> (usize, usize) {
     let cells = n_u.saturating_mul(n_v);
     if cells <= max_cells {
         return (n_u, n_v);
     }
+    log::warn!(
+        "NURBS grid of {n_u} x {n_v} cells exceeds {max_cells}; meshing it coarser than the requested deflection"
+    );
     #[allow(clippy::cast_precision_loss)]
     let scale = (max_cells as f64 / cells as f64).sqrt();
     #[allow(
