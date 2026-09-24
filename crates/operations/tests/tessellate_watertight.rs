@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use brepkit_math::vec::Point3;
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere};
-use brepkit_operations::tessellate::tessellate_solid_with_tolerance;
+use brepkit_operations::tessellate::{tessellate_solid, tessellate_solid_with_tolerance};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::topology::Topology;
 
@@ -87,4 +87,46 @@ fn sphere_tessellation_is_watertight() {
     let mut topo = Topology::new();
     let solid = make_sphere(&mut topo, 5.0, 24).unwrap();
     assert_watertight("sphere", &topo, solid);
+}
+
+/// A pointed cone's rim circle and its surface build their frames from
+/// opposite normals when the apex is up, so the rim's samples and the
+/// surface's own angular grid run from opposite sides in opposite senses.
+/// The cone's mesh must meet the base disc at every sample regardless,
+/// pointing up or down, at every deflection.
+#[test]
+fn pointed_cone_tessellation_is_watertight_at_every_deflection() {
+    for (bottom, top, height) in [
+        (3.0, 0.0, 6.0),
+        (0.0, 3.0, 6.0),
+        (1.0, 0.0, 2.0),
+        (5.0, 0.0, 1.0),
+    ] {
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, bottom, top, height).unwrap();
+        let radius: f64 = f64::max(bottom, top);
+        let truth = std::f64::consts::PI * radius * radius * height / 3.0;
+        for deflection in [0.1, 0.03, 0.01, 0.003, 0.001] {
+            let label = format!("cone({bottom}, {top}, {height}) at {deflection}");
+            let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+            let (edges, boundary) = boundary_edges(&mesh.positions, &mesh.indices);
+            assert_eq!(
+                boundary, 0,
+                "{label}: {boundary}/{edges} open or non-manifold edges"
+            );
+            let volume: f64 = mesh
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                    (a - Point3::new(0.0, 0.0, 0.0)).dot((b - a).cross(c - a)) / 6.0
+                })
+                .sum();
+            // The mesh is inscribed: it falls short by the rim's chords.
+            assert!(
+                volume <= truth + 1e-9 && truth - volume < 3.0 * deflection / radius * truth,
+                "{label}: mesh volume {volume}, truth {truth}"
+            );
+        }
+    }
 }

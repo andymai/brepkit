@@ -266,9 +266,10 @@ pub(super) fn tessellate_band_face_local(
 /// (issue #696: a drilled magnet hole). Reusing the shared rim vertices makes
 /// the band watertight by construction.
 ///
-/// Returns `Ok(true)` when the face is a simple two-rim band that was handled
-/// here, `Ok(false)` when it is not (the caller then falls back to the snap or
-/// CDT path). A "simple band" has no inner wires and exactly two rims
+/// Returns `Ok(true)` when the face is a simple two-rim band (or a pointed
+/// cone, one rim and a seam line up to the apex) that was handled here,
+/// `Ok(false)` when it is not (the caller then falls back to the snap or CDT
+/// path). A "simple band" has no inner wires and exactly two rims
 /// (everything else a seam line). Each rim is either one **closed** circle
 /// edge or a CHAIN of open circle arcs at one constant `v` whose spans sum to
 /// a full revolution — a boolean that splits a rim at tangency or crossing
@@ -373,7 +374,8 @@ pub(super) fn tessellate_revolution_band_shared(
         }
         cycles.push(cycle);
     }
-    if cycles.len() != 2 {
+    let pointed_cone = matches!(face_data.surface(), FaceSurface::Cone(_)) && cycles.len() == 1;
+    if cycles.len() != 2 && !pointed_cone {
         return Ok(false);
     }
     // Net winding per cycle from surface-projected endpoint deltas; a closed
@@ -435,6 +437,59 @@ pub(super) fn tessellate_revolution_band_shared(
         });
     }
 
+    // A pointed cone's only other boundary is its seam line up to the apex.
+    // Every ruling is straight, so a fan from the rim's shared samples to the
+    // apex deviates from the surface only by the rim's own chords.
+    let apex_id = if pointed_cone {
+        let FaceSurface::Cone(cone) = face_data.surface() else {
+            return Ok(false);
+        };
+        let mut seam = None;
+        for oe in wire.edges() {
+            let e = topo.edge(oe.edge())?;
+            if matches!(e.curve(), EdgeCurve::Line) {
+                if seam.is_some_and(|s| s != oe.edge()) {
+                    return Ok(false);
+                }
+                seam = Some(oe.edge());
+            }
+        }
+        let Some(seam) = seam else {
+            return Ok(false);
+        };
+        let seam_edge = topo.edge(seam)?;
+        let on_rim = |v| {
+            cycles[0]
+                .iter()
+                .any(|&ci| curved[ci].1 == v || curved[ci].2 == v)
+        };
+        let apex_end = if on_rim(seam_edge.start()) {
+            seam_edge.end()
+        } else if on_rim(seam_edge.end()) {
+            seam_edge.start()
+        } else {
+            return Ok(false);
+        };
+        let apex_vertex = topo.vertex(apex_end)?;
+        if (apex_vertex.point() - cone.apex()).length() > apex_vertex.tolerance() {
+            return Ok(false);
+        }
+        // Only the apex sample is taken from the seam: a closed circle is
+        // sampled from its frame's origin, so the rim's samples need not
+        // include the seam's rim vertex.
+        let Some(&apex) = edge_global_indices.get(&seam.index()).and_then(|ids| {
+            ids.iter().find(|&&id| {
+                (merged.positions[id as usize] - apex_vertex.point()).length()
+                    <= apex_vertex.tolerance()
+            })
+        }) else {
+            return Ok(false);
+        };
+        Some(apex)
+    } else {
+        None
+    };
+
     // Emit default-oriented (non-reversed) triangles: the geometric normal
     // matches the surface outward normal, the convention `tessellate_analytic`
     // uses. The caller (`tessellate_face_with_shared_edges`) applies the global
@@ -458,6 +513,13 @@ pub(super) fn tessellate_revolution_band_shared(
         }
         merged.indices.extend_from_slice(&tri);
     };
+
+    if let Some(apex) = apex_id {
+        for i in 0..n {
+            emit(merged, rims[0][i], rims[0][(i + 1) % n], apex);
+        }
+        return Ok(true);
+    }
 
     let m = rims[1].len();
     if n == m {
