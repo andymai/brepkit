@@ -1,0 +1,19 @@
+crates/operations/src/validate.rs
+  s_9955181122af73::t_ee80c6b85ed82f 205-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "737f8b54e48a8141ebb1a0791c70a9939de66486",
+  "prompts": {},
+  "sessions": {
+    "s_9955181122af73": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "80312182-f557-4f83-93e5-b19abfd078d1",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
