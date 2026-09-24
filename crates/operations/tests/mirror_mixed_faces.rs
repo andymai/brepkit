@@ -10,7 +10,9 @@ use brepkit_math::vec::Point3;
 use brepkit_operations::copy::copy_and_transform_solid;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::make_box;
-use brepkit_operations::tessellate::{boundary_edge_count, tessellate_solid};
+use brepkit_operations::tessellate::{
+    boundary_edge_count, non_manifold_edge_count, tessellate_solid,
+};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -54,6 +56,11 @@ fn assert_closed_at_volume(topo: &Topology, solid: SolidId, what: &str) {
     assert!(report.is_valid(), "{what}: {:?}", report.issues);
     let mesh = tessellate_solid(topo, solid, 0.01).unwrap();
     assert_eq!(boundary_edge_count(&mesh), 0, "{what}: open mesh");
+    assert_eq!(
+        non_manifold_edge_count(&mesh),
+        0,
+        "{what}: non-manifold mesh"
+    );
     let volume = solid_volume(topo, solid, 0.001).unwrap();
     assert!((volume - 24.0).abs() < 1e-9, "{what}: volume {volume}");
 }

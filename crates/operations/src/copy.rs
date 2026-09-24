@@ -40,6 +40,9 @@ struct FaceSnap {
     inner_wire_indices: Vec<usize>,
     surface: FaceSurface,
     reversed: bool,
+    /// Whether this face's wires reverse under a mirror; a wire shared by
+    /// faces that disagree is copied once per choice.
+    reverse_wires: bool,
 }
 
 struct ShellSnap {
@@ -145,6 +148,7 @@ pub fn copy_solid(
                 inner_wire_indices,
                 surface,
                 reversed: face.is_reversed(),
+                reverse_wires: false,
             });
         }
 
@@ -276,6 +280,7 @@ pub fn copy_and_transform_solid(
         for &face_id in shell.faces() {
             let face = topo.face(face_id)?;
             let image = surface_image(topo, face_id, matrix, &inverse)?;
+            let reverse_wires = mirrored && !image.flips_face;
             let outer_wire_index = face.outer_wire().index();
             let inner_wire_indices: Vec<usize> =
                 face.inner_wires().iter().map(|w| w.index()).collect();
@@ -283,7 +288,7 @@ pub fn copy_and_transform_solid(
             for wire_id_val in
                 std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
             {
-                if !seen_wires.insert(wire_id_val.index()) {
+                if !seen_wires.insert((wire_id_val.index(), reverse_wires)) {
                     continue;
                 }
                 let wire = topo.wire(wire_id_val)?;
@@ -329,7 +334,7 @@ pub fn copy_and_transform_solid(
                     old_index: wire_id_val.index(),
                     edges: edge_refs,
                     closed: wire.is_closed(),
-                    reverse: mirrored && !image.flips_face,
+                    reverse: reverse_wires,
                 });
             }
 
@@ -338,6 +343,7 @@ pub fn copy_and_transform_solid(
                 inner_wire_indices,
                 surface: image.surface,
                 reversed: face.is_reversed() != image.flips_face,
+                reverse_wires,
             });
         }
 
@@ -380,7 +386,7 @@ pub fn copy_and_transform_solid(
     // Under a mirror, a face whose normal stays outward reverses its wires
     // so they still wind counter-clockwise around it; a NURBS face flips its
     // flag instead (see `transform_solid`).
-    let mut wire_map: HashMap<usize, WireId> = HashMap::new();
+    let mut wire_map: HashMap<(usize, bool), WireId> = HashMap::new();
     for wsnap in &wire_snaps {
         let mut new_edges: Vec<OrientedEdge> = wsnap
             .edges
@@ -392,18 +398,18 @@ pub fn copy_and_transform_solid(
         }
         let new_wire =
             Wire::new(new_edges, wsnap.closed).map_err(crate::OperationsError::Topology)?;
-        wire_map.insert(wsnap.old_index, topo.add_wire(new_wire));
+        wire_map.insert((wsnap.old_index, wsnap.reverse), topo.add_wire(new_wire));
     }
 
     let mut new_shell_ids = Vec::new();
     for ssnap in shell_snaps {
         let mut new_face_ids = Vec::new();
         for fsnap in ssnap.faces {
-            let new_outer = wire_map[&fsnap.outer_wire_index];
+            let new_outer = wire_map[&(fsnap.outer_wire_index, fsnap.reverse_wires)];
             let new_inner: Vec<WireId> = fsnap
                 .inner_wire_indices
                 .iter()
-                .map(|idx| wire_map[idx])
+                .map(|&idx| wire_map[&(idx, fsnap.reverse_wires)])
                 .collect();
             let new_face = if fsnap.reversed {
                 Face::new_reversed(new_outer, new_inner, fsnap.surface)

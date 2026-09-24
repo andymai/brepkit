@@ -26,9 +26,12 @@ use brepkit_topology::wire::{OrientedEdge, WireId};
 ///   same `(u, v)` parameterization. A map that would stop a surface being
 ///   circular (a non-uniform scale across a cylinder's axis, say) converts
 ///   that face to the NURBS image of the surface.
-/// - A mirror (negative determinant) reverses every wire and flips the
-///   `reversed` flag of NURBS faces, so each outer wire still winds
-///   counter-clockwise around its face's outward normal.
+/// - A mirror (negative determinant) turns every boundary clockwise about
+///   its face's outward normal. A face with an explicit normal (a plane or
+///   quadric) keeps that normal outward and reverses its wires; a NURBS
+///   face's Su × Sv turns inward, so it keeps its wires and flips its
+///   `reversed` flag. Either way each stored outer wire still winds
+///   counter-clockwise about its surface normal.
 /// - Stored pcurves survive only on faces whose parameterization is carried
 ///   over exactly; the rest are dropped for consumers to recompute.
 ///
@@ -92,10 +95,43 @@ fn transform_topology(
     // the surface normal: only its flag flips.
     if matrix.determinant() < 0.0 {
         let kept: HashSet<FaceId> = face_ids.difference(&flipped).copied().collect();
+        separate_shared_wires(topo, &kept, &flipped)?;
         reverse_face_wires(topo, &kept)?;
     }
     topo.pcurves_mut().remove_faces(&stale_pcurves);
     topo.pcurves_mut().remove_edges(&moved_origins);
+    Ok(())
+}
+
+/// Give each of `flipped` its own copy of any wire it shares with a face in
+/// `kept`: the two groups need opposite senses of the same boundary.
+fn separate_shared_wires(
+    topo: &mut Topology,
+    kept: &HashSet<FaceId>,
+    flipped: &HashSet<FaceId>,
+) -> Result<(), crate::OperationsError> {
+    let mut kept_wires = HashSet::new();
+    for &fid in kept {
+        let face = topo.face(fid)?;
+        kept_wires.insert(face.outer_wire());
+        kept_wires.extend(face.inner_wires().iter().copied());
+    }
+    for &fid in flipped {
+        let face = topo.face(fid)?;
+        let (outer, inner) = (face.outer_wire(), face.inner_wires().to_vec());
+        if kept_wires.contains(&outer) {
+            let copy = topo.wire(outer)?.clone();
+            let copy = topo.add_wire(copy);
+            topo.face_mut(fid)?.set_outer_wire(copy);
+        }
+        for (k, wid) in inner.into_iter().enumerate() {
+            if kept_wires.contains(&wid) {
+                let copy = topo.wire(wid)?.clone();
+                let copy = topo.add_wire(copy);
+                topo.face_mut(fid)?.inner_wires_mut()[k] = copy;
+            }
+        }
+    }
     Ok(())
 }
 
