@@ -1,0 +1,24 @@
+crates/wasm/src/bindings/operations.rs
+  s_ba2f7b5c6902b6::t_2ce7be3d26d132 1697-1709
+crates/operations/src/draft.rs
+  s_ba2f7b5c6902b6::t_6cb22e4780c197 309,365
+  s_ba2f7b5c6902b6::t_84a9f03e697a97 148,270-284,290,294,299-304
+  s_ba2f7b5c6902b6::t_923475a687b45a 149-152,295,297-298,340-364,366-381
+  s_ba2f7b5c6902b6::t_cf8f094352f930 382
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "98a86483f99bae2f8dec529e6d06cdc1e07d70fb",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
