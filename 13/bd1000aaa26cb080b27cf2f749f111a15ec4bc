@@ -1,0 +1,38 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_3d1685d700844a 969-998
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_7c363f96362c3e 30-32,181-237,239-258,272-286,293-304
+  s_ba2f7b5c6902b6::t_dae30c817ebe16 238,259-271
+  s_ba2f7b5c6902b6::t_0097ae06c47fe2 287-292
+crates/operations/src/tessellate/solid.rs
+  s_ba2f7b5c6902b6::t_239bab66ac33e6 1081-1084
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_a940f1d7e02795 742-753,2588-2630,2635-2636,2640
+  s_ba2f7b5c6902b6::t_bdbbe9c94adc4b 544-555,2551-2587
+  s_ba2f7b5c6902b6::t_77a51ecd502fb6 2631-2634
+  s_ba2f7b5c6902b6::t_dfc2d972a2a9b4 2637-2639
+crates/operations/tests/oblique_rod_cut.rs
+  s_ba2f7b5c6902b6::t_d23a88322be6b1 1-109
+crates/topology/src/edge.rs
+  s_ba2f7b5c6902b6::t_5168da4743fdf8 142-146
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_4854e9dc805ffd 188-203
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_239bab66ac33e6 328
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "13bd1000aaa26cb080b27cf2f749f111a15ec4bc",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
