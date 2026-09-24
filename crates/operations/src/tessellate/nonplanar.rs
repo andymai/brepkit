@@ -1187,16 +1187,19 @@ pub(super) fn tessellate_latitude_band_shared(
         return Ok(true);
     }
 
-    // Case 2 — a COLLAR: the inner wire is a constant-v cap circle, the outer
-    // wire is a full-longitude-wrap "floor" at varying v (great-circle/seam
-    // arcs, e.g. a box ∩ sphere patch). Sweep interior rows whose per-column v
-    // interpolates from the scalloped floor up to the cap.
-    let Some((v_cap, cap_ring)) = inner_const else {
-        return Ok(false);
+    // Case 2 — a COLLAR: one wire is a constant-v cap circle, the other a
+    // full-longitude-wrap "floor" at varying v (great-circle/seam arcs of a
+    // box ∩ sphere patch below its cap, or a tilted plane's circle above a
+    // hemisphere's equator). Sweep interior rows whose per-column v
+    // interpolates from the floor to the cap.
+    let ((v_cap, cap_ring), floor_wid) = match (outer_const, inner_const) {
+        (None, Some(cap)) => (cap, outer_wid),
+        (Some(cap), None) => (cap, inner_wid),
+        _ => return Ok(false),
     };
     let Some(floor) = collect_var_v_ring(
         topo,
-        outer_wid,
+        floor_wid,
         project.as_ref(),
         edge_global_indices,
         merged,

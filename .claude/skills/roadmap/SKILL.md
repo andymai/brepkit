@@ -181,11 +181,28 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: per-face NURBS meshes ignore the trim** | `tessellate::tessellate` meshes a NURBS face over its whole surface, so `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY writers read a trimmed NURBS face as its whole patch (a converted napkin ring: `solid_volume` 1613 against 587.7). A trimmed CDT for NURBS faces whose boundary leaves the domain edges is parked on branch `wip/per-face-nurbs-trim`. It waits on `sweep_smooth`: its rail edges are straight chords between the first and last rings while the side surfaces curve along the path, so a trimmed mesh follows the chords (a quarter-circle sweep reads 6.87 against 7.85); build its rails as #1700 built `loft_smooth`'s. The parked branch also holds a surface-measured refinement of long interior edges that moved an uneven loft's mesh 0.3% off its exact 32.0686, unexplained |
 | **Stable row defect: a cone cut by a plane parallel to its axis falls back to an open mesh** (`make_cone(3, 0, 6)` or `make_cone(3, 1, 4)` less a box over x < 0, or x < 0.5) | Every case falls back and the fallback mesh is open (27 to 29 boundary edges). Through the apex (any cut through the axis), `sample_plane_cone` solves v = e / (n·g) = 0 on every generator and the section collapses onto the apex; the true section is the two rulings with n·g(u) = 0. Branch `fix/cone-meridian-cut` emits them as lines in phase FF (`plane_cone_apex_rulings`); past that the frustum's x = 0 cut builds its four faces but the cone face carries both rulings reversed and out of order (its surface frame puts u = 0 on -y, where one ruling lies), and a y = 0 cut drops the cone face entirely. Off the axis the section is a sampled hyperbola; undug |
 
+| **Sphere face measure and meshing leftovers** | `analytic_sphere_signed_volume` (the per-face flux behind `volume_from_direct_face_tessellation`) reads only a sphere face's outer wire, so a holed sphere face in a solid that is not a ball less disc caps (a ball less a tilted cylinder or a box pocket) counts its hole's cap too; per-face `tessellate` of a sphere face bounded by one tilted circle meshes the whole sphere (the solid mesh is right). Repro: the tilted cases of `sphere_plane_cut.rs` with the ball-less-caps path skipped |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A ball cut by a plane clear of its equator (CLOSED 2026-09-24; pin `crates/operations/tests/sphere_plane_cut.rs`)**:
+  `make_sphere(3, 32)` less the half-space above z = 0.5 fell back to a
+  415-face mesh reading 69.65 against 70.55, keeping the cap above it
+  fell back too, and a tilted plane's cut declared the ball "fully
+  contained" in the tool. Four roots: the internal-loops splitter took a
+  sphere loop's interior at its centroid, inside the ball (it now takes
+  the sphere point straight out through it); the doubled-face pass dropped
+  a cap and its disc, which share their one circle edge (two faces on
+  different surfaces that no other face touches now stay); the containment
+  witness probed only edges, and a ball's run only round its equator (a
+  ball is now probed toward each flat face of the tool and along the axes);
+  and the collar mesher wanted the level ring inside (a hemisphere less a
+  tilted cap has it outside). Measure: a ball less disc caps holds
+  (r A_sphere + sum d A_disc) / 3 about its centre, and a sphere face
+  bounded by one circle is the cap on its boundary's winding side.
 
 - **A tube cut by an oblique plane (CLOSED 2026-09-24; pin `tube_cut_by_an_oblique_plane` in `crates/operations/tests/oblique_rod_cut.rs`)**:
   a tube (radius 3 bored to 1.5) less the half-space above a tilted plane

@@ -2434,6 +2434,27 @@ fn detect_trivial_relation(
                     };
                     clear_outside(p)
                 })
+            }) || ball_of(topo, inner).is_some_and(|(center, radius)| {
+                // A ball's edges run only around its equator, so its reach
+                // along the axes and past the outer solid's flat faces is
+                // probed too: the deepest few planes it crosses, each once.
+                let axes = [
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                ];
+                let c = Vec3::new(center.x(), center.y(), center.z());
+                let mut planes: Vec<(f64, Vec3)> = outward_planes(topo, outer)
+                    .into_iter()
+                    .map(|(n, offset)| (n.dot(c) + radius - offset, n))
+                    .filter(|&(depth, _)| depth > 0.0)
+                    .collect();
+                planes.sort_by(|a, b| b.0.total_cmp(&a.0));
+                planes.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).length() < 1e-9);
+                axes.iter()
+                    .flat_map(|&a| [a, -a])
+                    .chain(planes.into_iter().take(16).map(|(_, n)| n))
+                    .any(|d| clear_outside(center + d * radius))
             })
         };
 
@@ -2458,6 +2479,49 @@ fn detect_trivial_relation(
         a_in_b,
         b_in_a,
     }
+}
+
+/// The centre and radius of a solid bounded only by faces of one sphere.
+fn ball_of(topo: &Topology, solid: SolidId) -> Option<(Point3, f64)> {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid).ok()?;
+    let mut ball: Option<(Point3, f64)> = None;
+    for fid in faces {
+        let FaceSurface::Sphere(s) = topo.face(fid).ok()?.surface() else {
+            return None;
+        };
+        match ball {
+            None => ball = Some((s.center(), s.radius())),
+            Some((c, r)) => {
+                if (s.center() - c).length() > 1e-9 * r || (s.radius() - r).abs() > 1e-9 * r {
+                    return None;
+                }
+            }
+        }
+    }
+    ball
+}
+
+/// A solid's planar faces as outward unit normals `n` with offsets `d`, the
+/// face lying on `n . p = d`.
+fn outward_planes(topo: &Topology, solid: SolidId) -> Vec<(Vec3, f64)> {
+    brepkit_topology::explorer::solid_faces(topo, solid)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|fid| {
+            let face = topo.face(fid).ok()?;
+            let FaceSurface::Plane { normal, d } = face.surface() else {
+                return None;
+            };
+            let len = normal.length();
+            let n = normal.normalize().ok()?;
+            let offset = d / len;
+            Some(if face.is_reversed() {
+                (-n, -offset)
+            } else {
+                (n, offset)
+            })
+        })
+        .collect()
 }
 
 /// Check whether every boundary vertex of `solid` is classified as

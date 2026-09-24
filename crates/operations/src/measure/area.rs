@@ -92,6 +92,22 @@ pub fn face_area(
             // where v is the latitude parameter (-pi/2 to pi/2).
             let r = sph.radius();
             let positions = crate::boolean::face_polygon(topo, face_id)?;
+            let mut holes = 0.0;
+            for &wire in face.inner_wires() {
+                holes += sphere_hole_area(topo, sph, wire)?;
+            }
+            // A face bounded by one circle is the cap on the side its boundary
+            // winds about, and a cap `h` high has `2 pi r h` of the sphere,
+            // however the circle tilts.
+            if let [oe] = topo.wire(face.outer_wire())?.edges()
+                && let edge = topo.edge(oe.edge())?
+                && edge.start() == edge.end()
+                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let Ok(winding) = newell_normal(&positions).normalize()
+            {
+                let rise = winding.dot(circle.center() - sph.center());
+                return Ok(2.0 * std::f64::consts::PI * r * (r - rise) - holes);
+            }
             if positions.len() >= 3 {
                 let v_vals: Vec<f64> = positions.iter().map(|p| sph.project_point(*p).1).collect();
                 let avg_v: f64 = v_vals.iter().sum::<f64>() / v_vals.len() as f64;
@@ -101,10 +117,6 @@ pub fn face_area(
                 } else {
                     (-std::f64::consts::FRAC_PI_2, avg_v)
                 };
-                let mut holes = 0.0;
-                for &wire in face.inner_wires() {
-                    holes += sphere_hole_area(topo, sph, wire)?;
-                }
                 Ok(2.0 * std::f64::consts::PI * r * r * (v_max.sin() - v_min.sin()) - holes)
             } else {
                 // Full sphere fallback
@@ -714,6 +726,21 @@ fn newell_area(positions: &[Point3]) -> f64 {
     }
 
     0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt()
+}
+
+/// Newell's normal of a closed polygon: twice its vector area.
+fn newell_normal(pts: &[Point3]) -> Vec3 {
+    let n = pts.len();
+    let mut normal = Vec3::new(0.0, 0.0, 0.0);
+    for i in 0..n {
+        let (a, b) = (pts[i], pts[(i + 1) % n]);
+        normal += Vec3::new(
+            (a.y() - b.y()) * (a.z() + b.z()),
+            (a.z() - b.z()) * (a.x() + b.x()),
+            (a.x() - b.x()) * (a.y() + b.y()),
+        );
+    }
+    normal
 }
 
 /// Signed area of a polygon projected onto the XY plane.
