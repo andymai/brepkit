@@ -1,0 +1,23 @@
+crates/operations/src/heal.rs
+  s_ba2f7b5c6902b6::t_768f23b90ffbd3 435
+crates/check/src/classify/boundary.rs
+  s_ba2f7b5c6902b6::t_768f23b90ffbd3 224-225,230,232-235,237-238
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_768f23b90ffbd3 1967-1973,1975,2032-2034,2050
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9d8d2b97f1ff6573310d4b51fda855dddab826a3",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
