@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.16](https://github.com/andymai/brepkit/compare/v4.0.15...v4.0.16) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** cut a ball with a plane clear of its equator, keeping either side, and measure it exactly ([#1742](https://github.com/andymai/brepkit/issues/1742)) ([be8ac29](https://github.com/andymai/brepkit/commit/be8ac296fd860d410d688a9cdfb000f4b40bb515))
+
 ## [4.0.15](https://github.com/andymai/brepkit/compare/v4.0.14...v4.0.15) (2026-09-24)
 
 
