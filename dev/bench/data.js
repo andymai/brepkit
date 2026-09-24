@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790251105475,
+  "lastUpdate": 1790251488175,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37043,6 +37043,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 34755913,
             "range": "± 205080",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e2d09a420eb69f2e4c2cc9e2dcddf5fd9a629109",
+          "message": "fix(operations): size NURBS interior grids by their own iso-line chords (#1705)\n\n## What was wrong\n\nNURBS interior grids now follow the face geometry and requested\ndeflection. Previously, `interior_grid_resolution` treated knot spans as\nradians of a unit circle, so the curved CDT's interior grid had no\nrelation to the surface.\n\nA radius 1.5, height 4 cylinder under `rotation_z(0.3) * scale(2, 1,\n1)`, an exact NURBS elliptic wall, meshed 6.2e-3 below its closed-form\nvolume `2 pi 1.5^2 4` at deflection 0.001.\n\n## What this does\n\n- For each NURBS parameter direction, finds the fewest divisions,\ndoubling from one, that keep chords from eight sampled iso-lines across\nthe face's `(u, v)` box within half the deflection and their normals\nwithin the angular tolerance.\n\n- Assigns one division to a straight direction, or ruling. Ruled walls\ntherefore receive no interior rows, like an analytic cylinder.\n\n- Weighs the normals' turn on every chord except one ending at a pole\n(an end of the span whose cross iso-line collapses to a point, where the\nreported normal can point either way), and caps each direction at 1024\ndivisions.\n\n- Bounds each grid as a whole. When the directions' divisions multiply\npast 65,536 cells, `cap_grid` shrinks both together, keeping their\nratio. A capped grid no longer meets the requested deflection, so\n`cap_grid` logs a warning when it shrinks one. This applies to the\ncurved CDT's interior grid, whose samples the CDT inserts one by one,\nand to the periodic NURBS grid from #1694.\n\n- Shares this sizing through `iso_divisions_over` with the periodic\nNURBS grid from #1694. That grid keeps at least three divisions in each\nclosed direction, since fewer collapse its seam copies onto the cells'\nother side.\n\n- Updates the rolling-ball diagnostic's pinned mesh volume from\n`27435.763162` to `27435.644932`. This solid is deliberately open, and\nits mesh volume moves with the meshes.\n\n## Verification\n\n- `squashed_walls_mesh_within_their_deflection` covers the squashed\ncylinder and a squashed frustum (bottom radius 1.5, top 0.5, height 4)\nunder `rotation_z(0.3) * scale(2, 1, 1)`. It checks watertight, manifold\nmeshes, closed-form volume within 3e-3 at deflection 0.01 and 2e-4 at\n0.001, and every wall triangle's vertices, centroid and edge midpoints\nwithin the deflection of the exact elliptic cone, measured through its\nimplicit form; every triangle not lying flat in a cap counts as wall,\nand at least 100 are read per case. The wall strays at most 6.3e-4 at\ndeflection 0.01 and 6.3e-5 at 0.001.\n\n- `small_squashed_torus_follows_its_angular_tolerance` meshes a small\nsquashed torus (radii 1 and 0.3, scaled 2 in x) at deflection 1.0 and\nangular tolerance 0.2 and checks no mesh edge joins normals turned by\nmore than 0.4; weighing the turn only on chords longer than the\ndeflection lets edges turn 1.5708.\n\n- The squashed cylinder meshes 1.41e-3 low at 0.01 and 8.9e-5 low at\n0.001. A squashed frustum meshes 1.40e-3 and 8.86e-5 low.\n\n- The operations, io and wasm suites pass: 1665 tests, 0 failures.\n\n- The roadmap closes the NURBS interior density row.",
+          "timestamp": "2026-09-24T12:02:11Z",
+          "tree_id": "93bc09eb4909380a33e04deb85f3c57e15d26f12",
+          "url": "https://github.com/andymai/brepkit/commit/e2d09a420eb69f2e4c2cc9e2dcddf5fd9a629109"
+        },
+        "date": 1790251484784,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1006041,
+            "range": "± 14757",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1084408,
+            "range": "± 26827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13179,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 742473,
+            "range": "± 938",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41716029,
+            "range": "± 160098",
             "unit": "ns/iter"
           }
         ]
