@@ -95,7 +95,11 @@ pub fn face_area(
                 } else {
                     (-std::f64::consts::FRAC_PI_2, avg_v)
                 };
-                Ok(2.0 * std::f64::consts::PI * r * r * (v_max.sin() - v_min.sin()))
+                let mut holes = 0.0;
+                for &wire in face.inner_wires() {
+                    holes += sphere_hole_area(topo, sph, wire)?;
+                }
+                Ok(2.0 * std::f64::consts::PI * r * r * (v_max.sin() - v_min.sin()) - holes)
             } else {
                 // Full sphere fallback
                 Ok(4.0 * std::f64::consts::PI * r * r)
@@ -108,6 +112,57 @@ pub fn face_area(
             Ok(triangle_mesh_area(&mesh))
         }
     }
+}
+
+/// The area a hole takes from a sphere cap: `R² |∮ sin v du|` inside a loop
+/// that winds none of the sphere's u (a drill's entry), and for a loop around
+/// the cap's pole the cap beyond it, `R² (2π − |∮ sin v du|)` (a bore's rim).
+/// The integral runs along the loop by midpoint sums at two resolutions and
+/// a Richardson step.
+fn sphere_hole_area(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Result<f64, crate::OperationsError> {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let (mut sweep, mut progress) = (0.0, 0.0);
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+        let at = |t: f64| sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
+        let sums = |n: usize| {
+            let (mut sweep, mut progress) = (0.0, 0.0);
+            #[allow(clippy::cast_precision_loss)]
+            let step = (to - from) / n as f64;
+            let mut u_prev = at(from).0;
+            for k in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let tk = from + step * k as f64;
+                let (_, vm) = at(tk + 0.5 * step);
+                let (un, _) = at(tk + step);
+                sweep += vm.sin() * wrap(un - u_prev);
+                progress += wrap(un - u_prev);
+                u_prev = un;
+            }
+            (sweep, progress)
+        };
+        let (coarse, _) = sums(128);
+        let (fine, turned) = sums(256);
+        sweep += (4.0 * fine - coarse) / 3.0;
+        progress += turned;
+    }
+    let r2 = sphere.radius() * sphere.radius();
+    Ok(if progress.abs() > PI {
+        r2 * (TAU - sweep.abs())
+    } else {
+        r2 * sweep.abs()
+    })
 }
 
 /// Angular sweep of a cylindrical face derived from its boundary arc edges.

@@ -69,10 +69,10 @@ fn l_lip_fuse_is_analytic_and_watertight() {
         faces.len()
     );
     let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.05).unwrap();
-    // At this deflection; 29045 at 0.01 (body 25630.5 + lip 6149.7 less their
-    // overlap, 2755 by a mesh intersect within its own deflection).
+    // Each face meshed within its own trim: 29034.3 at any deflection, and the
+    // whole-solid mesh reads 29046 at 0.01.
     assert!(
-        (vol - 28993.2).abs() < 20.0,
+        (vol - 29034.3).abs() < 20.0,
         "fused volume out of band: got {vol}"
     );
 }

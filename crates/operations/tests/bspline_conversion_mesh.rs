@@ -5,7 +5,7 @@
 use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::heal::convert_to_bspline;
-use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
+use brepkit_operations::measure::{oriented_solid_volume, solid_surface_area, solid_volume};
 use brepkit_operations::primitives::{make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
@@ -75,6 +75,33 @@ fn converted_bored_sphere_keeps_its_tunnel() {
     transform_solid(&mut topo, bore, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
     let ring = boolean(&mut topo, BooleanOp::Cut, sphere, bore).unwrap();
     let truth = solid_volume(&topo, ring, 0.001).unwrap();
+    // A napkin ring's volume depends only on its height: pi h^3 / 6.
+    let tall = 2.0 * 27.0_f64.sqrt();
+    let napkin = std::f64::consts::PI * tall.powi(3) / 6.0;
+    assert!(
+        (truth - napkin).abs() < 1e-6 * napkin,
+        "volume {truth}, napkin ring {napkin}"
+    );
+    let area = solid_surface_area(&topo, ring, 0.001).unwrap();
+    // Two spherical zones and the tunnel wall, all as tall as the tunnel.
+    let zones_and_wall = 2.0 * std::f64::consts::PI * (6.0 + 3.0) * tall;
+    assert!(
+        (area - zones_and_wall).abs() < 1e-6 * zones_and_wall,
+        "surface area {area}, zones and wall {zones_and_wall}"
+    );
     convert_to_bspline(&mut topo, ring).unwrap();
-    assert_keeps(&topo, ring, truth, &[(0.01, 3e-3)], None, "bored sphere");
+    assert_keeps(
+        &topo,
+        ring,
+        truth,
+        &[(0.01, 3e-3)],
+        Some(3e-4),
+        "bored sphere",
+    );
+    // Each face's own mesh keeps to its trim.
+    let converted = solid_surface_area(&topo, ring, 0.001).unwrap();
+    assert!(
+        (converted - area).abs() < 1e-3 * area,
+        "surface area {converted}, before conversion {area}"
+    );
 }
