@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.18](https://github.com/andymai/brepkit/compare/v4.0.17...v4.0.18) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** meet a torus with a coaxial ball or rod in exact circles ([#1748](https://github.com/andymai/brepkit/issues/1748)) ([42e7916](https://github.com/andymai/brepkit/commit/42e7916d8a441c86d04795c8834b773543ce6ac1))
+
 ## [4.0.17](https://github.com/andymai/brepkit/compare/v4.0.16...v4.0.17) (2026-09-24)
 
 
