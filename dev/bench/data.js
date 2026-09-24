@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790272568277,
+  "lastUpdate": 1790273351540,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38177,6 +38177,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35258493,
             "range": "± 86631",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f6644afc32aed3b4814a6eec5615eadf06acdfc3",
+          "message": "chore(main): release 4.0.10 (#1735)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.0.10](https://github.com/andymai/brepkit/compare/v4.0.9...v4.0.10)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **operations:** measure rods cut along their axis exactly, and planar\nfaces bounded by arcs\n([#1727](https://github.com/andymai/brepkit/issues/1727))\n([0b7bed6](https://github.com/andymai/brepkit/commit/0b7bed689b82a1dea8d0a798a168ff134ed5a9bf))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.10, bumping the workspace crate versions and\nupdating the changelog. This release includes the fix that measures rods\ncut along their axis exactly, and planar faces bounded by arcs.\n\n<sup>Written for commit 6e4d289ac8afa3ea0bee2c6b48d749865c0025ed.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1735?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T18:06:26Z",
+          "tree_id": "a40879b2261ef7cedf70574e25563893fddfd880",
+          "url": "https://github.com/andymai/brepkit/commit/f6644afc32aed3b4814a6eec5615eadf06acdfc3"
+        },
+        "date": 1790273348018,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000408,
+            "range": "± 1316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1085044,
+            "range": "± 1125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13042,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 749432,
+            "range": "± 24501",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41588040,
+            "range": "± 99926",
             "unit": "ns/iter"
           }
         ]
