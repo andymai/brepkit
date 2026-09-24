@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790260685232,
+  "lastUpdate": 1790265634148,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37475,6 +37475,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30493265,
             "range": "± 115780",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "faf833a10aa029b2dd87e4b25ca6562ded80355d",
+          "message": "fix(algo): drill a ball and a ring, and pocket a pointed cone (#1719)\n\nExact booleans now preserve the analytic faces of off-axis drilled\nballs, drilled rings, and pocketed pointed cones. The resulting solids\nvalidate, classify correctly, measure accurately, and tessellate\nwatertight.\n\n## What was wrong\n\nOn main, subtracting an upward r=0.2 drill from `make_sphere(2, 16)` at\n(0.5, 0, 1) or (0, 0.5, 1), and subtracting an r=0.3 z-axis drill from\n`make_torus(5, 1, 16)` at (5, 0) or (0, 5), fall back to planar meshes\ncontaining 624 to 913 plane faces.\n\nThe off-axis sphere-cylinder and torus-cylinder pairs had no algebraic\nintersection path. They entered the grid-seeded marcher, which took 287\ns for the ball in a debug build without producing usable curves.\n\nThree later stages also rejected valid topology. Same-domain grouping\ntreated complementary sphere hemispheres as duplicates. BuilderSolid\ndiscarded a torus face bounded by collapsed seams as a degenerate\nsliver, and edge merging welded its two zero-length seams. Assembly\nrejected the resulting two-face ring through its three-face minimum.\n\nFor the cone, subtracting the box x -0.5..0.5, y 1..5, z 1..2 from\n`make_cone(3, 0, 6)` produces an open planar mesh on main, with 48\nboundary edges and volume 53.08 against 55.32. The cone seam travels to\nthe apex and straight back. BuilderSolid spur excision dropped the\nentire cone face, while `remove_wire_spurs` removed the seam.\n\n## What this does\n\n- Extends `algebraic_sphere_cylinder` off the axis: it sweeps cylinder\nrulings and solves their quadratic intersections with the sphere. Adds\n`parallel_axis_torus_cylinder` using the same ruling sweep for cylinders\nparallel to the torus axis. Shared sweep helpers are factored out of the\ncylinder-cylinder implementation. The ball boolean takes 59 ms in a\ndebug build.\n\n- Records intersection point parameters on both surfaces, in the order\nthe pair was supplied, for these paths and coaxial sphere-cylinder\ncircles.\n\n- Treats equally oriented sphere or torus faces that traverse a shared\nclosed boundary in opposite directions as complementary regions through\n`complementary_regions_of_closed_surface`.\n\n- Keeps torus faces out of sliver removal. A torus sub-face bounded only\nby collapsed seams retains its parent outer wire, and edge merging\npreserves groups of zero-length lines used by only one face.\n\n- Allows solids with sphere or torus faces below the boolean assembly\nminimum of three faces. The drilled ball retains two sphere faces, one\ncylinder, and one plane. The drilled ring retains one torus and one\ncylinder. Both solids are exact, valid, and watertight.\n\n- Preserves pointed-cone seams during BuilderSolid spur excision and\nboolean healing. The pocket retains one cone and six planes, and\n`solid_volume` reads the truth.\n\n- Closes sphere caps through their poles along sampled meridians, with\nloops starting clear of holes. Whole rings with holes use a periodic\nrectangle. Holed cone seams split at the apex into sampled ruling sides\njoined by an apex row, while apex-reaching cones retain unscaled slant.\n\n- Makes NURBS edge mesh samples end exactly at their vertices and\nrestricts CDT loop recentering to whole periods. Ray classification\ntests holes on full-surface faces and closes pointed-cone parameter\nboundaries along the apex row.\n\n- Computes sphere and torus hole contributions from boundary integrals,\nwhile counting a ring face as the whole ring.\n\n## Verification\n\n- `ball_and_ring_drills.rs` covers seam-meridian and off-seam drills. It\nchecks `validate_solid`, face censuses, classification, watertight\nmeshes at 0.01, and `solid_volume` within 1e-7 of polar plug quadrature.\nRing mesh volume is within 1e-3 of truth. Ball mesh volume is within\n1e-3 of the undrilled ball mesh less the plug. All four cases fall back\nto meshes on main.\n\n- Two math tests cover the sphere-cylinder sweep (an entry and an exit\nloop; one joined loop over the ball side) and check that each point's\nstored parameters evaluate back to it.\n\n- `cone_pocket.rs` tests the +y pocket and a quarter-turn variant. It\nchecks validation, one cone and six planes, classification, watertight\nmeshing at 0.01, and volume within 1e-7 of a Simpson integral of the\nclosed-form chord area, 55.317406326696535. At 0.001, mesh volume is\nwithin 1e-3. The pocket mesh measures 55.3012 against 55.3174.\n\n- Sphere golden vertex and triangle counts change without changing\nvolume, bounding box, or centre of mass.\n\n- The algo, operations, io, math, check, wasm, render, and heal suites\npass: 2587 tests, 0 failures.\n\n- The roadmap row closes with a Closed entry and records whole-cone\nmeshing separately: `make_cone(3, 0, 6)` at deflection 0.01 has 78 open\nedges, on main and with this change.",
+          "timestamp": "2026-09-24T15:58:07Z",
+          "tree_id": "f9fc96f4246be12aabb2b47f0701bfbd33f41fc2",
+          "url": "https://github.com/andymai/brepkit/commit/faf833a10aa029b2dd87e4b25ca6562ded80355d"
+        },
+        "date": 1790265630275,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 806263,
+            "range": "± 1134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 874931,
+            "range": "± 1748",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11412,
+            "range": "± 117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 592572,
+            "range": "± 1138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35022627,
+            "range": "± 195726",
             "unit": "ns/iter"
           }
         ]
