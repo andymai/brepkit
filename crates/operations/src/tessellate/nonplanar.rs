@@ -611,14 +611,15 @@ pub(super) fn tessellate_revolution_band_shared(
     Ok(true)
 }
 
-/// Tessellate a torus band bounded by two closed rim circles and seamed by a
+/// Tessellate a torus band bounded by two closed rims and seamed by a
 /// doubled open arc (one edge, or a chain of them), in either orientation:
-///   * constant-`v` rims (latitude circles wrapping the ring angle `u`) — a
+///   * constant-`v` rims (latitude circles wrapping the ring angle `u`): a
 ///     full analytic revolve of a profile arc, seamed by that arc; interior
 ///     full-`u` rows are swept along the tube angle;
-///   * constant-`u` rims (tube circles wrapping `v`) — a PARTIAL-turn revolve
-///     of a full circle profile, seamed by the vertex's sweep arc; interior
-///     full-`v` rings are swept along the ring angle.
+///   * tube rims wrapping `v` (tube circles at constant `u`, a PARTIAL-turn
+///     revolve of a full circle profile; or a plane's loops around the tube,
+///     whose `u` wanders with `v`), seamed along a latitude; interior full-`v`
+///     rings are swept along the ring angle between the rims, column by column.
 ///
 /// The rims split their periodic direction into two arcs; the seam arc's
 /// midpoint picks which one the band covers (sweeping the wrong one would skin
@@ -734,9 +735,8 @@ pub(super) fn tessellate_torus_two_rim_band(
         raw.push(pts);
     }
 
-    // Both rims must be constant in the SAME parameter: constant-v (latitude
-    // rims, swept along the tube angle) or constant-u (tube rims, swept along
-    // the ring angle).
+    // Both rims must be latitude rims (constant v, swept along the tube
+    // angle) or both tube rims (swept along the ring angle).
     let spread_of = |pts: &[(f64, f64, u32)], pick_u: bool| -> (f64, f64) {
         let angles: Vec<f64> = pts
             .iter()

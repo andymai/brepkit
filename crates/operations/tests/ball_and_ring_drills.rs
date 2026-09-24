@@ -9,7 +9,7 @@ use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_poi
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
+use brepkit_operations::measure::{face_area, oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::{make_cylinder, make_sphere, make_torus};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
@@ -136,6 +136,24 @@ fn drill_ring(x: f64, y: f64) {
     assert!(
         (meshed - truth).abs() < 1e-3 * truth,
         "mesh volume {meshed}, truth {truth}"
+    );
+    // The ring's face is the whole ring less the tube over the drill's disc
+    // above and below, where the tube's area element is `r / sqrt(r^2 - d^2)`
+    // over the plane at `d` from the tube's core.
+    let holes = 2.0
+        * over_disc(x, y, 0.3, |px, py| {
+            1.0 / (1.0 - (px.hypot(py) - 5.0).powi(2)).sqrt()
+        });
+    let ring_face = solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .find(|&f| topo.face(f).unwrap().surface().type_tag() == "torus")
+        .unwrap();
+    let area = face_area(&topo, ring_face, 0.01).unwrap();
+    let area_truth = 4.0 * PI * PI * 5.0 - holes;
+    assert!(
+        (area - area_truth).abs() < 1e-6 * area_truth,
+        "ring face area {area}, truth {area_truth}"
     );
 }
 

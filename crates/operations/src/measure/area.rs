@@ -200,6 +200,9 @@ struct RevolutionMetric<'a> {
     /// A cone's apex, where the `u` lines collapse: a loop through it may
     /// jump in `u` there, since the weight vanishes on it.
     pole: Option<Point3>,
+    /// Whether `v` wraps too (a torus's tube angle), so a loop must also
+    /// return to its start in `v`.
+    v_periodic: bool,
 }
 
 /// The area of a cylinder face whose boundary is not a rectangle in
@@ -236,6 +239,7 @@ fn cylinder_face_uv_area(
             grad_v: &grad_v,
             weight: &weight,
             pole: None,
+            v_periodic: false,
         },
     )
 }
@@ -288,6 +292,7 @@ fn cone_face_uv_area(
             grad_v: &grad_v,
             weight: &weight,
             pole: Some(apex),
+            v_periodic: false,
         },
     )
 }
@@ -322,16 +327,34 @@ fn torus_face_uv_area(
         ((ex * cos_u + ey * sin_u) * -sin_v + ez * cos_v) * (1.0 / small)
     };
     let weight = |v: f64| small * small.mul_add(v.cos(), big);
-    face_uv_area(
-        topo,
-        face_id,
-        &RevolutionMetric {
-            project: &project,
-            grad_v: &grad_v,
-            weight: &weight,
-            pole: None,
-        },
-    )
+    let metric = RevolutionMetric {
+        project: &project,
+        grad_v: &grad_v,
+        weight: &weight,
+        pole: None,
+        v_periodic: true,
+    };
+    // A whole ring's outer wire is its seam placeholders collapsed onto one
+    // vertex, which encloses nothing in (u, v): the ring less its holes.
+    let face = topo.face(face_id)?;
+    let mut collapsed = true;
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        collapsed &= matches!(edge.curve(), EdgeCurve::Line)
+            && (topo.vertex(edge.start())?.point() - topo.vertex(edge.end())?.point()).length()
+                < 1e-9;
+    }
+    if collapsed {
+        let mut area = 4.0 * std::f64::consts::PI * std::f64::consts::PI * big * small;
+        for &wid in face.inner_wires() {
+            let Some(hole) = wire_uv_area(topo, wid, &metric)? else {
+                return Ok(None);
+            };
+            area -= hole.abs();
+        }
+        return Ok(Some(area));
+    }
+    face_uv_area(topo, face_id, &metric)
 }
 
 /// Whether `test` holds for every edge of a face, given the edge and its
@@ -412,6 +435,15 @@ fn wire_uv_area(
     let mut sum = 0.0;
     let mut first_u = None;
     let mut last_u: Option<f64> = None;
+    // The loop's v, unwrapped along it, for a surface whose v wraps.
+    let mut first_v: Option<f64> = None;
+    let mut v_walk: Option<f64> = None;
+    let mut walk_v = |p: Point3| {
+        let (_, v) = (metric.project)(p);
+        let next = v_walk.map_or(v, |w| v - ((v - w + PI) / TAU).floor() * TAU);
+        first_v.get_or_insert(next);
+        v_walk = Some(next);
+    };
     // The region's u has to jump by a turn somewhere on the loop, which is
     // free only across the pole (the weight vanishes there): walk from it.
     let mut edges = topo.wire(wire_id)?.edges().to_vec();
@@ -439,10 +471,27 @@ fn wire_uv_area(
             if first_u.is_none() {
                 first_u = Some(u_prev);
             }
+            walk_v(at(ta));
+            // A NURBS edge integrates knot span by knot span, where it is
+            // smooth; other curves in even segments.
             #[allow(clippy::cast_precision_loss)]
-            for seg in 0..SEGMENTS {
-                let a = ta + (tb - ta) * seg as f64 / SEGMENTS as f64;
-                let b = ta + (tb - ta) * (seg + 1) as f64 / SEGMENTS as f64;
+            let mut cuts: Vec<f64> = (0..=SEGMENTS)
+                .map(|seg| ta + (tb - ta) * seg as f64 / SEGMENTS as f64)
+                .collect();
+            if let EdgeCurve::NurbsCurve(nc) = curve {
+                let (lo, hi) = (ta.min(tb), ta.max(tb));
+                cuts = std::iter::once(ta)
+                    .chain(nc.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                    .chain(std::iter::once(tb))
+                    .collect();
+                cuts.dedup();
+                if tb < ta {
+                    let last = cuts.len() - 1;
+                    cuts[1..last].reverse();
+                }
+            }
+            for w in cuts.windows(2) {
+                let (a, b) = (w[0], w[1]);
                 let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
                 for gp in points {
                     let t = mid + half * gp.x;
@@ -458,13 +507,17 @@ fn wire_uv_area(
                     let dv = (metric.grad_v)(p).dot(tangent);
                     sum += gp.w * half * u * (metric.weight)(v) * dv;
                     u_prev = u;
+                    walk_v(p);
                 }
             }
             last_u = Some(u_near(at(tb), Some(u_prev)));
+            walk_v(at(tb));
         }
     }
+    let v_closes = !metric.v_periodic
+        || matches!((first_v, v_walk), (Some(a), Some(b)) if (a - b).abs() <= 1e-6);
     Ok(match (first_u, last_u) {
-        (Some(a), Some(b)) if touches_pole || (a - b).abs() <= 1e-6 => Some(sum),
+        (Some(a), Some(b)) if v_closes && (touches_pole || (a - b).abs() <= 1e-6) => Some(sum),
         _ => None,
     })
 }

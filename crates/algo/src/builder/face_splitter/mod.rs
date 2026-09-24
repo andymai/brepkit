@@ -4546,10 +4546,11 @@ fn loops_have_out_and_back(
 /// If there are no section edges, returns a single sub-face covering
 /// the entire face (pass-through).
 ///
-/// Wraps [`split_face_2d_impl`] to salvage closed circle and ellipse *cap*
-/// sections on plane faces (the drilled-socket → bin-body fuse: the socket's
-/// screw-hole rims land as closed circle sections on the body's coincident
-/// bottom plane; a tilted plane across a tube carries two nested ellipses).
+/// Wraps [`split_face_2d_impl`] to salvage closed circle, ellipse and curved
+/// loop *cap* sections on plane faces (the drilled-socket → bin-body fuse: the
+/// socket's screw-hole rims land as closed circle sections on the body's
+/// coincident bottom plane; a tilted plane across a tube carries two nested
+/// ellipses; a plane across a torus's tube carries its loops around the tube).
 /// The impl drops closed circles in both its arrangement path
 /// ([`arrangement_regions_from_inputs`] discards any input whose UV chord is
 /// zero-length, and a closed circle has `start == end`) and its wire-builder
@@ -4598,16 +4599,16 @@ pub fn split_face_2d(
         )
     };
 
-    // Cheap gate for the common case: no closed conic section, nothing to
+    // Cheap gate for the common case: no closed curved section, nothing to
     // salvage — skip all frame and polygon work below.
-    let any_closed_conic = sections.iter().any(|s| {
+    let any_closed_curve = sections.iter().any(|s| {
         (s.start - s.end).length() < tol.linear
             && matches!(
                 s.curve_3d,
                 EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
             )
     });
-    if !any_closed_conic {
+    if !any_closed_curve {
         return run_impl(sections);
     }
 
