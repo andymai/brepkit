@@ -273,7 +273,7 @@ impl<'a> ChamferBuilder<'a> {
         }
 
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
-        let mut cross_edges: Vec<(EdgeId, VertexId, VertexId)> = Vec::new();
+        let mut cross_edges: Vec<(EdgeId, VertexId, VertexId, FaceId)> = Vec::new();
 
         for (si, sr) in stripe_results.iter().enumerate() {
             // Reuse the trimmed neighbours' contact edges (mirrors the fillet
@@ -284,10 +284,14 @@ impl<'a> ChamferBuilder<'a> {
                 .copied()
                 .unwrap_or((None, None));
             let info =
-                crate::builder_utils::create_blend_face_with_contacts(topo, &sr.stripe, c1, c2)?;
+                crate::builder_utils::create_chamfer_face_with_contacts(topo, &sr.stripe, c1, c2)?;
             orient_chamfer_face(topo, info.face, &sr.stripe)?;
-            cross_edges.extend(info.cross_end);
-            cross_edges.extend(info.cross_start);
+            // A closed rim has no end faces to take its cross edges.
+            if !sr.stripe.spine.is_closed() {
+                for (edge, from, to) in info.cross_end.into_iter().chain(info.cross_start) {
+                    cross_edges.push((edge, from, to, info.face));
+                }
+            }
             blend_face_ids.push(info.face);
         }
 
@@ -359,11 +363,14 @@ fn orient_chamfer_face(
 /// to the other contact point. Each such detour is replaced by the chamfer's
 /// cross edge between the two points, which the end face then shares with
 /// the chamfer face. That drops the corner triangle from the end face at a
-/// convex edge and adds it at a concave one.
+/// convex edge and adds it at a concave one. A cross edge with no detour to
+/// take it (two chamfers meeting at the vertex, or a contact edge that
+/// could not be matched to the trimmer's) would leave the shell open, so
+/// the chamfer is refused.
 fn close_chamfer_ends(
     topo: &mut Topology,
     faces: &[FaceId],
-    cross_edges: &[(EdgeId, VertexId, VertexId)],
+    cross_edges: &[(EdgeId, VertexId, VertexId, FaceId)],
 ) -> Result<(), BlendError> {
     let ends = |topo: &Topology, oe: &OrientedEdge| -> Result<(VertexId, VertexId), BlendError> {
         let e = topo.edge(oe.edge())?;
@@ -373,7 +380,8 @@ fn close_chamfer_ends(
             (e.end(), e.start())
         })
     };
-    for &(cross, from, to) in cross_edges {
+    for &(cross, from, to, chamfer) in cross_edges {
+        let mut spliced_one = false;
         'faces: for &fid in faces {
             let face = topo.face(fid)?;
             let wires: Vec<WireId> = std::iter::once(face.outer_wire())
@@ -403,9 +411,13 @@ fn close_chamfer_ends(
                     {
                         *slot = new_wire;
                     }
+                    spliced_one = true;
                     break 'faces;
                 }
             }
+        }
+        if !spliced_one {
+            return Err(BlendError::TrimmingFailure { face: chamfer });
         }
     }
     Ok(())

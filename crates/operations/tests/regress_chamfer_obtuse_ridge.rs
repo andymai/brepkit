@@ -208,3 +208,25 @@ fn chamfer_v2_closes_two_parallel_edges() {
         "two parallel edges",
     );
 }
+
+/// Two chamfered edges meeting at a box corner need a mitre between the
+/// chamfer planes; without one the chamfer is refused, not returned open.
+#[test]
+fn chamfer_v2_refuses_edges_meeting_at_a_vertex() {
+    let mut topo = Topology::new();
+    let b = brepkit_operations::primitives::make_box(&mut topo, 4.0, 3.0, 2.0).unwrap();
+    let edges = solid_edges(&topo, b).unwrap();
+    let (a, z) = {
+        let e = topo.edge(edges[0]).unwrap();
+        (e.start(), e.end())
+    };
+    let neighbour = edges[1..]
+        .iter()
+        .copied()
+        .find(|&e| {
+            let e = topo.edge(e).unwrap();
+            [e.start(), e.end()].iter().any(|v| *v == a || *v == z)
+        })
+        .unwrap();
+    assert!(chamfer_v2(&mut topo, b, &[edges[0], neighbour], 0.4, 0.4).is_err());
+}
