@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790270417085,
+  "lastUpdate": 1790270794332,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -37907,6 +37907,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42093661,
             "range": "± 580328",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bfccfb153951c78e3d6e38d76b8051e7fc16874f",
+          "message": "fix(operations): chamfer a round rim between a flat cap and a cylinder or cone wall (#1722)\n\n## What was wrong\n\n`chamfer::chamfer`, including numeric-distance calls through the wasm\n`chamfer` binding, returned `Err(Math(ZeroVector))` for closed circular\nedges such as a rod's top rim and a tube's mouth. The planar path\nrebuilt faces as polygons, but a closed circle has only one vertex.\n\n## What this does\n\n- `chamfer()` first tries `chamfer_circular_rims` on a copy of the solid\nwhen every selected edge is a closed circle between a plane cap and a\ncoaxial cylinder or cone wall.\n- The cap circle moves by `d` into the cap. Its radius becomes `R - d`\non an outer wire and `R + d` around a hole.\n- The wall rim moves by `d` along the wall's rulings toward its other\nrim. A new cone face joins the circles, and the wall seam is shortened\nto the new rim.\n- Cone orientation follows the cap and wall outward normals. The cone\nuses each new circle opposite to its neighbour's use, reading a reversed\nface's wire flags flipped (a boolean's hole wall is a reversed face).\n- Convex rims remove a ring. Concave rims, including a blind hole's\nfloor, fill one.\n- A distance that would bring the cap's circle to another boundary of\nthe cap (two mouth rims meeting, for one) or move the wall's rim to its\nfar rim returns an error.\n- Rims outside that scope (a wall that is not a plain band between its\nrim and one other rim or the apex, a cap with edges other than lines and\ncircles) keep the existing path.\n- The roadmap gains a Closed entry, and the assembly-fuses tube note\npoints to it.\n\n## Verification\n\n- Added `crates/operations/tests/chamfer_round_rims.rs` with 8 tests\ncovering a rod's top rim, both rod rims, a tube mouth, a counterbored\ntube mouth, a frustum top rim, a block through-hole countersink, a\nblind-hole floor rim, and refused distances.\n- Each built case checks solid validity, face census, point\nclassification on both sides of the chamfer, and `solid_volume` within\n`1e-7` relative to the closed-form volume.\n- Each case also checks a watertight mesh at deflection `0.01` and the\nmesh volume within `2e-3` relative.\n- The operations, io, and wasm suites pass, totaling 1716 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `chamfer::chamfer` returning `Err(Math(ZeroVector))` on closed\ncircular rims — a rod's end, a tube's mouth, a hole's countersink —\nbecause the planar path rebuilt faces as polygons and a closed circle\nhas a single vertex.\n\nThe new `chamfer_circular_rims` path handles rims between a flat cap and\na coaxial cylinder or cone wall:\n\n- Moves the cap's circle `d` into the cap and the wall's rim `d` along\nits rulings, joined by a cone band.\n- Convex rims remove a ring; concave rims fill one; distances that would\nconsume the cap or the wall return an error.\n- Out-of-scope rims keep the existing polygon path.\n\nAdds 8 tests in `crates/operations/tests/chamfer_round_rims.rs` covering\nrods, tubes, frustums, countersinks, and refused distances, plus a wasm\ntest chamfering a rod's rim through the batch dispatcher and the public\nbinding. Marks the roadmap entry Closed and the assembly-fuses tube note\nas taking the round-rim chamfer.\n\n<sup>Written for commit 673a82bfd0564433ed198aeb7a0bbca0867985b9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1722?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T17:23:50Z",
+          "tree_id": "80356c21a8d1b11133bf6acca0cdee39035545c1",
+          "url": "https://github.com/andymai/brepkit/commit/bfccfb153951c78e3d6e38d76b8051e7fc16874f"
+        },
+        "date": 1790270790776,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999893,
+            "range": "± 1248",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081263,
+            "range": "± 5655",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13182,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 746034,
+            "range": "± 40891",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42106151,
+            "range": "± 125351",
             "unit": "ns/iter"
           }
         ]
