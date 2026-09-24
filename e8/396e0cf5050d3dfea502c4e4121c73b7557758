@@ -1,0 +1,34 @@
+crates/operations/src/tessellate/edge_sampling.rs
+  s_ba2f7b5c6902b6::t_18ca4d75863470 132,174-196
+  s_ba2f7b5c6902b6::t_279001de1ed25d 197-198
+crates/operations/tests/bspline_conversion_mesh.rs
+  s_ba2f7b5c6902b6::t_73b8b6ea0591e7 16-26,44,61-62,78
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_1b12575477a0a3 192-205
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_a801e39940111d 1666,2544
+  s_ba2f7b5c6902b6::t_578c74c5306b71 2116,3090-3120
+  s_ba2f7b5c6902b6::t_a9ce004a8a9eb9 2412-2415,2469,2472
+  s_ba2f7b5c6902b6::t_6fcc38445b5503 2226,2236,2393-2395,2435-2439
+  s_ba2f7b5c6902b6::t_e459b6acbbba69 2451-2461,2464
+  s_ba2f7b5c6902b6::t_c1935eeff3ac03 1627,1638-1656,2545-2552,2805-2807,2810-2811,2821,2842-2846,3121
+  s_ba2f7b5c6902b6::t_e8bfd1f9319dc7 2386-2387,2396-2411,2416-2434,2440-2443,2446-2450,2462-2463,2465-2468,2470-2471,2473-2480
+  s_ba2f7b5c6902b6::t_76a34002e572ad 2388-2392,2444-2445
+  s_ba2f7b5c6902b6::t_f13840e28d3515 1657-1665,3122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e8396e0cf5050d3dfea502c4e4121c73b7557758",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
