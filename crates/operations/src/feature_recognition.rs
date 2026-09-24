@@ -388,7 +388,14 @@ fn detect_chamfers_fag(
                     // the same angles and are not chamfers.
                     let area = |ni: &usize| fag.nodes.get(ni).map_or(0.0, |n| n.area);
                     let small = node.area <= 0.5 * area(ni).max(area(nj));
-                    if small && dot1 > 0.1 && dot1 < 0.95 && dot2 > 0.1 && dot2 < 0.95 {
+                    let bevel = replaces_an_edge(
+                        topo,
+                        fag,
+                        idx,
+                        (*ni, &neighbors[i].1),
+                        (*nj, &neighbors[j].1),
+                    );
+                    if small && bevel && dot1 > 0.1 && dot1 < 0.95 && dot2 > 0.1 && dot2 < 0.95 {
                         let angle = normal.dot(n1).acos();
                         let f1 = fag.nodes.get(ni).map(|n| n.face);
                         let f2 = fag.nodes.get(nj).map(|n| n.face);
@@ -407,6 +414,52 @@ fn detect_chamfers_fag(
     }
 
     Ok(())
+}
+
+/// A face's outward plane `(n, d)` (`n · p = d`, `n` unit), or `None` if it
+/// is not planar.
+fn outward_plane(
+    topo: &Topology,
+    fag: &FaceAdjacencyGraph,
+    node_idx: usize,
+) -> Option<(Vec3, f64)> {
+    let face = topo.face(fag.nodes.get(&node_idx)?.face).ok()?;
+    let FaceSurface::Plane { normal, d } = face.surface() else {
+        return None;
+    };
+    let len = normal.length();
+    let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+    (len > 0.0).then(|| (*normal * (sign / len), sign * d / len))
+}
+
+/// Whether face `idx` stands where an edge between neighbours `a` and `b`
+/// was cut away (or filled in): their planes meet along a line outside it
+/// when it meets them along convex edges, inside it when along concave ones.
+/// A triangular prism's side fails: its neighbours meet at the prism's own
+/// far edge, behind it.
+fn replaces_an_edge(
+    topo: &Topology,
+    fag: &FaceAdjacencyGraph,
+    idx: usize,
+    (a, edge_a): (usize, &FagEdge),
+    (b, edge_b): (usize, &FagEdge),
+) -> bool {
+    let (Some((nf, df)), Some((na, da)), Some((nb, db))) = (
+        outward_plane(topo, fag, idx),
+        outward_plane(topo, fag, a),
+        outward_plane(topo, fag, b),
+    ) else {
+        return false;
+    };
+    let c = na.dot(nb);
+    let det = c.mul_add(-c, 1.0);
+    if det < 1e-12 {
+        return false;
+    }
+    let meet = na * (c.mul_add(-db, da) / det) + nb * (c.mul_add(-da, db) / det);
+    let side = nf.dot(meet) - df;
+    let both = |kind: ConcavityType| edge_a.concavity == kind && edge_b.concavity == kind;
+    (both(ConcavityType::Convex) && side > 1e-9) || (both(ConcavityType::Concave) && side < -1e-9)
 }
 
 /// Get the planar normal for a FAG node, or `None` if non-planar.
@@ -797,6 +850,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A scalene triangular prism's narrow side sits at an angle to both
+    /// neighbours and is small beside the larger, but they meet at the
+    /// prism's own far edge behind it: nothing was bevelled.
+    #[test]
+    fn scalene_prism_side_is_not_a_chamfer() {
+        let mut topo = Topology::new();
+        let apex = (4.0_f64 - 1.85 * 1.85).sqrt();
+        let wire = brepkit_topology::builder::make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(2.5, 0.0, 0.0),
+                Point3::new(1.85, apex, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let face = topo.add_face(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let prism =
+            crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let chamfers = recognize_features(&topo, prism, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter(|f| matches!(f, Feature::Chamfer { .. }))
+            .count();
+        assert_eq!(chamfers, 0);
     }
 
     /// On a thin plate the chamfered edge's side face shrinks below the
