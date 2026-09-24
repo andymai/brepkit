@@ -172,9 +172,9 @@ pub fn recognize_features(
     let fag = build_face_adjacency_graph(topo, &face_ids, deflection)?;
 
     detect_chamfers_fag(topo, &fag, &mut features)?;
-    detect_fillet_like_fag(&fag, &mut features);
+    detect_fillet_like_fag(topo, &fag, &mut features);
     detect_holes(topo, &fag, &mut features)?;
-    detect_pockets_fag(&fag, &mut features);
+    detect_pockets_fag(topo, &fag, &mut features);
     detect_patterns(&mut features);
 
     Ok(features)
@@ -383,10 +383,11 @@ fn detect_chamfers_fag(
 
                     // A chamfer sits at an angle (neither parallel nor
                     // perpendicular) to both faces it bevels and is small
-                    // beside them: a regular prism's equal sides meet at the
-                    // same angles and are not chamfers.
+                    // beside the larger of them (on a thin part the other can
+                    // be a narrow side): a regular prism's equal sides meet at
+                    // the same angles and are not chamfers.
                     let area = |ni: &usize| fag.nodes.get(ni).map_or(0.0, |n| n.area);
-                    let small = node.area <= 0.5 * area(ni).min(area(nj));
+                    let small = node.area <= 0.5 * area(ni).max(area(nj));
                     if small && dot1 > 0.1 && dot1 < 0.95 && dot2 > 0.1 && dot2 < 0.95 {
                         let angle = normal.dot(n1).acos();
                         let f1 = fag.nodes.get(ni).map(|n| n.face);
@@ -427,19 +428,28 @@ fn get_node_planar_normal(
 
 /// Detect fillets: curved faces that meet at least two neighbours
 /// tangentially, as a rolling ball's band meets the two faces it blends.
-fn detect_fillet_like_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
+/// A curved face tangent only to parallel planes (a channel's round floor
+/// between its walls) blends no corner.
+fn detect_fillet_like_fag(topo: &Topology, fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
     let mut nodes: Vec<(&usize, &FagNode)> = fag.nodes.iter().collect();
     nodes.sort_unstable_by_key(|(idx, _)| **idx);
     for (idx, node) in nodes {
         if node.surface_class == SurfaceClass::Planar {
             continue;
         }
-        let tangent = fag.adjacency.get(idx).map_or(0, |adj| {
+        let tangent: Vec<usize> = fag.adjacency.get(idx).map_or_else(Vec::new, |adj| {
             adj.iter()
                 .filter(|(_, e)| e.concavity == ConcavityType::Tangent)
-                .count()
+                .map(|(n, _)| *n)
+                .collect()
         });
-        if tangent >= 2 {
+        let normals: Option<Vec<Vec3>> = tangent
+            .iter()
+            .map(|&n| get_node_planar_normal(topo, fag, n).and_then(|v| v.normalize().ok()))
+            .collect();
+        let between_parallel_planes =
+            normals.is_some_and(|ns| ns.windows(2).all(|w| w[0].dot(w[1]).abs() > 1.0 - 1e-9));
+        if tangent.len() >= 2 && !between_parallel_planes {
             features.push(Feature::FilletLike {
                 face: node.face,
                 area: node.area,
@@ -483,83 +493,155 @@ fn detect_holes(
 
 /// Detect pockets using concave-connected components in the FAG.
 ///
-/// A pocket is a set of faces connected by concave edges, with at
-/// least one planar floor face and two or more wall faces.
-fn detect_pockets_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
+/// A pocket is a planar floor with walls on two or more planes meeting it
+/// along concave edges. Coplanar pieces a boolean left split (joined by flat
+/// edges) count as one face. A component can hold several floors facing the
+/// same way (a stepped pocket's landings), each its own pocket.
+#[allow(clippy::too_many_lines)]
+fn detect_pockets_fag(topo: &Topology, fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
+    let planar = |ci: &usize| {
+        fag.nodes
+            .get(ci)
+            .is_some_and(|n| n.surface_class == SurfaceClass::Planar)
+    };
+    // Faces joined across a flat edge between two planes.
+    let flat = |a: &usize, b: &usize, e: &FagEdge| {
+        e.concavity == ConcavityType::Tangent && planar(a) && planar(b)
+    };
+    let outward = |ci: usize| {
+        let node = fag.nodes.get(&ci)?;
+        let normal = get_node_planar_normal(topo, fag, ci)?.normalize().ok()?;
+        let reversed = topo.face(node.face).ok()?.is_reversed();
+        Some(if reversed { -normal } else { normal })
+    };
+
+    let mut keys: Vec<usize> = fag.nodes.keys().copied().collect();
+    keys.sort_unstable();
     let mut visited: HashSet<usize> = HashSet::new();
-
-    for &idx in fag.nodes.keys() {
-        if visited.contains(&idx) {
-            continue;
-        }
-
-        let node = match fag.nodes.get(&idx) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        if node.surface_class != SurfaceClass::Planar {
+    for &idx in &keys {
+        if visited.contains(&idx) || !planar(&idx) {
             continue;
         }
 
         let mut component = HashSet::new();
         let mut stack = vec![idx];
-
         while let Some(current) = stack.pop() {
             if !component.insert(current) {
                 continue;
             }
-
             if let Some(adj) = fag.adjacency.get(&current) {
                 for (neighbor, edge) in adj {
-                    if edge.concavity == ConcavityType::Concave && !component.contains(neighbor) {
+                    let joins =
+                        edge.concavity == ConcavityType::Concave || flat(&current, neighbor, edge);
+                    if joins && !component.contains(neighbor) {
                         stack.push(*neighbor);
                     }
                 }
             }
         }
-
-        // The floor meets every wall along a concave edge, so it is the
-        // planar face with the most concave neighbours in the component (the
-        // larger on a tie); every other face is a wall.
-        let concave_degree = |ci: usize| {
-            fag.adjacency.get(&ci).map_or(0, |adj| {
-                adj.iter()
-                    .filter(|(n, e)| e.concavity == ConcavityType::Concave && component.contains(n))
-                    .count()
-            })
-        };
+        visited.extend(&component);
         let mut members: Vec<usize> = component.iter().copied().collect();
         members.sort_unstable();
-        let floor_idx = members
+
+        // Coplanar pieces, each labelled by its smallest member.
+        let mut group: HashMap<usize, usize> = HashMap::new();
+        for &m in &members {
+            if group.contains_key(&m) {
+                continue;
+            }
+            let mut piece = vec![m];
+            let mut at = 0;
+            while at < piece.len() {
+                let current = piece[at];
+                at += 1;
+                group.insert(current, m);
+                for (n, e) in fag.adjacency.get(&current).into_iter().flatten() {
+                    if flat(&current, n, e) && component.contains(n) && !piece.contains(n) {
+                        piece.push(*n);
+                    }
+                }
+            }
+        }
+        let concave_groups = |g: usize| -> Vec<usize> {
+            let mut out: Vec<usize> = members
+                .iter()
+                .filter(|m| group[m] == g)
+                .flat_map(|m| fag.adjacency.get(m).into_iter().flatten())
+                .filter(|(n, e)| e.concavity == ConcavityType::Concave && component.contains(n))
+                .map(|(n, _)| group[n])
+                .collect();
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+        let area = |ci: usize| fag.nodes.get(&ci).map_or(0.0, |n| n.area);
+        let group_area = |g: usize| {
+            members
+                .iter()
+                .filter(|m| group[m] == g)
+                .map(|&m| area(m))
+                .sum::<f64>()
+        };
+        let mut groups: Vec<usize> = group.values().copied().collect();
+        groups.sort_unstable();
+        groups.dedup();
+
+        // The pocket opens along a floor's outward normal: no face inside it
+        // looks back against that direction (a wall's opposite wall does).
+        // Of the floors that qualify, the deepest meets the most walls along
+        // concave edges (the larger on a tie).
+        let opens = |g: usize| {
+            outward(g).is_some_and(|up| {
+                groups
+                    .iter()
+                    .all(|&h| outward(h).is_none_or(|n| n.dot(up) > -1.0 + 1e-9))
+            })
+        };
+        let Some(up) = groups
             .iter()
             .copied()
-            .filter(|ci| {
-                fag.nodes
-                    .get(ci)
-                    .is_some_and(|n| n.surface_class == SurfaceClass::Planar)
-            })
+            .filter(|&g| planar(&g) && opens(g))
             .max_by(|&a, &b| {
-                let area = |ci: usize| fag.nodes.get(&ci).map_or(0.0, |n| n.area);
-                concave_degree(a)
-                    .cmp(&concave_degree(b))
-                    .then(area(a).total_cmp(&area(b)))
-            });
-        let floor = floor_idx.and_then(|ci| fag.nodes.get(&ci)).map(|n| n.face);
-        let walls: Vec<FaceId> = members
+                concave_groups(a)
+                    .len()
+                    .cmp(&concave_groups(b).len())
+                    .then(group_area(a).total_cmp(&group_area(b)))
+            })
+            .and_then(outward)
+        else {
+            continue;
+        };
+        let floors: Vec<usize> = groups
             .iter()
-            .filter(|&&ci| Some(ci) != floor_idx)
-            .filter_map(|ci| fag.nodes.get(ci).map(|n| n.face))
+            .copied()
+            .filter(|&g| outward(g).is_some_and(|n| n.dot(up) > 1.0 - 1e-9))
             .collect();
-
-        if let Some(floor_face) = floor
-            && walls.len() >= 2
-        {
-            features.push(Feature::Pocket {
-                floor: floor_face,
-                walls,
-            });
-            visited.extend(&component);
+        for &floor in &floors {
+            let wall_groups: Vec<usize> = concave_groups(floor)
+                .into_iter()
+                .filter(|g| !floors.contains(g))
+                .collect();
+            if wall_groups.len() < 2 {
+                continue;
+            }
+            let walls: Vec<FaceId> = members
+                .iter()
+                .filter(|m| wall_groups.contains(&group[m]))
+                .filter_map(|m| fag.nodes.get(m).map(|n| n.face))
+                .collect();
+            let floor_face = members
+                .iter()
+                .copied()
+                .filter(|m| group[m] == floor)
+                .max_by(|&a, &b| area(a).total_cmp(&area(b)))
+                .and_then(|m| fag.nodes.get(&m))
+                .map(|n| n.face);
+            if let Some(floor_face) = floor_face {
+                features.push(Feature::Pocket {
+                    floor: floor_face,
+                    walls,
+                });
+            }
         }
     }
 }
@@ -668,6 +750,114 @@ mod tests {
 
     fn count(edges: &[(ConcavityType, f64)], kind: ConcavityType) -> usize {
         edges.iter().filter(|(c, _)| *c == kind).count()
+    }
+
+    fn plane_of(topo: &Topology, face: FaceId) -> (Vec3, f64) {
+        match topo.face(face).unwrap().surface() {
+            FaceSurface::Plane { normal, d } => (*normal, *d),
+            other => panic!("not a plane: {}", other.type_tag()),
+        }
+    }
+
+    /// A shallow pocket with a deeper one in its floor, flush with three of
+    /// its walls: the landing and the deep floor are each a pocket's floor,
+    /// and neither is the other's wall.
+    #[test]
+    fn stepped_pocket_reports_each_floor() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 10.0, 10.0, 5.0).unwrap();
+        let shallow = placed_box(&mut topo, [2.0, 2.0, 3.0], [6.0, 6.0, 3.0]);
+        let block = boolean(&mut topo, BooleanOp::Cut, block, shallow).unwrap();
+        let deep = placed_box(&mut topo, [2.0, 2.0, 1.0], [3.0, 6.0, 3.0]);
+        let solid = boolean(&mut topo, BooleanOp::Cut, block, deep).unwrap();
+        let pockets: Vec<(FaceId, Vec<FaceId>)> = recognize_features(&topo, solid, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter_map(|f| match f {
+                Feature::Pocket { floor, walls } => Some((floor, walls)),
+                _ => None,
+            })
+            .collect();
+        let mut depths: Vec<f64> = pockets
+            .iter()
+            .map(|(floor, _)| {
+                let (n, d) = plane_of(&topo, *floor);
+                d / n.z()
+            })
+            .collect();
+        depths.sort_by(f64::total_cmp);
+        assert_eq!(depths.len(), 2, "{pockets:?}");
+        assert!((depths[0] - 1.0).abs() < 1e-9 && (depths[1] - 3.0).abs() < 1e-9);
+        for (floor, walls) in &pockets {
+            for wall in walls {
+                let (n, _) = plane_of(&topo, *wall);
+                assert!(
+                    n.z().abs() < 1e-9,
+                    "floor {floor:?} lists a flat wall {n:?}"
+                );
+            }
+        }
+    }
+
+    /// On a thin plate the chamfered edge's side face shrinks below the
+    /// chamfer; the chamfer is still one.
+    #[test]
+    fn chamfer_on_a_thin_plate_is_found() {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+        let edge = brepkit_topology::explorer::solid_edges(&topo, plate)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let e = topo.edge(e).unwrap();
+                let (s, t) = (
+                    topo.vertex(e.start()).unwrap().point(),
+                    topo.vertex(e.end()).unwrap().point(),
+                );
+                [s, t]
+                    .iter()
+                    .all(|p| (p.x() - 10.0).abs() < 1e-9 && (p.z() - 1.0).abs() < 1e-9)
+            })
+            .unwrap();
+        let solid = crate::blend_ops::chamfer_v2(&mut topo, plate, &[edge], 0.6, 0.6)
+            .unwrap()
+            .solid;
+        let chamfers = recognize_features(&topo, solid, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter(|f| matches!(f, Feature::Chamfer { .. }))
+            .count();
+        assert_eq!(chamfers, 1);
+    }
+
+    /// A slot whose floor is a half-cylinder tangent to both walls: the
+    /// floor joins two parallel walls, not a corner, so it is no fillet.
+    #[test]
+    fn round_channel_floor_is_not_a_fillet() {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 10.0, 10.0, 6.0).unwrap();
+        let slot = placed_box(&mut topo, [4.0, -1.0, 3.0], [2.0, 12.0, 4.0]);
+        let block = boolean(&mut topo, BooleanOp::Cut, block, slot).unwrap();
+        let round = make_cylinder(&mut topo, 1.0, 12.0).unwrap();
+        transform_solid(
+            &mut topo,
+            round,
+            &(Mat4::translation(5.0, -1.0, 3.0) * Mat4::rotation_x(-std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+        let solid = boolean(&mut topo, BooleanOp::Cut, block, round).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let curved = faces
+            .iter()
+            .filter(|&&f| !topo.face(f).unwrap().surface().is_planar())
+            .count();
+        assert_eq!(curved, 1, "{} faces", faces.len());
+        let fillets = recognize_features(&topo, solid, 0.1)
+            .unwrap()
+            .into_iter()
+            .filter(|f| matches!(f, Feature::FilletLike { .. }))
+            .count();
+        assert_eq!(fillets, 0);
     }
 
     /// A cavity lives on an inner shell; its faces must reach the graph.
