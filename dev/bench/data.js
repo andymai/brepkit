@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790237287208,
+  "lastUpdate": 1790237935724,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36341,6 +36341,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42053305,
             "range": "± 903743",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2afd7ea1197cb0ef1a1d66c2c98d6aa171825810",
+          "message": "chore(main): release 3.5.2 (#1702)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.5.2](https://github.com/andymai/brepkit/compare/v3.5.1...v3.5.2)\n(2026-09-24)\n\n\n### Bug Fixes\n\n* **operations:** mirror NURBS faces by their flag alone\n([#1699](https://github.com/andymai/brepkit/issues/1699))\n([cdc0e8b](https://github.com/andymai/brepkit/commit/cdc0e8bcc2c69344a75fa454ae84c0c99c08ef11))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases 3.5.2, bumping all `brepkit` crate versions and updating the\nchangelog. NURBS face mirroring is now determined by the face flag alone\nrather than by additional geometry checks.\n\n<sup>Written for commit 36e2eca5208d562a75976f8e68f5406f0512ca14.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1702?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T08:16:39Z",
+          "tree_id": "cf31057538d1f19a0a1d6562d0fda13bef0220b8",
+          "url": "https://github.com/andymai/brepkit/commit/2afd7ea1197cb0ef1a1d66c2c98d6aa171825810"
+        },
+        "date": 1790237932416,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 803024,
+            "range": "± 1180",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 868699,
+            "range": "± 4927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11063,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 581119,
+            "range": "± 782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 34691781,
+            "range": "± 308834",
             "unit": "ns/iter"
           }
         ]
