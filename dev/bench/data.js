@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790250433090,
+  "lastUpdate": 1790251105475,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -36989,6 +36989,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41973535,
             "range": "± 131712",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "65955cd9c783b4482f800bf878f9f07de544e5d6",
+          "message": "chore(main): release 3.6.0 (#1711)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [3.6.0](https://github.com/andymai/brepkit/compare/v3.5.5...v3.6.0)\n(2026-09-24)\n\n\n### Features\n\n* **operations:** draft planar faces by turning their planes\n([#1703](https://github.com/andymai/brepkit/issues/1703))\n([59afa95](https://github.com/andymai/brepkit/commit/59afa9538df77d2153437f78aac5afcdd2a3034c))\n\n\n### Bug Fixes\n\n* **operations:** sign feature-recognition dihedrals and fix its hole,\npocket and fillet rules\n([#1701](https://github.com/andymai/brepkit/issues/1701))\n([3c9f3d5](https://github.com/andymai/brepkit/commit/3c9f3d50bc1aa0f2eec5ff318d9170eca3a5bdd9))\n* **operations:** sum volume fluxes about a point near the solid\n([#1707](https://github.com/andymai/brepkit/issues/1707))\n([932e810](https://github.com/andymai/brepkit/commit/932e810a28785bb85e2e83919924998f53cdb25e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBumps the workspace to `3.6.1` and publishes the changelog for the new\nrelease.\n\n- Adds drafting of planar faces by turning their planes.\n- Fixes feature-recognition dihedral signs and the hole, pocket, and\nfillet rules, plus volume flux summation near the solid.\n- Closes chamfered edges' ends and orients concave chamfers.\n\n<sup>Written for commit 8847a8c546222602341437a3bc375a8356a98e2d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1711?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-24T11:56:06Z",
+          "tree_id": "7bdd3afa38bc6fc0e6d3f871c87ba854bbf91f5a",
+          "url": "https://github.com/andymai/brepkit/commit/65955cd9c783b4482f800bf878f9f07de544e5d6"
+        },
+        "date": 1790251102067,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 839221,
+            "range": "± 2137",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 873281,
+            "range": "± 1033",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11268,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 588193,
+            "range": "± 3570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 34755913,
+            "range": "± 205080",
             "unit": "ns/iter"
           }
         ]
