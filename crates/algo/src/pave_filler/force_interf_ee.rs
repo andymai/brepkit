@@ -49,6 +49,17 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             let ev = arena.resolve_vertex(pb.end.vertex);
             let start_pos = topo.vertex(sv)?.point();
             let end_pos = topo.vertex(ev)?.point();
+            // A zero-length line (a whole torus's collapsed seams) shares no
+            // geometry with anything; merging two would leave one edge
+            // standing for both of the torus's seams.
+            if (start_pos - end_pos).length() < tol.linear
+                && matches!(
+                    topo.edge(*orig_edge)?.curve(),
+                    brepkit_topology::edge::EdgeCurve::Line
+                )
+            {
+                continue;
+            }
             leaf_data.push((pb_id, *orig_edge, start_pos, end_pos));
         }
     }

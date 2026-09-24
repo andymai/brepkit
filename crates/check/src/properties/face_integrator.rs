@@ -81,7 +81,8 @@ pub(crate) fn integrate_face_about(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -100,7 +101,8 @@ pub(crate) fn integrate_face_about(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -119,7 +121,8 @@ pub(crate) fn integrate_face_about(
                 (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
             let hole_vs = full_revolution_hole_vs(topo, face_id, s);
             Ok(integrate_with_trimming(
                 s,
@@ -136,7 +139,8 @@ pub(crate) fn integrate_face_about(
         FaceSurface::Torus(s) => {
             let full = ((0.0, std::f64::consts::TAU), (0.0, std::f64::consts::TAU));
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, true, full)?;
-            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, true)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -156,7 +160,7 @@ pub(crate) fn integrate_face_about(
             let (u_range, v_range) =
                 face_uv_bounds(topo, face_id, s, periodic_u, periodic_v, full)?;
             let uv_boundary =
-                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), periodic_u)?;
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), periodic_u, false)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -821,6 +825,7 @@ fn build_face_uv_boundary<F>(
     face_id: FaceId,
     project: F,
     u_periodic: bool,
+    v_periodic: bool,
 ) -> Result<Vec<(f64, f64)>, CheckError>
 where
     F: Fn(Point3) -> (f64, f64),
@@ -832,9 +837,14 @@ where
 
     let mut uv: Vec<(f64, f64)> = polygon.iter().map(|&p| project(p)).collect();
 
+    // A torus band running over its tube's v = 0 line keeps a contiguous
+    // v only when v is unwrapped too.
     for i in 1..uv.len() {
         if u_periodic {
             uv[i].0 = unwrap_angle(uv[i - 1].0, uv[i].0);
+        }
+        if v_periodic {
+            uv[i].1 = unwrap_angle(uv[i - 1].1, uv[i].1);
         }
     }
 

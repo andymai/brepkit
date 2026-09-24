@@ -741,6 +741,36 @@ impl Builder {
                         sf.rank,
                         sf.classification
                     );
+                    // A whole ring reaches the builder unsplit when no section
+                    // crossed it: either the other solid misses it, or the
+                    // intersection went unfound. Samples around the ring tell
+                    // the two apart; a ring that crosses the other solid can
+                    // take no single class, so abort the analytic split.
+                    if let Some(torus) = whole_ring(&self.topo, sf.face_id)
+                        && matches!(sf.classification, FaceClass::Inside | FaceClass::Outside)
+                    {
+                        for k in 0..64_u32 {
+                            let (i, j) = (f64::from(k % 16), f64::from(k / 16));
+                            let at = torus.evaluate(
+                                std::f64::consts::TAU * i / 16.0,
+                                std::f64::consts::TAU * (j + 0.5) / 4.0,
+                            );
+                            let class = classifier::classify_point_cached(
+                                &self.topo,
+                                opposing_solid,
+                                opposing_geoms,
+                                at,
+                            )?;
+                            if matches!(class, FaceClass::Inside | FaceClass::Outside)
+                                && class != sf.classification
+                            {
+                                return Err(AlgoError::ClassificationFailed(format!(
+                                    "whole ring {:?} lies on both sides of the other solid",
+                                    sf.face_id
+                                )));
+                            }
+                        }
+                    }
                     if std::env::var("BK_CLS2").is_ok()
                         && let Ok(face) = self.topo.face(sf.face_id)
                     {
@@ -991,6 +1021,31 @@ fn face_interior_candidates(
         }
     }
     Ok(candidates)
+}
+
+/// The torus of a face bounded only by its collapsed seam placeholders
+/// (zero-length lines on one vertex): the whole ring.
+pub fn whole_ring(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Option<brepkit_math::surfaces::ToroidalSurface> {
+    let face = topo.face(face_id).ok()?;
+    let brepkit_topology::face::FaceSurface::Torus(torus) = face.surface() else {
+        return None;
+    };
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let collapsed = !wire.edges().is_empty()
+        && wire.edges().iter().all(|oe| {
+            topo.edge(oe.edge()).is_ok_and(|edge| {
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                    && topo
+                        .vertex(edge.start())
+                        .ok()
+                        .zip(topo.vertex(edge.end()).ok())
+                        .is_some_and(|(a, b)| (a.point() - b.point()).length() < 1e-9)
+            })
+        });
+    collapsed.then(|| torus.clone())
 }
 
 /// Sample a point in the interior of a face.

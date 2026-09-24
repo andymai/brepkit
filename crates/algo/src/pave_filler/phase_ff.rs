@@ -3551,6 +3551,38 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Cylinder(cylinder), FaceSurface::Torus(torus))
+        | (FaceSurface::Torus(torus), FaceSurface::Cylinder(cylinder)) => {
+            // A cylinder sharing a torus's axis meets it in circles about
+            // that axis.
+            match analytic_intersection::exact_cylinder_torus(cylinder, torus)? {
+                Some(exacts) => Ok(exact_raw_curves(exacts)),
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
+        (FaceSurface::Sphere(sphere), FaceSurface::Torus(torus))
+        | (FaceSurface::Torus(torus), FaceSurface::Sphere(sphere)) => {
+            // A sphere centred on a torus's axis meets it in circles about
+            // that axis; marching one took minutes to fit.
+            match analytic_intersection::exact_sphere_torus(sphere, torus)? {
+                Some(exacts) => Ok(exact_raw_curves(exacts)),
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (FaceSurface::Cone(c1), FaceSurface::Cone(c2)) => {
             // Coaxial cones meet at a single circle that coincides with their
             // shared cap rim. Emit it as an exact Circle so the closed-circle

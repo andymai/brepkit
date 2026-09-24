@@ -1607,6 +1607,54 @@ fn parallel_axis_torus_cylinder(
     }))
 }
 
+/// Where two circles in a half-plane through an axis cross, as `(rho, z)`
+/// pairs (distance from the axis, height along it): each sweeps a circle
+/// about the axis. `None` (defer to the marcher) when the circles coincide
+/// or touch, or a crossing lands on or past the axis; `Some` of none when
+/// they miss.
+fn meridian_crossings(
+    first: (f64, f64, f64),
+    second: (f64, f64, f64),
+    scale: f64,
+) -> Option<Vec<(f64, f64)>> {
+    let ((x1, z1, r1), (x2, z2, r2)) = (first, second);
+    let (dx, dz) = (x2 - x1, z2 - z1);
+    let dist = dx.hypot(dz);
+    let slack = 1e-9 * scale;
+    if dist < slack || (dist - (r1 + r2)).abs() < slack || (dist - (r1 - r2).abs()).abs() < slack {
+        return None;
+    }
+    if dist > r1 + r2 || dist < (r1 - r2).abs() {
+        return Some(Vec::new());
+    }
+    let along = r2.mul_add(-r2, r1.mul_add(r1, dist * dist)) / (2.0 * dist);
+    let across = r1.mul_add(r1, -(along * along)).max(0.0).sqrt();
+    let (ux, uz) = (dx / dist, dz / dist);
+    let mut crossings = Vec::with_capacity(2);
+    for side in [1.0, -1.0] {
+        let rho = x1 + along * ux - side * across * uz;
+        if rho <= slack {
+            return None;
+        }
+        crossings.push((rho, z1 + along * uz + side * across * ux));
+    }
+    Some(crossings)
+}
+
+/// Circles about an axis through `base`, at the given `(rho, z)` crossings.
+fn circles_about_axis(
+    base: Point3,
+    axis: Vec3,
+    crossings: &[(f64, f64)],
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    crossings
+        .iter()
+        .map(|&(rho, z)| {
+            Circle3D::new(base + axis * z, axis, rho).map(ExactIntersectionCurve::Circle)
+        })
+        .collect()
+}
+
 /// Exact intersection of two tori sharing an axis: their tube cross-sections
 /// in a half-plane through the axis cross in up to two points, and each sweeps
 /// a circle about the axis.
@@ -1627,36 +1675,88 @@ pub fn exact_torus_torus(
     if axis.cross(second.z_axis()).length() > 1e-9 || offset.cross(axis).length() > 1e-9 * scale {
         return Ok(None);
     }
-    let height = offset.dot(axis);
-    let (r1, r2) = (first.minor_radius(), second.minor_radius());
-    let (dx, dz) = (second.major_radius() - first.major_radius(), height);
-    let dist = dx.hypot(dz);
-    let slack = 1e-9 * scale;
-    if dist < slack || (dist - (r1 + r2)).abs() < slack || (dist - (r1 - r2).abs()).abs() < slack {
+    let Some(crossings) = meridian_crossings(
+        (first.major_radius(), 0.0, first.minor_radius()),
+        (
+            second.major_radius(),
+            offset.dot(axis),
+            second.minor_radius(),
+        ),
+        scale,
+    ) else {
+        return Ok(None);
+    };
+    circles_about_axis(first.center(), axis, &crossings).map(Some)
+}
+
+/// Exact intersection of a torus with a cylinder sharing its axis.
+///
+/// The wall line and the tube's cross-section in a half-plane through the
+/// axis cross in up to two points, each sweeping a circle about the axis.
+///
+/// `None` (defer to the marcher) unless the axes lie on one line, or when
+/// the wall touches the tube.
+///
+/// # Errors
+///
+/// Returns an error if a section circle cannot be built.
+pub fn exact_cylinder_torus(
+    cylinder: &CylindricalSurface,
+    torus: &ToroidalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let axis = torus.z_axis();
+    let scale = torus.major_radius() + cylinder.radius();
+    let offset = cylinder.origin() - torus.center();
+    if axis.cross(cylinder.axis()).length() > 1e-9 || offset.cross(axis).length() > 1e-9 * scale {
         return Ok(None);
     }
-    if dist > r1 + r2 || dist < (r1 - r2).abs() {
+    let gap = cylinder.radius() - torus.major_radius();
+    let small = torus.minor_radius();
+    if (gap.abs() - small).abs() < 1e-9 * scale {
+        return Ok(None);
+    }
+    if gap.abs() > small {
         return Ok(Some(Vec::new()));
     }
-    let along = r2.mul_add(-r2, r1.mul_add(r1, dist * dist)) / (2.0 * dist);
-    let across = r1.mul_add(r1, -(along * along)).max(0.0).sqrt();
-    let (ux, uz) = (dx / dist, dz / dist);
-    let mut circles = Vec::with_capacity(2);
-    for side in [1.0, -1.0] {
-        let rho = first.major_radius() + along * ux - side * across * uz;
-        let z = along * uz + side * across * ux;
-        // A crossing on or past the axis is no circle about it: leave the
-        // pair to the marcher rather than drop part of the section.
-        if rho <= slack {
-            return Ok(None);
-        }
-        circles.push(ExactIntersectionCurve::Circle(Circle3D::new(
-            first.center() + axis * z,
-            axis,
-            rho,
-        )?));
+    let height = small.mul_add(small, -(gap * gap)).sqrt();
+    circles_about_axis(
+        torus.center(),
+        axis,
+        &[(cylinder.radius(), height), (cylinder.radius(), -height)],
+    )
+    .map(Some)
+}
+
+/// Exact intersection of a torus with a sphere centred on its axis.
+///
+/// The sphere's great circle and the tube's cross-section in a half-plane
+/// through the axis cross in up to two points, and each sweeps a circle
+/// about the axis.
+///
+/// `None` (defer to the marcher) unless the sphere's centre lies on the axis,
+/// or when the two circles touch.
+///
+/// # Errors
+///
+/// Returns an error if a section circle cannot be built.
+pub fn exact_sphere_torus(
+    sphere: &SphericalSurface,
+    torus: &ToroidalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let axis = torus.z_axis();
+    let scale = torus.major_radius() + sphere.radius();
+    let offset = sphere.center() - torus.center();
+    if offset.cross(axis).length() > 1e-9 * scale {
+        return Ok(None);
     }
-    Ok(Some(circles))
+    let Some(crossings) = meridian_crossings(
+        (0.0, offset.dot(axis), sphere.radius()),
+        (torus.major_radius(), 0.0, torus.minor_radius()),
+        scale,
+    ) else {
+        return Ok(None);
+    };
+    circles_about_axis(torus.center(), axis, &crossings).map(Some)
 }
 
 /// Exact coaxial cone-cone intersection: returns the shared circle.
