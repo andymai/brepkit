@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790288113294,
+  "lastUpdate": 1790291551009,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39041,6 +39041,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42027137,
             "range": "± 180048",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "42e7916d8a441c86d04795c8834b773543ce6ac1",
+          "message": "fix(algo): meet a torus with a coaxial ball or rod in exact circles (#1748)\n\nA ball or a rod sharing a torus's axis now meets it in exact circles, so\neach boolean of those pairs builds an exact solid, and a whole ring that\na fuse used to drop now falls back instead.\n\n## What was wrong\n\nPhase FF had no sphere-torus or cylinder-torus arm, so both pairs\nentered the general surface marcher. On main at bc2b8d71, fusing\n`make_torus(4, 1.5, 32)` with a centered `make_sphere(3, 32)` spent 435\nseconds there before falling back to a 1294-face mesh. A coaxial\n`make_cylinder(4.2, 10)` from z = -5 to 5 fell back for every operation,\nproducing 564, 521, and 563 faces for Fuse, Cut, and Intersect. A radius\n2 rod standing clear in the hole fused to the rod alone, with 3 faces\nand volume 125.66, and its Cut fell back to a 922-face mesh measuring\n175.07 instead of 177.65.\n\nOnce the sections were exact, two passes mishandled the whole ring's\nseams. The post-split edge-overlap pass paired the torus face's two\nzero-length seam placeholders into one common block because both were\nlines with matching endpoints. Spur removal also interpreted the seam\npair of a whole ring as an out-and-back spur.\n\nClassification could silently discard an unsplit whole ring. A 2 x 20 x\n4 box through the ring fused to the box alone at volume 160, while a 20\nx 20 x 10 slab over x from 1 to 21 fused to the slab alone at volume\n4000.\n\nThe check crate also unwrapped face boundary angles only in u. A torus\nband crossing the tube's v = 0 line therefore jumped by 2 pi in v.\nWithout correcting this, the ball Cut measured 36.02 instead of 166.37.\n\n## What this does\n\n- Adds `exact_sphere_torus` for a sphere centered on the torus axis and\n`exact_cylinder_torus` for a cylinder sharing that axis. A shared-axis\nsurface of revolution meets the torus in circles about the axis, one for\neach crossing of their cross-sections in an axial half-plane.\n\n- Adds Phase FF arms in `compute_raw_curves` to emit those circles. The\nshared `meridian_crossings` and `circles_about_axis` helpers now also\nsupport `exact_torus_torus`.\n\n- Keeps non-coaxial pairs, touching or coincident cross-sections, and\ncrossings on or past the axis on the general analytic path. Its\nparallel-axis torus-cylinder path remains available.\n\n- Skips zero-length lines in `force_interf_ee`, and makes\n`excise_out_and_back_spurs` preserve whole rings through the builder's\nnew `whole_ring` helper.\n\n- Unwraps v as well as u when `build_face_uv_boundary` integrates a\ntorus face.\n\n- Samples an unsplit whole ring at 64 points around the ring and tube\nduring `classify_sub_faces`. Any disagreement with the face class\nreturns `ClassificationFailed`, allowing mesh fallback instead of\ndropping the ring. The box and slab fuses now retain it, with volumes\n306.80 and 4101.67.\n\n- Updates the roadmap with the Closed result, a 15 tools x 3 operations\ntorus audit, the remaining OPEN off-axis tube crossings, and the next\nstep of emitting tube-winding plane sections exactly. It also records\nthe ball zone measure, equator-plane classification misread, and the\n`validate_solid` disconnected-shell trap for a fuse containing a\ndisjoint whole torus.\n\n- The whole-ring check reads each hole in the ring as a polygon in its\n`(u, v)` parameter space and skips samples inside it. A hole whose walk\nwinds around the tube or ring bounds no hole on a torus, so it aborts\nthe analytic split. Without the hole skip, a radius `0.3` drill at `x =\n4.35` through `make_torus(5, 1, 16)` covers the samples at `u = 0`, `v =\n3 pi / 4` and `v = 5 pi / 4`, causing the cut to fall back. The\nout-and-back spur pass skips only a whole ring's collapsed outer wire\nand still reads its holes.\n\n- `exact_sphere_torus`, `exact_cylinder_torus` and `exact_torus_torus`\ndefer to the general intersector for a spindle torus, whose minor radius\nis at least the major radius and whose tube also crosses the far side of\nthe axis.\n\n- The check crate's trimmed integrator wraps a sample's `v` about the\nboundary polygon's middle when `v` is periodic, as it already does for\n`u`, and also unwraps a `v`-periodic NURBS face's boundary polygon in\n`v`.\n\n## Verification\n\n- `ball_in_a_rings_hole` checks all three operations as valid 3-face\nsolids, watertight meshes within 1e-2 relative volume of a Simpson slice\nintegral, `solid_volume` within 1e-6 for Intersect and 1e-3 for Fuse and\nCut, and three classified points.\n\n- `rod_through_a_rings_tube` checks the radius 4.2 rod as a valid 5-face\nFuse, 2-face Cut, and 2-face Intersect. Each volume is within 1e-9 of\nthe circular-segment closed form, each mesh is watertight and within\n1e-2, and a point past the wall is classified.\n\n- `rod_in_a_rings_hole` checks Fuse volume against ring plus rod within\n1e-9, and verifies that Cut leaves the full-volume torus as one face.\n\n- Unit tests in `analytic_intersection.rs` verify that a radius `3` ball\ncentred on the axis and another raised `1` along it meet the `(4, 1.5)`\ntube in two circles whose points lie on both surfaces within `1e-9`; a\nradius `1` ball misses with no curves; and a ball touching the inner\nequator, an off-axis ball and a spindle torus defer. A `4.2` rod meets\nthe tube in two circles within `1e-9`; a radius `2` rod misses; and a\n`5.5` wall touching the outer equator, a tilted axis, an offset axis and\na spindle torus defer.\n\n- `ring_drilled_near_its_inner_equator` drills the ring at `x = 4.35`\nand passes only with the hole skip in place.\n`bar_through_the_ring_fuses_with_it` fuses a `2 x 20 x 4` bar through\nthe ring's hole and tube with `make_torus(4, 1.5, 32)`, then checks a\nvalid solid within `1e-2` relative error of the bar plus the ring\noutside it using a Simpson integral, a watertight mesh and six\nclassified points. The coaxial tests now assert each result's faces by\nsurface type: two sphere faces and one torus face for the ball, and two\ncylinder faces, two plane faces and one torus face for the rod's fuse.\nThe math, check, algo, operations, io and wasm suites pass after these\nchanges.\n\n- The math, topology, geometry, check, algo, blend, heal, offset,\noperations, io, and wasm suites pass, totaling 2944 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nA ball or rod sharing a torus's axis now booleans into exact circles\ninstead of falling back to the general surface marcher, and a ring no\nsection cut can't be silently dropped anymore.\n\n- Emits the intersection circles where the two cross-sections in a\nhalf-plane through the axis cross; a ball in the ring's hole previously\nspent 435 seconds marching and fell back to a 1294-face mesh.\n- Deferring to the marcher for spindle tori, whose tube also crosses the\nfar side of the axis.\n- Sampling an unsplit whole ring around its tube during classification\nskips points inside its holes and sends a ring that crosses the other\nsolid back to the mesh fallback instead of dropping it.\n- Unwraps torus face boundaries in v as well as u, and wraps a\ntrimmed-integrator sample's v about the boundary's middle when v is\nperiodic.\n- Adds `torus_coaxial_tools.rs` covering all three operations against\nball and rod cases, plus a box-fuse regression in `torus_plane_cut.rs`.\n\n<sup>Written for commit 6b412c1580cedee7ea3190ef96e78c2295f6aede.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1748?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T23:09:52Z",
+          "tree_id": "7a551baa7f3e437c41e36e93f7f6affb05d726aa",
+          "url": "https://github.com/andymai/brepkit/commit/42e7916d8a441c86d04795c8834b773543ce6ac1"
+        },
+        "date": 1790291546813,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 999673,
+            "range": "± 8264",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081807,
+            "range": "± 32973",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13267,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 762149,
+            "range": "± 3032",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41551126,
+            "range": "± 45093",
             "unit": "ns/iter"
           }
         ]
