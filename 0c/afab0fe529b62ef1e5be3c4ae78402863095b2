@@ -1,0 +1,22 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_736e66a4109709 932-934,943-944,982-986
+  s_ba2f7b5c6902b6::t_5b42c29cd34375 942
+crates/operations/tests/sphere_plane_cut.rs
+  s_ba2f7b5c6902b6::t_736e66a4109709 159-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0cafab0fe529b62ef1e5be3c4ae78402863095b2",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
