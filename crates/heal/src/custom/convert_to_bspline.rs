@@ -79,7 +79,7 @@ fn convert_face_surface(topo: &mut Topology, fid: FaceId) -> Result<bool, HealEr
             let (mut v_lo, v_hi) = surface_v_range(topo, fid, |p| c.project_point(p).1)?;
             // The rational form needs a nonzero radius row, so a face that
             // reaches the apex keeps a vanishing ring there.
-            v_lo = v_lo.max(1e-9 * v_hi.abs().max(1.0));
+            v_lo = v_lo.max((1e-9 * v_hi.abs().max(1.0)).min(0.1 * Tolerance::new().linear));
             cone_to_nurbs(&c, (v_lo, v_hi.max(v_lo * 2.0)))?
         }
         FaceSurface::Sphere(s) => sphere_to_nurbs(&s)?,
@@ -199,23 +199,77 @@ fn boundary_points(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>, Heal
     Ok(points)
 }
 
-/// The span of a surface parameter over a face's boundary.
+/// The span of a surface parameter over a face's boundary. The patch ends
+/// exactly there, so an extreme between two samples (the crest of an
+/// elliptical rim) is refined to its true value.
 fn surface_v_range(
     topo: &Topology,
     face_id: FaceId,
     v_of: impl Fn(Point3) -> f64,
 ) -> Result<(f64, f64), HealError> {
-    let (lo, hi) = boundary_points(topo, face_id)?
-        .into_iter()
-        .map(v_of)
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
-            (lo.min(v), hi.max(v))
-        });
+    const SAMPLES: u32 = 32;
+    let face = topo.face(face_id)?;
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let param = |k: usize| {
+                #[allow(clippy::cast_precision_loss)]
+                let f = k as f64 / f64::from(SAMPLES);
+                t0 + (t1 - t0) * f
+            };
+            let v_at = |t: f64| v_of(edge.curve().evaluate_with_endpoints(t, start, end));
+            let vs: Vec<f64> = (0..=SAMPLES as usize).map(|k| v_at(param(k))).collect();
+            for (k, &v) in vs.iter().enumerate() {
+                lo = lo.min(v);
+                hi = hi.max(v);
+                if k == 0 || k + 1 == vs.len() {
+                    continue;
+                }
+                let (before, after) = (vs[k - 1], vs[k + 1]);
+                let flat = 1e-12 * (v.abs() + 1.0);
+                if v >= before && v >= after && v - before.min(after) > flat {
+                    hi = hi.max(golden_max(v_at, param(k - 1), param(k + 1)));
+                }
+                if v <= before && v <= after && before.max(after) - v > flat {
+                    lo = lo.min(-golden_max(|t| -v_at(t), param(k - 1), param(k + 1)));
+                }
+            }
+        }
+    }
     if lo < hi {
         Ok((lo, hi))
     } else {
         Ok((-1.0, 1.0))
     }
+}
+
+/// The maximum of `f` on `[a, b]`, where it has a single peak.
+fn golden_max(f: impl Fn(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
+    let r = (5.0_f64.sqrt() - 1.0) / 2.0;
+    let (mut c, mut d) = (b - r * (b - a), a + r * (b - a));
+    let (mut fc, mut fd) = (f(c), f(d));
+    for _ in 0..64 {
+        if fc > fd {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - r * (b - a);
+            fc = f(c);
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + r * (b - a);
+            fd = f(d);
+        }
+    }
+    fc.max(fd)
 }
 
 /// Build a NURBS plane surface that comfortably contains every wire vertex
@@ -449,6 +503,44 @@ mod tests {
             topo.face(fid).unwrap().surface(),
             FaceSurface::Nurbs(_)
         ));
+    }
+
+    /// A slanted rim's crest falls between boundary samples; the cylinder's
+    /// patch still reaches it.
+    #[test]
+    fn slanted_rim_crest_stays_on_the_patch() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::nurbs::projection::project_point_to_surface;
+
+        let cylinder = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis(), 1.0).unwrap();
+        let rim = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(-0.5, 0.0, 1.0),
+            1.25_f64.sqrt(),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.5),
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let a = topo.add_vertex(Vertex::new(rim.evaluate(0.05), 1e-7));
+        let b = topo.add_vertex(Vertex::new(rim.evaluate(0.05 + PI), 1e-7));
+        let halves = [(a, b), (b, a)].map(|(from, to)| {
+            let eid = topo.add_edge(Edge::new(from, to, EdgeCurve::Ellipse(rim.clone())));
+            OrientedEdge::new(eid, true)
+        });
+        let wire = topo.add_wire(Wire::new(halves.to_vec(), true).unwrap());
+        let fid = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(cylinder)));
+        let shell = topo.add_shell(Shell::new(vec![fid]).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+        convert_solid_to_bspline(&mut topo, solid).unwrap();
+        let FaceSurface::Nurbs(patch) = topo.face(fid).unwrap().surface() else {
+            panic!("the cylinder face should be NURBS");
+        };
+        for crest in [Point3::new(1.0, 0.0, 0.5), Point3::new(-1.0, 0.0, -0.5)] {
+            let on = project_point_to_surface(patch, crest, 1e-12).unwrap();
+            assert!(on.distance < 1e-9, "{crest:?} is {} off", on.distance);
+        }
     }
 
     #[test]
