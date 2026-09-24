@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790279164147,
+  "lastUpdate": 1790280119490,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38609,6 +38609,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42038880,
             "range": "± 115866",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f53d8b419eeeab68a2a830cc1093b99289c3de6c",
+          "message": "fix(algo): halve a rod through its seam, both ways (#1730)\n\n## What was wrong\n\nHalving `make_cylinder(3, 4)` through its axis and seam now produces the\ncorrect solid in both directions.\n\nOn main, removing y < 0 returns an accepted 4-face solid with volume\n87.39 instead of 18 pi = 56.55. The bottom cap keeps the full disc,\nwhile the cut face's bottom edge is the removed half's arc. Removing y >\n0 fails assembly with `all faces avoided (all have free edges)` and\nfalls back to a mesh. Every other tested 45 degree turn is correct.\n\nThree issues coincide at the seam:\n\n- A boundary circle's split pieces took their pcurve along the shorter\narc between their ends. At exactly half a turn,\n`compute_pcurve_on_surface` can trace the other half.\n- `pcurve_tangent_at_endpoint` assumed a reversed edge's pcurve runs in\nstored order. These pcurves run in traversal order, so every reversed\narc failed the stale check and fell back to its chord. The arc and\nsection chord then tied on departure angle.\n- A closed rim paved at one point away from its seam was split only at\nthe middle of its longer arc. One half stayed whole, shared both\nendpoints with the section chord, and was welded by the endpoint-keyed\nedge merge.\n\n## What this does\n\n- Adds `compute_boundary_pcurve_on_surface`, which gives split boundary\ncircle and ellipse pieces a pcurve following the edge's own sense.\n`split_boundary_edges_at_3d_points` uses it.\n- Reads a NURBS pcurve tangent from whichever end lies on the edge's\nstart. The traversal flag decides only when both ends do.\n- Paves a rim at the middles of both halves when it was paved at one\npoint, in both `make_blocks` and the planar splitter.\n- Adds a Closed roadmap entry.\n\n## Verification\n\n- `rod_halved_at_every_angle.rs` halves `make_cylinder(3, 4)` through\nits axis at every 15 degree turn, covering 24 cuts.\n- Each result must be a valid solid with at most 6 plane and cylinder\nfaces, classify two kept and two removed points by ray, have\n`solid_volume` within 2e-3 of 18 pi relative, and produce a watertight\nmesh at deflection 0.01.\n- The test fails on main at 90 degrees with volume 87.39.\n- The algo, operations, io, and wasm suites pass, totaling 1929 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes cylinder cuts through the seam so halving a rod produces a valid\nanalytic solid in both directions instead of an incorrect-volume solid\nor mesh fallback.\n\n- Preserve each boundary circle or ellipse piece's native arc, including\nhalf and major arcs, so a split piece traces itself rather than its\ncomplement.\n- Read pcurve tangents from whichever end lies on the edge's start,\nsince a reversed arc's pcurve may run in traversal order rather than\nstored order.\n- Split closed circle and ellipse rims at both arc middles, in\n`make_blocks` and the planar splitter, so edge merging never welds an\narc to a cut chord.\n- Add coverage for 24 cut angles, including seam-aligned cuts; each\nresult must be valid, watertight, analytic, and have half-cylinder\nvolume.\n\n<sup>Written for commit c1e3b6457c5891f32d339e67f65e4303ea9879a3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1730?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T19:59:32Z",
+          "tree_id": "833cf62d6d139f4cf4242e8af78f8a8a3a4fa303",
+          "url": "https://github.com/andymai/brepkit/commit/f53d8b419eeeab68a2a830cc1093b99289c3de6c"
+        },
+        "date": 1790280114658,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 571842,
+            "range": "± 1850",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 632541,
+            "range": "± 3275",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8202,
+            "range": "± 217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 436777,
+            "range": "± 25839",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29264717,
+            "range": "± 100523",
             "unit": "ns/iter"
           }
         ]
