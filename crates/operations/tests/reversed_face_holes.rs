@@ -45,7 +45,7 @@ fn pocket_through_a_bore_wall_is_exact() {
     let truth = 1000.0 - std::f64::consts::PI * 3.0 * 3.0 * 10.0 - pocket_material;
     let exact = solid_volume(&topo, result, 0.001).unwrap();
     assert!(
-        (exact - truth).abs() < 2e-4 * truth,
+        (exact - truth).abs() < 1e-9 * truth,
         "solid_volume {exact}, closed form {truth}"
     );
     for deflection in [0.01, 0.001] {
@@ -84,7 +84,7 @@ fn drill_into_a_cavity_floor_is_valid() {
     let truth = 1000.0 - 216.0 - 2.0 * std::f64::consts::PI;
     let exact = solid_volume(&topo, result, 0.001).unwrap();
     assert!(
-        (exact - truth).abs() < 2e-5 * truth,
+        (exact - truth).abs() < 1e-9 * truth,
         "solid_volume {exact}, closed form {truth}"
     );
     let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
