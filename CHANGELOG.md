@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.14](https://github.com/andymai/brepkit/compare/v4.0.13...v4.0.14) (2026-09-24)
+
+
+### Bug Fixes
+
+* **algo:** halve a rod through its seam, both ways ([#1730](https://github.com/andymai/brepkit/issues/1730)) ([f53d8b4](https://github.com/andymai/brepkit/commit/f53d8b419eeeab68a2a830cc1093b99289c3de6c))
+
 ## [4.0.13](https://github.com/andymai/brepkit/compare/v4.0.12...v4.0.13) (2026-09-24)
 
 
