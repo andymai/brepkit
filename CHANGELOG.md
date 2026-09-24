@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.6.1](https://github.com/andymai/brepkit/compare/v3.6.0...v3.6.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* **blend:** close chamfered edges' ends and orient concave chamfers ([#1710](https://github.com/andymai/brepkit/issues/1710)) ([03b7377](https://github.com/andymai/brepkit/commit/03b737757df59d25d016057fd6e72ee85bb5bb8f))
+
 ## [3.6.0](https://github.com/andymai/brepkit/compare/v3.5.5...v3.6.0) (2026-09-24)
 
 
