@@ -1096,7 +1096,7 @@ fn extrude_half_circle_reversed_edge_volume() {
     use brepkit_math::vec::{Point3, Vec3};
 
     // Same upper half-disc as `extrude_half_circle_face_volume`, but the arc is
-    // used REVERSED in the wire — guards the Circle arm of `reverse_edge_curve`
+    // used REVERSED in the wire — guards the Circle arm of `EdgeCurve::reversed`
     // (a reversed circle arc would otherwise sweep the complementary lower arc).
     let mut topo = Topology::new();
     let tol = Tolerance::new();
@@ -1144,7 +1144,7 @@ fn extrude_half_disc_reversed_nurbs_edge_volume() {
     use brepkit_math::vec::{Point3, Vec3};
 
     // Upper half-disc whose arc boundary is a NURBS (interpolated semicircle),
-    // used REVERSED in the wire. Guards the NURBS arm of `reverse_edge_curve`:
+    // used REVERSED in the wire. Guards the NURBS arm of `EdgeCurve::reversed`:
     // a reversed NURBS edge would otherwise leave the translated top edge's
     // endpoints inconsistent with its curve (the swept side then degenerates).
     let mut topo = Topology::new();

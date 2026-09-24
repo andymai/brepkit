@@ -25,6 +25,51 @@ pub enum EdgeCurve {
 }
 
 impl EdgeCurve {
+    /// The same point set traversed the opposite way.
+    ///
+    /// A circle or ellipse runs counter-clockwise about its normal, so
+    /// negating the normal and `v_axis` reverses it; a NURBS curve reverses
+    /// its control net and weights and mirrors its knot vector about its
+    /// domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`brepkit_math::MathError`] if the reversed curve cannot be
+    /// rebuilt.
+    pub fn reversed(&self) -> Result<Self, brepkit_math::MathError> {
+        Ok(match self {
+            Self::Line => Self::Line,
+            Self::Circle(c) => Self::Circle(Circle3D::with_axes(
+                c.center(),
+                -c.normal(),
+                c.radius(),
+                c.u_axis(),
+                -c.v_axis(),
+            )?),
+            Self::Ellipse(e) => Self::Ellipse(Ellipse3D::with_axes(
+                e.center(),
+                -e.normal(),
+                e.semi_major(),
+                e.semi_minor(),
+                e.u_axis(),
+                -e.v_axis(),
+            )?),
+            Self::NurbsCurve(nc) => {
+                // Mirror about the valid domain, which an unclamped knot
+                // vector's end knots overhang, so the domain maps onto itself.
+                let (d0, d1) = ParametricCurve::domain(nc);
+                let span = d0 + d1;
+                let knots = nc.knots();
+                Self::NurbsCurve(NurbsCurve::new(
+                    nc.degree(),
+                    knots.iter().rev().map(|&k| span - k).collect(),
+                    nc.control_points().iter().rev().copied().collect(),
+                    nc.weights().iter().rev().copied().collect(),
+                )?)
+            }
+        })
+    }
+
     /// Evaluate the curve at parameter `t`.
     ///
     /// `Line` has no stored geometry, so it linearly interpolates between
@@ -441,5 +486,63 @@ mod tests {
         let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta) + off;
         let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb) + off;
         assert_full_domain(curve.domain_with_endpoints(pa, pb), d0, d1);
+    }
+
+    #[test]
+    fn reversed_curves_trace_the_same_points_backwards() {
+        use brepkit_math::traits::ParametricCurve;
+        let center = Point3::new(1.0, -2.0, 0.5);
+        let normal = Vec3::new(0.2, 0.3, 1.0);
+        let circle = EdgeCurve::Circle(Circle3D::new(center, normal, 1.5).unwrap());
+        let ellipse = EdgeCurve::Ellipse(Ellipse3D::new(center, normal, 2.0, 0.7).unwrap());
+        for curve in [circle, ellipse] {
+            let back = curve.reversed().unwrap();
+            let (p, q) = match (&curve, &back) {
+                (EdgeCurve::Circle(a), EdgeCurve::Circle(b)) => (
+                    [0.3, 1.9, 4.4].map(|t| a.evaluate(t)),
+                    [0.3, 1.9, 4.4].map(|t| b.evaluate(-t)),
+                ),
+                (EdgeCurve::Ellipse(a), EdgeCurve::Ellipse(b)) => (
+                    [0.3, 1.9, 4.4].map(|t| a.evaluate(t)),
+                    [0.3, 1.9, 4.4].map(|t| b.evaluate(-t)),
+                ),
+                _ => unreachable!(),
+            };
+            for (a, b) in p.iter().zip(&q) {
+                assert!((*a - *b).length() < 1e-12, "{a:?} vs {b:?}");
+            }
+        }
+
+        let EdgeCurve::NurbsCurve(n) = open_nurbs() else {
+            unreachable!()
+        };
+        let unclamped = NurbsCurve::new(
+            2,
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(3.0, 2.0, 1.0),
+                Point3::new(4.0, 0.0, 0.0),
+            ],
+            vec![1.0, 0.8, 1.2, 1.0],
+        )
+        .unwrap();
+        for n in [n, unclamped] {
+            let EdgeCurve::NurbsCurve(r) = EdgeCurve::NurbsCurve(n.clone()).reversed().unwrap()
+            else {
+                unreachable!()
+            };
+            let (d0, d1) = ParametricCurve::domain(&n);
+            assert_eq!(ParametricCurve::domain(&r), (d0, d1));
+            for f in [0.0, 0.3, 0.8, 1.0] {
+                let t = d0 + f * (d1 - d0);
+                let (a, b) = (
+                    ParametricCurve::evaluate(&n, t),
+                    ParametricCurve::evaluate(&r, d0 + d1 - t),
+                );
+                assert!((a - b).length() < 1e-12, "{a:?} vs {b:?}");
+            }
+        }
     }
 }
