@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.2](https://github.com/andymai/brepkit/compare/v3.5.1...v3.5.2) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** mirror NURBS faces by their flag alone ([#1699](https://github.com/andymai/brepkit/issues/1699)) ([cdc0e8b](https://github.com/andymai/brepkit/commit/cdc0e8bcc2c69344a75fa454ae84c0c99c08ef11))
+
 ## [3.5.1](https://github.com/andymai/brepkit/compare/v3.5.0...v3.5.1) (2026-09-24)
 
 
