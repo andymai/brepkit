@@ -9,7 +9,7 @@ use super::TriangleMeshUV;
 use super::edge_sampling::{plane_axes, segments_for_chord_deviation_a};
 use super::nurbs::{
     compute_angular_range, compute_axial_range, compute_sphere_v_range, compute_torus_v_range,
-    compute_v_param_range, sphere_analytic_kind, tessellate_nurbs,
+    compute_v_param_range, sphere_analytic_kind, tessellate_nurbs, tessellate_periodic_nurbs_grid,
 };
 use super::planar::{tessellate_analytic, tessellate_analytic_with_boundary, tessellate_planar};
 
@@ -59,6 +59,25 @@ pub fn tessellate_with_uvs_a(
     angular_tol: f64,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     tessellate_with_uvs_floor(topo, face, deflection, angular_tol, false)
+}
+
+/// Whether a face is its whole surface: no holes, and an outer wire made of
+/// closed edges only (a torus's seam pair collapsed onto one vertex), which
+/// trims nothing away.
+fn covers_whole_domain(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    if !face_data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    for oe in topo.wire(face_data.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() != edge.end() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Like [`tessellate_with_uvs_a`] with an explicit curvature-floor selector.
@@ -127,6 +146,17 @@ pub(super) fn tessellate_with_uvs_floor(
                     })
                     .collect();
                 Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
+            }
+            FaceSurface::Nurbs(surface)
+                if surface.is_periodic_u()
+                    && surface.is_periodic_v()
+                    && covers_whole_domain(topo, face_data)? =>
+            {
+                Ok(tessellate_periodic_nurbs_grid(
+                    surface,
+                    deflection,
+                    angular_tol,
+                ))
             }
             FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection, angular_tol)),
             FaceSurface::Cylinder(cyl) => {
