@@ -1,0 +1,19 @@
+crates/operations/tests/torus_plane_cut.rs
+  s_ba2f7b5c6902b6::t_c8ef1614e6daeb 466-548
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b7e4ca8661b611d2441cf1ef90546b8e5e89d8cb",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
