@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.11](https://github.com/andymai/brepkit/compare/v4.0.10...v4.0.11) (2026-09-24)
+
+
+### Bug Fixes
+
+* **check:** classify points against every shell, so a cavity reads outside ([#1732](https://github.com/andymai/brepkit/issues/1732)) ([52543c4](https://github.com/andymai/brepkit/commit/52543c4f219dffa8e596fea118f558b91d5e3dc4))
+
 ## [4.0.10](https://github.com/andymai/brepkit/compare/v4.0.9...v4.0.10) (2026-09-24)
 
 
