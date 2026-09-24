@@ -492,14 +492,14 @@ fn loft_smooth_surface_passes_through_profiles() {
     for &fid in sh.faces() {
         let face = topo.face(fid).expect("face");
         if let FaceSurface::Nurbs(surface) = face.surface() {
-            // At u=0.5 (middle profile), the surface should pass through
-            // the middle profile's vertex positions. Evaluate at u=0.5, v=0.
-            let mid_pt = surface.evaluate(0.5, 0.0);
-            // The middle profile is at z=2.0.
+            // v runs up the rails; equal chords put the middle profile at
+            // v = 0.5, where the rail at u = 0 passes through a corner of it.
+            let mid_pt = surface.evaluate(0.0, 0.5);
             assert!(
-                (mid_pt.z() - 2.0).abs() < 0.5,
-                "surface at u=0.5 should be near z=2.0, got z={:.3}",
-                mid_pt.z()
+                (mid_pt.z() - 2.0).abs() < 1e-9
+                    && (mid_pt.x().abs() - 0.5).abs() < 1e-9
+                    && (mid_pt.y().abs() - 0.5).abs() < 1e-9,
+                "rail at v = 0.5 should be a middle-profile corner, got {mid_pt:?}"
             );
             break;
         }
@@ -1109,4 +1109,93 @@ fn loft_rounded_rect_nurbs_arcs_stays_analytic() {
             volumes[0]
         );
     }
+}
+
+/// A waisted square loft: each section at height z is a square of half-size
+/// `3 - z + z²/4`, so the volume is `4 ∫₀⁴ s² dz = 1328/15`. The sides share
+/// their rails, so the shell closes and its normals point out.
+#[test]
+fn loft_smooth_waisted_squares_close_at_their_volume() {
+    let truth = 1328.0 / 15.0;
+    for mirrored in [false, true] {
+        let mut topo = Topology::new();
+        let p0 = make_square_at(&mut topo, 6.0, 0.0);
+        let p1 = make_square_at(&mut topo, 4.0, 2.0);
+        let p2 = make_square_at(&mut topo, 6.0, 4.0);
+        let solid = loft_smooth(&mut topo, &[p0, p1, p2]).unwrap();
+        if mirrored {
+            crate::transform::transform_solid(
+                &mut topo,
+                solid,
+                &brepkit_math::mat::Mat4::scale(-1.0, 1.0, 1.0),
+            )
+            .unwrap();
+        }
+        let report = crate::validate::validate_solid(&topo, solid).unwrap();
+        assert!(
+            report.is_valid(),
+            "mirrored={mirrored}: {:?}",
+            report.issues
+        );
+        for deflection in [0.01, 0.001] {
+            let mesh = crate::tessellate::tessellate_solid(&topo, solid, deflection).unwrap();
+            assert_eq!(
+                crate::tessellate::boundary_edge_count(&mesh),
+                0,
+                "mirrored={mirrored}: open mesh at {deflection}"
+            );
+        }
+        let volume = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "mirrored={mirrored}: volume {volume}, expected {truth}"
+        );
+    }
+}
+
+/// Profiles whose corners travel different distances: every rail must still
+/// share the others' knots, or neighbouring sides part along their rail.
+#[test]
+fn loft_smooth_uneven_profiles_share_their_rails() {
+    let rect = |topo: &mut Topology, (cx, cy): (f64, f64), (hx, hy): (f64, f64), z: f64| {
+        let v = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(cx + x, cy + y, z), 1e-7)));
+        let edges = (0..4)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    };
+    let mut topo = Topology::new();
+    let p0 = rect(&mut topo, (0.0, 0.0), (2.0, 1.0), 0.0);
+    let p1 = rect(&mut topo, (0.5, 0.2), (1.0, 1.5), 1.5);
+    let p2 = rect(&mut topo, (-0.3, 0.4), (2.5, 0.5), 3.0);
+    let p3 = rect(&mut topo, (0.0, 0.0), (1.5, 1.5), 5.0);
+    let solid = loft_smooth(&mut topo, &[p0, p1, p2, p3]).unwrap();
+    let report = crate::validate::validate_solid(&topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    for deflection in [0.01, 0.001] {
+        let mesh = crate::tessellate::tessellate_solid(&topo, solid, deflection).unwrap();
+        assert_eq!(
+            crate::tessellate::boundary_edge_count(&mesh),
+            0,
+            "open mesh at {deflection}"
+        );
+    }
+    let volume = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+    let mesh = crate::measure::oriented_solid_volume(&topo, solid, 0.0005).unwrap();
+    assert!(
+        volume > 0.0 && (volume - mesh).abs() < 1e-3 * volume,
+        "solid_volume {volume}, mesh {mesh}"
+    );
 }
