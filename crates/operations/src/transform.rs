@@ -108,11 +108,15 @@ fn reverse_face_wires(
     Ok(())
 }
 
-/// Determine the v-range (latitude) of a sphere face from its boundary.
+/// The latitude range `(v_min, v_max)` a sphere face covers.
 ///
-/// Projects boundary vertices onto the sphere to find their latitudes,
-/// then uses the sign of the average vertex Z offset from center to
-/// determine which hemisphere the face covers.
+/// The boundary's own latitudes bound it. A face whose outer wire is one loop
+/// around the axis (no seam, no inner wires) is a cap, and which pole it
+/// holds follows from the loop's winding: the outer wire runs
+/// counter-clockwise about the face's outward normal, so it circles the
+/// sphere axis counter-clockwise exactly when that normal points north. A
+/// primitive hemisphere is bounded by the equator alone and has no pole
+/// vertex, so neither its latitudes nor its vertices can tell the two apart.
 fn sphere_face_v_range(
     topo: &Topology,
     face_id: FaceId,
@@ -122,91 +126,53 @@ fn sphere_face_v_range(
 
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
-    let mut v_vals = Vec::new();
+    let center = sph.center();
+    let axis = sph.z_axis();
 
+    let mut samples: Vec<brepkit_math::vec::Point3> = Vec::new();
+    let mut uses: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     for oe in wire.edges() {
+        *uses.entry(oe.edge().index()).or_default() += 1;
         let edge = topo.edge(oe.edge())?;
-        let pt = topo.vertex(edge.start())?.point();
-        let (_u, v) = sph.project_point(pt);
-        v_vals.push(v);
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let n = if matches!(edge.curve(), EdgeCurve::Line) {
+            1
+        } else {
+            16
+        };
+        let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+        samples.extend((0..n).map(|k| {
+            let t = from + (to - from) * f64::from(k) / f64::from(n);
+            edge.curve().evaluate_with_endpoints(t, sp, ep)
+        }));
     }
-
-    if v_vals.is_empty() {
-        // Full sphere with no boundary → full range
+    if samples.is_empty() {
         return Ok((-FRAC_PI_2, FRAC_PI_2));
     }
+    let (v_lo, v_hi) = samples.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &p| {
+        let v = sph.project_point(p).1;
+        (lo.min(v), hi.max(v))
+    });
 
-    // All boundary vertices should be at roughly the same v (equator).
-    // Determine hemisphere by checking whether face is above or below boundary.
-    let boundary_v = v_vals.iter().copied().sum::<f64>() / v_vals.len() as f64;
-
-    // Check which side: sample a face interior point. A simpler heuristic:
-    // if any inner wire exists, check it. Otherwise, examine the face's
-    // Newell normal direction relative to the sphere center.
-    //
-    // For brepkit's make_sphere: south hemisphere has normals pointing
-    // away from center with v ∈ [-π/2, boundary_v], north hemisphere
-    // v ∈ [boundary_v, π/2].
-    //
-    // Use a heuristic: compute the average Z of boundary relative to center
-    // and compare with the face's position hints.
-    let center = sph.center();
-    let avg_boundary_z: f64 = {
-        let mut sum = 0.0;
-        for oe in wire.edges() {
-            let edge = topo.edge(oe.edge())?;
-            let pt = topo.vertex(edge.start())?.point();
-            sum += (pt - center).dot(sph.z_axis());
-        }
-        sum / wire.edges().len() as f64
-    };
-
-    // If the boundary is near the equator (avg_z ≈ 0), we need another way.
-    // Try to detect hemisphere by checking if the face has a pole vertex
-    // (a degenerate edge with a pole at v = ±π/2).
-    // Simpler approach: this is called before the transform, and make_sphere
-    // creates two faces. Just check if boundary_v ≈ 0 and pick hemispheres.
-    if boundary_v.abs() < 0.1 {
-        // Near equator: use face ordering. Check if this face has vertices
-        // near the north pole (z > center.z) or south pole (z < center.z).
-        // If avg_boundary_z is near 0, look for a degenerate pole vertex.
-        let mut has_pole_north = false;
-        let mut has_pole_south = false;
-        for oe in wire.edges() {
-            let edge = topo.edge(oe.edge())?;
-            if edge.start() == edge.end() {
-                let pt = topo.vertex(edge.start())?.point();
-                let dz = (pt - center).dot(sph.z_axis());
-                if dz > 0.0 {
-                    has_pole_north = true;
-                } else {
-                    has_pole_south = true;
-                }
-            }
-        }
-        if has_pole_north {
-            return Ok((boundary_v, FRAC_PI_2));
-        }
-        if has_pole_south {
-            return Ok((-FRAC_PI_2, boundary_v));
-        }
-        // Default: use the winding direction. If first edge goes "forward" in
-        // parameter space, it's the north hemisphere.
-        // Fallback: just check avg Z of all edge midpoints would require
-        // curve evaluation. Use a simpler heuristic based on face ordering.
-        // The first face in make_sphere is south, second is north.
-        // This is fragile, but works for this specific case.
-        if avg_boundary_z >= 0.0 {
-            return Ok((boundary_v, FRAC_PI_2));
-        }
-        return Ok((-FRAC_PI_2, boundary_v));
+    let seamed = uses.values().any(|&n| n > 1);
+    if seamed || !face.inner_wires().is_empty() {
+        return Ok((v_lo, v_hi));
     }
-
-    if boundary_v > 0.0 {
-        Ok((boundary_v, FRAC_PI_2))
+    let winding: f64 = samples
+        .iter()
+        .zip(samples.iter().cycle().skip(1))
+        .map(|(&a, &b)| (a - center).cross(b - center).dot(axis))
+        .sum();
+    let north = (winding > 0.0) != face.is_reversed();
+    Ok(if north {
+        (v_lo, FRAC_PI_2)
     } else {
-        Ok((-FRAC_PI_2, boundary_v))
-    }
+        (-FRAC_PI_2, v_hi)
+    })
 }
 
 /// The linear part of `matrix` applied to `v` (no translation).

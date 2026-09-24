@@ -993,6 +993,39 @@ fn non_uniform_scale_makes_a_sphere_an_exact_ellipsoid() {
     assert!(patches > 0, "the ellipsoid faces are NURBS");
 }
 
+/// A primitive sphere's hemispheres are bounded by the equator alone, with no
+/// pole vertex; each must still get the patch of its own half.
+#[test]
+fn ellipsoid_hemispheres_get_their_own_halves() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+    transform_solid(&mut topo, solid, &Mat4::scale(1.0, 2.0, 3.0)).unwrap();
+    let mut sides = Vec::new();
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        let FaceSurface::Nurbs(n) = topo.face(fid).unwrap().surface().clone() else {
+            continue;
+        };
+        let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
+        let z: Vec<f64> = (0..=8)
+            .flat_map(|i| (1..8).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                n.evaluate(
+                    u0 + (u1 - u0) * f64::from(i) / 8.0,
+                    v0 + (v1 - v0) * f64::from(j) / 8.0,
+                )
+                .z()
+            })
+            .collect();
+        assert!(
+            z.iter().all(|&z| z > -1e-9) || z.iter().all(|&z| z < 1e-9),
+            "a hemisphere patch straddles the equator"
+        );
+        sides.push(z.iter().sum::<f64>() > 0.0);
+    }
+    sides.sort_unstable();
+    assert_eq!(sides, vec![false, true], "one north and one south patch");
+}
+
 /// The fused copy-and-transform maps every surface, curve and wire exactly
 /// as copying and then transforming does.
 #[test]
