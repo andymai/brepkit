@@ -190,6 +190,15 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **`sweep_smooth`'s rails left their faces (CLOSED 2026-09-24; pin `sweep_smooth_rails_lie_on_their_faces` in `crates/operations/src/sweep/tests.rs`)**:
+  each rail edge was the straight chord between its first and last ring
+  vertices while each side face interpolated its own two columns of ring
+  positions, so the faces' boundaries left their surfaces (a trimmed mesh
+  of a quarter-circle sweep read 6.87 against 7.85). The rails are now one
+  B-spline per profile vertex through its ring positions on shared
+  parameters, and each side is the ruled surface between two of them, as
+  in `loft_smooth`.
+
 - **NURBS faces meshed far outside their deflection (CLOSED 2026-09-24; pin `squashed_walls_mesh_within_their_deflection` in `crates/operations/tests/non_uniform_scale_mesh.rs`)**:
   `interior_grid_resolution` fed a NURBS face's knot spans to a circle-chord
   formula with radius 1, so a squashed cylinder's wall meshed 6.2e-3 low in

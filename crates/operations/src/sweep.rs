@@ -7,7 +7,7 @@
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
-use brepkit_math::nurbs::surface_fitting::interpolate_surface;
+use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -1122,35 +1122,52 @@ pub fn sweep_smooth(
         true,
     )?);
 
-    // NURBS side faces: one surface per edge index spanning all rings.
-    let degree_u = (num_rings - 1).min(3);
-    let degree_v = 1;
-
-    // Rail edges, one per profile vertex (the swept-vertex path from the first
-    // to the last ring), shared between the two adjacent side faces so the shell
-    // is manifold.
-    let rail_edges: Vec<_> = (0..n)
-        .map(|i| topo.add_edge(Edge::new(first_ring[i], last_ring[i], EdgeCurve::Line)))
+    // One rail per profile vertex, interpolated through its ring positions on
+    // parameters shared by every rail, so neighbouring rails share one knot
+    // vector. The rail edges are those curves, and each side face is the
+    // ruled surface between its two rails: its boundary is exactly the rail
+    // and ring edges its neighbours share.
+    let degree = (num_rings - 1).min(3);
+    let rail_points: Vec<Vec<Point3>> = (0..n)
+        .map(|i| ring_positions.iter().map(|ring| ring[i]).collect())
+        .collect();
+    let params = crate::loft::mean_chord_params(&rail_points);
+    let rails = rail_points
+        .iter()
+        .map(|points| crate::loft::interpolate_at(points, degree, &params))
+        .collect::<Result<Vec<_>, _>>()?;
+    let rail_edges: Vec<_> = rails
+        .iter()
+        .enumerate()
+        .map(|(i, rail)| {
+            topo.add_edge(Edge::new(
+                first_ring[i],
+                last_ring[i],
+                EdgeCurve::NurbsCurve(rail.clone()),
+            ))
+        })
         .collect();
 
     for i in 0..n {
         let next_i = (i + 1) % n;
+        let (a, b) = (&rails[i], &rails[next_i]);
+        let surface = NurbsSurface::new(
+            1,
+            a.degree(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            a.knots().to_vec(),
+            vec![a.control_points().to_vec(), b.control_points().to_vec()],
+            vec![vec![1.0; a.control_points().len()]; 2],
+        )
+        .map_err(crate::OperationsError::Math)?;
 
-        // Build interpolation grid: rings × 2 (edge endpoints).
-        let grid: Vec<Vec<Point3>> = (0..num_rings)
-            .map(|k| vec![ring_positions[k][i], ring_positions[k][next_i]])
-            .collect();
-
-        let surface =
-            interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
-
-        // The surface normal ∂u×∂v = path×edge points *into* the swept body for
-        // a CCW profile; reverse the face when it opposes the geometric outward
-        // so the solid's faces are consistently outward. Probe everything at the
-        // start ring (u=0), mid-edge (v=0.5): the edge tangent crossed with the
-        // local path direction *at the edge midpoint*. If they are parallel (the
-        // edge runs along the path) the cross product vanishes, so fall back to
-        // the radial direction from the ring centroid.
+        // Reverse the face when its normal ∂u×∂v = edge×path opposes the
+        // geometric outward, so the solid's faces are consistently outward.
+        // Probe everything mid-edge (u=0.5) at the start ring (v=0): the edge
+        // tangent crossed with the local path direction *at the edge
+        // midpoint*. If they are parallel (the edge runs along the path) the
+        // cross product vanishes, so fall back to the radial direction from
+        // the ring centroid.
         let mid0 = ring_positions[0][i] + (ring_positions[0][next_i] - ring_positions[0][i]) * 0.5;
         let mid1 = ring_positions[1][i] + (ring_positions[1][next_i] - ring_positions[1][i]) * 0.5;
         let edge_dir = ring_positions[0][next_i] - ring_positions[0][i];
@@ -1159,7 +1176,7 @@ pub fn sweep_smooth(
             outward = mid0 - crate::winding::polygon_centroid(&ring_positions[0]);
         }
         let reversed = surface
-            .normal(0.0, 0.5)
+            .normal(0.5, 0.0)
             .map(|nrm| nrm.dot(outward) < 0.0)
             .unwrap_or(false);
 
