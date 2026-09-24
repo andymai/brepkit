@@ -1,0 +1,38 @@
+crates/operations/src/tessellate/solid.rs
+  s_ba2f7b5c6902b6::t_d5b53859719f62 1105-1106,1108
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_5dc07ef08f9331 2201-2205
+  s_ba2f7b5c6902b6::t_512d959196e780 2238
+  s_ba2f7b5c6902b6::t_3c4f945534bfb8 2011
+  s_ba2f7b5c6902b6::t_6660d8d7b9f0c8 2200,2206
+  s_ba2f7b5c6902b6::t_b039ddc3ba671a 1946-1948,1953-1955
+  s_ba2f7b5c6902b6::t_371da6b04390f3 1949-1952,1990-1994,2140-2143,2186-2189,2196
+  s_ba2f7b5c6902b6::t_d7120cc2ac90b1 2475-2535,2650,2656
+  s_ba2f7b5c6902b6::t_d5b53859719f62 1930-1945,1956-1959,2064-2094,2106,2113-2115,2231-2237,2239-2240,2536-2649
+  s_ba2f7b5c6902b6::t_70ec57a2d9f18e 1995-1998,2651-2655
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_5dc07ef08f9331 1426-1471,1475-1488,1490-1493,1495-1498,1500,1502-1507,1509,1513-1519,2266-2273
+  s_ba2f7b5c6902b6::t_fea6c5483ce720 1472-1474,1489,1494,1499,1501,1508,1510-1512
+crates/operations/tests/cylinder_wall_windows.rs
+  s_ba2f7b5c6902b6::t_5fe43ed09c52f0 1-34,37-73,75-89,91-133,135-216
+  s_ba2f7b5c6902b6::t_9643ce48c90e7b 35-36,134
+  s_ba2f7b5c6902b6::t_84bc701155326b 74,90
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_d7120cc2ac90b1 80-87,89-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "648a1e1d4f50b511a91ed6b254ef985a8c2d042a",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
