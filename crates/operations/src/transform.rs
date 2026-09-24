@@ -26,9 +26,12 @@ use brepkit_topology::wire::{OrientedEdge, WireId};
 ///   same `(u, v)` parameterization. A map that would stop a surface being
 ///   circular (a non-uniform scale across a cylinder's axis, say) converts
 ///   that face to the NURBS image of the surface.
-/// - A mirror (negative determinant) reverses every wire and flips the
-///   `reversed` flag of NURBS faces, so each outer wire still winds
-///   counter-clockwise around its face's outward normal.
+/// - A mirror (negative determinant) turns every boundary clockwise about
+///   its face's outward normal. A face with an explicit normal (a plane or
+///   quadric) keeps that normal outward and reverses its wires; a NURBS
+///   face's Su × Sv turns inward, so it keeps its wires and flips its
+///   `reversed` flag. Either way each stored outer wire still winds
+///   counter-clockwise about its surface normal.
 /// - Stored pcurves survive only on faces whose parameterization is carried
 ///   over exactly; the rest are dropped for consumers to recompute.
 ///
@@ -68,9 +71,15 @@ fn transform_topology(
     // Surfaces go first: the NURBS fallbacks read a face's parameter range
     // off its boundary vertices, which must still lie on the source surface.
     let mut stale_pcurves = HashSet::new();
+    let mut flipped = HashSet::new();
     for &fid in face_ids {
-        if !transform_face_surface(topo, fid, matrix, inverse)? {
+        let (keeps_parameterization, flips_face) =
+            transform_face_surface(topo, fid, matrix, inverse)?;
+        if !keeps_parameterization {
             stale_pcurves.insert(fid);
+        }
+        if flips_face {
+            flipped.insert(fid);
         }
     }
     for &vid in vertex_ids {
@@ -79,11 +88,50 @@ fn transform_topology(
         vertex.set_point(new_point);
     }
     let moved_origins = transform_edges(topo, edge_ids, matrix)?;
+    // A mirror turns every face's boundary clockwise about its outward
+    // normal. A face with an explicit normal (plane, quadric) keeps that
+    // normal outward, so its wires reverse. A NURBS image's Su × Sv turns
+    // inward instead, which already leaves its wires counter-clockwise about
+    // the surface normal: only its flag flips.
     if matrix.determinant() < 0.0 {
-        reverse_face_wires(topo, face_ids)?;
+        let kept: HashSet<FaceId> = face_ids.difference(&flipped).copied().collect();
+        separate_shared_wires(topo, &kept, &flipped)?;
+        reverse_face_wires(topo, &kept)?;
     }
     topo.pcurves_mut().remove_faces(&stale_pcurves);
     topo.pcurves_mut().remove_edges(&moved_origins);
+    Ok(())
+}
+
+/// Give each of `flipped` its own copy of any wire it shares with a face in
+/// `kept`: the two groups need opposite senses of the same boundary.
+fn separate_shared_wires(
+    topo: &mut Topology,
+    kept: &HashSet<FaceId>,
+    flipped: &HashSet<FaceId>,
+) -> Result<(), crate::OperationsError> {
+    let mut kept_wires = HashSet::new();
+    for &fid in kept {
+        let face = topo.face(fid)?;
+        kept_wires.insert(face.outer_wire());
+        kept_wires.extend(face.inner_wires().iter().copied());
+    }
+    for &fid in flipped {
+        let face = topo.face(fid)?;
+        let (outer, inner) = (face.outer_wire(), face.inner_wires().to_vec());
+        if kept_wires.contains(&outer) {
+            let copy = topo.wire(outer)?.clone();
+            let copy = topo.add_wire(copy);
+            topo.face_mut(fid)?.set_outer_wire(copy);
+        }
+        for (k, wid) in inner.into_iter().enumerate() {
+            if kept_wires.contains(&wid) {
+                let copy = topo.wire(wid)?.clone();
+                let copy = topo.add_wire(copy);
+                topo.face_mut(fid)?.inner_wires_mut()[k] = copy;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -382,13 +430,14 @@ pub(crate) fn surface_image(
 }
 
 /// Transform a single face's surface to its exact image under `matrix`.
-/// Returns whether the face's stored pcurves remain valid.
+/// Returns whether the face's stored pcurves remain valid, and whether its
+/// flag flipped with the image's normal.
 fn transform_face_surface(
     topo: &mut Topology,
     fid: FaceId,
     matrix: &Mat4,
     inverse: &Mat4,
-) -> Result<bool, crate::OperationsError> {
+) -> Result<(bool, bool), crate::OperationsError> {
     let image = surface_image(topo, fid, matrix, inverse)?;
     let face = topo.face_mut(fid)?;
     if image.flips_face {
@@ -396,7 +445,7 @@ fn transform_face_surface(
         face.set_reversed(!reversed);
     }
     face.set_surface(image.surface);
-    Ok(image.keeps_parameterization)
+    Ok((image.keeps_parameterization, image.flips_face))
 }
 
 /// The v-parameter range a face's boundary covers, sampled along every edge
