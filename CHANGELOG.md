@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.5.5](https://github.com/andymai/brepkit/compare/v3.5.4...v3.5.5) (2026-09-24)
+
+
+### Bug Fixes
+
+* **operations:** close loft_smooth's shell on shared curved rails ([#1700](https://github.com/andymai/brepkit/issues/1700)) ([6c5acc0](https://github.com/andymai/brepkit/commit/6c5acc03fa3754561fe3a1e0c2a3f246530c9e96))
+
 ## [3.5.4](https://github.com/andymai/brepkit/compare/v3.5.3...v3.5.4) (2026-09-24)
 
 
