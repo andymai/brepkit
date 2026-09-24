@@ -1,0 +1,26 @@
+crates/operations/tests/far_from_origin_volume.rs
+  s_ba2f7b5c6902b6::t_236d9113fb0348 10,16-17,109-137
+  s_ba2f7b5c6902b6::t_6521a3623e5f50 138
+crates/check/src/properties/mod.rs
+  s_ba2f7b5c6902b6::t_23ecc628ae6136 62,73-78,85,89
+  s_ba2f7b5c6902b6::t_236d9113fb0348 235-241
+  s_ba2f7b5c6902b6::t_4c8605a29aa830 234
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_23ecc628ae6136 2778,2907
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d4e552a7bbb796054734b853929987467fcd839a",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
