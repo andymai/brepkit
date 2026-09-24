@@ -4,7 +4,6 @@
 //! surfaces between corresponding profile edges.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
-use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -1153,51 +1152,53 @@ pub fn loft_smooth(
         )?);
     }
 
-    // NURBS side faces: one surface per edge index, spanning ALL profiles.
-    // Degree in u (across profiles): min(P-1, 3) for smooth interpolation.
-    // Degree in v (along edge): 1 (linear between adjacent vertices).
-    let degree_u = (num_profiles - 1).min(3);
-    let degree_v = 1;
+    // One rail per vertex index through that vertex of every profile, all
+    // sharing the mean chord-length parameters and so one knot vector. Each
+    // side face is the ruled surface between two neighbouring rails, so its
+    // boundary IS the rails and the ring edges, which both neighbours share.
+    // u runs along the ring edge and v up the rails: for profiles wound CCW
+    // about the stacking direction the normal Su × Sv points outward.
+    let last = num_profiles - 1;
+    let degree = (num_profiles - 1).min(3);
+    let rail_points: Vec<Vec<Point3>> = (0..n)
+        .map(|i| profile_verts.iter().map(|verts| verts[i]).collect())
+        .collect();
+    let params = mean_chord_params(&rail_points);
+    let rails = rail_points
+        .iter()
+        .map(|points| interpolate_at(points, degree, &params))
+        .collect::<Result<Vec<_>, _>>()?;
+    let rail_edges: Vec<EdgeId> = rails
+        .iter()
+        .enumerate()
+        .map(|(i, rail)| {
+            topo.add_edge(Edge::new(
+                ring_verts[0][i],
+                ring_verts[last][i],
+                EdgeCurve::NurbsCurve(rail.clone()),
+            ))
+        })
+        .collect();
 
     for i in 0..n {
         let next_i = (i + 1) % n;
-
-        // Build the interpolation grid: rows = profiles, cols = 2 (edge endpoints).
-        let grid: Vec<Vec<Point3>> = (0..num_profiles)
-            .map(|k| vec![profile_verts[k][i], profile_verts[k][next_i]])
-            .collect();
-
-        let surface =
-            interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
-
-        // The wire goes around the edge of the NURBS patch:
-        // bottom edge → right rail → top edge (reversed) → left rail (reversed)
-        let last = num_profiles - 1;
-
-        // Bottom edge: ring_edges[0][i] (first profile, edge i)
-        // Top edge: ring_edges[last][i] (last profile, edge i)
-        // Left rail: connects vertex i across all profiles
-        // Right rail: connects vertex next_i across all profiles
-
-        // For the multi-section case, we need edges spanning ALL profiles.
-        // Create single edges from first to last profile for the rails.
-        let e_left_rail = topo.add_edge(Edge::new(
-            ring_verts[0][i],
-            ring_verts[last][i],
-            EdgeCurve::Line,
-        ));
-        let e_right_rail = topo.add_edge(Edge::new(
-            ring_verts[0][next_i],
-            ring_verts[last][next_i],
-            EdgeCurve::Line,
-        ));
+        let (a, b) = (&rails[i], &rails[next_i]);
+        let surface = NurbsSurface::new(
+            1,
+            a.degree(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            a.knots().to_vec(),
+            vec![a.control_points().to_vec(), b.control_points().to_vec()],
+            vec![vec![1.0; a.control_points().len()]; 2],
+        )
+        .map_err(crate::OperationsError::Math)?;
 
         let side_wire = Wire::new(
             vec![
-                OrientedEdge::new(ring_edges[0][i], true),     // bottom
-                OrientedEdge::new(e_right_rail, true),         // right
-                OrientedEdge::new(ring_edges[last][i], false), // top (reversed)
-                OrientedEdge::new(e_left_rail, false),         // left (reversed)
+                OrientedEdge::new(ring_edges[0][i], true),
+                OrientedEdge::new(rail_edges[next_i], true),
+                OrientedEdge::new(ring_edges[last][i], false),
+                OrientedEdge::new(rail_edges[i], false),
             ],
             true,
         )
@@ -1225,6 +1226,119 @@ pub fn loft_smooth(
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
+}
+
+/// Interpolate a non-rational B-spline through `points` at the increasing
+/// `params`, with knots averaged from the parameters (The NURBS Book, eq.
+/// 9.8): curves fitted at the same parameters share one knot vector.
+fn interpolate_at(
+    points: &[Point3],
+    degree: usize,
+    params: &[f64],
+) -> Result<brepkit_math::nurbs::curve::NurbsCurve, crate::OperationsError> {
+    use brepkit_math::nurbs::basis::{basis_funs, find_span};
+
+    let n = points.len();
+    if n < 2 || params.len() != n || params.windows(2).any(|w| w[1] <= w[0]) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "rail interpolation needs increasing parameters, one per point".into(),
+        });
+    }
+    let p = degree.clamp(1, n - 1);
+    let mut knots = vec![params[0]; p + 1];
+    for j in 1..n - p {
+        #[allow(clippy::cast_precision_loss)]
+        knots.push(params[j..j + p].iter().sum::<f64>() / p as f64);
+    }
+    knots.extend(std::iter::repeat_n(params[n - 1], p + 1));
+
+    // Collocation: row i holds N_{j,p}(params[i]), nonzero only across its
+    // span's p + 1 columns. `last[c]` is the lowest row reaching column c.
+    let mut rows = vec![vec![0.0; n]; n];
+    let mut last: Vec<usize> = (0..n).collect();
+    for (i, (row, &u)) in rows.iter_mut().zip(params).enumerate() {
+        let span = find_span(n, p, u, &knots);
+        for (k, value) in basis_funs(span, u, p, &knots).into_iter().enumerate() {
+            row[span - p + k] = value;
+            last[span - p + k] = last[span - p + k].max(i);
+        }
+    }
+    for c in 1..n {
+        last[c] = last[c].max(last[c - 1]);
+    }
+    let mut rhs: Vec<[f64; 3]> = points.iter().map(|q| [q.x(), q.y(), q.z()]).collect();
+    // Gaussian elimination with partial pivoting. Spans never decrease with
+    // the parameter, so no row below `last[col]` reaches column `col`, and
+    // eliminating (or swapping) within that window only fills columns whose
+    // windows reach at least as far: the band holds, and the solve stays
+    // quadratic in the profile count.
+    for col in 0..n {
+        let pivot = (col..=last[col])
+            .max_by(|&a, &b| rows[a][col].abs().total_cmp(&rows[b][col].abs()))
+            .unwrap_or(col);
+        if rows[pivot][col].abs() < 1e-14 {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "rail interpolation system is singular".into(),
+            });
+        }
+        rows.swap(col, pivot);
+        rhs.swap(col, pivot);
+        for r in col + 1..=last[col] {
+            let f = rows[r][col] / rows[col][col];
+            for c in col..n {
+                rows[r][c] -= f * rows[col][c];
+            }
+            for k in 0..3 {
+                rhs[r][k] -= f * rhs[col][k];
+            }
+        }
+    }
+    let mut control = vec![[0.0; 3]; n];
+    for r in (0..n).rev() {
+        for k in 0..3 {
+            let tail: f64 = (r + 1..n).map(|c| rows[r][c] * control[c][k]).sum();
+            control[r][k] = (rhs[r][k] - tail) / rows[r][r];
+        }
+    }
+    brepkit_math::nurbs::curve::NurbsCurve::new(
+        p,
+        knots,
+        control
+            .iter()
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect(),
+        vec![1.0; n],
+    )
+    .map_err(crate::OperationsError::Math)
+}
+
+/// Chord-length parameters in `[0, 1]` averaged over several point rows of
+/// equal length. A row whose points all coincide carries no spacing and is
+/// left out; if every row does, the parameters are uniform.
+fn mean_chord_params(rows: &[Vec<Point3>]) -> Vec<f64> {
+    let len = rows.first().map_or(0, Vec::len);
+    let mut sum = vec![0.0; len];
+    let mut counted = 0_u32;
+    for row in rows {
+        let steps: Vec<f64> = row.windows(2).map(|w| (w[1] - w[0]).length()).collect();
+        let total: f64 = steps.iter().sum();
+        if total <= 0.0 {
+            continue;
+        }
+        let mut acc = 0.0;
+        for (k, step) in std::iter::once(0.0).chain(steps).enumerate() {
+            acc += step;
+            sum[k] += acc / total;
+        }
+        counted += 1;
+    }
+    if counted == 0 {
+        #[allow(clippy::cast_precision_loss)]
+        return (0..len)
+            .map(|k| k as f64 / (len.max(2) - 1) as f64)
+            .collect();
+    }
+    sum.iter().map(|s| s / f64::from(counted)).collect()
 }
 
 #[cfg(test)]
