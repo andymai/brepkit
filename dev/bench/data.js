@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790284319594,
+  "lastUpdate": 1790287440168,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -38933,6 +38933,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45466911,
             "range": "± 247380",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bc2b8d718bf2806230de5ef32a057f2223b0d4b7",
+          "message": "fix(algo): cut a torus with a plane across or through its axis, keeping either side (#1746)\n\nA plane across or through a torus's axis now cuts it into a valid solid\non either side whose volume and face areas match closed forms, and two\noverlapping coaxial tori intersect to an exact lens.\n\n## What was wrong\n\nCutting `make_torus(4, 1.5, 32)` with the half-space above z = 0\nreturned the unchanged one-face torus with volume 177.65. At z = 0.5 it\nreturned the full volume split into three faces. At z = -1 it fell back\nto a 282-face planar mesh. A plane through the axis also fell back to a\nmesh with \"all faces avoided (all have free edges)\".\n\nPlane-torus sections were always sampled and fitted as NURBS loops. The\nwhole torus then entered the internal-loops splitter, which treated each\nclosed section as a hole and sampled its interior at the loop centroid,\naway from the surface. The classifier also considered a point inside a\nplane face's hole, such as the middle of an annulus, to be on the face.\n\nArea and volume measurement selected the short tube-angle range between\na band's rims. This measured a band covering more than half the tube as\nits smaller complement. The part below z = 0.5 consequently measured\n75.53 instead of 125.82.\n\nContainment testing only probed a whole torus at its collapsed seam\nplaceholders. After tipping the scene, the tool bounding box could\nenclose the ring while that single vertex lay inside the tool, producing\n`EmptyResult` with \"Cut with target fully contained in tool\". The same\nfalse shortcut made overlapping coaxial tori with `(R, r) = (3, 0.5)`\nand `(4, 0.7)` intersect to the whole first torus, volume 14.80.\nContinuing past that shortcut caused the marched section to fit\nthousands of points in one dense solve and not finish.\n\n## What this does\n\n- Extends `exact_plane_analytic` with exact plane-torus sections. A\nplane across the axis produces two circles of radius `R ± sqrt(r^2 -\nh^2)` for `|h| < r`. A plane through the axis produces the two tube\ncross-sections of radius `r`, centered `R` to either side of the axis.\nOther orientations remain sampled.\n\n- Adds a whole-torus splitter for faces bounded only by degenerate seam\nplaceholders. Coaxial circles divide the tube into bands, while tube\ncross-sections divide the ring into sectors. Each result joins its two\ncircles with a seam traversed out and back, along the reference meridian\nfor bands or the common latitude for sectors.\n\n- Starts coaxial section circles on the reference meridian at `u = 0`,\nwhere `make_torus` retains its vertex. Tube cross-sections start on the\nouter equator. All circles from one cut therefore begin on the same seam\nline.\n\n- Treats points inside any hole polygon as off the plane face.\n\n- Adds `torus_band_v_range`, deriving the tube-angle range from the\nmiddle of the seam arc. Open arcs run counterclockwise from their start\nvertex. Torus face area and flux-based volume now use this range.\n\n- Probes a whole ring at its axial reach and toward every flat tool\nface, in addition to its edges. For direction `d`, the furthest tube\npoint is `C + R rho + r d`, where `rho` is the unit component of `d`\nperpendicular to the axis.\n\n- Adds exact coaxial torus-torus section circles from the intersections\nof their tube cross-sections in a half-plane through the axis. The\nresulting intersection is a two-band lens with volume 1.8879, compared\nwith 1.88793 from numeric integration.\n\n- Splits every band and sector seam at its midpoint, preventing bands\nseamed between the same vertices from sharing edge ends during builder\nmerging. The two-rim band mesher accepts multi-arc seams,\n`partial_torus_sector_volume` sums all seam arcs, and\n`torus_sector_u_range` reads a sector's ring-angle range from its seam.\n\n- The torus flux behind the volume now treats a sector between two tube\ncross-sections as covering the whole tube over the ring angle along\nwhich its seam runs (`torus_sector_u_range`). Previously, float noise\ncould make a sector's rims read `v = 0` and `v = 2 pi`, producing zero\nface flux: a box over one side of a plane through the axis fused with\nthe torus measured 2000, equal to the box alone, instead of 2088.83.\n\n- `exact_torus_torus` defers to the marcher when a crossing lands on or\npast the axis instead of dropping that circle. The classifier counts a\npoint as inside a plane face's hole only when it is farther than the\ntolerance from the hole's outline, so a point on the rim remains on the\nboundary.\n\n- Adds a Closed roadmap entry.\n\n## Verification\n\n- `torus_cut_across_its_axis` cuts `make_torus(4, 1.5, 32)` at heights\n0, 0.5, -1, and 1.2, both upright and rotated 0.7 about x and 0.3 about\nz. Cut and Intersect retain the parts below and above. Every result is a\nvalid two-face solid. Volume, torus area, and annulus area agree with\nPappus's closed forms within `1e-9` relative error. Six points around\neach plane classify correctly, the hole center remains outside, and each\nmesh is watertight with volume within `1e-2`.\n\n- `torus_halved_through_its_axis` tests planes turned 0, 60, and 200\ndegrees, retaining either side. Each valid three-face solid has volume\n`pi^2 R r^2`, torus area `2 pi^2 R r`, and cross-section areas `pi r^2`\nwithin `1e-9`. Seven points classify correctly, and mesh volume is\nwithin `1e-2`.\n\n- `coaxial_tori_meet_in_an_exact_lens` checks a valid two-face lens,\nvolume within `1e-6` relative error of a Simpson slice integral, and a\nwatertight mesh. `toruses_different_major_radius_intersect_nontrivial`,\nwhich ran for over 15 minutes once the probe refuted its false\ncontainment, now completes.\n\n- `box_fused_over_half_a_torus` fuses a box over the `x > 0` half-space\nwith `make_torus(4, 1.5, 32)` and checks a valid solid whose\n`solid_volume` is within `1e-9` relative tolerance of `8000 + pi^2 R\nr^2`, a watertight mesh, and three classified points. The math,\ntopology, check, algo, blend, operations, io, and wasm suites pass,\ntotaling 2713 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nCutting a torus with a plane across or through its axis now returns a\nvalid solid on either side whose volume and face areas match closed\nforms, instead of the whole torus, a face-split full volume, or a\nfallback mesh.\n\n- Planes across the axis and through it meet the torus in exact circles\nrather than sampled NURBS loops.\n- A new splitter divides a whole torus into bands around the tube or\nsectors around the ring, seamed along the reference meridian or equator.\n- Torus area and flux-based volume read a band from the middle of its\nseam arc instead of the short way between rims; a sector between two\ntube cross-sections now covers the whole tube over the ring angle its\nseam runs along.\n- Points inside a plane face's hole are classified as off that face,\nexcept on the hole's rim within tolerance.\n- Whole rings are probed toward enclosing solids' flat faces as well as\ntheir collapsed seams; previously a tipped box could enclose the ring\nand produce `EmptyResult`.\n- Coaxial tori now intersect in exact circles from their tube\ncross-sections; two overlapping tori build an exact two-band lens\n(volume 1.8879 vs 1.88793 numeric) where the marcher previously ran\nwithout finishing.\n\n<sup>Written for commit 1dc65ffdbb55ce0a8818c4a1a326cc176ff3652c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1746?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T22:01:22Z",
+          "tree_id": "297649e270a87d94d18c5f1308be7cebe4753b56",
+          "url": "https://github.com/andymai/brepkit/commit/bc2b8d718bf2806230de5ef32a057f2223b0d4b7"
+        },
+        "date": 1790287435660,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000020,
+            "range": "± 4192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1080916,
+            "range": "± 16385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13061,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 745635,
+            "range": "± 3372",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41977489,
+            "range": "± 460408",
             "unit": "ns/iter"
           }
         ]
