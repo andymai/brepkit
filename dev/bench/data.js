@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790297943597,
+  "lastUpdate": 1790303840994,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39311,6 +39311,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42260695,
             "range": "± 208498",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "91040fb81d8d22a4e1ce0b98da8f94c14ee5d94a",
+          "message": "fix(algo): build both bands when a box cuts a torus around its tube (#1753)\n\nBox cuts that form multiple tube-winding loops on a torus now build and\nclassify every intervening band, producing analytic, watertight Cut,\nFuse, and Intersect results for the half-ring case. Folded loops now\nfall back safely instead of returning exact-path results with wrong\nvolumes.\n\n## What was wrong\n\nOn main at `159559cc`, cutting `make_torus(4, 1.5, 32)` with a 6-cube\nspanning x from -3 to 3, y from 0 to 6, and z from -3 to 3 silently\nproduced incomplete results. Cut returned an open shell holding 100.2013\ninstead of the true volume 127.4891. Fuse returned an open shell holding\n316.1865 instead of 343.4891. Intersect fell back to a mesh, while Cut\nand Fuse did not fall back.\n\nThe box walls at x = ±3 cut lobes of the tube, and the wall at y = 0\ncuts the tube cross-sections. These arcs join into two loops, each\nwinding once around the tube. The torus between them consists of two\nbands of about half the ring each.\n\n`split_torus_band_by_arrangement` chained the arcs into both loops, but\nemitted only the band taking the long route around the ring.\nClassification therefore omitted the other band.\n`tessellate_torus_notch_band` also swept the long route. When the box\ncovered that route, the band required by the result was never built.\n\nA sweep of 216 box placements against the same torus, using centres on a\n6 x 3 x 3 grid and half-sizes from 0.5 to 3 for all three operations,\nfound seven placements where Cut and Fuse returned open shells in this\nway.\n\nA related probe used the same torus and a box over `|x| < 3`, y from\n`y0` to 6, and `|z| < 2`. On main at `159559cc`, it returned exact-path\nresults with four planes and one torus, or six planes and one torus for\nFuse, but incorrect volumes. At `y0 = -0.5`, Cut returned 7.95419\nagainst 126.67902 and Fuse returned 163.95419 against 282.67902, both\nwith open meshes. At `y0 = 0.5`, Cut returned 113.08933 against\n128.29917 and Fuse returned 245.05365 against 260.29917.\n\n## What this does\n\n- `split_torus_by_tube_loops` now accepts loops stitched from arcs\ncontributed by several walls, rather than only single closed sections.\n`closed_chains` stitches sections end to end. `TubeLoop` accepts a chain\nthat winds once around the tube, runs monotonically along the tube, and\ncan provide its ring angle `u` at any tube angle `v`.\n\n- The loops are ordered around the ring along one latitude. Each\nneighbouring pair is seamed between the vertices nearest in tube angle\nwhose straight seam in `(u, v)` remains inside the band. When the\nvertices share a tube angle, the seam is a latitude arc. Otherwise, it\nis a NURBS curve fitted through points on the torus along the straight\npath in `(u, v)`. Every resulting band is built and classified.\nSingle-loop cases, including tube cross-sections and plane loops around\nthe tube, retain their latitude seams.\n\n- `seam_inside` checks a straight `(u, v)` seam against the band at\nevery walk sample of either loop that it passes, plus 15 evenly spaced\npoints along the seam. It counts a walk sample only when it lies clear\nof the seam's two ends by more than `1e-7` in tube angle. The end\nvertices are themselves walk samples where the seam meets the loops, and\nrounding would otherwise place a check at the seam's end, on the loop,\nand refuse a good sloped seam. Each loop reads `u` piecewise-linearly\nfrom its walk samples, so a seam that is inside at every sample it\npasses remains inside between them. A constant-tube-angle latitude seam\npasses no walk samples and retains the 15-point check.\n\n- A folded loop falls back rather than being built exactly. Such a loop\ncannot provide `u` as a function of `v`, which sector seaming relies on.\n`TubeLoop::new` rejects it, preventing the operation from returning an\nexact but wrong result.\n\n- `split_torus_band_by_arrangement` is removed.\n\n- `tessellate_torus_two_rim_band` sorts edges by wire traversal count,\nwith seams traversed twice and rims once, then groups rim edges sharing\nvertices so that a rim may be a chain of arcs.\n\n- Each stitch is oriented using its signed area in `(u, v)`, where\ncounterclockwise is outward on a torus. This remains reliable for a\nsliver along a lobe near its pinch, where the sliver is too thin for its\n3D normal to determine orientation.\n\n- Chained rims add a row column level with every rim vertex. Each row\ncan therefore turn with a rim running nearly along a latitude, instead\nof cutting the corner and folding the stitch. These faces receive a\ndenser mesh.\n\n- The roadmap gains a Closed entry and an OPEN row for the remaining box\nfallbacks: boxes around the axis whose lobes form loops winding around\nthe ring rather than the tube, small boxes passing through the tube\nwall, and a box over half the ring whose y wall passes the axis. The\nfolded case is pinned by `box_wall_on_either_side_of_the_ring_axis`.\n\n## Verification\n\n- `box_over_half_the_ring` covers all three operations both upright and\nwith the scene rotated by 0.7 about x and 0.3 about z. Each result is a\nvalid solid with the expected surfaces: four planes and one torus for\nCut and Intersect, and six planes and one torus for Fuse. It checks\n`solid_volume` within `1e-6` relative tolerance of the oracle, a\nwatertight mesh with volume within `1e-2`, and three classified points.\n\n- The `ring_in_box(big, small, (x_lo, x_hi), y0)` oracle integrates over\nthe tube cross-section the area of the annulus between circles about the\naxis at `big - w` and `big + w`, each clipped in closed form to the two\nside walls and `y > y0`. Simpson integration is split where a circle\nmeets a wall end, at `rho` equal to `|x_lo|`, `|x_hi|`, `|y0|`,\n`hypot(x_lo, y0)`, and `hypot(x_hi, y0)`. It works for any ring radius,\nside walls, and `y0`. At 800 and 3200 steps per piece it gives\n50.163724189 and 50.163724187 for `y0 = 0`, and 49.353646518 at both\nresolutions for `y0 = 0.5`, with x from -3 to 3. For x from -3 to 3.3\nand `y0 = 0.5`, it gives 52.469803884 at both resolutions.\n`box_over_half_the_ring` uses x from -3 to 3 and `y0 = 0`.\n\n- At `y0 = 0` the kernel common volume is `1.6e-7` above the oracle\nbecause the lobe arcs are cubic fits through sampled section points.\n`check_piece` accepts this tolerance, while the other plane-cut tests\nretain `1e-8`.\n\n- `box_wall_on_either_side_of_the_ring_axis` tests `make_torus(4, 1.5,\n32)` against three boxes, across all three operations: x from -3 to 3\nwith `y0 = 0.5`, x from -3 to 3.3 with `y0 = 0.5`, and x from -3 to 3\nwith `y0 = -0.5`. Each box spans y from `y0` to 6 and `|z| < 3`. At `y0\n= 0.5`, the side-wall turns lie outside the box and the loops wind\nmonotonically around the tube. Every result is exact, with the expected\nsurfaces, volume within `1e-6` relative tolerance of the oracle, and a\nwatertight mesh. In the asymmetric box, the side walls sit at different\ndistances from the axis, so the loops' corners sit at different tube\nangles and every seam between them slopes. At `y0 = -0.5`, the turns lie\ninside the box, each loop folds, and `TubeLoop::new` rejects it. The\ntest accepts a fallback there, with mesh volume within 3 percent but\nrequires any result retaining a curved face to meet the exact bar.\n\n- `seam_ending_on_walk_samples_stays_inside` pins a sloped seam whose\nends are walk samples reached by different roundings. It accepts both\ndirections in `v` and fails when the end margin is removed.\n`seam_crossed_between_its_samples_is_refused` pins a loop with a spike\ncrossing the seam between its 1/16 samples. It refuses that loop,\naccepts the same seam against a straight loop, and fails when walk\nsamples are not checked. Both use synthetic straight loops at `u = 0`\nand `u = 2`.\n\n- On this branch, the `|z| < 2` probe is exact for all three operations\nat `y0 = 0.5`. Intersect, for example, returns 49.35364 against the\nclosed-form value 49.3536465. At `y0 = -0.5`, all three operations fall\nback to watertight meshes.\n\n- `cut_torus_by_box_notch_is_analytic_watertight`, the notch tracer\nregression, passes through the new splitter.\n\n- For the large box, Intersect now has 5 faces and volume 50.1637, Cut\nhas 5 faces and volume 127.4891, and Fuse has 7 faces and volume\n343.4891. All three mesh watertight.\n\n- Across the placement sweep, 245 of 648 operations build exactly, up\nfrom 233, and none returns an open shell. The remaining cases fall back\nsafely.\n\n- On `fe0aaf09`, all 224 `brepkit-algo` tests and all 10\n`torus_plane_cut` tests pass, 234 in one run. On `3006ae44`, the math,\ntopology, geometry, check, algo, blend, heal, offset, operations, io,\nand wasm suites pass, totaling 2954 tests.",
+          "timestamp": "2026-09-25T02:35:07Z",
+          "tree_id": "758530c739dd3ffab3006a8a2251a2a0a958db87",
+          "url": "https://github.com/andymai/brepkit/commit/91040fb81d8d22a4e1ce0b98da8f94c14ee5d94a"
+        },
+        "date": 1790303836271,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 595798,
+            "range": "± 7171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 644953,
+            "range": "± 8329",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8356,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 432071,
+            "range": "± 11616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28665386,
+            "range": "± 281883",
             "unit": "ns/iter"
           }
         ]
