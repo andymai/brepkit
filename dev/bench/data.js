@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790352189564,
+  "lastUpdate": 1790353984281,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40283,6 +40283,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42309286,
             "range": "± 114864",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "74c3bc3b184ed0acc592c3e9771f30f00bd443cd",
+          "message": "fix(algo): keep a ball's octant exact through a second boolean (#1767)\n\nA ball octant now remains exact and valid through second booleans that\nremove either a corner or a rod, with all three tested constructions\navoiding mesh fallback.\n\n## What was wrong\n\n- The setup intersects `make_sphere(3, 32)` with `[0, 10]^3`. The\naxis-aligned box shortcut produces an octant directly. Turning the box\nand ball 0.3 about `z` sends the operation through the boolean engine.\nThe second boolean removes the box corner at `(1, 1, 1)`, in the turned\nframe for the turned case. The true volume is `pi R^3 / 6` less the\nball's piece past the corner: `12.762907157`.\n\n- On main, the engine-built octant is invalid. Its sphere patch runs its\nequator arc in the same direction as the floor, leaving 3 shared edges\nwith one sense. The cap loop branch in `split_noseam_face_direct`, used\nwhen a cap loop runs along the face's boundary, keeps the loop as its\narcs arrive.\n\n- Cutting the corner from that octant returns it unchanged and invalid.\nPhase FF reads the patch backwards and drops every section arc. Cutting\nthe corner from a shortcut octant falls back to a mesh.\n\n- `sphere_seam_plane_crossings` fits a seam plane through a sphere\nface's boundary vertices. This is appropriate for a hemisphere bounded\nby equator chords. For the three-arc octant patch, it fits `x + y + z =\n3` through the corners and splits the `z = 1` section circle at `(-0.73,\n2.73, 1)` and `(2.73, -0.73, 1)`.\n\n- `Circle3D::intersect_circle` returns no points for circles in skew\nplanes, so a section circle never crosses the patch's meridian arcs.\n\n- A plane face's arc filter in `emit_split_circle_arcs` widens its\nadmitting band by the sagitta of the face's longest boundary chord:\n`4.4` for the box's 10-unit side against the section's radius `sqrt(8)`,\nallowing an arc outside the box face to survive.\n\n- The builder's ray-cast classifier in `classifier/ray_cast.rs`\nrepresents a sphere face by the flat polygon through its boundary. A\npoint between that polygon and the sphere reads Outside. The box\ncorner's walls sample at `(1.83, 1.83, 1)` in the box frame. Those\npoints are inside the octant, but the classifier reads them outside and\ndrops the walls.\n\n- `solid_volume` sends any solid with a holed sphere face whose outer\nwire leaves a latitude to the whole-solid mesh path. That rule targets a\nbox-ball collar, but the octant less the corner consequently measures\n`12.762458797`.\n\n- The octant above the equator less a rod of radius `0.4` along `z`\nthrough `(1, 1)` also falls back to a mesh, shortcut-built and\nengine-built alike. The sphere patch's one section, the rod's closed\ncurve, starts at a point inside the patch, yet `is_point_on_boundary_uv`\nreads it as on the boundary. The patch's meridian from `B` to the north\npole has UV endpoints `(pi/2, 0)` and `(0, pi/2)`. The pole's `u` is\narbitrary, so the chord runs diagonally across the face, and the point\n`(0.620, 0.960)` lies 0.0065 from it, inside the `0.01` band. The patch\nskips the internal-loops path and splits into nothing.\n\n## What this does\n\n- In that branch the cap loop turns around when it runs an arc the same\nway as the remainder, so each shared arc runs opposite ways in the two\nsub-faces. The remainder starts on the face's own boundary and keeps the\nface's winding.\n\n- Seam plane crossings apply only when a sphere face is bounded by line\nedges. An arc bounded face instead uses the crossings of its own edges.\n\n- `Circle3D::intersect_circle` intersects circles in skew planes on the\ncommon line of their planes, with a unit test for a latitude and a great\ncircle of one sphere.\n\n- The sagitta band is computed per chord and applies only to chords\nshorter than half the section's radius.\n\n- The ray-cast classifier adds a sphere variant using the ray/sphere\nroots. A hit remains only when it lies in every loop region. A loop in\none plane uses the half-space that its wire leaves on its left about the\nsphere's outward normal. Its plane needs a vector area, the raw Newell\nvector, above `1e-9 r^2`. A loop that only runs along a seam and back\nencloses none, and its normalized direction was rounding noise.\n\n- A loop of arcs in several planes uses the intersection of the arcs'\nhalf-spaces for a convex patch, or their union for a convex hole, only\nwhen each arc is the whole of its circle on the region's side of the\nother planes. At 64 sampled points around each circle, the admitted\npoints must form exactly one run: a column narrower than the ball meets\nthe sphere twice, and for a ball of radius 5 and the column `|x|, |y| <=\n3` the four arcs bounding the dome's top also bound the column's far\nend. Any other loop retains the polygon path.\n\n- The collar mesh path additionally requires the outer wire to wind the\nsphere's axis, with `u` progress above `pi`.\n\n- `is_point_on_boundary_uv` tests a sphere face's circle arcs in 3D\nonly, using the exact arc test it already runs first. Other surfaces\nkeep the UV chord test. Skipping that test for cylinders too breaks\n`fuse_two_cylinders`, whose fuse then measures only the larger cylinder.\n\n## Verification\n\n- `box_octant_feeds_a_second_boolean` in\n`crates/operations/tests/sphere_box_corner.rs` covers the shortcut\noctant above and below the equator, plus the engine-built octant turned\n0.3 about `z`. Every octant is valid. After removing the corner, every\nresult has no mesh fallback, remains valid, and measures within `1e-9`\nof the truth. All three measure `12.762907157`.\n\n- The same test cuts the rod from all three octants. Each result is\nexact, valid, and within `1e-7` of the octant less the column over the\nrod's disc, measured `12.816011656` against `12.816011655`.\n\n- The pins decide no mesh fallback from the result's own faces, at most\n12 with one a sphere face, rather than the process-wide fallback\ncounter, which other tests in the same binary may bump while one runs.\nThe corner cut also classifies a point just inside the removed corner\nOutside and two points of the octant beside it Inside, mapped through\nthe turn.\n\n- `sphere_arc_loops_bound_only_their_own_region` in\n`classifier/ray_cast.rs` declines the column dome's four-arc patch,\nwhich is accepted without the run check. It accepts an octant's\nthree-arc patch and admits its own corner point, but neither a\nneighbouring octant's nor the far pole. It also declines a whole sphere\nwritten as a meridian seam walked out and back, which has no enclosed\narea.\n\n- A pose audit covering 5 primitives, 4 tools, Cut and Intersect, and\nupright, turned, and mirrored poses, with the rod fix, matches main in\nevery cell.\n\n- The roadmap retains one open case. The octant below the equator turned\n0.3 about `z` falls back in its first boolean, producing 94 faces and\n`13.937` against `14.137`.\n\n- No boolean today builds the four-arc dome exactly. A ball of radius 5\nintersected with the column falls back to a mesh in its first boolean\nfor floors at `z = -1`, `0`, `0.5` and `1`.\n\n- The workspace suite passes: 3089 tests run, 3089 passed, 20 skipped.",
+          "timestamp": "2026-09-25T16:30:55Z",
+          "tree_id": "7403421466faa0edeb6df419ad9068cf230f4914",
+          "url": "https://github.com/andymai/brepkit/commit/74c3bc3b184ed0acc592c3e9771f30f00bd443cd"
+        },
+        "date": 1790353980388,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 559900,
+            "range": "± 7070",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 626083,
+            "range": "± 53352",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8205,
+            "range": "± 224",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 419748,
+            "range": "± 4055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27517508,
+            "range": "± 460623",
             "unit": "ns/iter"
           }
         ]
