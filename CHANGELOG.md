@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.19](https://github.com/andymai/brepkit/compare/v4.0.18...v4.0.19) (2026-09-25)
+
+
+### Bug Fixes
+
+* **algo:** cut a torus with a cube over its side ([#1751](https://github.com/andymai/brepkit/issues/1751)) ([159559c](https://github.com/andymai/brepkit/commit/159559ccc6e0e6471aee2c90cd8827aeac887d9f))
+
 ## [4.0.18](https://github.com/andymai/brepkit/compare/v4.0.17...v4.0.18) (2026-09-24)
 
 
