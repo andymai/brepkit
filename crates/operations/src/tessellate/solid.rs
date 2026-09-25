@@ -1184,8 +1184,8 @@ pub(super) fn tessellate_face_with_shared_edges(
         // fills the removed polar cap. Tessellate such bands structurally from
         // the shared boundary vertices instead. Returns false for any other
         // sphere/torus face, which then takes the CDT/snap path unchanged.
-        // A torus notch band (torus − box: a kept patch wrapping the tube fully,
-        // bounded by two v-wrapping seam-arc loops at the ends of a ring-angle
+        // A torus notch band (a patch wrapping the tube fully, its outer and
+        // one inner wire each a v-wrapping loop at an end of a ring-angle
         // span) is swept along u, not v, so it is not a latitude band. Try it
         // first; it returns false for any other torus face.
         let handled_notch = matches!(face_data.surface(), FaceSurface::Torus(_))

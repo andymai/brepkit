@@ -648,45 +648,69 @@ pub(super) fn tessellate_torus_two_rim_band(
     }
 
     let wire = topo.wire(face_data.outer_wire())?;
-    let mut rim_edge_ids: Vec<usize> = Vec::new();
-    // The seam may be split into several arcs, each run up and back once.
-    let mut seam: Vec<(brepkit_topology::edge::EdgeId, usize)> = Vec::new();
+    // The seam is run up and back once (it may be split into several
+    // pieces); every other edge runs once, round one of the two rims (a
+    // closed curve, or arcs joined end to end).
+    let mut uses: Vec<(brepkit_topology::edge::EdgeId, usize)> = Vec::new();
     for oe in wire.edges() {
-        let e = topo.edge(oe.edge())?;
-        let closed = e.start() == e.end();
-        match e.curve() {
-            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) if closed => {
-                let idx = oe.edge().index();
-                if !rim_edge_ids.contains(&idx) {
-                    rim_edge_ids.push(idx);
-                }
-            }
-            // A NURBS seam is the analytic revolve of a recognised NURBS-circle
-            // profile arc, and a LINE seam is the rim-fillet band's degenerate
-            // chord between its two contact circles: the band reuses that
-            // original edge as its seam, and the seam is only midpoint-sampled
-            // (via the EdgeCurve delegates) to pick the covered arc — the
-            // chord midpoint projects into the covered arc — so any open
-            // curve type is safe here.
-            EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) | EdgeCurve::Line if !closed => {
-                match seam.iter_mut().find(|(eid, _)| *eid == oe.edge()) {
-                    Some((_, uses)) => *uses += 1,
-                    None => seam.push((oe.edge(), 1)),
-                }
-            }
-            EdgeCurve::Circle(_)
-            | EdgeCurve::NurbsCurve(_)
-            | EdgeCurve::Line
-            | EdgeCurve::Ellipse(_) => return Ok(false),
+        if matches!(topo.edge(oe.edge())?.curve(), EdgeCurve::Ellipse(_)) {
+            return Ok(false);
+        }
+        match uses.iter_mut().find(|(eid, _)| *eid == oe.edge()) {
+            Some((_, n)) => *n += 1,
+            None => uses.push((oe.edge(), 1)),
         }
     }
-    let Some(&(seam_eid, _)) = seam.first() else {
-        return Ok(false);
-    };
-    if seam.iter().any(|&(_, uses)| uses != 2) {
+    if uses.iter().any(|&(_, n)| n > 2) {
         return Ok(false);
     }
-    if rim_edge_ids.len() != 2 {
+    // A NURBS seam is the analytic revolve of a recognised NURBS-circle
+    // profile arc, and a LINE seam is the rim-fillet band's degenerate chord
+    // between its two contact circles: the seam is only midpoint-sampled (via
+    // the EdgeCurve delegates) to pick the covered arc, so any open curve type
+    // is safe here.
+    let Some(seam_eid) = wire
+        .edges()
+        .iter()
+        .map(brepkit_topology::wire::OrientedEdge::edge)
+        .find(|eid| uses.iter().any(|&(e, n)| e == *eid && n == 2))
+    else {
+        return Ok(false);
+    };
+    // The once-run edges in two rims, joined by shared vertices.
+    let mut rims_of: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::new();
+    let mut rim_vertices: Vec<Vec<brepkit_topology::vertex::VertexId>> = Vec::new();
+    for &(eid, n) in &uses {
+        if n != 1 {
+            continue;
+        }
+        let e = topo.edge(eid)?;
+        let ends = [e.start(), e.end()];
+        let touching: Vec<usize> = (0..rims_of.len())
+            .filter(|&r| ends.iter().any(|v| rim_vertices[r].contains(v)))
+            .collect();
+        match touching.as_slice() {
+            [] => {
+                rims_of.push(vec![eid]);
+                rim_vertices.push(ends.to_vec());
+            }
+            [r] => {
+                rims_of[*r].push(eid);
+                rim_vertices[*r].extend(ends);
+            }
+            [r, rest @ ..] => {
+                let r = *r;
+                for &o in rest.iter().rev() {
+                    let (edges, verts) = (rims_of.remove(o), rim_vertices.remove(o));
+                    rims_of[r].extend(edges);
+                    rim_vertices[r].extend(verts);
+                }
+                rims_of[r].push(eid);
+                rim_vertices[r].extend(ends);
+            }
+        }
+    }
+    if rims_of.len() != 2 {
         return Ok(false);
     }
 
@@ -716,18 +740,20 @@ pub(super) fn tessellate_torus_two_rim_band(
     // Project each rim's shared pool vertices (wrap-safe: a rim at angle 0
     // projects samples on both sides of the period).
     let mut raw: Vec<Vec<(f64, f64, u32)>> = Vec::with_capacity(2);
-    for &re in &rim_edge_ids {
-        let Some(gids) = edge_global_indices.get(&re) else {
-            return Ok(false);
-        };
+    for rim in &rims_of {
         let mut seen: DetHashSet<u32> = DetHashSet::default();
-        let mut pts: Vec<(f64, f64, u32)> = Vec::with_capacity(gids.len());
-        for &g in gids {
-            if !seen.insert(g) {
-                continue;
+        let mut pts: Vec<(f64, f64, u32)> = Vec::new();
+        for eid in rim {
+            let Some(gids) = edge_global_indices.get(&eid.index()) else {
+                return Ok(false);
+            };
+            for &g in gids {
+                if !seen.insert(g) {
+                    continue;
+                }
+                let (u, v) = project(merged.positions[g as usize]);
+                pts.push((u, v, g));
             }
-            let (u, v) = project(merged.positions[g as usize]);
-            pts.push((u, v, g));
         }
         if pts.len() < 3 {
             return Ok(false);
@@ -869,16 +895,50 @@ pub(super) fn tessellate_torus_two_rim_band(
     let n_rows =
         segments_for_chord_deviation_a(sweep_radius, widest, deflection, angular_tol, true).max(1);
 
-    let emit = make_band_emit(&project, &surf_normal);
+    // Rims joined from several arcs turn corners where the arcs meet, and can
+    // run nearly along a latitude near one (a lobe near its pinch). A row
+    // column level with every rim vertex keeps each row turning with the rim;
+    // a row sampled only between them would cut across a corner and fold the
+    // stitch.
+    #[allow(clippy::cast_precision_loss)]
+    let mut cols: Vec<f64> = (0..n_cols)
+        .map(|j| TAU * (j as f64) / (n_cols as f64))
+        .collect();
+    if !lat_mode && rims_of.iter().any(|rim| rim.len() > 1) {
+        cols.extend(rims.iter().flatten().map(|&(a, _)| a.rem_euclid(TAU)));
+        cols.sort_by(f64::total_cmp);
+        cols.dedup_by(|a, b| (*a - *b).abs() < 1e-7);
+    }
+    // Orient each stitch in (u, v), where counterclockwise is outward on a
+    // torus: a sliver between a nearly straight rim and a row just inside it
+    // is too thin for its 3D normal to say which way it faces.
+    let emit = |merged: &mut TriangleMesh, a: u32, b: u32, c: u32| {
+        if a == b || b == c || a == c {
+            return;
+        }
+        let wrap = |d: f64| (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+        let (ua, va) = project(merged.positions[a as usize]);
+        let (ub, vb) = project(merged.positions[b as usize]);
+        let (uc, vc) = project(merged.positions[c as usize]);
+        let (bu, bv) = (wrap(ub - ua), wrap(vb - va));
+        let (cu, cv) = (wrap(uc - ua), wrap(vc - va));
+        let area = bu.mul_add(cv, -(bv * cu));
+        if area.abs() < 1e-18 {
+            return;
+        }
+        let mut tri = [a, b, c];
+        if area < 0.0 {
+            tri.swap(1, 2);
+        }
+        merged.indices.extend_from_slice(&tri);
+    };
     let mut prev_ring: LatRing = rims[0].clone();
     for i in 1..n_rows {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f64 / n_rows as f64;
         let level = lvl0 + sweep * t;
-        let mut row: LatRing = Vec::with_capacity(n_cols);
-        for j in 0..n_cols {
-            #[allow(clippy::cast_precision_loss)]
-            let a = TAU * (j as f64) / (n_cols as f64);
+        let mut row: LatRing = Vec::with_capacity(cols.len());
+        for &a in &cols {
             let (u, v) = if lat_mode {
                 (a, level)
             } else {

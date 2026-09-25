@@ -988,7 +988,7 @@ pub(super) fn split_torus_by_coaxial_circles(
     let center = torus.center();
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
     if let Some(sectors) =
-        split_torus_by_tube_loops(torus, sections, rank, reversed, face_id, close_tol)
+        split_torus_by_tube_loops(surface, torus, sections, rank, reversed, face_id, close_tol)
     {
         return Some(sectors);
     }
@@ -1104,73 +1104,207 @@ pub(super) fn split_torus_by_coaxial_circles(
     Some(bands)
 }
 
-/// A closed section that winds once around a torus's tube and not around
-/// its ring (a tube cross-section, or a plane's loop around the tube): its
-/// start as `(u, v)`, whether it runs up the tube, and its `u` half a turn
-/// on, unwrapped from the start's. `None` for any other section.
-fn tube_winding(
-    torus: &brepkit_math::surfaces::ToroidalSurface,
-    section: &SectionEdge,
-    close_tol: f64,
-) -> Option<(f64, f64, bool, f64)> {
-    use std::f64::consts::{FRAC_PI_4, PI, TAU};
-
-    if (section.start - section.end).length() > close_tol {
-        return None;
-    }
-    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    // A closed circle's domain starts at its frame's origin, not its vertex.
-    let (t0, t1) = match &section.curve_3d {
-        EdgeCurve::Circle(c) => {
-            let a0 = c.project(section.start);
-            (a0, a0 + TAU)
-        }
-        curve => curve.domain_with_endpoints(section.start, section.end),
-    };
-    if (section
-        .curve_3d
-        .evaluate_with_endpoints(t0, section.start, section.end)
-        - section.start)
-        .length()
-        > close_tol
-    {
-        return None;
-    }
-    let (u0, v0) = torus.project_point(section.start);
-    let (mut u, mut v) = (u0, v0);
-    let (mut du, mut dv) = (0.0_f64, 0.0_f64);
-    let mut half_turn = None;
-    let n = 64_i32;
-    for k in 1..=n {
-        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0);
-        let p = section
-            .curve_3d
-            .evaluate_with_endpoints(t, section.start, section.end);
-        let (pu, pv) = torus.project_point(p);
-        let (step_u, step_v) = (wrap(pu - u), wrap(pv - v));
-        if step_u.abs() > FRAC_PI_4 || step_v.abs() > FRAC_PI_4 {
-            return None;
-        }
-        if half_turn.is_none() && (dv + step_v).abs() >= PI {
-            let f = (PI - dv.abs()) / step_v.abs();
-            half_turn = Some(u0 + du + f * step_u);
-        }
-        (u, v) = (pu, pv);
-        du += step_u;
-        dv += step_v;
-    }
-    if du.abs() > 1e-3 || (dv.abs() - TAU).abs() > 1e-3 {
-        return None;
-    }
-    Some((u0, v0, dv > 0.0, half_turn?))
+/// A closed chain of sections that winds once around a torus's tube and not
+/// around its ring (a tube cross-section, a plane's loop around the tube, or
+/// arcs of several walls joined end to end), running monotonically along the
+/// tube: its edges in order and its walk as `(v, u)`, unwrapped from its
+/// first vertex.
+struct TubeLoop {
+    edges: Vec<OrientedPCurveEdge>,
+    walk: Vec<(f64, f64)>,
 }
 
-/// Split a whole torus into sectors around the ring at closed sections that
-/// each wind once around the tube (tube cross-sections from planes through
-/// the axis, or a plane's loops around the tube), all starting on one
-/// latitude: each sector is the seam arc along the ring on that latitude,
-/// the next section up the tube, the arc back and the first section down.
+impl TubeLoop {
+    /// Read a closed chain as a loop around the tube, or `None`.
+    fn new(
+        torus: &brepkit_math::surfaces::ToroidalSurface,
+        edges: Vec<OrientedPCurveEdge>,
+        close_tol: f64,
+    ) -> Option<Self> {
+        use std::f64::consts::{FRAC_PI_4, PI, TAU};
+        let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+        let mut walk: Vec<(f64, f64)> = Vec::new();
+        for e in &edges {
+            let (from, to) = natural_endpoints(e);
+            // A closed circle's domain starts at its frame's origin, not its
+            // vertex.
+            let (t0, t1) = match &e.curve_3d {
+                EdgeCurve::Circle(c) if (from - to).length() < close_tol => {
+                    let a0 = c.project(from);
+                    (a0, a0 + TAU)
+                }
+                curve => curve.domain_with_endpoints(from, to),
+            };
+            let n = 32_u32;
+            let mut pts: Vec<Point3> = (0..=n)
+                .map(|k| {
+                    e.curve_3d.evaluate_with_endpoints(
+                        (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0),
+                        from,
+                        to,
+                    )
+                })
+                .collect();
+            if !e.forward {
+                pts.reverse();
+            }
+            if (pts[0] - e.start_3d).length() > close_tol {
+                return None;
+            }
+            for p in pts {
+                let (u, v) = torus.project_point(p);
+                let next = walk
+                    .last()
+                    .map_or((v, u), |&(lv, lu)| (lv + wrap(v - lv), lu + wrap(u - lu)));
+                if let Some(&(lv, lu)) = walk.last()
+                    && ((next.0 - lv).abs() > FRAC_PI_4 || (next.1 - lu).abs() > FRAC_PI_4)
+                {
+                    return None;
+                }
+                walk.push(next);
+            }
+        }
+        let (&(v0, u0), &(v1, u1)) = (walk.first()?, walk.last()?);
+        let turn = v1 - v0;
+        if (u1 - u0).abs() > 1e-3 || (turn.abs() - TAU).abs() > 1e-3 {
+            return None;
+        }
+        // Monotone along the tube, so its u reads off its v.
+        if walk.windows(2).any(|w| (w[1].0 - w[0].0) * turn < -1e-9) {
+            return None;
+        }
+        Some(Self { edges, walk })
+    }
+
+    fn up(&self) -> bool {
+        self.walk[self.walk.len() - 1].0 > self.walk[0].0
+    }
+
+    /// The loop's `u` at tube angle `v`, in its walk's frame.
+    fn u_at(&self, v: f64) -> f64 {
+        use std::f64::consts::TAU;
+        let (v0, v1) = (self.walk[0].0, self.walk[self.walk.len() - 1].0);
+        let lo = v0.min(v1);
+        let v = lo + (v - lo).rem_euclid(TAU);
+        let up = self.up();
+        let k = self
+            .walk
+            .partition_point(|&(w, _)| if up { w < v } else { w > v })
+            .clamp(1, self.walk.len() - 1);
+        let ((va, ua), (vb, ub)) = (self.walk[k - 1], self.walk[k]);
+        if (vb - va).abs() < 1e-15 {
+            ua
+        } else {
+            ua + (ub - ua) * (v - va) / (vb - va)
+        }
+    }
+
+    /// Its vertices as `(index of the edge leaving it, point)`.
+    fn vertices(&self) -> impl Iterator<Item = (usize, Point3)> + '_ {
+        self.edges.iter().enumerate().map(|(k, e)| (k, e.start_3d))
+    }
+
+    /// Its edges from the vertex at `k`, running up the tube or down it.
+    fn run_from(&self, k: usize, up: bool) -> Vec<OrientedPCurveEdge> {
+        let mut edges = self.edges.clone();
+        edges.rotate_left(k);
+        if up == self.up() {
+            edges
+        } else {
+            reverse_loop(&edges)
+        }
+    }
+}
+
+/// Whether the straight `(u, v)` seam from `(ua, va)` across `span` in `u` and
+/// `dv` in `v` stays strictly inside the band from `first` to `next`. Both
+/// loops read `u` piecewise-linearly off their walks, so the seam stays inside
+/// if it does at every walk sample it passes and between them. The seam's own
+/// ends are samples too, where it meets the loops, so only samples clear of
+/// them count. A latitude seam (`dv` zero) passes none.
+fn seam_inside(
+    first: &TubeLoop,
+    next: &TubeLoop,
+    (ua, va): (f64, f64),
+    span: f64,
+    dv: f64,
+) -> bool {
+    use std::f64::consts::TAU;
+    let breaks = first.walk.iter().chain(&next.walk).filter_map(|&(w, _)| {
+        let d = if dv > 0.0 {
+            (w - va).rem_euclid(TAU)
+        } else {
+            (va - w).rem_euclid(TAU)
+        };
+        (d > 1e-7 && d < dv.abs() - 1e-7).then(|| d / dv.abs())
+    });
+    (1..16).map(|k| f64::from(k) / 16.0).chain(breaks).all(|t| {
+        let (u, v) = (span.mul_add(t, ua), dv.mul_add(t, va));
+        let off = (u - first.u_at(v)).rem_euclid(TAU);
+        let width = (next.u_at(v) - first.u_at(v)).rem_euclid(TAU);
+        off > 1e-9 && off < width - 1e-9
+    })
+}
+
+/// Sections stitched end to end into closed chains, a closed section a chain
+/// of its own; `None` unless every section closes a chain.
+fn closed_chains(
+    sections: &[SectionEdge],
+    surface: &FaceSurface,
+    rank: Rank,
+    join_tol: f64,
+) -> Option<Vec<Vec<OrientedPCurveEdge>>> {
+    let edges: Vec<OrientedPCurveEdge> = sections
+        .iter()
+        .map(|s| torus_section_to_edge(s, surface, rank))
+        .collect();
+    let mut used = vec![false; edges.len()];
+    let mut chains = Vec::new();
+    for first in 0..edges.len() {
+        if used[first] {
+            continue;
+        }
+        used[first] = true;
+        let mut chain = vec![edges[first].clone()];
+        loop {
+            let tail = chain[chain.len() - 1].end_3d;
+            if (tail - chain[0].start_3d).length() <= join_tol {
+                break;
+            }
+            let (i, flip) = edges.iter().enumerate().find_map(|(i, e)| {
+                if used[i] {
+                    None
+                } else if (e.start_3d - tail).length() < join_tol {
+                    Some((i, false))
+                } else if (e.end_3d - tail).length() < join_tol {
+                    Some((i, true))
+                } else {
+                    None
+                }
+            })?;
+            used[i] = true;
+            chain.push(if flip {
+                reverse_loop(std::slice::from_ref(&edges[i])).remove(0)
+            } else {
+                edges[i].clone()
+            });
+        }
+        chains.push(chain);
+    }
+    Some(chains)
+}
+
+/// Split a whole torus into sectors around the ring at closed chains of
+/// sections that each wind once around the tube (tube cross-sections from
+/// planes through the axis, a plane's loops around the tube, or arcs of
+/// several walls joined end to end). Each sector runs from a vertex of one
+/// loop along a seam to a vertex of the next, up that loop, back along the
+/// seam and down the first. The seam is a latitude arc where the two
+/// vertices share a tube angle, else the curve straight between them in
+/// `(u, v)`.
+#[allow(clippy::too_many_lines)]
 fn split_torus_by_tube_loops(
+    surface: &FaceSurface,
     torus: &brepkit_math::surfaces::ToroidalSurface,
     sections: &[SectionEdge],
     rank: Rank,
@@ -1182,109 +1316,126 @@ fn split_torus_by_tube_loops(
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use std::f64::consts::{PI, TAU};
 
-    let axis = torus.z_axis();
-    let center = torus.center();
-    let big = torus.major_radius();
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    // (u around the ring, the section, whether it runs +v up the tube, its
-    // u half a turn up, relative to its start)
-    let mut rims: Vec<(f64, &SectionEdge, bool, f64)> = Vec::with_capacity(sections.len());
-    let mut seam_v: Option<f64> = None;
-    for s in sections {
-        let (u, v, up, half_turn) = tube_winding(torus, s, close_tol)?;
-        match seam_v {
-            None => seam_v = Some(v),
-            Some(sv) if wrap(v - sv).abs() > 1e-6 => return None,
-            Some(_) => {}
-        }
-        rims.push((u.rem_euclid(TAU), s, up, half_turn - u));
+    let mut loops: Vec<TubeLoop> = Vec::new();
+    for chain in closed_chains(sections, surface, rank, close_tol)? {
+        loops.push(TubeLoop::new(torus, chain, close_tol)?);
     }
-    let seam_v = seam_v?;
-    rims.sort_by(|a, b| a.0.total_cmp(&b.0));
-    if rims.windows(2).any(|w| w[1].0 - w[0].0 < 1e-9)
-        || rims[0].0 + TAU - rims[rims.len() - 1].0 < 1e-9
+    if loops.len() < 2 {
+        return None;
+    }
+    // Order the loops around the ring along one latitude.
+    let v_ref = loops[0].walk[0].0;
+    let mut order: Vec<(f64, usize)> = loops
+        .iter()
+        .enumerate()
+        .map(|(i, l)| (l.u_at(v_ref).rem_euclid(TAU), i))
+        .collect();
+    order.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if order.windows(2).any(|w| w[1].0 - w[0].0 < 1e-9)
+        || order[0].0 + TAU - order[order.len() - 1].0 < 1e-9
     {
         return None;
     }
-
-    let (sin_v, cos_v) = seam_v.sin_cos();
-    // The latitude runs counterclockwise about the axis as u grows.
-    let latitude = Circle3D::with_axes(
-        center + axis * (torus.minor_radius() * sin_v),
-        axis,
-        torus.minor_radius().mul_add(cos_v, big),
-        torus.x_axis(),
-        torus.y_axis(),
-    )
-    .ok()?;
-    let rim_edge = |s: &SectionEdge, forward: bool, u: f64| {
-        let pcurve = match rank {
-            Rank::A => s.pcurve_a.clone(),
-            Rank::B => s.pcurve_b.clone(),
-        };
-        OrientedPCurveEdge {
-            curve_3d: s.curve_3d.clone(),
-            pcurve,
-            start_uv: Point2::new(u, seam_v),
-            end_uv: Point2::new(u, seam_v),
-            start_3d: s.start,
-            end_3d: s.start,
-            forward,
-            source_edge_idx: None,
-            pave_block_id: s.pave_block_id,
-        }
+    let loops: Vec<&TubeLoop> = order.iter().map(|&(_, i)| &loops[i]).collect();
+    // The width of the sector past loop `i` at `v`.
+    let width = |i: usize, v: f64| {
+        (loops[(i + 1) % loops.len()].u_at(v) - loops[i].u_at(v)).rem_euclid(TAU)
     };
-    let arc = |u_lo: f64, u_hi: f64, along: bool| -> Option<OrientedPCurveEdge> {
-        let (lo, hi) = (torus.evaluate(u_lo, seam_v), torus.evaluate(u_hi, seam_v));
-        let pcurve =
-            Curve2D::Line(Line2D::new(Point2::new(u_lo, seam_v), Vec2::new(1.0, 0.0)).ok()?);
-        let (from, to, uv_from, uv_to) = if along {
-            (lo, hi, Point2::new(u_lo, seam_v), Point2::new(u_hi, seam_v))
+
+    let seam_piece = |from: (f64, f64), to: (f64, f64)| -> Option<OrientedPCurveEdge> {
+        let ((u0, v0), (u1, v1)) = (from, to);
+        let (a, b) = (torus.evaluate(u0, v0), torus.evaluate(u1, v1));
+        let direction = Vec2::new(u1 - u0, v1 - v0);
+        let pcurve = Curve2D::Line(Line2D::new(Point2::new(u0, v0), direction).ok()?);
+        let curve_3d = if (v1 - v0).abs() < 1e-12 {
+            // The latitude runs counterclockwise about the axis as u grows.
+            let (sin_v, cos_v) = v0.sin_cos();
+            let latitude = Circle3D::with_axes(
+                torus.center() + torus.z_axis() * (torus.minor_radius() * sin_v),
+                torus.z_axis(),
+                torus.minor_radius().mul_add(cos_v, torus.major_radius()),
+                torus.x_axis(),
+                torus.y_axis(),
+            )
+            .ok()?;
+            if u1 < u0 {
+                return None;
+            }
+            EdgeCurve::Circle(latitude)
         } else {
-            (hi, lo, Point2::new(u_hi, seam_v), Point2::new(u_lo, seam_v))
+            let pts: Vec<Point3> = (0..=16_u32)
+                .map(|k| {
+                    let t = f64::from(k) / 16.0;
+                    torus.evaluate((u1 - u0).mul_add(t, u0), (v1 - v0).mul_add(t, v0))
+                })
+                .collect();
+            EdgeCurve::NurbsCurve(brepkit_math::nurbs::fitting::interpolate(&pts, 3).ok()?)
         };
         Some(OrientedPCurveEdge {
-            curve_3d: EdgeCurve::Circle(latitude.clone()),
+            curve_3d,
             pcurve,
-            start_uv: uv_from,
-            end_uv: uv_to,
-            start_3d: from,
-            end_3d: to,
-            forward: along,
+            start_uv: Point2::new(u0, v0),
+            end_uv: Point2::new(u1, v1),
+            start_3d: a,
+            end_3d: b,
+            forward: true,
             source_edge_idx: None,
             pave_block_id: None,
         })
     };
 
-    let n = rims.len();
+    let n = loops.len();
     let mut sectors = Vec::with_capacity(n);
     for i in 0..n {
-        let (u_lo, first, first_up, first_turn) = rims[i];
-        let (u_next, next, next_up, next_turn) = rims[(i + 1) % n];
-        let u_hi = if i + 1 == n { u_next + TAU } else { u_next };
-        // Counterclockwise in (u, v): along the ring, up the next section,
-        // back along the ring, down the first. The seam is split at its
-        // middle, as for bands.
-        let u_mid = f64::midpoint(u_lo, u_hi);
-        let wire = vec![
-            arc(u_lo, u_mid, true)?,
-            arc(u_mid, u_hi, true)?,
-            rim_edge(next, next_up, u_hi),
-            arc(u_mid, u_hi, false)?,
-            arc(u_lo, u_mid, false)?,
-            rim_edge(first, !first_up, u_lo),
-        ];
+        let (first, next) = (loops[i], loops[(i + 1) % n]);
+        // The vertex pair nearest in tube angle whose straight seam stays
+        // inside the sector.
+        let mut pairs: Vec<(f64, usize, Point3, usize, Point3)> = Vec::new();
+        for (ka, a) in first.vertices() {
+            for (kb, b) in next.vertices() {
+                let dv = wrap(torus.project_point(b).1 - torus.project_point(a).1);
+                pairs.push((dv.abs(), ka, a, kb, b));
+            }
+        }
+        pairs.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let seam = pairs.iter().find_map(|&(_, ka, a, kb, b)| {
+            let (ua, va) = torus.project_point(a);
+            let (ub, vb) = torus.project_point(b);
+            let dv = wrap(vb - va);
+            let dv = if dv.abs() < 1e-9 { 0.0 } else { dv };
+            let span = (ub - ua).rem_euclid(TAU);
+            seam_inside(first, next, (ua, va), span, dv).then_some((
+                ka,
+                (ua, va),
+                kb,
+                (ua + span, va + dv),
+            ))
+        })?;
+        let (ka, at_a, kb, at_b) = seam;
+        let mid = (f64::midpoint(at_a.0, at_b.0), f64::midpoint(at_a.1, at_b.1));
+        let (out_1, out_2) = (seam_piece(at_a, mid)?, seam_piece(mid, at_b)?);
+        let back = reverse_loop(&[out_1.clone(), out_2.clone()]);
+        // Counterclockwise in (u, v): along the ring, up the next loop, back
+        // along the ring, down the first. The seam is split at its middle,
+        // so two sectors on different tori seamed between the same two
+        // vertices never share both ends of one edge.
+        let mut wire = vec![out_1, out_2];
+        wire.extend(next.run_from(kb, true));
+        wire.extend(back);
+        wire.extend(first.run_from(ka, false));
+        // Inside, half a turn round the tube from the seam.
+        let v_far = at_a.1 + PI;
+        let u_lo = first.u_at(v_far);
+        let interior = torus.evaluate(u_lo + 0.5 * width(i, v_far), v_far);
         sectors.push(SplitSubFace {
-            surface: FaceSurface::Torus(torus.clone()),
+            surface: surface.clone(),
             outer_wire: wire,
             inner_wires: Vec::new(),
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: Some(torus.evaluate(
-                f64::midpoint(u_lo + first_turn, u_hi + next_turn),
-                seam_v + PI,
-            )),
+            precomputed_interior: Some(interior),
         });
     }
     Some(sectors)
@@ -1756,176 +1907,6 @@ fn torus_section_to_edge(
         source_edge_idx: None,
         pave_block_id: section.pave_block_id,
     }
-}
-
-/// Contained tracer for the `torus − box`-style cut: a box notch removes a
-/// connected sector of the ring whose surface boundary, in the torus `(θ, φ)`
-/// parameter space, is TWO closed loops each WRAPPING the tube angle `φ` fully
-/// (one at each θ-band where the box walls cut the tube partially; the box
-/// swallows the whole tube cross-section in between). The kept toroidal surface
-/// is the annular `u`-band between those two loops — emitted as ONE band face
-/// (outer wire = one φ-loop, the other as an inner wire, like a cylinder band
-/// between two rims).
-///
-/// Returns `None` (defer to the generic path) unless the in-box arcs stitch into
-/// exactly two φ-wrapping closed loops. Relies on the FF exact-crossing trim
-/// (`trim_torus_oval_to_box_face`) having given the arcs faithful endpoints that
-/// share the box-edge crossing vertices.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn split_torus_band_by_arrangement(
-    surface: &FaceSurface,
-    sections: &[SectionEdge],
-    rank: Rank,
-    reversed: bool,
-    face_id: FaceId,
-    tol: f64,
-) -> Option<Vec<SplitSubFace>> {
-    use std::f64::consts::{PI, TAU};
-    let FaceSurface::Torus(torus) = surface else {
-        return None;
-    };
-    // Open arcs only (closed sections would be the lobe-hole case, not a band).
-    let open: Vec<OrientedPCurveEdge> = sections
-        .iter()
-        .filter(|s| (s.start - s.end).length() > tol)
-        .map(|s| torus_section_to_edge(s, surface, rank))
-        .collect();
-    if open.len() < 2 {
-        return None;
-    }
-
-    // Stitch arcs into closed loops by chaining shared 3D endpoints. The FF
-    // exact-crossing trim snaps adjacent arcs to the SAME box-edge crossing
-    // (and the arc-split shares the exact midpoint), so a tight tolerance
-    // suffices — a loose one could stitch unrelated endpoints into false loops.
-    let join_tol = (tol * 100.0).max(tol);
-    let mut used = vec![false; open.len()];
-    let mut loops: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
-    for s0 in 0..open.len() {
-        if used[s0] {
-            continue;
-        }
-        used[s0] = true;
-        let mut chain = vec![open[s0].clone()];
-        loop {
-            let tail = chain.last().map_or(chain[0].start_3d, |e| e.end_3d);
-            if (tail - chain[0].start_3d).length() < join_tol && chain.len() >= 2 {
-                break; // closed
-            }
-            let nxt = open.iter().enumerate().find_map(|(i, e)| {
-                if used[i] {
-                    None
-                } else if (e.start_3d - tail).length() < join_tol {
-                    Some((i, false))
-                } else if (e.end_3d - tail).length() < join_tol {
-                    Some((i, true))
-                } else {
-                    None
-                }
-            });
-            match nxt {
-                Some((i, rev)) => {
-                    used[i] = true;
-                    let mut e = open[i].clone();
-                    if rev {
-                        std::mem::swap(&mut e.start_uv, &mut e.end_uv);
-                        std::mem::swap(&mut e.start_3d, &mut e.end_3d);
-                        e.forward = !e.forward;
-                    }
-                    chain.push(e);
-                }
-                None => break,
-            }
-        }
-        let closed = chain.len() >= 2
-            && chain
-                .last()
-                .is_some_and(|e| (e.end_3d - chain[0].start_3d).length() < join_tol);
-        if closed {
-            loops.push(chain);
-        }
-    }
-
-    // The kept band needs exactly two φ-wrapping boundary loops.
-    if loops.len() != 2 {
-        return None;
-    }
-    // Each loop must wrap φ fully: net φ-traversal ≈ ±2π.
-    let net_phi = |l: &[OrientedPCurveEdge]| -> f64 {
-        let mut phis: Vec<f64> = Vec::new();
-        for e in l {
-            let (_, v) = torus.project_point(e.start_3d);
-            phis.push(v);
-            let (_, vm) = torus.project_point(
-                e.curve_3d
-                    .evaluate_with_endpoints(0.5, e.start_3d, e.end_3d),
-            );
-            phis.push(vm);
-        }
-        let mut acc = 0.0;
-        for i in 0..phis.len() {
-            let d = phis[(i + 1) % phis.len()] - phis[i];
-            acc += d - TAU * ((d + PI) / TAU).floor();
-        }
-        acc
-    };
-    if loops.iter().any(|l| net_phi(l).abs() < PI) {
-        return None;
-    }
-
-    // Snap each loop's internal junctions to the midpoint of the two meeting
-    // endpoints so the loop is internally watertight at the box-edge vertices.
-    let snap_loop = |l: &mut Vec<OrientedPCurveEdge>| {
-        let n = l.len();
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let mid = l[i].end_3d + (l[j].start_3d - l[i].end_3d) * 0.5;
-            l[i].end_3d = mid;
-            l[j].start_3d = mid;
-        }
-    };
-    for l in &mut loops {
-        snap_loop(l);
-    }
-
-    let outer = loops[0].clone();
-    // Interior sample on the KEPT band: the band spans the ring angle u the LONG
-    // way between the two boundary loops, which sit at roughly constant u (the
-    // box-wall cuts). Take each loop's mean u (wrap-safe via summed unit vectors)
-    // and the MIDPOINT of the long arc between them — NOT a hardcoded u = π,
-    // which is only correct when the notch is on the +x side (a mirrored or
-    // rotated cut puts the kept band's centre elsewhere). The band wraps the tube
-    // v fully at this interior u, so v = 0 is on it.
-    let loop_mean_u = |l: &[OrientedPCurveEdge]| -> f64 {
-        let (mut sx, mut sy) = (0.0, 0.0);
-        for e in l {
-            let (u, _) = torus.project_point(e.start_3d);
-            sx += u.cos();
-            sy += u.sin();
-        }
-        sy.atan2(sx).rem_euclid(TAU)
-    };
-    let u0 = loop_mean_u(&loops[0]);
-    let u1 = loop_mean_u(&loops[1]);
-    // Long-arc midpoint between u0 and u1 (the short gap is the removed notch).
-    let fwd = (u1 - u0).rem_euclid(TAU);
-    let u_mid = if fwd >= PI {
-        (u0 + fwd / 2.0).rem_euclid(TAU) // a->b the long way is increasing
-    } else {
-        (u0 - (TAU - fwd) / 2.0).rem_euclid(TAU) // long way is decreasing
-    };
-    let interior = torus.evaluate(u_mid, 0.0);
-    let inner_rev = reverse_loop(&loops[1]);
-
-    Some(vec![SplitSubFace {
-        surface: surface.clone(),
-        outer_wire: outer,
-        inner_wires: vec![inner_rev],
-        reversed,
-        parent: face_id,
-        rank,
-        precomputed_interior: Some(interior),
-    }])
 }
 
 /// Points inside the regions loops that wind neither of its angles split a
@@ -4971,5 +4952,40 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    fn tube_loop(walk: Vec<(f64, f64)>) -> super::TubeLoop {
+        super::TubeLoop {
+            edges: Vec::new(),
+            walk,
+        }
+    }
+
+    fn straight_walk(u: f64) -> Vec<(f64, f64)> {
+        (0..=62).map(|k| (0.1 * f64::from(k), u)).collect()
+    }
+
+    /// A sloped seam whose ends are walk samples, reached by different
+    /// roundings (`0.1 * 3` is not `0.3`), stays inside: its ends lie on the
+    /// loops by construction and must not count as crossings.
+    #[test]
+    fn seam_ending_on_walk_samples_stays_inside() {
+        let (first, next) = (tube_loop(straight_walk(0.0)), tube_loop(straight_walk(2.0)));
+        assert!(super::seam_inside(&first, &next, (0.0, 0.3), 2.0, 0.2));
+        assert!(super::seam_inside(&first, &next, (0.0, 0.5), 2.0, -0.2));
+    }
+
+    /// A loop that pokes across the seam between the seam's even samples is
+    /// caught at the walk sample where it turns.
+    #[test]
+    fn seam_crossed_between_its_samples_is_refused() {
+        let next = tube_loop(straight_walk(2.0));
+        let straight = tube_loop(straight_walk(0.0));
+        assert!(super::seam_inside(&straight, &next, (0.0, 1.0), 2.0, 0.5));
+        let mut walk = straight_walk(0.0);
+        let at = walk.partition_point(|&(v, _)| v < 1.26);
+        walk.splice(at..at, [(1.26, 0.0), (1.265, 1.2), (1.27, 0.0)]);
+        let spiked = tube_loop(walk);
+        assert!(!super::seam_inside(&spiked, &next, (0.0, 1.0), 2.0, 0.5));
     }
 }

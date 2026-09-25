@@ -286,15 +286,16 @@ fn torus_area_beyond(big: f64, small: f64, h: f64) -> f64 {
 }
 
 /// Checks a boolean piece: exactly the given faces by surface type, valid
-/// when it is one piece, `solid_volume` within 1e-8 of `truth` (the loops
-/// around the tube are fitted through exact points, which bounds it), and a
-/// closed mesh within 1% of it.
+/// when it is one piece, `solid_volume` within `rel` of `truth`, and a
+/// closed mesh within 1% of it. The sections are fitted through their
+/// samples, which bounds `rel`: a plane's loops around the tube are sampled
+/// exactly at each tube angle and hold to 1e-8, a lobe's samples less so.
 fn check_piece(
     topo: &Topology,
     piece: SolidId,
     census: &[(&str, usize)],
     one_piece: bool,
-    truth: f64,
+    (truth, rel): (f64, f64),
     label: &str,
 ) {
     let mut found: Vec<(&str, usize)> = Vec::new();
@@ -333,7 +334,7 @@ fn check_piece(
     }
     let volume = solid_volume(topo, piece, 0.01).unwrap();
     assert!(
-        (volume - truth).abs() < 1e-8 * truth,
+        (volume - truth).abs() < rel * truth,
         "{label}: volume {volume}, truth {truth}"
     );
     let mesh = tessellate_solid(topo, piece, 0.01).unwrap();
@@ -392,7 +393,7 @@ fn slab_over_one_side_of_the_ring() {
             transform_solid(&mut topo, torus, tip).unwrap();
             transform_solid(&mut topo, slab, tip).unwrap();
             let piece = boolean(&mut topo, op, torus, slab).unwrap();
-            check_piece(&topo, piece, census, true, truth, &label);
+            check_piece(&topo, piece, census, true, (truth, 1e-8), &label);
             let tube = solid_faces(&topo, piece)
                 .unwrap()
                 .into_iter()
@@ -462,7 +463,7 @@ fn bar_through_the_ring() {
         let bar = make_box(&mut topo, 2.0, 20.0, 4.0).unwrap();
         transform_solid(&mut topo, bar, &Mat4::translation(-1.0, -10.0, -2.0)).unwrap();
         let piece = boolean(&mut topo, op, torus, bar).unwrap();
-        check_piece(&topo, piece, census, one_piece, truth, &label);
+        check_piece(&topo, piece, census, one_piece, (truth, 1e-8), &label);
         // The ring clear of the bar, the ring in it, the bar alone.
         let probes = [(-big, 0.0, 0.5), (0.0, big, 0.0), (0.0, 0.0, 0.0)];
         for ((x, y, z), class) in probes.into_iter().zip(kept) {
@@ -534,7 +535,7 @@ fn slab_tilted_off_the_axis() {
             &[("plane", 2), ("torus", 1)]
         };
         let label = format!("{op:?}");
-        check_piece(&topo, piece, census, true, truth, &label);
+        check_piece(&topo, piece, census, true, (truth, 1e-8), &label);
         // The ring past the plane, the ring behind it, the hole's middle.
         let probes = [(big, 0.0, 0.0), (-big, 0.0, 0.0), (0.0, 0.0, 0.0)];
         for ((x, y, z), class) in probes.into_iter().zip(kept) {
@@ -615,7 +616,7 @@ fn cube_over_the_rings_side() {
                 &[("plane", 3), ("torus", 1)]
             };
             let volume = solid_volume(&topo, piece, 0.01).unwrap();
-            check_piece(&topo, piece, census, true, volume, &label);
+            check_piece(&topo, piece, census, true, (volume, 1e-8), &label);
             // The ring in the cube, the ring across from it, the cube alone.
             let probes = [(big, 0.0, 0.0), (-big, 0.0, 0.0), (6.0, 0.0, 1.8)];
             for ((x, y, z), class) in probes.into_iter().zip(kept) {
@@ -679,5 +680,174 @@ fn cube_inside_the_tube() {
         );
         let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
         assert!(is_watertight(&mesh), "{op:?}: open or non-manifold mesh");
+    }
+}
+
+/// The ring within a box over `x` in `[x_lo, x_hi]`, `y > y0`, reaching past
+/// the ring in `+y`: over the tube's cross-section, the area of the annulus
+/// between the circles about the axis at `big ∓ w`, each clipped to the box
+/// in closed form. The integral splits where a circle meets a wall's end
+/// (`rho` one of `|x_lo|`, `|x_hi|`, `|y0|` and their corners with `y0`), so
+/// Simpson converges fast.
+fn ring_in_box(big: f64, small: f64, (x_lo, x_hi): (f64, f64), y0: f64) -> f64 {
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    // The disc of radius `rho` within the box: `under` is the area under its
+    // upper arc and `span` the width, each over `[a, b]` within the walls.
+    let disc = |rho: f64| {
+        let g = |x: f64| {
+            0.5 * x.mul_add(
+                (rho * rho - x * x).max(0.0).sqrt(),
+                rho * rho * (x / rho).clamp(-1.0, 1.0).asin(),
+            )
+        };
+        let span = |a: f64, b: f64| (b.min(x_hi) - a.max(x_lo)).max(0.0);
+        let under = |a: f64, b: f64| {
+            let (l, h) = (a.max(x_lo), b.min(x_hi));
+            if h > l { g(h) - g(l) } else { 0.0 }
+        };
+        let up = y0.max(0.0);
+        let mut area = 0.0;
+        if rho > up {
+            let q = rho.mul_add(rho, -up * up).sqrt();
+            area += up.mul_add(-span(-q, q), under(-q, q));
+        }
+        if y0 < 0.0 {
+            let depth = -y0;
+            let q = if rho > depth {
+                rho.mul_add(rho, -depth * depth).sqrt()
+            } else {
+                0.0
+            };
+            area += depth.mul_add(span(-q, q), under(-rho, rho) - under(-q, q));
+        }
+        area
+    };
+    let f = |t: f64| {
+        let w = small * t.cos();
+        w * (disc(big + w) - disc(big - w))
+    };
+    let mut cuts = vec![-PI / 2.0, PI / 2.0];
+    for rho in [
+        x_lo.abs(),
+        x_hi.abs(),
+        y0.abs(),
+        x_lo.hypot(y0),
+        x_hi.hypot(y0),
+    ] {
+        for c in [(big - rho) / small, (rho - big) / small] {
+            if c > 0.0 && c < 1.0 {
+                cuts.extend([c.acos(), -c.acos()]);
+            }
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.windows(2).map(|w| simpson(800, w[0], w[1], &f)).sum()
+}
+
+/// A 6-cube over `|x| < 3`, `y` in `[0, 6]` with the torus, upright and
+/// tipped over. Its `x = ±3` walls cut lobes of the tube and its `y = 0`
+/// wall the tube's cross-sections, joined into two loops that wind round the
+/// tube, so the torus splits into two sectors of about half the ring each.
+#[test]
+fn box_over_half_the_ring() {
+    use PointClassification::{Inside, Outside};
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let ring = 2.0 * PI * PI * big * small * small;
+    let inside = ring_in_box(big, small, (-3.0, 3.0), 0.0);
+    let sector: &[(&str, usize)] = &[("plane", 4), ("torus", 1)];
+    let fused: &[(&str, usize)] = &[("plane", 6), ("torus", 1)];
+    let tips = [
+        Mat4::identity(),
+        Mat4::rotation_x(0.7) * Mat4::rotation_z(0.3),
+    ];
+    for (k, tip) in tips.iter().enumerate() {
+        for (op, census, truth, kept) in [
+            (
+                BooleanOp::Intersect,
+                sector,
+                inside,
+                [Inside, Outside, Outside],
+            ),
+            (
+                BooleanOp::Cut,
+                sector,
+                ring - inside,
+                [Outside, Inside, Outside],
+            ),
+            (
+                BooleanOp::Fuse,
+                fused,
+                216.0 + ring - inside,
+                [Inside, Inside, Inside],
+            ),
+        ] {
+            let label = format!("tip {k}, {op:?}");
+            let mut topo = Topology::new();
+            let torus = make_torus(&mut topo, big, small, 32).unwrap();
+            let cube = make_box(&mut topo, 6.0, 6.0, 6.0).unwrap();
+            transform_solid(&mut topo, cube, &Mat4::translation(-3.0, 0.0, -3.0)).unwrap();
+            transform_solid(&mut topo, torus, tip).unwrap();
+            transform_solid(&mut topo, cube, tip).unwrap();
+            let piece = boolean(&mut topo, op, torus, cube).unwrap();
+            check_piece(&topo, piece, census, true, (truth, 1e-6), &label);
+            // The ring in the box, the ring across from it, the box alone.
+            let probes = [(0.0, big, 0.0), (0.0, -big, 0.0), (0.0, 1.0, 2.5)];
+            for ((x, y, z), class) in probes.into_iter().zip(kept) {
+                let p = tip.mul_point(Point3::new(x, y, z));
+                assert_eq!(at(&topo, piece, p), class, "{label}: ({x}, {y}, {z})");
+            }
+        }
+    }
+}
+
+/// The box's `y` wall moved off the ring's axis, to either side, and one side
+/// wall moved out. Each side wall's section turns back on the tube at
+/// `y = 0`. With the wall at `y0 > 0` the turn lies outside the box and the
+/// loops wind round the tube monotonically; with the side walls at different
+/// distances from the axis, the loops' corners sit at different tube angles
+/// and every seam between them slopes. With `y0 < 0` the turn lies inside
+/// the box and each loop folds; that case may fall back to a mesh, but must
+/// never come out exact and wrong.
+#[test]
+fn box_wall_on_either_side_of_the_ring_axis() {
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let ring = 2.0 * PI * PI * big * small * small;
+    let sector: &[(&str, usize)] = &[("plane", 4), ("torus", 1)];
+    let fused: &[(&str, usize)] = &[("plane", 6), ("torus", 1)];
+    for (x_hi, y0) in [(3.0, 0.5), (3.3, 0.5), (3.0, -0.5)] {
+        let inside = ring_in_box(big, small, (-3.0, x_hi), y0);
+        let cube = 6.0 * (3.0 + x_hi) * (6.0 - y0);
+        for (op, census, truth) in [
+            (BooleanOp::Intersect, sector, inside),
+            (BooleanOp::Cut, sector, ring - inside),
+            (BooleanOp::Fuse, fused, cube + ring - inside),
+        ] {
+            let label = format!("x_hi {x_hi}, y0 {y0}, {op:?}");
+            let mut topo = Topology::new();
+            let torus = make_torus(&mut topo, big, small, 32).unwrap();
+            let box_ = make_box(&mut topo, 3.0 + x_hi, 6.0 - y0, 6.0).unwrap();
+            transform_solid(&mut topo, box_, &Mat4::translation(-3.0, y0, -3.0)).unwrap();
+            let piece = boolean(&mut topo, op, torus, box_).unwrap();
+            let exact = solid_faces(&topo, piece)
+                .unwrap()
+                .into_iter()
+                .any(|f| !topo.face(f).unwrap().surface().is_planar());
+            if y0 > 0.0 || exact {
+                check_piece(&topo, piece, census, true, (truth, 1e-6), &label);
+            } else {
+                let volume = solid_volume(&topo, piece, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 0.03 * truth,
+                    "{label}: mesh volume {volume}, truth {truth}"
+                );
+            }
+        }
     }
 }
