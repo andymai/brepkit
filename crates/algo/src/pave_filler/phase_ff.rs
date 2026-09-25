@@ -4040,6 +4040,7 @@ fn plane_analytic_intersection(
                         continue;
                     }
                     let pts = pts_dedup;
+                    crate::perf::bump_section_fit_points(pts.len() as u64);
                     // A cone's parabola or hyperbola between two of its samples
                     // is exactly a rational quadratic; other runs take a cubic
                     // through the samples, which only meets the curve at them.
@@ -4058,7 +4059,6 @@ fn plane_analytic_intersection(
                     let nurbs = if let Some(arc) = exact {
                         arc
                     } else {
-                        crate::perf::bump_section_fit_points(pts.len() as u64);
                         brepkit_math::nurbs::fitting::interpolate(&pts, 3.min(pts.len() - 1))
                             .map_err(|e| {
                                 AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}"))

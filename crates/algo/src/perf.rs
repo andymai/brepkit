@@ -89,13 +89,14 @@ pub(crate) fn bump_local_vertex_insert() {
     LOCAL_VERTEX_INSERTS.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Count the points fed to a section-curve NURBS interpolation in the FF
-/// phase's sampled plane-analytic path. The sampled chain spans the unbounded
-/// section conic; `clip_chain_to_pair_boxes` keeps only the runs that can
-/// reach the face pair's AABB overlap, so a tangent graze fits a handful of
-/// points. Reverting the clip feeds the full ~512-point chain to the dense
-/// O(n^3) solve per grazing pair — the baseplate fuse regression (#1488).
-/// Crate-internal.
+/// Count the points of each clipped run in the FF phase's sampled
+/// plane-analytic path, whether a cone's exact conic arc or the NURBS
+/// interpolation then builds the section. The sampled chain spans the
+/// unbounded section conic; `clip_chain_to_pair_boxes` keeps only the runs
+/// that can reach the face pair's AABB overlap, so a tangent graze keeps a
+/// handful of points. Reverting the clip feeds the full ~512-point chain to
+/// the dense O(n^3) solve per grazing pair: the baseplate fuse regression
+/// (#1488). Crate-internal.
 #[inline]
 #[allow(clippy::used_underscore_binding)]
 pub(crate) fn bump_section_fit_points(_n: u64) {
