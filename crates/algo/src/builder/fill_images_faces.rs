@@ -63,8 +63,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
     face_ranks: &HashMap<FaceId, Rank, S2>,
     tol: Tolerance,
-) -> Vec<SubFace> {
+) -> (Vec<SubFace>, Vec<FaceId>) {
     let mut sub_faces = Vec::new();
+    // Faces whose sections the splitter could not lay out.
+    let mut unsplit: Vec<FaceId> = Vec::new();
 
     // Shared edge cache: (face_id, source_edge_idx) → EdgeId. Ensures section
     // edges (which appear in both forward and reverse in adjacent loops from
@@ -510,6 +512,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 
         if split_results.is_empty() {
             log::warn!("fill_images_faces: split_face_2d returned empty for face {face_id:?}");
+            // Kept whole it takes one class; that is sound only when no
+            // section actually crosses it.
+            if !crossing_points(topo, face_id, &sections).0.is_empty() {
+                unsplit.push(face_id);
+            }
             let expanded =
                 rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             sub_faces.push(SubFace {
@@ -754,7 +761,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
     }
 
-    sub_faces
+    (sub_faces, unsplit)
 }
 
 /// Create a NEW face from an unsplit face using fresh pool vertices.
@@ -4419,4 +4426,96 @@ mod tests {
             "{hits:?}"
         );
     }
+}
+
+/// Points of a face's sections that cross its interior rather than run along
+/// its boundary (a quarter, half and three quarters along each section, kept
+/// when clear of every boundary edge), and that clearance: a hundredth of the
+/// face's extent. Boundary edges are sampled finely enough that a section
+/// lying along one sits well within it; a seam, run twice by its wire, bounds
+/// nothing and is skipped.
+fn crossing_points(
+    topo: &Topology,
+    face_id: FaceId,
+    sections: &[crate::builder::split_types::SectionEdge],
+) -> (Vec<Point3>, f64) {
+    let Ok(face) = topo.face(face_id) else {
+        return (Vec::new(), 0.0);
+    };
+    let mut boundary: Vec<Vec<Point3>> = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let Ok(wire) = topo.wire(wid) else {
+            continue;
+        };
+        for oe in wire.edges() {
+            if wire
+                .edges()
+                .iter()
+                .filter(|o| o.edge() == oe.edge())
+                .count()
+                > 1
+            {
+                continue;
+            }
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (sp, ep) = (a.point(), b.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            boundary.push(
+                (0..=64_u32)
+                    .map(|k| {
+                        edge.curve().evaluate_with_endpoints(
+                            (t1 - t0).mul_add(f64::from(k) / 64.0, t0),
+                            sp,
+                            ep,
+                        )
+                    })
+                    .collect(),
+            );
+        }
+    }
+    let points: Vec<Point3> = boundary.iter().flatten().copied().collect();
+    let Some(&first) = points.first() else {
+        return (Vec::new(), 0.0);
+    };
+    let (lo, hi) = points.iter().fold((first, first), |(lo, hi), p| {
+        (
+            Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z())),
+            Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z())),
+        )
+    });
+    let clear = 0.01 * (hi - lo).length();
+    let crossing = sections
+        .iter()
+        .flat_map(|s| {
+            let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            [0.25, 0.5, 0.75].map(|f| {
+                s.curve_3d
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), s.start, s.end)
+            })
+        })
+        .filter(|&p| distance_to_runs(p, &boundary) > clear)
+        .collect();
+    (crossing, clear)
+}
+
+/// Distance from a point to the nearest of some sampled curves.
+fn distance_to_runs(p: Point3, runs: &[Vec<Point3>]) -> f64 {
+    let to_segment = |a: Point3, b: Point3| {
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let t = if len2 > 0.0 {
+            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + ab * t)).length()
+    };
+    runs.iter()
+        .flat_map(|run| run.windows(2).map(|w| to_segment(w[0], w[1])))
+        .fold(f64::INFINITY, f64::min)
 }

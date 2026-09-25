@@ -1220,8 +1220,24 @@ fn boundary_seam_u(
     tol: f64,
 ) -> Option<f64> {
     use std::f64::consts::TAU;
+    // A pointed cone's seam runs up to its apex, which has no u.
+    let at_apex = |p: Point3| match surface {
+        FaceSurface::Cone(cone) => (p - cone.apex()).length() <= tol,
+        _ => false,
+    };
     for e in boundary_edges {
         if !matches!(e.curve_3d, EdgeCurve::Line) || (e.start_3d - e.end_3d).length() <= tol {
+            continue;
+        }
+        if at_apex(e.start_3d) || at_apex(e.end_3d) {
+            let rim = if at_apex(e.start_3d) {
+                e.end_3d
+            } else {
+                e.start_3d
+            };
+            if let Some((u, _)) = surface.project_point(rim) {
+                return Some(u);
+            }
             continue;
         }
         let (Some((u0, _)), Some((u1, _))) = (
@@ -4753,6 +4769,68 @@ fn interior_loop_center(
 /// anywhere is refused.
 const CAP_INTERIORITY_MARGIN: f64 = 1.05;
 
+/// A loop with the two halves of one of `rims` back to back (the rim split
+/// only at its seam's antipode, touched by no section) with that rim whole
+/// in their place, starting where the first half starts.
+fn rejoin_untouched_rims(
+    wire: Vec<OrientedPCurveEdge>,
+    rims: &[OrientedPCurveEdge],
+    tol: f64,
+) -> Vec<OrientedPCurveEdge> {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    let near = |a: Point3, b: Point3| (a - b).length() < 100.0 * tol;
+    let same_circle = |a: &EdgeCurve, b: &EdgeCurve| match (a, b) {
+        (EdgeCurve::Circle(p), EdgeCurve::Circle(q)) => {
+            near(p.center(), q.center()) && (p.radius() - q.radius()).abs() < 100.0 * tol
+        }
+        _ => false,
+    };
+    let n = wire.len();
+    if rims.is_empty() || n < 3 {
+        return wire;
+    }
+    for i in 0..n {
+        let (first, second) = (&wire[i], &wire[(i + 1) % n]);
+        if first.source_edge_idx.is_some() || second.source_edge_idx.is_some() {
+            continue;
+        }
+        let Some(rim) = rims.iter().find(|r| {
+            same_circle(&r.curve_3d, &first.curve_3d)
+                && same_circle(&r.curve_3d, &second.curve_3d)
+                && near(r.start_3d, first.start_3d)
+        }) else {
+            continue;
+        };
+        if !near(first.end_3d, second.start_3d) || !near(second.end_3d, first.start_3d) {
+            continue;
+        }
+        let Ok(line) = Line2D::new(first.start_uv, second.end_uv - first.start_uv) else {
+            continue;
+        };
+        let whole = OrientedPCurveEdge {
+            curve_3d: rim.curve_3d.clone(),
+            pcurve: Curve2D::Line(line),
+            start_uv: first.start_uv,
+            end_uv: second.end_uv,
+            start_3d: first.start_3d,
+            end_3d: first.start_3d,
+            forward: first.forward,
+            source_edge_idx: None,
+            pave_block_id: rim.pave_block_id,
+        };
+        let mut out: Vec<OrientedPCurveEdge> = Vec::with_capacity(n - 1);
+        for k in 0..n {
+            if k == i {
+                out.push(whole.clone());
+            } else if k != (i + 1) % n {
+                out.push(wire[k].clone());
+            }
+        }
+        return rejoin_untouched_rims(out, rims, tol);
+    }
+    wire
+}
+
 /// Wire points in TRAVERSAL order, honouring each oriented edge's direction.
 ///
 /// [`collect_wire_points`] pushes every edge's stored `start()` and ignores the
@@ -5398,10 +5476,13 @@ fn split_face_2d_impl(
     // seam meridian makes the crossing point a section ENDPOINT, so the
     // boundary-splitting below anchors the seam edge at the same 3D point
     // and the graphs share a vertex.
+    // A conic section crossing a cone's seam ruling needs the same anchor to
+    // pass from one seam copy to the other.
     let seam_anchored_sections: Vec<SectionEdge>;
     let sections: &[SectionEdge] = if !is_plane
         && super::pcurve_compute::surface_periods(&surface).0.is_some()
-        && sections_form_winding_chain(sections, &surface, tol.linear)
+        && (matches!(surface, FaceSurface::Cone(_))
+            || sections_form_winding_chain(sections, &surface, tol.linear))
         && let Some(seam_u) = boundary_seam_u(&boundary_edges, &surface, tol.linear)
     {
         seam_anchored_sections =
@@ -5560,6 +5641,32 @@ fn split_face_2d_impl(
     if !is_plane && let Some(reg) = split_registry.as_deref_mut() {
         split_pts_3d.extend(reg.values().flatten().copied());
     }
+    // A closed rim is re-split here from the raw edge, so it must break at
+    // every vertex its pave images carry (the caps sharing it take those
+    // images), not only at the sections' ends.
+    if matches!(surface, FaceSurface::Cone(_))
+        && let Ok(outer) = topo.wire(face.outer_wire())
+    {
+        for oe in outer.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            if edge.start() != edge.end() {
+                continue;
+            }
+            let Some(imgs) = edge_images.get(&oe.edge()).filter(|imgs| imgs.len() > 1) else {
+                continue;
+            };
+            for &img in imgs {
+                if let Ok(piece) = topo.edge(img)
+                    && let (Ok(a), Ok(b)) = (topo.vertex(piece.start()), topo.vertex(piece.end()))
+                {
+                    split_pts_3d.push(a.point());
+                    split_pts_3d.push(b.point());
+                }
+            }
+        }
+    }
 
     // For periodic faces, align closed boundary edge UV with seam edge UV.
     // The same 3D vertex projects to u=0 (from circle unwrapping) and u=seam
@@ -5575,9 +5682,17 @@ fn split_face_2d_impl(
         if let Some(seam_u) = seam_u_opt {
             for edge in &mut boundary_edges {
                 if (edge.start_3d - edge.end_3d).length() < 1e-10 {
-                    // Closed edge: shift UV so start_uv.x() == seam_u.
+                    // Closed edge: shift UV so start_uv.x() == seam_u. One
+                    // already starting on a copy of the seam's u was placed
+                    // there by the boundary walk, in step with its seam
+                    // lines, and stays.
                     let shift = seam_u - edge.start_uv.x();
-                    if shift.abs() > 0.01 {
+                    let on_seam_copy = matches!(surface, FaceSurface::Cone(_))
+                        && (shift
+                            - (shift / std::f64::consts::TAU).round() * std::f64::consts::TAU)
+                            .abs()
+                            <= 1e-6;
+                    if shift.abs() > 0.01 && !on_seam_copy {
                         edge.start_uv = Point2::new(edge.start_uv.x() + shift, edge.start_uv.y());
                         edge.end_uv = Point2::new(edge.end_uv.x() + shift, edge.end_uv.y());
                     }
@@ -5651,6 +5766,22 @@ fn split_face_2d_impl(
         }
     }
     let boundary_arc_crossed = !boundary_cross_pts.is_empty();
+
+    // The closed rims as they arrive, before the split at the seam's
+    // antipode above: a rim no section touches is put back whole in the loop
+    // that runs both its halves, so it stays the edge its cap shares.
+    let closed_rims: Vec<OrientedPCurveEdge> = if matches!(surface, FaceSurface::Cone(_)) {
+        boundary_edges
+            .iter()
+            .filter(|e| {
+                matches!(e.curve_3d, EdgeCurve::Circle(_))
+                    && (e.start_3d - e.end_3d).length() < 1e-10
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let boundary_edges = split_boundary_edges_at_3d_points(
         boundary_edges,
@@ -6189,6 +6320,34 @@ fn split_face_2d_impl(
             source_edge_idx: Some(section_idx),
             pave_block_id: pb_id,
         });
+    }
+
+    // Full-band u window: the boundary walk lays a periodic face's rims and
+    // seam lines out in one continuous u window, which need not be the
+    // principal one; a section projected to its principal u would then sit
+    // a period away from the rims it ends on. Move each section by whole
+    // periods so its midpoint falls inside the window.
+    if u_periodic
+        && matches!(surface, FaceSurface::Cone(_))
+        && all_edges.len() > n_boundary_edges
+        && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
+    {
+        let (lo, hi) = all_edges[..n_boundary_edges]
+            .iter()
+            .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
+                (lo.min(u), hi.max(u))
+            });
+        if hi - lo > 0.5 * u_period {
+            for e in &mut all_edges[n_boundary_edges..] {
+                let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
+                let shift = -((mid - lo) / u_period).floor() * u_period;
+                if shift != 0.0 {
+                    e.start_uv = Point2::new(e.start_uv.x() + shift, e.start_uv.y());
+                    e.end_uv = Point2::new(e.end_uv.x() + shift, e.end_uv.y());
+                }
+            }
+        }
     }
 
     // Partial-band u unwrap: a face whose u-window touches the period seam
@@ -7065,12 +7224,17 @@ fn split_face_2d_impl(
     // walker an annulus cut once is a single wrapped region (the mid-wall
     // pad whose second wall crossing rides the seam). Fires only when the
     // greedy produced no split at all, so configs the greedy handles (all
-    // rulings in-face) never take this path.
+    // rulings in-face) never take this path. A pointed cone's rulings meet
+    // at its apex, where its boundary has no edge to close the greedy's
+    // loops on, so it always takes this path.
+    let pointed_cone = matches!(&surface, FaceSurface::Cone(cone) if all_edges[..n_boundary_edges]
+        .iter()
+        .any(|e| (e.start_3d - cone.apex()).length() < 100.0 * tol.linear));
     if u_periodic
         && !v_periodic
-        && loops.len() <= 1
+        && (loops.len() <= 1 || pointed_cone)
         && !sections.is_empty()
-        && matches!(&surface, FaceSurface::Cylinder(_))
+        && matches!(&surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
         && original_inner_wires.is_empty()
         && let Some(sectors) = split_periodic_face_into_sectors(
             &surface,
@@ -7088,7 +7252,8 @@ fn split_face_2d_impl(
         && !v_periodic
         && !sections.is_empty()
         && (matches!(&surface, FaceSurface::Cylinder(_)) && (greedy_broken || ring_duplicated)
-            || matches!(&surface, FaceSurface::Cone(_)) && ring_duplicated)
+            || matches!(&surface, FaceSurface::Cone(_))
+                && (ring_duplicated || (pointed_cone && greedy_broken)))
     {
         if let Some(result) = split_cylinder_band_by_arrangement(
             &surface,
@@ -7328,7 +7493,13 @@ fn split_face_2d_impl(
             let has_nonline = wire_loop
                 .iter()
                 .any(|e| !matches!(e.curve_3d, EdgeCurve::Line));
-            if has_line && has_nonline {
+            // A loop running along part of the face's boundary and back
+            // along a section (a conic tongue off a cone's rim) bounds a
+            // region of the face too; only a loop of sections alone is a hole.
+            let on_boundary = matches!(surface, FaceSurface::Cone(_))
+                && wire_loop.iter().any(|e| e.source_edge_idx.is_none())
+                && wire_loop.iter().any(|e| e.source_edge_idx.is_some());
+            if (has_line && has_nonline) || on_boundary {
                 outers.push((wire_loop, 1.0)); // area placeholder
             } else {
                 holes.push(wire_loop);
@@ -7572,7 +7743,7 @@ fn split_face_2d_impl(
                 }
             }
         }
-        sub_faces.push(SplitSubFace {
+        let mut sub_face = SplitSubFace {
             surface: surface.clone(),
             outer_wire,
             inner_wires: Vec::new(),
@@ -7580,7 +7751,15 @@ fn split_face_2d_impl(
             parent: face_id,
             rank,
             precomputed_interior: None,
-        });
+        };
+        // A whole rim spans a period in one edge, which the periodic
+        // sampler folds away: take the interior point from the halves.
+        let rejoined = rejoin_untouched_rims(sub_face.outer_wire.clone(), &closed_rims, tol.linear);
+        if rejoined.len() != sub_face.outer_wire.len() {
+            sub_face.precomputed_interior = Some(interior_point_3d(&sub_face, None));
+            sub_face.outer_wire = rejoined;
+        }
+        sub_faces.push(sub_face);
     }
 
     // Simple hole matching: each hole goes to the outer that contains its
@@ -7856,7 +8035,20 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // sample (it ends up on the wrong side of the section). Unwrapping the
     // sampled points to one continuous u-window first makes the polygon simple
     // again so the centroid/edge-walk interior point is geometrically valid.
-    let pts_2d = if matches!(
+    // A pointed cone's piece around its apex closes across the apex, a whole
+    // period in u at v = 0, which its seam layout already carries; unwrapping
+    // would fold that jump away, and the seam copies' pcurves need not follow
+    // the traversal.
+    let around_apex = match &sub_face.surface {
+        FaceSurface::Cone(cone) => sub_face
+            .outer_wire
+            .iter()
+            .any(|e| (e.start_3d - cone.apex()).length() < 1e-9),
+        _ => false,
+    };
+    let pts_2d = if around_apex {
+        sampling::sample_wire_loop_uv_on_surface(&sub_face.outer_wire, &sub_face.surface)
+    } else if matches!(
         &sub_face.surface,
         FaceSurface::Cone(_) | FaceSurface::Cylinder(_)
     ) {
@@ -7898,8 +8090,12 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
         let range = v_max - v_min;
         if range > 1e-9 {
             let margin = 0.05 * range;
-            if interior_uv.y() < v_min + margin || interior_uv.y() > v_max - margin {
-                interior_uv = Point2::new(interior_uv.x(), 0.5 * (v_min + v_max));
+            let snapped = Point2::new(interior_uv.x(), 0.5 * (v_min + v_max));
+            if (interior_uv.y() < v_min + margin || interior_uv.y() > v_max - margin)
+                && (!matches!(&sub_face.surface, FaceSurface::Cone(_))
+                    || super::classify_2d::point_in_polygon_2d(snapped, &pts_2d))
+            {
+                interior_uv = snapped;
             }
         }
     }

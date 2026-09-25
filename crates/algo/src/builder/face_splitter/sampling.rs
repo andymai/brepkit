@@ -61,6 +61,56 @@ pub(super) fn sample_wire_loop_uv_via_frame(
     pts
 }
 
+/// Sample a periodic-face wire loop by evaluating each edge's 3D curve in
+/// traversal order and projecting it onto the surface, keeping u continuous
+/// from each edge's laid-out start. Used where the stored pcurves cannot be
+/// trusted to follow the traversal (a pointed cone's seam copies).
+pub(super) fn sample_wire_loop_uv_on_surface(
+    wire: &[OrientedPCurveEdge],
+    surface: &brepkit_topology::face::FaceSurface,
+) -> Vec<Point2> {
+    use brepkit_topology::edge::EdgeCurve;
+    use std::f64::consts::TAU;
+    const CURVE_SAMPLES: usize = 8;
+
+    let mut pts = Vec::with_capacity(wire.len() * CURVE_SAMPLES);
+    for e in wire {
+        pts.push(e.start_uv);
+        if matches!(e.curve_3d, EdgeCurve::Line) {
+            continue;
+        }
+        let (s3, e3) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+        #[allow(clippy::cast_precision_loss)]
+        let mut samples: Vec<_> = (1..CURVE_SAMPLES)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(k as f64 / CURVE_SAMPLES as f64, t0);
+                e.curve_3d.evaluate_with_endpoints(t, s3, e3)
+            })
+            .collect();
+        // A marched curve's domain can run from either end: orient by where
+        // its start actually evaluates.
+        let at_t0 = e.curve_3d.evaluate_with_endpoints(t0, s3, e3);
+        if (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length() {
+            samples.reverse();
+        }
+        let mut prev_u = e.start_uv.x();
+        for p in samples {
+            let Some((u, v)) = surface.project_point(p) else {
+                continue;
+            };
+            let u = u - ((u - prev_u) / TAU).round() * TAU;
+            prev_u = u;
+            pts.push(Point2::new(u, v));
+        }
+    }
+    pts
+}
+
 /// Sample UV points along a wire loop with optional periodic unwrapping.
 ///
 /// When `u_period`/`v_period` is set, unwraps consecutive points so the

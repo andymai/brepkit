@@ -309,8 +309,21 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
         return;
     }
     let at_seam = |u: f64| -> bool { u.abs() < 1e-9 || (u - TAU).abs() < 1e-9 };
+    // A pointed cone's seam runs up to the apex and back, where u is
+    // undefined: each apex end takes its ruling's u, and the walk starts on
+    // the ruling leaving the apex, so the seam's two copies land a period
+    // apart with the rim running between them.
+    let apex = match surface {
+        FaceSurface::Cone(cn) => Some(cn.apex()),
+        _ => None,
+    };
+    let at_apex = |p: Point3| apex.is_some_and(|a| (p - a).length() < 1e-9);
+    let leaves_apex = edges
+        .iter()
+        .position(|e| at_apex(e.start_3d) && !at_apex(e.end_3d));
     // Walk from an edge anchored off the seam so continuity has a reference.
-    let Some(first) = edges.iter().position(|e| !at_seam(e.start_uv.x())) else {
+    let Some(first) = leaves_apex.or_else(|| edges.iter().position(|e| !at_seam(e.start_uv.x())))
+    else {
         return;
     };
     let n = edges.len();
@@ -326,15 +339,38 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
     // projects to, so shifting it "nearest" would move it a period away
     // from the seam lines it shares vertices with.
     let nearest = |u: f64, target: f64| -> f64 { u - ((u - target) / TAU).round() * TAU };
-    let mut cur = edges[first].start_uv.x();
+    let mut cur = if leaves_apex.is_some() {
+        edges[first].end_uv.x()
+    } else {
+        edges[first].start_uv.x()
+    };
     for k in 0..n {
         let e = &mut edges[(first + k) % n];
         let is_closed = (e.start_3d - e.end_3d).length() < 1e-10;
-        if is_closed {
+        if is_closed && !matches!(surface, FaceSurface::Cone(_)) {
             cur = e.end_uv.x();
             continue;
         }
-        let su = nearest(e.start_uv.x(), cur);
+        if is_closed {
+            // Its samples start at its vertex and run the curve's own sense:
+            // move them by whole periods onto the running u, and leave the
+            // walk a turn on in the traversal's sense.
+            let shift = nearest(e.start_uv.x(), cur) - e.start_uv.x();
+            let native = e.end_uv.x() - e.start_uv.x();
+            e.start_uv = Point2::new(e.start_uv.x() + shift, e.start_uv.y());
+            e.end_uv = Point2::new(e.end_uv.x() + shift, e.end_uv.y());
+            cur = if e.forward {
+                e.end_uv.x()
+            } else {
+                e.start_uv.x() - native
+            };
+            continue;
+        }
+        let su = if at_apex(e.start_3d) {
+            nearest(e.end_uv.x(), cur)
+        } else {
+            nearest(e.start_uv.x(), cur)
+        };
         // Native orientation: `domain_with_endpoints` takes the positive
         // parametric span from its first point, so a major arc sampled from
         // swapped endpoints (or by the shorter-arc helper) would put the
@@ -364,7 +400,11 @@ fn resolve_seam_endpoint_uv(edges: &mut [OrientedPCurveEdge], surface: &FaceSurf
         } else {
             su
         };
-        let eu = nearest(e.end_uv.x(), mu);
+        let eu = if at_apex(e.end_3d) {
+            su
+        } else {
+            nearest(e.end_uv.x(), mu)
+        };
         if (su - e.start_uv.x()).abs() > 1e-12 {
             e.start_uv = Point2::new(su, e.start_uv.y());
         }

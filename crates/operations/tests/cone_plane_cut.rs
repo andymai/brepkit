@@ -4,6 +4,10 @@
 //! of its area times the apex's distance to the plane. Seen along the axis the
 //! section encloses `proj`, the wall between the apex and the plane covers
 //! the same region, and the wall's normal makes a fixed angle with the axis.
+//!
+//! A plane parallel to the axis meets the wall in two rulings when it holds
+//! the axis and in a hyperbola otherwise; the part of the cone past it is,
+//! at every height, the circular segment past the plane.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -20,6 +24,7 @@ use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceSurface;
+use brepkit_topology::solid::SolidId;
 
 struct Case {
     label: String,
@@ -201,5 +206,142 @@ fn cone_cut_by_a_plane_across_its_wall() {
             "{label}: mesh volume {meshed}, truth {}",
             case.volume
         );
+    }
+}
+
+/// The cone of base radius 3 and height `h` narrowing to `top`, turned by
+/// `turn` about its axis, against a box over `x < off`.
+fn cone_and_box(top: f64, h: f64, turn: f64, off: f64, op: BooleanOp) -> (Topology, SolidId) {
+    let mut topo = Topology::new();
+    let cone = make_cone(&mut topo, 3.0, top, h).unwrap();
+    transform_solid(&mut topo, cone, &Mat4::rotation_z(turn.to_radians())).unwrap();
+    let block = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+    transform_solid(
+        &mut topo,
+        block,
+        &Mat4::translation(off - 20.0, -10.0, -5.0),
+    )
+    .unwrap();
+    let piece = boolean(&mut topo, op, cone, block).unwrap();
+    (topo, piece)
+}
+
+/// The volume of that cone over `x < off`: the circular segment past the
+/// plane at every height, integrated by Simpson's rule split where the
+/// radius reaches `|off|`.
+fn cone_below(top: f64, h: f64, off: f64) -> f64 {
+    let radius = |z: f64| (top - 3.0).mul_add(z / h, 3.0);
+    let segment = |z: f64| {
+        let r = radius(z);
+        if off >= r {
+            PI * r * r
+        } else if off <= -r {
+            0.0
+        } else {
+            (r * r).mul_add(PI - (off / r).acos(), off * off.mul_add(-off, r * r).sqrt())
+        }
+    };
+    let simpson = |lo: f64, hi: f64| {
+        let n = 2000;
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = segment(lo) + segment(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * segment(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let kink = (3.0 - off.abs()) / (3.0 - top) * h;
+    if kink > 0.0 && kink < h {
+        simpson(0.0, kink) + simpson(kink, h)
+    } else {
+        simpson(0.0, h)
+    }
+}
+
+/// A pointed cone and a frustum halved by a plane holding the axis, turned so
+/// the plane's rulings fall on, beside and across the seam.
+#[test]
+fn cone_halved_through_its_axis() {
+    for (top, h) in [(0.0_f64, 6.0_f64), (1.0, 4.0)] {
+        let whole = PI * h / 3.0 * top.mul_add(top + 3.0, 9.0);
+        for turn in [0.0_f64, 17.0, 90.0, 200.0] {
+            for (op, truth) in [
+                (BooleanOp::Cut, whole / 2.0),
+                (BooleanOp::Intersect, whole / 2.0),
+                (BooleanOp::Fuse, 8000.0 + whole / 2.0),
+            ] {
+                let label = format!("top {top}, turned {turn}, {op:?}");
+                let (topo, piece) = cone_and_box(top, h, turn, 0.0, op);
+                let report = validate_solid(&topo, piece).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let faces = solid_faces(&topo, piece).unwrap();
+                assert!(
+                    faces
+                        .iter()
+                        .any(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_))),
+                    "{label}: no cone face"
+                );
+                let volume = solid_volume(&topo, piece, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-9 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+                let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            }
+        }
+    }
+}
+
+/// A pointed cone and a frustum cut by planes parallel to the axis, turned so
+/// the seam lies on either side of the cut. The listed cases build exactly;
+/// the rest (the piece cut off holding the seam, and some frustum cuts) may
+/// fall back to a mesh, but never come out exact and wrong.
+#[test]
+fn cone_cut_parallel_to_its_axis() {
+    let exact = |top: f64, turn: f64, off: f64| -> bool {
+        let offsets: &[f64] = match (top > 0.0, turn) {
+            (false, 0.0) => &[-2.5, -1.5, -1.0, -0.7, 0.3, 0.5, 1.2, 2.0, 2.4],
+            (false, 17.0) => &[-2.5, -1.5, -1.0, -0.7],
+            (false, _) => &[0.3, 0.5, 1.2, 2.0, 2.4],
+            (true, 0.0 | 17.0) => &[-2.5, -0.7, 0.3, 0.5],
+            (true, _) => &[-0.7, 0.3, 0.5, 2.0, 2.4],
+        };
+        offsets.contains(&off)
+    };
+    for (top, h) in [(0.0_f64, 6.0_f64), (1.0, 4.0)] {
+        let whole = PI * h / 3.0 * top.mul_add(top + 3.0, 9.0);
+        for turn in [0.0_f64, 17.0, 200.0] {
+            for off in [-2.5_f64, -1.5, -1.0, -0.7, 0.3, 0.5, 1.2, 2.0, 2.4] {
+                let below = cone_below(top, h, off);
+                let must_build = exact(top, turn, off);
+                for (op, truth) in [
+                    (BooleanOp::Cut, whole - below),
+                    (BooleanOp::Intersect, below),
+                    (BooleanOp::Fuse, 8000.0 + whole - below),
+                ] {
+                    let label = format!("top {top}, turned {turn}, x < {off}, {op:?}");
+                    let (topo, piece) = cone_and_box(top, h, turn, off, op);
+                    let faces = solid_faces(&topo, piece).unwrap();
+                    let built = faces
+                        .iter()
+                        .any(|&f| !topo.face(f).unwrap().surface().is_planar());
+                    assert!(built || !must_build, "{label}: fell back to a mesh");
+                    let volume = solid_volume(&topo, piece, 0.01).unwrap();
+                    let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+                    assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                    // The tessellated measure of a hyperbola-trimmed wall;
+                    // a fallback's mesh errs on the scale of the whole cone.
+                    // A fuse is judged by what the cone adds to the box.
+                    let box_volume = if op == BooleanOp::Fuse { 8000.0 } else { 0.0 };
+                    let (added, expected) = (volume - box_volume, truth - box_volume);
+                    let bound = if built { 1e-3 * expected } else { 3e-2 * whole };
+                    assert!(
+                        (added - expected).abs() < bound,
+                        "{label}: volume {volume}, truth {truth}"
+                    );
+                }
+            }
+        }
     }
 }

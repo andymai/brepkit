@@ -251,10 +251,22 @@ pub(super) fn sample_edge_to_uv(
 ) -> Vec<Point2> {
     let n = PCURVE_SAMPLES;
     let mut pts_3d = Vec::with_capacity(n + 1);
+    // A cone's closed rim runs a full turn from its vertex, wherever the
+    // circle's own frame puts parameter 0, so its UV samples start where the
+    // seam lines leaving that vertex do.
+    let closed_cone_rim = matches!(surface, FaceSurface::Cone(_)) && (start - end).length() < 1e-10;
     for i in 0..=n {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f64 / n as f64;
-        let p = evaluate_edge_at_t(curve_3d, start, end, t);
+        let p = match curve_3d {
+            EdgeCurve::Circle(c) if closed_cone_rim => {
+                ParametricCurve::evaluate(c, c.project(start) + TAU * t)
+            }
+            EdgeCurve::Ellipse(e) if closed_cone_rim => {
+                ParametricCurve::evaluate(e, e.project(start) + TAU * t)
+            }
+            _ => evaluate_edge_at_t(curve_3d, start, end, t),
+        };
         pts_3d.push(p);
     }
 

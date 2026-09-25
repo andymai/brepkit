@@ -2387,6 +2387,9 @@ pub(super) fn tessellate_nonplanar_cdt(
     // least one is the miter's elliptic crease. The class stays narrow because
     // every other curved trim feeds boolean volume and classification paths
     // whose triangulation is qualified separately.
+    // A plane's conic section trims a cone the same way: marched sides, rim
+    // arcs split wherever earlier cuts put vertices on them, and lines, which
+    // on a cone are rulings and stay straight in the developed metric.
     let mut nurbs_boundaries = 0;
     let mut transverse_boundaries = 0;
     let mut ellipse_boundaries = 0;
@@ -2405,7 +2408,10 @@ pub(super) fn tessellate_nonplanar_cdt(
         4 => nurbs_boundaries == 2 && transverse_boundaries == 2,
         3 => nurbs_boundaries == 1 && transverse_boundaries == 2 && ellipse_boundaries >= 1,
         _ => false,
-    };
+    } || (matches!(face_data.surface(), FaceSurface::Cone(_))
+        && nurbs_boundaries + ellipse_boundaries > 0
+        && transverse_boundaries > 0
+        && face_data.inner_wires().is_empty());
     let stripe_radius = if circle_floor || !is_fillet_stripe {
         None
     } else {
