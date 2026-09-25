@@ -165,6 +165,27 @@ pub(super) fn split_noseam_face_direct(
         let Some(remainder) = chain_closed_loop(pool, close_tol) else {
             return unsplit();
         };
+        // The remainder starts on the face's own boundary, so it keeps the
+        // face's winding; the cap chained its arcs whichever way they came
+        // and must run each arc it shares with the remainder the other way.
+        let runs_with_remainder = cap_edges
+            .iter()
+            .zip(&coincident)
+            .filter(|&(_, &coin)| !coin)
+            .find_map(|(arc, _)| {
+                remainder.iter().find_map(|e| {
+                    let same = (e.start_3d - arc.start_3d).length() < close_tol
+                        && (e.end_3d - arc.end_3d).length() < close_tol;
+                    let opposite = (e.start_3d - arc.end_3d).length() < close_tol
+                        && (e.end_3d - arc.start_3d).length() < close_tol;
+                    (same || opposite).then_some(same)
+                })
+            });
+        let cap_edges = if runs_with_remainder == Some(true) {
+            reverse_loop(&cap_edges)
+        } else {
+            cap_edges
+        };
 
         let cap_interior = sphere_loop_interior(surface, &cap_edges);
         let remainder_interior = sphere_loop_interior(surface, &remainder);

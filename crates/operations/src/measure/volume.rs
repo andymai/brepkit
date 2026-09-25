@@ -77,7 +77,9 @@ fn sphere_wire_constant_v(
 }
 
 /// Whether the solid has at least one sphere face that is a scalloped collar
-/// (a bored quadric whose outer wire varies in `v`, e.g. a box ∩ sphere patch).
+/// (a bored quadric whose outer wire varies in `v` and winds the sphere's
+/// axis, e.g. a box ∩ sphere patch). A holed patch that does not wind the
+/// axis (an octant with a corner cut from it) keeps the per-face path.
 fn solid_has_scalloped_sphere_collar(topo: &Topology, solid: SolidId) -> bool {
     let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, solid) else {
         return false;
@@ -85,7 +87,10 @@ fn solid_has_scalloped_sphere_collar(topo: &Topology, solid: SolidId) -> bool {
     faces.iter().any(|&fid| {
         topo.face(fid).is_ok_and(|f| match f.surface() {
             FaceSurface::Sphere(s) => {
-                !f.inner_wires().is_empty() && !sphere_outer_wire_constant_v(topo, fid, s)
+                !f.inner_wires().is_empty()
+                    && !sphere_outer_wire_constant_v(topo, fid, s)
+                    && sphere_wire_u_progress(topo, f.outer_wire(), s)
+                        .is_ok_and(|p| p.abs() > std::f64::consts::PI)
             }
             _ => false,
         })

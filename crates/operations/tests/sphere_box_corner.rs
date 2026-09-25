@@ -106,11 +106,12 @@ fn ball_less_a_box_corner() {
     }
 }
 
-/// The ball's octant from the box shortcut feeds a second boolean: less a rod
-/// of radius 0.4 along `z` through `(1, 1)` (the column over the rod's disc,
-/// by Simpson in polar coordinates) it stays exact below the equator, and
-/// less a box corner at `(1, 1, ±1)` it loses the corner's piece (within 2%,
-/// a mesh allowed) rather than ignoring the tool.
+/// The ball's octant feeds a second boolean: less a rod of radius 0.4 along
+/// `z` through `(1, 1)` (the column over the rod's disc, by Simpson in polar
+/// coordinates) it stays exact below the equator, and less a box corner at
+/// `(1, 1, ±1)` it loses exactly the corner's piece, whether the box shortcut
+/// built the octant or the boolean engine did (box and ball turned about `z`,
+/// out of the shortcut's reach).
 #[test]
 fn box_octant_feeds_a_second_boolean() {
     let octant = PI * RADIUS.powi(3) / 6.0;
@@ -128,13 +129,21 @@ fn box_octant_feeds_a_second_boolean() {
             RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
         })
     });
-    for lower in [false, true] {
+    for (lower, spin) in [(false, 0.0), (true, 0.0), (false, 0.3)] {
+        let label = format!("lower {lower} spin {spin}");
+        let turn = Mat4::rotation_z(spin);
         let octant_of = |topo: &mut Topology| {
             let sphere = make_sphere(topo, RADIUS, 32).unwrap();
             let block = make_box(topo, 10.0, 10.0, 10.0).unwrap();
             let z0 = if lower { -10.0 } else { 0.0 };
-            transform_solid(topo, block, &Mat4::translation(0.0, 0.0, z0)).unwrap();
-            boolean(topo, BooleanOp::Intersect, sphere, block).unwrap()
+            transform_solid(topo, block, &(turn * Mat4::translation(0.0, 0.0, z0))).unwrap();
+            transform_solid(topo, sphere, &turn).unwrap();
+            let piece = boolean(topo, BooleanOp::Intersect, sphere, block).unwrap();
+            assert!(
+                validate_solid(topo, piece).unwrap().is_valid(),
+                "{label}: invalid octant"
+            );
+            piece
         };
         if lower {
             let mut topo = Topology::new();
@@ -154,15 +163,25 @@ fn box_octant_feeds_a_second_boolean() {
         let piece = octant_of(&mut topo);
         let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let z0 = if lower { -11.0 } else { 1.0 };
-        transform_solid(&mut topo, block, &Mat4::translation(1.0, 1.0, z0)).unwrap();
+        transform_solid(&mut topo, block, &(turn * Mat4::translation(1.0, 1.0, z0))).unwrap();
+        let before = mesh_fallback_count();
         let result = boolean(&mut topo, BooleanOp::Cut, piece, block).unwrap();
+        assert_eq!(
+            mesh_fallback_count(),
+            before,
+            "{label}: fell back to a mesh"
+        );
+        assert!(
+            validate_solid(&topo, result).unwrap().is_valid(),
+            "{label}: invalid"
+        );
         let (volume, truth) = (
             solid_volume(&topo, result, 0.01).unwrap(),
             octant - corner_piece(1.0, 1.0, 1.0),
         );
         assert!(
-            (volume - truth).abs() < 2e-2 * truth,
-            "corner lower {lower}: volume {volume}, truth {truth}"
+            (volume - truth).abs() < 1e-9 * truth,
+            "{label}: volume {volume}, truth {truth}"
         );
     }
 }

@@ -384,12 +384,13 @@ impl Circle3D {
         out
     }
 
-    /// Intersect the circle with another COPLANAR circle.
+    /// Intersect the circle with another circle.
     ///
     /// Returns up to 2 intersection points along with their angle parameter
-    /// `t` on `self`. Non-coplanar pairs (skew or offset planes) and
-    /// coincident/concentric pairs return no points — callers own those
-    /// configurations separately.
+    /// `t` on `self`. Circles in skew planes meet only on the planes' common
+    /// line (two circles on one sphere, a latitude and a great circle). Circles
+    /// in parallel but offset planes, and coincident or concentric coplanar
+    /// pairs, return no points — callers own those configurations separately.
     ///
     /// Near-tangent conditioning: when the circles graze (the chord implied
     /// by the root pair penetrates by less than `tol`), the two roots are
@@ -401,7 +402,7 @@ impl Circle3D {
     pub fn intersect_circle(&self, other: &Self, tol: f64) -> Vec<(Point3, f64)> {
         let mut out = Vec::new();
         if self.normal.cross(other.normal).length() > 1e-9 {
-            return out; // Skew planes — not this primitive's case.
+            return self.intersect_skew_circle(other, tol);
         }
         let dvec = other.center - self.center;
         if dvec.dot(self.normal).abs() > tol {
@@ -447,6 +448,59 @@ impl Circle3D {
             let h = h2.sqrt();
             push(foot + vx * h);
             push(foot - vx * h);
+        }
+        out
+    }
+
+    /// [`Self::intersect_circle`] for a circle whose plane crosses this one's:
+    /// the points of the planes' common line at this circle's radius that
+    /// also lie on `other`, a grazing pair collapsed to its foot.
+    fn intersect_skew_circle(&self, other: &Self, tol: f64) -> Vec<(Point3, f64)> {
+        let mut out: Vec<(Point3, f64)> = Vec::new();
+        let (n1, n2) = (self.normal, other.normal);
+        let Ok(dir) = n1.cross(n2).normalize() else {
+            return out;
+        };
+        // The point of the common line nearest the origin, from the two
+        // plane equations `n · x = h`.
+        let (h1, h2) = (
+            n1.dot(Vec3::new(self.center.x(), self.center.y(), self.center.z())),
+            n2.dot(Vec3::new(
+                other.center.x(),
+                other.center.y(),
+                other.center.z(),
+            )),
+        );
+        let (a, b, c) = (n1.dot(n1), n2.dot(n2), n1.dot(n2));
+        let det = a.mul_add(b, -(c * c));
+        let base = n1 * ((h1 * b - h2 * c) / det) + n2 * ((h2 * a - h1 * c) / det);
+        let base = Point3::new(base.x(), base.y(), base.z());
+        let off = base - self.center;
+        let half_b = dir.dot(off);
+        let disc = half_b.mul_add(half_b, -(off.dot(off) - self.radius * self.radius));
+        let well = 2.0 * self.radius * tol;
+        if disc < -well {
+            return out;
+        }
+        let roots: Vec<f64> = if disc <= well {
+            vec![-half_b]
+        } else {
+            let root = disc.sqrt();
+            vec![-half_b - root, -half_b + root]
+        };
+        for s in roots {
+            let p = base + dir * s;
+            if ((p - other.center).length() - other.radius).abs() > tol {
+                continue;
+            }
+            let v = p - self.center;
+            let mut t = v.dot(self.v_axis).atan2(v.dot(self.u_axis));
+            if t < 0.0 {
+                t += std::f64::consts::TAU;
+            }
+            if !out.iter().any(|(q, _)| (*q - p).length() < tol) {
+                out.push((p, t));
+            }
         }
         out
     }
