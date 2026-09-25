@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790350292573,
+  "lastUpdate": 1790351234288,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40121,6 +40121,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42077822,
             "range": "± 763680",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8bb25addcaf490983d6b4045e8e0cba221adea4c",
+          "message": "chore(main): release 4.0.27 (#1770)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.27](https://github.com/andymai/brepkit/compare/v4.0.26...v4.0.27)\n(2026-09-25)\n\n\n### Bug Fixes\n\n* **io:** write and read a solid's cavities through STEP\n([#1769](https://github.com/andymai/brepkit/issues/1769))\n([a634bb7](https://github.com/andymai/brepkit/commit/a634bb76009b0c7960cc826a9706bf6b700ee666))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases brepkit 4.0.27, which fixes writing and reading a solid's\ncavities through STEP.\n\n<sup>Written for commit 0ef4d50673f9b448a4c9a6b3e24e733c9b32d634.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1770?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-25T15:44:29Z",
+          "tree_id": "c87e432bc34a993aea76015a92ac8478a96c8b55",
+          "url": "https://github.com/andymai/brepkit/commit/8bb25addcaf490983d6b4045e8e0cba221adea4c"
+        },
+        "date": 1790351230434,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1004204,
+            "range": "± 2235",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1089108,
+            "range": "± 1359",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13074,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 750021,
+            "range": "± 1061",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42312284,
+            "range": "± 102509",
             "unit": "ns/iter"
           }
         ]
