@@ -1705,8 +1705,15 @@ fn build_box_sphere_octant(
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
 
-    // Cutting plane normals + their box-plane-d values.
-    let cut_planes: Vec<(Vec3, f64)> = cuts.iter().map(|&i| faces[i]).collect();
+    // Cutting plane normals + their box-plane-d values, ordered so the
+    // in-box directions `-n_i` form a right-handed frame: each arc below
+    // runs counter-clockwise about its plane's inward normal from one box
+    // edge to the next, which is the short in-box arc only in that frame (a
+    // corner reaching down, `(+x, +y, -z)`, would get the complements).
+    let mut cut_planes: Vec<(Vec3, f64)> = cuts.iter().map(|&i| faces[i]).collect();
+    if cut_planes.len() == 3 && cut_planes[0].0.dot(cut_planes[1].0.cross(cut_planes[2].0)) > 0.0 {
+        cut_planes.swap(1, 2);
+    }
     // The 3 outward normals must be mutually orthogonal (axis-aligned box).
     let n0 = cut_planes[0].0;
     let n1 = cut_planes[1].0;
@@ -1742,6 +1749,13 @@ fn build_box_sphere_octant(
         }
     }
     let o = Point3::new(o[0], o[1], o[2]);
+    // Three cutting planes do not put the corner inside the ball: out of it,
+    // the region is not the octant this builds (a ball of radius 3 at
+    // (1.8, 1.8, 1.8) in the box over the positive octant came out 82.09
+    // against 78.84).
+    if (o - sphere_center).length() >= r - tol.linear {
+        return Ok(None);
+    }
 
     // In-box direction perpendicular to each cutting plane = -n_i.
     let in_dirs: Vec<Vec3> = cut_planes
@@ -1851,13 +1865,17 @@ fn build_box_sphere_octant(
     // Arc on cut plane 2 (between v_x and v_y).
     let arc_xy = build_arc_edge(n2, sphere_pts[0], sphere_pts[1], v_x, v_y)?;
 
+    // Every wire runs counter-clockwise about its face's outward normal:
+    // in the right-handed frame `d0 = d1 × d2`, so O → Y → Z would wind
+    // about the inward `d0`. A later boolean reads a sphere face's side from
+    // its wire, and a clockwise patch hands it the complement.
     // Quarter-disc face on cut plane 0 (perpendicular to n0): bounded by
-    // box edges O-Y and O-Z + arc Y→Z.
+    // box edges O-Z and O-Y + arc Z→Y.
     let qd0_wire = Wire::new(
         vec![
-            OrientedEdge::new(e_oy, true),   // O → Y
-            OrientedEdge::new(arc_yz, true), // Y → Z (arc)
-            OrientedEdge::new(e_oz, false),  // Z → O (reversed)
+            OrientedEdge::new(e_oz, true),    // O → Z
+            OrientedEdge::new(arc_yz, false), // Z → Y (arc)
+            OrientedEdge::new(e_oy, false),   // Y → O
         ],
         true,
     )
@@ -1874,9 +1892,9 @@ fn build_box_sphere_octant(
 
     let qd1_wire = Wire::new(
         vec![
-            OrientedEdge::new(e_oz, true),   // O → Z
-            OrientedEdge::new(arc_zx, true), // Z → X (arc)
-            OrientedEdge::new(e_ox, false),  // X → O (reversed)
+            OrientedEdge::new(e_ox, true),    // O → X
+            OrientedEdge::new(arc_zx, false), // X → Z (arc)
+            OrientedEdge::new(e_oz, false),   // Z → O
         ],
         true,
     )
@@ -1893,9 +1911,9 @@ fn build_box_sphere_octant(
 
     let qd2_wire = Wire::new(
         vec![
-            OrientedEdge::new(e_ox, true),   // O → X
-            OrientedEdge::new(arc_xy, true), // X → Y (arc)
-            OrientedEdge::new(e_oy, false),  // Y → O (reversed)
+            OrientedEdge::new(e_oy, true),    // O → Y
+            OrientedEdge::new(arc_xy, false), // Y → X (arc)
+            OrientedEdge::new(e_ox, false),   // X → O
         ],
         true,
     )
@@ -1910,17 +1928,13 @@ fn build_box_sphere_octant(
         },
     ));
 
-    // Spherical patch: bounded by the 3 arcs.
-    // Wind so the sphere's outward normal matches the resulting volume
-    // (outside the octant). With arcs going X→Y→Z→X around the patch,
-    // the right-hand rule gives an outward normal pointing AWAY from O.
-    // Each arc is traversed forward by its quarter-disc, so the patch must
-    // traverse all three reversed for consistent edge senses: X → Z → Y → X.
+    // Spherical patch: bounded by the 3 arcs, X → Y → Z, each traversed
+    // forward here and reversed by its quarter-disc.
     let sph_wire = Wire::new(
         vec![
-            OrientedEdge::new(arc_zx, false), // X → Z
-            OrientedEdge::new(arc_yz, false), // Z → Y
-            OrientedEdge::new(arc_xy, false), // Y → X
+            OrientedEdge::new(arc_xy, true), // X → Y
+            OrientedEdge::new(arc_yz, true), // Y → Z
+            OrientedEdge::new(arc_zx, true), // Z → X
         ],
         true,
     )

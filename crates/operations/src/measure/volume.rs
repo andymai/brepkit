@@ -2550,22 +2550,13 @@ fn analytic_sphere_signed_volume(
     let mut v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
     // For sphere caps (single circle boundary at one latitude), the boundary
-    // vertices all share approximately the same v, so v_max ~ v_min.
-    // Determine which pole the face covers by checking a face interior point.
+    // vertices all share approximately the same v, so v_max ~ v_min. The
+    // wire runs counter-clockwise about the outward normal, so a loop turning
+    // toward +u has the north pole on its left (the loop's centroid lies on
+    // the axis, which says nothing about the side).
     if (v_max - v_min).abs() < 0.01 {
         let v_boundary = f64::midpoint(v_min, v_max);
-        let positions = crate::boolean::face_polygon(topo, face_id)?;
-        if positions.is_empty() {
-            return Ok(Some(0.0));
-        }
-        let n = positions.len() as f64;
-        let avg = Point3::new(
-            positions.iter().map(|p| p.x()).sum::<f64>() / n,
-            positions.iter().map(|p| p.y()).sum::<f64>() / n,
-            positions.iter().map(|p| p.z()).sum::<f64>() / n,
-        );
-        let (_, v_interior) = sph.project_point(avg);
-        if v_interior > v_boundary {
+        if sphere_wire_u_progress(topo, face.outer_wire(), sph)? > 0.0 {
             v_min = v_boundary;
             v_max = std::f64::consts::FRAC_PI_2;
         } else {
@@ -2634,6 +2625,39 @@ fn analytic_sphere_signed_volume(
     }
 
     Ok(Some(if face.is_reversed() { -vol } else { vol }))
+}
+
+/// The net turn in u a sphere wire makes along its traversal, pole samples
+/// skipped.
+fn sphere_wire_u_progress(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<f64, crate::OperationsError> {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let (mut progress, mut u_last) = (0.0, None);
+    for oe in topo.wire(wire_id)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        for (from, to) in traversal_spans(edge, oe.is_forward(), sp, ep) {
+            for i in 0..=16 {
+                let t = (to - from).mul_add(f64::from(i) / 16.0, from);
+                let (u, v) = sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
+                if v.abs() >= FRAC_PI_2 - 1e-6 {
+                    continue;
+                }
+                if let Some(last) = u_last {
+                    progress += wrap(u - last);
+                }
+                u_last = Some(u);
+            }
+        }
+    }
+    Ok(progress)
 }
 
 /// Whether a sphere wire bounds the `(u, v)` box `u_range` x `v_range`:
@@ -4145,6 +4169,51 @@ mod tests {
             (flux - truth).abs() < 1e-9 * truth,
             "flux {flux}, truth {truth}"
         );
+    }
+
+    /// The two sides of the latitude `z = 1` on a ball of radius 3, each a
+    /// face bounded by that one circle run its own way: the cap above has
+    /// `2 pi R (R - 1)` of the sphere and the rest `2 pi R (R + 1)`, so about
+    /// the centre their fluxes are `R` times those areas over three. The
+    /// loop's centroid sits on the axis above the centre for both, so only
+    /// the loop's turn tells them apart. A reversed face (a pocket a Cut
+    /// leaves) keeps its wire about the surface's outward normal and turns
+    /// only its flux.
+    #[test]
+    fn sphere_box_reads_a_caps_side_from_its_turn() {
+        use std::f64::consts::PI;
+        let mut topo = Topology::new();
+        let r = 3.0_f64;
+        let o = Point3::new(0.0, 0.0, 0.0);
+        let rim = (r * r - 1.0).sqrt();
+        let v = topo.add_vertex(Vertex::new(Point3::new(rim, 0.0, 1.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), rim).unwrap();
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let sphere = brepkit_math::surfaces::SphericalSurface::new(o, r).unwrap();
+        for (forward, side) in [
+            (true, 2.0 * PI * r * (r - 1.0) * r / 3.0),
+            (false, 2.0 * PI * r * (r + 1.0) * r / 3.0),
+        ] {
+            for reversed in [false, true] {
+                let wire = Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap();
+                let wid = topo.add_wire(wire);
+                let surface = FaceSurface::Sphere(sphere.clone());
+                let face = topo.add_face(if reversed {
+                    Face::new_reversed(wid, vec![], surface)
+                } else {
+                    Face::new(wid, vec![], surface)
+                });
+                let flux = analytic_sphere_signed_volume(&topo, face, o)
+                    .unwrap()
+                    .unwrap();
+                let truth = if reversed { -side } else { side };
+                assert!(
+                    (flux - truth).abs() < 1e-9 * side,
+                    "forward {forward} reversed {reversed}: flux {flux}, truth {truth}"
+                );
+            }
+        }
     }
 
     fn wall_flux(topo: &Topology, solid: SolidId) -> f64 {
