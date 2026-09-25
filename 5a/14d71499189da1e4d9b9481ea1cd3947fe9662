@@ -1,0 +1,21 @@
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_ba2f7b5c6902b6::t_33b8dc587bdf77 165-166,168,272-275,278-313,319,404
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_5d46c708987908 3463-3472
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5a14d71499189da1e4d9b9481ea1cd3947fe9662",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
