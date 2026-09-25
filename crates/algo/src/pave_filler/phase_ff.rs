@@ -3332,10 +3332,10 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
 /// Pole-side axis of a spherical face, from its boundary winding: the summed
 /// `(midpoint − center) × chord` over the outer wire points from the sphere
 /// center into the face's hemisphere, reversed faces included: their wire
-/// still runs about the sphere's outward normal. Returns
-/// `None` when the wire is degenerate or near-planar through the center, so the
-/// side is ambiguous. Shared by the broad-phase AABB and the section in-both
-/// filter so the two stay consistent.
+/// still runs about the sphere's outward normal. Returns `None` when the wire
+/// is degenerate or near-planar through the center, so the side is
+/// ambiguous. Shared by the broad-phase AABB and the section in-both filter
+/// so the two stay consistent.
 fn sphere_region_axis(
     topo: &Topology,
     face_id: FaceId,
@@ -3377,10 +3377,10 @@ fn sphere_region_axis(
     }
     // Summed (midpoint − center) × chord around the closed loop ≈ 2·(area
     // vector): its direction is the face's outward pole axis. The cross
-    // products have units of length^2, so the
-    // degeneracy threshold is derived from the input magnitudes: `scale` sums
-    // each term's bound (|mid − center| · |chord|); a near-planar-through-center
-    // loop (ambiguous side) leaves `axis` small relative to it.
+    // products have units of length^2, so the degeneracy threshold is derived
+    // from the input magnitudes: `scale` sums each term's bound
+    // (|mid − center| · |chord|); a near-planar-through-center loop
+    // (ambiguous side) leaves `axis` small relative to it.
     let mut axis = Vec3::new(0.0, 0.0, 0.0);
     let mut scale = 0.0;
     let count = pts.len();
