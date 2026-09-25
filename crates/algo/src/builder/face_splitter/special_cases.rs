@@ -1216,6 +1216,36 @@ impl TubeLoop {
     }
 }
 
+/// Whether the straight `(u, v)` seam from `(ua, va)` across `span` in `u` and
+/// `dv` in `v` stays strictly inside the band from `first` to `next`. Both
+/// loops read `u` piecewise-linearly off their walks, so the seam stays inside
+/// if it does at every walk sample it passes and between them. The seam's own
+/// ends are samples too, where it meets the loops, so only samples clear of
+/// them count. A latitude seam (`dv` zero) passes none.
+fn seam_inside(
+    first: &TubeLoop,
+    next: &TubeLoop,
+    (ua, va): (f64, f64),
+    span: f64,
+    dv: f64,
+) -> bool {
+    use std::f64::consts::TAU;
+    let breaks = first.walk.iter().chain(&next.walk).filter_map(|&(w, _)| {
+        let d = if dv > 0.0 {
+            (w - va).rem_euclid(TAU)
+        } else {
+            (va - w).rem_euclid(TAU)
+        };
+        (d > 1e-7 && d < dv.abs() - 1e-7).then(|| d / dv.abs())
+    });
+    (1..16).map(|k| f64::from(k) / 16.0).chain(breaks).all(|t| {
+        let (u, v) = (span.mul_add(t, ua), dv.mul_add(t, va));
+        let off = (u - first.u_at(v)).rem_euclid(TAU);
+        let width = (next.u_at(v) - first.u_at(v)).rem_euclid(TAU);
+        off > 1e-9 && off < width - 1e-9
+    })
+}
+
 /// Sections stitched end to end into closed chains, a closed section a chain
 /// of its own; `None` unless every section closes a chain.
 fn closed_chains(
@@ -1375,23 +1405,12 @@ fn split_torus_by_tube_loops(
             let dv = wrap(vb - va);
             let dv = if dv.abs() < 1e-9 { 0.0 } else { dv };
             let span = (ub - ua).rem_euclid(TAU);
-            // Both loops read `u` piecewise-linearly off their walks, so a
-            // straight seam stays inside if it does at every walk sample it
-            // passes and between them. A latitude seam (`dv` zero) has none.
-            let breaks = first.walk.iter().chain(&next.walk).filter_map(|&(w, _)| {
-                let t = if dv > 0.0 {
-                    (w - va).rem_euclid(TAU) / dv
-                } else {
-                    -(va - w).rem_euclid(TAU) / dv
-                };
-                (t > 0.0 && t < 1.0).then_some(t)
-            });
-            let inside = (1..16).map(|k| f64::from(k) / 16.0).chain(breaks).all(|t| {
-                let (u, v) = (span.mul_add(t, ua), dv.mul_add(t, va));
-                let off = (u - first.u_at(v)).rem_euclid(TAU);
-                off > 1e-9 && off < width(i, v) - 1e-9
-            });
-            inside.then_some((ka, (ua, va), kb, (ua + span, va + dv)))
+            seam_inside(first, next, (ua, va), span, dv).then_some((
+                ka,
+                (ua, va),
+                kb,
+                (ua + span, va + dv),
+            ))
         })?;
         let (ka, at_a, kb, at_b) = seam;
         let mid = (f64::midpoint(at_a.0, at_b.0), f64::midpoint(at_a.1, at_b.1));
@@ -4933,5 +4952,40 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    fn tube_loop(walk: Vec<(f64, f64)>) -> super::TubeLoop {
+        super::TubeLoop {
+            edges: Vec::new(),
+            walk,
+        }
+    }
+
+    fn straight_walk(u: f64) -> Vec<(f64, f64)> {
+        (0..=62).map(|k| (0.1 * f64::from(k), u)).collect()
+    }
+
+    /// A sloped seam whose ends are walk samples, reached by different
+    /// roundings (`0.1 * 3` is not `0.3`), stays inside: its ends lie on the
+    /// loops by construction and must not count as crossings.
+    #[test]
+    fn seam_ending_on_walk_samples_stays_inside() {
+        let (first, next) = (tube_loop(straight_walk(0.0)), tube_loop(straight_walk(2.0)));
+        assert!(super::seam_inside(&first, &next, (0.0, 0.3), 2.0, 0.2));
+        assert!(super::seam_inside(&first, &next, (0.0, 0.5), 2.0, -0.2));
+    }
+
+    /// A loop that pokes across the seam between the seam's even samples is
+    /// caught at the walk sample where it turns.
+    #[test]
+    fn seam_crossed_between_its_samples_is_refused() {
+        let next = tube_loop(straight_walk(2.0));
+        let straight = tube_loop(straight_walk(0.0));
+        assert!(super::seam_inside(&straight, &next, (0.0, 1.0), 2.0, 0.5));
+        let mut walk = straight_walk(0.0);
+        let at = walk.partition_point(|&(v, _)| v < 1.26);
+        walk.splice(at..at, [(1.26, 0.0), (1.265, 1.2), (1.27, 0.0)]);
+        let spiked = tube_loop(walk);
+        assert!(!super::seam_inside(&spiked, &next, (0.0, 1.0), 2.0, 0.5));
     }
 }

@@ -683,12 +683,13 @@ fn cube_inside_the_tube() {
     }
 }
 
-/// The ring within a box over `|x| < 3`, `y > y0`, reaching past the ring
-/// in `+y`: over the tube's cross-section, the area of the annulus between
-/// the circles about the axis at `big ∓ w`, each clipped to the box in
-/// closed form. The integral splits where a circle meets a wall's end
-/// (`rho = 3`, `|y0|` or `hypot(3, y0)`), so Simpson converges fast.
-fn ring_in_box(big: f64, small: f64, y0: f64) -> f64 {
+/// The ring within a box over `x` in `[x_lo, x_hi]`, `y > y0`, reaching past
+/// the ring in `+y`: over the tube's cross-section, the area of the annulus
+/// between the circles about the axis at `big ∓ w`, each clipped to the box
+/// in closed form. The integral splits where a circle meets a wall's end
+/// (`rho` one of `|x_lo|`, `|x_hi|`, `|y0|` and their corners with `y0`), so
+/// Simpson converges fast.
+fn ring_in_box(big: f64, small: f64, (x_lo, x_hi): (f64, f64), y0: f64) -> f64 {
     let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
         let step = (hi - lo) / f64::from(n);
         let mut sum = f(lo) + f(hi);
@@ -697,8 +698,8 @@ fn ring_in_box(big: f64, small: f64, y0: f64) -> f64 {
         }
         sum * step / 3.0
     };
-    // The disc of radius `rho` within the box, from the area under its upper
-    // arc between `-x` and `x`, `2 * g(x)`.
+    // The disc of radius `rho` within the box: `under` is the area under its
+    // upper arc and `span` the width, each over `[a, b]` within the walls.
     let disc = |rho: f64| {
         let g = |x: f64| {
             0.5 * x.mul_add(
@@ -706,21 +707,25 @@ fn ring_in_box(big: f64, small: f64, y0: f64) -> f64 {
                 rho * rho * (x / rho).clamp(-1.0, 1.0).asin(),
             )
         };
+        let span = |a: f64, b: f64| (b.min(x_hi) - a.max(x_lo)).max(0.0);
+        let under = |a: f64, b: f64| {
+            let (l, h) = (a.max(x_lo), b.min(x_hi));
+            if h > l { g(h) - g(l) } else { 0.0 }
+        };
         let up = y0.max(0.0);
         let mut area = 0.0;
         if rho > up {
-            let m = rho.mul_add(rho, -up * up).sqrt().min(3.0);
-            area += 2.0 * (g(m) - up * m);
+            let q = rho.mul_add(rho, -up * up).sqrt();
+            area += up.mul_add(-span(-q, q), under(-q, q));
         }
         if y0 < 0.0 {
             let depth = -y0;
-            let full = rho.min(3.0);
-            let m = if rho > depth {
-                rho.mul_add(rho, -depth * depth).sqrt().min(3.0)
+            let q = if rho > depth {
+                rho.mul_add(rho, -depth * depth).sqrt()
             } else {
                 0.0
             };
-            area += 2.0 * (depth.mul_add(m, g(full)) - g(m));
+            area += depth.mul_add(span(-q, q), under(-rho, rho) - under(-q, q));
         }
         area
     };
@@ -729,7 +734,13 @@ fn ring_in_box(big: f64, small: f64, y0: f64) -> f64 {
         w * (disc(big + w) - disc(big - w))
     };
     let mut cuts = vec![-PI / 2.0, PI / 2.0];
-    for rho in [3.0, y0.abs(), 3.0_f64.hypot(y0)] {
+    for rho in [
+        x_lo.abs(),
+        x_hi.abs(),
+        y0.abs(),
+        x_lo.hypot(y0),
+        x_hi.hypot(y0),
+    ] {
         for c in [(big - rho) / small, (rho - big) / small] {
             if c > 0.0 && c < 1.0 {
                 cuts.extend([c.acos(), -c.acos()]);
@@ -749,7 +760,7 @@ fn box_over_half_the_ring() {
     use PointClassification::{Inside, Outside};
     let (big, small) = (4.0_f64, 1.5_f64);
     let ring = 2.0 * PI * PI * big * small * small;
-    let inside = ring_in_box(big, small, 0.0);
+    let inside = ring_in_box(big, small, (-3.0, 3.0), 0.0);
     let sector: &[(&str, usize)] = &[("plane", 4), ("torus", 1)];
     let fused: &[(&str, usize)] = &[("plane", 6), ("torus", 1)];
     let tips = [
@@ -796,29 +807,32 @@ fn box_over_half_the_ring() {
     }
 }
 
-/// The box's `y` wall moved off the ring's axis, to either side. Each side
-/// wall's section turns back on the tube at `y = 0`. With the wall at
-/// `y0 > 0` the turn lies outside the box and the loops wind round the tube
-/// monotonically. With `y0 < 0` the turn lies inside it and each loop folds;
-/// that case may fall back to a mesh, but must never come out exact and wrong.
+/// The box's `y` wall moved off the ring's axis, to either side, and one side
+/// wall moved out. Each side wall's section turns back on the tube at
+/// `y = 0`. With the wall at `y0 > 0` the turn lies outside the box and the
+/// loops wind round the tube monotonically; with the side walls at different
+/// distances from the axis, the loops' corners sit at different tube angles
+/// and every seam between them slopes. With `y0 < 0` the turn lies inside
+/// the box and each loop folds; that case may fall back to a mesh, but must
+/// never come out exact and wrong.
 #[test]
 fn box_wall_on_either_side_of_the_ring_axis() {
     let (big, small) = (4.0_f64, 1.5_f64);
     let ring = 2.0 * PI * PI * big * small * small;
     let sector: &[(&str, usize)] = &[("plane", 4), ("torus", 1)];
     let fused: &[(&str, usize)] = &[("plane", 6), ("torus", 1)];
-    for y0 in [0.5, -0.5] {
-        let inside = ring_in_box(big, small, y0);
-        let cube = 36.0 * (6.0 - y0);
+    for (x_hi, y0) in [(3.0, 0.5), (3.3, 0.5), (3.0, -0.5)] {
+        let inside = ring_in_box(big, small, (-3.0, x_hi), y0);
+        let cube = 6.0 * (3.0 + x_hi) * (6.0 - y0);
         for (op, census, truth) in [
             (BooleanOp::Intersect, sector, inside),
             (BooleanOp::Cut, sector, ring - inside),
             (BooleanOp::Fuse, fused, cube + ring - inside),
         ] {
-            let label = format!("y0 {y0}, {op:?}");
+            let label = format!("x_hi {x_hi}, y0 {y0}, {op:?}");
             let mut topo = Topology::new();
             let torus = make_torus(&mut topo, big, small, 32).unwrap();
-            let box_ = make_box(&mut topo, 6.0, 6.0 - y0, 6.0).unwrap();
+            let box_ = make_box(&mut topo, 3.0 + x_hi, 6.0 - y0, 6.0).unwrap();
             transform_solid(&mut topo, box_, &Mat4::translation(-3.0, y0, -3.0)).unwrap();
             let piece = boolean(&mut topo, op, torus, box_).unwrap();
             let exact = solid_faces(&topo, piece)
