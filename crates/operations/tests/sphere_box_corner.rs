@@ -11,15 +11,30 @@ use std::f64::consts::PI;
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
-use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
+use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::explorer::solid_faces;
+use brepkit_topology::face::FaceSurface;
+use brepkit_topology::solid::SolidId;
 
 const RADIUS: f64 = 3.0;
+
+/// Whether a result is exact rather than a mesh fallback, which is all planes
+/// and dozens of them: the results here keep a sphere face among a handful.
+/// (The fallback counter is process-wide, and other tests in this binary may
+/// fall back while one runs.)
+fn exact(topo: &Topology, solid: SolidId) -> bool {
+    let faces = solid_faces(topo, solid).unwrap();
+    faces.len() <= 12
+        && faces
+            .iter()
+            .any(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+}
 
 /// The ball's piece past `x = a`, `y = b` and `z = c`: across `y` the height
 /// `sqrt(R² - x² - y²) - c` integrates in closed form, leaving a Simpson
@@ -71,13 +86,8 @@ fn ball_less_a_box_corner() {
             let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
             let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
             transform_solid(&mut topo, block, &Mat4::translation(a, b, z0)).unwrap();
-            let before = mesh_fallback_count();
             let result = boolean(&mut topo, op, sphere, block).unwrap();
-            assert_eq!(
-                mesh_fallback_count(),
-                before,
-                "{label}: fell back to a mesh"
-            );
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
             let report = validate_solid(&topo, result).unwrap();
             assert!(report.is_valid(), "{label}: {:?}", report.issues);
             let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
@@ -150,9 +160,8 @@ fn box_octant_feeds_a_second_boolean() {
             let piece = octant_of(&mut topo);
             let rod = make_cylinder(&mut topo, 0.4, 20.0).unwrap();
             transform_solid(&mut topo, rod, &Mat4::translation(1.0, 1.0, -10.0)).unwrap();
-            let before = mesh_fallback_count();
             let result = boolean(&mut topo, BooleanOp::Cut, piece, rod).unwrap();
-            assert_eq!(mesh_fallback_count(), before, "rod: fell back to a mesh");
+            assert!(exact(&topo, result), "rod: fell back to a mesh");
             let (volume, truth) = (solid_volume(&topo, result, 0.01).unwrap(), octant - column);
             assert!(
                 (volume - truth).abs() < 1e-7 * truth,
@@ -164,17 +173,40 @@ fn box_octant_feeds_a_second_boolean() {
         let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let z0 = if lower { -11.0 } else { 1.0 };
         transform_solid(&mut topo, block, &(turn * Mat4::translation(1.0, 1.0, z0))).unwrap();
-        let before = mesh_fallback_count();
         let result = boolean(&mut topo, BooleanOp::Cut, piece, block).unwrap();
-        assert_eq!(
-            mesh_fallback_count(),
-            before,
-            "{label}: fell back to a mesh"
-        );
+        assert!(exact(&topo, result), "{label}: fell back to a mesh");
         assert!(
             validate_solid(&topo, result).unwrap().is_valid(),
             "{label}: invalid"
         );
+        // Just inside the removed corner, and the octant's material beside it.
+        let side = if lower { -1.0 } else { 1.0 };
+        for (p, class) in [
+            (
+                Point3::new(1.3, 1.3, 1.3 * side),
+                PointClassification::Outside,
+            ),
+            (
+                Point3::new(0.6, 0.6, 0.6 * side),
+                PointClassification::Inside,
+            ),
+            (
+                Point3::new(1.3, 0.6, 1.3 * side),
+                PointClassification::Inside,
+            ),
+        ] {
+            assert_eq!(
+                classify_point(
+                    &topo,
+                    result,
+                    turn.mul_point(p),
+                    &ClassifyOptions::default()
+                )
+                .unwrap(),
+                class,
+                "{label}: {p:?}"
+            );
+        }
         let (volume, truth) = (
             solid_volume(&topo, result, 0.01).unwrap(),
             octant - corner_piece(1.0, 1.0, 1.0),

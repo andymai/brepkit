@@ -1670,6 +1670,23 @@ mod tests {
         assert!(admits(Point3::new(r, r, r)), "its own corner");
         assert!(!admits(Point3::new(-r, r, r)), "a neighbouring octant");
         assert!(!admits(Point3::new(0.0, 0.0, -3.0)), "the far pole");
+
+        // A whole sphere written as a meridian seam walked out and back
+        // encloses no area: declined rather than read as the seam's planes.
+        let (n, e, s) = (
+            Point3::new(0.0, 0.0, 3.0),
+            Point3::new(3.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, -3.0),
+        );
+        let seam = sphere_patch(&mut topo, 3.0, &[n, e, s, e], &[origin; 4]);
+        let face = topo.face(seam).unwrap();
+        let FaceSurface::Sphere(sph) = face.surface() else {
+            unreachable!()
+        };
+        assert!(
+            sphere_face_loops(&topo, face, sph).unwrap().is_none(),
+            "the seam loop declined"
+        );
     }
 
     #[test]
