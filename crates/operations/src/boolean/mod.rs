@@ -1705,8 +1705,15 @@ fn build_box_sphere_octant(
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
 
-    // Cutting plane normals + their box-plane-d values.
-    let cut_planes: Vec<(Vec3, f64)> = cuts.iter().map(|&i| faces[i]).collect();
+    // Cutting plane normals + their box-plane-d values, ordered so the
+    // in-box directions `-n_i` form a right-handed frame: each arc below
+    // runs counter-clockwise about its plane's inward normal from one box
+    // edge to the next, which is the short in-box arc only in that frame (a
+    // corner reaching down, `(+x, +y, -z)`, would get the complements).
+    let mut cut_planes: Vec<(Vec3, f64)> = cuts.iter().map(|&i| faces[i]).collect();
+    if cut_planes.len() == 3 && cut_planes[0].0.dot(cut_planes[1].0.cross(cut_planes[2].0)) > 0.0 {
+        cut_planes.swap(1, 2);
+    }
     // The 3 outward normals must be mutually orthogonal (axis-aligned box).
     let n0 = cut_planes[0].0;
     let n1 = cut_planes[1].0;

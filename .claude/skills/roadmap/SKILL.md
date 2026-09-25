@@ -192,6 +192,18 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A turned ball, and a ball less a box corner (CLOSED 2026-09-25; pins in `crates/operations/tests/sphere_box_corner.rs`)**:
+  a ball whose axis left world z fell back on every boolean tried (a cap,
+  a rod, a box corner): a hemisphere's boundary v range, empty on an
+  upright ball, came out a 1e-16 sliver that clipped every section away
+  (`face_v_range`), and a turned box face kept a section arc outside it,
+  its region test widened by the sagitta of its longest straight side (4.4
+  for a 10-unit face). The ball less a box corner came back exact but
+  invalid, its pocket's hole wound with the hemisphere's outer wire
+  (`split_noseam_face_direct` kept the chained loop as it came), and the
+  corner's Intersect below the equator built its arcs as their complements
+  (`build_box_sphere_octant` assumed a right-handed corner).
+
 - **Per-face meshes of a trimmed torus face (CLOSED 2026-09-25; pins in `crates/operations/tests/torus_face_mesh.rs`)**:
   per-face `tessellate` gridded a torus face's (u, v) box, so a notched
   ring meshed whole, a half ring meshed to nothing and a patch inside a
@@ -200,7 +212,7 @@ One line each; the fixture/PR carries the story. Newest first.
   exact area). The glTF, OBJ and PLY writers and the wasm UV mesh read
   these meshes. Every torus face other than the whole ring now takes the
   local mesher with the solid mesher's cascade (notch, two-rim, latitude
-  band, CDT, snap).
+  band, CDT), falling back to the grid.
 
 - **Sphere faces trimmed by a box or a rod: area, mesh and volume (CLOSED 2026-09-25; pins in `crates/operations/tests/sphere_face_area.rs`)**:
   `face_area` read a sphere face as a zone from its boundary's mean

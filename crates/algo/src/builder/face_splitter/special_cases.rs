@@ -190,8 +190,16 @@ pub(super) fn split_noseam_face_direct(
         ];
     }
 
-    // Cap loop is interior to the boundary: cap + band-with-hole.
-    let hole_edges: Vec<OrientedPCurveEdge> = cap_edges.iter().map(reverse_of).collect();
+    // Cap loop is interior to the boundary: cap + band-with-hole. The chain
+    // runs whichever way its arcs came; the cap wants it counter-clockwise
+    // about the outward normal and the hole the reverse, or the band's hole
+    // winds with its outer wire, which no whole-face flip can repair.
+    let cap_edges = if sphere_loop_counter_clockwise(surface, &cap_edges) == Some(false) {
+        reverse_loop(&cap_edges)
+    } else {
+        cap_edges
+    };
+    let hole_edges = reverse_loop(&cap_edges);
     vec![
         SplitSubFace {
             surface: surface.clone(),
@@ -786,6 +794,36 @@ fn arc_covers_segment(arc: &OrientedPCurveEdge, segment: &OrientedPCurveEdge, to
 /// Interior point for a loop on a sphere face: the spherical centroid of
 /// the loop edges' midpoints, projected back onto the sphere. `None` for
 /// non-sphere surfaces (callers fall back to UV-based interior sampling).
+/// Whether a loop of section arcs on a sphere, within a hemisphere, runs
+/// counter-clockwise about the outward normal: its vector area
+/// `½ ∮ (P − C) × dP` points out through the region it bounds. `None` off a
+/// sphere or for a loop too small to tell.
+fn sphere_loop_counter_clockwise(
+    surface: &FaceSurface,
+    edges: &[OrientedPCurveEdge],
+) -> Option<bool> {
+    use brepkit_math::vec::Vec3;
+    let FaceSurface::Sphere(s) = surface else {
+        return None;
+    };
+    let center = s.center();
+    let mut sweep = Vec3::new(0.0, 0.0, 0.0);
+    for e in edges {
+        let at = |t: f64| {
+            super::super::pcurve_compute::evaluate_edge_at_t(&e.curve_3d, e.start_3d, e.end_3d, t)
+        };
+        let mut prev = at(0.0);
+        for k in 1..=16 {
+            let next = at(f64::from(k) / 16.0);
+            sweep += (prev - center).cross(next - prev) * 0.5;
+            prev = next;
+        }
+    }
+    let inside = sphere_loop_interior(surface, edges)? - center;
+    let turn = sweep.dot(inside);
+    (turn.abs() > 1e-12 * s.radius().powi(3)).then_some(turn > 0.0)
+}
+
 fn sphere_loop_interior(surface: &FaceSurface, edges: &[OrientedPCurveEdge]) -> Option<Point3> {
     use brepkit_math::vec::Vec3;
     let FaceSurface::Sphere(s) = surface else {
