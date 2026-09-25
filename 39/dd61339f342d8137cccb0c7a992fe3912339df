@@ -1,0 +1,29 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_f88ef94452bbca 1909-1919,1921-1925,1944-1969
+  s_ba2f7b5c6902b6::t_468a72057bc477 1970-1971
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_18f38da6834484 486-489
+  s_ba2f7b5c6902b6::t_87fc12ea08b56e 415,477-485,490-499
+  s_ba2f7b5c6902b6::t_cf1079ccd668e8 3248-3291
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_cae408becb7ce9 204-207
+crates/operations/tests/cone_plane_cut.rs
+  s_ba2f7b5c6902b6::t_18f38da6834484 393
+  s_ba2f7b5c6902b6::t_b80da7402e8a2d 441-474
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "39dd61339f342d8137cccb0c7a992fe3912339df",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
