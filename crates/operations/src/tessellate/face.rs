@@ -243,7 +243,19 @@ pub(super) fn tessellate_with_uvs_floor(
         FaceSurface::Sphere(sphere) => sphere_face_is_trimmed(topo, face_data, sphere)?,
         _ => false,
     };
-    let holed_wall = if holed_analytic || trimmed_nurbs || trimmed_sphere {
+    // Nor is a torus face other than the whole ring, whose wire is its two
+    // seam lines (a box's notch, a coaxial tool's band, a patch inside one
+    // closed curve).
+    let trimmed_torus = matches!(face_data.surface(), FaceSurface::Torus(_))
+        && !(face_data.inner_wires().is_empty() && {
+            let mut seams_only = true;
+            for oe in topo.wire(face_data.outer_wire())?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                seams_only &= matches!(edge.curve(), EdgeCurve::Line) && edge.start() == edge.end();
+            }
+            seams_only
+        });
+    let holed_wall = if holed_analytic || trimmed_nurbs || trimmed_sphere || trimmed_torus {
         match super::nonplanar::tessellate_holed_face_local(
             topo,
             face,

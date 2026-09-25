@@ -3019,8 +3019,9 @@ fn anchor_closed_edges_at_vertices(
 /// shared pool. A cylinder or cone wall goes through the constrained CDT. A
 /// sphere face goes through the latitude-band mesher when it is a band
 /// between two latitude rims, and through the constrained CDT otherwise. A
-/// torus face goes only through the latitude-band mesher, and comes back
-/// without triangles when that mesher declines it.
+/// torus face tries the solid mesher's structured bands (notch, two-rim,
+/// latitude) and then its constrained CDT, with the snap mesher behind it. A
+/// face none takes comes back without triangles.
 pub(super) fn tessellate_holed_face_local(
     topo: &Topology,
     face_id: FaceId,
@@ -3098,15 +3099,62 @@ pub(super) fn tessellate_holed_face_local(
                 true
             }
         }
-        FaceSurface::Torus(_) => tessellate_latitude_band_shared(
-            topo,
-            face_data,
-            deflection,
-            angular_tol,
-            &pool,
-            &mut merged,
-            &mut point_to_global,
-        )?,
+        FaceSurface::Torus(_) => {
+            let banded = tessellate_torus_notch_band(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )? || tessellate_torus_two_rim_band(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )? || tessellate_latitude_band_shared(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )?;
+            banded || {
+                let before = merged.indices.len();
+                let cdt = tessellate_nonplanar_cdt(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                    &pool,
+                    &mut merged,
+                    &mut point_to_global,
+                );
+                if cdt.is_err() || merged.indices.len() == before {
+                    merged.indices.truncate(before);
+                    tessellate_nonplanar_snap(
+                        topo,
+                        face_id,
+                        face_data,
+                        deflection,
+                        angular_tol,
+                        circle_floor,
+                        &pool,
+                        &mut merged,
+                        &mut point_to_global,
+                    )?;
+                }
+                merged.indices.len() > before
+            }
+        }
         FaceSurface::Plane { .. } => false,
     };
     if !meshed {
