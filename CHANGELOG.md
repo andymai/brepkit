@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.25](https://github.com/andymai/brepkit/compare/v4.0.24...v4.0.25) (2026-09-25)
+
+
+### Bug Fixes
+
+* **operations:** mesh a reversed sphere cap over its own side ([#1763](https://github.com/andymai/brepkit/issues/1763)) ([c35b839](https://github.com/andymai/brepkit/commit/c35b839d1d8b6129a0c35466dd950ff133d76608))
+
 ## [4.0.24](https://github.com/andymai/brepkit/compare/v4.0.23...v4.0.24) (2026-09-25)
 
 
