@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790321378522,
+  "lastUpdate": 1790322779844,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39635,6 +39635,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42697515,
             "range": "± 222601",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e7875c19acf3432e6438cf6719488e55791cf69",
+          "message": "fix(operations): mesh a trimmed torus face over the face, not its box (#1759)\n\nTrimmed torus faces now tessellate over their actual face regions, with\ncontinuous per-triangle UVs and mesh areas within 1% of the exact areas\nfor all 48 torus faces retained by the exact booleans.\n\n## What was wrong\n\n- Per-face `tessellate` meshed a torus face over the `(u, v)` box\nreturned by `compute_angular_range` and `compute_torus_v_range`, rather\nthan over the face itself.\n\n- Against `make_torus(4, 1.5)`, 15 tools under `Fuse`, `Cut`, and\n`Intersect` keep 48 torus faces. On main, 28 mesh more than 1% away from\ntheir exact `face_area`.\n\n- Representative failures include a 4-unit cube over the ring's outer\nside (`x` from 3 to 7, `Intersect`), which meshes 44.3227 against\n26.4561, and the half ring past `x = 0`, which meshes 0.0000 against\n118.4353. The tube patch inside a thin rod of radius 0.5 under\n`Intersect` meshes the whole ring, 236.8070 against 0.7968.\n\n- The glTF, OBJ, and PLY writers, together with the wasm UV mesh binding\n`tessellate_with_uvs_a`, consume these per-face meshes.\n\n## What this does\n\n- `tessellate` routes every torus face except the whole ring through\n`tessellate_holed_face_local`. A whole ring has no holes, and its outer\nwire traverses each closed seam edge both ways. This covers\n`make_torus`'s two seam lines and files that represent them as two seam\ncircles.\n\n- `tessellate_holed_face_local` tries the structured meshers in the\nsolid mesher's order: `tessellate_torus_notch_band`,\n`tessellate_torus_two_rim_band`, `tessellate_latitude_band_shared`, then\nthe constrained CDT in `tessellate_nonplanar_cdt`. If none produces\ntriangles, the face falls back to the grid.\n\n- The snap mesher is excluded because it re-enters the per-face mesher\nfor the same face, causing unbounded recursion.\n\n- Per-face UV meshes split triangles across the `v` seam as well as the\n`u` seam. Torus faces whose rings wrap the tube therefore keep\ncontinuous `(u, v)` coordinates on every triangle.\n\n- The roadmap closes this row, removes the per-face NURBS row already\nclosed by #1720, and removes blank lines inside the stability table.\n\n## Verification\n\n- `trimmed_torus_faces_mesh_their_own_region` exercises nine tools under\nall three operations: five boxes, a radius 3 ball, a coaxial rod of\nradius 4.2, a rod of radius 0.5 across the tube, and a second ring\nshifted up by 1. Every case retains at least one torus face, and every\ntorus face meshes within 1% of `face_area`.\n\n- `half_rings_mesh_their_closed_form_area` checks the half ring past `x\n= 0` within `1e-9` of `2 pi^2 R r`, and the ring above `z = 0.4` within\n`1e-9` of `2 pi r R (pi - 2 asin(0.4 / r))`. Both meshes are within 1%.\n\n- `whole_ring_with_circle_seams_meshes_whole` verifies a hand-built\nwhole ring with two closed seam circles, each traversed both ways,\nwithin 1% of `4 pi^2 R r`.\n\n- `trimmed_torus_face_uvs_stay_continuous` verifies that no torus-face\ntriangle spans half a turn or more in `u` or `v` for the half ring and\nouter-side cube under `Cut` and `Intersect`. Disabling the `v`-seam\nsplit fails this test.\n\n- Disabling the routing makes the first two tests fail. The half ring\nmeshes to 1.85e-16 against 118.4352528130723, and the outer-side cube\nmeshes to 44.32269009786278 against 26.456093249978746.\n\n- The workspace suite passes: 3067 tests run, 3067 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes per-face tessellation of trimmed torus faces, which meshed over\nthe face's `(u, v)` box rather than the face itself. A notched ring\nmeshed whole, a half ring meshed to nothing, and a patch inside a thin\nrod meshed as the whole ring; 28 of 48 torus faces kept by\n`make_torus(4, 1.5)` against 15 tools were more than 1% off their exact\n`face_area`. These meshes feed the glTF, OBJ and PLY writers and the\nwasm `tessellate_with_uvs_a` binding, so all of them read the wrong\nsurface.\n\nEvery torus face other than the whole ring (whose wire runs each closed\nseam both ways, as lines or circles) now goes through the local mesher,\nwhich tries the solid mesher's structured bands in order (notch,\ntwo-rim, latitude) and then the constrained CDT, falling back to the\ngrid if none produce triangles. The snap mesher is excluded because it\nre-enters the per-face mesher for the same face; a face the CDT cannot\ntake comes back empty, so the fallback does not recurse into a stack\noverflow. Per-face UVs split across the v seam as well as the u seam.\nAll 48 torus faces now mesh within 1% of their exact area.\n\n**Verification**\n- Four tests pin the mesh area, a file-written whole ring with circle\nseams, and per-triangle UV continuity on both axes; they fail when\nrouting is disabled.\n- The roadmap closes the torus row, drops the per-face NURBS row already\nclosed, and removes blank table lines.\n\n<sup>Written for commit e2e45e11b22f63e4b6caa5ef30eb730cb563398f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1759?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-25T07:50:46Z",
+          "tree_id": "72e516a191aa520685ea5e47e6c10aa2334dd043",
+          "url": "https://github.com/andymai/brepkit/commit/5e7875c19acf3432e6438cf6719488e55791cf69"
+        },
+        "date": 1790322776015,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 572866,
+            "range": "± 5781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 627948,
+            "range": "± 5084",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7887,
+            "range": "± 78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 427522,
+            "range": "± 7653",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28724070,
+            "range": "± 196849",
             "unit": "ns/iter"
           }
         ]
