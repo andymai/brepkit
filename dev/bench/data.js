@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790294465329,
+  "lastUpdate": 1790297160228,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39203,6 +39203,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42854939,
             "range": "± 281088",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "159559ccc6e0e6471aee2c90cd8827aeac887d9f",
+          "message": "fix(algo): cut a torus with a cube over its side (#1751)\n\nBoolean operations now cut a torus with an axis-aligned cube over its\nside as exact B-Rep solids, with valid topology, watertight meshes, and\nface-based volume measurement.\n\n## What was wrong\n\nFor `make_torus(4, 1.5, 32)` and a 4-cube spanning x from 3 to 7, with\n|y| and |z| under 2, every operation fell back to a mesh. Fuse produced\n869 faces, Cut 865, and Intersect 117. A separate cut using a 0.6-cube\ninside the tube left the expected ring around a box cavity, but\n`solid_volume` measured 177.4342 instead of 177.43688.\n\nThis configuration exercises multiple kinds of torus intersection. The x\n= 3 wall cuts a tube lobe without winding around it, since x = 3 lies\nbetween R - r and R. The y = ±2 walls cut loops around the tube, which\nare then trimmed by the cube edges. The torus region inside the cube is\none disc bounded by eight arcs.\n\nThe face splitter's internal-loops path never ran.\n`is_point_on_boundary_uv` takes a zero-length boundary edge for a closed\ncircle, and so flags every point at that edge's v as on the boundary. A\nwhole ring's seam placeholders lie at v = 0, exactly where the loops\naround the tube begin and where the trimmed arcs split.\n\nOnce that path ran, two further problems appeared. The splitter chose a\ndisc interior point from the loop's 3D centroid, which is off the torus\nsurface, and assigned no interior point to the holed remainder.\nSeparately, the builder's whole-ring classification guard and the\nwhole-ring mesher sampled NURBS edges in knot-span order. On these arcs\nthat order runs from the end vertex back to the start vertex. The guard\ntherefore read the hole as winding and aborted the split, while the\nmesher placed seams across the hole.\n\n## What this does\n\n- Treats every section of a whole ring as internal in `split_face_2d`,\nsince the ring has no boundary despite its two zero-length seam\nplaceholders.\n\n- Adds `torus_loop_interiors`, which reads each loop as a polygon in (u,\nv). The disc point lies midway across the widest enclosed span on the\nline through the loop's middle v. The remainder uses the grid point\nfarthest from every loop.\n\n- Orients NURBS knot-span sampling by the edge's start vertex in both\n`ring_hole_polygons` and `whole_ring_rectangle`.\n\n- Measures a solid containing a whole-ring torus face one face at a\ntime, using the ring's exact flux instead of deriving its contribution\nfrom the mesh.\n\n- Adds a Closed roadmap entry. The torus audit and off-axis rows now\nleave only curved tools off the axis, specifically a ball on the tube\nand crossed tori, which use the general marcher.\n\nThe side cube now produces an 8-face Fuse with volume 217.6614, a 4-face\nCut with volume 153.6614, and a 4-face Intersect with volume 23.9915.\nEach completes in 6 to 7 ms, compared with 42 to 93 ms for the\nfallbacks, and meshes watertight. The cavity cut now measures 177.4369.\n\n- The whole-ring tests in `split_face_2d`,\n`split_face_with_internal_loops`, and `split_torus_by_coaxial_circles`\nnow require collapsed boundary edges to be lines, matching the builder\nand measure whole-ring tests, so a torus cap bounded by one closed curve\nis not interpreted as a whole ring. Internal-loop routing takes a whole\nring only when there are no earlier holes, because\n`torus_loop_interiors` handles only rings without them.\n\n- `torus_loop_interiors` tests a candidate remainder point against each\nloop shifted to the middle of its bounding box in `(u, v)`, rather than\nits sample mean, which can drift toward a side containing many short\nedges.\n\n## Verification\n\n- `cube_over_the_rings_side` covers Fuse, Cut, and Intersect both\nupright and after rotations of 0.7 about x and 0.3 about z. Each result\nis valid, has the expected surface types, meshes watertight with volume\nwithin 1e-2, and passes three point classifications.\n\n- The common volume is within 1e-5 relative error of a Simpson integral.\nCut plus Intersect equals the ring volume, and Fuse minus Cut equals the\ncube volume of 64, both within 1e-9.\n\n- `cube_inside_the_tube` verifies all three operations for the 0.6-cube.\nResults are valid, within 1e-9 of the ring less cube, cube, and ring\nvolumes, and mesh watertight.\n\n- `cube_inside_the_tube` asserts each result's faces by surface type:\nsix planes and one torus for the cut, six planes for the common part,\nand one torus for the fuse. The algo, operations, io, and wasm suites\npass after these changes.\n\n- The math, topology, geometry, check, algo, blend, heal, offset,\noperations, io, and wasm suites pass, totaling 2953 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes boolean operations so cutting a torus with an axis-aligned cube\nover its side produces exact B-Rep solids instead of falling back to\nmeshes.\n\n- The splitter now treats every section of a whole ring as internal,\nsince the ring has no boundary despite its zero-length seam\nplaceholders. Whole-ring handling applies only when the boundary edges\nare lines and there are no prior holes, so capped torus faces keep the\ngeneric paths.\n- Disc and remainder interior points now come from (u, v), where a\nloop's 3D centroid can land off the torus surface.\n- NURBS knot-span edges are oriented by start vertex in the whole-ring\nclassification guard and the whole-ring mesher, which previously sampled\nend-to-start and misread the hole as winding.\n- `solid_volume` measures whole-ring faces one at a time with exact flux\ninstead of deriving their contribution from a mesh.\n- Adds `cube_over_the_rings_side` and `cube_inside_the_tube` tests\ncovering Fuse, Cut, and Intersect with validated topology and volumes.\n\n<sup>Written for commit 509d357afe28a4e1662cb164f59ec45a04118b86.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1751?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-25T00:43:42Z",
+          "tree_id": "ad8ee8e83841cf7d74b0c49bb3b86d2aa9ffecff",
+          "url": "https://github.com/andymai/brepkit/commit/159559ccc6e0e6471aee2c90cd8827aeac887d9f"
+        },
+        "date": 1790297156479,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 806332,
+            "range": "± 10089",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 875647,
+            "range": "± 1656",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10925,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 587609,
+            "range": "± 782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35236352,
+            "range": "± 114390",
             "unit": "ns/iter"
           }
         ]
