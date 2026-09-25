@@ -978,9 +978,9 @@ pub(super) fn split_torus_by_coaxial_circles(
     };
     let close_tol = tol * 100.0;
     if sections.len() < 2
-        || boundary_edges
-            .iter()
-            .any(|e| (e.start_3d - e.end_3d).length() > close_tol)
+        || boundary_edges.iter().any(|e| {
+            !matches!(e.curve_3d, EdgeCurve::Line) || (e.start_3d - e.end_3d).length() > close_tol
+        })
     {
         return None;
     }
@@ -1928,6 +1928,102 @@ pub(super) fn split_torus_band_by_arrangement(
     }])
 }
 
+/// Points inside the regions loops that wind neither of its angles split a
+/// whole torus into: one in each loop's disc, midway across the widest span
+/// the loop encloses on the line through its middle `v`, and one on the ring
+/// outside every loop, at the grid point farthest from them. Each loop is
+/// read as a polygon in `(u, v)`, unwrapped along its walk. `None` when a
+/// loop winds.
+fn torus_loop_interiors(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    loops: &[Vec<OrientedPCurveEdge>],
+) -> Option<(Vec<Point3>, Point3)> {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let mut polys: Vec<Vec<(f64, f64)>> = Vec::with_capacity(loops.len());
+    let mut samples: Vec<Point3> = Vec::new();
+    for loop_edges in loops {
+        let mut poly: Vec<(f64, f64)> = Vec::new();
+        for e in loop_edges {
+            for p in edge_samples(e, 32) {
+                samples.push(p);
+                let (u, v) = torus.project_point(p);
+                let next = poly
+                    .last()
+                    .map_or((u, v), |&(lu, lv)| (lu + wrap(u - lu), lv + wrap(v - lv)));
+                poly.push(next);
+            }
+        }
+        let (&first, &last) = (poly.first()?, poly.last()?);
+        if (last.0 + wrap(first.0 - last.0) - first.0).abs() > PI
+            || (last.1 + wrap(first.1 - last.1) - first.1).abs() > PI
+        {
+            return None;
+        }
+        polys.push(poly);
+    }
+    let crossings = |poly: &[(f64, f64)], v: f64| -> Vec<f64> {
+        let mut xs: Vec<f64> = (0..poly.len())
+            .filter_map(|k| {
+                let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+                ((a.1 <= v) != (b.1 <= v)).then(|| a.0 + (v - a.1) / (b.1 - a.1) * (b.0 - a.0))
+            })
+            .collect();
+        xs.sort_by(f64::total_cmp);
+        xs
+    };
+    let mut discs = Vec::with_capacity(polys.len());
+    for poly in &polys {
+        let (lo, hi) = poly
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, v)| {
+                (lo.min(v), hi.max(v))
+            });
+        let v = f64::midpoint(lo, hi);
+        let xs = crossings(poly, v);
+        let (a, b) = xs
+            .chunks_exact(2)
+            .map(|pair| (pair[0], pair[1]))
+            .max_by(|p, q| (p.1 - p.0).total_cmp(&(q.1 - q.0)))?;
+        discs.push(torus.evaluate(f64::midpoint(a, b), v));
+    }
+    // A point is in a loop when, shifted by whole turns to the loop's
+    // middle, a ray along +u from it crosses the loop an odd number of times.
+    let inside = |poly: &[(f64, f64)], u: f64, v: f64| -> bool {
+        let ((u_lo, v_lo), (u_hi, v_hi)) = poly.iter().fold(
+            (
+                (f64::INFINITY, f64::INFINITY),
+                (f64::NEG_INFINITY, f64::NEG_INFINITY),
+            ),
+            |((a, b), (c, d)), &(pu, pv)| ((a.min(pu), b.min(pv)), (c.max(pu), d.max(pv))),
+        );
+        let near = |x: f64, mid: f64| x + TAU * ((mid - x + PI) / TAU).floor();
+        let (u, v) = (
+            near(u, f64::midpoint(u_lo, u_hi)),
+            near(v, f64::midpoint(v_lo, v_hi)),
+        );
+        crossings(poly, v).iter().filter(|&&x| x > u).count() % 2 == 1
+    };
+    let mut best: Option<(f64, Point3)> = None;
+    for i in 0..32_u32 {
+        for j in 0..16_u32 {
+            let (u, v) = (TAU * f64::from(i) / 32.0, TAU * (f64::from(j) + 0.5) / 16.0);
+            if polys.iter().any(|poly| inside(poly, u, v)) {
+                continue;
+            }
+            let at = torus.evaluate(u, v);
+            let clear = samples
+                .iter()
+                .map(|&q| (q - at).length())
+                .fold(f64::INFINITY, f64::min);
+            if best.is_none_or(|(d, _)| clear > d) {
+                best = Some((clear, at));
+            }
+        }
+    }
+    Some((discs, best?.1))
+}
+
 /// Split a face when ALL section edges are interior (don't touch the boundary).
 ///
 /// Groups section edges into closed loops by chaining shared 3D endpoints.
@@ -2505,6 +2601,20 @@ pub(super) fn split_face_with_internal_loops(
         }
     }
 
+    // A whole ring's disc and remainder interiors come from its (u, v): a
+    // loop's centroid is off the surface, and the remainder has no boundary
+    // to sample.
+    let ring_interiors = match surface {
+        FaceSurface::Torus(torus)
+            if boundary_edges.iter().all(|e| {
+                matches!(e.curve_3d, EdgeCurve::Line)
+                    && (e.start_3d - e.end_3d).length() < tol_3d * 100.0
+            }) && original_inner_wires.is_empty() =>
+        {
+            torus_loop_interiors(torus, &loops)
+        }
+        _ => None,
+    };
     for (li, loop_edges) in loops.iter().enumerate() {
         // Compute the interior point for the disc sub-face.
         // For closed section curves (circles) that form internal loops,
@@ -2570,7 +2680,9 @@ pub(super) fn split_face_with_internal_loops(
             }
         }
         let disc_interior = if nested.is_empty() {
-            disc_interior
+            ring_interiors
+                .as_ref()
+                .map_or(disc_interior, |(discs, _)| discs[li])
         } else {
             between_loop_and_holes(loop_edges, &nested).map_or(disc_interior, into_solid)
         };
@@ -2700,7 +2812,9 @@ pub(super) fn split_face_with_internal_loops(
             .map(|(_, h)| h.clone()),
     );
     let frame_interior = frame_interior.or_else(|| {
-        if nested_holes.is_empty() && parent_loop.iter().all(Option::is_none) {
+        if let Some((_, remainder)) = &ring_interiors {
+            Some(*remainder)
+        } else if nested_holes.is_empty() && parent_loop.iter().all(Option::is_none) {
             None
         } else {
             between_loop_and_holes(boundary_edges, &all_holes).map(into_solid)

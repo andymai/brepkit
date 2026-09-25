@@ -1067,7 +1067,15 @@ fn ring_hole_polygons(
                 topo.vertex(edge.end())?.point(),
             );
             let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            // A NURBS edge's knot span can run from its end vertex back.
+            let at_t0 = edge.curve().evaluate_with_endpoints(t0, sp, ep);
+            let (t0, t1) = if (at_t0 - sp).length() <= (at_t0 - ep).length() {
+                (t0, t1)
+            } else {
+                (t1, t0)
+            };
             let (a, b) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+
             for k in 0..32_u32 {
                 let t = (b - a).mul_add(f64::from(k) / 32.0, a);
                 push(edge.curve().evaluate_with_endpoints(t, sp, ep));
@@ -1076,6 +1084,7 @@ fn ring_hole_polygons(
         let (Some(&first), Some(&last)) = (poly.first(), poly.last()) else {
             continue;
         };
+
         let step_u = last.x() + wrap(first.x() - last.x());
         let step_v = last.y() + wrap(first.y() - last.y());
         if (step_u - first.x()).abs() > PI || (step_v - first.y()).abs() > PI {
