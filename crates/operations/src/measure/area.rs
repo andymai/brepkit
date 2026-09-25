@@ -108,7 +108,7 @@ pub fn face_area(
                 let rise = winding.dot(circle.center() - sph.center());
                 return Ok(2.0 * std::f64::consts::PI * r * (r - rise) - holes);
             }
-            if let Some(area) = sphere_face_uv_area(topo, face_id, sph, deflection)? {
+            if let Some(area) = sphere_face_uv_area(topo, face_id, sph, holes, deflection)? {
                 return Ok(area);
             }
             if positions.len() >= 3 {
@@ -141,15 +141,13 @@ pub fn face_area(
     }
 }
 
-/// The area of a sphere face whose wires close in u (through a pole if they
-/// meet one), where the area element is `R² cos v du dv`. Such an outer loop
-/// bounds either the patch inside it or everything past it: the face's own
-/// mesh says which. `None` when a wire winds the axis.
-fn sphere_face_uv_area(
+/// `∮ u w(v) dv` along a wire on a sphere, `w = R² cos v`, with u unwrapped
+/// and free to jump at a pole: plus or minus the area of one of the two
+/// regions the wire bounds. `None` when the wire winds the axis.
+pub(super) fn sphere_wire_signed_area(
     topo: &Topology,
-    face_id: FaceId,
     sphere: &brepkit_math::surfaces::SphericalSurface,
-    deflection: f64,
+    wire_id: brepkit_topology::wire::WireId,
 ) -> Result<Option<f64>, crate::OperationsError> {
     let (axis, radius) = (sphere.z_axis(), sphere.radius());
     let project = |p: Point3| sphere.project_point(p);
@@ -168,40 +166,72 @@ fn sphere_face_uv_area(
         poles: &poles,
         v_periodic: false,
     };
-    let face = topo.face(face_id)?;
-    let Some(outer) = wire_uv_area(topo, face.outer_wire(), &metric)? else {
-        return Ok(None);
-    };
-    let mut holes = 0.0;
-    for &wid in face.inner_wires() {
-        let Some(hole) = wire_uv_area(topo, wid, &metric)? else {
-            return Ok(None);
-        };
-        holes += hole.abs();
-    }
-    let whole = 4.0 * std::f64::consts::PI * radius * radius;
-    let (patch, past) = (outer.abs() - holes, whole - outer.abs() - holes);
-    let meshed = triangle_mesh_area(&tessellate::tessellate(topo, face_id, deflection)?);
-    Ok(Some(if (meshed - patch).abs() <= (meshed - past).abs() {
-        patch
-    } else {
-        past
-    }))
+    wire_uv_area(topo, wire_id, &metric)
 }
 
-/// The area a hole takes from a sphere cap: `R² |∮ sin v du|` inside a loop
-/// that winds none of the sphere's u (a drill's entry), and for a loop around
-/// the cap's pole the cap beyond it, `R² (2π − |∮ sin v du|)` (a bore's rim).
-/// The integral runs along the loop by midpoint sums at two resolutions and
-/// a Richardson step.
+/// Whether a sphere face is the region of area `patch` its outer loop bounds
+/// rather than the sphere past it (`past`), by the face's own mesh. `None`
+/// when the two are too close to tell apart (a patch near half the sphere).
+pub(super) fn sphere_face_is_patch(
+    topo: &Topology,
+    face_id: FaceId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    patch: f64,
+    past: f64,
+) -> Result<Option<bool>, crate::OperationsError> {
+    let whole = 4.0 * std::f64::consts::PI * sphere.radius() * sphere.radius();
+    if (patch - past).abs() < 0.05 * whole {
+        return Ok(None);
+    }
+    let mesh = tessellate::tessellate(topo, face_id, 1e-2 * sphere.radius())?;
+    let meshed = triangle_mesh_area(&mesh);
+    Ok(Some((meshed - patch).abs() <= (meshed - past).abs()))
+}
+
+/// The area of a sphere face whose outer loop closes in u (through a pole if
+/// it meets one), where the area element is `R² cos v du dv`: the region that
+/// loop bounds or the sphere past it, less the `holes`. A face too near half
+/// the sphere to tell which takes its mesh's area. `None` when the outer loop
+/// winds the axis.
+fn sphere_face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    holes: f64,
+    deflection: f64,
+) -> Result<Option<f64>, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let Some(outer) = sphere_wire_signed_area(topo, sphere, face.outer_wire())? else {
+        return Ok(None);
+    };
+    let whole = 4.0 * std::f64::consts::PI * sphere.radius() * sphere.radius();
+    let (patch, past) = (outer.abs() - holes, whole - outer.abs() - holes);
+    Ok(Some(
+        match sphere_face_is_patch(topo, face_id, sphere, patch, past)? {
+            Some(true) => patch,
+            Some(false) => past,
+            None => triangle_mesh_area(&tessellate::tessellate(topo, face_id, deflection)?),
+        },
+    ))
+}
+
+/// The area a hole takes from a sphere face: the smaller region inside a loop
+/// that winds none of the sphere's u (a drill's entry, a pocket through a
+/// pole), and for a loop around the axis the smaller cap beyond it,
+/// `R² (2π − |∮ sin v du|)` (a bore's rim), by midpoint sums at two
+/// resolutions and a Richardson step.
 fn sphere_hole_area(
     topo: &Topology,
     sphere: &brepkit_math::surfaces::SphericalSurface,
     wire_id: brepkit_topology::wire::WireId,
 ) -> Result<f64, crate::OperationsError> {
     use std::f64::consts::{PI, TAU};
+    let r2 = sphere.radius() * sphere.radius();
+    if let Some(signed) = sphere_wire_signed_area(topo, sphere, wire_id)? {
+        return Ok(signed.abs().min(2.0 * TAU * r2 - signed.abs()));
+    }
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    let (mut sweep, mut progress) = (0.0, 0.0);
+    let mut sweep = 0.0;
     for oe in topo.wire(wire_id)?.edges() {
         let edge = topo.edge(oe.edge())?;
         let (sp, ep) = (
@@ -212,7 +242,7 @@ fn sphere_hole_area(
         let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
         let at = |t: f64| sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
         let sums = |n: usize| {
-            let (mut sweep, mut progress) = (0.0, 0.0);
+            let mut sweep = 0.0;
             #[allow(clippy::cast_precision_loss)]
             let step = (to - from) / n as f64;
             let mut u_prev = at(from).0;
@@ -222,22 +252,13 @@ fn sphere_hole_area(
                 let (_, vm) = at(tk + 0.5 * step);
                 let (un, _) = at(tk + step);
                 sweep += vm.sin() * wrap(un - u_prev);
-                progress += wrap(un - u_prev);
                 u_prev = un;
             }
-            (sweep, progress)
+            sweep
         };
-        let (coarse, _) = sums(128);
-        let (fine, turned) = sums(256);
-        sweep += (4.0 * fine - coarse) / 3.0;
-        progress += turned;
+        sweep += (4.0 * sums(256) - sums(128)) / 3.0;
     }
-    let r2 = sphere.radius() * sphere.radius();
-    Ok(if progress.abs() > PI {
-        r2 * (TAU - sweep.abs())
-    } else {
-        r2 * sweep.abs()
-    })
+    Ok(r2 * (TAU - sweep.abs()))
 }
 
 /// A lateral of revolution read in its `(u, v)` parameters, where the area

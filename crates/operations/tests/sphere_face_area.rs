@@ -3,17 +3,20 @@
 //! `z > 0.8` in a three-sided patch, and the box over the positive octant in
 //! a patch whose sides are two meridians and the equator. A tilted rod
 //! through the ball keeps two caps whose flux measures the rod's piece
-//! exactly.
+//! exactly, and a pocket over the pole leaves a hole that meets the pole.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
 
+use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
-use brepkit_operations::tessellate::tessellate;
+use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
+use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceSurface;
@@ -114,52 +117,54 @@ fn sphere_octant() {
     }
 }
 
-/// The ball above the plane `z = 1.5 + 0.2 x`, clear of its equator: a cap
-/// under one tilted circle, `2 pi R (R - d)` of the sphere with `d` the
-/// plane's distance from the centre, which its own mesh covers too.
+/// The ball above the plane `z = 1.5 + slope x`, clear of its equator: a cap
+/// under one circle, level or tilted, `2 pi R (R - d)` of the sphere with `d`
+/// the plane's distance from the centre, which its own mesh covers too.
 #[test]
-fn cap_under_a_tilted_circle() {
-    let slope = 0.2_f64;
-    let d = 1.5 / slope.hypot(1.0);
-    let truth = 2.0 * PI * RADIUS * (RADIUS - d);
-    let mut topo = Topology::new();
-    let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
-    let lid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
-    let place = Mat4::translation(0.0, 0.0, 1.5)
-        * Mat4::rotation_y(-slope.atan())
-        * Mat4::translation(-10.0, -10.0, 0.0);
-    transform_solid(&mut topo, lid, &place).unwrap();
-    let cap = boolean(&mut topo, BooleanOp::Intersect, ball, lid).unwrap();
-    let faces: Vec<_> = solid_faces(&topo, cap)
-        .unwrap()
-        .into_iter()
-        .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
-        .collect();
-    assert_eq!(faces.len(), 1, "one sphere face");
-    let area = face_area(&topo, faces[0], 0.005).unwrap();
-    assert!(
-        (area - truth).abs() < 1e-9 * truth,
-        "area {area}, truth {truth}"
-    );
-    let mesh = tessellate(&topo, faces[0], 0.005).unwrap();
-    let meshed: f64 = mesh
-        .indices
-        .chunks_exact(3)
-        .map(|t| {
-            let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
-            (b - a).cross(c - a).length() / 2.0
-        })
-        .sum();
-    assert!(
-        (meshed - truth).abs() < 1e-2 * truth,
-        "mesh area {meshed}, truth {truth}"
-    );
+fn cap_under_a_level_or_tilted_circle() {
+    for slope in [0.0_f64, 0.2] {
+        let d = 1.5 / slope.hypot(1.0);
+        let truth = 2.0 * PI * RADIUS * (RADIUS - d);
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let lid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let place = Mat4::translation(0.0, 0.0, 1.5)
+            * Mat4::rotation_y(-slope.atan())
+            * Mat4::translation(-10.0, -10.0, 0.0);
+        transform_solid(&mut topo, lid, &place).unwrap();
+        let cap = boolean(&mut topo, BooleanOp::Intersect, ball, lid).unwrap();
+        let faces: Vec<_> = solid_faces(&topo, cap)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+            .collect();
+        assert_eq!(faces.len(), 1, "slope {slope}: one sphere face");
+        let area = face_area(&topo, faces[0], 0.005).unwrap();
+        assert!(
+            (area - truth).abs() < 1e-9 * truth,
+            "slope {slope}: area {area}, truth {truth}"
+        );
+        let mesh = tessellate(&topo, faces[0], 0.005).unwrap();
+        let meshed: f64 = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                (b - a).cross(c - a).length() / 2.0
+            })
+            .sum();
+        assert!(
+            (meshed - truth).abs() < 1e-2 * truth,
+            "slope {slope}: mesh area {meshed}, truth {truth}"
+        );
+    }
 }
 
 /// A rod of radius 0.8 through the ball, its axis tilted and 1.08 from the
 /// centre: the piece inside is, over the rod's cross-section, the chord
 /// through the ball, integrated by Simpson in polar coordinates about the
-/// axis. Less it, the ball keeps the rest.
+/// axis. Less it, the ball keeps the rest: a valid, watertight solid that
+/// holds the ball's far side and not the rod's axis.
 #[test]
 fn tilted_rod_through_a_ball() {
     let (rod, tilt, foot) = (0.8_f64, 0.6_f64, (1.0_f64, 0.5_f64));
@@ -193,10 +198,76 @@ fn tilted_rod_through_a_ball() {
             * Mat4::translation(0.0, 0.0, -5.0);
         transform_solid(&mut topo, cylinder, &place).unwrap();
         let piece = boolean(&mut topo, op, sphere, cylinder).unwrap();
+        let report = validate_solid(&topo, piece).unwrap();
+        assert!(report.is_valid(), "{op:?}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{op:?}: open or non-manifold mesh");
         let volume = solid_volume(&topo, piece, 0.01).unwrap();
         assert!(
             (volume - truth).abs() < 1e-7 * truth,
             "{op:?}: volume {volume}, truth {truth}"
         );
+        let at = |p: Point3| classify_point(&topo, piece, p, &ClassifyOptions::default()).unwrap();
+        let (on_axis, far_side) = if op == BooleanOp::Intersect {
+            (PointClassification::Inside, PointClassification::Outside)
+        } else {
+            (PointClassification::Outside, PointClassification::Inside)
+        };
+        assert_eq!(
+            at(Point3::new(foot.0, foot.1, 0.0)),
+            on_axis,
+            "{op:?}: rod axis"
+        );
+        assert_eq!(
+            at(Point3::new(-2.0, 0.0, 0.0)),
+            far_side,
+            "{op:?}: far side"
+        );
+    }
+}
+
+/// The box over `x > 0`, `y > 0`, `z > 2` takes a quarter of the cap above
+/// `z = 2`, whose loop runs up one meridian to the pole and down another:
+/// the cap is `h = 1` high, so `2 pi R h` of the sphere and `pi h² (3R - h) / 3`
+/// of the ball.
+#[test]
+fn pocket_through_a_pole() {
+    let (cap_area, cap_volume) = (2.0 * PI * RADIUS, PI * (3.0 * RADIUS - 1.0) / 3.0);
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    for (op, truth, areas) in [
+        (BooleanOp::Intersect, cap_volume / 4.0, vec![cap_area / 4.0]),
+        (
+            BooleanOp::Cut,
+            ball - cap_volume / 4.0,
+            vec![
+                2.0 * PI * RADIUS * RADIUS - cap_area / 4.0,
+                2.0 * PI * RADIUS * RADIUS,
+            ],
+        ),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(0.0, 0.0, 2.0)).unwrap();
+        let piece = boolean(&mut topo, op, sphere, block).unwrap();
+        let volume = solid_volume(&topo, piece, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "{op:?}: volume {volume}, truth {truth}"
+        );
+        let mut found: Vec<f64> = solid_faces(&topo, piece)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+            .map(|f| face_area(&topo, f, 0.005).unwrap())
+            .collect();
+        found.sort_by(f64::total_cmp);
+        assert_eq!(found.len(), areas.len(), "{op:?}: sphere faces");
+        for (area, truth) in found.into_iter().zip(areas) {
+            assert!(
+                (area - truth).abs() < 1e-9 * truth,
+                "{op:?}: area {area}, truth {truth}"
+            );
+        }
     }
 }

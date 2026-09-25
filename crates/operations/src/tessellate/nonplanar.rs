@@ -3016,11 +3016,11 @@ fn anchor_closed_edges_at_vertices(
 /// Mesh one curved face with holes on its own, the way the solid mesher does:
 /// every edge of the face is sampled into a local pool first, so closed rims
 /// are anchored at their vertices exactly as they are against the solid's
-/// shared pool. A cylinder or cone wall goes through the constrained CDT; a
-/// sphere face through the latitude-band mesher when its rims are latitudes
-/// (they enclose no area in (u, v)) and the CDT otherwise; a torus face only
-/// through the latitude-band mesher. A face none takes comes back without
-/// triangles.
+/// shared pool. A cylinder or cone wall goes through the constrained CDT. A
+/// sphere face goes through the latitude-band mesher when it is a band
+/// between two latitude rims, and through the constrained CDT otherwise. A
+/// torus face goes only through the latitude-band mesher, and comes back
+/// without triangles when that mesher declines it.
 pub(super) fn tessellate_holed_face_local(
     topo: &Topology,
     face_id: FaceId,
