@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790304651746,
+  "lastUpdate": 1790312557846,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39419,6 +39419,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42589923,
             "range": "± 45052",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a3cddb10c2ea591ef4380d167942bbaacb70a8ed",
+          "message": "fix(algo): cut a cone with a plane parallel to its axis (#1755)\n\nThe cone and axis-parallel plane cases now produce 96 exact results and\n72 safe mesh fallbacks across the 168-case sweep, with no wrong-volume\nor open-mesh results. The corresponding results on main were 6 exact\nbuilds, 119 fallbacks, and 43 incorrect solids.\n\n## What was wrong\n\nCone sections exposed several independent assumptions in phase FF, the\nperiodic face splitter, volume measurement, and tessellation.\n\nThrough the apex, `sample_plane_cone` solved `v = e / (n·g) = 0` on\nevery generator, collapsing the section onto the apex instead of\nproducing the two rulings where `n·g(u) = 0`.\n\nAway from the axis, the sampled chain stopped at `max(8 v_min, v_min +\n4)` along the generator. A plane near the axis could therefore produce\nan open hyperbola that stopped before crossing the rim. At `x = 0.3`,\nthe traced sections ended at `z = 1.2` instead of `z = 0`.\n\nThe splitter also mishandled cone topology around periodic seams, apex\nendpoints, closed rims, and loops that followed a face boundary before\nreturning along a section. These failures could discard regions, close a\nloop using only the two seam copies, or disconnect an untouched cap. The\nperiodic sampler could unwrap rim pieces spanning more than half a turn\nthe short way, causing a loop to wind twice and placing its sample in\nthe removed notch.\n\nOn main, fusing the frustum with the box over `x < 0` returned the box\nalone, with volume 8000 instead of 8027.22714. Cutting the pointed cone\nby the box over `x < 0.3` returned 56.54867 instead of 22.94324.\n\n## What this does\n\n- Phase FF emits the two through-apex rulings as lines in\n`plane_cone_apex_rulings`. Its `plane_holds_apex` test uses the linear\ntolerance widened only by `1e-12` times the coordinates' size, so it\ndoes not depend on the model's distance from the origin.\n\n- `exact_plane_analytic_reaching` passes a reach into\n`sample_plane_cone`. The reach is 1.25 times the distance from the apex\nto the farthest corner of the two faces' bounding-box overlap, allowing\nan open hyperbola to reach the rim it crosses.\n\n- `split_cone_section_at_vertices` splits a sampled conic at its vertex,\nwhere it crosses the plane containing the cone axis and the section\nplane normal. The vertex is solved exactly on the cone. This prevents a\nrim-to-rim section arc from sharing both endpoint keys with the cap\nchord and being welded to it by the endpoint-keyed edge merge.\n\n- `split_periodic_face_into_sectors` handles cones, including\npointed-cone sectors that close at the apex. Pointed cones route through\nsector splitting even when the greedy trace returns loops.\n\n- A loop on a cone that follows the face boundary and returns along a\nsection is classified as a region rather than a hole.\n\n- `resolve_seam_endpoint_uv` starts at the ruling leaving a pointed-cone\napex and assigns each apex endpoint that ruling's `u`, placing the two\nseam copies one period apart. Every piece of a cone face obtains its\ninterior point from its 3D curves through\n`sample_wire_loop_uv_on_surface`. A closed rim in that sampler runs a\nfull turn from its vertex in its traversal's sense. This keeps the top\ncap of the frustum Cut over `x < -1.5`, which periodic sampling lost by\nwinding the loop twice and sampling the removed notch. A broken greedy\ntrace on a pointed cone retries with the DCEL trace, and\n`boundary_seam_u` reads the seam `u` from the rim endpoint.\n\n- Cone sections are split where they cross the seam ruling using\nwinding-chain seam anchoring. A split on a cone ruling keeps the\nruling's `u`, using its start's value, or its end's when it starts at\nthe apex, and interpolates only `v`. A closed cone rim is sampled in\n`(u, v)` from its vertex.\n\n- Every closed rim is split at the seam antipode. When a section already\nends there, as for the frustum top rim touched by `x = -1` at turn 0,\nthe rim is also split at its quarter points so its two halves do not\nshare both ends and become welded by the edge merge.\n`rejoin_untouched_rims` rejoins an untouched cone rim in the loop that\ntraverses both halves, preserving sharing with the untouched cap. The\nloop's interior point is taken from those halves.\n\n- `analytic_revolution_solid_volume` accepts a cone side face through\nthe axis. `ruled_wall_is_rectangle` recognizes that such walls are\nrectangles in `(u, v)`, allowing a halved cone to measure exactly. The\nthrough-axis test uses the linear tolerance widened only by `1e-12`\ntimes the coordinates' size, so it does not depend on the model's\ndistance from the origin.\n\n- Cone walls trimmed by marched or elliptic sections use the stripe\ntessellation path, including its developed metric and angular\nrefinement. The previous raw `(u, v)` rim-to-rim ladder had no interior\npoints and fanned triangles across as much as 2.69 radians. One affected\nfrustum piece measured 14.60 instead of 35.13.\n\n- Two safety checks prevent invalid exact results from escaping. The\nbuilder returns `FaceSplitFailed`, causing fallback, when a face crossed\nby sections whose samples are clear of its boundary splits into nothing.\n`validate_boolean_result` rejects an edge whose midpoint is more than 5\npercent of the solid bounding-box diagonal away from a non-NURBS face\nthat bounds it, measuring planar faces by point-to-plane distance.\n\n- The splitter, sampling, and meshing changes are gated to cones.\nApplying them to cylinders broke a box less a quarter cylinder,\nproducing 787.94 instead of 929.31, and broke six rod and knuckle\nfixtures. The remaining cone cases fall back safely rather than being\nbuilt.\n\n- The roadmap records this work as Closed and retains an OPEN row for\nthe remaining fallbacks. Both cones fall back when the piece cut off by\nthe plane holds the seam: the pointed cone turned 17 degrees at `x <\n0.3` and beyond or 200 degrees at `x < -0.7` and below, and the frustum\nat `x < 1.2` and beyond for turns 0 and 17 or `x < -1` and below at turn\n200. The pointed cone at turn 0 builds because its hyperbola's vertex\nlands on the seam. The frustum cuts at `x < -1` and `x < -1.5` for turns\n0 and 17 also build.\n\n## Verification\n\n- The 168-case probe used `make_cone(3, 0, 6)` and `make_cone(3, 1, 4)`,\nturned 0, 17, 90, or 200 degrees, against a 20-unit cube over `x < off`\nfor offsets `-2.5`, `-1.5`, `-0.7`, `0`, `0.3`, `1.2`, and `2.4`, with\nCut, Intersect, and Fuse. Results changed from 6 exact, 119 fallbacks,\nand 43 wrong to 96 exact, 72 fallbacks, and 0 wrong.\n\n- `cone_halved_through_its_axis` covers both cones at all four turns and\nall three operations. Each result is a valid solid with a cone face,\nclassifies a point in each half, has volume within `1e-9` of half the\ncone plus 8000 for Fuse, and produces a watertight mesh.\n\n- `cone_cut_parallel_to_its_axis` covers both cones at turns 0, 17, and\n200, nine offsets, and all three operations. Of the 54 cone and offset\ncells, 36 must build exactly. Every result has a watertight mesh. Every\nexact result validates the solid, classifies a point on each side of the\ncut, and has volume within `1e-3` of a Simpson circular-segment oracle.\nFallback error is bounded by the smaller of 3 percent of the whole cone\nand half the piece. Fuse is judged by the cone volume added to the box.\n\n- `frustum_halved_at_every_angle` halves the frustum through its axis at\nevery 15 degrees. Each result is valid and analytic, classifies points\non both sides, has volume within `1e-9` of `26 pi / 3`, and produces a\nwatertight mesh.\n\n- `spacer_foot_fuse_inmem` now pins the exact `solid_volume` of\n2397.8346 within `1e-3` and the mesh within 0.2 percent of it. The exact\nvolume is the same on main; the mesh at deflection 0.01 now reads\n2395.35, while main's mesh, 2404.44, is 0.28 percent off.\n\n- The full workspace suite passes all 2960 tests.",
+          "timestamp": "2026-09-25T04:59:58Z",
+          "tree_id": "10e8dc6e43a59e294d1096f3c1588b527094fea2",
+          "url": "https://github.com/andymai/brepkit/commit/a3cddb10c2ea591ef4380d167942bbaacb70a8ed"
+        },
+        "date": 1790312554556,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1020791,
+            "range": "± 13785",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1101985,
+            "range": "± 2331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14677,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 758717,
+            "range": "± 2492",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42541289,
+            "range": "± 225247",
             "unit": "ns/iter"
           }
         ]
