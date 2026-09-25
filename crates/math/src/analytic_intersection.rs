@@ -364,7 +364,7 @@ fn exact_plane_cone(
 /// NURBS.
 ///
 /// A hyperbola `x = a cosh φ, y = b sinh φ` (in the plane frame of
-/// [`exact_plane_cone`]) is cut into pieces of at most one unit of `φ`, each
+/// `exact_plane_cone`) is cut into pieces of at most one unit of `φ`, each
 /// a conic Bézier: its middle point is where the end tangents meet and its
 /// middle weight is the cosh of half the piece's span. A parabola is one
 /// polynomial quadratic. `None` for an elliptic or circular section, a plane
