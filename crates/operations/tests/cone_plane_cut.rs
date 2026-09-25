@@ -288,6 +288,25 @@ fn cone_halved_through_its_axis() {
                 );
                 let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
                 assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                // The half past the plane, the half before it (the cone is
+                // round, so the turn moves neither).
+                let (before, past) = match op {
+                    BooleanOp::Cut => (PointClassification::Outside, PointClassification::Inside),
+                    BooleanOp::Intersect => {
+                        (PointClassification::Inside, PointClassification::Outside)
+                    }
+                    BooleanOp::Fuse => (PointClassification::Inside, PointClassification::Inside),
+                };
+                for (x, class) in [(-1.5, before), (1.5, past)] {
+                    let at = classify_point(
+                        &topo,
+                        piece,
+                        Point3::new(x, 0.0, 0.5),
+                        &ClassifyOptions::default(),
+                    )
+                    .unwrap();
+                    assert_eq!(at, class, "{label}: at x = {x}");
+                }
             }
         }
     }
@@ -361,7 +380,13 @@ fn cone_cut_parallel_to_its_axis() {
                     // A fuse is judged by what the cone adds to the box.
                     let box_volume = if op == BooleanOp::Fuse { 8000.0 } else { 0.0 };
                     let (added, expected) = (volume - box_volume, truth - box_volume);
-                    let bound = if built { 1e-3 * expected } else { 3e-2 * whole };
+                    // A fallback's bound never exceeds half the piece, so a
+                    // result that lost the piece altogether still fails.
+                    let bound = if built {
+                        1e-3 * expected
+                    } else {
+                        (3e-2 * whole).min(0.5 * expected)
+                    };
                     assert!(
                         (added - expected).abs() < bound,
                         "{label}: volume {volume}, truth {truth}"

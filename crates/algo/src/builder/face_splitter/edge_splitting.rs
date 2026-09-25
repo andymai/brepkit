@@ -181,13 +181,17 @@ pub(super) fn split_boundary_edges_at_3d_points(
                     (edge.end_uv.x() - edge.start_uv.x()).mul_add(t, edge.start_uv.x()),
                     edge.start_uv.y(),
                 )
-            } else if matches!(edge.curve_3d, EdgeCurve::Line)
-                && matches!(surface, FaceSurface::Cone(_))
-            {
-                // A line on a cone is a ruling, straight in UV: a split on a
-                // seam copy keeps that copy's u.
+            } else if let (EdgeCurve::Line, FaceSurface::Cone(cone)) = (&edge.curve_3d, surface) {
+                // A line on a cone is a ruling at one u: a split on a seam
+                // copy keeps that copy's u (the apex end's own u is its
+                // ruling's, or arbitrary), and only v runs along it.
+                let u = if (edge.start_3d - cone.apex()).length() < tol {
+                    edge.end_uv.x()
+                } else {
+                    edge.start_uv.x()
+                };
                 brepkit_math::vec::Point2::new(
-                    (edge.end_uv.x() - edge.start_uv.x()).mul_add(t, edge.start_uv.x()),
+                    u,
                     (edge.end_uv.y() - edge.start_uv.y()).mul_add(t, edge.start_uv.y()),
                 )
             } else {

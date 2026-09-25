@@ -84,20 +84,45 @@ pub(super) fn sample_wire_loop_uv_on_surface(
         } else {
             (e.end_3d, e.start_3d)
         };
-        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+        let closed = (e.start_3d - e.end_3d).length() < 1e-10;
         #[allow(clippy::cast_precision_loss)]
-        let mut samples: Vec<_> = (1..CURVE_SAMPLES)
-            .map(|k| {
-                let t = (t1 - t0).mul_add(k as f64 / CURVE_SAMPLES as f64, t0);
-                e.curve_3d.evaluate_with_endpoints(t, s3, e3)
-            })
-            .collect();
-        // A marched curve's domain can run from either end: orient by where
-        // its start actually evaluates.
-        let at_t0 = e.curve_3d.evaluate_with_endpoints(t0, s3, e3);
-        if (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length() {
-            samples.reverse();
-        }
+        let fraction = |k: usize| k as f64 / CURVE_SAMPLES as f64;
+        let samples: Vec<_> = match &e.curve_3d {
+            // A closed conic's own domain starts wherever its frame puts
+            // parameter 0: run a full turn from its vertex, in its own sense
+            // when forward.
+            EdgeCurve::Circle(c) if closed => {
+                let (a0, turn) = (c.project(e.start_3d), if e.forward { TAU } else { -TAU });
+                (1..CURVE_SAMPLES)
+                    .map(|k| c.evaluate(turn.mul_add(fraction(k), a0)))
+                    .collect()
+            }
+            EdgeCurve::Ellipse(el) if closed => {
+                let (a0, turn) = (el.project(e.start_3d), if e.forward { TAU } else { -TAU });
+                (1..CURVE_SAMPLES)
+                    .map(|k| el.evaluate(turn.mul_add(fraction(k), a0)))
+                    .collect()
+            }
+            _ => {
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                let mut samples: Vec<_> = (1..CURVE_SAMPLES)
+                    .map(|k| {
+                        e.curve_3d.evaluate_with_endpoints(
+                            (t1 - t0).mul_add(fraction(k), t0),
+                            s3,
+                            e3,
+                        )
+                    })
+                    .collect();
+                // A marched curve's domain can run from either end: orient by
+                // where its start actually evaluates.
+                let at_t0 = e.curve_3d.evaluate_with_endpoints(t0, s3, e3);
+                if (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length() {
+                    samples.reverse();
+                }
+                samples
+            }
+        };
         let mut prev_u = e.start_uv.x();
         for p in samples {
             let Some((u, v)) = surface.project_point(p) else {
