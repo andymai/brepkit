@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790357890585,
+  "lastUpdate": 1790358727033,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40445,6 +40445,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 34965254,
             "range": "± 455695",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "082ae314e6773d847e7f29df4d3c97c922365abc",
+          "message": "chore(main): release 4.0.30 (#1774)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.30](https://github.com/andymai/brepkit/compare/v4.0.29...v4.0.30)\n(2026-09-25)\n\n\n### Bug Fixes\n\n* **algo:** hand a faceted equator's arc to both hemispheres\n([#1773](https://github.com/andymai/brepkit/issues/1773))\n([57402c2](https://github.com/andymai/brepkit/commit/57402c2d6cda4480ff92f46db764c199336206d6))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit-wasm` 4.0.30, bumping all workspace crate versions to\nmatch.\n\n**Bug Fixes**\n- Handles a faceted equator's arc to both hemispheres.\n\n<sup>Written for commit 6f36199d94ec9b485c08ebd292a7372f57834de7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1774?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-25T17:49:41Z",
+          "tree_id": "97de45789e46479504b8e9fe52dc302f5ad0ccad",
+          "url": "https://github.com/andymai/brepkit/commit/082ae314e6773d847e7f29df4d3c97c922365abc"
+        },
+        "date": 1790358724072,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 688769,
+            "range": "± 7168",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 746240,
+            "range": "± 1004",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8912,
+            "range": "± 715",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 500614,
+            "range": "± 7641",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 31432323,
+            "range": "± 1425304",
             "unit": "ns/iter"
           }
         ]
