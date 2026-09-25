@@ -3462,8 +3462,14 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
     }
     // A boundary along one latitude (a hemisphere's equator) spans no v; on
     // a tilted sphere rounding leaves it a sliver wide, which as an extent
-    // would clip away every section inside the face.
-    if v_max - v_min > 1e-9 {
+    // would clip away every section inside the face. The sliver is measured
+    // on the surface, where an angular v spans its radius per radian.
+    let v_scale = match surface {
+        FaceSurface::Sphere(s) => s.radius(),
+        FaceSurface::Torus(t) => t.minor_radius(),
+        _ => 1.0,
+    };
+    if (v_max - v_min) * v_scale > Tolerance::new().linear {
         Some((v_min, v_max))
     } else {
         None
