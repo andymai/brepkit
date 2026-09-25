@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790336416679,
+  "lastUpdate": 1790350292573,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40067,6 +40067,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30885899,
             "range": "± 803052",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a634bb76009b0c7960cc826a9706bf6b700ee666",
+          "message": "fix(io): write and read a solid's cavities through STEP (#1769)\n\nSTEP round trips now preserve a solid’s cavities, encode void\norientation correctly, and emit a valid\n`ADVANCED_BREP_SHAPE_REPRESENTATION` item list.\n\n## What was wrong\n\n- The writer serializes only a solid’s outer shell as a\n`MANIFOLD_SOLID_BREP`, while the reader builds every solid with no inner\nshells. The box `[-5, 5]^3` less a ball of radius 2 at its centre\ntherefore reads back from STEP at 1000.0000 against 966.4897.\n\n- The `ADVANCED_BREP_SHAPE_REPRESENTATION` item list contains a trailing\ncomma (`(#584,)`), which ISO 10303-21’s list syntax does not allow.\n\n## What this does\n\n- A solid with cavities is written as a `BREP_WITH_VOIDS`. It contains\nthe outer `CLOSED_SHELL` plus one `ORIENTED_CLOSED_SHELL` per cavity,\nflagged `.F.` as required by the standard for voids, over a closed shell\nwhose faces are written turned over, facing out of the void.\n\n- A solid without cavities stays a `MANIFOLD_SOLID_BREP`.\n\n- The reader collects `BREP_WITH_VOIDS` alongside `MANIFOLD_SOLID_BREP`,\nin entity-id order. When an oriented shell is flagged false, it builds\nthe void with each face turned back over.\n\n- Turning a face over flips only its reversal flag. Its loops keep\nwinding about the surface’s normal, matching how #1763’s bound rule\nreads them.\n\n- The `ADVANCED_BREP_SHAPE_REPRESENTATION` item list is written without\na trailing comma.\n\n- The roadmap closes the cavity row.\n\n## Verification\n\n- `cavities_survive_a_round_trip` covers the box `[-5, 5]^3` less one\nball of radius 1.5, and less two. STEP output contains `BREP_WITH_VOIDS`\nand one `.F.` oriented shell per cavity.\n\n- Each solid is read back twice, with the read-back solid written again.\nEach pass contains one solid with its cavities, is valid, measures\nwithin `1e-9` of `1000 - 4.5 pi n`, and meshes watertight.\n\n- `a_solid_without_cavities_stays_a_manifold_brep` verifies that a plain\nbox writes a `MANIFOLD_SOLID_BREP`, no `BREP_WITH_VOIDS`, and no\ntrailing comma in the item list.\n\n- The workspace suite passes: 3084 tests run, 3084 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSTEP round trips now preserve a solid's cavities: the writer emitted\nonly the outer shell and the reader built solids with no inner shells,\nso a box with a ball cut from it read back at 1000.0000 instead of\n966.4897.\n\n- Solids with cavities are written as `BREP_WITH_VOIDS`, with one\n`ORIENTED_CLOSED_SHELL` per void flagged `.F.` over a shell written\nfacing out of the void.\n- The reader gathers `BREP_WITH_VOIDS` in entity-id order and builds\neach void by turning every face of a false-oriented shell back over.\n- The `ADVANCED_BREP_SHAPE_REPRESENTATION` item list no longer carries a\ntrailing comma.\n- Tests round-trip a box with one and two ball-shaped cavities twice,\nand verify a solid without cavities still writes a\n`MANIFOLD_SOLID_BREP`.\n\n<sup>Written for commit 23fae2399bd839e583424d309ef4fdb825e1de57.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1769?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-25T08:28:34-07:00",
+          "tree_id": "0a1992adf8ae9edad3e1ba59039bf2e5ec24dd5c",
+          "url": "https://github.com/andymai/brepkit/commit/a634bb76009b0c7960cc826a9706bf6b700ee666"
+        },
+        "date": 1790350287736,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 961177,
+            "range": "± 6181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1053142,
+            "range": "± 3622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12167,
+            "range": "± 52",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 752354,
+            "range": "± 16956",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42077822,
+            "range": "± 763680",
             "unit": "ns/iter"
           }
         ]
