@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790329286796,
+  "lastUpdate": 1790334913340,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39851,6 +39851,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45087854,
             "range": "± 413187",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c35b839d1d8b6129a0c35466dd950ff133d76608",
+          "message": "fix(operations): mesh a reversed sphere cap over its own side (#1763)\n\nReversed sphere caps now tessellate over their own side of their\nboundary circle, non-uniform scaling preserves that side in the\nresulting NURBS patch, hollowed balls mesh their inner walls as bowls,\nand STEP face bounds preserve the intended side across external files\nand brepkit round trips.\n\n## What was wrong\n\n- The boolean builders reverse a face by flipping its flag while keeping\nits wire. The GFA's `builder_solid` and the contained-cavity builder\nfollow this convention. A reversed face's wire therefore runs\ncounter-clockwise about the surface's outward normal, and `solid_volume`\nreads it that way.\n\n- `close_loop_at_pole` in `tessellate/nonplanar.rs` closes a single loop\nwinding a sphere face's `u` at the enclosed pole. It instead read a\nreversed face's wire about the face's normal and closed the loop at the\nother pole. `transform_solid`'s `sphere_face_v_range` made the same\norientation assumption when a non-uniform scale turned a sphere face\ninto a NURBS patch.\n\n- For the box `[-5, 5]^3` less a ball of radius 2 at `(0, 0, 5.5)`, the\nremaining dimple is bounded by one circle. Its `solid_volume` is exact\nat 989.397125, while the solid mesh's volume read 937.98. Scaling it by\n1.5 along x measured 1406.77 against 1484.10.\n\n- By ISO 10303-42, a face bound runs about the face's normal, reversed\nwhen the bound's own flag is false, while brepkit stores every loop\nabout the surface's normal. The reader kept a `.F.` face's loops as\nwritten and ignored each bound's flag. With the pole rule reading the\nwire's turn, a reversed single-circle cap written by another system\nwould therefore mesh its complement.\n\n- `shell_op`'s sphere arm built a hollowed ball's inner wall with its\nvertex list reversed and the `reversed` flag set, so its wire ran\nclockwise about the sphere's outward normal. The rim face, built\nopposite each neighbour's effective sense, then wound its hole the same\nway as its outer loop. The solid validated because the two cancel.\n\n- With the mesher change alone, `shell(make_sphere(10, 32), 1, [north\nhemisphere])` meshed the inner wall as a dome and produced an open solid\nmesh.\n\n## What this does\n\n- Both pole selection paths now read the wire's turn alone. A loop\nturning toward `+u` about the sphere's axis has the north pole on its\nleft.\n\n- The STEP writer now flags a reversed face's bounds `.F.` and adds\n`face bounds per ISO 10303-42` to its `FILE_DESCRIPTION`. The reader\nturns a loop whose bound flag and face flag differ, except in a brepkit\nexport without that marker, which wrote a reversed face's bounds about\nthe surface's normal. Brepkit's committed STEP fixtures are such exports\nand read as before.\n\n- The sphere arm now keeps the outer face's winding, and the `reversed`\nflag alone turns the wall inward. The rim's hole then winds as a hole.\nOn main, the wall's per-face mesh lies above the rim with mean `z` 5.618\nwhile the solid mesh was right. Both now lie below it.\n\n- The cross one-row fillet fixture\n(`crates/io/tests/cross_one_row_fillet_inmem.rs`) contains four reversed\nsphere corner patches of radius 0.5. Main meshed their complements,\nproducing 2.61 to 3.03 mm² each from a 3.14 mm² ball. They now measure\n1.01 to 1.02 mm².\n\n- That fixture's solid mesh remains open. Mesh edges not shared by two\ntriangles number 2084 on main and 1675 now. Its mesh volume is 64,907 on\nmain and 65,090 now about the origin, and 29,224 about `(80, 5, 10)` on\nboth. The comparison of the origin-anchored value with 64,968.05 within\n0.1% is removed because an open mesh does not provide a stable volume\ncriterion.\n\n- The roadmap closes the sphere-cap row and the STEP loops on reversed\nfaces row. It adds an OPEN row for the fixture's open mesh, whose\n`solid_volume` reads 68,449.\n\n- Two more OPEN rows record review findings. The ray-cast point\nclassifiers, `classify.rs` in operations and `boundary.rs` in check,\nnegate a reversed sphere face's loop normal. Around the dimple, `(0, 0,\n4)` and `(1.9, 0, 4.9)` read Inside in both, and `(0, 0, 3)` reads\nOutside in the operations one. Shelled cylinder and cone cups are\ninvalid with 32 shared edges having one sense each, and a hollowed torus\nfails to assemble.\n\n## Verification\n\n- `dimple_meshes_its_own_side` checks `solid_volume` within `1e-9` of\n`1000 - pi h^2 (3r - h) / 3`, with `h = 1.5` and `r = 2`. It also checks\na watertight solid mesh with volume within `1e-3`, plus one reversed\nsphere face whose exact and meshed areas are within 1% of `2 pi r h`.\n\n- `cavity_hemispheres_mesh_their_own_halves` subtracts a fully enclosed\nball from a box. Each reversed hemisphere's mesh lies on the side its\nwire leaves on its left about the outward normal. This test also passes\non main and guards the convention.\n\n- `turned_dimple_and_cavity_mesh_their_own_sides` checks the dimpled box\nand the box with a cavity, turned 90 degrees about x, 1 radian about x,\nand 90 degrees about y. Their solid meshes are watertight and within\n`1e-3` of the volume, and each reversed sphere face's own mesh lies on\nits side of its rim's plane, with the two cavity hemispheres on opposite\nsides. It passes on main too.\n\n- `dimple_survives_an_uneven_scale` verifies that scaling the dimpled\nbox by 1.5 along x preserves 1.5 times its volume within `1e-3`.\n\n- `hollowed_ball_meshes_its_bowl` checks that the bowl is valid, its\n`solid_volume` is within `1e-9` of `2/3 pi (10^3 - 9^3)`, its solid mesh\nis watertight with volume within `1e-3`, and the inner wall's own mesh\nlies below the rim. It fails without the `shell_op` change with an open\nmesh.\n\n- `crates/io/tests/step_reversed_face_bounds.rs` tests the dimpled box\nthrough a round trip, the same file rewritten the way other systems\nwrite it, with every bound flagged true, the reversed face's loop\nturned, and the header naming another system, and an export in the\nearlier form, with no marker, bounds flagged true, and loops as stored.\nEach reads back with `solid_volume` within `1e-9`, a watertight solid\nmesh within `1e-3`, and the dimple meshed below the box's top. Without\nthe reader change, the other-system file reads 937.8226453977021 against\n989.3971247941345.\n\n- `dimple_meshes_its_own_side`, `dimple_survives_an_uneven_scale`,\n`hollowed_ball_meshes_its_bowl`, and the round-trip and other-system\nSTEP tests fail on main. The workspace suite passes: 3079 tests run,\n3079 passed, 20 skipped.",
+          "timestamp": "2026-09-25T04:11:49-07:00",
+          "tree_id": "a7affedea61743396fe3468ed7954a70e83eef57",
+          "url": "https://github.com/andymai/brepkit/commit/c35b839d1d8b6129a0c35466dd950ff133d76608"
+        },
+        "date": 1790334908723,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1011737,
+            "range": "± 2636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1094762,
+            "range": "± 1397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12995,
+            "range": "± 58",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 756156,
+            "range": "± 2579",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42377423,
+            "range": "± 282980",
             "unit": "ns/iter"
           }
         ]
