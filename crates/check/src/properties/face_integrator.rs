@@ -6,6 +6,7 @@
 //! quadrature over the UV domain.
 
 use brepkit_math::quadrature::gauss_legendre_points;
+use brepkit_math::tolerance::Tolerance;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -122,7 +123,15 @@ pub(crate) fn integrate_face_about(
                 (0.0, std::f64::consts::TAU),
                 (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
             );
-            let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
+            let bounds = face_uv_bounds(topo, face_id, s, true, false, full)?;
+            // A turned sphere's equator projects to a rounding sliver of v
+            // rather than one value, and bounds no more than it does upright.
+            let (u_range, v_range) =
+                if (bounds.1.1 - bounds.1.0) * s.radius() <= Tolerance::new().linear {
+                    full
+                } else {
+                    bounds
+                };
             let uv_boundary =
                 build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
             let hole_vs = full_revolution_hole_vs(topo, face_id, s);
@@ -344,9 +353,7 @@ fn face_uv_bounds<S: ParametricSurface>(
         v_max = v_min + (full_domain.1.1 - full_domain.1.0);
     }
 
-    // A turned sphere's equator projects to a rounding sliver of v rather
-    // than one value, and bounds no more than it does upright.
-    if u_min >= u_max || v_max - v_min < 1e-9 {
+    if u_min >= u_max || v_min >= v_max {
         // A degenerate projection (e.g. all boundary vertices on a sphere's
         // pole seam) does not mean an empty face — it means the boundary failed
         // to bound a sub-region, so the face spans the full analytic domain.

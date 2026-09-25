@@ -162,8 +162,8 @@ pub(super) fn split_noseam_face_direct(
                 pool.push(reverse_of(arc));
             }
         }
-        // An open arc no split carries fails the face rather than keeping it
-        // whole (see the arrangement below).
+        // When the open arcs do not chain into one loop, the face fails
+        // instead of being kept whole (see the arrangement below).
         let Some(remainder) = chain_closed_loop(pool, close_tol) else {
             return Vec::new();
         };
@@ -269,10 +269,10 @@ fn split_noseam_by_arrangement(
     face_id: FaceId,
     tol: f64,
 ) -> Vec<SplitSubFace> {
-    // Every arc here crosses the face, so a region this cannot trace fails
-    // the face (an empty split) rather than keeping it whole: one sample
-    // would then classify the whole hemisphere, which can close a wrong
-    // solid the result gates accept.
+    // Every arc here crosses the face, so when a region cannot be traced
+    // the face fails (an empty split) instead of being kept whole: one
+    // sample would then classify the whole hemisphere, which can close a
+    // wrong solid the result gates accept.
     // Need at least two arcs to interleave; one arc is handled by the cap path.
     if open_sections.len() < 2 {
         return Vec::new();
@@ -282,26 +282,8 @@ fn split_noseam_by_arrangement(
     // the seam only when at least three of them surround the pole: a single
     // chain (a half-space) or two (a slab) leave regions on both sides of it,
     // and the one this keeps would drop the rest.
-    let seam_plane = {
-        let pts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
-        let mut n = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-        let mut c = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-        for (i, a) in pts.iter().enumerate() {
-            let b = pts[(i + 1) % pts.len()];
-            n += brepkit_math::vec::Vec3::new(
-                (a.y() - b.y()) * (a.z() + b.z()),
-                (a.z() - b.z()) * (a.x() + b.x()),
-                (a.x() - b.x()) * (a.y() + b.y()),
-            );
-            c += brepkit_math::vec::Vec3::new(a.x(), a.y(), a.z());
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let c = c * (1.0 / pts.len().max(1) as f64);
-        n.normalize()
-            .ok()
-            .map(|n| (n, Point3::new(c.x(), c.y(), c.z())))
-    };
-    let Some((seam_n, seam_p)) = seam_plane else {
+    let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
+    let Some((seam_n, seam_p)) = loop_plane(&verts) else {
         return Vec::new();
     };
     let seam_ends = open_sections
@@ -440,34 +422,14 @@ fn build_seam_arcs(
     tol: f64,
 ) -> Option<Vec<OrientedPCurveEdge>> {
     use brepkit_math::curves::Circle3D;
-    use brepkit_math::vec::Vec3;
 
     let FaceSurface::Sphere(sphere) = surface else {
         return None;
     };
 
-    // Seam-plane normal + a point on it, from the boundary polygon (Newell).
+    // Seam-plane normal + a point on it, from the boundary polygon.
     let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
-    if verts.len() < 3 {
-        return None;
-    }
-    let mut nrm = Vec3::new(0.0, 0.0, 0.0);
-    let mut cen = Vec3::new(0.0, 0.0, 0.0);
-    let n = verts.len();
-    for i in 0..n {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        nrm += Vec3::new(
-            (a.y() - b.y()) * (a.z() + b.z()),
-            (a.z() - b.z()) * (a.x() + b.x()),
-            (a.x() - b.x()) * (a.y() + b.y()),
-        );
-        cen += Vec3::new(a.x(), a.y(), a.z());
-    }
-    let plane_n = nrm.normalize().ok()?;
-    #[allow(clippy::cast_precision_loss)]
-    let inv_n = 1.0 / n as f64;
-    let plane_pt = Point3::new(cen.x() * inv_n, cen.y() * inv_n, cen.z() * inv_n);
+    let (plane_n, plane_pt) = loop_plane(&verts)?;
 
     // Seam circle on the sphere: centre offset from the sphere centre along the
     // plane normal by the plane's signed distance; radius from Pythagoras.
@@ -694,6 +656,29 @@ fn loop_polyline(loop_edges: &[OrientedPCurveEdge]) -> Vec<brepkit_math::vec::Po
         }
     }
     poly
+}
+
+/// The plane of a closed polyline: its unit Newell normal (along its vector
+/// area, so the loop runs counter-clockwise about it) and its vertex centroid.
+/// `None` for fewer than three points or no area.
+fn loop_plane(pts: &[Point3]) -> Option<(brepkit_math::vec::Vec3, Point3)> {
+    use brepkit_math::vec::Vec3;
+    if pts.len() < 3 {
+        return None;
+    }
+    let mut n = Vec3::new(0.0, 0.0, 0.0);
+    let mut c = Vec3::new(0.0, 0.0, 0.0);
+    for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
+        n += Vec3::new(
+            (a.y() - b.y()) * (a.z() + b.z()),
+            (a.z() - b.z()) * (a.x() + b.x()),
+            (a.x() - b.x()) * (a.y() + b.y()),
+        );
+        c += Vec3::new(a.x(), a.y(), a.z());
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let c = c * (1.0 / pts.len() as f64);
+    Some((n.normalize().ok()?, Point3::new(c.x(), c.y(), c.z())))
 }
 
 /// Reverse a loop's orientation (a hole is traversed opposite to the containing
@@ -2614,25 +2599,7 @@ pub(super) fn split_face_with_internal_loops(
         let caps: Vec<Option<(Point3, brepkit_math::vec::Vec3, f64)>> = loops
             .iter()
             .map(|l| {
-                let pts = sample_edges_3d(l);
-                if pts.len() < 3 {
-                    return None;
-                }
-                let mut n = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-                let mut c = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-                for (i, a) in pts.iter().enumerate() {
-                    let b = pts[(i + 1) % pts.len()];
-                    n += brepkit_math::vec::Vec3::new(
-                        (a.y() - b.y()) * (a.z() + b.z()),
-                        (a.z() - b.z()) * (a.x() + b.x()),
-                        (a.x() - b.x()) * (a.y() + b.y()),
-                    );
-                    c += brepkit_math::vec::Vec3::new(a.x(), a.y(), a.z());
-                }
-                #[allow(clippy::cast_precision_loss)]
-                let c = c * (1.0 / pts.len() as f64);
-                let c = Point3::new(c.x(), c.y(), c.z());
-                let n = n.normalize().ok()?;
+                let (n, c) = loop_plane(&sample_edges_3d(l))?;
                 let d = (c - sph.center()).dot(n);
                 if d.abs() <= tol_3d * 100.0 {
                     return None;

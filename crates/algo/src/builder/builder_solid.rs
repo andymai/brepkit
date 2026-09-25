@@ -712,10 +712,36 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 let v = v_period.map_or(v, |p| v - ((v - pv) / p).round() * p);
                 uvs[i] = (u, v);
             }
-            let (u_lo, u_hi, v_lo, v_hi) = uvs.iter().fold(
+            let (u_lo, u_hi, mut v_lo, mut v_hi) = uvs.iter().fold(
                 (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
                 |(ul, uh, vl, vh), &(u, v)| (ul.min(u), uh.max(u), vl.min(v), vh.max(v)),
             );
+            // A sphere face whose loop winds the axis holds the pole on the
+            // loop's left, which the box of its boundary never reaches (a
+            // hemisphere's box is a sliver on its equator, and the face's
+            // flux would drop out of the vote): progress toward +u puts the
+            // north pole there. A sample at a pole has no longitude, and
+            // stepping through one could count a turn the loop never makes.
+            if matches!(surface, FaceSurface::Sphere(_)) {
+                let off_pole: Vec<f64> = uvs
+                    .iter()
+                    .filter(|&&(_, v)| v.abs() < std::f64::consts::FRAC_PI_2 - 1e-6)
+                    .map(|&(u, _)| u)
+                    .collect();
+                let progress: f64 = off_pole
+                    .iter()
+                    .zip(off_pole.iter().cycle().skip(1))
+                    .map(|(a, b)| {
+                        (b - a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                            - std::f64::consts::PI
+                    })
+                    .sum();
+                if progress > std::f64::consts::PI {
+                    v_hi = std::f64::consts::FRAC_PI_2;
+                } else if progress < -std::f64::consts::PI {
+                    v_lo = -std::f64::consts::FRAC_PI_2;
+                }
+            }
             let rev_flag = face.is_reversed();
             let (n_u, n_v) = (24usize, 24usize);
             let du = (u_hi - u_lo) / n_u as f64;

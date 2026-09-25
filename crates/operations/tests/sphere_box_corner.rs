@@ -298,8 +298,10 @@ fn ball_cut_and_fused_with_a_turned_octant_box() {
 /// A ball turned about an oblique axis, or mirrored through a slanted plane,
 /// with the tool moved alongside: a box corner, a slab and a rod stay exact
 /// and valid. A turned hemisphere's equator is a rounding sliver of `v`, not
-/// an extent; the slab's latitudes nest on one hemisphere. The Cut bounds
-/// cover the chordal equator's measure (the roadmap's sphere measure row).
+/// an extent; the slab's latitudes nest on one hemisphere; the rod's tunnel
+/// leaves a shell whose hemispheres' flux decides its orientation. The
+/// corner and slab Cut bounds cover the chordal equator's measure (the
+/// roadmap's sphere measure row).
 #[test]
 fn turned_and_mirrored_balls_stay_exact() {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
@@ -323,13 +325,24 @@ fn turned_and_mirrored_balls_stay_exact() {
         })
     });
     let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(0.3);
+    let at = Point3::new(0.3, 0.0, 0.0);
+    let normal = brepkit_math::vec::Vec3::new(1.0, 0.2, 0.1);
+    let unit = normal.normalize().unwrap();
     for pose in ["turned", "mirrored"] {
+        let place = |p: Point3| {
+            if pose == "turned" {
+                turn.mul_point(p)
+            } else {
+                p - unit * (2.0 * (p - at).dot(unit))
+            }
+        };
         for (tool, op, truth, bound) in [
             ("corner", BooleanOp::Intersect, corner, 1e-7),
             ("corner", BooleanOp::Cut, ball - corner, 2e-4),
             ("slab", BooleanOp::Intersect, zone, 1e-9),
             ("slab", BooleanOp::Cut, ball - zone, 2e-4),
             ("rod", BooleanOp::Intersect, rod, 1e-6),
+            ("rod", BooleanOp::Cut, ball - rod, 1e-7),
         ] {
             let label = format!("{pose} {tool} {op:?}");
             let mut topo = Topology::new();
@@ -357,10 +370,6 @@ fn turned_and_mirrored_balls_stay_exact() {
                 transform_solid(&mut topo, sphere, &turn).unwrap();
                 transform_solid(&mut topo, block, &turn).unwrap();
             } else {
-                let (at, normal) = (
-                    Point3::new(0.3, 0.0, 0.0),
-                    brepkit_math::vec::Vec3::new(1.0, 0.2, 0.1),
-                );
                 sphere = mirror(&mut topo, sphere, at, normal).unwrap();
                 block = mirror(&mut topo, block, at, normal).unwrap();
             }
@@ -375,6 +384,24 @@ fn turned_and_mirrored_balls_stay_exact() {
                 (volume - truth).abs() < bound * truth,
                 "{label}: volume {volume}, truth {truth}"
             );
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            // A point in the tool's part of the ball and one in the rest,
+            // placed like the solids.
+            let (in_tool, in_rest) = match tool {
+                "corner" => (Point3::new(1.05, 1.25, 0.85), Point3::new(-2.0, -1.0, 0.3)),
+                "slab" => (Point3::new(0.2, -0.3, 1.5), Point3::new(0.2, -0.3, 0.5)),
+                _ => (Point3::new(0.5, 0.0, 1.0), Point3::new(-1.5, 0.0, -1.0)),
+            };
+            let (tool_side, rest_side) = if op == BooleanOp::Cut {
+                (PointClassification::Outside, PointClassification::Inside)
+            } else {
+                (PointClassification::Inside, PointClassification::Outside)
+            };
+            let at_point =
+                |p: Point3| classify_point(&topo, result, place(p), &ClassifyOptions::default());
+            assert_eq!(at_point(in_tool).unwrap(), tool_side, "{label}: tool side");
+            assert_eq!(at_point(in_rest).unwrap(), rest_side, "{label}: rest");
         }
     }
 }

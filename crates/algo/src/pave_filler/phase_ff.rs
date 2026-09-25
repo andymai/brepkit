@@ -1048,7 +1048,18 @@ impl FaceExtent {
                     }
                 }
             };
-            let margin = (v1 - v0).abs() * 0.01 + tol.linear;
+            // A sphere range reaching a pole spans from the face's boundary
+            // latitude, where the margin keeps sections on the boundary; a
+            // hundredth of a hemisphere's span would admit latitudes past it.
+            let margin = match surface {
+                FaceSurface::Sphere(s)
+                    if (v1 - std::f64::consts::FRAC_PI_2).abs() < 1e-12
+                        || (v0 + std::f64::consts::FRAC_PI_2).abs() < 1e-12 =>
+                {
+                    10.0 * tol.linear / s.radius().max(tol.linear)
+                }
+                _ => (v1 - v0).abs() * 0.01 + tol.linear,
+            };
             // For a partial-arc lateral face (rounded-rect corner = a 90°
             // quarter-cylinder), record the angular gap the face does NOT
             // cover so `contains` rejects a point that projects onto the
@@ -3320,7 +3331,8 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
 
 /// Pole-side axis of a spherical face, from its boundary winding: the summed
 /// `(midpoint − center) × chord` over the outer wire points from the sphere
-/// center into the face's hemisphere (negated for a reversed face). Returns
+/// center into the face's hemisphere, reversed faces included: their wire
+/// still runs about the sphere's outward normal. Returns
 /// `None` when the wire is degenerate or near-planar through the center, so the
 /// side is ambiguous. Shared by the broad-phase AABB and the section in-both
 /// filter so the two stay consistent.
@@ -3364,8 +3376,8 @@ fn sphere_region_axis(
         return None;
     }
     // Summed (midpoint − center) × chord around the closed loop ≈ 2·(area
-    // vector): its direction is the face's outward pole axis (negated for a
-    // reversed face). The cross products have units of length^2, so the
+    // vector): its direction is the face's outward pole axis. The cross
+    // products have units of length^2, so the
     // degeneracy threshold is derived from the input magnitudes: `scale` sums
     // each term's bound (|mid − center| · |chord|); a near-planar-through-center
     // loop (ambiguous side) leaves `axis` small relative to it.
@@ -3380,9 +3392,6 @@ fn sphere_region_axis(
         let chord = b - a;
         scale += radial.length() * chord.length();
         axis += radial.cross(chord);
-    }
-    if face.is_reversed() {
-        axis = axis * -1.0;
     }
     let len = axis.length();
     if scale < tol.linear * tol.linear || len < scale * tol.linear {
@@ -3485,20 +3494,20 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
             v_min = -std::f64::consts::FRAC_PI_2;
         }
     }
-    // A boundary along one latitude (a hemisphere's equator) spans no v; on
-    // a turned sphere rounding leaves it a sliver wide, which as an extent
-    // would clip away every section inside the face. The sliver is measured
-    // on the surface, where an angular v spans its radius per radian.
-    let v_scale = match surface {
-        FaceSurface::Sphere(s) => s.radius(),
-        FaceSurface::Torus(t) => t.minor_radius(),
-        _ => 1.0,
+    // A boundary along one latitude (a hemisphere's equator, a tube's rim)
+    // spans no v; on a turned sphere or torus rounding leaves it a sliver
+    // wide, which as an extent would clip away every section inside the face.
+    // The sliver is measured on the surface, where an angular v spans its
+    // radius per radian.
+    let bounded = match surface {
+        FaceSurface::Sphere(s) => (v_max - v_min) * s.radius() > Tolerance::new().linear,
+        FaceSurface::Torus(t) => (v_max - v_min) * t.minor_radius() > Tolerance::new().linear,
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_) => v_min < v_max,
     };
-    if (v_max - v_min) * v_scale > Tolerance::new().linear {
-        Some((v_min, v_max))
-    } else {
-        None
-    }
+    bounded.then_some((v_min, v_max))
 }
 
 /// Intermediate intersection result before face IDs are assigned.
