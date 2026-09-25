@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.28](https://github.com/andymai/brepkit/compare/v4.0.27...v4.0.28) (2026-09-25)
+
+
+### Bug Fixes
+
+* **check:** read a reversed face's side from its wire ([#1768](https://github.com/andymai/brepkit/issues/1768)) ([3cdc0c7](https://github.com/andymai/brepkit/commit/3cdc0c7a402f27e181e6c04cd922ce87cd7c24a9))
+
 ## [4.0.27](https://github.com/andymai/brepkit/compare/v4.0.26...v4.0.27) (2026-09-25)
 
 
