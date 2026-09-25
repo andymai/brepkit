@@ -116,11 +116,19 @@ fn fill_boundary_on(topo: &Topology, arena: &mut GfaArena) -> Result<(), AlgoErr
 /// Section edges from FF intersection curves go into `pave_blocks_sc`.
 fn fill_section_sc(arena: &mut GfaArena) {
     // Snapshot curve data to avoid aliasing
-    let curve_data: Vec<_> = arena
+    let mut curve_data: Vec<_> = arena
         .curves
         .iter()
         .map(|c| (c.face_a, c.face_b, c.pave_blocks.clone()))
         .collect();
+    // A face a curve also sections takes its blocks as a section too (listed
+    // as its own pair; the face sets absorb the repeat).
+    curve_data.extend(arena.curve_extra_faces.iter().flat_map(|(&idx, faces)| {
+        let pbs = arena.curves.get(idx).map(|c| c.pave_blocks.clone());
+        faces
+            .iter()
+            .filter_map(move |&f| pbs.clone().map(|pbs| (f, f, pbs)))
+    }));
 
     for (face_a, face_b, pb_ids) in curve_data {
         for &pb_id in &pb_ids {

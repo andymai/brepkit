@@ -5349,18 +5349,20 @@ fn emit_split_circle_arcs(
     // sharing a face (e.g. both hemispheres of a faceted sphere paired with
     // the same coplanar box face yield the same equator arc). Re-emitting it
     // would hand the shared face two coincident sections and corrupt its
-    // split. First pair wins; the later pair contributes nothing new to the
-    // shared face anyway (the circle lies along its twin's region boundary).
+    // split, so the earlier curve stays the only one; the later pair's other
+    // face still needs it (the arc closes the loop of whichever hemisphere
+    // the result keeps) and is recorded as a face that curve also sections.
     let close_pts = |a: Point3, b: Point3| (a - b).length() < tol.linear * 10.0;
-    let arc_exists = |arena: &GfaArena, p_s: Point3, p_e: Point3, p_m: Point3| -> bool {
-        arena.curves.iter().any(|c| {
+    let arc_exists = |arena: &GfaArena, p_s: Point3, p_e: Point3, p_m: Point3| -> Option<usize> {
+        arena.curves.iter().enumerate().position(|(idx, c)| {
             let EdgeCurve::Circle(existing) = &c.curve else {
                 return false;
             };
-            let shares_face = c.face_a == face_a
-                || c.face_a == face_b
-                || c.face_b == face_a
-                || c.face_b == face_b;
+            let extra = arena.curve_extra_faces.get(&idx);
+            let shares_face = [c.face_a, c.face_b]
+                .iter()
+                .chain(extra.into_iter().flatten())
+                .any(|&f| f == face_a || f == face_b);
             if !shares_face
                 || (existing.center() - circle.center()).length() > tol.linear * 10.0
                 || (existing.radius() - circle.radius()).abs() > tol.linear * 10.0
@@ -5385,11 +5387,18 @@ fn emit_split_circle_arcs(
             let (t_e, p_e, idx_e) = w[1];
 
             let p_m = circle.evaluate(0.5 * (t_s + t_e));
-            if arc_exists(arena, p_s, p_e, p_m) {
+            if let Some(existing) = arc_exists(arena, p_s, p_e, p_m) {
                 log::debug!(
                     "FF: skip duplicate closed-circle arc t=[{t_s:.4},{t_e:.4}] \
                      for {face_a:?}/{face_b:?}"
                 );
+                let (c_a, c_b) = (arena.curves[existing].face_a, arena.curves[existing].face_b);
+                let extra = arena.curve_extra_faces.entry(existing).or_default();
+                for face in [face_a, face_b] {
+                    if face != c_a && face != c_b && !extra.contains(&face) {
+                        extra.push(face);
+                    }
+                }
                 continue;
             }
 

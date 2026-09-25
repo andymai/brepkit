@@ -138,7 +138,7 @@ fn box_octant_feeds_a_second_boolean() {
             RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
         })
     });
-    for (lower, spin) in [(false, 0.0), (true, 0.0), (false, 0.3)] {
+    for (lower, spin) in [(false, 0.0), (true, 0.0), (false, 0.3), (true, 0.3)] {
         let label = format!("lower {lower} spin {spin}");
         let turn = Mat4::rotation_z(spin);
         let octant_of = |topo: &mut Topology| {
@@ -218,6 +218,79 @@ fn box_octant_feeds_a_second_boolean() {
             (volume - truth).abs() < 1e-9 * truth,
             "{label}: volume {volume}, truth {truth}"
         );
+    }
+}
+
+/// The ball within the box over an octant, both turned about `z`, is the
+/// octant from the boolean engine above and below the equator: four faces,
+/// valid, `pi R³ / 6`. Below it, the box's top face meets the ball on the
+/// faceted equator, whose arc both hemispheres need.
+#[test]
+fn turned_octants_are_exact() {
+    let truth = PI * RADIUS.powi(3) / 6.0;
+    for spin in [0.3, 1.1, -0.4] {
+        for lower in [false, true] {
+            let label = format!("lower {lower} spin {spin}");
+            let turn = Mat4::rotation_z(spin);
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            let z0 = if lower { -10.0 } else { 0.0 };
+            transform_solid(&mut topo, block, &(turn * Mat4::translation(0.0, 0.0, z0))).unwrap();
+            transform_solid(&mut topo, sphere, &turn).unwrap();
+            let piece = boolean(&mut topo, BooleanOp::Intersect, sphere, block).unwrap();
+            assert_eq!(
+                solid_faces(&topo, piece).unwrap().len(),
+                4,
+                "{label}: faces"
+            );
+            assert!(exact(&topo, piece), "{label}: fell back to a mesh");
+            assert!(
+                validate_solid(&topo, piece).unwrap().is_valid(),
+                "{label}: invalid"
+            );
+            let volume = solid_volume(&topo, piece, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-9 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
+
+/// The ball less, and fused with, the box over an octant, both turned 0.3
+/// about `z`, above and below the equator: exact and valid, the ball less its
+/// octant or joined to the box by the rest of it. The volume bound covers the
+/// chordal equator's measure (the roadmap's sphere measure row).
+#[test]
+fn ball_cut_and_fused_with_a_turned_octant_box() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let octant = PI * RADIUS.powi(3) / 6.0;
+    for (op, truth) in [
+        (BooleanOp::Cut, ball - octant),
+        (BooleanOp::Fuse, 1000.0 + ball - octant),
+    ] {
+        for lower in [false, true] {
+            let label = format!("{op:?} lower {lower}");
+            let turn = Mat4::rotation_z(0.3);
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            let z0 = if lower { -10.0 } else { 0.0 };
+            transform_solid(&mut topo, block, &(turn * Mat4::translation(0.0, 0.0, z0))).unwrap();
+            transform_solid(&mut topo, sphere, &turn).unwrap();
+            let result = boolean(&mut topo, op, sphere, block).unwrap();
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
+            assert!(
+                validate_solid(&topo, result).unwrap().is_valid(),
+                "{label}: invalid"
+            );
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 2e-4 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
     }
 }
 
