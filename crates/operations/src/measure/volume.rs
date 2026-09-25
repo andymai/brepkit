@@ -388,7 +388,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     // Establish the shared revolution axis from the first quadric wall.
     let mut axis: Option<(Point3, Vec3)> = None;
     let mut has_wall = false;
-    let mut has_other_wall = false;
+    let (mut has_cone, mut has_torus) = (false, false);
     let axis_tol = 1e-7;
 
     let set_or_check_axis = |axis: &mut Option<(Point3, Vec3)>, o: Point3, d: Vec3| -> bool {
@@ -439,14 +439,14 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
             }
             FaceSurface::Cone(c) => {
                 has_wall = true;
-                has_other_wall = true;
+                has_cone = true;
                 if !set_or_check_axis(&mut axis, c.apex(), c.axis()) {
                     return None;
                 }
             }
             FaceSurface::Torus(t) => {
                 has_wall = true;
-                has_other_wall = true;
+                has_torus = true;
                 if !set_or_check_axis(&mut axis, t.center(), t.z_axis()) {
                     return None;
                 }
@@ -470,7 +470,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     for &fid in &faces {
         let face = topo.face(fid).ok()?;
         match face.surface() {
-            FaceSurface::Plane { normal, .. } => {
+            FaceSurface::Plane { normal, d } => {
                 let unit = normal.normalize().ok()?;
                 let v = if unit.cross(axis_d).length() <= 1e-6 {
                     if !planar_face_arcs_centered_on_axis(topo, fid, axis_o, axis_d) {
@@ -481,8 +481,15 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
                 } else {
                     // A face parallel to the axis of cylinder walls (a flat on
                     // a shaft, the cut face of a half rod) meets them in
-                    // rulings, so the walls stay rectangles in (u, v).
-                    if unit.dot(axis_d).abs() > 1e-9 || has_other_wall {
+                    // rulings, and one through the axis meets cone walls in
+                    // rulings through the apex, so the walls stay rectangles
+                    // in (u, v).
+                    let o = axis_o - Point3::new(0.0, 0.0, 0.0);
+                    let off_axis = (unit.dot(o) - d / normal.length()).abs();
+                    if unit.dot(axis_d).abs() > 1e-9
+                        || has_torus
+                        || (has_cone && off_axis > 1e-7_f64.max(1e-12 * o.length()))
+                    {
                         return None;
                     }
                     has_side_face = true;
@@ -501,8 +508,10 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     // an L in (u, v), which the rectangle integrator would over-count.
     if has_side_face {
         for &fid in &faces {
-            if matches!(topo.face(fid).ok()?.surface(), FaceSurface::Cylinder(_))
-                && !cylinder_wall_is_rectangle(topo, fid)?
+            if matches!(
+                topo.face(fid).ok()?.surface(),
+                FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+            ) && !ruled_wall_is_rectangle(topo, fid)?
             {
                 return None;
             }
@@ -528,16 +537,19 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
     Some(total.abs())
 }
 
-/// Whether a cylinder face is a rectangle in `(u, v)`: every line a ruling
-/// (parallel to the axis) running its full height, every other edge a rim
-/// arc at its bottom or top spanning at most a half turn (the angular-range
-/// reader takes an arc's shorter side).
-fn cylinder_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> {
+/// Whether a cylinder or cone face is a rectangle in `(u, v)`: every line a
+/// ruling (along the axis, or through a cone's apex) running its full height,
+/// every other edge a rim arc at its bottom or top spanning at most a half
+/// turn (the angular-range reader takes an arc's shorter side).
+fn ruled_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> {
     use brepkit_topology::edge::EdgeCurve;
     let face = topo.face(face_id).ok()?;
-    let FaceSurface::Cylinder(cyl) = face.surface() else {
-        return Some(false);
+    let (axis, apex) = match face.surface() {
+        FaceSurface::Cylinder(cyl) => (cyl.axis(), None),
+        FaceSurface::Cone(cone) => (cone.axis(), Some(cone.apex())),
+        _ => return Some(false),
     };
+    let surface = face.surface();
     let wire = topo.wire(face.outer_wire()).ok()?;
     let mut ends = Vec::with_capacity(wire.edges().len());
     for oe in wire.edges() {
@@ -552,16 +564,23 @@ fn cylinder_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> 
         {
             return Some(false);
         }
-        if matches!(edge.curve(), EdgeCurve::Line)
-            && (end - start).cross(cyl.axis()).length() > 1e-9 * (end - start).length().max(1.0)
-        {
-            return Some(false);
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            let along = match apex {
+                None => axis,
+                Some(apex) if (start - apex).length() > (end - apex).length() => start - apex,
+                Some(apex) => end - apex,
+            };
+            let off = (end - start).cross(along).length() / along.length().max(1e-300);
+            if off > 1e-9 * (end - start).length().max(1.0) {
+                return Some(false);
+            }
         }
-        ends.push((
-            edge.curve().clone(),
-            cyl.project_point(start).1,
-            cyl.project_point(end).1,
-        ));
+        let (Some((_, v_start)), Some((_, v_end))) =
+            (surface.project_point(start), surface.project_point(end))
+        else {
+            return None;
+        };
+        ends.push((edge.curve().clone(), v_start, v_end));
     }
     let v_min = ends
         .iter()
@@ -576,7 +595,7 @@ fn cylinder_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> 
     Some(ends.iter().all(|(curve, a, b)| match curve {
         EdgeCurve::Line => (at(*a, v_min) && at(*b, v_max)) || (at(*a, v_max) && at(*b, v_min)),
         EdgeCurve::Circle(c) => {
-            c.normal().cross(cyl.axis()).length() <= 1e-9
+            c.normal().cross(axis).length() <= 1e-9
                 && ((at(*a, v_min) && at(*b, v_min)) || (at(*a, v_max) && at(*b, v_max)))
         }
         EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,

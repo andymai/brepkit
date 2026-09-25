@@ -705,6 +705,58 @@ pub(super) fn validate_boolean_result(
         });
     }
 
+    // An edge that does not lie on a face it bounds (two curves welded by
+    // their shared ends, a face's arc taken for the neighbour's chord) passes
+    // every count above yet bounds the face wrongly: its mesh opens and its
+    // volume misreads. A welded corner arc's sagitta is small against the
+    // solid, so the bound is loose.
+    let reach = crate::measure::solid_bounding_box(topo, solid)
+        .map(|bb| (bb.max - bb.min).length())
+        .unwrap_or(0.0);
+    if reach > 0.0 {
+        for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+            let face = topo.face(fid)?;
+            let surface = face.surface();
+            if matches!(surface, FaceSurface::Nurbs(_)) {
+                continue;
+            }
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid)?.edges() {
+                    let edge = topo.edge(oe.edge())?;
+                    let (sp, ep) = (
+                        topo.vertex(edge.start())?.point(),
+                        topo.vertex(edge.end())?.point(),
+                    );
+                    let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                    let mid = edge
+                        .curve()
+                        .evaluate_with_endpoints(f64::midpoint(t0, t1), sp, ep);
+                    let off = if let FaceSurface::Plane { normal, d } = surface {
+                        let origin = Point3::new(0.0, 0.0, 0.0);
+                        (normal.dot(mid - origin) - d).abs() / normal.length()
+                    } else {
+                        let Some(foot) = surface
+                            .project_point(mid)
+                            .and_then(|(u, v)| surface.evaluate(u, v))
+                        else {
+                            continue;
+                        };
+                        (foot - mid).length()
+                    };
+                    if off > 0.05 * reach {
+                        return Err(crate::OperationsError::InvalidInput {
+                            reason: format!(
+                                "boolean result has an edge {off:.3} off the {} face it bounds",
+                                surface.type_tag()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

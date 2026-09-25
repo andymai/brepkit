@@ -60,9 +60,16 @@ fn spacer_foot_fuse_is_exact_and_strictly_valid() {
     let report = brepkit_operations::validate::validate_solid(&topo, fused).unwrap();
     assert!(report.is_valid(), "fuse must validate: {report:?}");
 
-    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, fused, 0.01).unwrap();
+    // The exact faces integrate to the same volume at any deflection; the
+    // mesh reads within a part in five hundred of it.
+    let vol = brepkit_operations::measure::solid_volume(&topo, fused, 0.01).unwrap();
     assert!(
-        (vol - 2404.44).abs() < 0.5,
-        "exact fuse volume expected ~2404.44 at 0.01 deflection, got {vol}"
+        (vol - 2397.8346).abs() < 1e-3,
+        "exact fuse volume expected 2397.8346, got {vol}"
+    );
+    let meshed = brepkit_operations::measure::oriented_solid_volume(&topo, fused, 0.01).unwrap();
+    assert!(
+        (meshed - vol).abs() < 2e-3 * vol,
+        "mesh volume {meshed} strays from the exact {vol}"
     );
 }

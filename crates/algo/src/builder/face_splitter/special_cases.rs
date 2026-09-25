@@ -1640,16 +1640,21 @@ pub(super) fn split_periodic_face_into_sectors(
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::vec::{Point2, Vec2};
     use std::f64::consts::{PI, TAU};
-    if !matches!(surface, FaceSurface::Cylinder(_)) {
-        return None;
-    }
+    let apex = match surface {
+        FaceSurface::Cylinder(_) => None,
+        FaceSurface::Cone(cone) => Some(cone.apex()),
+        _ => return None,
+    };
     let close_tol = tol * 100.0;
+    // The apex has no longitude: every u reading skips it.
+    let at_apex = |p: Point3| apex.is_some_and(|a| (p - a).length() < close_tol);
 
     // A rim is a closed circle edge, or several arcs of one circle when
     // earlier booleans split it (a hinge barrel's rim after its journals were
     // cut): every circle edge lies on one of exactly two rims, told apart by
     // their axial v. The sectors mint their own rim arcs from the circle
-    // geometry, so how the rim arrives fragmented does not matter here.
+    // geometry, so how the rim arrives fragmented does not matter here. A
+    // pointed cone has one rim, its seam running up to the apex.
     let mut rim_edges: Vec<&OrientedPCurveEdge> = Vec::new();
     let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
     for e in boundary_edges {
@@ -1660,28 +1665,36 @@ pub(super) fn split_periodic_face_into_sectors(
             _ => return None,
         }
     }
-    if rim_edges.len() < 2 || seam_edges.is_empty() {
+    if rim_edges.is_empty() || seam_edges.is_empty() {
         return None;
     }
-    let mut rim_levels: Vec<(f64, &OrientedPCurveEdge)> = Vec::new();
+    let mut rim_levels: Vec<(f64, Option<&OrientedPCurveEdge>)> = Vec::new();
     for e in &rim_edges {
         let (_, v) = surface.project_point(e.start_3d)?;
-        match rim_levels
-            .iter()
-            .position(|(lv, _)| (lv - v).abs() < close_tol)
-        {
-            Some(_) => {}
-            None => rim_levels.push((v, e)),
+        if !rim_levels.iter().any(|(lv, _)| (lv - v).abs() < close_tol) {
+            rim_levels.push((v, Some(e)));
         }
     }
-    if rim_levels.len() != 2 {
-        return None;
+    let reaches_apex = seam_edges
+        .iter()
+        .any(|e| at_apex(e.start_3d) || at_apex(e.end_3d));
+    match (rim_levels.len(), apex) {
+        (2, _) if !reaches_apex => {}
+        (1, Some(apex)) if reaches_apex => rim_levels.push((surface.project_point(apex)?.1, None)),
+        _ => return None,
     }
-    let boundary_circles: Vec<&OrientedPCurveEdge> = rim_levels.iter().map(|(_, e)| *e).collect();
 
-    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
+    let seam_u = seam_edges
+        .iter()
+        .flat_map(|e| [e.start_3d, e.end_3d])
+        .find(|&p| !at_apex(p))
+        .and_then(|p| surface.project_point(p))?
+        .0;
     for e in &seam_edges {
         for p in [e.start_3d, e.end_3d] {
+            if at_apex(p) {
+                continue;
+            }
             let (u, _) = surface.project_point(p)?;
             let du = (u - seam_u + PI).rem_euclid(TAU) - PI;
             if du.abs() > 1e-6 {
@@ -1690,16 +1703,9 @@ pub(super) fn split_periodic_face_into_sectors(
         }
     }
 
-    let rim_v = |e: &OrientedPCurveEdge| -> Option<f64> {
-        let (_, v) = surface.project_point(e.start_3d)?;
-        Some(v)
-    };
-    let v0 = rim_v(boundary_circles[0])?;
-    let v1 = rim_v(boundary_circles[1])?;
-    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
-        (v0, boundary_circles[0], v1, boundary_circles[1])
-    } else {
-        (v1, boundary_circles[1], v0, boundary_circles[0])
+    rim_levels.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let [(v_bot, bot_edge), (v_top, top_edge)] = rim_levels[..] else {
+        return None;
     };
     if v_top - v_bot < close_tol {
         return None;
@@ -1714,8 +1720,9 @@ pub(super) fn split_periodic_face_into_sectors(
         }
         let (us, vs) = surface.project_point(sec.start)?;
         let (ue, ve) = surface.project_point(sec.end)?;
+        let us = if at_apex(sec.start) { ue } else { us };
         let du = (us - ue + PI).rem_euclid(TAU) - PI;
-        if du.abs() > 1e-6 {
+        if !at_apex(sec.end) && du.abs() > 1e-6 {
             return None;
         }
         let (v_lo, v_hi) = if vs < ve { (vs, ve) } else { (ve, vs) };
@@ -1788,8 +1795,14 @@ pub(super) fn split_periodic_face_into_sectors(
             _ => None,
         }
     };
-    let bot_circle = rim_circle(bot_edge)?;
-    let top_circle = rim_circle(top_edge)?;
+    let bot_circle = bot_edge.map(rim_circle);
+    let top_circle = top_edge.map(rim_circle);
+    if bot_circle.as_ref().is_some_and(Option::is_none)
+        || top_circle.as_ref().is_some_and(Option::is_none)
+    {
+        return None;
+    }
+    let (bot_circle, top_circle) = (bot_circle.flatten(), top_circle.flatten());
     let mk_arc = |circle: &brepkit_math::curves::Circle3D,
                   v: f64,
                   a_rel: f64,
@@ -1824,45 +1837,59 @@ pub(super) fn split_periodic_face_into_sectors(
         })
     };
 
-    // Sector loop orientation must match the original boundary traversal:
-    // the bottom rim's traversal direction at the seam decides whether the
-    // sector floor runs CCW (+u) or CW (-u).
-    let bot_tangent = {
-        let c = &bot_circle;
-        let t = c.tangent(c.project(bot_edge.start_3d));
-        if bot_edge.forward { t } else { -t }
+    // Sector loop orientation must match the original boundary traversal: a
+    // loop counterclockwise in (u, v) runs its bottom rim toward +u and its
+    // top rim toward -u, so either rim's traversal decides it.
+    let (rim_edge, rim, rim_v, rim_is_bottom) = match (bot_edge, &bot_circle, top_edge, &top_circle)
+    {
+        (Some(e), Some(c), _, _) => (e, c, v_bot, true),
+        (_, _, Some(e), Some(c)) => (e, c, v_top, false),
+        _ => return None,
+    };
+    let rim_tangent = {
+        let t = rim.tangent(rim.project(rim_edge.start_3d));
+        if rim_edge.forward { t } else { -t }
     };
     let du_dir = {
-        // Surface partial in +u where the representative bottom rim edge
-        // starts (a fragmented rim's piece need not start at the seam, and a
-        // circle's tangent turns with u).
-        let (u_s, _) = surface.project_point(bot_edge.start_3d)?;
-        let p0 = surface.evaluate(u_s, v_bot)?;
-        let p1 = surface.evaluate(u_s + 1e-4, v_bot)?;
+        // Surface partial in +u where the representative rim edge starts (a
+        // fragmented rim's piece need not start at the seam, and a circle's
+        // tangent turns with u).
+        let (u_s, _) = surface.project_point(rim_edge.start_3d)?;
+        let p0 = surface.evaluate(u_s, rim_v)?;
+        let p1 = surface.evaluate(u_s + 1e-4, rim_v)?;
         (p1 - p0).normalize().ok()?
     };
-    let floor_ccw = bot_tangent.dot(du_dir) > 0.0;
+    let floor_ccw = (rim_tangent.dot(du_dir) > 0.0) == rim_is_bottom;
 
     let mut sectors = Vec::with_capacity(cuts.len() - 1);
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
+        // A pointed cone's apex level has no arc: the rulings meet there.
+        let arc = |circle: Option<&brepkit_math::curves::Circle3D>, v: f64, ccw: bool| match circle
+        {
+            None => Some(None),
+            Some(c) => mk_arc(c, v, a, b, ccw).map(Some),
+        };
         // floor: a->b (CCW) or b->a; then up at the far cut, ceiling back,
         // down at the near cut. Choose edge order so the loop is connected.
-        let wire = if floor_ccw {
-            vec![
-                mk_arc(&bot_circle, v_bot, a, b, true)?,
-                mk_vertical(b, true)?,
-                mk_arc(&top_circle, v_top, a, b, false)?,
-                mk_vertical(a, false)?,
+        let wire: Vec<OrientedPCurveEdge> = if floor_ccw {
+            [
+                arc(bot_circle.as_ref(), v_bot, true)?,
+                Some(mk_vertical(b, true)?),
+                arc(top_circle.as_ref(), v_top, false)?,
+                Some(mk_vertical(a, false)?),
             ]
         } else {
-            vec![
-                mk_arc(&bot_circle, v_bot, a, b, false)?,
-                mk_vertical(a, true)?,
-                mk_arc(&top_circle, v_top, a, b, true)?,
-                mk_vertical(b, false)?,
+            [
+                arc(bot_circle.as_ref(), v_bot, false)?,
+                Some(mk_vertical(a, true)?),
+                arc(top_circle.as_ref(), v_top, true)?,
+                Some(mk_vertical(b, false)?),
             ]
-        };
+        }
+        .into_iter()
+        .flatten()
+        .collect();
         let interior = surface.evaluate(
             (seam_u + f64::midpoint(a, b)).rem_euclid(TAU),
             f64::midpoint(v_bot, v_top),

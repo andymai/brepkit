@@ -41,10 +41,26 @@ pub fn exact_plane_analytic(
     plane_normal: Vec3,
     plane_d: f64,
 ) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    exact_plane_analytic_reaching(surface, plane_normal, plane_d, 0.0)
+}
+
+/// [`exact_plane_analytic`] with a cone's sampled hyperbola or parabola
+/// carried at least `reach` from the apex, so it spans whatever faces the
+/// caller will trim it to.
+///
+/// # Errors
+///
+/// Returns an error if the intersection computation fails.
+pub fn exact_plane_analytic_reaching(
+    surface: AnalyticSurface<'_>,
+    plane_normal: Vec3,
+    plane_d: f64,
+    reach: f64,
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
     match surface {
         AnalyticSurface::Cylinder(cyl) => exact_plane_cylinder(cyl, plane_normal, plane_d),
         AnalyticSurface::Sphere(sphere) => exact_plane_sphere(sphere, plane_normal, plane_d),
-        AnalyticSurface::Cone(cone) => exact_plane_cone(cone, plane_normal, plane_d),
+        AnalyticSurface::Cone(cone) => exact_plane_cone(cone, plane_normal, plane_d, reach),
         AnalyticSurface::Torus(torus) => {
             if let Some(circles) = exact_plane_torus(torus, plane_normal, plane_d)? {
                 return Ok(circles);
@@ -223,6 +239,7 @@ fn exact_plane_cone(
     cone: &ConicalSurface,
     normal: Vec3,
     d: f64,
+    reach: f64,
 ) -> Result<Vec<ExactIntersectionCurve>, MathError> {
     let axis = cone.axis();
     let cos_theta = normal.dot(axis).abs();
@@ -287,7 +304,7 @@ fn exact_plane_cone(
     if m_len < 1e-12 {
         // Axis parallel to normal — handled by the perpendicular branch above;
         // fall back to sampling for safety.
-        let chains = sample_plane_cone(cone, normal, d)?;
+        let chains = sample_plane_cone(cone, normal, d, reach)?;
         return Ok(chains
             .into_iter()
             .map(ExactIntersectionCurve::Points)
@@ -334,7 +351,7 @@ fn exact_plane_cone(
 
     // Parabola / hyperbola (and the near-parabolic ellipse margin): the section
     // is unbounded, so emit bounded, branch-separated sample chains.
-    let chains = sample_plane_cone(cone, normal, d)?;
+    let chains = sample_plane_cone(cone, normal, d, reach)?;
     Ok(chains
         .into_iter()
         .map(ExactIntersectionCurve::Points)
@@ -396,7 +413,7 @@ pub fn sample_plane_analytic(
 ) -> Result<Vec<Vec<Point3>>, MathError> {
     match surface {
         AnalyticSurface::Cylinder(cyl) => sample_plane_cylinder(cyl, normal, d),
-        AnalyticSurface::Cone(cone) => sample_plane_cone(cone, normal, d),
+        AnalyticSurface::Cone(cone) => sample_plane_cone(cone, normal, d, 0.0),
         AnalyticSurface::Sphere(sphere) => sample_plane_sphere(sphere, normal, d),
         AnalyticSurface::Torus(torus) => sample_plane_torus(torus, normal, d),
     }
@@ -490,6 +507,7 @@ fn sample_plane_cone(
     cone: &ConicalSurface,
     normal: Vec3,
     d: f64,
+    reach: f64,
 ) -> Result<Vec<Vec<Point3>>, MathError> {
     let apex = cone.apex();
     let n_dot_apex = dot_np(normal, apex);
@@ -529,7 +547,9 @@ fn sample_plane_cone(
     // scale-invariant and centred on where any finite cone face's overlap lies;
     // the downstream consumer trims the fitted curve to the actual face AABB, so
     // over-coverage is harmless. The floor handles a vertex at the apex (v_min≈0).
-    let v_max = (8.0 * v_min).max(v_min + 4.0);
+    // A caller that knows its faces asks for their reach: an open hyperbola
+    // (a vertex close to the axis) crosses a rim far past eight vertex radii.
+    let v_max = (8.0 * v_min).max(v_min + 4.0).max(reach);
 
     // Per-sample v within the cap; the raw values stay in `vs` for the
     // boundary solve below.
@@ -1956,7 +1976,7 @@ fn offset_parallel_cone_cone(
     let axis2 = c2.axis();
     let scale = 1.0 + delta_v.length();
     let mut out = Vec::new();
-    for curve in exact_plane_cone(c1, n_hat, d)? {
+    for curve in exact_plane_cone(c1, n_hat, d, 0.0)? {
         let samples: Vec<Point3> = match &curve {
             ExactIntersectionCurve::Circle(c) => (0..4)
                 .map(|i| crate::traits::ParametricCurve::evaluate(c, TAU * f64::from(i) / 4.0))
@@ -3888,7 +3908,7 @@ mod tests {
         let n = Vec3::new(0.3, 0.0, 1.0).normalize().unwrap();
         // Plane through (0,0,5): d = n·(0,0,5).
         let d = n.z() * 5.0;
-        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        let curves = exact_plane_cone(&cone, n, d, 0.0).unwrap();
         assert!(
             curves
                 .iter()
@@ -3912,7 +3932,7 @@ mod tests {
         .unwrap();
         let n = Vec3::new(0.3, 0.0, 1.0).normalize().unwrap();
         let d = n.z() * -5.0;
-        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        let curves = exact_plane_cone(&cone, n, d, 0.0).unwrap();
         assert!(
             curves.is_empty(),
             "plane on the phantom-nappe side must yield no real curve, got {}",
@@ -3932,7 +3952,7 @@ mod tests {
         .unwrap();
         let n = Vec3::new(1.0, 0.0, 1.0).normalize().unwrap();
         let d = n.x() * 3.0 + n.z() * 3.0; // through (3,0,3)
-        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        let curves = exact_plane_cone(&cone, n, d, 0.0).unwrap();
         assert_eq!(
             curves.len(),
             1,
@@ -3962,7 +3982,7 @@ mod tests {
         let d = -58.360_56;
         let cos_theta = n.dot(cone.axis()).abs();
         assert!(cos_theta < 0.2, "expected a shallow (hyperbola) plane");
-        let curves = exact_plane_cone(&cone, n, d).unwrap();
+        let curves = exact_plane_cone(&cone, n, d, 0.0).unwrap();
         // Real downward nappe only: never above the apex (z=15.85). The vertex is
         // ~1.2 mm from the apex, so the bounded arc stays within a few mm of it.
         assert_on_plane_and_cone(&curves, &cone, n, d, (5.0, 15.85));

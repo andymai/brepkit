@@ -3519,6 +3519,18 @@ fn compute_raw_curves(
             plane_cylinder_parallel_lines(*normal, *d, cyl, bbox_a, bbox_b)
         }
 
+        (FaceSurface::Plane { normal, d }, FaceSurface::Cone(cone))
+            if plane_holds_apex(*normal, *d, cone) =>
+        {
+            Ok(plane_cone_apex_rulings(*normal, cone, bbox_a, bbox_b))
+        }
+
+        (FaceSurface::Cone(cone), FaceSurface::Plane { normal, d })
+            if plane_holds_apex(*normal, *d, cone) =>
+        {
+            Ok(plane_cone_apex_rulings(*normal, cone, bbox_a, bbox_b))
+        }
+
         (FaceSurface::Plane { normal, d }, other) if other.as_analytic().is_some() => {
             if let Some(analytic) = other.as_analytic() {
                 plane_analytic_intersection(*normal, *d, &analytic, bbox_a, bbox_b)
@@ -3925,7 +3937,38 @@ fn plane_analytic_intersection(
     bbox_a: &Aabb3,
     bbox_b: &Aabb3,
 ) -> Result<Vec<RawCurve>, AlgoError> {
-    let exact_curves = analytic_intersection::exact_plane_analytic(*analytic, normal, d)?;
+    // A cone's hyperbola must reach past every corner of the two faces'
+    // overlap, with room for the fit to carry it across the rims there.
+    let reach = 1.25
+        * match analytic {
+            analytic_intersection::AnalyticSurface::Cone(cone) => {
+                let (lo, hi) = (
+                    Point3::new(
+                        bbox_a.min.x().max(bbox_b.min.x()),
+                        bbox_a.min.y().max(bbox_b.min.y()),
+                        bbox_a.min.z().max(bbox_b.min.z()),
+                    ),
+                    Point3::new(
+                        bbox_a.max.x().min(bbox_b.max.x()),
+                        bbox_a.max.y().min(bbox_b.max.y()),
+                        bbox_a.max.z().min(bbox_b.max.z()),
+                    ),
+                );
+                (0..8_u8)
+                    .map(|k| {
+                        let corner = Point3::new(
+                            if k & 1 == 0 { lo.x() } else { hi.x() },
+                            if k & 2 == 0 { lo.y() } else { hi.y() },
+                            if k & 4 == 0 { lo.z() } else { hi.z() },
+                        );
+                        (corner - cone.apex()).length()
+                    })
+                    .fold(0.0_f64, f64::max)
+            }
+            _ => 0.0,
+        };
+    let exact_curves =
+        analytic_intersection::exact_plane_analytic_reaching(*analytic, normal, d, reach)?;
 
     let mut results = Vec::new();
     for exact in exact_curves {
@@ -3967,7 +4010,16 @@ fn plane_analytic_intersection(
                 // AABB overlap first (with neighbor padding so boundary
                 // crossings keep local shape support) and fit per run.
                 let lin_tol = brepkit_math::tolerance::Tolerance::new().linear;
-                for pts in clip_chain_to_pair_boxes(&pts, bbox_a, bbox_b) {
+                let halves = match analytic {
+                    analytic_intersection::AnalyticSurface::Cone(cone) => {
+                        split_cone_section_at_vertices(&pts, cone, normal, d)
+                    }
+                    _ => vec![pts],
+                };
+                for pts in halves
+                    .iter()
+                    .flat_map(|half| clip_chain_to_pair_boxes(half, bbox_a, bbox_b))
+                {
                     // A tangential contact can sample as one point repeated N
                     // times (adjacent half-socket corner cylinders touching the
                     // body wall): interpolation through duplicate points is
@@ -4013,6 +4065,93 @@ fn plane_analytic_intersection(
     }
 
     Ok(results)
+}
+
+/// A plane's section of a cone split at its vertices, where it crosses the
+/// plane through the cone's axis and the section plane's normal: the section
+/// is symmetric across that plane. A conic arc running from a cap's rim back
+/// to the same rim shares both ends with the cap's chord between them, and
+/// the assembler's endpoint-keyed edge merge would weld the two; halves meeting
+/// at the vertex never share both ends with anything.
+fn split_cone_section_at_vertices(
+    pts: &[Point3],
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    normal: Vec3,
+    d: f64,
+) -> Vec<Vec<Point3>> {
+    let (apex, axis) = (cone.apex(), cone.axis());
+    let (Ok(n), Ok(m)) = (normal.normalize(), axis.cross(normal).normalize()) else {
+        return vec![pts.to_vec()];
+    };
+    let d = d / normal.length();
+    let side = |p: Point3| (p - apex).dot(m);
+    // The vertex on the line where the two planes meet, solved exactly on
+    // the cone: along it `w = w0 + s e`, and on the cone `(w.a)^2 =
+    // sin^2(alpha) |w|^2`.
+    let vertex_near = |q: Point3| -> Option<Point3> {
+        let e = n.cross(m);
+        let p0 = apex + n * (d - n.dot(apex - Point3::new(0.0, 0.0, 0.0)));
+        let w0 = p0 - apex;
+        let sin2 = cone.half_angle().sin().powi(2);
+        let qa = e.dot(axis).powi(2) - sin2 * e.dot(e);
+        let qb = 2.0 * (w0.dot(axis) * e.dot(axis) - sin2 * w0.dot(e));
+        let qc = w0.dot(axis).powi(2) - sin2 * w0.dot(w0);
+        let s_near = (q - p0).dot(e);
+        let roots: Vec<f64> = if qa.abs() < 1e-12 {
+            if qb.abs() < 1e-300 {
+                return None;
+            }
+            vec![-qc / qb]
+        } else {
+            let disc = qb.mul_add(qb, -4.0 * qa * qc);
+            if disc < 0.0 {
+                return None;
+            }
+            let r = disc.sqrt();
+            vec![(-qb + r) / (2.0 * qa), (-qb - r) / (2.0 * qa)]
+        };
+        let s = roots
+            .into_iter()
+            .min_by(|x, y| (x - s_near).abs().total_cmp(&(y - s_near).abs()))?;
+        Some(p0 + e * s)
+    };
+    let scale = pts
+        .iter()
+        .map(|&p| (p - apex).length())
+        .fold(1.0_f64, f64::max);
+    let on = |x: f64| x.abs() <= 1e-12 * scale;
+    let Some(&first) = pts.first() else {
+        return Vec::new();
+    };
+    // Each half keeps at least three samples, which its fit needs.
+    let n = pts.len();
+    let mut halves = Vec::new();
+    let mut current = vec![first];
+    for i in 1..n {
+        let (a, b) = (pts[i - 1], pts[i]);
+        let (sa, sb) = (side(a), side(b));
+        let split = if on(sb) {
+            (i >= 2 && i + 2 < n).then_some(b)
+        } else if !on(sa) && sa * sb < 0.0 && i >= 2 && i + 1 < n {
+            Some(a + (b - a) * (sa / (sa - sb)))
+        } else {
+            None
+        };
+        if let Some(q) = split
+            && let Some(v) = vertex_near(q)
+            && (v - q).length() <= (b - a).length()
+        {
+            current.push(v);
+            halves.push(std::mem::take(&mut current));
+            current.push(v);
+            if on(sb) {
+                continue;
+            }
+        }
+        current.push(b);
+    }
+    halves.push(current);
+    halves
 }
 
 /// Intersect a plane parallel to a cylinder's axis with the cylinder.
@@ -4113,6 +4252,74 @@ fn exact_raw_curves(exacts: Vec<analytic_intersection::ExactIntersectionCurve>) 
             analytic_intersection::ExactIntersectionCurve::Points(_) => None,
         })
         .collect()
+}
+
+/// Whether a plane (not perpendicular to the axis) passes through a cone's
+/// apex, where its section is a pair of rulings rather than a conic.
+fn plane_holds_apex(normal: Vec3, d: f64, cone: &brepkit_math::surfaces::ConicalSurface) -> bool {
+    let apex = cone.apex() - Point3::new(0.0, 0.0, 0.0);
+    let Ok(unit) = normal.normalize() else {
+        return false;
+    };
+    let offset = unit.dot(apex) - d / normal.length();
+    // The linear tolerance, widened only by the rounding of far-off
+    // coordinates: a plane a model unit from the apex never qualifies.
+    let tol = Tolerance::new().linear.max(1e-12 * apex.length());
+    offset.abs() <= tol && unit.dot(cone.axis()).abs() < 1.0 - 1e-9
+}
+
+/// The rulings a plane through a cone's apex cuts: the generators `g(u)`
+/// lying in the plane, `n·g(u) = 0`, each a line from the apex along its
+/// real nappe, trimmed to the two faces' AABBs. A plane touching the cone
+/// along a single ruling never splits a face and is skipped.
+fn plane_cone_apex_rulings(
+    normal: Vec3,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
+) -> Vec<RawCurve> {
+    // g(u) = cos a·(cos u·X + sin u·Y) + sin a·axis, so n·g(u) = 0 reads
+    // A cos u + B sin u = −C.
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    let a = cos_a * normal.dot(cone.x_axis());
+    let b = cos_a * normal.dot(cone.y_axis());
+    let c = sin_a * normal.dot(cone.axis());
+    let amp = a.hypot(b);
+    if amp < 1e-12 {
+        return Vec::new();
+    }
+    let ratio = -c / amp;
+    if ratio.abs() > 1.0 - 1e-9 {
+        return Vec::new();
+    }
+    let phi = b.atan2(a);
+    let delta = ratio.acos();
+    let apex = cone.apex();
+    let mut results = Vec::new();
+    for u in [phi + delta, phi - delta] {
+        let Ok(dir) = (cone.evaluate(u, 1.0) - apex).normalize() else {
+            continue;
+        };
+        let (t0, t1) = trim_t_range_to_aabb(apex, dir, bbox_a, bbox_b);
+        let t_range = (t0.max(0.0), t1);
+        if t_range.1 - t_range.0 < 1e-9 {
+            continue;
+        }
+        let p0 = apex + dir * t_range.0;
+        let p1 = apex + dir * t_range.1;
+        let bbox = Aabb3 {
+            min: Point3::new(p0.x().min(p1.x()), p0.y().min(p1.y()), p0.z().min(p1.z())),
+            max: Point3::new(p0.x().max(p1.x()), p0.y().max(p1.y()), p0.z().max(p1.z())),
+        };
+        results.push(RawCurve {
+            curve: EdgeCurve::Line,
+            bbox,
+            t_range,
+            p_start: p0,
+            p_end: p1,
+        });
+    }
+    results
 }
 
 /// Analytic-analytic surface intersection using marching.

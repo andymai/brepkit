@@ -360,7 +360,7 @@ impl Builder {
     pub fn perform(&mut self) -> Result<(), AlgoError> {
         use crate::perf::gfa_time;
         gfa_time!("build_face_ranks", self.build_face_ranks())?;
-        gfa_time!("fill_images", self.fill_images());
+        gfa_time!("fill_images", self.fill_images())?;
         gfa_time!("classify_sub_faces", self.classify_sub_faces())?;
         if let Ok(v) = std::env::var("BK_CLS3")
             && let Ok(want) = v.parse::<usize>()
@@ -501,20 +501,30 @@ impl Builder {
     }
 
     /// Phase 1: map edges to split images and build sub-faces.
-    fn fill_images(&mut self) {
+    ///
+    /// A face whose sections cut it but which splits into nothing would stand
+    /// whole and take one class for both sides of its sections, so it fails
+    /// the build instead.
+    fn fill_images(&mut self) -> Result<(), AlgoError> {
         let edge_images = fill_images::fill_edge_images(&self.arena);
         log::debug!(
             "Builder: {} original edges mapped to split images",
             edge_images.len()
         );
 
-        self.sub_faces = fill_images_faces::fill_images_faces(
+        let (sub_faces, unsplit) = fill_images_faces::fill_images_faces(
             &mut self.topo,
             &self.arena,
             &edge_images,
             &self.face_ranks,
             self.tol,
         );
+        if let Some(face) = unsplit.first() {
+            return Err(AlgoError::FaceSplitFailed(format!(
+                "face {face:?} is cut by sections but split into nothing"
+            )));
+        }
+        self.sub_faces = sub_faces;
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
 
         // Step 3: same-domain detection (records pairs, does NOT set FaceClass)
@@ -537,6 +547,7 @@ impl Builder {
         // is to let BOP keep A's face and discard B's (which it already does),
         // then fix edge sharing at the BuilderSolid level via
         // merge_duplicate_edges.
+        Ok(())
     }
 
     /// Map each input face to an ordinal unique per shell across both operand
@@ -907,8 +918,13 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
     // is correct for all of them (see the doc comment).
     let edge_images = fill_images::fill_edge_images(&arena);
     let all_a_ranks: HashMap<FaceId, Rank> = face_source.keys().map(|&f| (f, Rank::A)).collect();
-    let sub_faces =
+    let (sub_faces, unsplit) =
         fill_images_faces::fill_images_faces(&mut topo, &arena, &edge_images, &all_a_ranks, tol);
+    if let Some(face) = unsplit.first() {
+        return Err(AlgoError::FaceSplitFailed(format!(
+            "face {face:?} is cut by sections but split into nothing"
+        )));
+    }
 
     // The global source of each sub-face is its parent input face's source.
     let sub_source: Vec<usize> = sub_faces
