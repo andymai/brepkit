@@ -247,8 +247,6 @@ fn count_face_ray_crossings(
             )
         }
         FaceSurface::Sphere(sph) => {
-            // Sphere boundaries are planar (equator, small circles), so
-            // point_in_polygon_3d works. UV projection fails at poles.
             let sph = sph.clone();
             let roots = ray_sphere_roots(origin, direction, &sph);
             count_3d_polygon_crossings(topo, face_id, origin, direction, &roots)
@@ -358,12 +356,6 @@ fn ray_plane_crossings(
     }
 }
 
-/// Count crossings using 3D polygon containment (for faces with planar boundaries,
-/// e.g. sphere hemispheres where UV projection has pole singularities).
-///
-/// The polygon normal (from Newell's method) indicates which side of the boundary
-/// plane the face extends into. A hit point must be on that side AND project
-/// inside the boundary polygon.
 /// Half-space representation of a plane-convex sphere patch with a
 /// NON-planar boundary: one (circle center, unit normal, interior sign) per
 /// boundary arc. Returns `None` for planar boundaries (the calibrated
@@ -428,6 +420,14 @@ fn nonplanar_sphere_arc_halfspaces(
     Some(out)
 }
 
+/// Count a ray's crossings of a sphere face, read in 3D (a sphere's `(u, v)`
+/// is singular at its poles).
+///
+/// The outer loop's Newell normal points to the face's side of the loop. A
+/// loop in one plane bounds exactly the sphere's part on that side, and any
+/// other loop the hits that project inside it along that normal; a wire
+/// that only runs a seam out and back bounds nothing, and the face is the
+/// whole sphere. Holes come off by [`hit_in_sphere_hole`].
 fn count_3d_polygon_crossings(
     topo: &Topology,
     face_id: FaceId,
@@ -439,10 +439,13 @@ fn count_3d_polygon_crossings(
         return Ok(0);
     }
 
-    let verts = face_polygon(topo, face_id)?;
+    // Sampled along its arcs: a boundary made of arcs has too few vertices
+    // to bound anything by itself.
+    let verts = brepkit_check::util::face_polygon(topo, face_id)?;
     if verts.len() < 3 {
         return Ok(0);
     }
+    let whole = wire_runs_out_and_back(topo, topo.face(face_id)?.outer_wire())?;
     // A sphere patch whose boundary arcs lie in DIFFERENT planes (an octant
     // patch: three quarter-arcs in three orthogonal planes) has a non-planar
     // boundary polygon, and the single-plane containment below discards
@@ -450,7 +453,10 @@ fn count_3d_polygon_crossings(
     // plane-convex: exactly the sphere points on the interior side of every
     // boundary arc's plane, with the side calibrated from the boundary
     // centroid pushed onto the sphere.
-    if let Some(halfspaces) = nonplanar_sphere_arc_halfspaces(topo, face_id, &verts) {
+    if let Some(halfspaces) = (!whole)
+        .then(|| nonplanar_sphere_arc_halfspaces(topo, face_id, &verts))
+        .flatten()
+    {
         let mut crossings = 0u32;
         for &t in roots {
             if t <= RAY_T_MIN {
@@ -471,6 +477,10 @@ fn count_3d_polygon_crossings(
     let normal = polygon_normal(&verts);
     // A reference point on the boundary plane.
     let ref_pt = verts[0];
+    // A loop in one plane bounds exactly the sphere's part on its side, at
+    // any size; a polygon test would only add the chords' sagitta and miss a
+    // cap larger than a hemisphere.
+    let planar = loop_is_planar(&verts, normal);
 
     let mut crossings = 0u32;
     for &t in roots {
@@ -479,21 +489,113 @@ fn count_3d_polygon_crossings(
         }
         let hit = origin + direction * t;
 
-        // The hit must be on the face's side of the boundary plane.
-        // The polygon normal (from wire winding) points toward the face interior.
-        let side = (hit - ref_pt).dot(normal);
-        if side < -HALF_SPACE_EPS {
-            continue;
-        }
-
-        if point_in_polygon_3d(&hit, &verts, &normal)
-            && !hit_in_inner_wire_3d(topo, face_id, hit, &normal)?
-        {
+        // On the face's side of the boundary plane, and projected along the
+        // loop's own normal, not the nearest world axis: a tilted face is not
+        // a graph over an axis plane, and the part of it past the axis's
+        // silhouette projects outside its own boundary.
+        let in_outer = whole
+            || ((hit - ref_pt).dot(normal) >= -HALF_SPACE_EPS
+                && (planar || point_in_polygon_along(&hit, &verts, normal)));
+        if in_outer && !hit_in_sphere_hole(topo, face_id, hit, &verts, normal)? {
             crossings += 1;
         }
     }
 
     Ok(crossings)
+}
+
+fn point_in_polygon_along(point: &Point3, polygon: &[Point3], normal: Vec3) -> bool {
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(polygon[0], normal) else {
+        return false;
+    };
+    let flat = |p: Point3| {
+        let d = p - frame.origin;
+        Point2::new(d.dot(frame.x), d.dot(frame.y))
+    };
+    let flat_poly: Vec<Point2> = polygon.iter().map(|&p| flat(p)).collect();
+    point_in_polygon(flat(*point), &flat_poly)
+}
+
+fn loop_is_planar(pts: &[Point3], normal: Vec3) -> bool {
+    let extent = loop_extent(pts);
+    pts.iter()
+        .all(|p| (*p - pts[0]).dot(normal).abs() <= 1e-9 * extent)
+}
+
+/// A wire whose every edge runs out and back as often (a seam, with no
+/// rim) bounds nothing. A band's two rims can cancel each other's vector
+/// area, so the area cannot tell; the wire's own edge uses can. An edge
+/// closing on its start at a point (a pole) is skipped.
+fn wire_runs_out_and_back(
+    topo: &Topology,
+    wire: brepkit_topology::wire::WireId,
+) -> Result<bool, OperationsError> {
+    let mut runs: Vec<(brepkit_topology::edge::EdgeId, i32)> = Vec::new();
+    for oe in topo.wire(wire)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        if edge.start() == edge.end() {
+            // A closed rim passes its vertex once, and one sample could
+            // land there.
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, start);
+            let at_vertex = [0.25, 0.5, 0.75].iter().all(|f| {
+                let p =
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(*f, t0), start, start);
+                (p - start).length() <= Tolerance::new().linear
+            });
+            if at_vertex {
+                continue;
+            }
+        }
+        let step = if oe.is_forward() { 1 } else { -1 };
+        match runs.iter_mut().find(|(id, _)| *id == oe.edge()) {
+            Some((_, n)) => *n += step,
+            None => runs.push((oe.edge(), step)),
+        }
+    }
+    Ok(!runs.is_empty() && runs.iter().all(|&(_, n)| n == 0))
+}
+
+fn loop_extent(pts: &[Point3]) -> f64 {
+    pts.iter()
+        .map(|p| (*p - pts[0]).length())
+        .fold(0.0, f64::max)
+}
+
+/// Whether a hit on a sphere face lands in one of its holes. A hole in one
+/// plane is the sphere's part beyond that plane, away from the face (whose
+/// outer loop lies on the near side); any other hole is tested by polygon,
+/// projected along the outer loop's `normal`.
+fn hit_in_sphere_hole(
+    topo: &Topology,
+    face_id: FaceId,
+    hit: Point3,
+    outer: &[Point3],
+    normal: Vec3,
+) -> Result<bool, OperationsError> {
+    for &iw in topo.face(face_id)?.inner_wires() {
+        let hole = brepkit_check::util::wire_polygon(topo, iw)?;
+        if hole.len() < 3 {
+            continue;
+        }
+        let hole_normal = polygon_normal(&hole);
+        let in_hole = if loop_is_planar(&hole, hole_normal) {
+            let at = hole[0];
+            let near = outer
+                .iter()
+                .map(|p| (*p - at).dot(hole_normal))
+                .fold(0.0_f64, |a, d| if d.abs() > a.abs() { d } else { a });
+            let side = (hit - at).dot(hole_normal);
+            near != 0.0 && side * near.signum() < -HALF_SPACE_EPS
+        } else {
+            point_in_polygon_along(&hit, &hole, normal)
+        };
+        if in_hole {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Count crossings for analytic (non-planar) faces using UV containment.

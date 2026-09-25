@@ -192,10 +192,20 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Shelled cylinder and cone cups are invalid** | `shell(make_cylinder(5, 10), 1, [top])` and `shell(make_cone(5, 2, 10), 1, [top])` each leave 32 shared edges with one sense (the cup measures 344.45 against 333.01), and a hollowed `make_torus(6, 2)` fails with "solid assembly produced no faces". Their inner walls (closed-seam cylinder, cone, NURBS and torus) reach `assemble_solid_mixed`'s generic arm with the reversed vertex list and the flag; the sphere arm keeps the outer face's winding instead. Giving them the same un-reversal makes the senses consistent but not the cup (Euler V-E+F = -1 with V=128, E=134, F=5, volume 451.86), so a second fault sits in the closed-seam wall or its rim. Until they match, a shelled solid where a sphere wall meets one of them would cross the seam in one sense (no brepkit operation builds that seam today: a capsule's fuse falls back to a mesh) |
 | **Heal's sphere recognition keeps an inward NURBS face's side** (`crates/heal/src/custom/convert_to_elementary.rs` near line 65; found by reading, not yet reproduced) | The NURBS face's surface is swapped for the recognized sphere with its flag and wire kept, without comparing the NURBS normal (`Su x Sv`) with the sphere's outward normal: a patch whose parameterization faces inward (a mirrored NURBS sphere patch, whose transform flips the flag and keeps the wire) would come out wound against its new surface. Next: pin it with a mirrored NURBS patch, and turn the flag and the wires over when the normals oppose |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
+| **Point classification reads plane discs and cylinder walls through chords** (grid probe `zz_mirrod` in the session scratchpad) | Both `classify_point`s test a ray's hit on a plane or cylinder face against its boundary sampled into chords (32 per closed circle), so a hit within a sagitta of a circular rim is misread: on the exact mirrored ball less the slab `1 < z < 2` (#1775), a point under the slab reads Outside because two of its rays cross the slab's discs within 0.006 of their rims. The operations classifier also votes with two rays and needs both for Inside, so one miss reads Outside, and it reads a point as on the boundary by its distance to a sphere face's whole sphere, trimmed or not. A sphere face bounded by one wire of two rims joined by a seam (a band, as a file may store a ball between two planes) is misread by both: neither planar nor a seam alone, it takes the polygon path along a Newell normal the two rims mostly cancel; a cap bounded by its rim and a seam takes the same path, with the rim's chords. Dropping the seam's out-and-back run from the loop would leave the rims to the side tests |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Point classification misread sphere faces (CLOSED 2026-09-25; pins in `crates/operations/tests/sphere_classify.rs`)**:
+  both `classify_point`s tested a ray's hit on a sphere face against its
+  boundary polygon projected onto the nearest axis plane, over which a
+  tilted face is no graph, and through the chords' sagitta: on a grid of
+  2,117 points a plain `make_sphere(3, 32)` read 32 (check) and 132
+  (operations) wrong upright, 452 and 489 turned. A loop in one plane now
+  bounds the face by its side of the plane, a planar hole by the far side
+  of its own, and any other loop is projected along its own normal.
 
 - **A turned octant below the equator fell back (CLOSED 2026-09-25; pin `turned_octants_are_exact` in `crates/operations/tests/sphere_box_corner.rs`)**:
   the box's top face meets the ball on the faceted equator, and phase FF
