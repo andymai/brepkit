@@ -947,6 +947,7 @@ fn sphere_face_loops(
 ) -> Result<Option<Vec<SphereLoop>>, AlgoError> {
     use brepkit_topology::edge::EdgeCurve;
     const SAMPLES: usize = 8;
+    const RING: usize = 64;
     let r = surface.radius();
     let slack = 1e-9 * r.max(1.0);
     let mut loops = Vec::new();
@@ -982,15 +983,29 @@ fn sphere_face_loops(
         if all.len() < 3 {
             return Ok(None);
         }
-        let normal = newell_normal(&all);
+        // Twice the loop's vector area: a loop that only runs along a seam and
+        // back encloses none, and its direction is rounding noise.
+        let area = all.iter().zip(all.iter().cycle().skip(1)).fold(
+            Vec3::new(0.0, 0.0, 0.0),
+            |acc, (a, b)| {
+                acc + Vec3::new(
+                    (a.y() - b.y()) * (a.z() + b.z()),
+                    (a.z() - b.z()) * (a.x() + b.x()),
+                    (a.x() - b.x()) * (a.y() + b.y()),
+                )
+            },
+        );
+        if area.length() <= 1e-9 * r * r {
+            return Ok(None);
+        }
+        let normal = area * (1.0 / area.length());
         let centroid = all.iter().fold(Vec3::new(0.0, 0.0, 0.0), |acc, p| {
             acc + Vec3::new(p.x(), p.y(), p.z())
         }) * (1.0 / f64::from(u32::try_from(all.len()).unwrap_or(u32::MAX)));
         let centroid = Point3::new(centroid.x(), centroid.y(), centroid.z());
-        if normal.length() > 0.5
-            && all
-                .iter()
-                .all(|p| (*p - centroid).dot(normal).abs() <= slack)
+        if all
+            .iter()
+            .all(|p| (*p - centroid).dot(normal).abs() <= slack)
         {
             loops.push(SphereLoop {
                 planes: vec![(centroid, normal)],
@@ -1032,6 +1047,31 @@ fn sphere_face_loops(
         } else {
             return Ok(None);
         };
+        // The half-spaces bound the loop's region only when each arc is the
+        // whole of its circle that lies on the region's side of the other
+        // planes: a column narrower than the ball meets the sphere twice, and
+        // its far end would read as part of a dome bounded by its top arcs.
+        for (j, (_, circle)) in edges.iter().enumerate() {
+            let Some(circle) = circle else {
+                return Ok(None);
+            };
+            let admitted: Vec<bool> = (0..RING)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let p = circle.evaluate(std::f64::consts::TAU * k as f64 / RING as f64);
+                    planes.iter().enumerate().all(|(i, &(c, n))| {
+                        let d = (p - c).dot(n);
+                        i == j || if any { d <= slack } else { d >= -slack }
+                    })
+                })
+                .collect();
+            let runs = (0..RING)
+                .filter(|&k| admitted[k] && !admitted[(k + RING - 1) % RING])
+                .count();
+            if runs != 1 {
+                return Ok(None);
+            }
+        }
         loops.push(SphereLoop { planes, any });
     }
     Ok(Some(loops))
@@ -1540,6 +1580,96 @@ mod tests {
         ));
         let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
         topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    /// A sphere face through `corners`, each boundary arc from one corner to
+    /// the next on the circle its plane (`centres[i]`, through the corner
+    /// pair) cuts from the sphere, the short way round.
+    fn sphere_patch(
+        topo: &mut Topology,
+        radius: f64,
+        corners: &[Point3],
+        centres: &[Point3],
+    ) -> brepkit_topology::face::FaceId {
+        let verts: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let mut edges = Vec::new();
+        for i in 0..corners.len() {
+            let (a, b, c) = (corners[i], corners[(i + 1) % corners.len()], centres[i]);
+            let normal = (a - c).cross(b - c).normalize().unwrap();
+            let circle = brepkit_math::curves::Circle3D::new(c, normal, (a - c).length()).unwrap();
+            let e = topo.add_edge(Edge::new(
+                verts[i],
+                verts[(i + 1) % corners.len()],
+                EdgeCurve::Circle(circle),
+            ));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let sphere =
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
+                .unwrap();
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)))
+    }
+
+    /// Arcs in several planes stand for their half-spaces only when each arc
+    /// is the whole of its circle on the region's side of the others: an
+    /// octant's three arcs are, a dome's four arcs in a column narrower than
+    /// the ball are not (the column's far end meets the sphere too).
+    #[test]
+    fn sphere_arc_loops_bound_only_their_own_region() {
+        let mut topo = Topology::default();
+        let h = 7.0_f64.sqrt();
+        let dome = sphere_patch(
+            &mut topo,
+            5.0,
+            &[
+                Point3::new(3.0, 3.0, h),
+                Point3::new(-3.0, 3.0, h),
+                Point3::new(-3.0, -3.0, h),
+                Point3::new(3.0, -3.0, h),
+            ],
+            &[
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(-3.0, 0.0, 0.0),
+                Point3::new(0.0, -3.0, 0.0),
+                Point3::new(3.0, 0.0, 0.0),
+            ],
+        );
+        let face = topo.face(dome).unwrap();
+        let FaceSurface::Sphere(s) = face.surface() else {
+            unreachable!()
+        };
+        assert!(
+            sphere_face_loops(&topo, face, s).unwrap().is_none(),
+            "the column dome's arcs declined"
+        );
+
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let octant = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(3.0, 0.0, 0.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(0.0, 0.0, 3.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let face = topo.face(octant).unwrap();
+        let FaceSurface::Sphere(s) = face.surface() else {
+            unreachable!()
+        };
+        let loops = sphere_face_loops(&topo, face, s)
+            .unwrap()
+            .expect("the octant's arcs accepted");
+        let r = 3.0_f64.sqrt();
+        let admits = |p: Point3| loops.iter().all(|l| l.admits(p, 1e-9));
+        assert!(admits(Point3::new(r, r, r)), "its own corner");
+        assert!(!admits(Point3::new(-r, r, r)), "a neighbouring octant");
+        assert!(!admits(Point3::new(0.0, 0.0, -3.0)), "the far pole");
     }
 
     #[test]
