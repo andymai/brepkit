@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790351234288,
+  "lastUpdate": 1790351405572,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40175,6 +40175,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42312284,
             "range": "± 102509",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3cdc0c7a402f27e181e6c04cd922ce87cd7c24a9",
+          "message": "fix(check): read a reversed face's side from its wire (#1768)\n\nReversed faces now derive their classification side from the wire's\nwinding, while orientation validation handles reversed faces, degenerate\nfull-band loops, and sphere faces consistently.\n\n## What was wrong\n\n- A reversed face's wire runs counter-clockwise about its surface's\noutward normal. The boolean builders flip the flag and keep the wire.\n#1763 aligns the mesher, `shell_op`, and STEP with this convention.\n\n- `classify_point` in `brepkit-operations` (`classify.rs`) and\n`brepkit-check` (`classify/boundary.rs`) keep a ray's sphere hit only on\nthe face's side of its boundary loop's plane. Both negated that side on\na reversed face.\n\n- For the box `[-5, 5]^3` less a ball of radius 2 at `(0, 0, 5.5)`,\nforming a dimple, `(0, 0, 4)` and `(1.9, 0, 4.9)` read Inside in both\nclassifiers. Both points are inside the dimple. `(0, 0, 3)` read Outside\nin the operations classifier. Boolean containment checks call the\noperations classifier.\n\n- `check_face_orientation` (`validate/face.rs`) compared a reversed\nface's wire winding with the negated surface normal. It therefore warned\non the dimple and on each of the 5 walls of a box less a box poking into\nits top.\n\n- The same check normalized a full band's Newell vector. A full band has\ntwo opposite rims and a doubled seam, producing a vector that is\nrounding noise of order 1e-16. This made its verdict on a cylinder\nlateral arbitrary. With the flip removed, a bore's wall would warn.\n\n- A loop on a sphere bounds a region on either side of it, and its wire\nalone says which, so there is no normal to hold it against. A\nsingle-circle cap bigger than a hemisphere has its boundary's centroid\nover the far pole, where the check compared against the far pole's\nnormal and warned, reversed or not. Faces cut from `make_sphere` stay at\nor under a hemisphere, so boolean results did not reach that case.\nImported or revolved caps can.\n\n## What this does\n\n- Both classifiers use the loop's polygon normal as it is, so the wire\ndirectly determines the accepted side of its boundary plane.\n\n- The orientation check compares the wire with the surface normal. It\nskips a loop whose vector area is at most `1e-9` of its extent squared,\navoiding an arbitrary direction for full-band loops. It also skips\nsphere faces.\n\n- The roadmap closes the classifier row. It also adds an OPEN row found\nin review by reading, but not yet reproduced: heal's\n`convert_to_elementary` swaps a NURBS face's surface for the recognized\nsphere with its flag and wire kept, without comparing the NURBS normal\nwith the sphere's outward normal.\n\n## Verification\n\n- `reversed_caps_classify_by_their_wire` checks both classifiers on five\npoints around the dimple and five around a cavity formed by placing the\nball at the box's centre. The points cover inside and outside. The test\nfails on main at the first dimple point.\n\n- `reversed_faces_raise_no_orientation_warning` verifies that no\norientation warning is raised on a dimple, a cavity, a pocket's walls,\nor a bore's wall.\n\n- `a_cap_past_its_hemisphere_raises_no_warning` in `validate/face.rs`\nverifies that a cap of a radius-2 sphere bounded by the circle at `z =\n-1`, unreversed and reversed, raises no warning. Without the skip the\nunreversed one warns.\n\n- The workspace suite passes: 3085 tests run, 3085 passed, 20 skipped.",
+          "timestamp": "2026-09-25T15:46:23Z",
+          "tree_id": "db4b14363c46848b458544852574e4a749ea568a",
+          "url": "https://github.com/andymai/brepkit/commit/3cdc0c7a402f27e181e6c04cd922ce87cd7c24a9"
+        },
+        "date": 1790351400965,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012236,
+            "range": "± 1549",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1100553,
+            "range": "± 2057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13120,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 761749,
+            "range": "± 1084",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42240395,
+            "range": "± 423695",
             "unit": "ns/iter"
           }
         ]
