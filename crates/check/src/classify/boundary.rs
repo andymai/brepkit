@@ -118,8 +118,6 @@ pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
     crate::util::polygon_normal(verts)
 }
 
-/// Whether `point`, projected along `normal`, lies inside `polygon`
-/// projected the same way.
 fn point_in_polygon_along(point: &Point3, polygon: &[Point3], normal: Vec3) -> bool {
     let Ok(frame) = brepkit_math::frame::Frame3::from_normal(polygon[0], normal) else {
         return false;
@@ -167,14 +165,32 @@ fn hit_in_sphere_hole(
     Ok(false)
 }
 
-/// Whether a loop lies in the plane through its first point with `normal`.
 fn loop_is_planar(pts: &[Point3], normal: Vec3) -> bool {
-    let scale = pts
-        .iter()
-        .map(|p| (*p - pts[0]).length())
-        .fold(0.0, f64::max);
+    let extent = loop_extent(pts);
     pts.iter()
-        .all(|p| (*p - pts[0]).dot(normal).abs() <= 1e-9 * scale)
+        .all(|p| (*p - pts[0]).dot(normal).abs() <= 1e-9 * extent)
+}
+
+/// Against the loop's extent squared, so the rounding residue of a loop run
+/// out and back along one path (a seam) reads as no area, whatever its size.
+fn loop_encloses_nothing(pts: &[Point3]) -> bool {
+    let mut n = Vec3::new(0.0, 0.0, 0.0);
+    for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
+        let (a, b) = (*a - pts[0], *b - pts[0]);
+        n += Vec3::new(
+            (a.y() - b.y()) * (a.z() + b.z()),
+            (a.z() - b.z()) * (a.x() + b.x()),
+            (a.x() - b.x()) * (a.y() + b.y()),
+        );
+    }
+    let extent = loop_extent(pts);
+    n.length() <= 1e-9 * extent * extent
+}
+
+fn loop_extent(pts: &[Point3]) -> f64 {
+    pts.iter()
+        .map(|p| (*p - pts[0]).length())
+        .fold(0.0, f64::max)
 }
 
 /// Whether a hit inside the outer wire actually lands in one of the face's
@@ -317,13 +333,14 @@ where
     Ok(crossings)
 }
 
-/// Count crossings using 3D polygon containment (for faces with planar
-/// boundaries, e.g. sphere hemispheres where UV projection has pole
-/// singularities).
+/// Count a ray's crossings of a sphere face, read in 3D (a sphere's `(u, v)`
+/// is singular at its poles).
 ///
-/// The polygon normal (from Newell's method) indicates which side of the
-/// boundary plane the face extends into. A hit point must be on that side
-/// AND project inside the boundary polygon.
+/// The outer loop's Newell normal points to the face's side of the loop. A
+/// loop in one plane bounds exactly the sphere's part on that side, and any
+/// other loop the hits that project inside it along that normal; a loop
+/// enclosing no area (a seam run out and back) bounds nothing, and the face
+/// is the whole sphere. Holes come off by [`hit_in_sphere_hole`].
 ///
 /// # Errors
 ///
@@ -347,6 +364,7 @@ fn count_3d_polygon_crossings(
     // so its polygon normal points to the face's side of the boundary plane.
     let normal = polygon_normal(&verts);
     let ref_pt = verts[0];
+    let whole = loop_encloses_nothing(&verts);
     // A loop in one plane bounds exactly the sphere's part on its side, at
     // any size; a polygon test would only add the chords' sagitta and miss a
     // cap larger than a hemisphere.
@@ -359,16 +377,13 @@ fn count_3d_polygon_crossings(
         }
         let hit = origin + direction * t;
 
-        // The hit must be on the face's side of the boundary plane.
-        let side = (hit - ref_pt).dot(normal);
-        if side < -HALF_SPACE_EPS {
-            continue;
-        }
-
-        // Projected along the loop's own normal, not the nearest world axis:
-        // a tilted face is not a graph over an axis plane, and the part of
-        // it past the axis's silhouette projects outside its own boundary.
-        let in_outer = planar || point_in_polygon_along(&hit, &verts, normal);
+        // On the face's side of the boundary plane, and projected along the
+        // loop's own normal, not the nearest world axis: a tilted face is not
+        // a graph over an axis plane, and the part of it past the axis's
+        // silhouette projects outside its own boundary.
+        let in_outer = whole
+            || ((hit - ref_pt).dot(normal) >= -HALF_SPACE_EPS
+                && (planar || point_in_polygon_along(&hit, &verts, normal)));
         if in_outer && !hit_in_sphere_hole(topo, face_id, hit, &verts, normal)? {
             crossings += 1;
         }
@@ -428,8 +443,6 @@ pub fn count_face_ray_crossings(
             )
         }
         FaceSurface::Sphere(sph) => {
-            // Sphere boundaries are planar (equator, small circles), so
-            // point_in_polygon_3d works. UV projection fails at poles.
             let sph = sph.clone();
             let roots = ray_surface::ray_sphere(origin, direction, &sph);
             count_3d_polygon_crossings(topo, face_id, origin, direction, &roots)

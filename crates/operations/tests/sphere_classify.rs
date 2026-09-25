@@ -144,7 +144,57 @@ fn a_ball_less_a_tool_classifies() {
             "rod" => (p.x() - 0.5).hypot(p.z() - 1.0) < 0.6,
             _ => p.x().hypot(p.y()) < 1.0,
         };
-        let (check, _) = misreads(&topo, result, &|p| p, &near, &|p| in_ball(p) && !in_tool(p));
+        let (check, ops) = misreads(&topo, result, &|p| p, &near, &|p| in_ball(p) && !in_tool(p));
         assert!(check.is_empty(), "{tool}: check misreads {check:?}");
+        assert!(ops.is_empty(), "{tool}: operations misreads {ops:?}");
+    }
+}
+
+/// A ball whose one face is bounded by a seam, a meridian run out and back
+/// (as a ball is imported), encloses no area: the face is the whole sphere.
+#[test]
+fn a_seam_bounded_ball_classifies() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    for (seam_normal, axis) in [
+        (Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
+        (Vec3::new(1.0, 0.3, 0.0), Vec3::new(0.0, 0.0, 1.0)),
+        (Vec3::new(0.0, 0.3, -0.2), Vec3::new(1.0, 0.4, 0.6)),
+    ] {
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let a = axis.normalize().unwrap();
+        let south = topo.add_vertex(Vertex::new(origin + a * -RADIUS, 1e-7));
+        let north = topo.add_vertex(Vertex::new(origin + a * RADIUS, 1e-7));
+        let meridian = Circle3D::new(origin, seam_normal, RADIUS).unwrap();
+        let seam = topo.add_edge(Edge::new(south, north, EdgeCurve::Circle(meridian)));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let surface = FaceSurface::Sphere(SphericalSurface::new(origin, RADIUS).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], surface));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        let ball = topo.add_solid(Solid::new(shell, vec![]));
+        let (check, ops) = misreads(&topo, ball, &|p| p, &|_| 1.0, &in_ball);
+        assert!(
+            check.is_empty(),
+            "{seam_normal:?}: check misreads {check:?}"
+        );
+        assert!(
+            ops.is_empty(),
+            "{seam_normal:?}: operations misreads {ops:?}"
+        );
     }
 }
