@@ -1,0 +1,30 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_76588b24c8b527 1642,2578-2583,2645-2654,2656-2662,2664-2668,2682-2696,2698,2752-2762,2797,2800-2803,2806,2809,2816,2819,2833,2835,2840
+  s_ba2f7b5c6902b6::t_20c169b260bb95 2639-2644,2655,2663,2669-2681,2697,4069-4110
+  s_ba2f7b5c6902b6::t_52575d3f99f6a4 2699,4111
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_9980c96efa4ee1 122-129,195,215-218
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_510c6cb7cf703e 264-308,566-570,572-582,584-585,587-588,593-608,610-613,615-633,636-637
+crates/operations/tests/sphere_face_area.rs
+  s_ba2f7b5c6902b6::t_3268878c73f528 7,13,15-16,24,26-28,33,50,66,69,71-81,90,94-112,120-123,141-144,320-355,359-365,368-369,371-372,375-390
+  s_ba2f7b5c6902b6::t_c4eb0bd35f899c 34-39,67-68,118-119,139-140,147
+  s_ba2f7b5c6902b6::t_2b8e287801b9b3 356-358,366-367,370,373-374
+  s_ba2f7b5c6902b6::t_bb17db6d4927b4 70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0feefa84e4f87f509ec6ee7b3c77052dae2010d7",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
