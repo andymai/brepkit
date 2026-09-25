@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790292251613,
+  "lastUpdate": 1790294465329,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39149,6 +39149,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 40442983,
             "range": "± 973975",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4240871235257d8e0255e49b668610537fefb0a3",
+          "message": "fix(algo): cut a torus with a plane whose loops wind around its tube (#1750)\n\nA plane whose section winds around a torus's tube now cuts, fuses and\nintersects it exactly, with watertight meshes and volumes integrated\nalong the new faces' boundaries, where each op fell back to a mesh\nbefore.\n\n## What was wrong\n\nOn main at `42e7916d`, boolean operations between `make_torus(4, 1.5,\n32)` and a 20 x 20 x 10 slab over x from 1 to 21 always fell back to\nmeshes. Fuse produced 578 faces, Cut 574, and Intersect 404. A 2 x 20 x\n4 bar through the ring's hole over x from -1 to 1 also fell back. Fuse\nproduced 810 faces, while Cut produced 808 and Intersect 228, with both\nfailing validation.\n\nA plane parallel to the torus axis within `R - r` of it, or tilted\nslightly from that position, crosses every tube cross-section twice. Its\nintersection consists of two loops, each described by `u = phi ±\nacos(rhs(v))` for every `v`.\n\nPhase FF sampled this section with a half-step offset and greedily\nchained the points, so the loops started wherever the scan began. The\nresulting winding loops then exposed several assumptions downstream. The\ntorus splitter treated them as holes because its sector path accepted\nonly meridian circles. The plane face splitter dropped the two closed\nNURBS loops, since its cap salvage took only circles and ellipses. Torus\narea took a `(u, v)` box of the face's vertices, which reads 104.65 for\nsuch a sector whose area is 99.33. The two-rim torus band mesher also\nrequired rims with constant `u` or constant `v`, which these loops do\nnot have.\n\n## What this does\n\n- Adds `plane_torus_winding_loops` in\n`crates/math/src/analytic_intersection.rs`. It recognizes sections where\n`|rhs(v)|` stays below `1 - 1e-3` throughout a dense scan, samples both\nbranches at 128 steps starting from `v = 0`, the outer equator, and\ncloses each loop on its first point. `exact_plane_analytic` now returns\nthese loops.\n\n- Generalizes the torus sector splitter from meridian circles to any\nclosed section that winds once around the tube, does not wind around the\nring, and starts with its peers on one latitude. `tube_winding` measures\nthe winding from section samples, the splitter is renamed\n`split_torus_by_tube_loops`, and each sector interior point is placed\nhalf a tube turn between its two loops.\n\n- Extends `split_face_2d` cap salvage to closed NURBS loops. A loop is\naccepted when all samples clear the face outline by one twentieth of the\nloop's extent, then carved as a cap placed using the samples' centroid.\n\n- Uses Green's theorem through `torus_face_uv_area` when a torus face\nhas an edge that is neither a line nor a circle. `torus_hole_flux`\nfollows the outer wire, whose path up one loop and down the other winds\nneither angle. `solid_volume` routes solids containing such faces\nthrough the per-face path instead of the mesh.\n\n- Extends the two-rim torus band mesher to closed NURBS rims. It obtains\neach tube rim's `u` at each `v` from shared vertices and sweeps rows\nbetween the rims column by column.\n\n- Improves the related fitted-loop case. Intersecting `make_torus(4,\n1.5)` with a radius 0.5 rod across the tube now reads 2.3230 through\nexact flux, compared with 2.32302 from numeric integration and 2.3222\nfrom the previous mesh calculation.\n\n- Produces the slab results as Fuse with 7 faces and volume 4103.1349,\nCut with 3 faces and 103.1349, and Intersect with 3 faces and 74.5180.\nThe bar results are Fuse with 8 faces and 309.0360, Cut with 6 faces and\n149.0360, and Intersect with 6 faces and 28.6169. Each builds in 1 to 3\nms, compared with 47 to 102 ms for the fallbacks.\n\n- Adds a Closed roadmap entry and updates the torus audit and off-axis\nOPEN rows. Remaining off-axis fallbacks include a cube over the ring's\nside, where `x = 3` cuts a non-winding lobe and the `y = ±2` loops are\ntrimmed by cube edges, a ball on the tube, and crossed tori.\n\n- `torus_face_uv_area` treats a whole-ring torus face, whose outer wire\nhas seam placeholders collapsed onto one vertex and therefore bounds\nnothing in `(u, v)`, as `4π²Rr` less its holes, with each hole measured\nby the Green's-theorem walk. The drilled ring, `drill_ring` in\n`ball_and_ring_drills.rs`, is such a face, with NURBS holes from the\nparallel-axis ruling loops.\n\n- The Green's-theorem walk, `wire_uv_area`, now requires a torus wire to\nreturn to its start in both `u` and `v`, and integrates each NURBS edge\nknot span separately where the curve is smooth.\n\n- The documentation for `tessellate_torus_two_rim_band` and the\nplane-cap salvage in `split_face_2d` now describes the winding rims and\nthe closed curved loops they accept, and the salvage gate is renamed\n`any_closed_curve`.\n\n## Verification\n\n- `slab_over_one_side_of_the_ring` covers Intersect, Cut, and Fuse both\nupright and after rotations of 0.7 about x and 0.3 about z. It checks\nvalid solids, expected plane and torus face counts, relative volume\nerror within `1e-8` against a Simpson integral, watertight meshes with\nvolume error within `1e-2`, and four classified points.\n\n- `bar_through_the_ring` checks the two-piece Cut and Intersect shells,\nthe one-piece Fuse, their surface counts, volumes within `1e-8` of the\nSimpson integral, watertight meshes, and four classified points. It\nreplaces the fuse-only test that used `1e-2`.\n\n- `slab_tilted_off_the_axis` rotates the slab 0.15 rad about y. Cut plus\nIntersect equals the ring, and Fuse minus Cut equals the slab volume of\n4000, both within `1e-9`. Every result is valid and watertight, with\nmesh volume within `1e-2`.\n\n- The bar common volume is `7.2e-8` below the Simpson result, which\nconverges to 28.6168997847 at 400, 800, and 1600 steps. Its four loops\nare cubic fits through exact points spaced `2 pi / 128` apart.\n\n- The bar's two-piece Cut and Intersect verify that every edge bounds\nexactly two faces. The tilted slab is checked against an independent\nintegral over the tube's cross-section, where each circle about the axis\nretains `2 acos(q)` of itself, within `1e-8`, with three classified\npoints per operation. The slab's torus face areas are checked within\n`1e-8` of a Simpson integral over the tube angle, and the drilled rings'\ntorus face area is checked within `1e-6` of `4π²Rr` less the two holes\nintegrated over the drill's disc.\n\n- The math, topology, geometry, check, algo, blend, heal, offset,\noperations, io, and wasm suites pass, totaling 2951 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPlane cuts of a torus whose section winds around the tube now cut, fuse,\nand intersect exactly with watertight meshes; before, every operation\nfell back to meshes. The torus faces these cuts leave are now measured\nexactly where a mesh would only inscribe them: a face trimmed by a\nfree-form loop goes through Green's theorem (winding neither angle\nacross the loop walk), and a whole ring whose outer wire collapsed onto\none vertex reads as the ring less its holes.\n\n- Samples both loops exactly from `v = 0` (the outer equator) so every\nloop starts on one latitude, recognized in `exact_plane_analytic`.\n- Generalizes the whole-torus sector splitter from meridian circles to\nany closed section that winds once around the tube\n(`split_torus_by_tube_loops`).\n- Lets a plane face carve a closed NURBS loop lying strictly inside it\nas a cap.\n- Measures torus faces trimmed by free-form curves with Green's theorem,\nintegrating NURBS edges knot span by knot span and requiring each wire\nto close in `v` as well as `u`.\n- Sweeps the two-rim torus band mesher between rims whose ring angle\nwanders along the tube.\n\n**Verification**\n\n- For `make_torus(4, 1.5)`, a slab over `x > 1` yields\nFuse/Cut/Intersect with 7/3/3 faces and volumes\n4103.1349/103.1349/74.5180, each in 1–3 ms versus 47–102 ms for the old\nfallback; a bar through the ring yields 8/6/6 faces.\n- New tests `slab_over_one_side_of_the_ring`, `bar_through_the_ring`,\nand `slab_tilted_off_the_axis` check upright and rotated cases, valid\none-piece results, watertight meshes, torus face areas, and volumes\nwithin `1e-8` of Simpson integrals.\n- A rod across the tube now reads 2.3230 through exact flux versus\n2.32302 numerically.\n\n<sup>Written for commit e4b9d17205970b24aa63815da7071cb6bfe0ac61.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1750?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-24T23:58:10Z",
+          "tree_id": "9318d97030065326f39eebbc1039e3aa2d5b2834",
+          "url": "https://github.com/andymai/brepkit/commit/4240871235257d8e0255e49b668610537fefb0a3"
+        },
+        "date": 1790294461062,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 979056,
+            "range": "± 3433",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1110630,
+            "range": "± 62721",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12291,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 726378,
+            "range": "± 9008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42854939,
+            "range": "± 281088",
             "unit": "ns/iter"
           }
         ]
