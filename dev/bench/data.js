@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790313381444,
+  "lastUpdate": 1790320546091,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39527,6 +39527,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42337342,
             "range": "± 71383",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c824c8c43549601d95cb10ed520f604febdf0347",
+          "message": "fix(operations): measure and mesh a sphere face that a box or rod trims (#1757)\n\nTrimmed sphere faces now produce the correct area, mesh, and volume when\nboxes, rods, caps, poles, seams, and holes define their boundaries.\n\n## What was wrong\n\n- With `make_sphere(3, 32)` and `R = 3`, `face_area` treated a sphere\nface as a zone from its boundary's mean latitude to a pole. A box bite\nover `x > 1`, `y > 1.2`, `z > 0.8` measured 84.69581408719256 instead of\n3.086698498691789. The positive octant measured 84.82300164692441\ninstead of 14.137166941154069, or `pi R^2 / 2`.\n\n- The hole formula `R^2 |∮ sin v du|` counted the loop's turn in `u` at\na pole. For the ball less the box over `x > 0`, `y > 0`, `z > 2`, the\nupper sphere face's hole runs through the pole. Its area measured\n47.12388980384694 (`15 pi`) instead of 51.836278784231595 (`16.5 pi`).\n\n- Per-face `tessellate` gridded the face's `(u, v)` bounding box. The\ncap above `z = 1.5 + 0.2 x` meshed to 112.942913019151 instead of\n28.823402341591887, while the level cap above `z = 1.5` meshed to\n112.942913019151 instead of 28.274333882308138. The grid reads its `v`\nrange from outer-wire vertices, and a one-circle rim supplies one\nvertex, so it filled the whole sphere.\n\n- `analytic_sphere_signed_volume` integrated flux over the same bounding\nbox. A solid with a sphere face trimmed by a tilted rod measured an\n`Intersect` volume of 10.996345778925772 instead of 11.000032005473157.\nA hole whose flux could not be integrated, such as a loop around the\naxis, was omitted and its cap counted as material.\n\n## What this does\n\n- `face_area` integrates sphere faces in `(u, v)` by Green's theorem\nwith area element `R^2 cos v du dv`. `sphere_wire_signed_area` uses the\nexisting `RevolutionMetric` and `wire_uv_area`. `wire_uv_area` accepts\nboth sphere poles, or a cone's apex, as locations where `u` may jump\nbecause the weight vanishes.\n\n- `pole_crossings` splits an edge that passes over a pole between its\nvertices. It brackets every one of 64 probe intervals, including the\nfirst and last, so each jump falls on a span end and no quadrature\nsegment straddles the kink.\n\n- An outer loop that winds none of the sphere's `u` bounds two regions:\nthe patch inside the loop and the sphere past it. `sphere_face_is_patch`\nselects the candidate nearer the face's mesh area at deflection `1e-2\nR`. A face within 5% of half the sphere is measured by its mesh because\nan exact pick of the wrong region would be off by the whole complement.\nThe volume path also measures that face by its mesh.\n\n- `sphere_hole_area` treats a hole as the smaller region bounded by its\nloop, using the same pole-safe integral. For a loop around the axis, it\nretains `R^2 (2 pi - |∮ sin v du|)`, the smaller cap beyond the loop.\n\n- Per-face `tessellate` uses `tessellate_holed_face_local` when a sphere\nface's outer wire reaches a pole, contains an edge that is neither a\nlatitude nor a meridian, or has fewer than three edges. The local mesher\nsends a band between two latitude rims through the latitude-band mesher\nand every other sphere face through the constrained CDT, matching the\nsolid mesher. Chord edges where a primitive's hemispheres meet retain\nthe grid.\n\n- A sphere face whose outer loop has no chords and winds none of `u`,\nincluding a loop through a pole, uses `sphere_patch_flux`: `(R * area +\n(C - about) . vector_area) / 3` for the patch, or the ball's volume less\nthat value for the sphere past it, minus each hole's smaller-region\nflux. Such a face also sends the solid through the direct volume path.\n\n- `analytic_sphere_signed_volume` ignores a pole vertex's arbitrary `u`\nand accepts the `(u, v)` box only when `sphere_wire_on_box_sides`\nconfirms that the wire bounds it. Every edge must follow a box side or\nbe a seam traversed both ways, preserving the exact box for a seamed\nhemisphere read from a file. A wire clear of the poles winds the axis\nexactly when the box spans the full turn. A hole or outer wire the exact\npaths cannot integrate falls back to the face's mesh because leaving it\nout counts its region as material.\n\n- The roadmap closes the trimmed-sphere row and retains an OPEN row for\nthe chordal equator and solids with no face on the direct path.\n`make_torus(4, 1.5)` less `make_sphere(3)` reads 166.4567 against\n166.3658. The ball less its positive octant reads 98.95105 against\n98.96017 with every face's area exact. The ball's part inside a coaxial\n`r = 1` bore reads 18.30905 against 18.31583 on the whole-solid mesh.\nThe roadmap also records sphere booleans that fall back to a mesh on\nmain: every box face crossing the equator, a section through a pole, and\na rod through a trimmed sphere patch.\n\n## Verification\n\n- `sphere_face_bitten_by_a_box_corner` checks area within `1e-9` of an\n`xy`-projected oracle whose inner integral is `R asin(y / c)`, leaving\none Simpson integral. It checks mesh within 1% and volume within `1e-9`\nusing the same construction with height `sqrt(c^2 - y^2) - 0.8`\nintegrated in closed form across `y`.\n\n- `sphere_octant` checks the octant patch and remaining upper-hemisphere\npatch within `1e-9` of `pi R^2 / 2` and `3 pi R^2 / 2`, mesh within 1%,\nand octant volume within `1e-9` of `pi R^3 / 6`.\n\n- `cap_under_a_level_or_tilted_circle` covers slopes 0 and 0.2, with\narea within `1e-9` of `2 pi R (R - d)` and mesh within 1%.\n\n- `tilted_rod_through_a_ball` verifies valid `Intersect` and `Cut`\nsolids under `validate_solid`, watertight meshes, volumes within `1e-7`\nof a polar Simpson integral over the rod's cross-section, and correct\nclassification of the rod's axis and `(-2, 0, 0)`.\n\n- `pocket_through_a_pole` checks `Intersect` and `Cut` volumes within\n`1e-9` of a quarter of `pi h^2 (3R - h) / 3`, with `h = 1`, and the ball\nless it. Every sphere face's area is within `1e-9`.\n\n- `box_less_the_balls_octant` checks the retained reversed sphere face\nwithin `1e-9` of `pi R^2 / 2` and volume within `1e-9` of `1000 - pi R^3\n/ 6`.\n\n- `half_cap_whose_arc_runs_over_the_pole` checks a hand-built face\nwithin `1e-9` of `pi R (R - 1)`, both with the far vertex at `z = 2` and\nhalf a degree past the pole inside the arc's last probe interval. With\npole splitting disabled, the `z = 2` case reads 18.850232447020424\nagainst 18.84955592153876. Omitting bracketing for the first and last\nprobe intervals breaks the half-degree case.\n\n- Unit tests in `measure/volume.rs` cover both box-path guards.\n`sphere_box_declines_a_notched_hemisphere` declines the hand-built upper\nhemisphere less a notch over `x > 0`, `y > 0`, `z < 1`; disabling the\nguard fails. `sphere_box_takes_a_seamed_hemisphere` keeps the box for an\nequator plus a meridian seam traversed both ways, yielding `2 pi R^3 /\n3` of flux about the centre within `1e-9`; removing the seam clause\nfails.\n\n- All seven integration tests fail on main. Representative failures\ninclude the level cap mesh at 112.942913019151 against\n28.274333882308138, the box less the ball's octant sphere area at\n84.82300164692441 against 14.137166941154069, the octant volume at\n14.136640332731488 against 14.137166941154069, and the box-corner volume\nat 1.3424538231779346 against 1.3425184202116442.\n\n- The workspace suite passes: 3063 tests run, 3063 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes area, mesh, and volume measurement for trimmed sphere faces (cut\nby boxes, rods, and tilted planes) so they reflect the actual boundary\nrather than a bounding box.\n\n**What changed**\n- `face_area` integrates spherical faces in (u, v) via Green's theorem,\nallowing both poles and selecting the correct patch using the face's own\nmesh; an arc that crosses a pole is split there.\n- Per-face tessellation routes trimmed or pole-touching sphere faces\nthrough the constrained CDT, matching the solid mesher; chord edges keep\nthe grid.\n- Sphere faces whose outer loop clears the poles and winds none of the\nsphere's `u` use an exact patch flux for the direct volume path; the box\nflux only accepts wires that bound it, including a seam the wire runs\nboth ways.\n- Faces the closed forms cannot cover (a hole through a pole or around\nthe axis, a trim off the grid, a patch near half the sphere) fall back\nto the face's own mesh.\n\n**Verification**\n- New tests cover a box corner bite, octant, tilted cap, and tilted rod\nthrough a ball, checking area within 1e-9 and mesh within 1%, and volume\nwithin 1e-7.\n- Extra tests pin a reversed patch, an arc over the pole, a notched\nhemisphere the box flux declines, and a seamed hemisphere the box flux\nkeeps.\n- All tests fail on main; the full suite passes.\n\n<sup>Written for commit 047a274d920a4f4142aac135cac3d897afdcf74e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1757?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-25T07:13:20Z",
+          "tree_id": "9fd213feab26ba118eef2d34b8986fb943d0b9f3",
+          "url": "https://github.com/andymai/brepkit/commit/c824c8c43549601d95cb10ed520f604febdf0347"
+        },
+        "date": 1790320542388,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 814675,
+            "range": "± 1727",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 883471,
+            "range": "± 1879",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10958,
+            "range": "± 99",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 595810,
+            "range": "± 2062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35414540,
+            "range": "± 407765",
             "unit": "ns/iter"
           }
         ]
