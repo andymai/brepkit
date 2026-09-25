@@ -412,7 +412,7 @@ pub fn plane_cone_conic_arc(
     };
     let ((s0, t0), (s1, t1)) = (plane_st(from), plane_st(to));
     let scale = s0.abs().max(t0.abs()).max(s1.abs()).max(t1.abs()).max(1.0);
-    if e.abs() < 1e-9 * scale {
+    if e.abs() < 1e-9 * scale || (from - to).length() <= 1e-9 * scale {
         return Ok(None);
     }
     let point = |s: f64, t: f64| origin + e1 * s + e2 * t;
@@ -474,7 +474,29 @@ pub fn plane_cone_conic_arc(
     }
     #[allow(clippy::cast_precision_loss)]
     knots.extend([pieces as f64; 3]);
-    NurbsCurve::new(2, knots, control, weights).map(Some)
+    let curve = NurbsCurve::new(2, knots, control, weights)?;
+    // The closed forms drop terms that vanish only on the exact conic (a
+    // barely elliptic section read as a parabola), so the arc must meet the
+    // cone between its ends too: a point at radius ρ and height h off the
+    // apex lies |ρ sin α − |h| cos α| from it.
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    let off_cone = |q: Point3| {
+        let w = q - apex;
+        let h = w.dot(axis);
+        (w - axis * h)
+            .length()
+            .mul_add(sin_a, -(h.abs() * cos_a))
+            .abs()
+    };
+    for i in 0..pieces {
+        for f in [0.25, 0.5, 0.75] {
+            #[allow(clippy::cast_precision_loss)]
+            if off_cone(curve.evaluate(i as f64 + f)) > 1e-9 * scale {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(curve))
 }
 
 /// Reference to an analytic surface for intersection dispatch.
@@ -3219,6 +3241,50 @@ mod tests {
                 let off_cone = (w.z() - w.length() * half_angle.sin()).abs();
                 assert!(off_plane < 1e-9, "off the plane by {off_plane}");
                 assert!(off_cone < 1e-9, "off the cone by {off_cone}");
+            }
+        }
+    }
+
+    /// A plane a few 1e-10 short of parallel to a ruling cuts a vast ellipse
+    /// that the parabola's closed form only approximates: the arc is either
+    /// declined or on the cone, and an arc with coincident ends is declined.
+    #[test]
+    fn plane_cone_conic_arc_declines_a_near_parabolic_ellipse() {
+        let half_angle = 1.1_f64;
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            half_angle,
+        )
+        .unwrap();
+        for shortfall in [1e-10, 3e-10, 8e-10] {
+            let tilt = half_angle - shortfall / (2.0 * half_angle).sin();
+            let normal = Vec3::new(tilt.sin(), 0.0, tilt.cos());
+            let chains =
+                exact_plane_analytic_reaching(AnalyticSurface::Cone(&cone), normal, 1.0, 10.0)
+                    .unwrap();
+            let Some(chain) = chains.iter().find_map(|c| match c {
+                ExactIntersectionCurve::Points(chain) => Some(chain),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let (from, to) = (chain[2], chain[chain.len() - 3]);
+            assert!(
+                plane_cone_conic_arc(&cone, normal, 1.0, from, from)
+                    .unwrap()
+                    .is_none(),
+                "coincident ends"
+            );
+            let Some(arc) = plane_cone_conic_arc(&cone, normal, 1.0, from, to).unwrap() else {
+                continue;
+            };
+            let (t0, t1) = arc.domain();
+            for i in 0..=200 {
+                let w = arc.evaluate(t0 + (t1 - t0) * f64::from(i) / 200.0)
+                    - Point3::new(0.0, 0.0, 0.0);
+                let off_cone = (w.z() - w.length() * half_angle.sin()).abs();
+                assert!(off_cone < 1e-8, "{shortfall}: off the cone by {off_cone}");
             }
         }
     }

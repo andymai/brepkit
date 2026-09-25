@@ -204,9 +204,10 @@ One line each; the fixture/PR carries the story. Newest first.
   integral, and differently again when turned or mirrored (the pose audit's
   frustum and cone drifts, 2e-6 to 2e-5): a cylinder or cone wall trimmed by
   a free-form curve left the solid on the whole-solid mesh. `solid_volume`
-  now takes the direct path for it. Phase FF builds a cone's parabola or
-  hyperbola section as the exact rational quadratic arc
-  (`plane_cone_conic_arc`) instead of a cubic through samples.
+  now takes the direct path for it, integrating a NURBS boundary's flux per
+  knot span. Phase FF builds a cone's parabola or hyperbola section as the
+  exact rational quadratic arc (`plane_cone_conic_arc`, declined unless it
+  meets the cone between its ends) instead of a cubic through samples.
 
 - **Reversed sphere caps meshed their complement (CLOSED 2026-09-25; pins in `crates/operations/tests/sphere_reversed_cap.rs`)**:
   a box less a ball poking through its top leaves a reversed sphere face

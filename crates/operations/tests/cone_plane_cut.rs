@@ -390,7 +390,7 @@ fn cone_cut_parallel_to_its_axis() {
                     // A fallback's bound never exceeds half the piece, so a
                     // result that lost the piece altogether still fails.
                     let bound = if built {
-                        5e-8 * expected
+                        5e-9 * expected
                     } else {
                         (3e-2 * whole).min(0.5 * expected)
                     };
@@ -437,6 +437,40 @@ fn frustum_half_space_in_any_pose() {
             assert!(
                 (volume - truth).abs() < 1e-8 * truth,
                 "{op:?} {pose}: volume {volume}, truth {truth}"
+            );
+            assert!(
+                validate_solid(&topo, piece).unwrap().is_valid(),
+                "{op:?} {pose}: invalid"
+            );
+            let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{op:?} {pose}: open mesh");
+            // (2, 0, 1) lies in the frustum beyond the plane, (0, 0, 1) short of it.
+            let place = |p: Point3| match pose {
+                "turned" => turn.mul_point(p),
+                "mirrored" => {
+                    let (at, n) = (
+                        Point3::new(0.3, 0.0, 0.0),
+                        Vec3::new(1.0, 0.2, 0.1).normalize().unwrap(),
+                    );
+                    p - n * (2.0 * (p - at).dot(n))
+                }
+                _ => p,
+            };
+            let (kept, removed) = if op == BooleanOp::Intersect {
+                (Point3::new(2.0, 0.0, 1.0), Point3::new(0.0, 0.0, 1.0))
+            } else {
+                (Point3::new(0.0, 0.0, 1.0), Point3::new(2.0, 0.0, 1.0))
+            };
+            let opts = ClassifyOptions::default();
+            assert_eq!(
+                classify_point(&topo, piece, place(kept), &opts).unwrap(),
+                PointClassification::Inside,
+                "{op:?} {pose}: lost its material"
+            );
+            assert_eq!(
+                classify_point(&topo, piece, place(removed), &opts).unwrap(),
+                PointClassification::Outside,
+                "{op:?} {pose}: kept the removed side"
             );
         }
     }
