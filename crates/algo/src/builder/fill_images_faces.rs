@@ -1703,6 +1703,9 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
             map.entry(curve.face_b)
                 .or_default()
                 .push(SectionSource::Curve(idx));
+            for &face in arena.curve_extra_faces.get(&idx).into_iter().flatten() {
+                map.entry(face).or_default().push(SectionSource::Curve(idx));
+            }
         }
     }
     // IN edges from EF interferences — individual PaveBlocks.

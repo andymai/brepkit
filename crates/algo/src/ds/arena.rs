@@ -40,6 +40,11 @@ pub struct GfaArena {
     /// lookup during intersection (built after VV, when `edge_pave_blocks` and
     /// the same-domain mapping are fixed). `None` falls back to a linear scan.
     pub pave_vertex_index: Option<super::PaveVertexIndex>,
+    /// Faces a curve also sections beyond its own pair, by curve index: an
+    /// arc two faces of one operand share with a face of the other (a
+    /// faceted sphere's equator arc on a coplanar box face) is emitted once
+    /// but splits both.
+    pub curve_extra_faces: BTreeMap<usize, Vec<FaceId>>,
 }
 
 impl GfaArena {
@@ -56,6 +61,7 @@ impl GfaArena {
             common_blocks: Arena::new(),
             pb_to_cb: BTreeMap::new(),
             pave_vertex_index: None,
+            curve_extra_faces: BTreeMap::new(),
         }
     }
 
