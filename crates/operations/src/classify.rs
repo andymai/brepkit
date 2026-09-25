@@ -535,11 +535,16 @@ fn wire_runs_out_and_back(
         let edge = topo.edge(oe.edge())?;
         let start = topo.vertex(edge.start())?.point();
         if edge.start() == edge.end() {
+            // A closed rim passes its vertex once, and one sample could
+            // land there.
             let (t0, t1) = edge.curve().domain_with_endpoints(start, start);
-            let mid = edge
-                .curve()
-                .evaluate_with_endpoints(0.5 * (t0 + t1), start, start);
-            if (mid - start).length() <= Tolerance::new().linear {
+            let at_vertex = [0.25, 0.5, 0.75].iter().all(|f| {
+                let p =
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(*f, t0), start, start);
+                (p - start).length() <= Tolerance::new().linear
+            });
+            if at_vertex {
                 continue;
             }
         }

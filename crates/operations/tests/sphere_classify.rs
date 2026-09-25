@@ -262,3 +262,69 @@ fn a_point_in_a_thin_bore_is_off_the_boundary() {
         PointClassification::Outside
     );
 }
+
+/// A half ball whose cap is bounded by its rim and a seam run out and back,
+/// the rim's vertex at the middle of the rim circle's parameter range: the
+/// rim is no point, so the cap is not the whole sphere, and points below
+/// the disc, whose rays cross the sphere below the rim, read outside.
+#[test]
+fn a_seam_capped_half_ball_keeps_its_rim() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    let mut topo = Topology::new();
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    let rim_circle = Circle3D::new(origin, up, RADIUS).unwrap();
+    let on_rim = topo.add_vertex(Vertex::new(rim_circle.evaluate(std::f64::consts::PI), 1e-7));
+    let pole = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, RADIUS), 1e-7));
+    let rim = topo.add_edge(Edge::new(on_rim, on_rim, EdgeCurve::Circle(rim_circle)));
+    let meridian = Circle3D::new(origin, Vec3::new(-1.0, 0.0, 0.0), RADIUS).unwrap();
+    let seam = topo.add_edge(Edge::new(on_rim, pole, EdgeCurve::Circle(meridian)));
+    let cap_wire = Wire::new(
+        vec![
+            OrientedEdge::new(rim, true),
+            OrientedEdge::new(seam, true),
+            OrientedEdge::new(seam, false),
+        ],
+        true,
+    )
+    .unwrap();
+    let cap_wire = topo.add_wire(cap_wire);
+    let sphere = FaceSurface::Sphere(SphericalSurface::new(origin, RADIUS).unwrap());
+    let cap = topo.add_face(Face::new(cap_wire, vec![], sphere));
+    let disc_wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, false)], true).unwrap());
+    let floor = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, -1.0),
+        d: 0.0,
+    };
+    let disc = topo.add_face(Face::new(disc_wire, vec![], floor));
+    let shell = topo.add_shell(Shell::new(vec![cap, disc]).unwrap());
+    let half = topo.add_solid(Solid::new(shell, vec![]));
+    for (p, inside) in [
+        (Point3::new(0.3, 0.2, 1.5), true),
+        (Point3::new(-1.0, 0.5, 1.0), true),
+        (Point3::new(-3.21, -1.25, -1.84), false),
+        (Point3::new(-2.59, -1.87, -1.22), false),
+        (Point3::new(-1.97, -0.02, -1.84), false),
+    ] {
+        let by_check = classify_point(&topo, half, p, &ClassifyOptions::default()).unwrap();
+        let by_ops =
+            brepkit_operations::classify::classify_point(&topo, half, p, 0.01, 1e-7).unwrap();
+        assert_eq!(
+            by_check == PointClassification::Inside,
+            inside,
+            "check at {p:?}"
+        );
+        assert_eq!(
+            by_ops == brepkit_operations::classify::PointClassification::Inside,
+            inside,
+            "operations at {p:?}"
+        );
+    }
+}
