@@ -4,13 +4,16 @@
 //! a patch whose sides are two meridians and the equator. A tilted rod
 //! through the ball keeps two caps whose flux measures the rod's piece
 //! exactly, and a pocket over the pole leaves a hole that meets the pole.
+//! Each piece's volume is held to an independent integral too.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
 
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
+use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
-use brepkit_math::vec::Point3;
+use brepkit_math::surfaces::SphericalSurface;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
@@ -18,14 +21,22 @@ use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::explorer::solid_faces;
-use brepkit_topology::face::FaceSurface;
+use brepkit_topology::face::{Face, FaceSurface};
+use brepkit_topology::vertex::Vertex;
+use brepkit_topology::wire::{OrientedEdge, Wire};
 
 const RADIUS: f64 = 3.0;
 
 /// The sphere faces of the ball less or within a box at `corner`, with their
-/// exact and meshed areas, in the order the result lists them.
-fn sphere_faces(op: BooleanOp, corner: (f64, f64, f64)) -> Vec<(f64, f64)> {
+/// exact and meshed areas, in the order the result lists them, and the
+/// piece's volume when `measure` asks for it.
+fn sphere_faces(
+    op: BooleanOp,
+    corner: (f64, f64, f64),
+    measure: bool,
+) -> (Vec<(f64, f64)>, Option<f64>) {
     let mut topo = Topology::new();
     let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
     let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -36,7 +47,7 @@ fn sphere_faces(op: BooleanOp, corner: (f64, f64, f64)) -> Vec<(f64, f64)> {
     )
     .unwrap();
     let piece = boolean(&mut topo, op, ball, block).unwrap();
-    solid_faces(&topo, piece)
+    let faces = solid_faces(&topo, piece)
         .unwrap()
         .into_iter()
         .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
@@ -52,7 +63,22 @@ fn sphere_faces(op: BooleanOp, corner: (f64, f64, f64)) -> Vec<(f64, f64)> {
                 .sum();
             (face_area(&topo, f, 0.005).unwrap(), meshed)
         })
-        .collect()
+        .collect();
+    let volume = measure.then(|| solid_volume(&topo, piece, 0.01).unwrap());
+    (faces, volume)
+}
+
+/// Simpson's rule over `n` (even) panels, substituted `x = end - s²` so the
+/// integrand stays smooth where the region pinches off at `end`.
+fn toward_pinch(from: f64, end: f64, f: &dyn Fn(f64) -> f64) -> f64 {
+    let g = |s: f64| f(s.mul_add(-s, end)) * 2.0 * s;
+    let (n, span) = (800_u32, (end - from).sqrt());
+    let step = span / f64::from(n);
+    let mut sum = g(0.0) + g(span);
+    for k in 1..n {
+        sum += if k % 2 == 1 { 4.0 } else { 2.0 } * g(step * f64::from(k));
+    }
+    sum * step / 3.0
 }
 
 /// The patch past `x = 1`, `y = 1.2` and `z = 0.8`, projected onto the
@@ -61,25 +87,40 @@ fn sphere_faces(op: BooleanOp, corner: (f64, f64, f64)) -> Vec<(f64, f64)> {
 /// Simpson integral in `x`, substituted where the patch pinches off.
 fn corner_patch() -> f64 {
     let x_end = (RADIUS * RADIUS - 0.64 - 1.44).sqrt();
-    let across = |x: f64| {
+    toward_pinch(1.0, x_end, &|x: f64| {
         let c = RADIUS.mul_add(RADIUS, -(x * x)).sqrt();
         let y_end = (RADIUS * RADIUS - 0.64 - x * x).max(0.0).sqrt();
         RADIUS * ((y_end / c).asin() - (1.2 / c).asin())
-    };
-    let f = |s: f64| across(s.mul_add(-s, x_end)) * 2.0 * s;
-    let (n, span) = (800_u32, (x_end - 1.0).sqrt());
-    let step = span / f64::from(n);
-    let mut sum = f(0.0) + f(span);
-    for k in 1..n {
-        sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step * f64::from(k));
-    }
-    sum * step / 3.0
+    })
+}
+
+/// The ball's piece past the same three planes: across `y` the height
+/// `sqrt(c² - y²) - 0.8` integrates in closed form, leaving the same
+/// integral in `x`.
+fn corner_piece() -> f64 {
+    let x_end = (RADIUS * RADIUS - 0.64 - 1.44).sqrt();
+    toward_pinch(1.0, x_end, &|x: f64| {
+        let c2 = RADIUS.mul_add(RADIUS, -(x * x));
+        let y_end = (c2 - 0.64).max(0.0).sqrt();
+        let g = |y: f64| {
+            0.5 * y.mul_add(
+                y.mul_add(-y, c2).max(0.0).sqrt(),
+                c2 * (y / c2.sqrt()).asin(),
+            ) - 0.8 * y
+        };
+        g(y_end) - g(1.2)
+    })
 }
 
 #[test]
 fn sphere_face_bitten_by_a_box_corner() {
     let truth = corner_patch();
-    let faces = sphere_faces(BooleanOp::Intersect, (1.0, 1.2, 0.8));
+    let (faces, volume) = sphere_faces(BooleanOp::Intersect, (1.0, 1.2, 0.8), true);
+    let (volume, piece) = (volume.unwrap(), corner_piece());
+    assert!(
+        (volume - piece).abs() < 1e-9 * piece,
+        "volume {volume}, truth {piece}"
+    );
     assert_eq!(faces.len(), 1, "one sphere face");
     let (area, meshed) = faces[0];
     assert!(
@@ -95,10 +136,15 @@ fn sphere_face_bitten_by_a_box_corner() {
 #[test]
 fn sphere_octant() {
     let octant = PI * RADIUS * RADIUS / 2.0;
-    let within = sphere_faces(BooleanOp::Intersect, (0.0, 0.0, 0.0));
+    let (within, volume) = sphere_faces(BooleanOp::Intersect, (0.0, 0.0, 0.0), true);
+    let (volume, piece) = (volume.unwrap(), PI * RADIUS.powi(3) / 6.0);
+    assert!(
+        (volume - piece).abs() < 1e-9 * piece,
+        "volume {volume}, truth {piece}"
+    );
     assert_eq!(within.len(), 1, "one sphere face");
     // Less the octant, the upper hemisphere keeps three quarters of itself.
-    let mut less = sphere_faces(BooleanOp::Cut, (0.0, 0.0, 0.0));
+    let (mut less, _) = sphere_faces(BooleanOp::Cut, (0.0, 0.0, 0.0), false);
     less.sort_by(|a, b| a.0.total_cmp(&b.0));
     assert_eq!(less.len(), 2, "two sphere faces");
     for ((area, meshed), truth) in [
@@ -270,4 +316,75 @@ fn pocket_through_a_pole() {
             );
         }
     }
+}
+
+/// A box over the positive octant less the ball keeps the octant's patch
+/// turned inward, a quarter of a hemisphere, and the box less an eighth of
+/// the ball.
+#[test]
+fn box_less_the_balls_octant() {
+    let mut topo = Topology::new();
+    let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let piece = boolean(&mut topo, BooleanOp::Cut, block, ball).unwrap();
+    let faces: Vec<_> = solid_faces(&topo, piece)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+        .collect();
+    assert_eq!(faces.len(), 1, "one sphere face");
+    assert!(topo.face(faces[0]).unwrap().is_reversed(), "turned inward");
+    let (area, truth) = (
+        face_area(&topo, faces[0], 0.005).unwrap(),
+        PI * RADIUS * RADIUS / 2.0,
+    );
+    assert!(
+        (area - truth).abs() < 1e-9 * truth,
+        "area {area}, truth {truth}"
+    );
+    let (volume, truth) = (
+        solid_volume(&topo, piece, 0.01).unwrap(),
+        1000.0 - PI * RADIUS.powi(3) / 6.0,
+    );
+    assert!(
+        (volume - truth).abs() < 1e-9 * truth,
+        "volume {volume}, truth {truth}"
+    );
+}
+
+/// Half the cap above `z = 1`, built by hand: the latitude on the `y > 0`
+/// side, then the arc in `y = 0` back over the pole to `z = 2`, which it
+/// passes between its two vertices off the middle of its span, and down to
+/// the latitude. Half the cap is `pi R h` with `h = R - 1`.
+#[test]
+fn half_cap_whose_arc_runs_over_the_pole() {
+    let mut topo = Topology::new();
+    let rim = RADIUS.mul_add(RADIUS, -1.0).sqrt();
+    let o = Point3::new(0.0, 0.0, 0.0);
+    let east = topo.add_vertex(Vertex::new(Point3::new(rim, 0.0, 1.0), 1e-7));
+    let west = topo.add_vertex(Vertex::new(Point3::new(-rim, 0.0, 1.0), 1e-7));
+    let high = RADIUS.mul_add(RADIUS, -4.0).sqrt();
+    let peak = topo.add_vertex(Vertex::new(Point3::new(high, 0.0, 2.0), 1e-7));
+    let latitude =
+        Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), rim).unwrap();
+    let meridian = Circle3D::new(o, Vec3::new(0.0, 1.0, 0.0), RADIUS).unwrap();
+    let edges = [
+        topo.add_edge(Edge::new(east, west, EdgeCurve::Circle(latitude))),
+        topo.add_edge(Edge::new(west, peak, EdgeCurve::Circle(meridian.clone()))),
+        topo.add_edge(Edge::new(peak, east, EdgeCurve::Circle(meridian))),
+    ];
+    let wire = Wire::new(
+        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let sphere = SphericalSurface::new(o, RADIUS).unwrap();
+    let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Sphere(sphere)));
+    let truth = PI * RADIUS * (RADIUS - 1.0);
+    let area = face_area(&topo, face, 0.005).unwrap();
+    assert!(
+        (area - truth).abs() < 1e-9 * truth,
+        "area {area}, truth {truth}"
+    );
 }

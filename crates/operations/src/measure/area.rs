@@ -261,6 +261,51 @@ fn sphere_hole_area(
     Ok(r2 * (TAU - sweep.abs()))
 }
 
+/// The parameters strictly inside `(ta, tb)`, in traversal order, where a
+/// curve passes through one of `poles` (within `1e-7`): each local minimum of
+/// the distance over 64 probes, refined by ternary search.
+fn pole_crossings(at: &dyn Fn(f64) -> Point3, (ta, tb): (f64, f64), poles: &[Point3]) -> Vec<f64> {
+    const PROBES: usize = 64;
+    let mut found: Vec<f64> = Vec::new();
+    for &pole in poles {
+        let gap = |t: f64| (at(t) - pole).length();
+        #[allow(clippy::cast_precision_loss)]
+        let ts: Vec<f64> = (0..=PROBES)
+            .map(|k| ta + (tb - ta) * k as f64 / PROBES as f64)
+            .collect();
+        let gaps: Vec<f64> = ts.iter().map(|&t| gap(t)).collect();
+        for k in 1..PROBES {
+            if gaps[k] > gaps[k - 1] || gaps[k] > gaps[k + 1] {
+                continue;
+            }
+            let (mut lo, mut hi) = (ts[k - 1], ts[k + 1]);
+            for _ in 0..80 {
+                let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+                if gap(m1) < gap(m2) {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let t = 0.5 * (lo + hi);
+            let p = at(t);
+            if gap(t) <= 1e-7
+                && (p - at(ta)).length() > 1e-7
+                && (p - at(tb)).length() > 1e-7
+                && !found.iter().any(|&f| (at(f) - p).length() <= 1e-7)
+            {
+                found.push(t);
+            }
+        }
+    }
+    if tb < ta {
+        found.sort_by(|a, b| b.total_cmp(a));
+    } else {
+        found.sort_by(f64::total_cmp);
+    }
+    found
+}
+
 /// A lateral of revolution read in its `(u, v)` parameters, where the area
 /// element is `weight(v) du dv`.
 struct RevolutionMetric<'a> {
@@ -518,73 +563,78 @@ fn wire_uv_area(
     };
     // The region's u has to jump by a turn somewhere on the loop, which is
     // free only across the pole (the weight vanishes there): walk from it.
-    let mut edges = topo.wire(wire_id)?.edges().to_vec();
-    let mut leaves_pole = Vec::with_capacity(edges.len());
-    for oe in &edges {
+    // An arc over a pole between its vertices is cut there, so its jump
+    // falls on a span end too.
+    let wire_edges = topo.wire(wire_id)?.edges().to_vec();
+    let mut spans: Vec<(usize, (f64, f64), bool)> = Vec::new();
+    for (k, oe) in wire_edges.iter().enumerate() {
         let edge = topo.edge(oe.edge())?;
-        let from = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        leaves_pole.push(at_pole(topo.vertex(from)?.point()));
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, start, end);
+        for (ta, tb) in traversal_spans(edge, oe.is_forward(), start, end) {
+            let mut from = ta;
+            for t in pole_crossings(&at, (ta, tb), metric.poles) {
+                spans.push((k, (from, t), at_pole(at(from))));
+                from = t;
+            }
+            spans.push((k, (from, tb), at_pole(at(from))));
+        }
     }
-    if let Some(k) = leaves_pole.iter().position(|&p| p) {
-        edges.rotate_left(k);
+    if let Some(k) = spans.iter().position(|&(_, _, leaves)| leaves) {
+        spans.rotate_left(k);
     }
-    for oe in &edges {
-        let edge = topo.edge(oe.edge())?;
+    for &(k, (ta, tb), _) in &spans {
+        let edge = topo.edge(wire_edges[k].edge())?;
         let start = topo.vertex(edge.start())?.point();
         let end = topo.vertex(edge.end())?.point();
         let curve = edge.curve();
         let at = |t: f64| curve.evaluate_with_endpoints(t, start, end);
-        for (ta, tb) in traversal_spans(edge, oe.is_forward(), start, end) {
-            let mut u_prev = u_near(at(ta), last_u);
-            if first_u.is_none() {
-                first_u = Some(u_prev);
-            }
-            walk_v(at(ta));
-            // A NURBS edge integrates knot span by knot span, where it is
-            // smooth; other curves in even segments.
-            #[allow(clippy::cast_precision_loss)]
-            let mut cuts: Vec<f64> = (0..=SEGMENTS)
-                .map(|seg| ta + (tb - ta) * seg as f64 / SEGMENTS as f64)
-                .collect();
-            if let EdgeCurve::NurbsCurve(nc) = curve {
-                let (lo, hi) = (ta.min(tb), ta.max(tb));
-                cuts = std::iter::once(ta)
-                    .chain(nc.knots().iter().copied().filter(|&k| k > lo && k < hi))
-                    .chain(std::iter::once(tb))
-                    .collect();
-                cuts.dedup();
-                if tb < ta {
-                    let last = cuts.len() - 1;
-                    cuts[1..last].reverse();
-                }
-            }
-            for w in cuts.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
-                for gp in points {
-                    let t = mid + half * gp.x;
-                    let p = at(t);
-                    let u = u_near(p, Some(u_prev));
-                    let tangent = match curve {
-                        EdgeCurve::Line => end - start,
-                        EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
-                        EdgeCurve::Ellipse(e) => e.tangent(t),
-                        EdgeCurve::NurbsCurve(nc) => nc.derivatives(t, 1)[1],
-                    };
-                    let (_, v) = (metric.project)(p);
-                    let dv = (metric.grad_v)(p).dot(tangent);
-                    sum += gp.w * half * u * (metric.weight)(v) * dv;
-                    u_prev = u;
-                    walk_v(p);
-                }
-            }
-            last_u = Some(u_near(at(tb), Some(u_prev)));
-            walk_v(at(tb));
+        let mut u_prev = u_near(at(ta), last_u);
+        if first_u.is_none() {
+            first_u = Some(u_prev);
         }
+        walk_v(at(ta));
+        // A NURBS edge integrates knot span by knot span, where it is
+        // smooth; other curves in even segments.
+        #[allow(clippy::cast_precision_loss)]
+        let mut cuts: Vec<f64> = (0..=SEGMENTS)
+            .map(|seg| ta + (tb - ta) * seg as f64 / SEGMENTS as f64)
+            .collect();
+        if let EdgeCurve::NurbsCurve(nc) = curve {
+            let (lo, hi) = (ta.min(tb), ta.max(tb));
+            cuts = std::iter::once(ta)
+                .chain(nc.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                .chain(std::iter::once(tb))
+                .collect();
+            cuts.dedup();
+            if tb < ta {
+                let last = cuts.len() - 1;
+                cuts[1..last].reverse();
+            }
+        }
+        for w in cuts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
+            for gp in points {
+                let t = mid + half * gp.x;
+                let p = at(t);
+                let u = u_near(p, Some(u_prev));
+                let tangent = match curve {
+                    EdgeCurve::Line => end - start,
+                    EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
+                    EdgeCurve::Ellipse(e) => e.tangent(t),
+                    EdgeCurve::NurbsCurve(nc) => nc.derivatives(t, 1)[1],
+                };
+                let (_, v) = (metric.project)(p);
+                let dv = (metric.grad_v)(p).dot(tangent);
+                sum += gp.w * half * u * (metric.weight)(v) * dv;
+                u_prev = u;
+                walk_v(p);
+            }
+        }
+        last_u = Some(u_near(at(tb), Some(u_prev)));
+        walk_v(at(tb));
     }
     let v_closes = !metric.v_periodic
         || matches!((first_v, v_walk), (Some(a), Some(b)) if (a - b).abs() <= 1e-6);
