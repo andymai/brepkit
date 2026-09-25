@@ -13,6 +13,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
+use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
@@ -288,6 +289,90 @@ fn ball_cut_and_fused_with_a_turned_octant_box() {
             let volume = solid_volume(&topo, result, 0.01).unwrap();
             assert!(
                 (volume - truth).abs() < 2e-4 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
+
+/// A ball turned about an oblique axis, or mirrored through a slanted plane,
+/// with the tool moved alongside: a box corner, a slab and a rod stay exact
+/// and valid. A turned hemisphere's equator is a rounding sliver of `v`, not
+/// an extent; the slab's latitudes nest on one hemisphere. The Cut bounds
+/// cover the chordal equator's measure (the roadmap's sphere measure row).
+#[test]
+fn turned_and_mirrored_balls_stay_exact() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let corner = corner_piece(1.0, 1.2, 0.8);
+    // The ball between z = 1 and z = 2.
+    let zone = PI * (RADIUS.powi(2) * 1.0 - (8.0 - 1.0) / 3.0);
+    // The rod of radius 0.6 along y through (0.5, _, 1): the ball's chord
+    // along y over the rod's disc, by Simpson in polar coordinates.
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let rod = simpson(200, 0.0, 0.6, &|r: f64| {
+        r * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
+            let (x, z) = (r.mul_add(th.cos(), 0.5), r.mul_add(th.sin(), 1.0));
+            2.0 * RADIUS.mul_add(RADIUS, -(x * x + z * z)).sqrt()
+        })
+    });
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(0.3);
+    for pose in ["turned", "mirrored"] {
+        for (tool, op, truth, bound) in [
+            ("corner", BooleanOp::Intersect, corner, 1e-7),
+            ("corner", BooleanOp::Cut, ball - corner, 2e-4),
+            ("slab", BooleanOp::Intersect, zone, 1e-9),
+            ("slab", BooleanOp::Cut, ball - zone, 2e-4),
+            ("rod", BooleanOp::Intersect, rod, 1e-6),
+        ] {
+            let label = format!("{pose} {tool} {op:?}");
+            let mut topo = Topology::new();
+            let mut sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let mut block = match tool {
+                "corner" => {
+                    let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+                    transform_solid(&mut topo, b, &Mat4::translation(1.0, 1.2, 0.8)).unwrap();
+                    b
+                }
+                "slab" => {
+                    let b = make_box(&mut topo, 20.0, 20.0, 1.0).unwrap();
+                    transform_solid(&mut topo, b, &Mat4::translation(-10.0, -10.0, 1.0)).unwrap();
+                    b
+                }
+                _ => {
+                    let c = make_cylinder(&mut topo, 0.6, 20.0).unwrap();
+                    let place = Mat4::translation(0.5, 10.0, 1.0)
+                        * Mat4::rotation_x(std::f64::consts::FRAC_PI_2);
+                    transform_solid(&mut topo, c, &place).unwrap();
+                    c
+                }
+            };
+            if pose == "turned" {
+                transform_solid(&mut topo, sphere, &turn).unwrap();
+                transform_solid(&mut topo, block, &turn).unwrap();
+            } else {
+                let (at, normal) = (
+                    Point3::new(0.3, 0.0, 0.0),
+                    brepkit_math::vec::Vec3::new(1.0, 0.2, 0.1),
+                );
+                sphere = mirror(&mut topo, sphere, at, normal).unwrap();
+                block = mirror(&mut topo, block, at, normal).unwrap();
+            }
+            let result = boolean(&mut topo, op, sphere, block).unwrap();
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
+            assert!(
+                validate_solid(&topo, result).unwrap().is_valid(),
+                "{label}: invalid"
+            );
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < bound * truth,
                 "{label}: volume {volume}, truth {truth}"
             );
         }

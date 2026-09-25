@@ -344,7 +344,9 @@ fn face_uv_bounds<S: ParametricSurface>(
         v_max = v_min + (full_domain.1.1 - full_domain.1.0);
     }
 
-    if u_min >= u_max || v_min >= v_max {
+    // A turned sphere's equator projects to a rounding sliver of v rather
+    // than one value, and bounds no more than it does upright.
+    if u_min >= u_max || v_max - v_min < 1e-9 {
         // A degenerate projection (e.g. all boundary vertices on a sphere's
         // pole seam) does not mean an empty face — it means the boundary failed
         // to bound a sub-region, so the face spans the full analytic domain.

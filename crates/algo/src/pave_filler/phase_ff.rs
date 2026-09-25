@@ -3445,22 +3445,56 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
     let wire = topo.wire(face.outer_wire()).ok()?;
     let mut v_min = f64::MAX;
     let mut v_max = f64::MIN;
+    // A sphere face whose outer loop winds the axis holds the pole on the
+    // loop's left, which its boundary never reaches: `u` progress toward +u
+    // puts the north pole there.
+    let mut u_progress = 0.0;
+    let mut u_last: Option<f64> = None;
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         // Sample 5 points to capture v-extremes on curved/closed edges
-        for frac in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let fracs = if oe.is_forward() {
+            [0.0, 0.25, 0.5, 0.75, 1.0]
+        } else {
+            [1.0, 0.75, 0.5, 0.25, 0.0]
+        };
+        for frac in fracs {
             let t = t0 + (t1 - t0) * frac;
             let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
-            if let Some((_, v)) = surface.project_point(pt) {
+            if let Some((u, v)) = surface.project_point(pt) {
                 v_min = v_min.min(v);
                 v_max = v_max.max(v);
+                if v.abs() < std::f64::consts::FRAC_PI_2 - 1e-6 {
+                    if let Some(last) = u_last {
+                        u_progress += (u - last + std::f64::consts::PI)
+                            .rem_euclid(std::f64::consts::TAU)
+                            - std::f64::consts::PI;
+                    }
+                    u_last = Some(u);
+                }
             }
         }
     }
-    if v_min < v_max {
+    if matches!(surface, FaceSurface::Sphere(_)) && u_progress.abs() > std::f64::consts::PI {
+        if u_progress > 0.0 {
+            v_max = std::f64::consts::FRAC_PI_2;
+        } else {
+            v_min = -std::f64::consts::FRAC_PI_2;
+        }
+    }
+    // A boundary along one latitude (a hemisphere's equator) spans no v; on
+    // a turned sphere rounding leaves it a sliver wide, which as an extent
+    // would clip away every section inside the face. The sliver is measured
+    // on the surface, where an angular v spans its radius per radian.
+    let v_scale = match surface {
+        FaceSurface::Sphere(s) => s.radius(),
+        FaceSurface::Torus(t) => t.minor_radius(),
+        _ => 1.0,
+    };
+    if (v_max - v_min) * v_scale > Tolerance::new().linear {
         Some((v_min, v_max))
     } else {
         None
