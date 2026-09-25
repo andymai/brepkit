@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.21](https://github.com/andymai/brepkit/compare/v4.0.20...v4.0.21) (2026-09-25)
+
+
+### Bug Fixes
+
+* **algo:** cut a cone with a plane parallel to its axis ([#1755](https://github.com/andymai/brepkit/issues/1755)) ([a3cddb1](https://github.com/andymai/brepkit/commit/a3cddb10c2ea591ef4380d167942bbaacb70a8ed))
+
 ## [4.0.20](https://github.com/andymai/brepkit/compare/v4.0.19...v4.0.20) (2026-09-25)
 
 
