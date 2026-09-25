@@ -198,3 +198,48 @@ fn a_seam_bounded_ball_classifies() {
         );
     }
 }
+
+/// Points on the ball's surface read as on its boundary in every pose: the
+/// boundary check reads a sphere face as the ray count does.
+#[test]
+fn a_ball_reads_its_surface_as_boundary() {
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(0.3);
+    let at = Point3::new(0.3, 0.0, 0.0);
+    let normal = Vec3::new(1.0, 0.2, 0.1);
+    let unit = normal.normalize().unwrap();
+    for pose in ["upright", "turned", "mirrored"] {
+        let mut topo = Topology::new();
+        let mut ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        match pose {
+            "turned" => transform_solid(&mut topo, ball, &turn).unwrap(),
+            "mirrored" => ball = mirror(&mut topo, ball, at, normal).unwrap(),
+            _ => {}
+        }
+        let place = |p: Point3| match pose {
+            "turned" => turn.mul_point(p),
+            "mirrored" => p - unit * (2.0 * (p - at).dot(unit)),
+            _ => p,
+        };
+        let mut off = Vec::new();
+        for i in 0..24 {
+            for j in 1..12 {
+                let step = std::f64::consts::PI / 12.0;
+                let (u, v) = (
+                    f64::from(i).mul_add(step, 0.05),
+                    f64::from(j).mul_add(step, -std::f64::consts::FRAC_PI_2),
+                );
+                let p = Point3::new(
+                    RADIUS * v.cos() * u.cos(),
+                    RADIUS * v.cos() * u.sin(),
+                    RADIUS * v.sin(),
+                );
+                let class =
+                    classify_point(&topo, ball, place(p), &ClassifyOptions::default()).unwrap();
+                if class != PointClassification::OnBoundary {
+                    off.push((p, class));
+                }
+            }
+        }
+        assert!(off.is_empty(), "{pose}: {off:?}");
+    }
+}

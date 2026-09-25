@@ -185,6 +185,14 @@ fn is_on_boundary(
                 }
             }
         };
+        if dist < tolerance && matches!(face.surface(), FaceSurface::Sphere(_)) {
+            // Read as the ray count reads it: a tilted sphere face is no graph
+            // over the nearest axis plane.
+            match boundary::SphereRegion::of(topo, fid)? {
+                Some(region) if !region.contains(topo, fid, point, tolerance)? => continue,
+                _ => return Ok(true),
+            }
+        }
         if dist < tolerance {
             let polygon = crate::util::face_polygon(topo, fid)?;
             if polygon.len() >= 3 {

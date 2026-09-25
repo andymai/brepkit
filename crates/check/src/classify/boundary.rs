@@ -140,6 +140,7 @@ fn hit_in_sphere_hole(
     hit: Point3,
     outer: &[Point3],
     normal: Vec3,
+    slack: f64,
 ) -> Result<bool, CheckError> {
     for &iw in topo.face(face_id)?.inner_wires() {
         let hole = crate::util::wire_polygon(topo, iw)?;
@@ -154,7 +155,7 @@ fn hit_in_sphere_hole(
                 .map(|p| (*p - at).dot(hole_normal))
                 .fold(0.0_f64, |a, d| if d.abs() > a.abs() { d } else { a });
             let side = (hit - at).dot(hole_normal);
-            near != 0.0 && side * near.signum() < -HALF_SPACE_EPS
+            near != 0.0 && side * near.signum() < -slack
         } else {
             point_in_polygon_along(&hit, &hole, normal)
         };
@@ -333,14 +334,64 @@ where
     Ok(crossings)
 }
 
-/// Count a ray's crossings of a sphere face, read in 3D (a sphere's `(u, v)`
-/// is singular at its poles).
+/// A sphere face's region, read in 3D from its outer loop (a sphere's
+/// `(u, v)` is singular at its poles).
 ///
 /// The outer loop's Newell normal points to the face's side of the loop. A
 /// loop in one plane bounds exactly the sphere's part on that side, and any
-/// other loop the hits that project inside it along that normal; a loop
+/// other loop the points that project inside it along that normal; a loop
 /// enclosing no area (a seam run out and back) bounds nothing, and the face
 /// is the whole sphere. Holes come off by [`hit_in_sphere_hole`].
+pub struct SphereRegion {
+    outer: Vec<Point3>,
+    normal: Vec3,
+    whole: bool,
+    planar: bool,
+}
+
+impl SphereRegion {
+    /// `None` when the outer loop samples to fewer than three points.
+    pub fn of(topo: &Topology, face_id: FaceId) -> Result<Option<Self>, CheckError> {
+        let outer = face_polygon(topo, face_id)?;
+        if outer.len() < 3 {
+            return Ok(None);
+        }
+        // The wire runs about the sphere's outward normal on a reversed face
+        // too, so its polygon normal points to the face's side of the loop.
+        let normal = polygon_normal(&outer);
+        let whole = loop_encloses_nothing(&outer);
+        // A loop in one plane bounds exactly the sphere's part on its side,
+        // at any size; a polygon test would only add the chords' sagitta and
+        // miss a cap larger than a hemisphere.
+        let planar = loop_is_planar(&outer, normal);
+        Ok(Some(Self {
+            outer,
+            normal,
+            whole,
+            planar,
+        }))
+    }
+
+    /// Whether `p`, a point on the sphere, lies on the face, with `slack`
+    /// allowed across each boundary plane.
+    pub fn contains(
+        &self,
+        topo: &Topology,
+        face_id: FaceId,
+        p: Point3,
+        slack: f64,
+    ) -> Result<bool, CheckError> {
+        // Projected along the loop's own normal, not the nearest world axis:
+        // a tilted face is not a graph over an axis plane, and the part of it
+        // past the axis's silhouette projects outside its own boundary.
+        let in_outer = self.whole
+            || ((p - self.outer[0]).dot(self.normal) >= -slack
+                && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
+        Ok(in_outer && !hit_in_sphere_hole(topo, face_id, p, &self.outer, self.normal, slack)?)
+    }
+}
+
+/// Count a ray's crossings of a sphere face.
 ///
 /// # Errors
 ///
@@ -355,40 +406,17 @@ fn count_3d_polygon_crossings(
     if roots.is_empty() {
         return Ok(0);
     }
-
-    let verts = face_polygon(topo, face_id)?;
-    if verts.len() < 3 {
+    let Some(region) = SphereRegion::of(topo, face_id)? else {
         return Ok(0);
-    }
-    // The wire runs about the sphere's outward normal on a reversed face too,
-    // so its polygon normal points to the face's side of the boundary plane.
-    let normal = polygon_normal(&verts);
-    let ref_pt = verts[0];
-    let whole = loop_encloses_nothing(&verts);
-    // A loop in one plane bounds exactly the sphere's part on its side, at
-    // any size; a polygon test would only add the chords' sagitta and miss a
-    // cap larger than a hemisphere.
-    let planar = loop_is_planar(&verts, normal);
-
+    };
     let mut crossings = 0u32;
     for &t in roots {
-        if t <= RAY_T_MIN {
-            continue;
-        }
-        let hit = origin + direction * t;
-
-        // On the face's side of the boundary plane, and projected along the
-        // loop's own normal, not the nearest world axis: a tilted face is not
-        // a graph over an axis plane, and the part of it past the axis's
-        // silhouette projects outside its own boundary.
-        let in_outer = whole
-            || ((hit - ref_pt).dot(normal) >= -HALF_SPACE_EPS
-                && (planar || point_in_polygon_along(&hit, &verts, normal)));
-        if in_outer && !hit_in_sphere_hole(topo, face_id, hit, &verts, normal)? {
+        if t > RAY_T_MIN
+            && region.contains(topo, face_id, origin + direction * t, HALF_SPACE_EPS)?
+        {
             crossings += 1;
         }
     }
-
     Ok(crossings)
 }
 
