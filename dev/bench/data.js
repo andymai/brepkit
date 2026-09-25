@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790358727033,
+  "lastUpdate": 1790376016495,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40499,6 +40499,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 31432323,
             "range": "± 1425304",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9db702492452a3678116c7ced3cbf17cb9384dfd",
+          "message": "fix(check): read a sphere face by its boundary planes (#1776)\n\nBoth classifiers now misread 0 points in every pose of the 2,117-point\nplain-ball grid.\n\n## What was wrong\n\n- The two classifiers are `brepkit_check::classify::classify_point` and\n`brepkit_operations::classify::classify_point`. The wasm batch\npoint-classification operation in `crates/wasm/src/bindings/batch.rs`\ncalls the operations classifier.\n\n- Both counted a ray hit on a sphere face by passing it to\n`point_in_polygon_3d`, including holes, after projecting the boundary\npolygon onto the axis plane nearest the polygon's normal. A tilted\nsphere face is not a graph over that plane, so the portion past the axis\nsilhouette projects outside its boundary. Near a circular rim, the\npolygon's chords also sit inside the circle by the sagitta, making valid\nhits read outside.\n\n- The operations classifier additionally built the polygon with\n`crate::boolean::face_polygon`, which samples a partial arc only at its\nend vertices.\n\n- On a grid of 2,117 points through and around `make_sphere(3, 32)`,\nexcluding points within 0.04 of the sphere, the check classifier misread\n32 points upright, 452 turned about an oblique axis and 127 mirrored\nthrough a slanted plane. The operations classifier misread 132, 489 and\n259.\n\n## What this does\n\n- In both crates, a sphere face whose outer loop lies in one plane is\nclassified by the side of that plane. This exactly selects the sphere's\npart on the loop's side at any cap size. A planar hole selects the part\nbeyond its plane, away from the outer loop, independent of the hole\nwire's direction. Other loops use the polygon test projected along the\nouter loop's own normal. The operations classifier samples arcs with\n`brepkit_check::util::face_polygon`.\n\n- A sphere face bounded only by a seam run out and back bounds nothing.\nIts Newell normal is rounding residue, so treating it as planar would\nselect an arbitrary hemisphere. An outer wire whose every edge runs out\nand back as often therefore represents the whole sphere less its holes.\nA closed edge counts as a point, such as a pole, only when curve samples\nat a quarter, half and three quarters of its parameter range all lie on\nits vertex. A closed rim passes its vertex once, so one sample is\ninsufficient. Detection examines edges rather than loop area because a\nband's two rims can cancel their vector area.\n\n- The check classifier's `is_on_boundary` precheck uses the same sphere\nregion as ray counting through `SphereRegion` in\n`crates/check/src/classify/boundary.rs`. It also accepts points within\ntolerance of a rim by 3D distance. That tolerance does not cross the\nrim's plane, since a small rim meets the sphere at a grazing angle and a\nsliver of plane distance can span the hole's entire mouth.\n\n## Verification\n\n- `crates/operations/tests/sphere_classify.rs` adds\n`a_ball_classifies_in_every_pose`, which runs both classifiers over 729\npoints around a plain ball upright, turned and mirrored.\n`a_ball_less_a_tool_classifies` covers a ball less a box corner, an\noff-axis rod and a coaxial bore. Each result retains a sphere face, and\nthe bore's holes are planar. Both tests fail with the previous\nclassifiers and pass with this change.\n\n- `a_seam_bounded_ball_classifies` builds a seam-bounded face in three\nplanes and checks both classifiers. It fails when whole-sphere reading\nis disabled. `a_seam_capped_half_ball_keeps_its_rim` builds a half ball\nfrom a rim-bounded cap, a seam run out and back, and a disc. The rim's\nvertex is at the middle of its parameter range. Both classifiers read\npoints below the disc as Outside, where a one-sample pole test made the\ncap the whole sphere and the check classifier read them Inside.\n\n- `a_ball_reads_its_surface_as_boundary` samples 264 surface points on\nan upright, turned and mirrored ball and expects `OnBoundary`. The\nprevious precheck reads upright equator points as Outside.\n`a_point_in_a_thin_bore_is_off_the_boundary` cuts a coaxial bore of\nradius 0.01 and checks a sphere point inside its mouth, 3e-4 from the\nwall. It reads Outside, while allowing tolerance across the rim plane\nreads `OnBoundary`.\n\n- Before the three-sample pole test and half-ball test, the workspace\nsuite reports 3096 tests run, 3096 passed, 20 skipped. After they are\nadded, the check and operations crates report 1300 tests run, 1300\npassed, 13 skipped. CI runs the workspace on the final head.\n\n- A new roadmap row tracks the remaining cases. Plane and cylinder hits\nstill use boundaries sampled into chords, 32 per closed circle, so hits\nwithin a circular rim's sagitta can be misread. The operations\nclassifier still requires both of two ray votes for Inside and measures\nboundary distance to a sphere face's whole sphere, trimmed or not. Both\nclassifiers still misread a band stored as two rims joined by a seam,\nwhile a cap bounded by its rim and a seam still follows the polygon path\nwith the rim's chords.",
+          "timestamp": "2026-09-25T22:37:26Z",
+          "tree_id": "25e9dae49d6869a4cbeb605f2822c9e977386f4f",
+          "url": "https://github.com/andymai/brepkit/commit/9db702492452a3678116c7ced3cbf17cb9384dfd"
+        },
+        "date": 1790376011955,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1097960,
+            "range": "± 2797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1143650,
+            "range": "± 1319",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14159,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 774402,
+            "range": "± 2383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45394364,
+            "range": "± 224813",
             "unit": "ns/iter"
           }
         ]
