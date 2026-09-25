@@ -1626,19 +1626,22 @@ pub fn solid_volume(
     // use direct per-face tessellation with signed-volume summation.
     // tessellate() handles face reversal (flips winding + normals), so raw
     // signed tets are correct even without a globally watertight mesh.
-    // So does a torus face trimmed by a free-form curve, whose flux follows
-    // exactly along its boundary where a mesh would only inscribe it, a
-    // whole ring (around a cavity, say), whose flux is its volume, and a
-    // sphere face whose outer loop winds none of its u (a rod's end cap).
+    // So does a torus, cylinder or cone face trimmed by a free-form curve (a
+    // wall's hyperbola or ellipse), whose flux follows exactly along its
+    // boundary where a mesh would only inscribe it, a whole ring (around a
+    // cavity, say), whose flux is its volume, and a sphere face whose outer
+    // loop winds none of its u (a rod's end cap).
     let needs_direct_tessellation = brepkit_topology::explorer::solid_faces(topo, solid)?
         .into_iter()
         .any(|fid| {
             topo.face(fid).is_ok_and(|f| {
                 !f.inner_wires().is_empty()
                     || (f.is_reversed() && !matches!(f.surface(), FaceSurface::Plane { .. }))
-                    || (matches!(f.surface(), FaceSurface::Torus(_))
-                        && (is_whole_ring(topo, f)
-                            || has_free_form_boundary(topo, fid).unwrap_or(false)))
+                    || (matches!(f.surface(), FaceSurface::Torus(_)) && is_whole_ring(topo, f))
+                    || (matches!(
+                        f.surface(),
+                        FaceSurface::Torus(_) | FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+                    ) && has_free_form_boundary(topo, fid).unwrap_or(false))
                     || sphere_patch_outer_area(topo, fid).is_ok_and(|area| area.is_some())
             })
         });
@@ -1903,16 +1906,23 @@ fn developable_face_flux(
                     let p0 = at(span.0);
                     first_u = Some(unwrap(&mut prev_u, p0, project(p0).0));
                 }
-                let (g, a) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                    stieltjes(span, 1, &mut prev_u)
-                } else {
+                if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                    let (g, a) = stieltjes(span, 1, &mut prev_u);
+                    wire_flux += g;
+                    wire_area += a;
+                    continue;
+                }
+                // Richardson assumes a smooth integrand, which a NURBS edge
+                // is only between its knots: each knot span gets its own.
+                let pieces = knot_pieces(edge.curve(), span);
+                let coarse = (128 / pieces.len()).max(16);
+                for piece in pieces {
                     let mut coarse_prev = prev_u;
-                    let (gc, ac) = stieltjes(span, 128, &mut coarse_prev);
-                    let (gf, af) = stieltjes(span, 256, &mut prev_u);
-                    ((4.0 * gf - gc) / 3.0, (4.0 * af - ac) / 3.0)
-                };
-                wire_flux += g;
-                wire_area += a;
+                    let (gc, ac) = stieltjes(piece, coarse, &mut coarse_prev);
+                    let (gf, af) = stieltjes(piece, 2 * coarse, &mut prev_u);
+                    wire_flux += (4.0 * gf - gc) / 3.0;
+                    wire_area += (4.0 * af - ac) / 3.0;
+                }
             }
         }
         if let (Some(start), Some(end)) = (first_u, prev_u)
@@ -1929,6 +1939,34 @@ fn developable_face_flux(
         flux += if wire_index == 0 { region } else { -region };
     }
     Ok(Some(if face.is_reversed() { -flux } else { flux }))
+}
+
+/// `span` cut at the interior knots of a NURBS curve, in the span's own
+/// direction; any other curve's span whole.
+fn knot_pieces(curve: &brepkit_topology::edge::EdgeCurve, span: (f64, f64)) -> Vec<(f64, f64)> {
+    let brepkit_topology::edge::EdgeCurve::NurbsCurve(nurbs) = curve else {
+        return vec![span];
+    };
+    let (lo, hi) = (span.0.min(span.1), span.0.max(span.1));
+    let eps = 1e-12 * (hi - lo).max(1.0);
+    let mut cuts: Vec<f64> = nurbs
+        .knots()
+        .iter()
+        .copied()
+        .filter(|&k| k > lo + eps && k < hi - eps)
+        .collect();
+    cuts.dedup_by(|a, b| (*a - *b).abs() <= eps);
+    if span.1 < span.0 {
+        cuts.reverse();
+    }
+    let mut pieces = Vec::with_capacity(cuts.len() + 1);
+    let mut from = span.0;
+    for cut in cuts {
+        pieces.push((from, cut));
+        from = cut;
+    }
+    pieces.push((from, span.1));
+    pieces
 }
 
 /// Divergence-theorem flux `(1/3) ∫ P·N dA` of a planar face: its plane's

@@ -14,9 +14,10 @@ use std::f64::consts::PI;
 
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
-use brepkit_math::vec::Point3;
-use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_math::vec::{Point3, Vec3};
+use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
 use brepkit_operations::measure::{face_area, solid_volume};
+use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_box, make_cone};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
@@ -228,7 +229,8 @@ fn cone_and_box(top: f64, h: f64, turn: f64, off: f64, op: BooleanOp) -> (Topolo
 
 /// The volume of that cone over `x < off`: the circular segment past the
 /// plane at every height, integrated by Simpson's rule split where the
-/// radius reaches `|off|`.
+/// radius reaches `|off|`, substituted `z = kink ∓ s²` on each side of it,
+/// where the segment grows as the 3/2 power of the distance.
 fn cone_below(top: f64, h: f64, off: f64) -> f64 {
     let radius = |z: f64| (top - 3.0).mul_add(z / h, 3.0);
     let segment = |z: f64| {
@@ -241,20 +243,24 @@ fn cone_below(top: f64, h: f64, off: f64) -> f64 {
             (r * r).mul_add(PI - (off / r).acos(), off * off.mul_add(-off, r * r).sqrt())
         }
     };
-    let simpson = |lo: f64, hi: f64| {
+    let simpson = |span: f64, f: &dyn Fn(f64) -> f64| {
         let n = 2000;
-        let step = (hi - lo) / f64::from(n);
-        let mut sum = segment(lo) + segment(hi);
+        let step = span / f64::from(n);
+        let mut sum = f(0.0) + f(span);
         for k in 1..n {
-            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * segment(step.mul_add(f64::from(k), lo));
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step * f64::from(k));
         }
         sum * step / 3.0
     };
     let kink = (3.0 - off.abs()) / (3.0 - top) * h;
     if kink > 0.0 && kink < h {
-        simpson(0.0, kink) + simpson(kink, h)
+        simpson(kink.sqrt(), &|s: f64| {
+            segment(s.mul_add(-s, kink)) * 2.0 * s
+        }) + simpson((h - kink).sqrt(), &|s: f64| {
+            segment(s.mul_add(s, kink)) * 2.0 * s
+        })
     } else {
-        simpson(0.0, h)
+        simpson(h, &segment)
     }
 }
 
@@ -375,15 +381,16 @@ fn cone_cut_parallel_to_its_axis() {
                     let volume = solid_volume(&topo, piece, 0.01).unwrap();
                     let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
                     assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
-                    // The tessellated measure of a hyperbola-trimmed wall;
-                    // a fallback's mesh errs on the scale of the whole cone.
-                    // A fuse is judged by what the cone adds to the box.
+                    // A built piece's hyperbola-trimmed wall is measured along
+                    // its boundary; a fallback's mesh errs on the scale of the
+                    // whole cone. A fuse is judged by what the cone adds to
+                    // the box.
                     let box_volume = if op == BooleanOp::Fuse { 8000.0 } else { 0.0 };
                     let (added, expected) = (volume - box_volume, truth - box_volume);
                     // A fallback's bound never exceeds half the piece, so a
                     // result that lost the piece altogether still fails.
                     let bound = if built {
-                        1e-3 * expected
+                        5e-9 * expected
                     } else {
                         (3e-2 * whole).min(0.5 * expected)
                     };
@@ -393,6 +400,78 @@ fn cone_cut_parallel_to_its_axis() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// The frustum (radius 3 to 1.5 over height 6) and the box over `x > 0.5`,
+/// upright, turned about an oblique axis and mirrored through a slanted
+/// plane: each piece's volume, with its wall trimmed by the plane's
+/// hyperbola, matches the segment integral in every pose.
+#[test]
+fn frustum_half_space_in_any_pose() {
+    let whole = PI * 6.0 / 3.0 * (9.0 + 4.5 + 2.25);
+    let beyond = whole - cone_below(1.5, 6.0, 0.5);
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(0.3);
+    for (op, truth) in [
+        (BooleanOp::Intersect, beyond),
+        (BooleanOp::Cut, whole - beyond),
+    ] {
+        for pose in ["upright", "turned", "mirrored"] {
+            let mut topo = Topology::new();
+            let mut cone = make_cone(&mut topo, 3.0, 1.5, 6.0).unwrap();
+            let mut block = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::translation(0.5, -10.0, -5.0)).unwrap();
+            if pose == "turned" {
+                transform_solid(&mut topo, cone, &turn).unwrap();
+                transform_solid(&mut topo, block, &turn).unwrap();
+            } else if pose == "mirrored" {
+                let (at, normal) = (Point3::new(0.3, 0.0, 0.0), Vec3::new(1.0, 0.2, 0.1));
+                cone = mirror(&mut topo, cone, at, normal).unwrap();
+                block = mirror(&mut topo, block, at, normal).unwrap();
+            }
+            let before = mesh_fallback_count();
+            let piece = boolean(&mut topo, op, cone, block).unwrap();
+            assert_eq!(mesh_fallback_count(), before, "{op:?} {pose}: fell back");
+            let volume = solid_volume(&topo, piece, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-8 * truth,
+                "{op:?} {pose}: volume {volume}, truth {truth}"
+            );
+            assert!(
+                validate_solid(&topo, piece).unwrap().is_valid(),
+                "{op:?} {pose}: invalid"
+            );
+            let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{op:?} {pose}: open mesh");
+            // (2, 0, 1) lies in the frustum beyond the plane, (0, 0, 1) short of it.
+            let place = |p: Point3| match pose {
+                "turned" => turn.mul_point(p),
+                "mirrored" => {
+                    let (at, n) = (
+                        Point3::new(0.3, 0.0, 0.0),
+                        Vec3::new(1.0, 0.2, 0.1).normalize().unwrap(),
+                    );
+                    p - n * (2.0 * (p - at).dot(n))
+                }
+                _ => p,
+            };
+            let (kept, removed) = if op == BooleanOp::Intersect {
+                (Point3::new(2.0, 0.0, 1.0), Point3::new(0.0, 0.0, 1.0))
+            } else {
+                (Point3::new(0.0, 0.0, 1.0), Point3::new(2.0, 0.0, 1.0))
+            };
+            let opts = ClassifyOptions::default();
+            assert_eq!(
+                classify_point(&topo, piece, place(kept), &opts).unwrap(),
+                PointClassification::Inside,
+                "{op:?} {pose}: lost its material"
+            );
+            assert_eq!(
+                classify_point(&topo, piece, place(removed), &opts).unwrap(),
+                PointClassification::Outside,
+                "{op:?} {pose}: kept the removed side"
+            );
         }
     }
 }

@@ -4041,12 +4041,29 @@ fn plane_analytic_intersection(
                     }
                     let pts = pts_dedup;
                     crate::perf::bump_section_fit_points(pts.len() as u64);
-                    // Fit a degree-3 NURBS curve through the sampled points
-                    let nurbs =
+                    // A cone's parabola or hyperbola between two of its samples
+                    // is exactly a rational quadratic; other runs take a cubic
+                    // through the samples, which only meets the curve at them.
+                    let exact = match analytic {
+                        analytic_intersection::AnalyticSurface::Cone(cone) => {
+                            analytic_intersection::plane_cone_conic_arc(
+                                cone,
+                                normal,
+                                d,
+                                pts[0],
+                                pts[pts.len() - 1],
+                            )?
+                        }
+                        _ => None,
+                    };
+                    let nurbs = if let Some(arc) = exact {
+                        arc
+                    } else {
                         brepkit_math::nurbs::fitting::interpolate(&pts, 3.min(pts.len() - 1))
                             .map_err(|e| {
                                 AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}"))
-                            })?;
+                            })?
+                    };
                     let t_range = nurbs.domain();
                     let bbox = Aabb3::try_from_points(pts.iter().copied()).ok_or_else(|| {
                         AlgoError::IntersectionFailed("empty points for NURBS fit".into())

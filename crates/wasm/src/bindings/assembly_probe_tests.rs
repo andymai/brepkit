@@ -323,13 +323,23 @@ fn prism_vertical_corner_fillets_are_watertight() {
         "corner fillets leave open mesh edges"
     );
     let volume = solid_volume(&topo, eased, 0.01).unwrap();
+    // The box less four corners, each `(1 - pi/4) r²` of cross-section.
+    let full = height + SINK;
+    let truth = (width * depth).mul_add(
+        full,
+        -4.0 * (1.0 - std::f64::consts::FRAC_PI_4) * CORNER_FILLET_MM.powi(2) * full,
+    );
+    assert!(
+        (volume - truth).abs() < 1e-9 * truth,
+        "volume {volume}, truth {truth}"
+    );
     let oriented = oriented_solid_volume(&topo, eased, 0.01).unwrap();
-    // `solid_volume` integrates the faces exactly while `oriented_solid_volume`
-    // integrates an inscribed mesh, so the mesh route can only under-count; an
-    // inverted face would move a whole face's flux the other way.
+    // `oriented_solid_volume` integrates an inscribed mesh, so it can only
+    // under-count, by about 1e-4 here; an inverted face would move a whole
+    // face's flux the other way.
     let residue = volume - oriented;
     assert!(
-        residue >= 0.0 && residue < 1e-4 * volume,
+        residue >= 0.0 && residue < 1e-3 * volume,
         "volume {volume} vs oriented {oriented}: a face is inverted"
     );
 }
