@@ -1,0 +1,39 @@
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_f63e9de9eb640d 83
+  s_ba2f7b5c6902b6::t_5273ab390b0e51 77-82,84-97,100,117,131,134
+  s_ba2f7b5c6902b6::t_febc3ba879974a 66-68,74-76,240-241
+  s_ba2f7b5c6902b6::t_c4425ff55a897a 137-139
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_70c756de2c353c 144-147,150,169-190,196-199,201-202,204,207,209-215
+  s_ba2f7b5c6902b6::t_c8f4ee20cda3d6 111,191-195,200,218-222,229-232,234,245,257,259,261
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_d15f3e5b95ecf0 185,187,201-208
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_79c30d377adc44 3020-3023
+  s_ba2f7b5c6902b6::t_0b5e5af966248a 3019
+crates/operations/src/tessellate/mod.rs
+  s_ba2f7b5c6902b6::t_5273ab390b0e51 37
+crates/operations/tests/sphere_face_area.rs
+  s_ba2f7b5c6902b6::t_66f1f05ada0b40 11,13,17,19,120-122,124-160,166-167,201-204,210-225
+  s_ba2f7b5c6902b6::t_d931a227186645 6,226-271
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_70c756de2c353c 1630-1632,1642,2499,2509-2510,2512-2513,2559,2622-2627,2630,2634-2636,2643,2646-2675,2682-2684,2686,2695,2707,2710,2713-2714,2716,2725-2726,2731-2750,2757-2759,2771,2782-2784,3184-3185,3187-3192
+  s_ba2f7b5c6902b6::t_5273ab390b0e51 2511,2523-2526
+  s_ba2f7b5c6902b6::t_d931a227186645 2727-2730,2780-2781
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fe6614af3c19ece1a9b87c97012214d267df6775",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
