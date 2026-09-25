@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.20](https://github.com/andymai/brepkit/compare/v4.0.19...v4.0.20) (2026-09-25)
+
+
+### Bug Fixes
+
+* **algo:** build both bands when a box cuts a torus around its tube ([#1753](https://github.com/andymai/brepkit/issues/1753)) ([91040fb](https://github.com/andymai/brepkit/commit/91040fb81d8d22a4e1ce0b98da8f94c14ee5d94a))
+
 ## [4.0.19](https://github.com/andymai/brepkit/compare/v4.0.18...v4.0.19) (2026-09-25)
 
 
