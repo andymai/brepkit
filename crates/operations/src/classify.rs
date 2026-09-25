@@ -439,7 +439,9 @@ fn count_3d_polygon_crossings(
         return Ok(0);
     }
 
-    let verts = face_polygon(topo, face_id)?;
+    // Sampled along its arcs: a boundary made of arcs has too few vertices
+    // to bound anything by itself.
+    let verts = brepkit_check::util::face_polygon(topo, face_id)?;
     if verts.len() < 3 {
         return Ok(0);
     }
@@ -471,6 +473,10 @@ fn count_3d_polygon_crossings(
     let normal = polygon_normal(&verts);
     // A reference point on the boundary plane.
     let ref_pt = verts[0];
+    // A loop in one plane bounds exactly the sphere's part on its side, at
+    // any size; a polygon test would only add the chords' sagitta and miss a
+    // cap larger than a hemisphere.
+    let planar = loop_is_planar(&verts, normal);
 
     let mut crossings = 0u32;
     for &t in roots {
@@ -486,14 +492,75 @@ fn count_3d_polygon_crossings(
             continue;
         }
 
-        if point_in_polygon_3d(&hit, &verts, &normal)
-            && !hit_in_inner_wire_3d(topo, face_id, hit, &normal)?
-        {
+        // Projected along the loop's own normal, not the nearest world axis:
+        // a tilted face is not a graph over an axis plane, and the part of
+        // it past the axis's silhouette projects outside its own boundary.
+        let in_outer = planar || point_in_polygon_along(&hit, &verts, normal);
+        if in_outer && !hit_in_sphere_hole(topo, face_id, hit, &verts, normal)? {
             crossings += 1;
         }
     }
 
     Ok(crossings)
+}
+
+/// Whether `point`, projected along `normal`, lies inside `polygon`
+/// projected the same way.
+fn point_in_polygon_along(point: &Point3, polygon: &[Point3], normal: Vec3) -> bool {
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(polygon[0], normal) else {
+        return false;
+    };
+    let flat = |p: Point3| {
+        let d = p - frame.origin;
+        Point2::new(d.dot(frame.x), d.dot(frame.y))
+    };
+    let flat_poly: Vec<Point2> = polygon.iter().map(|&p| flat(p)).collect();
+    point_in_polygon(flat(*point), &flat_poly)
+}
+
+/// Whether a loop lies in the plane through its first point with `normal`.
+fn loop_is_planar(pts: &[Point3], normal: Vec3) -> bool {
+    let scale = pts
+        .iter()
+        .map(|p| (*p - pts[0]).length())
+        .fold(0.0, f64::max);
+    pts.iter()
+        .all(|p| (*p - pts[0]).dot(normal).abs() <= 1e-9 * scale)
+}
+
+/// Whether a hit on a sphere face lands in one of its holes. A hole in one
+/// plane is the sphere's part beyond that plane, away from the face (whose
+/// outer loop lies on the near side); any other hole is tested by polygon,
+/// projected along the outer loop's `normal`.
+fn hit_in_sphere_hole(
+    topo: &Topology,
+    face_id: FaceId,
+    hit: Point3,
+    outer: &[Point3],
+    normal: Vec3,
+) -> Result<bool, OperationsError> {
+    for &iw in topo.face(face_id)?.inner_wires() {
+        let hole = brepkit_check::util::wire_polygon(topo, iw)?;
+        if hole.len() < 3 {
+            continue;
+        }
+        let hole_normal = polygon_normal(&hole);
+        let in_hole = if loop_is_planar(&hole, hole_normal) {
+            let at = hole[0];
+            let near = outer
+                .iter()
+                .map(|p| (*p - at).dot(hole_normal))
+                .fold(0.0_f64, |a, d| if d.abs() > a.abs() { d } else { a });
+            let side = (hit - at).dot(hole_normal);
+            near != 0.0 && side * near.signum() < -HALF_SPACE_EPS
+        } else {
+            point_in_polygon_along(&hit, &hole, normal)
+        };
+        if in_hole {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Count crossings for analytic (non-planar) faces using UV containment.
