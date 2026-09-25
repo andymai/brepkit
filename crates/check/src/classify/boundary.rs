@@ -140,7 +140,6 @@ fn hit_in_sphere_hole(
     hit: Point3,
     outer: &[Point3],
     normal: Vec3,
-    slack: f64,
 ) -> Result<bool, CheckError> {
     for &iw in topo.face(face_id)?.inner_wires() {
         let hole = crate::util::wire_polygon(topo, iw)?;
@@ -155,7 +154,7 @@ fn hit_in_sphere_hole(
                 .map(|p| (*p - at).dot(hole_normal))
                 .fold(0.0_f64, |a, d| if d.abs() > a.abs() { d } else { a });
             let side = (hit - at).dot(hole_normal);
-            near != 0.0 && side * near.signum() < -slack
+            near != 0.0 && side * near.signum() < -HALF_SPACE_EPS
         } else {
             point_in_polygon_along(&hit, &hole, normal)
         };
@@ -172,20 +171,34 @@ fn loop_is_planar(pts: &[Point3], normal: Vec3) -> bool {
         .all(|p| (*p - pts[0]).dot(normal).abs() <= 1e-9 * extent)
 }
 
-/// Against the loop's extent squared, so the rounding residue of a loop run
-/// out and back along one path (a seam) reads as no area, whatever its size.
-fn loop_encloses_nothing(pts: &[Point3]) -> bool {
-    let mut n = Vec3::new(0.0, 0.0, 0.0);
-    for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
-        let (a, b) = (*a - pts[0], *b - pts[0]);
-        n += Vec3::new(
-            (a.y() - b.y()) * (a.z() + b.z()),
-            (a.z() - b.z()) * (a.x() + b.x()),
-            (a.x() - b.x()) * (a.y() + b.y()),
-        );
+/// A wire whose every edge runs out and back as often (a seam, with no
+/// rim) bounds nothing. A band's two rims can cancel each other's vector
+/// area, so the area cannot tell; the wire's own edge uses can. An edge
+/// closing on its start at a point (a pole) is skipped.
+fn wire_runs_out_and_back(
+    topo: &Topology,
+    wire: brepkit_topology::wire::WireId,
+) -> Result<bool, CheckError> {
+    let mut runs: Vec<(brepkit_topology::edge::EdgeId, i32)> = Vec::new();
+    for oe in topo.wire(wire)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        if edge.start() == edge.end() {
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, start);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), start, start);
+            if (mid - start).length() <= brepkit_math::tolerance::Tolerance::new().linear {
+                continue;
+            }
+        }
+        let step = if oe.is_forward() { 1 } else { -1 };
+        match runs.iter_mut().find(|(id, _)| *id == oe.edge()) {
+            Some((_, n)) => *n += step,
+            None => runs.push((oe.edge(), step)),
+        }
     }
-    let extent = loop_extent(pts);
-    n.length() <= 1e-9 * extent * extent
+    Ok(!runs.is_empty() && runs.iter().all(|&(_, n)| n == 0))
 }
 
 fn loop_extent(pts: &[Point3]) -> f64 {
@@ -339,9 +352,9 @@ where
 ///
 /// The outer loop's Newell normal points to the face's side of the loop. A
 /// loop in one plane bounds exactly the sphere's part on that side, and any
-/// other loop the points that project inside it along that normal; a loop
-/// enclosing no area (a seam run out and back) bounds nothing, and the face
-/// is the whole sphere. Holes come off by [`hit_in_sphere_hole`].
+/// other loop the points that project inside it along that normal; a wire
+/// that only runs a seam out and back bounds nothing, and the face is the
+/// whole sphere. Holes come off by [`hit_in_sphere_hole`].
 pub struct SphereRegion {
     outer: Vec<Point3>,
     normal: Vec3,
@@ -359,7 +372,7 @@ impl SphereRegion {
         // The wire runs about the sphere's outward normal on a reversed face
         // too, so its polygon normal points to the face's side of the loop.
         let normal = polygon_normal(&outer);
-        let whole = loop_encloses_nothing(&outer);
+        let whole = wire_runs_out_and_back(topo, topo.face(face_id)?.outer_wire())?;
         // A loop in one plane bounds exactly the sphere's part on its side,
         // at any size; a polygon test would only add the chords' sagitta and
         // miss a cap larger than a hemisphere.
@@ -372,22 +385,20 @@ impl SphereRegion {
         }))
     }
 
-    /// Whether `p`, a point on the sphere, lies on the face, with `slack`
-    /// allowed across each boundary plane.
+    /// Whether `p`, a point on the sphere, lies on the face.
     pub fn contains(
         &self,
         topo: &Topology,
         face_id: FaceId,
         p: Point3,
-        slack: f64,
     ) -> Result<bool, CheckError> {
         // Projected along the loop's own normal, not the nearest world axis:
         // a tilted face is not a graph over an axis plane, and the part of it
         // past the axis's silhouette projects outside its own boundary.
         let in_outer = self.whole
-            || ((p - self.outer[0]).dot(self.normal) >= -slack
+            || ((p - self.outer[0]).dot(self.normal) >= -HALF_SPACE_EPS
                 && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
-        Ok(in_outer && !hit_in_sphere_hole(topo, face_id, p, &self.outer, self.normal, slack)?)
+        Ok(in_outer && !hit_in_sphere_hole(topo, face_id, p, &self.outer, self.normal)?)
     }
 }
 
@@ -411,9 +422,7 @@ fn count_3d_polygon_crossings(
     };
     let mut crossings = 0u32;
     for &t in roots {
-        if t > RAY_T_MIN
-            && region.contains(topo, face_id, origin + direction * t, HALF_SPACE_EPS)?
-        {
+        if t > RAY_T_MIN && region.contains(topo, face_id, origin + direction * t)? {
             crossings += 1;
         }
     }

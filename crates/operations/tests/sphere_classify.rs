@@ -243,3 +243,22 @@ fn a_ball_reads_its_surface_as_boundary() {
         assert!(off.is_empty(), "{pose}: {off:?}");
     }
 }
+
+/// A point on the ball inside the mouth of a thin coaxial bore, 3e-4 from
+/// the bore's wall, is in the bore, not on the boundary: the tolerance is no
+/// slack across the bore rim's plane, which meets the sphere at a grazing
+/// angle.
+#[test]
+fn a_point_in_a_thin_bore_is_off_the_boundary() {
+    let mut topo = Topology::new();
+    let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
+    let rod = make_cylinder(&mut topo, 0.01, 20.0).unwrap();
+    transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
+    let bored = boolean(&mut topo, BooleanOp::Cut, ball, rod).unwrap();
+    let x = 0.0097_f64;
+    let p = Point3::new(x, 0.0, RADIUS.mul_add(RADIUS, -(x * x)).sqrt());
+    assert_eq!(
+        classify_point(&topo, bored, p, &ClassifyOptions::default()).unwrap(),
+        PointClassification::Outside
+    );
+}

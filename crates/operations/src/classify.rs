@@ -425,9 +425,9 @@ fn nonplanar_sphere_arc_halfspaces(
 ///
 /// The outer loop's Newell normal points to the face's side of the loop. A
 /// loop in one plane bounds exactly the sphere's part on that side, and any
-/// other loop the hits that project inside it along that normal; a loop
-/// enclosing no area (a seam run out and back) bounds nothing, and the face
-/// is the whole sphere. Holes come off by [`hit_in_sphere_hole`].
+/// other loop the hits that project inside it along that normal; a wire
+/// that only runs a seam out and back bounds nothing, and the face is the
+/// whole sphere. Holes come off by [`hit_in_sphere_hole`].
 fn count_3d_polygon_crossings(
     topo: &Topology,
     face_id: FaceId,
@@ -445,7 +445,7 @@ fn count_3d_polygon_crossings(
     if verts.len() < 3 {
         return Ok(0);
     }
-    let whole = loop_encloses_nothing(&verts);
+    let whole = wire_runs_out_and_back(topo, topo.face(face_id)?.outer_wire())?;
     // A sphere patch whose boundary arcs lie in DIFFERENT planes (an octant
     // patch: three quarter-arcs in three orthogonal planes) has a non-planar
     // boundary polygon, and the single-plane containment below discards
@@ -522,20 +522,34 @@ fn loop_is_planar(pts: &[Point3], normal: Vec3) -> bool {
         .all(|p| (*p - pts[0]).dot(normal).abs() <= 1e-9 * extent)
 }
 
-/// Against the loop's extent squared, so the rounding residue of a loop run
-/// out and back along one path (a seam) reads as no area, whatever its size.
-fn loop_encloses_nothing(pts: &[Point3]) -> bool {
-    let mut n = Vec3::new(0.0, 0.0, 0.0);
-    for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
-        let (a, b) = (*a - pts[0], *b - pts[0]);
-        n += Vec3::new(
-            (a.y() - b.y()) * (a.z() + b.z()),
-            (a.z() - b.z()) * (a.x() + b.x()),
-            (a.x() - b.x()) * (a.y() + b.y()),
-        );
+/// A wire whose every edge runs out and back as often (a seam, with no
+/// rim) bounds nothing. A band's two rims can cancel each other's vector
+/// area, so the area cannot tell; the wire's own edge uses can. An edge
+/// closing on its start at a point (a pole) is skipped.
+fn wire_runs_out_and_back(
+    topo: &Topology,
+    wire: brepkit_topology::wire::WireId,
+) -> Result<bool, OperationsError> {
+    let mut runs: Vec<(brepkit_topology::edge::EdgeId, i32)> = Vec::new();
+    for oe in topo.wire(wire)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        if edge.start() == edge.end() {
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, start);
+            let mid = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), start, start);
+            if (mid - start).length() <= Tolerance::new().linear {
+                continue;
+            }
+        }
+        let step = if oe.is_forward() { 1 } else { -1 };
+        match runs.iter_mut().find(|(id, _)| *id == oe.edge()) {
+            Some((_, n)) => *n += step,
+            None => runs.push((oe.edge(), step)),
+        }
     }
-    let extent = loop_extent(pts);
-    n.length() <= 1e-9 * extent * extent
+    Ok(!runs.is_empty() && runs.iter().all(|&(_, n)| n == 0))
 }
 
 fn loop_extent(pts: &[Point3]) -> f64 {

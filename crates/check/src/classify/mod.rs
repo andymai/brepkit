@@ -186,12 +186,31 @@ fn is_on_boundary(
             }
         };
         if dist < tolerance && matches!(face.surface(), FaceSurface::Sphere(_)) {
-            // Read as the ray count reads it: a tilted sphere face is no graph
-            // over the nearest axis plane.
-            match boundary::SphereRegion::of(topo, fid)? {
-                Some(region) if !region.contains(topo, fid, point, tolerance)? => continue,
-                _ => return Ok(true),
+            // Read as the ray count reads it (a tilted sphere face is no graph
+            // over the nearest axis plane), or within the tolerance of a rim.
+            // The tolerance is no slack across a rim's plane: a small rim's
+            // plane meets the sphere at a grazing angle, and a sliver of
+            // plane distance spans the whole mouth of its hole.
+            let on_face = match boundary::SphereRegion::of(topo, fid)? {
+                Some(region) => {
+                    region.contains(topo, fid, point)? || {
+                        let mut near_rim = false;
+                        for wid in std::iter::once(face.outer_wire())
+                            .chain(face.inner_wires().iter().copied())
+                        {
+                            let rim = crate::util::wire_polygon(topo, wid)?;
+                            near_rim |=
+                                rim.len() >= 2 && distance_to_loop(point, &rim) <= tolerance;
+                        }
+                        near_rim
+                    }
+                }
+                None => true,
+            };
+            if on_face {
+                return Ok(true);
             }
+            continue;
         }
         if dist < tolerance {
             let polygon = crate::util::face_polygon(topo, fid)?;
