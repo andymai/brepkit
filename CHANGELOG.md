@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.29](https://github.com/andymai/brepkit/compare/v4.0.28...v4.0.29) (2026-09-25)
+
+
+### Bug Fixes
+
+* **algo:** keep a ball's octant exact through a second boolean ([#1767](https://github.com/andymai/brepkit/issues/1767)) ([74c3bc3](https://github.com/andymai/brepkit/commit/74c3bc3b184ed0acc592c3e9771f30f00bd443cd))
+
 ## [4.0.28](https://github.com/andymai/brepkit/compare/v4.0.27...v4.0.28) (2026-09-25)
 
 
