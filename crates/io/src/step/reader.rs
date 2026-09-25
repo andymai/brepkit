@@ -129,12 +129,15 @@ impl<'a> StepBuilder<'a> {
     }
 
     fn build_all_solids(&mut self) -> Result<Vec<SolidId>, IoError> {
-        let brep_ids: Vec<u64> = self
+        let mut brep_ids: Vec<u64> = self
             .entities
             .iter()
-            .filter(|(_, e)| e.entity_type == "MANIFOLD_SOLID_BREP")
+            .filter(|(_, e)| {
+                e.entity_type == "MANIFOLD_SOLID_BREP" || e.entity_type == "BREP_WITH_VOIDS"
+            })
             .map(|(&id, _)| id)
             .collect();
+        brep_ids.sort_unstable();
 
         let mut solid_ids = Vec::new();
         for brep_id in brep_ids {
@@ -147,23 +150,51 @@ impl<'a> StepBuilder<'a> {
     fn build_solid(&mut self, brep_id: u64) -> Result<SolidId, IoError> {
         let attrs = self.get_entity(brep_id)?.attrs.clone();
         let refs = parse_refs(&attrs);
-        // MANIFOLD_SOLID_BREP('name', #shell) — shell is the only #ref.
+        // MANIFOLD_SOLID_BREP('name', #shell) or BREP_WITH_VOIDS('name',
+        // #shell, (#void, ...)): the outer shell is the first #ref.
         let shell_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
-            reason: format!("MANIFOLD_SOLID_BREP #{brep_id} missing shell reference"),
+            reason: format!("solid #{brep_id} missing shell reference"),
         })?;
 
-        let shell_id = self.build_shell(shell_ref)?;
-        let solid_id = self.topo.add_solid(Solid::new(shell_id, Vec::new()));
+        let shell_id = self.build_shell(shell_ref, false)?;
+        let mut voids = Vec::new();
+        if self.get_entity(brep_id)?.entity_type == "BREP_WITH_VOIDS" {
+            for void_ref in parse_list_refs(&attrs) {
+                // ORIENTED_CLOSED_SHELL('name', *, #closed_shell, orientation):
+                // a false orientation turns every face of the shell over.
+                let void = self.get_entity(void_ref)?;
+                let (void_type, void_attrs) = (void.entity_type.clone(), void.attrs.clone());
+                let (closed_ref, flip) = if void_type == "ORIENTED_CLOSED_SHELL" {
+                    let tail = void_attrs.trim_end_matches(')').trim();
+                    let closed = parse_refs(&void_attrs).first().copied().ok_or_else(|| {
+                        IoError::ParseError {
+                            reason: format!("ORIENTED_CLOSED_SHELL #{void_ref} missing shell"),
+                        }
+                    })?;
+                    (closed, tail.ends_with(".F.") || tail.ends_with(".FALSE."))
+                } else {
+                    (void_ref, false)
+                };
+                voids.push(self.build_shell(closed_ref, flip)?);
+            }
+        }
+        let solid_id = self.topo.add_solid(Solid::new(shell_id, voids));
         Ok(solid_id)
     }
 
-    fn build_shell(&mut self, shell_ref: u64) -> Result<brepkit_topology::shell::ShellId, IoError> {
+    /// `flip` turns every face over (a void's shell under a false
+    /// orientation).
+    fn build_shell(
+        &mut self,
+        shell_ref: u64,
+        flip: bool,
+    ) -> Result<brepkit_topology::shell::ShellId, IoError> {
         let attrs = self.get_entity(shell_ref)?.attrs.clone();
         let face_refs = parse_list_refs(&attrs);
 
         let mut face_ids = Vec::new();
         for face_ref in face_refs {
-            let face_id = self.build_face(face_ref)?;
+            let face_id = self.build_face(face_ref, flip)?;
             face_ids.push(face_id);
         }
 
@@ -175,7 +206,11 @@ impl<'a> StepBuilder<'a> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn build_face(&mut self, face_ref: u64) -> Result<brepkit_topology::face::FaceId, IoError> {
+    fn build_face(
+        &mut self,
+        face_ref: u64,
+        flip: bool,
+    ) -> Result<brepkit_topology::face::FaceId, IoError> {
         let attrs = self.get_entity(face_ref)?.attrs.clone();
         // Check for reversed face orientation (.F. flag at end of ADVANCED_FACE).
         let orient_tail = attrs.trim_end_matches(')').trim();
@@ -233,11 +268,13 @@ impl<'a> StepBuilder<'a> {
             reason: format!("ADVANCED_FACE #{face_ref} has no bounds"),
         })?;
 
-        let face_id = if face_reversed {
+        // Turning a face over flips its normal, not the side of its surface
+        // its loops wind about.
+        let face_id = if face_reversed == flip {
+            self.topo.add_face(Face::new(outer, inner_wires, surface))
+        } else {
             self.topo
                 .add_face(Face::new_reversed(outer, inner_wires, surface))
-        } else {
-            self.topo.add_face(Face::new(outer, inner_wires, surface))
         };
         Ok(face_id)
     }
