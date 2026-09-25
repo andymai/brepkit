@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.31](https://github.com/andymai/brepkit/compare/v4.0.30...v4.0.31) (2026-09-25)
+
+
+### Bug Fixes
+
+* **check:** read a sphere face by its boundary planes ([#1776](https://github.com/andymai/brepkit/issues/1776)) ([9db7024](https://github.com/andymai/brepkit/commit/9db702492452a3678116c7ced3cbf17cb9384dfd))
+
 ## [4.0.30](https://github.com/andymai/brepkit/compare/v4.0.29...v4.0.30) (2026-09-25)
 
 
