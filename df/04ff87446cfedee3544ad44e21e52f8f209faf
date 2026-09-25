@@ -1,8 +1,10 @@
 crates/operations/src/tessellate/face.rs
   s_ba2f7b5c6902b6::t_7a447a056779ac 250-257
   s_ba2f7b5c6902b6::t_260754051e70f9 249
+  s_ba2f7b5c6902b6::t_54c860cbd6420f 246-248,258
 crates/operations/src/tessellate/nonplanar.rs
   s_ba2f7b5c6902b6::t_260754051e70f9 3102-3157
+  s_ba2f7b5c6902b6::t_54c860cbd6420f 3022-3024
 crates/operations/tests/torus_face_mesh.rs
   s_ba2f7b5c6902b6::t_4bdc7a5c0ed9cf 1-162
   s_ba2f7b5c6902b6::t_16a43e7523c7bb 163-164
