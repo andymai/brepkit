@@ -117,11 +117,10 @@ fn ball_less_a_box_corner() {
 }
 
 /// The ball's octant feeds a second boolean: less a rod of radius 0.4 along
-/// `z` through `(1, 1)` (the column over the rod's disc, by Simpson in polar
-/// coordinates) it stays exact below the equator, and less a box corner at
-/// `(1, 1, ±1)` it loses exactly the corner's piece, whether the box shortcut
-/// built the octant or the boolean engine did (box and ball turned about `z`,
-/// out of the shortcut's reach).
+/// `z` through `(1, 1)` it loses the column over the rod's disc (by Simpson in
+/// polar coordinates), and less a box corner at `(1, 1, ±1)` exactly the
+/// corner's piece, whether the box shortcut built the octant or the boolean
+/// engine did (box and ball turned about `z`, out of the shortcut's reach).
 #[test]
 fn box_octant_feeds_a_second_boolean() {
     let octant = PI * RADIUS.powi(3) / 6.0;
@@ -155,17 +154,21 @@ fn box_octant_feeds_a_second_boolean() {
             );
             piece
         };
-        if lower {
+        {
             let mut topo = Topology::new();
             let piece = octant_of(&mut topo);
             let rod = make_cylinder(&mut topo, 0.4, 20.0).unwrap();
-            transform_solid(&mut topo, rod, &Mat4::translation(1.0, 1.0, -10.0)).unwrap();
+            transform_solid(&mut topo, rod, &(turn * Mat4::translation(1.0, 1.0, -10.0))).unwrap();
             let result = boolean(&mut topo, BooleanOp::Cut, piece, rod).unwrap();
-            assert!(exact(&topo, result), "rod: fell back to a mesh");
+            assert!(exact(&topo, result), "{label} rod: fell back to a mesh");
+            assert!(
+                validate_solid(&topo, result).unwrap().is_valid(),
+                "{label} rod: invalid"
+            );
             let (volume, truth) = (solid_volume(&topo, result, 0.01).unwrap(), octant - column);
             assert!(
                 (volume - truth).abs() < 1e-7 * truth,
-                "rod: volume {volume}, truth {truth}"
+                "{label} rod: volume {volume}, truth {truth}"
             );
         }
         let mut topo = Topology::new();
