@@ -1,0 +1,62 @@
+crates/operations/tests/sphere_classify.rs
+  s_ba2f7b5c6902b6::t_b8a0d9393870ee 1-18,21-127,134-146,148,329-330
+  s_ba2f7b5c6902b6::t_114620c865a3a9 19-20,128-133
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_ac6875b441a1f2 224-231
+  s_ba2f7b5c6902b6::t_935e50bb9e655e 232
+  s_ba2f7b5c6902b6::t_a619b96a9000dc 210-217,223
+  s_ba2f7b5c6902b6::t_619d847e18e0c9 190,218-222
+  s_ba2f7b5c6902b6::t_459fd4499c0f83 187,202-208
+  s_ba2f7b5c6902b6::t_29769aa3f88c57 209
+crates/check/src/classify/boundary.rs
+  s_ba2f7b5c6902b6::t_b36b58ba5b068e 121-167,168,210,213-214
+crates/operations/src/classify.rs
+  s_ba2f7b5c6902b6::t_b36b58ba5b068e 442-444,480-483,499,507-518,519,521,564-599
+  s_ba2f7b5c6902b6::t_9ea61fa86b16aa 600
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_5d46c708987908 3490-3496
+  s_ba2f7b5c6902b6::t_1a2ec329387ce9 3457-3461,3468-3473,3476,3479-3486,3509
+  s_ba2f7b5c6902b6::t_b42e10ef8d6b13 1051-1062
+  s_ba2f7b5c6902b6::t_370ceb51d33a19 3334,3379
+  s_ba2f7b5c6902b6::t_3730060c3a267f 3497-3508,3510
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_ba2f7b5c6902b6::t_33b8dc587bdf77 168,278-284,287-295,301,386
+  s_ba2f7b5c6902b6::t_f0bf833b5d244d 2594-2601,2603-2633,2644-2647
+  s_ba2f7b5c6902b6::t_b0759ce3f61346 165-166,272-275
+  s_ba2f7b5c6902b6::t_11d5f0ceb702de 285-286,430,432,661-683,2602
+crates/operations/tests/sphere_box_corner.rs
+  s_ba2f7b5c6902b6::t_43275a300e1f3d 16,298-300,305-327,331,339-344,346-372,373-386,405-408
+  s_ba2f7b5c6902b6::t_ba9d1543e39831 301-304,345
+  s_ba2f7b5c6902b6::t_e75a9eeeb9ce13 328-330,332-338,387-404
+  s_ba2f7b5c6902b6::t_cfb5d9bafe864b 458-460
+  s_ba2f7b5c6902b6::t_80fa81b45956a4 477-480,489-498
+  s_ba2f7b5c6902b6::t_5008e9e1f6a0c2 452-457,461-476,481-488,499-501,503-508
+  s_ba2f7b5c6902b6::t_459fd4499c0f83 502
+crates/algo/src/builder/builder_solid.rs
+  s_ba2f7b5c6902b6::t_d1863e3724bbec 723-738
+  s_ba2f7b5c6902b6::t_a02306a6cf7239 715,719-722,739-744
+crates/operations/tests/sphere_reversed_cap.rs
+  s_ba2f7b5c6902b6::t_78069930b9f9c5 370-417
+crates/check/src/properties/face_integrator.rs
+  s_ba2f7b5c6902b6::t_282f136a8ab1db 9,126-134,356
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_fbf8e4b83896b4 8154-8179,8230-8231,8234-8235,8240-8245
+  s_ba2f7b5c6902b6::t_bc7567cfaccdce 8232-8233,8236-8239
+  s_ba2f7b5c6902b6::t_3b3bb0f7a8be09 8246-8247
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8d7e3df498d57b6027f04ca3037dbd2aad35afc3",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
