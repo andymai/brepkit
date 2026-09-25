@@ -257,6 +257,42 @@ fn turned_octants_are_exact() {
     }
 }
 
+/// The ball less, and fused with, the box over an octant, both turned 0.3
+/// about `z`, above and below the equator: exact and valid, the ball less its
+/// octant or joined to the box by the rest of it. The volume bound covers the
+/// chordal equator's measure (the roadmap's sphere measure row).
+#[test]
+fn ball_cut_and_fused_with_a_turned_octant_box() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let octant = PI * RADIUS.powi(3) / 6.0;
+    for (op, truth) in [
+        (BooleanOp::Cut, ball - octant),
+        (BooleanOp::Fuse, 1000.0 + ball - octant),
+    ] {
+        for lower in [false, true] {
+            let label = format!("{op:?} lower {lower}");
+            let turn = Mat4::rotation_z(0.3);
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            let z0 = if lower { -10.0 } else { 0.0 };
+            transform_solid(&mut topo, block, &(turn * Mat4::translation(0.0, 0.0, z0))).unwrap();
+            transform_solid(&mut topo, sphere, &turn).unwrap();
+            let result = boolean(&mut topo, op, sphere, block).unwrap();
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
+            assert!(
+                validate_solid(&topo, result).unwrap().is_valid(),
+                "{label}: invalid"
+            );
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 2e-4 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
+
 /// A ball of radius 3 at `(1.8, 1.8, 1.8)` within the box over the positive
 /// octant meets all three of the box's corner planes, but the corner lies
 /// outside the ball, so the region is not an octant: the result keeps the
