@@ -5528,11 +5528,15 @@ fn split_face_2d_impl(
         // boundary in UV space.
         let uv_tol = 0.01; // ~0.6 deg in angular coordinates
         // A whole ring has no boundary: its seam placeholders stand for the
-        // seam lines, which a section may cross like any other point.
+        // seam lines, which a section may cross like any other point. (A ring
+        // with holes already keeps the boundary test, and its interiors come
+        // from the generic paths.)
         let whole_ring = matches!(surface, FaceSurface::Torus(_))
-            && boundary_edges
-                .iter()
-                .all(|e| (e.start_3d - e.end_3d).length() < tol.linear * 100.0);
+            && original_inner_wires.is_empty()
+            && boundary_edges.iter().all(|e| {
+                matches!(e.curve_3d, EdgeCurve::Line)
+                    && (e.start_3d - e.end_3d).length() < tol.linear * 100.0
+            });
         let endpoints_internal = whole_ring
             || sections.iter().all(|s| {
                 let start_on_boundary =

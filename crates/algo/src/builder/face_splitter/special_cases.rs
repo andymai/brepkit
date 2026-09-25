@@ -978,9 +978,9 @@ pub(super) fn split_torus_by_coaxial_circles(
     };
     let close_tol = tol * 100.0;
     if sections.len() < 2
-        || boundary_edges
-            .iter()
-            .any(|e| (e.start_3d - e.end_3d).length() > close_tol)
+        || boundary_edges.iter().any(|e| {
+            !matches!(e.curve_3d, EdgeCurve::Line) || (e.start_3d - e.end_3d).length() > close_tol
+        })
     {
         return None;
     }
@@ -1990,15 +1990,18 @@ fn torus_loop_interiors(
     // A point is in a loop when, shifted by whole turns to the loop's
     // middle, a ray along +u from it crosses the loop an odd number of times.
     let inside = |poly: &[(f64, f64)], u: f64, v: f64| -> bool {
-        let (mut su, mut sv) = (0.0, 0.0);
-        for &(pu, pv) in poly {
-            su += pu;
-            sv += pv;
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let n = poly.len() as f64;
+        let ((u_lo, v_lo), (u_hi, v_hi)) = poly.iter().fold(
+            (
+                (f64::INFINITY, f64::INFINITY),
+                (f64::NEG_INFINITY, f64::NEG_INFINITY),
+            ),
+            |((a, b), (c, d)), &(pu, pv)| ((a.min(pu), b.min(pv)), (c.max(pu), d.max(pv))),
+        );
         let near = |x: f64, mid: f64| x + TAU * ((mid - x + PI) / TAU).floor();
-        let (u, v) = (near(u, su / n), near(v, sv / n));
+        let (u, v) = (
+            near(u, f64::midpoint(u_lo, u_hi)),
+            near(v, f64::midpoint(v_lo, v_hi)),
+        );
         crossings(poly, v).iter().filter(|&&x| x > u).count() % 2 == 1
     };
     let mut best: Option<(f64, Point3)> = None;
@@ -2603,10 +2606,10 @@ pub(super) fn split_face_with_internal_loops(
     // to sample.
     let ring_interiors = match surface {
         FaceSurface::Torus(torus)
-            if boundary_edges
-                .iter()
-                .all(|e| (e.start_3d - e.end_3d).length() < tol_3d * 100.0)
-                && original_inner_wires.is_empty() =>
+            if boundary_edges.iter().all(|e| {
+                matches!(e.curve_3d, EdgeCurve::Line)
+                    && (e.start_3d - e.end_3d).length() < tol_3d * 100.0
+            }) && original_inner_wires.is_empty() =>
         {
             torus_loop_interiors(torus, &loops)
         }

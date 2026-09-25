@@ -647,16 +647,29 @@ fn cube_inside_the_tube() {
     let (big, small) = (4.0_f64, 1.5_f64);
     let ring = 2.0 * PI * PI * big * small * small;
     let cube = 0.6_f64.powi(3);
-    for (op, truth) in [
-        (BooleanOp::Cut, ring - cube),
-        (BooleanOp::Intersect, cube),
-        (BooleanOp::Fuse, ring),
+    let cavity: &[(&str, usize)] = &[("plane", 6), ("torus", 1)];
+    let cube_faces: &[(&str, usize)] = &[("plane", 6)];
+    let ring_face: &[(&str, usize)] = &[("torus", 1)];
+    for (op, census, truth) in [
+        (BooleanOp::Cut, cavity, ring - cube),
+        (BooleanOp::Intersect, cube_faces, cube),
+        (BooleanOp::Fuse, ring_face, ring),
     ] {
         let mut topo = Topology::new();
         let torus = make_torus(&mut topo, big, small, 32).unwrap();
         let tool = make_box(&mut topo, 0.6, 0.6, 0.6).unwrap();
         transform_solid(&mut topo, tool, &Mat4::translation(3.7, -0.3, -0.3)).unwrap();
         let piece = boolean(&mut topo, op, torus, tool).unwrap();
+        let mut found: Vec<(&str, usize)> = Vec::new();
+        for face in solid_faces(&topo, piece).unwrap() {
+            let tag = topo.face(face).unwrap().surface().type_tag();
+            match found.iter_mut().find(|(t, _)| *t == tag) {
+                Some((_, n)) => *n += 1,
+                None => found.push((tag, 1)),
+            }
+        }
+        found.sort_unstable();
+        assert_eq!(found, census, "{op:?}: faces");
         let report = validate_solid(&topo, piece).unwrap();
         assert!(report.is_valid(), "{op:?}: {:?}", report.issues);
         let volume = solid_volume(&topo, piece, 0.01).unwrap();
