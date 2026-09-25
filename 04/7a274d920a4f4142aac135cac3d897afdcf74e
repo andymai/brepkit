@@ -1,0 +1,25 @@
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_97cfa79de3b3d1 266-267,271-275,278-281,284-291
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_2b928dd9c1651c 4114-4147
+  s_ba2f7b5c6902b6::t_97cfa79de3b3d1 2641-2645,2657-2658,2664-2667,2669,2682-2685
+  s_ba2f7b5c6902b6::t_d3d45e41750347 4112-4113
+crates/operations/tests/sphere_face_area.rs
+  s_ba2f7b5c6902b6::t_2b928dd9c1651c 356-359,363-399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "047a274d920a4f4142aac135cac3d897afdcf74e",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
