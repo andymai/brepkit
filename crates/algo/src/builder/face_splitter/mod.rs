@@ -5732,7 +5732,22 @@ fn split_face_2d_impl(
                 if let Some((_, v)) = surface.project_point(edge.start_3d)
                     && let Some(anti_pt) = surface.evaluate(anti_u, v)
                 {
+                    // A section already ending at the antipode (a cone's top
+                    // rim touched there) would leave two halves sharing both
+                    // ends, which the edge merge welds: quarter them too.
+                    let taken = split_pts_3d
+                        .iter()
+                        .any(|&p| (p - anti_pt).length() < 100.0 * tol.linear);
                     split_pts_3d.push(anti_pt);
+                    if taken && matches!(surface, FaceSurface::Cone(_)) {
+                        for quarter in [0.5, 1.5] {
+                            if let Some(p) =
+                                surface.evaluate(std::f64::consts::PI.mul_add(quarter, seam_u), v)
+                            {
+                                split_pts_3d.push(p);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -8035,23 +8050,14 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // sample (it ends up on the wrong side of the section). Unwrapping the
     // sampled points to one continuous u-window first makes the polygon simple
     // again so the centroid/edge-walk interior point is geometrically valid.
-    // A pointed cone's piece around its apex closes across the apex, a whole
-    // period in u at v = 0, which its seam layout already carries; unwrapping
-    // would fold that jump away, and the seam copies' pcurves need not follow
-    // the traversal.
-    let around_apex = match &sub_face.surface {
-        FaceSurface::Cone(cone) => sub_face
-            .outer_wire
-            .iter()
-            .any(|e| (e.start_3d - cone.apex()).length() < 1e-9),
-        _ => false,
-    };
-    let pts_2d = if around_apex {
+    // A cone's pieces already carry a consistent layout (a pointed cone's
+    // piece around its apex closes across it, a whole period in u at v = 0),
+    // which unwrapping folds wherever a rim piece spans over a half turn or
+    // crosses the apex, and whose seam copies' pcurves need not follow the
+    // traversal: sample each edge's 3D curve from its laid-out start.
+    let pts_2d = if matches!(&sub_face.surface, FaceSurface::Cone(_)) {
         sampling::sample_wire_loop_uv_on_surface(&sub_face.outer_wire, &sub_face.surface)
-    } else if matches!(
-        &sub_face.surface,
-        FaceSurface::Cone(_) | FaceSurface::Cylinder(_)
-    ) {
+    } else if matches!(&sub_face.surface, FaceSurface::Cylinder(_)) {
         let (u_period, v_period) = super::pcurve_compute::surface_periods(&sub_face.surface);
         sample_wire_loop_uv_periodic(&sub_face.outer_wire, u_period, v_period)
     } else if let (FaceSurface::Plane { .. }, Some(f)) = (&sub_face.surface, frame) {

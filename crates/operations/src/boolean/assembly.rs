@@ -732,13 +732,18 @@ pub(super) fn validate_boolean_result(
                     let mid = edge
                         .curve()
                         .evaluate_with_endpoints(f64::midpoint(t0, t1), sp, ep);
-                    let Some(foot) = surface
-                        .project_point(mid)
-                        .and_then(|(u, v)| surface.evaluate(u, v))
-                    else {
-                        continue;
+                    let off = if let FaceSurface::Plane { normal, d } = surface {
+                        let origin = Point3::new(0.0, 0.0, 0.0);
+                        (normal.dot(mid - origin) - d).abs() / normal.length()
+                    } else {
+                        let Some(foot) = surface
+                            .project_point(mid)
+                            .and_then(|(u, v)| surface.evaluate(u, v))
+                        else {
+                            continue;
+                        };
+                        (foot - mid).length()
                     };
-                    let off = (foot - mid).length();
                     if off > 0.05 * reach {
                         return Err(crate::OperationsError::InvalidInput {
                             reason: format!(

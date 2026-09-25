@@ -182,7 +182,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 
 | **Stable row defect: per-face NURBS meshes ignore the trim** | `tessellate::tessellate` meshes a NURBS face over its whole surface, so `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY writers read a trimmed NURBS face as its whole patch (a converted napkin ring: `solid_volume` 1613 against 587.7). A trimmed CDT for NURBS faces whose boundary leaves the domain edges is parked on branch `wip/per-face-nurbs-trim`. It waits on `sweep_smooth`: its rail edges are straight chords between the first and last rings while the side surfaces curve along the path, so a trimmed mesh follows the chords (a quarter-circle sweep reads 6.87 against 7.85); build its rails as #1700 built `loft_smooth`'s. The parked branch also holds a surface-measured refinement of long interior edges that moved an uneven loft's mesh 0.3% off its exact 32.0686, unexplained |
-| **Cone cuts parallel to the axis: the remaining fallbacks** (`cone_cut_parallel_to_its_axis` in `crates/operations/tests/cone_plane_cut.rs` lists the exact cells) | Safe fallbacks, none wrong. A pointed cone falls back when the piece the plane cuts off holds the seam (turned 17 degrees at x < 0.3 and beyond, turned 200 at x < -0.7 and below): the section is anchored where it crosses the seam ruling, and the region the seam pinches still traces wrong. A frustum also falls back with the seam in the piece cut off (x < 1.2 and beyond at turns 0 and 17), at x < -1 (the plane touches its top rim, so the piece pinches at the tangency) and at x < -1.5 (undug). The loop, stripe-meshing and rim changes of the Closed entry are cone-only: on cylinders they broke a box less a quarter cylinder (the closed-rim sampling start) and six rod and knuckle fixtures, so a rod cut by a wall crossing one rim (tilted 10 or 25 degrees) still falls back where they would build it exactly |
+| **Cone cuts parallel to the axis: the remaining fallbacks** (`cone_cut_parallel_to_its_axis` in `crates/operations/tests/cone_plane_cut.rs` lists the exact cells) | Safe fallbacks, none wrong. Both cones fall back when the piece the plane cuts off holds the seam (the pointed cone turned 17 degrees at x < 0.3 and beyond or turned 200 at x < -0.7 and below, the frustum at x < 1.2 and beyond at turns 0 and 17 or at x < -1 and below at turn 200): the section is anchored where it crosses the seam ruling, and the region the seam pinches still traces wrong. The pointed cone at turn 0 builds even so, since its hyperbola's vertex lands exactly on the seam. The loop, stripe-meshing and rim changes of the Closed entry are cone-only: on cylinders they broke a box less a quarter cylinder (the closed-rim sampling start) and six rod and knuckle fixtures, so a rod cut by a wall crossing one rim (tilted 10 or 25 degrees) still falls back where they would build it exactly |
 
 | **Sphere face measure and meshing leftovers** | `analytic_sphere_signed_volume` (the per-face flux behind `volume_from_direct_face_tessellation`) reads only a sphere face's outer wire, so a holed sphere face in a solid that is not a ball less disc caps (a ball less a tilted cylinder or a box pocket) counts its hole's cap too; per-face `tessellate` of a sphere face bounded by one tilted circle meshes the whole sphere (the solid mesh is right). Repro: the tilted cases of `sphere_plane_cut.rs` with the ball-less-caps path skipped. A solid bounded by a ball zone between the chordal equator and a section circle measures off: `make_torus(4, 1.5)` less `make_sphere(3)` reads 166.4567 against 166.3658 (`torus_coaxial_tools.rs` bounds it at 1e-3), and `classify_point` on that Cut reads (2.8, 0, 0), on the equator plane, Inside where (2.8, 0, 0.3) reads Outside |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
@@ -193,8 +193,8 @@ One line each; the fixture/PR carries the story. Newest first.
 
 - **A cone cut by a plane parallel to its axis (CLOSED 2026-09-25; pins `cone_halved_through_its_axis` and `cone_cut_parallel_to_its_axis` in `crates/operations/tests/cone_plane_cut.rs`)**:
   over 168 cases (both cones, four turns, seven offsets, three ops) main
-  built 6 exactly, fell back on 119 and returned 43 wrong solids; now 88,
-  80 and 0. Through the apex the section is the two rulings with
+  built 6 exactly, fell back on 119 and returned 43 wrong solids; now 96,
+  72 and 0. Through the apex the section is the two rulings with
   n·g(u) = 0 (`plane_cone_apex_rulings`), the wall splits into sectors
   between them (a pointed cone's close at the apex), and the exact volume
   takes a side face through the axis of cone walls
@@ -203,9 +203,11 @@ One line each; the fixture/PR carries the story. Newest first.
   for the faces' reach); it splits at its vertex so no arc shares both ends
   with a cap's chord; a loop along the boundary and back along a section is
   a region, not a hole; a pointed cone's seam copies lie a period apart
-  through the apex, its apex piece samples its interior from 3D and its
-  broken trace retries with the DCEL; an untouched rim is rejoined whole
-  for its cap; a section crossing the seam is anchored there; and the
+  through the apex, every piece samples its interior from its 3D curves
+  (unwrapping folds rim pieces over a half turn and the apex jump), and a
+  pointed cone's broken trace retries with the DCEL; an untouched rim is rejoined whole
+  for its cap, and a rim a section touches at the seam's antipode is
+  quartered so its halves never share both ends; a section crossing the seam is anchored there; and the
   stripe mesher takes conic-trimmed walls, which the rim ladder fanned into
   chords (a third of the volume lost). A face its sections cross but which
   splits into nothing now fails the build, and a result edge off the face

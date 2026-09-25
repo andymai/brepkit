@@ -295,17 +295,18 @@ fn cone_halved_through_its_axis() {
 
 /// A pointed cone and a frustum cut by planes parallel to the axis, turned so
 /// the seam lies on either side of the cut. The listed cases build exactly;
-/// the rest (the piece cut off holding the seam, and some frustum cuts) may
-/// fall back to a mesh, but never come out exact and wrong.
+/// the rest (the piece cut off holding the seam) may fall back to a mesh, but
+/// never come out exact and wrong.
 #[test]
 fn cone_cut_parallel_to_its_axis() {
+    use PointClassification::{Inside, Outside};
     let exact = |top: f64, turn: f64, off: f64| -> bool {
         let offsets: &[f64] = match (top > 0.0, turn) {
             (false, 0.0) => &[-2.5, -1.5, -1.0, -0.7, 0.3, 0.5, 1.2, 2.0, 2.4],
             (false, 17.0) => &[-2.5, -1.5, -1.0, -0.7],
             (false, _) => &[0.3, 0.5, 1.2, 2.0, 2.4],
-            (true, 0.0 | 17.0) => &[-2.5, -0.7, 0.3, 0.5],
-            (true, _) => &[-0.7, 0.3, 0.5, 2.0, 2.4],
+            (true, 0.0 | 17.0) => &[-2.5, -1.5, -1.0, -0.7, 0.3, 0.5],
+            (true, _) => &[-0.7, 0.3, 0.5, 1.2, 2.0, 2.4],
         };
         offsets.contains(&off)
     };
@@ -327,6 +328,31 @@ fn cone_cut_parallel_to_its_axis() {
                         .iter()
                         .any(|&f| !topo.face(f).unwrap().surface().is_planar());
                     assert!(built || !must_build, "{label}: fell back to a mesh");
+                    if built {
+                        let report = validate_solid(&topo, piece).unwrap();
+                        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                        // Halfway between the wall and the plane on either
+                        // side, a tenth of the way up, where the cone is round
+                        // whatever its turn.
+                        let z = 0.1 * h;
+                        let r = (top - 3.0).mul_add(0.1, 3.0);
+                        let (inside_box, beyond) = match op {
+                            BooleanOp::Cut => (Outside, Inside),
+                            BooleanOp::Intersect => (Inside, Outside),
+                            BooleanOp::Fuse => (Inside, Inside),
+                        };
+                        for (x, class) in [(0.5 * (off - r), inside_box), (0.5 * (off + r), beyond)]
+                        {
+                            let at = classify_point(
+                                &topo,
+                                piece,
+                                Point3::new(x, 0.0, z),
+                                &ClassifyOptions::default(),
+                            )
+                            .unwrap();
+                            assert_eq!(at, class, "{label}: at x = {x}");
+                        }
+                    }
                     let volume = solid_volume(&topo, piece, 0.01).unwrap();
                     let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
                     assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");

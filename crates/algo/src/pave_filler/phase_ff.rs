@@ -4257,10 +4257,15 @@ fn exact_raw_curves(exacts: Vec<analytic_intersection::ExactIntersectionCurve>) 
 /// Whether a plane (not perpendicular to the axis) passes through a cone's
 /// apex, where its section is a pair of rulings rather than a conic.
 fn plane_holds_apex(normal: Vec3, d: f64, cone: &brepkit_math::surfaces::ConicalSurface) -> bool {
-    let apex = cone.apex();
-    let offset = normal.x() * apex.x() + normal.y() * apex.y() + normal.z() * apex.z() - d;
-    let scale = (apex - Point3::new(0.0, 0.0, 0.0)).length().max(1.0);
-    offset.abs() <= 1e-9 * scale && normal.dot(cone.axis()).abs() < 1.0 - 1e-9
+    let apex = cone.apex() - Point3::new(0.0, 0.0, 0.0);
+    let Ok(unit) = normal.normalize() else {
+        return false;
+    };
+    let offset = unit.dot(apex) - d / normal.length();
+    // The linear tolerance, widened only by the rounding of far-off
+    // coordinates: a plane a model unit from the apex never qualifies.
+    let tol = Tolerance::new().linear.max(1e-12 * apex.length());
+    offset.abs() <= tol && unit.dot(cone.axis()).abs() < 1.0 - 1e-9
 }
 
 /// The rulings a plane through a cone's apex cuts: the generators `g(u)`

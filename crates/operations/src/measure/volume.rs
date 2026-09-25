@@ -488,7 +488,7 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
                     let off_axis = (unit.dot(o) - d / normal.length()).abs();
                     if unit.dot(axis_d).abs() > 1e-9
                         || has_torus
-                        || (has_cone && off_axis > 1e-9 * o.length().max(1.0))
+                        || (has_cone && off_axis > 1e-7_f64.max(1e-12 * o.length()))
                     {
                         return None;
                     }
