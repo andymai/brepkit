@@ -1,0 +1,29 @@
+crates/operations/src/classify.rs
+  s_ba2f7b5c6902b6::t_d1ccfeb2616858 469-471
+crates/operations/tests/sphere_reversed_cap.rs
+  s_ba2f7b5c6902b6::t_cf30d62e853780 262-305,307-360
+  s_ba2f7b5c6902b6::t_ba80adc6481f65 306
+crates/check/src/classify/boundary.rs
+  s_ba2f7b5c6902b6::t_d1ccfeb2616858 287-289
+crates/check/src/validate/face.rs
+  s_ba2f7b5c6902b6::t_31d56700093e44 22-24,27,53,56
+  s_ba2f7b5c6902b6::t_2c4c8909fa72b7 37-45,47,75-85
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_6997d398913543 201-209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "858dc80724ffea5e615b39b819a4e0358674d191",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
