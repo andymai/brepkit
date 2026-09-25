@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790323607957,
+  "lastUpdate": 1790328272467,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39743,6 +39743,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42478868,
             "range": "± 125982",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8f045bf6b509ac0550b70577a1aeedfec7d83ed9",
+          "message": "fix(operations): keep a ball's box-corner pocket and the box-sphere octant exact (#1760)\n\nBall and box corner booleans now preserve exact topology, orientation,\nvolume, and watertightness across the supported corner configurations\nusing `make_sphere(3, 32)`.\n\n## What was wrong\n\n- A ball less a box whose corner lies inside it returned exact with\ncorrect volume, but failed `validate_solid` with “3 shared edges have\ninconsistent face orientations.” In `split_noseam_face_direct`, a\nsection loop became the cap’s outer wire in its chained direction, while\nthe hole was only reversed per edge. A clockwise chain therefore\nproduced a hole wound with the hemisphere’s outer wire, which no whole\nface flip repairs. This affected corners at `(1, 1, 1)`, `(1, 1.2,\n0.8)`, `(0.5, 0.5, 0.5)`, and `(1.5, 0.2, 0.3)`.\n\n- The `Intersect` shortcut `build_box_sphere_octant` constructed arcs\ncounter-clockwise about each cutting plane’s inward normal. This selects\nthe short arc only when the corner’s inward directions form a\nright-handed frame. Below the equator at `(1, 1.2, 0.8)`, the directions\nare `(+x, +y, -z)`, so the shortcut selected complementary spans of\n311.5, 308.2, and 314.8 degrees instead of 48.5, 51.8, and 45.2. The\nresulting solid mesh was not watertight.\n\n- The shortcut wound all four wires clockwise about their outward\nnormals. `sphere_region_axis` consequently read the sphere patch\nbackwards during a second boolean. The origin octant less the `(1, 1,\n1)` corner remained unchanged with 4 faces and the octant’s volume. The\noctant below the equator less a radius 0.4 rod along z through `(1, 1)`\nmeasured 12.824526856 instead of 12.816011655.\n\n- The shortcut also built an octant whenever the three corner planes cut\nthe ball, even if the corner was outside it. A radius 3 ball centered at\n`(1.8, 1.8, 1.8)` within the positive octant box returned a valid 4 face\nsolid of 82.09 instead of 78.84.\n\n- `analytic_sphere_signed_volume` selected a latitude bounded face’s\npole from its boundary polygon centroid. That centroid lies on the axis,\nat the center for an equator polygon where v is undefined, and above the\ncenter for any loop above the equator. It therefore reads both sides of\nan upper latitude as north.\n\n## What this does\n\n- `split_noseam_face_direct` uses `sphere_loop_counter_clockwise` to\nturn each chained loop counter-clockwise about the outward normal before\nconstructing the cap and hole. Orientation comes from the loop vector\narea `½ ∮ (P − C) × dP`, sampled along each edge traversal with\n`edge_samples`. The hole reverses both edge order and edge direction.\n\n- `build_box_sphere_octant` orders its three cuts so their inward\ndirections form a right-handed frame. Every wire is counter-clockwise\nabout its face’s outward normal: each quarter disc runs from O along the\nnext axis first, and the sphere patch runs X to Y to Z.\n\n- `build_box_sphere_octant` steps aside unless the corner lies inside\nthe ball, sending other cases through the GFA boolean pipeline.\n\n- `sphere_wire_u_progress` derives the cap pole from the wire’s net turn\nin u. The wire remains counter-clockwise about the surface’s outward\nnormal even on a reversed face, because the GFA builder flips the flag\nwhile retaining the wire. A loop turning toward +u therefore has the\nnorth pole on its left. For `[-5, 5]^3` less a radius 2 ball centered at\n`(0, 0, 5.5)`, `solid_volume` is exact at 989.397125.\n\n- The turned and mirrored ball work remains on\n`wip/turned-ball-sections`. Phase FF currently reads a turned hemisphere\nboundary v range as a `1e-16` sliver and clips every section away. The\nbranch makes turned cap, rod, and box corner cases exact, but a turned\nball less `1 < z < 2` is open, while the mirrored result is valid but\nmisses its lower piece, measuring 8.378 instead of 92.153. It also\ncontains the required collar and arc filter guards.\n\n- The roadmap retains OPEN rows for reversed sphere caps, turned or\nmirrored balls, primitive pose auditing, and second booleans on octants.\nThose octant cases now fall back instead of silently ignoring the tool,\nwhile a GFA built, rotated octant case remains unchanged and invalid.\n\n## Verification\n\n- `ball_less_a_box_corner` covers all four corners plus `(1, 1.2, 0.8)`\nmirrored below the equator under `Cut` and `Intersect`. Every result\nstays exact, passes `validate_solid`, produces a watertight mesh,\nclassifies ray cast points correctly, and matches the corner integral\nwithin `1e-7`.\n\n- `box_octant_feeds_a_second_boolean` checks the lower octant less the\nrod against a polar Simpson oracle within `1e-7`. It also verifies that\nupper and lower octants lose the `(1, 1, 1)` corner’s piece within 2%,\nallowing mesh fallback but rejecting an ignored tool.\n\n- `sphere_box_reads_a_caps_side_from_its_turn` checks both faces bounded\nby the latitude `z = 1`. Their fluxes match `R` times area over three\nwithin `1e-9`, using areas `2 pi R (R - 1)` and `2 pi R (R + 1)`, and\nreverse faces produce negated fluxes.\n\n- `corner_outside_the_ball_is_not_an_octant` checks the `(1.8, 1.8,\n1.8)` case within 2% of the two-dimensional Simpson result 78.84.\n\n- A sweep of 34 ball booleans changes only one row: the ball less the\n`(1, 1, 1)` corner becomes valid.\n\n- The workspace suite passes: 3071 tests run, 3071 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes a ball less a box corner come back valid and watertight above or\nbelow the equator, and feeds the box-sphere octant to a second boolean\nthe right way round. Turned-ball cases keep falling back to a mesh: the\nv-sliver fix that would keep them exact is parked on\n`wip/turned-ball-sections`, and the fallbacks get roadmap rows.\n\n- Orients a cap's chained loop counter-clockwise so the pocket's hole\nwinds against the hemisphere's outer wire; orders the box-octant\nshortcut's cuts right-handed and winds its wires counter-clockwise, so a\ncorner below the equator keeps its short arcs and a second boolean reads\nthe patch's side, not its complement. The shortcut now steps aside when\nthe box's corner lies outside the ball, where the region is not an\noctant.\n- A cap's pole in the (u, v)-box flux is read from the wire's turn in u;\nthe boundary centroid it read sits on the axis and cannot tell which\nside the cap covers.\n\n<sup>Written for commit 68c699d777df926b4afb630285c3652b11992cd6.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1760?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-25T09:21:36Z",
+          "tree_id": "bbf164a020c67cc664b55d2565f94ab5728a452d",
+          "url": "https://github.com/andymai/brepkit/commit/8f045bf6b509ac0550b70577a1aeedfec7d83ed9"
+        },
+        "date": 1790328268326,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1055752,
+            "range": "± 1459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1146849,
+            "range": "± 41337",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14101,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 770074,
+            "range": "± 2917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45873999,
+            "range": "± 56594",
             "unit": "ns/iter"
           }
         ]
