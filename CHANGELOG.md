@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.23](https://github.com/andymai/brepkit/compare/v4.0.22...v4.0.23) (2026-09-25)
+
+
+### Bug Fixes
+
+* **operations:** mesh a trimmed torus face over the face, not its box ([#1759](https://github.com/andymai/brepkit/issues/1759)) ([5e7875c](https://github.com/andymai/brepkit/commit/5e7875c19acf3432e6438cf6719488e55791cf69))
+
 ## [4.0.22](https://github.com/andymai/brepkit/compare/v4.0.21...v4.0.22) (2026-09-25)
 
 
