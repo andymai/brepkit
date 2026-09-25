@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.26](https://github.com/andymai/brepkit/compare/v4.0.25...v4.0.26) (2026-09-25)
+
+
+### Bug Fixes
+
+* **operations:** measure a hyperbola-trimmed cone wall exactly ([#1764](https://github.com/andymai/brepkit/issues/1764)) ([04aa563](https://github.com/andymai/brepkit/commit/04aa56356eb8d9e6fe41a6b7872be544ec45f2d8))
+
 ## [4.0.25](https://github.com/andymai/brepkit/compare/v4.0.24...v4.0.25) (2026-09-25)
 
 
