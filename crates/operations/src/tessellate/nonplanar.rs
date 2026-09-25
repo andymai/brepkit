@@ -3020,8 +3020,8 @@ fn anchor_closed_edges_at_vertices(
 /// sphere face goes through the latitude-band mesher when it is a band
 /// between two latitude rims, and through the constrained CDT otherwise. A
 /// torus face tries the solid mesher's structured bands (notch, two-rim,
-/// latitude) and then its constrained CDT. A face none takes comes back
-/// without triangles.
+/// latitude) and then its constrained CDT. When no mesher takes the face, it
+/// comes back without triangles.
 pub(super) fn tessellate_holed_face_local(
     topo: &Topology,
     face_id: FaceId,
