@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.22](https://github.com/andymai/brepkit/compare/v4.0.21...v4.0.22) (2026-09-25)
+
+
+### Bug Fixes
+
+* **operations:** measure and mesh a sphere face that a box or rod trims ([#1757](https://github.com/andymai/brepkit/issues/1757)) ([c824c8c](https://github.com/andymai/brepkit/commit/c824c8c43549601d95cb10ed520f604febdf0347))
+
 ## [4.0.21](https://github.com/andymai/brepkit/compare/v4.0.20...v4.0.21) (2026-09-25)
 
 
