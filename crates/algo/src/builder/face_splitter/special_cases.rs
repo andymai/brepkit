@@ -791,9 +791,6 @@ fn arc_covers_segment(arc: &OrientedPCurveEdge, segment: &OrientedPCurveEdge, to
     within(segment.start_3d) && within(segment.end_3d)
 }
 
-/// Interior point for a loop on a sphere face: the spherical centroid of
-/// the loop edges' midpoints, projected back onto the sphere. `None` for
-/// non-sphere surfaces (callers fall back to UV-based interior sampling).
 /// Whether a loop of section arcs on a sphere, within a hemisphere, runs
 /// counter-clockwise about the outward normal: its vector area
 /// `½ ∮ (P − C) × dP` points out through the region it bounds. `None` off a
@@ -809,14 +806,8 @@ fn sphere_loop_counter_clockwise(
     let center = s.center();
     let mut sweep = Vec3::new(0.0, 0.0, 0.0);
     for e in edges {
-        let at = |t: f64| {
-            super::super::pcurve_compute::evaluate_edge_at_t(&e.curve_3d, e.start_3d, e.end_3d, t)
-        };
-        let mut prev = at(0.0);
-        for k in 1..=16 {
-            let next = at(f64::from(k) / 16.0);
-            sweep += (prev - center).cross(next - prev) * 0.5;
-            prev = next;
+        for w in edge_samples(e, 16).windows(2) {
+            sweep += (w[0] - center).cross(w[1] - w[0]) * 0.5;
         }
     }
     let inside = sphere_loop_interior(surface, edges)? - center;
@@ -824,6 +815,9 @@ fn sphere_loop_counter_clockwise(
     (turn.abs() > 1e-12 * s.radius().powi(3)).then_some(turn > 0.0)
 }
 
+/// Interior point for a loop on a sphere face: the spherical centroid of
+/// the loop edges' midpoints, projected back onto the sphere. `None` for
+/// non-sphere surfaces (callers fall back to UV-based interior sampling).
 fn sphere_loop_interior(surface: &FaceSurface, edges: &[OrientedPCurveEdge]) -> Option<Point3> {
     use brepkit_math::vec::Vec3;
     let FaceSurface::Sphere(s) = surface else {

@@ -181,3 +181,64 @@ fn turned_ball_keeps_exact_cuts() {
         }
     }
 }
+
+/// The ball's octant from the box shortcut feeds a second boolean: less a rod
+/// of radius 0.4 along `z` through `(1, 1)` (the column over the rod's disc,
+/// by Simpson in polar coordinates) it stays exact below the equator, and
+/// less a box corner at `(1, 1, ±1)` it loses the corner's piece (within 2%,
+/// a mesh allowed) rather than ignoring the tool.
+#[test]
+fn box_octant_feeds_a_second_boolean() {
+    let octant = PI * RADIUS.powi(3) / 6.0;
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let column = simpson(200, 0.0, 0.4, &|r: f64| {
+        r * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
+            let (x, y) = (r.mul_add(th.cos(), 1.0), r.mul_add(th.sin(), 1.0));
+            RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
+        })
+    });
+    for lower in [false, true] {
+        let octant_of = |topo: &mut Topology| {
+            let sphere = make_sphere(topo, RADIUS, 32).unwrap();
+            let block = make_box(topo, 10.0, 10.0, 10.0).unwrap();
+            let z0 = if lower { -10.0 } else { 0.0 };
+            transform_solid(topo, block, &Mat4::translation(0.0, 0.0, z0)).unwrap();
+            boolean(topo, BooleanOp::Intersect, sphere, block).unwrap()
+        };
+        if lower {
+            let mut topo = Topology::new();
+            let piece = octant_of(&mut topo);
+            let rod = make_cylinder(&mut topo, 0.4, 20.0).unwrap();
+            transform_solid(&mut topo, rod, &Mat4::translation(1.0, 1.0, -10.0)).unwrap();
+            let before = mesh_fallback_count();
+            let result = boolean(&mut topo, BooleanOp::Cut, piece, rod).unwrap();
+            assert_eq!(mesh_fallback_count(), before, "rod: fell back to a mesh");
+            let (volume, truth) = (solid_volume(&topo, result, 0.01).unwrap(), octant - column);
+            assert!(
+                (volume - truth).abs() < 1e-7 * truth,
+                "rod: volume {volume}, truth {truth}"
+            );
+        }
+        let mut topo = Topology::new();
+        let piece = octant_of(&mut topo);
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let z0 = if lower { -11.0 } else { 1.0 };
+        transform_solid(&mut topo, block, &Mat4::translation(1.0, 1.0, z0)).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, piece, block).unwrap();
+        let (volume, truth) = (
+            solid_volume(&topo, result, 0.01).unwrap(),
+            octant - corner_piece(1.0, 1.0, 1.0),
+        );
+        assert!(
+            (volume - truth).abs() < 2e-2 * truth,
+            "corner lower {lower}: volume {volume}, truth {truth}"
+        );
+    }
+}
