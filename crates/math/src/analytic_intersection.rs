@@ -9,6 +9,7 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 use crate::MathError;
 use crate::curves::{Circle3D, Ellipse3D};
 use crate::frame::Frame3;
+use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::fitting::interpolate;
 use crate::nurbs::intersection::{IntersectionCurve, IntersectionPoint};
 use crate::surfaces::{ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface};
@@ -356,6 +357,124 @@ fn exact_plane_cone(
         .into_iter()
         .map(ExactIntersectionCurve::Points)
         .collect())
+}
+
+/// The exact arc from `from` to `to` of a plane's parabola or hyperbola
+/// section of a cone, both ends on one branch of it, as a rational quadratic
+/// NURBS.
+///
+/// A hyperbola `x = a cosh φ, y = b sinh φ` (in the plane frame of
+/// [`exact_plane_cone`]) is cut into pieces of at most one unit of `φ`, each
+/// a conic Bézier: its middle point is where the end tangents meet and its
+/// middle weight is the cosh of half the piece's span. A parabola is one
+/// polynomial quadratic. `None` for an elliptic or circular section, a plane
+/// through the apex, or ends off one branch of the section.
+///
+/// # Errors
+///
+/// Returns an error if the plane normal is zero or the curve cannot be built.
+#[allow(clippy::many_single_char_names)]
+pub fn plane_cone_conic_arc(
+    cone: &ConicalSurface,
+    normal: Vec3,
+    d: f64,
+    from: Point3,
+    to: Point3,
+) -> Result<Option<NurbsCurve>, MathError> {
+    let len = normal.length();
+    if len < 1e-15 {
+        return Err(MathError::ZeroVector);
+    }
+    let (normal, d) = (normal * (1.0 / len), d / len);
+    let axis = cone.axis();
+    let c = normal.dot(axis);
+    let p2 = (1.0 - c * c).max(0.0);
+    let p = p2.sqrt();
+    let k = cone.half_angle().sin().powi(2);
+    let a_coeff = p2 - k;
+    let m = Vec3::new(
+        axis.x() - c * normal.x(),
+        axis.y() - c * normal.y(),
+        axis.z() - c * normal.z(),
+    );
+    let m_len = m.length();
+    if m_len < 1e-12 || a_coeff < -1e-9 {
+        return Ok(None);
+    }
+    let e1 = m * (1.0 / m_len);
+    let e2 = normal.cross(e1);
+    let apex = cone.apex();
+    let e = d - dot_np(normal, apex);
+    let origin = apex + normal * e;
+    let plane_st = |q: Point3| {
+        let w = q - origin;
+        (w.dot(e1), w.dot(e2))
+    };
+    let ((s0, t0), (s1, t1)) = (plane_st(from), plane_st(to));
+    let scale = s0.abs().max(t0.abs()).max(s1.abs()).max(t1.abs()).max(1.0);
+    if e.abs() < 1e-9 * scale {
+        return Ok(None);
+    }
+    let point = |s: f64, t: f64| origin + e1 * s + e2 * t;
+    let on_curve = |q: Point3, r: Point3| (q - r).length() <= 1e-6 * scale;
+    let (control, weights) = if a_coeff.abs() <= 1e-9 {
+        // (p² − k) s² vanishes: 2ecp·s + e²(c² − k) = k·t², s = α t² + β.
+        let lin = 2.0 * e * c * p;
+        if lin.abs() < 1e-12 * scale {
+            return Ok(None);
+        }
+        let (alpha, beta) = (k / lin, -e * e * (c * c - k) / lin);
+        if !on_curve(point(alpha * t0 * t0 + beta, t0), from)
+            || !on_curve(point(alpha * t1 * t1 + beta, t1), to)
+        {
+            return Ok(None);
+        }
+        let mid = point(alpha * t0 * t1 + beta, 0.5 * (t0 + t1));
+        (vec![from, mid, to], vec![1.0; 3])
+    } else {
+        // A (s − s_c)² − k t² = R with R = e² k (1 − k) / A.
+        let s_c = -e * c * p / a_coeff;
+        let r = e * e * k * (1.0 - k) / a_coeff;
+        if r <= 0.0 {
+            return Ok(None);
+        }
+        let (a, b) = ((r / a_coeff).sqrt(), (r / k).sqrt());
+        let (x0, x1) = (s0 - s_c, s1 - s_c);
+        if x0 * x1 <= 0.0 {
+            return Ok(None);
+        }
+        let side = x0.signum();
+        let hyperbola = |phi: f64| point(s_c + side * a * phi.cosh(), b * phi.sinh());
+        let (phi0, phi1) = ((t0 / b).asinh(), (t1 / b).asinh());
+        if !on_curve(hyperbola(phi0), from) || !on_curve(hyperbola(phi1), to) {
+            return Ok(None);
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let pieces = ((phi1 - phi0).abs().ceil() as usize).max(1);
+        let mut control = vec![from];
+        let mut weights = vec![1.0];
+        for i in 0..pieces {
+            #[allow(clippy::cast_precision_loss)]
+            let (fa, fb) = (i as f64 / pieces as f64, (i + 1) as f64 / pieces as f64);
+            let (pa, pb) = (phi0 + (phi1 - phi0) * fa, phi0 + (phi1 - phi0) * fb);
+            let (mid, half) = (0.5 * (pa + pb), 0.5 * (pb - pa));
+            let w = half.cosh();
+            control.push(point(s_c + side * a * mid.cosh() / w, b * mid.sinh() / w));
+            weights.push(w);
+            control.push(if i + 1 == pieces { to } else { hyperbola(pb) });
+            weights.push(1.0);
+        }
+        (control, weights)
+    };
+    let pieces = (control.len() - 1) / 2;
+    let mut knots = vec![0.0; 3];
+    for i in 1..pieces {
+        #[allow(clippy::cast_precision_loss)]
+        knots.extend([i as f64; 2]);
+    }
+    #[allow(clippy::cast_precision_loss)]
+    knots.extend([pieces as f64; 3]);
+    NurbsCurve::new(2, knots, control, weights).map(Some)
 }
 
 /// Reference to an analytic surface for intersection dispatch.
@@ -3061,6 +3180,48 @@ fn surface_closures<'a>(
 mod tests {
     use super::*;
     use crate::tolerance::Tolerance;
+
+    /// Arcs of a cone's hyperbola (a plane parallel to the axis) and parabola
+    /// (a plane parallel to a ruling) between two of their sampled points
+    /// stay on both the plane and the cone everywhere, not just at samples.
+    #[test]
+    fn plane_cone_conic_arcs_lie_on_both_surfaces() {
+        let half_angle = 1.1_f64;
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            half_angle,
+        )
+        .unwrap();
+        let ruling = Vec3::new(half_angle.sin(), 0.0, half_angle.cos());
+        for (normal, d) in [(Vec3::new(1.0, 0.0, 0.0), 0.5), (ruling, 1.0)] {
+            let chains =
+                exact_plane_analytic_reaching(AnalyticSurface::Cone(&cone), normal, d, 10.0)
+                    .unwrap();
+            let chain = chains
+                .iter()
+                .find_map(|c| match c {
+                    ExactIntersectionCurve::Points(chain) => Some(chain),
+                    _ => None,
+                })
+                .expect("a parabola or hyperbola section is sampled");
+            let (from, to) = (chain[2], chain[chain.len() - 3]);
+            let arc = plane_cone_conic_arc(&cone, normal, d, from, to)
+                .unwrap()
+                .expect("an exact arc");
+            let (t0, t1) = arc.domain();
+            assert!((arc.evaluate(t0) - from).length() < 1e-12);
+            assert!((arc.evaluate(t1) - to).length() < 1e-12);
+            for i in 0..=200 {
+                let q = arc.evaluate(t0 + (t1 - t0) * f64::from(i) / 200.0);
+                let w = q - Point3::new(0.0, 0.0, 0.0);
+                let off_plane = (normal.dot(w) - d).abs();
+                let off_cone = (w.z() - w.length() * half_angle.sin()).abs();
+                assert!(off_plane < 1e-9, "off the plane by {off_plane}");
+                assert!(off_cone < 1e-9, "off the cone by {off_cone}");
+            }
+        }
+    }
 
     #[test]
     fn plane_cylinder_perpendicular() {

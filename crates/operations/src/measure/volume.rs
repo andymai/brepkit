@@ -1626,19 +1626,22 @@ pub fn solid_volume(
     // use direct per-face tessellation with signed-volume summation.
     // tessellate() handles face reversal (flips winding + normals), so raw
     // signed tets are correct even without a globally watertight mesh.
-    // So does a torus face trimmed by a free-form curve, whose flux follows
-    // exactly along its boundary where a mesh would only inscribe it, a
-    // whole ring (around a cavity, say), whose flux is its volume, and a
-    // sphere face whose outer loop winds none of its u (a rod's end cap).
+    // So does a torus, cylinder or cone face trimmed by a free-form curve (a
+    // wall's hyperbola or ellipse), whose flux follows exactly along its
+    // boundary where a mesh would only inscribe it, a whole ring (around a
+    // cavity, say), whose flux is its volume, and a sphere face whose outer
+    // loop winds none of its u (a rod's end cap).
     let needs_direct_tessellation = brepkit_topology::explorer::solid_faces(topo, solid)?
         .into_iter()
         .any(|fid| {
             topo.face(fid).is_ok_and(|f| {
                 !f.inner_wires().is_empty()
                     || (f.is_reversed() && !matches!(f.surface(), FaceSurface::Plane { .. }))
-                    || (matches!(f.surface(), FaceSurface::Torus(_))
-                        && (is_whole_ring(topo, f)
-                            || has_free_form_boundary(topo, fid).unwrap_or(false)))
+                    || (matches!(f.surface(), FaceSurface::Torus(_)) && is_whole_ring(topo, f))
+                    || (matches!(
+                        f.surface(),
+                        FaceSurface::Torus(_) | FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+                    ) && has_free_form_boundary(topo, fid).unwrap_or(false))
                     || sphere_patch_outer_area(topo, fid).is_ok_and(|area| area.is_some())
             })
         });
