@@ -1,0 +1,23 @@
+crates/check/src/validate/face.rs
+  s_ba2f7b5c6902b6::t_01359dd2fd4138 105-124,131-148
+  s_ba2f7b5c6902b6::t_43517b7808d3dd 125-130
+  s_ba2f7b5c6902b6::t_c447a409e671b6 32-40
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_43517b7808d3dd 193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0da3acc4c239e06936670f44519584a45ec89054",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
