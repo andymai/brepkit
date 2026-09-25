@@ -81,10 +81,15 @@ pub fn check_face_orientation(
     Ok(vec![])
 }
 
-/// Twice the polygon's vector area (Newell's method).
+/// Twice the polygon's vector area (Newell's method), taken about its first
+/// point so a loop far from the origin keeps no absolute-coordinate residue.
 fn newell_vector(verts: &[Point3]) -> Vec3 {
+    let Some(&origin) = verts.first() else {
+        return Vec3::new(0.0, 0.0, 0.0);
+    };
     let mut sum = Vec3::new(0.0, 0.0, 0.0);
-    for (a, b) in verts.iter().zip(verts.iter().cycle().skip(1)) {
+    let local: Vec<Vec3> = verts.iter().map(|p| *p - origin).collect();
+    for (a, b) in local.iter().zip(local.iter().cycle().skip(1)) {
         sum += Vec3::new(
             (a.y() - b.y()) * (a.z() + b.z()),
             (a.z() - b.z()) * (a.x() + b.x()),

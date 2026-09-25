@@ -326,7 +326,7 @@ fn reversed_caps_classify_by_their_wire() {
 fn reversed_faces_raise_no_orientation_warning() {
     use brepkit_check::validate::{ValidateOptions, validate_solid as check_solid};
     use brepkit_operations::primitives::make_cylinder;
-    for tool in 0..4 {
+    for tool in 0..5 {
         let mut topo = Topology::new();
         let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         transform_solid(&mut topo, block, &Mat4::translation(-5.0, -5.0, -5.0)).unwrap();
@@ -342,10 +342,19 @@ fn reversed_faces_raise_no_orientation_warning() {
                 transform_solid(&mut topo, b, &Mat4::translation(-1.0, -1.0, 4.0)).unwrap();
                 ("pocket", b)
             }
-            _ => {
+            3 => {
                 let c = make_cylinder(&mut topo, 1.0, 20.0).unwrap();
                 transform_solid(&mut topo, c, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
                 ("bore", c)
+            }
+            _ => {
+                // The same bore far from the origin, where a band's vector
+                // area must still cancel.
+                let far = Mat4::translation(1.0e6, -7.0e5, 5.0e5);
+                transform_solid(&mut topo, block, &far).unwrap();
+                let c = make_cylinder(&mut topo, 1.0, 20.0).unwrap();
+                transform_solid(&mut topo, c, &(far * Mat4::translation(0.0, 0.0, -10.0))).unwrap();
+                ("far bore", c)
             }
         };
         let piece = boolean(&mut topo, BooleanOp::Cut, block, cutter).unwrap();
