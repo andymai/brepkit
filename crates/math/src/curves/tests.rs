@@ -649,6 +649,29 @@ fn circle_intersect_circle_near_tangent_collapses_to_foot() {
 }
 
 #[test]
+fn circle_intersect_circle_on_one_sphere() {
+    // The latitude z = 1 of a radius-3 sphere and its great circle in y = 0
+    // meet at (±sqrt(8), 0, 1), from either side.
+    let latitude = Circle3D::new(
+        Point3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        8.0_f64.sqrt(),
+    )
+    .unwrap();
+    let great = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 3.0).unwrap();
+    for (a, b) in [(&latitude, &great), (&great, &latitude)] {
+        let hits = a.intersect_circle(b, 1e-9);
+        assert_eq!(hits.len(), 2);
+        for (p, t) in &hits {
+            assert!((p.x().abs() - 8.0_f64.sqrt()).abs() < 1e-12);
+            assert!(p.y().abs() < 1e-12);
+            assert!((p.z() - 1.0).abs() < 1e-12);
+            assert!((a.evaluate(*t) - *p).length() < 1e-12);
+        }
+    }
+}
+
+#[test]
 fn circle_intersect_circle_disjoint_and_non_coplanar_empty() {
     let a = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
     // Far apart.
@@ -657,7 +680,7 @@ fn circle_intersect_circle_disjoint_and_non_coplanar_empty() {
     // Parallel but offset planes.
     let c = Circle3D::new(Point3::new(1.0, 0.0, 0.5), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
     assert!(a.intersect_circle(&c, 1e-9).is_empty());
-    // Skew planes.
+    // Skew planes whose common line misses one of the circles.
     let d = Circle3D::new(Point3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 1.0).unwrap();
     assert!(a.intersect_circle(&d, 1e-9).is_empty());
     // Concentric.

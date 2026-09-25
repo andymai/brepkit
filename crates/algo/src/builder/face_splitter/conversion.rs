@@ -481,6 +481,14 @@ pub(super) fn is_point_on_boundary_uv(
     for &u in &u_candidates {
         let pt_uv = Point2::new(u, pv);
         for edge in boundary {
+            // A sphere's arcs were settled in 3D above: the UV chord of one
+            // ending at a pole runs to an arbitrary pole `u` and sweeps across
+            // the face (a meridian's chord to a pole at `u = 0`).
+            if matches!(surface, FaceSurface::Sphere(_))
+                && matches!(edge.curve_3d, brepkit_topology::edge::EdgeCurve::Circle(_))
+            {
+                continue;
+            }
             let su = edge.start_uv;
             let eu = edge.end_uv;
             let dx = eu.x() - su.x();

@@ -191,12 +191,28 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **The cross one-row fillet's solid mesh is open** (fixture `crates/io/tests/cross_one_row_fillet_inmem.rs`) | The fillet result is closed by topology (every edge used twice), but `tessellate_solid` leaves about 1,700 mesh edges not shared by two triangles, so its volume depends on the anchor (65,090 about the origin, 29,224 about (80, 5, 10)); `solid_volume` reads 68,449 against the 64,968 oracle. The fixture's volume criterion compared the origin-anchored number and was dropped. Its r = 0.5 reversed sphere corner patches meshed their complements (about 3.03 mm² each against 1.02) until the reversed-cap fix |
 | **Shelled cylinder and cone cups are invalid** | `shell(make_cylinder(5, 10), 1, [top])` and `shell(make_cone(5, 2, 10), 1, [top])` each leave 32 shared edges with one sense (the cup measures 344.45 against 333.01), and a hollowed `make_torus(6, 2)` fails with "solid assembly produced no faces". Their inner walls (closed-seam cylinder, cone, NURBS and torus) reach `assemble_solid_mixed`'s generic arm with the reversed vertex list and the flag; the sphere arm keeps the outer face's winding instead. Giving them the same un-reversal makes the senses consistent but not the cup (Euler V-E+F = -1 with V=128, E=134, F=5, volume 451.86), so a second fault sits in the closed-seam wall or its rim. Until they match, a shelled solid where a sphere wall meets one of them would cross the seam in one sense (no brepkit operation builds that seam today: a capsule's fuse falls back to a mesh) |
 | **Heal's sphere recognition keeps an inward NURBS face's side** (`crates/heal/src/custom/convert_to_elementary.rs` near line 65; found by reading, not yet reproduced) | The NURBS face's surface is swapped for the recognized sphere with its flag and wire kept, without comparing the NURBS normal (`Su x Sv`) with the sphere's outward normal: a patch whose parameterization faces inward (a mirrored NURBS sphere patch, whose transform flips the flag and keeps the wire) would come out wound against its new surface. Next: pin it with a mirrored NURBS patch, and turn the flag and the wires over when the normals oppose |
-| **Second booleans on a ball's octant** (pin `box_octant_feeds_a_second_boolean` in `crates/operations/tests/sphere_box_corner.rs` tolerates the fallbacks) | The octant from the box shortcut less a box corner at `(1, 1, 1)` falls back to a mesh, and less a rod along z through `(1, 1)` above the equator too (below it is exact). The same octant built by the GFA (box and ball turned 0.3 about z, so the shortcut does not fire) less that corner comes back unchanged and invalid: silently wrong, the next dig |
+| **Second booleans on a ball's octant: the remaining fallback** (pin `box_octant_feeds_a_second_boolean` in `crates/operations/tests/sphere_box_corner.rs`) | Safe fallback. The octant below the equator with box and ball turned 0.3 about `z` falls back in its first boolean (94 faces, 13.937 against 14.137) |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A ball's octant through a second boolean (CLOSED 2026-09-25; pin `box_octant_feeds_a_second_boolean` in `crates/operations/tests/sphere_box_corner.rs`)**:
+  the octant the boolean engine builds (box and ball turned about `z`) came
+  back invalid, its patch's chained cap kept as the arcs came
+  (`split_noseam_face_direct` now runs each arc the cap shares with the
+  remainder the other way), and cutting a box corner from any octant fell
+  back or returned it unchanged. Four roots: the seam-plane crossings fitted
+  a plane through an arc-bounded patch's corners (now chord-bounded faces
+  only), `Circle3D::intersect_circle` gave nothing for skew planes, a plane
+  face's arc band grew with its longest side's sagitta (now per chord), and
+  the ray-cast classifier stood a sphere face in by the flat polygon through
+  its boundary (now the ray/sphere roots in each loop's half-spaces). The
+  collar mesh path in `solid_volume` now also requires the outer wire to
+  wind the axis. A rod through the patch fell back: a sphere face's point
+  test took a meridian's UV chord to its pole's arbitrary `u` as boundary
+  (its arcs are tested in 3D only now).
 
 - **Point classifiers and the orientation check read a reversed face's side (CLOSED 2026-09-25; pins `reversed_caps_classify_by_their_wire` and `reversed_faces_raise_no_orientation_warning` in `crates/operations/tests/sphere_reversed_cap.rs`)**:
   `classify_point` in operations and in check negated a reversed sphere

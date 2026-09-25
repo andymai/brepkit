@@ -11,15 +11,30 @@ use std::f64::consts::PI;
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
-use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
+use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::explorer::solid_faces;
+use brepkit_topology::face::FaceSurface;
+use brepkit_topology::solid::SolidId;
 
 const RADIUS: f64 = 3.0;
+
+/// Whether a result is exact rather than a mesh fallback, which is all planes
+/// and dozens of them: the results here keep a sphere face among a handful.
+/// (The fallback counter is process-wide, and other tests in this binary may
+/// fall back while one runs.)
+fn exact(topo: &Topology, solid: SolidId) -> bool {
+    let faces = solid_faces(topo, solid).unwrap();
+    faces.len() <= 12
+        && faces
+            .iter()
+            .any(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+}
 
 /// The ball's piece past `x = a`, `y = b` and `z = c`: across `y` the height
 /// `sqrt(R² - x² - y²) - c` integrates in closed form, leaving a Simpson
@@ -71,13 +86,8 @@ fn ball_less_a_box_corner() {
             let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
             let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
             transform_solid(&mut topo, block, &Mat4::translation(a, b, z0)).unwrap();
-            let before = mesh_fallback_count();
             let result = boolean(&mut topo, op, sphere, block).unwrap();
-            assert_eq!(
-                mesh_fallback_count(),
-                before,
-                "{label}: fell back to a mesh"
-            );
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
             let report = validate_solid(&topo, result).unwrap();
             assert!(report.is_valid(), "{label}: {:?}", report.issues);
             let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
@@ -106,11 +116,11 @@ fn ball_less_a_box_corner() {
     }
 }
 
-/// The ball's octant from the box shortcut feeds a second boolean: less a rod
-/// of radius 0.4 along `z` through `(1, 1)` (the column over the rod's disc,
-/// by Simpson in polar coordinates) it stays exact below the equator, and
-/// less a box corner at `(1, 1, ±1)` it loses the corner's piece (within 2%,
-/// a mesh allowed) rather than ignoring the tool.
+/// The ball's octant feeds a second boolean: less a rod of radius 0.4 along
+/// `z` through `(1, 1)` it loses the column over the rod's disc (by Simpson in
+/// polar coordinates), and less a box corner at `(1, 1, ±1)` exactly the
+/// corner's piece, whether the box shortcut built the octant or the boolean
+/// engine did (box and ball turned about `z`, out of the shortcut's reach).
 #[test]
 fn box_octant_feeds_a_second_boolean() {
     let octant = PI * RADIUS.powi(3) / 6.0;
@@ -128,41 +138,85 @@ fn box_octant_feeds_a_second_boolean() {
             RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
         })
     });
-    for lower in [false, true] {
+    for (lower, spin) in [(false, 0.0), (true, 0.0), (false, 0.3)] {
+        let label = format!("lower {lower} spin {spin}");
+        let turn = Mat4::rotation_z(spin);
         let octant_of = |topo: &mut Topology| {
             let sphere = make_sphere(topo, RADIUS, 32).unwrap();
             let block = make_box(topo, 10.0, 10.0, 10.0).unwrap();
             let z0 = if lower { -10.0 } else { 0.0 };
-            transform_solid(topo, block, &Mat4::translation(0.0, 0.0, z0)).unwrap();
-            boolean(topo, BooleanOp::Intersect, sphere, block).unwrap()
+            transform_solid(topo, block, &(turn * Mat4::translation(0.0, 0.0, z0))).unwrap();
+            transform_solid(topo, sphere, &turn).unwrap();
+            let piece = boolean(topo, BooleanOp::Intersect, sphere, block).unwrap();
+            assert!(
+                validate_solid(topo, piece).unwrap().is_valid(),
+                "{label}: invalid octant"
+            );
+            piece
         };
-        if lower {
+        {
             let mut topo = Topology::new();
             let piece = octant_of(&mut topo);
             let rod = make_cylinder(&mut topo, 0.4, 20.0).unwrap();
-            transform_solid(&mut topo, rod, &Mat4::translation(1.0, 1.0, -10.0)).unwrap();
-            let before = mesh_fallback_count();
+            transform_solid(&mut topo, rod, &(turn * Mat4::translation(1.0, 1.0, -10.0))).unwrap();
             let result = boolean(&mut topo, BooleanOp::Cut, piece, rod).unwrap();
-            assert_eq!(mesh_fallback_count(), before, "rod: fell back to a mesh");
+            assert!(exact(&topo, result), "{label} rod: fell back to a mesh");
+            assert!(
+                validate_solid(&topo, result).unwrap().is_valid(),
+                "{label} rod: invalid"
+            );
             let (volume, truth) = (solid_volume(&topo, result, 0.01).unwrap(), octant - column);
             assert!(
                 (volume - truth).abs() < 1e-7 * truth,
-                "rod: volume {volume}, truth {truth}"
+                "{label} rod: volume {volume}, truth {truth}"
             );
         }
         let mut topo = Topology::new();
         let piece = octant_of(&mut topo);
         let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let z0 = if lower { -11.0 } else { 1.0 };
-        transform_solid(&mut topo, block, &Mat4::translation(1.0, 1.0, z0)).unwrap();
+        transform_solid(&mut topo, block, &(turn * Mat4::translation(1.0, 1.0, z0))).unwrap();
         let result = boolean(&mut topo, BooleanOp::Cut, piece, block).unwrap();
+        assert!(exact(&topo, result), "{label}: fell back to a mesh");
+        assert!(
+            validate_solid(&topo, result).unwrap().is_valid(),
+            "{label}: invalid"
+        );
+        // Just inside the removed corner, and the octant's material beside it.
+        let side = if lower { -1.0 } else { 1.0 };
+        for (p, class) in [
+            (
+                Point3::new(1.3, 1.3, 1.3 * side),
+                PointClassification::Outside,
+            ),
+            (
+                Point3::new(0.6, 0.6, 0.6 * side),
+                PointClassification::Inside,
+            ),
+            (
+                Point3::new(1.3, 0.6, 1.3 * side),
+                PointClassification::Inside,
+            ),
+        ] {
+            assert_eq!(
+                classify_point(
+                    &topo,
+                    result,
+                    turn.mul_point(p),
+                    &ClassifyOptions::default()
+                )
+                .unwrap(),
+                class,
+                "{label}: {p:?}"
+            );
+        }
         let (volume, truth) = (
             solid_volume(&topo, result, 0.01).unwrap(),
             octant - corner_piece(1.0, 1.0, 1.0),
         );
         assert!(
-            (volume - truth).abs() < 2e-2 * truth,
-            "corner lower {lower}: volume {volume}, truth {truth}"
+            (volume - truth).abs() < 1e-9 * truth,
+            "{label}: volume {volume}, truth {truth}"
         );
     }
 }

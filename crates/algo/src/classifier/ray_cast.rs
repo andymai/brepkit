@@ -76,6 +76,37 @@ enum FaceGeom {
         /// tube (whole torus).
         v_band: Option<(f64, f64)>,
     },
+    /// A spherical face whose loops each bound a region of the sphere cut out
+    /// by planes. Crossings come from the ray/sphere quadratic, kept when the
+    /// hit lies on every loop's side. The flat polygon fallback stands the
+    /// patch in by the polygon through its boundary, which misreads every
+    /// point between the two (an octant's corner region).
+    Sphere {
+        surface: brepkit_math::surfaces::SphericalSurface,
+        loops: Vec<SphereLoop>,
+    },
+}
+
+/// One loop of a spherical face as the half-spaces its region lies in: the
+/// side each boundary plane leaves on the loop's left about the sphere's
+/// outward normal. A loop in one plane is one half-space; a loop of arcs in
+/// several planes bounds either their intersection (a convex patch) or,
+/// running the other way around it, its complement (`any`: a convex hole).
+struct SphereLoop {
+    /// `(point on the plane, normal toward the region)`.
+    planes: Vec<(Point3, Vec3)>,
+    any: bool,
+}
+
+impl SphereLoop {
+    fn admits(&self, p: Point3, slack: f64) -> bool {
+        let inside = |&(c, n): &(Point3, Vec3)| (p - c).dot(n) >= -slack;
+        if self.any {
+            self.planes.iter().any(inside)
+        } else {
+            self.planes.iter().all(inside)
+        }
+    }
 }
 
 /// Classify a point by ray casting against the solid's faces.
@@ -264,6 +295,7 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
                         FaceGeom::Cylinder { .. } => "cylinder".to_string(),
                         FaceGeom::Cone { .. } => "cone".to_string(),
                         FaceGeom::Torus { .. } => "torus".to_string(),
+                        FaceGeom::Sphere { loops, .. } => format!("sphere[{} loops]", loops.len()),
                     };
                     log::debug!(
                         "RAYHIT {label} dir=({:.3},{:.3},{:.3}) geom#{gi} {tag} c={c} susp={s}",
@@ -674,6 +706,16 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             }
         }
 
+        if let brepkit_topology::face::FaceSurface::Sphere(sph) = face.surface()
+            && let Some(loops) = sphere_face_loops(topo, face, sph)?
+        {
+            result.push(FaceGeom::Sphere {
+                surface: sph.clone(),
+                loops,
+            });
+            continue;
+        }
+
         let verts = wire_polygon(topo, face.outer_wire())?;
         if verts.len() < 3 {
             continue;
@@ -848,7 +890,191 @@ fn ray_geom_crossings(
         FaceGeom::Torus { surface, v_band } => {
             ray_torus_crossings(origin, ray_dir, surface, *v_band, tol)
         }
+        FaceGeom::Sphere { surface, loops } => {
+            ray_sphere_crossings(origin, ray_dir, surface, loops, tol)
+        }
     }
+}
+
+/// Count ray crossings with a spherical face: the ray/sphere roots whose hit
+/// lies in every loop's region. A tangent ray counts none; a hit within
+/// tolerance of a loop's plane marks the ray suspicious.
+fn ray_sphere_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::surfaces::SphericalSurface,
+    loops: &[SphereLoop],
+    tol: Tolerance,
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
+    let r = surface.radius();
+    let m = origin - surface.center();
+    let a = ray_dir.dot(ray_dir);
+    let b = 2.0 * m.dot(ray_dir);
+    let c = r.mul_add(-r, m.dot(m));
+    let disc = b.mul_add(b, -4.0 * a * c);
+    if disc < 1e-12 * a * r * r {
+        return (0, false);
+    }
+    let sqrt_disc = disc.sqrt();
+    let mut crossings = 0;
+    let mut suspicious = false;
+    for t in [(-b - sqrt_disc) / (2.0 * a), (-b + sqrt_disc) / (2.0 * a)] {
+        if t <= tol.linear {
+            continue;
+        }
+        let hit = origin + ray_dir * t;
+        suspicious |= loops.iter().any(|l| {
+            l.planes
+                .iter()
+                .any(|&(c, n)| (hit - c).dot(n).abs() <= near)
+        });
+        if loops.iter().all(|l| l.admits(hit, tol.linear)) {
+            crossings += 1;
+        }
+    }
+    (crossings, suspicious)
+}
+
+/// A spherical face's loops as [`SphereLoop`]s, each wire walked in its
+/// traversal direction (a region on the left about the sphere's outward
+/// normal, reversed faces included). `None` when a loop is neither planar nor
+/// made of circle arcs that bound a convex patch or a convex hole.
+fn sphere_face_loops(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    surface: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<Option<Vec<SphereLoop>>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    const SAMPLES: usize = 8;
+    const RING: usize = 64;
+    let r = surface.radius();
+    let slack = 1e-9 * r.max(1.0);
+    let mut loops = Vec::new();
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let wire = topo.wire(wire_id)?;
+        // Each edge's samples in traversal order, and its circle if it is one.
+        let mut edges: Vec<(Vec<Point3>, Option<brepkit_math::curves::Circle3D>)> = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let mut pts: Vec<Point3> = (0..=SAMPLES)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let f = k as f64 / SAMPLES as f64;
+                    edge.curve()
+                        .evaluate_with_endpoints(t0 + (t1 - t0) * f, sp, ep)
+                })
+                .collect();
+            if !oe.is_forward() {
+                pts.reverse();
+            }
+            let circle = match edge.curve() {
+                EdgeCurve::Circle(c) => Some(c.clone()),
+                EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+            };
+            edges.push((pts, circle));
+        }
+        let all: Vec<Point3> = edges.iter().flat_map(|(p, _)| p.iter().copied()).collect();
+        if all.len() < 3 {
+            return Ok(None);
+        }
+        // Twice the loop's vector area: a loop that only runs along a seam and
+        // back encloses none, and its direction is rounding noise.
+        let area = all.iter().zip(all.iter().cycle().skip(1)).fold(
+            Vec3::new(0.0, 0.0, 0.0),
+            |acc, (a, b)| {
+                acc + Vec3::new(
+                    (a.y() - b.y()) * (a.z() + b.z()),
+                    (a.z() - b.z()) * (a.x() + b.x()),
+                    (a.x() - b.x()) * (a.y() + b.y()),
+                )
+            },
+        );
+        if area.length() <= 1e-9 * r * r {
+            return Ok(None);
+        }
+        let normal = area * (1.0 / area.length());
+        let centroid = all.iter().fold(Vec3::new(0.0, 0.0, 0.0), |acc, p| {
+            acc + Vec3::new(p.x(), p.y(), p.z())
+        }) * (1.0 / f64::from(u32::try_from(all.len()).unwrap_or(u32::MAX)));
+        let centroid = Point3::new(centroid.x(), centroid.y(), centroid.z());
+        if all
+            .iter()
+            .all(|p| (*p - centroid).dot(normal).abs() <= slack)
+        {
+            loops.push(SphereLoop {
+                planes: vec![(centroid, normal)],
+                any: false,
+            });
+            continue;
+        }
+        // Arcs in several planes: each arc's side is the one its left points
+        // into at its middle sample.
+        let mut planes = Vec::with_capacity(edges.len());
+        for (pts, circle) in &edges {
+            let Some(circle) = circle else {
+                return Ok(None);
+            };
+            let mid = pts[SAMPLES / 2];
+            let tangent = pts[SAMPLES / 2 + 1] - pts[SAMPLES / 2 - 1];
+            let Ok(outward) = (mid - surface.center()).normalize() else {
+                return Ok(None);
+            };
+            let side = outward.cross(tangent).dot(circle.normal());
+            if side.abs() <= slack {
+                return Ok(None);
+            }
+            planes.push((circle.center(), circle.normal() * side.signum()));
+        }
+        let holds = |j: usize, want: bool| {
+            edges.iter().enumerate().all(|(i, (pts, _))| {
+                i == j
+                    || pts.iter().all(|p| {
+                        let d = (*p - planes[j].0).dot(planes[j].1);
+                        if want { d >= -slack } else { d <= slack }
+                    })
+            })
+        };
+        let any = if (0..planes.len()).all(|j| holds(j, true)) {
+            false
+        } else if (0..planes.len()).all(|j| holds(j, false)) {
+            true
+        } else {
+            return Ok(None);
+        };
+        // The half-spaces bound the loop's region only when each arc is the
+        // whole of its circle that lies on the region's side of the other
+        // planes: a column narrower than the ball meets the sphere twice, and
+        // its far end would read as part of a dome bounded by its top arcs.
+        for (j, (_, circle)) in edges.iter().enumerate() {
+            let Some(circle) = circle else {
+                return Ok(None);
+            };
+            let admitted: Vec<bool> = (0..RING)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let p = circle.evaluate(std::f64::consts::TAU * k as f64 / RING as f64);
+                    planes.iter().enumerate().all(|(i, &(c, n))| {
+                        let d = (p - c).dot(n);
+                        i == j || if any { d <= slack } else { d >= -slack }
+                    })
+                })
+                .collect();
+            let runs = (0..RING)
+                .filter(|&k| admitted[k] && !admitted[(k + RING - 1) % RING])
+                .count();
+            if runs != 1 {
+                return Ok(None);
+            }
+        }
+        loops.push(SphereLoop { planes, any });
+    }
+    Ok(Some(loops))
 }
 
 /// Test a single face polygon against a ray for crossing parity.
@@ -1354,6 +1580,113 @@ mod tests {
         ));
         let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
         topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    /// A sphere face through `corners`, each boundary arc from one corner to
+    /// the next on the circle its plane (`centres[i]`, through the corner
+    /// pair) cuts from the sphere, the short way round.
+    fn sphere_patch(
+        topo: &mut Topology,
+        radius: f64,
+        corners: &[Point3],
+        centres: &[Point3],
+    ) -> brepkit_topology::face::FaceId {
+        let verts: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let mut edges = Vec::new();
+        for i in 0..corners.len() {
+            let (a, b, c) = (corners[i], corners[(i + 1) % corners.len()], centres[i]);
+            let normal = (a - c).cross(b - c).normalize().unwrap();
+            let circle = brepkit_math::curves::Circle3D::new(c, normal, (a - c).length()).unwrap();
+            let e = topo.add_edge(Edge::new(
+                verts[i],
+                verts[(i + 1) % corners.len()],
+                EdgeCurve::Circle(circle),
+            ));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let sphere =
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
+                .unwrap();
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)))
+    }
+
+    /// Arcs in several planes stand for their half-spaces only when each arc
+    /// is the whole of its circle on the region's side of the others: an
+    /// octant's three arcs are, a dome's four arcs in a column narrower than
+    /// the ball are not (the column's far end meets the sphere too).
+    #[test]
+    fn sphere_arc_loops_bound_only_their_own_region() {
+        let mut topo = Topology::default();
+        let h = 7.0_f64.sqrt();
+        let dome = sphere_patch(
+            &mut topo,
+            5.0,
+            &[
+                Point3::new(3.0, 3.0, h),
+                Point3::new(-3.0, 3.0, h),
+                Point3::new(-3.0, -3.0, h),
+                Point3::new(3.0, -3.0, h),
+            ],
+            &[
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(-3.0, 0.0, 0.0),
+                Point3::new(0.0, -3.0, 0.0),
+                Point3::new(3.0, 0.0, 0.0),
+            ],
+        );
+        let face = topo.face(dome).unwrap();
+        let FaceSurface::Sphere(s) = face.surface() else {
+            unreachable!()
+        };
+        assert!(
+            sphere_face_loops(&topo, face, s).unwrap().is_none(),
+            "the column dome's arcs declined"
+        );
+
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let octant = sphere_patch(
+            &mut topo,
+            3.0,
+            &[
+                Point3::new(3.0, 0.0, 0.0),
+                Point3::new(0.0, 3.0, 0.0),
+                Point3::new(0.0, 0.0, 3.0),
+            ],
+            &[origin, origin, origin],
+        );
+        let face = topo.face(octant).unwrap();
+        let FaceSurface::Sphere(s) = face.surface() else {
+            unreachable!()
+        };
+        let loops = sphere_face_loops(&topo, face, s)
+            .unwrap()
+            .expect("the octant's arcs accepted");
+        let r = 3.0_f64.sqrt();
+        let admits = |p: Point3| loops.iter().all(|l| l.admits(p, 1e-9));
+        assert!(admits(Point3::new(r, r, r)), "its own corner");
+        assert!(!admits(Point3::new(-r, r, r)), "a neighbouring octant");
+        assert!(!admits(Point3::new(0.0, 0.0, -3.0)), "the far pole");
+
+        // A whole sphere written as a meridian seam walked out and back
+        // encloses no area: declined rather than read as the seam's planes.
+        let (n, e, s) = (
+            Point3::new(0.0, 0.0, 3.0),
+            Point3::new(3.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, -3.0),
+        );
+        let seam = sphere_patch(&mut topo, 3.0, &[n, e, s, e], &[origin; 4]);
+        let face = topo.face(seam).unwrap();
+        let FaceSurface::Sphere(sph) = face.surface() else {
+            unreachable!()
+        };
+        assert!(
+            sphere_face_loops(&topo, face, sph).unwrap().is_none(),
+            "the seam loop declined"
+        );
     }
 
     #[test]
