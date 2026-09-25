@@ -108,6 +108,9 @@ pub fn face_area(
                 let rise = winding.dot(circle.center() - sph.center());
                 return Ok(2.0 * std::f64::consts::PI * r * (r - rise) - holes);
             }
+            if let Some(area) = sphere_face_uv_area(topo, face_id, sph, deflection)? {
+                return Ok(area);
+            }
             if positions.len() >= 3 {
                 let v_vals: Vec<f64> = positions.iter().map(|p| sph.project_point(*p).1).collect();
                 let avg_v: f64 = v_vals.iter().sum::<f64>() / v_vals.len() as f64;
@@ -136,6 +139,54 @@ pub fn face_area(
             Ok(triangle_mesh_area(&mesh))
         }
     }
+}
+
+/// The area of a sphere face whose wires close in u (through a pole if they
+/// meet one), where the area element is `R² cos v du dv`. Such an outer loop
+/// bounds either the patch inside it or everything past it: the face's own
+/// mesh says which. `None` when a wire winds the axis.
+fn sphere_face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    deflection: f64,
+) -> Result<Option<f64>, crate::OperationsError> {
+    let (axis, radius) = (sphere.z_axis(), sphere.radius());
+    let project = |p: Point3| sphere.project_point(p);
+    // v = asin((P - C)·z / R), so along the surface dv = z·dP / (R cos v).
+    let grad_v = |p: Point3| {
+        let (_, v) = sphere.project_point(p);
+        axis * (1.0 / (radius * v.cos()))
+    };
+    let weight = |v: f64| radius * radius * v.cos();
+    let centre = sphere.center();
+    let poles = [centre + axis * radius, centre - axis * radius];
+    let metric = RevolutionMetric {
+        project: &project,
+        grad_v: &grad_v,
+        weight: &weight,
+        poles: &poles,
+        v_periodic: false,
+    };
+    let face = topo.face(face_id)?;
+    let Some(outer) = wire_uv_area(topo, face.outer_wire(), &metric)? else {
+        return Ok(None);
+    };
+    let mut holes = 0.0;
+    for &wid in face.inner_wires() {
+        let Some(hole) = wire_uv_area(topo, wid, &metric)? else {
+            return Ok(None);
+        };
+        holes += hole.abs();
+    }
+    let whole = 4.0 * std::f64::consts::PI * radius * radius;
+    let (patch, past) = (outer.abs() - holes, whole - outer.abs() - holes);
+    let meshed = triangle_mesh_area(&tessellate::tessellate(topo, face_id, deflection)?);
+    Ok(Some(if (meshed - patch).abs() <= (meshed - past).abs() {
+        patch
+    } else {
+        past
+    }))
 }
 
 /// The area a hole takes from a sphere cap: `R² |∮ sin v du|` inside a loop
@@ -197,9 +248,9 @@ struct RevolutionMetric<'a> {
     /// `dv/dt` is `grad_v · P'(t)`.
     grad_v: &'a dyn Fn(Point3) -> Vec3,
     weight: &'a dyn Fn(f64) -> f64,
-    /// A cone's apex, where the `u` lines collapse: a loop through it may
-    /// jump in `u` there, since the weight vanishes on it.
-    pole: Option<Point3>,
+    /// Where the `u` lines collapse (a cone's apex, a sphere's poles): a loop
+    /// through one may jump in `u` there, since the weight vanishes on it.
+    poles: &'a [Point3],
     /// Whether `v` wraps too (a torus's tube angle), so a loop must also
     /// return to its start in `v`.
     v_periodic: bool,
@@ -238,7 +289,7 @@ fn cylinder_face_uv_area(
             project: &project,
             grad_v: &grad_v,
             weight: &weight,
-            pole: None,
+            poles: &[],
             v_periodic: false,
         },
     )
@@ -291,7 +342,7 @@ fn cone_face_uv_area(
             project: &project,
             grad_v: &grad_v,
             weight: &weight,
-            pole: Some(apex),
+            poles: &[apex],
             v_periodic: false,
         },
     )
@@ -331,7 +382,7 @@ fn torus_face_uv_area(
         project: &project,
         grad_v: &grad_v,
         weight: &weight,
-        pole: None,
+        poles: &[],
         v_periodic: true,
     };
     // A whole ring's outer wire is its seam placeholders collapsed onto one
@@ -419,7 +470,7 @@ fn wire_uv_area(
     use std::f64::consts::{PI, TAU};
     const SEGMENTS: usize = 16;
     const ORDER: usize = 8;
-    let at_pole = |p: Point3| metric.pole.is_some_and(|q| (p - q).length() <= 1e-7);
+    let at_pole = |p: Point3| metric.poles.iter().any(|&q| (p - q).length() <= 1e-7);
     let mut touches_pole = false;
     let mut u_near = |p: Point3, near: Option<f64>| {
         if at_pole(p) {

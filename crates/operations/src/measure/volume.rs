@@ -1638,6 +1638,8 @@ pub fn solid_volume(
                     || (matches!(f.surface(), FaceSurface::Torus(_))
                         && (is_whole_ring(topo, f)
                             || has_free_form_boundary(topo, fid).unwrap_or(false)))
+                    || sphere_patch_flux(topo, fid, Point3::new(0.0, 0.0, 0.0))
+                        .is_ok_and(|flux| flux.is_some())
             })
         });
     if needs_direct_tessellation {
@@ -2629,16 +2631,42 @@ fn sphere_hole_flux(
     wire_id: brepkit_topology::wire::WireId,
     about: Point3,
 ) -> Result<Option<f64>, crate::OperationsError> {
+    Ok(sphere_loop_area_and_flux(topo, sphere, wire_id, about)?.map(|(_, flux)| flux))
+}
+
+/// The area a loop winding none of a sphere's u bounds, and that region's
+/// flux, as [`sphere_hole_flux`] reads them. `None` for a loop around a pole.
+fn sphere_loop_area_and_flux(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+    about: Point3,
+) -> Result<Option<(f64, f64)>, crate::OperationsError> {
     use std::f64::consts::{PI, TAU};
     let centre = sphere.center();
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
     let (mut turn, mut sweep, mut progress) = (0.0, Vec3::new(0.0, 0.0, 0.0), 0.0);
+    // The poles, where u means nothing, and chords, which leave the sphere,
+    // break the reading along the loop.
+    let poles = [
+        centre + sphere.z_axis() * sphere.radius(),
+        centre - sphere.z_axis() * sphere.radius(),
+    ];
     for oe in topo.wire(wire_id)?.edges() {
         let edge = topo.edge(oe.edge())?;
+        if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            return Ok(None);
+        }
         let (sp, ep) = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
+        if [sp, ep]
+            .iter()
+            .any(|&p| poles.iter().any(|&q| (p - q).length() <= 1e-7))
+        {
+            return Ok(None);
+        }
         let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep);
         let sums = |(from, to): (f64, f64), n: usize| {
             let (mut turn, mut sweep, mut progress) = (0.0, Vec3::new(0.0, 0.0, 0.0), 0.0);
@@ -2679,7 +2707,49 @@ fn sphere_hole_flux(
     };
     let radius = sphere.radius();
     let area = radius * radius * turn;
-    Ok(Some((radius * area + (centre - about).dot(sweep)) / 3.0))
+    Ok(Some((
+        area,
+        (radius * area + (centre - about).dot(sweep)) / 3.0,
+    )))
+}
+
+/// The flux of a sphere face whose outer loop, clear of the poles, winds
+/// none of the sphere's u: the patch inside the loop or the sphere past it
+/// (the whole ball's flux less the patch's), whichever the face's area
+/// matches, less its holes. `None` for any other sphere face.
+fn sphere_patch_flux(
+    topo: &Topology,
+    face_id: FaceId,
+    about: Point3,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use std::f64::consts::PI;
+    let face = topo.face(face_id)?;
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return Ok(None);
+    };
+    let Some((loop_area, loop_flux)) =
+        sphere_loop_area_and_flux(topo, sphere, face.outer_wire(), about)?
+    else {
+        return Ok(None);
+    };
+    let (mut hole_area, mut hole_flux) = (0.0, 0.0);
+    for &wid in face.inner_wires() {
+        let Some((area, flux)) = sphere_loop_area_and_flux(topo, sphere, wid, about)? else {
+            return Ok(None);
+        };
+        hole_area += area;
+        hole_flux += flux;
+    }
+    let radius = sphere.radius();
+    let area = crate::measure::face_area(topo, face_id, 0.01)?;
+    let patch = loop_area - hole_area;
+    let past = 4.0 * PI * radius * radius - loop_area - hole_area;
+    let flux = if (area - patch).abs() <= (area - past).abs() {
+        loop_flux - hole_flux
+    } else {
+        4.0 / 3.0 * PI * radius.powi(3) - loop_flux - hole_flux
+    };
+    Ok(Some(if face.is_reversed() { -flux } else { flux }))
 }
 
 /// Exact signed volume contribution of a toroidal face via the divergence
@@ -3074,7 +3144,10 @@ pub fn volume_from_direct_face_tessellation(
                 continue;
             }
             FaceSurface::Sphere(_) => {
-                total += analytic_sphere_signed_volume(topo, fid, about)? * 6.0;
+                total += match sphere_patch_flux(topo, fid, about)? {
+                    Some(flux) => flux,
+                    None => analytic_sphere_signed_volume(topo, fid, about)?,
+                } * 6.0;
                 continue;
             }
             FaceSurface::Torus(_) => {

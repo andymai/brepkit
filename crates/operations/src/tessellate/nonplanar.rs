@@ -3017,9 +3017,10 @@ fn anchor_closed_edges_at_vertices(
 /// every edge of the face is sampled into a local pool first, so closed rims
 /// are anchored at their vertices exactly as they are against the solid's
 /// shared pool. A cylinder or cone wall goes through the constrained CDT; a
-/// sphere or torus face only through the latitude-band mesher, since its
-/// constant-v rims enclose no area in (u, v). A face neither takes comes back
-/// without triangles.
+/// sphere face through the latitude-band mesher when its rims are latitudes
+/// (they enclose no area in (u, v)) and the CDT otherwise; a torus face only
+/// through the latitude-band mesher. A face none takes comes back without
+/// triangles.
 pub(super) fn tessellate_holed_face_local(
     topo: &Topology,
     face_id: FaceId,
@@ -3071,7 +3072,33 @@ pub(super) fn tessellate_holed_face_local(
             )?;
             true
         }
-        FaceSurface::Sphere(_) | FaceSurface::Torus(_) => tessellate_latitude_band_shared(
+        FaceSurface::Sphere(_) => {
+            tessellate_latitude_band_shared(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )? || {
+                // Any other sphere face takes the constrained CDT, as it
+                // does in the solid mesher.
+                tessellate_nonplanar_cdt(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                    &pool,
+                    &mut merged,
+                    &mut point_to_global,
+                )?;
+                true
+            }
+        }
+        FaceSurface::Torus(_) => tessellate_latitude_band_shared(
             topo,
             face_data,
             deflection,
