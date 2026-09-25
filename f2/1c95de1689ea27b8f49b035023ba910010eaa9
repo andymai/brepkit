@@ -1,0 +1,14 @@
+crates/algo/src/builder/face_splitter/special_cases.rs
+  h_b755e1950659f4 258-262,285-290
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f21c95de1689ea27b8f49b035023ba910010eaa9",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
