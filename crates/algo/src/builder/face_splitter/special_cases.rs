@@ -1375,8 +1375,18 @@ fn split_torus_by_tube_loops(
             let dv = wrap(vb - va);
             let dv = if dv.abs() < 1e-9 { 0.0 } else { dv };
             let span = (ub - ua).rem_euclid(TAU);
-            let inside = (1..16).all(|k| {
-                let t = f64::from(k) / 16.0;
+            // Both loops read `u` piecewise-linearly off their walks, so a
+            // straight seam stays inside if it does at every walk sample it
+            // passes and between them. A latitude seam (`dv` zero) has none.
+            let breaks = first.walk.iter().chain(&next.walk).filter_map(|&(w, _)| {
+                let t = if dv > 0.0 {
+                    (w - va).rem_euclid(TAU) / dv
+                } else {
+                    -(va - w).rem_euclid(TAU) / dv
+                };
+                (t > 0.0 && t < 1.0).then_some(t)
+            });
+            let inside = (1..16).map(|k| f64::from(k) / 16.0).chain(breaks).all(|t| {
                 let (u, v) = (span.mul_add(t, ua), dv.mul_add(t, va));
                 let off = (u - first.u_at(v)).rem_euclid(TAU);
                 off > 1e-9 && off < width(i, v) - 1e-9

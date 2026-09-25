@@ -683,16 +683,13 @@ fn cube_inside_the_tube() {
     }
 }
 
-/// The ring within a box over `|x| < 3`, `y > 0`: for each circle about the
-/// axis, `pi` of it where it lies inside `x = ±3`, and `pi - 2 acos(3 / rho)`
-/// past them, over the tube's cross-section. The integral splits where the
-/// walls take over (`rho = 3`, substituting `rho = 3 + s^2` past it) so
-/// Simpson converges fast.
-fn ring_in_half_box(big: f64, small: f64) -> f64 {
+/// The ring within a box over `|x| < 3`, `y > y0`, reaching past the ring
+/// in `+y`: over the tube's cross-section, the area of the annulus between
+/// the circles about the axis at `big ∓ w`, each clipped to the box in
+/// closed form. The integral splits where a circle meets a wall's end
+/// (`rho = 3`, `|y0|` or `hypot(3, y0)`), so Simpson converges fast.
+fn ring_in_box(big: f64, small: f64, y0: f64) -> f64 {
     let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
-        if hi <= lo {
-            return 0.0;
-        }
         let step = (hi - lo) / f64::from(n);
         let mut sum = f(lo) + f(hi);
         for k in 1..n {
@@ -700,26 +697,47 @@ fn ring_in_half_box(big: f64, small: f64) -> f64 {
         }
         sum * step / 3.0
     };
-    let slice = |w: f64| {
-        let (lo, hi) = (big - w, big + w);
-        let inner = hi.min(3.0);
-        let within = if inner > lo {
-            PI * (inner * inner - lo * lo) / 2.0
-        } else {
-            0.0
+    // The disc of radius `rho` within the box, from the area under its upper
+    // arc between `-x` and `x`, `2 * g(x)`.
+    let disc = |rho: f64| {
+        let g = |x: f64| {
+            0.5 * x.mul_add(
+                (rho * rho - x * x).max(0.0).sqrt(),
+                rho * rho * (x / rho).clamp(-1.0, 1.0).asin(),
+            )
         };
-        let (s0, s1) = ((lo.max(3.0) - 3.0).sqrt(), (hi - 3.0).max(0.0).sqrt());
-        within
-            + simpson(800, s0, s1, &|s: f64| {
-                let rho = s.mul_add(s, 3.0);
-                rho * 2.0f64.mul_add(-(3.0 / rho).acos(), PI) * 2.0 * s
-            })
+        let up = y0.max(0.0);
+        let mut area = 0.0;
+        if rho > up {
+            let m = rho.mul_add(rho, -up * up).sqrt().min(3.0);
+            area += 2.0 * (g(m) - up * m);
+        }
+        if y0 < 0.0 {
+            let depth = -y0;
+            let full = rho.min(3.0);
+            let m = if rho > depth {
+                rho.mul_add(rho, -depth * depth).sqrt().min(3.0)
+            } else {
+                0.0
+            };
+            area += 2.0 * (depth.mul_add(m, g(full)) - g(m));
+        }
+        area
     };
-    let kink = (1.0 / small).acos();
-    let f = |t: f64| small * t.cos() * slice(small * t.cos());
-    simpson(800, -PI / 2.0, -kink, &f)
-        + simpson(800, -kink, kink, &f)
-        + simpson(800, kink, PI / 2.0, &f)
+    let f = |t: f64| {
+        let w = small * t.cos();
+        w * (disc(big + w) - disc(big - w))
+    };
+    let mut cuts = vec![-PI / 2.0, PI / 2.0];
+    for rho in [3.0, y0.abs(), 3.0_f64.hypot(y0)] {
+        for c in [(big - rho) / small, (rho - big) / small] {
+            if c > 0.0 && c < 1.0 {
+                cuts.extend([c.acos(), -c.acos()]);
+            }
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.windows(2).map(|w| simpson(800, w[0], w[1], &f)).sum()
 }
 
 /// A 6-cube over `|x| < 3`, `y` in `[0, 6]` with the torus, upright and
@@ -731,7 +749,7 @@ fn box_over_half_the_ring() {
     use PointClassification::{Inside, Outside};
     let (big, small) = (4.0_f64, 1.5_f64);
     let ring = 2.0 * PI * PI * big * small * small;
-    let inside = ring_in_half_box(big, small);
+    let inside = ring_in_box(big, small, 0.0);
     let sector: &[(&str, usize)] = &[("plane", 4), ("torus", 1)];
     let fused: &[(&str, usize)] = &[("plane", 6), ("torus", 1)];
     let tips = [
@@ -773,6 +791,48 @@ fn box_over_half_the_ring() {
             for ((x, y, z), class) in probes.into_iter().zip(kept) {
                 let p = tip.mul_point(Point3::new(x, y, z));
                 assert_eq!(at(&topo, piece, p), class, "{label}: ({x}, {y}, {z})");
+            }
+        }
+    }
+}
+
+/// The box's `y` wall moved off the ring's axis, to either side. Each side
+/// wall's section turns back on the tube at `y = 0`. With the wall at
+/// `y0 > 0` the turn lies outside the box and the loops wind round the tube
+/// monotonically. With `y0 < 0` the turn lies inside it and each loop folds;
+/// that case may fall back to a mesh, but must never come out exact and wrong.
+#[test]
+fn box_wall_on_either_side_of_the_ring_axis() {
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let ring = 2.0 * PI * PI * big * small * small;
+    let sector: &[(&str, usize)] = &[("plane", 4), ("torus", 1)];
+    let fused: &[(&str, usize)] = &[("plane", 6), ("torus", 1)];
+    for y0 in [0.5, -0.5] {
+        let inside = ring_in_box(big, small, y0);
+        let cube = 36.0 * (6.0 - y0);
+        for (op, census, truth) in [
+            (BooleanOp::Intersect, sector, inside),
+            (BooleanOp::Cut, sector, ring - inside),
+            (BooleanOp::Fuse, fused, cube + ring - inside),
+        ] {
+            let label = format!("y0 {y0}, {op:?}");
+            let mut topo = Topology::new();
+            let torus = make_torus(&mut topo, big, small, 32).unwrap();
+            let box_ = make_box(&mut topo, 6.0, 6.0 - y0, 6.0).unwrap();
+            transform_solid(&mut topo, box_, &Mat4::translation(-3.0, y0, -3.0)).unwrap();
+            let piece = boolean(&mut topo, op, torus, box_).unwrap();
+            let exact = solid_faces(&topo, piece)
+                .unwrap()
+                .into_iter()
+                .any(|f| !topo.face(f).unwrap().surface().is_planar());
+            if y0 > 0.0 || exact {
+                check_piece(&topo, piece, census, true, (truth, 1e-6), &label);
+            } else {
+                let volume = solid_volume(&topo, piece, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 0.03 * truth,
+                    "{label}: mesh volume {volume}, truth {truth}"
+                );
             }
         }
     }
