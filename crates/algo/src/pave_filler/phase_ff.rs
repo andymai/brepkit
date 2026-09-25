@@ -5200,13 +5200,8 @@ fn emit_split_circle_arcs(
     };
     let loops_a = planar_loops(face_a);
     let loops_b = planar_loops(face_b);
-    // The sagitta band applies per chord, and only to a chord short enough to
-    // be one of a rim arc's sixteen samples on this circle: a straight side
-    // (a tilted box face's ten-unit edge) would otherwise widen the band by
-    // metres' worth of its own sagitta.
     let in_region = |loops: &Option<crate::classifier::FaceLoops2d>, p: Point3| -> bool {
         use crate::builder::classify_2d::{boundary_eps, distance_to_polygon_boundary};
-        let radius = circle.radius();
         loops.as_ref().is_none_or(|l| {
             l.to_uv(p).is_none_or(|q| {
                 l.contains(q)
@@ -5214,17 +5209,13 @@ fn emit_split_circle_arcs(
                         if lp.len() < 3 {
                             return false;
                         }
-                        distance_to_polygon_boundary(q, lp) <= boundary_eps(lp)
-                            || lp.iter().zip(lp.iter().cycle().skip(1)).any(|(a, b)| {
-                                let d = *b - *a;
-                                let chord = d.length();
-                                if chord > 0.5 * radius || chord <= 0.0 {
-                                    return false;
-                                }
-                                let f = ((q - *a).dot(d) / (chord * chord)).clamp(0.0, 1.0);
-                                let foot = *a + d * f;
-                                (q - foot).length() <= chord * chord / (8.0 * radius)
-                            })
+                        let max_chord = lp
+                            .iter()
+                            .zip(lp.iter().cycle().skip(1))
+                            .map(|(a, b)| (*b - *a).length())
+                            .fold(0.0_f64, f64::max);
+                        let sagitta = max_chord * max_chord / (8.0 * circle.radius());
+                        distance_to_polygon_boundary(q, lp) <= boundary_eps(lp).max(sagitta)
                     })
             })
         })

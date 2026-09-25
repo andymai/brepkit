@@ -162,11 +162,8 @@ pub(super) fn split_noseam_face_direct(
                 pool.push(reverse_of(arc));
             }
         }
-        // An open arc no split carries fails the face rather than keeping it
-        // whole: one sample then classifies the whole hemisphere, which can
-        // close a wrong solid the result gates accept.
         let Some(remainder) = chain_closed_loop(pool, close_tol) else {
-            return Vec::new();
+            return unsplit();
         };
 
         let cap_interior = sphere_loop_interior(surface, &cap_edges);
@@ -249,52 +246,27 @@ fn split_noseam_by_arrangement(
     face_id: FaceId,
     tol: f64,
 ) -> Vec<SplitSubFace> {
-    // Every arc here crosses the face, so a region this cannot trace fails
-    // the face (an empty split) rather than keeping it whole.
+    let unsplit = || {
+        vec![SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: boundary_edges.to_vec(),
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: None,
+        }]
+    };
+
     // Need at least two arcs to interleave; one arc is handled by the cap path.
     if open_sections.len() < 2 {
-        return Vec::new();
-    }
-    // The collar is the region inside every arc chain (a section split over
-    // its crest is one chain of two arcs), which the chains fence off from
-    // the seam only when at least three of them surround the pole: a single
-    // chain (a half-space) or two (a slab) leave regions on both sides of
-    // it, and the one this keeps would drop the rest.
-    let seam_plane = {
-        let pts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
-        let mut n = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-        let mut c = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-        for (i, a) in pts.iter().enumerate() {
-            let b = pts[(i + 1) % pts.len()];
-            n += brepkit_math::vec::Vec3::new(
-                (a.y() - b.y()) * (a.z() + b.z()),
-                (a.z() - b.z()) * (a.x() + b.x()),
-                (a.x() - b.x()) * (a.y() + b.y()),
-            );
-            c += brepkit_math::vec::Vec3::new(a.x(), a.y(), a.z());
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let c = c * (1.0 / pts.len().max(1) as f64);
-        n.normalize()
-            .ok()
-            .map(|n| (n, Point3::new(c.x(), c.y(), c.z())))
-    };
-    let Some((seam_n, seam_p)) = seam_plane else {
-        return Vec::new();
-    };
-    let seam_ends = open_sections
-        .iter()
-        .flat_map(|a| [a.start_3d, a.end_3d])
-        .filter(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
-        .count();
-    if seam_ends < 6 {
-        return Vec::new();
+        return unsplit();
     }
 
     // Reconstruct the seam as its exact circle and split it at the crossings,
     // so the seam arcs share endpoints EXACTLY with the open arcs.
     let Some(seam_arcs) = build_seam_arcs(surface, boundary_edges, open_sections, tol) else {
-        return Vec::new();
+        return unsplit();
     };
 
     // Half-edge soup: every seam arc and every open arc in both orientations,
@@ -379,7 +351,7 @@ fn split_noseam_by_arrangement(
     }
 
     let Some(region_idx) = best else {
-        return Vec::new();
+        return unsplit();
     };
     let mut region = loops[region_idx].clone();
     if net_u(&region) * parent_net_u > 0.0 {
