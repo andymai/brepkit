@@ -244,6 +244,7 @@ fn turned_octants_are_exact() {
                 4,
                 "{label}: faces"
             );
+            assert!(exact(&topo, piece), "{label}: fell back to a mesh");
             assert!(
                 validate_solid(&topo, piece).unwrap().is_valid(),
                 "{label}: invalid"

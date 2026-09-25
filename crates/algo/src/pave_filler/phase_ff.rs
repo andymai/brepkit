@@ -5354,14 +5354,15 @@ fn emit_split_circle_arcs(
     // the result keeps) and is recorded as a face that curve also sections.
     let close_pts = |a: Point3, b: Point3| (a - b).length() < tol.linear * 10.0;
     let arc_exists = |arena: &GfaArena, p_s: Point3, p_e: Point3, p_m: Point3| -> Option<usize> {
-        arena.curves.iter().position(|c| {
+        arena.curves.iter().enumerate().position(|(idx, c)| {
             let EdgeCurve::Circle(existing) = &c.curve else {
                 return false;
             };
-            let shares_face = c.face_a == face_a
-                || c.face_a == face_b
-                || c.face_b == face_a
-                || c.face_b == face_b;
+            let extra = arena.curve_extra_faces.get(&idx);
+            let shares_face = [c.face_a, c.face_b]
+                .iter()
+                .chain(extra.into_iter().flatten())
+                .any(|&f| f == face_a || f == face_b);
             if !shares_face
                 || (existing.center() - circle.center()).length() > tol.linear * 10.0
                 || (existing.radius() - circle.radius()).abs() > tol.linear * 10.0
@@ -5392,12 +5393,10 @@ fn emit_split_circle_arcs(
                      for {face_a:?}/{face_b:?}"
                 );
                 let (c_a, c_b) = (arena.curves[existing].face_a, arena.curves[existing].face_b);
+                let extra = arena.curve_extra_faces.entry(existing).or_default();
                 for face in [face_a, face_b] {
-                    if face != c_a && face != c_b {
-                        let extra = arena.curve_extra_faces.entry(existing).or_default();
-                        if !extra.contains(&face) {
-                            extra.push(face);
-                        }
+                    if face != c_a && face != c_b && !extra.contains(&face) {
+                        extra.push(face);
                     }
                 }
                 continue;
