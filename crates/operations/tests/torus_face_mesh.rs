@@ -6,16 +6,22 @@
 
 use std::f64::consts::PI;
 
+use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
+use brepkit_math::surfaces::ToroidalSurface;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::face_area;
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere, make_torus};
-use brepkit_operations::tessellate::tessellate;
+use brepkit_operations::tessellate::{tessellate, tessellate_with_uvs};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::explorer::solid_faces;
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::Vertex;
+use brepkit_topology::wire::{OrientedEdge, Wire};
 
 const RING: (f64, f64) = (4.0, 1.5);
 
@@ -160,5 +166,76 @@ fn half_rings_mesh_their_closed_form_area() {
             (meshed - truth).abs() < 1e-2 * truth,
             "{name}: mesh area {meshed}, truth {truth}"
         );
+    }
+}
+
+/// A whole ring bounded, as files write it, by its two seam circles each run
+/// both ways: it meshes as the whole ring, `4 pi² R r`.
+#[test]
+fn whole_ring_with_circle_seams_meshes_whole() {
+    let (big, small) = RING;
+    let mut topo = Topology::new();
+    let o = Point3::new(0.0, 0.0, 0.0);
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(big + small, 0.0, 0.0), 1e-7));
+    let tube = Circle3D::new(Point3::new(big, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), small).unwrap();
+    let rim = Circle3D::new(o, Vec3::new(0.0, 0.0, 1.0), big + small).unwrap();
+    let a = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(tube)));
+    let b = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(rim)));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(a, true),
+            OrientedEdge::new(b, true),
+            OrientedEdge::new(a, false),
+            OrientedEdge::new(b, false),
+        ],
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let torus = ToroidalSurface::new(o, big, small).unwrap();
+    let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Torus(torus)));
+    let truth = 4.0 * PI * PI * big * small;
+    let meshed = meshed_area(&topo, face);
+    assert!(
+        (meshed - truth).abs() < 1e-2 * truth,
+        "mesh area {meshed}, truth {truth}"
+    );
+}
+
+/// A trimmed torus face's per-face mesh keeps both parameters continuous
+/// over every triangle, across the tube's seam as well as the ring's.
+#[test]
+fn trimmed_torus_face_uvs_stay_continuous() {
+    let cube = |s: (f64, f64, f64)| move |t: &mut Topology| make_box(t, s.0, s.1, s.2).unwrap();
+    for (name, place, size) in [
+        (
+            "past x = 0",
+            Mat4::translation(0.0, -10.0, -5.0),
+            (10.0, 20.0, 10.0),
+        ),
+        (
+            "cube over the outer side",
+            Mat4::translation(3.0, -2.0, -2.0),
+            (4.0, 4.0, 4.0),
+        ),
+    ] {
+        for op in [BooleanOp::Cut, BooleanOp::Intersect] {
+            let (topo, piece) = ring_with(op, cube(size), place);
+            for face in torus_faces(&topo, piece) {
+                let mesh = tessellate_with_uvs(&topo, face, 0.01).unwrap();
+                for t in mesh.mesh.indices.chunks_exact(3) {
+                    for axis in 0..2 {
+                        let vals = [0, 1, 2].map(|k| mesh.uvs[t[k] as usize][axis]);
+                        let spread = vals.iter().copied().fold(f64::MIN, f64::max)
+                            - vals.iter().copied().fold(f64::MAX, f64::min);
+                        assert!(
+                            spread < PI,
+                            "{name} {op:?}: a triangle spans {spread} in {}",
+                            ["u", "v"][axis]
+                        );
+                    }
+                }
+            }
+        }
     }
 }

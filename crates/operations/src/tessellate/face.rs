@@ -243,15 +243,20 @@ pub(super) fn tessellate_with_uvs_floor(
         FaceSurface::Sphere(sphere) => sphere_face_is_trimmed(topo, face_data, sphere)?,
         _ => false,
     };
-    // Nor is a torus face other than the whole ring, whose wire is its two
-    // seam lines (a box's notch, a coaxial tool's band, a patch inside one
-    // closed curve).
+    // Nor is a torus face other than the whole ring, whose wire runs each of
+    // its closed seams (lines here, circles from a file) both ways (a box's
+    // notch, a coaxial tool's band, a patch inside one closed curve).
     let trimmed_torus = matches!(face_data.surface(), FaceSurface::Torus(_))
         && !(face_data.inner_wires().is_empty() && {
+            let edges = topo.wire(face_data.outer_wire())?.edges();
             let mut seams_only = true;
-            for oe in topo.wire(face_data.outer_wire())?.edges() {
+            for oe in edges {
                 let edge = topo.edge(oe.edge())?;
-                seams_only &= matches!(edge.curve(), EdgeCurve::Line) && edge.start() == edge.end();
+                let uses = edges
+                    .iter()
+                    .filter(|other| other.edge() == oe.edge())
+                    .count();
+                seams_only &= edge.start() == edge.end() && uses == 2;
             }
             seams_only
         });
