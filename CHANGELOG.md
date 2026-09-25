@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.30](https://github.com/andymai/brepkit/compare/v4.0.29...v4.0.30) (2026-09-25)
+
+
+### Bug Fixes
+
+* **algo:** hand a faceted equator's arc to both hemispheres ([#1773](https://github.com/andymai/brepkit/issues/1773)) ([57402c2](https://github.com/andymai/brepkit/commit/57402c2d6cda4480ff92f46db764c199336206d6))
+
 ## [4.0.29](https://github.com/andymai/brepkit/compare/v4.0.28...v4.0.29) (2026-09-25)
 
 
