@@ -426,13 +426,16 @@ impl StepWriteContext {
         let face = topo.face(face_id).map_err(topo_err)?;
 
         let mut bound_ids = Vec::new();
+        // A stored loop runs about the surface's normal; the standard reads a
+        // bound about the face's, so a reversed face's bounds run backwards.
+        let bound_orient = if face.is_reversed() { ".F." } else { ".T." };
 
         let outer_loop = self.write_edge_loop(topo, face.outer_wire())?;
         let outer_bound = self.next_id();
         self.write_entity(
             outer_bound,
             "FACE_OUTER_BOUND",
-            &format!("'', #{outer_loop}, .T.)"),
+            &format!("'', #{outer_loop}, {bound_orient})"),
         );
         bound_ids.push(outer_bound);
 
@@ -442,7 +445,7 @@ impl StepWriteContext {
             self.write_entity(
                 inner_bound,
                 "FACE_BOUND",
-                &format!("'', #{inner_loop}, .T.)"),
+                &format!("'', #{inner_loop}, {bound_orient})"),
             );
             bound_ids.push(inner_bound);
         }
@@ -631,7 +634,12 @@ impl StepWriteContext {
         let mut out = String::new();
         let _ = writeln!(out, "ISO-10303-21;");
         let _ = writeln!(out, "HEADER;");
-        let _ = writeln!(out, "FILE_DESCRIPTION(('brepkit STEP export'), '2;1');");
+        let _ = writeln!(
+            out,
+            "FILE_DESCRIPTION(('{}', '{}'), '2;1');",
+            super::EXPORT_DESCRIPTION,
+            super::ISO_FACE_BOUNDS
+        );
         let _ = writeln!(
             out,
             "FILE_NAME('output.stp', '2024-01-01T00:00:00', (''), (''), \

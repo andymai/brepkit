@@ -194,3 +194,68 @@ fn hollowed_ball_meshes_its_bowl() {
         "the inner wall meshed above its rim"
     );
 }
+
+/// The dimple and the cavity turned so the ball's axis leaves world z: each
+/// reversed sphere face still meshes on its own side of its rim's plane, and
+/// the solid mesh stays closed at the solid's volume.
+#[test]
+fn turned_dimple_and_cavity_mesh_their_own_sides() {
+    let (r, h) = (2.0_f64, 1.5_f64);
+    for (z, truth) in [
+        (5.5, 1000.0 - PI * h * h * (3.0 * r - h) / 3.0),
+        (0.0, 1000.0 - 4.0 / 3.0 * PI * 8.0),
+    ] {
+        for (label, turn) in [
+            ("x90", Mat4::rotation_x(std::f64::consts::FRAC_PI_2)),
+            ("x60", Mat4::rotation_x(1.0)),
+            ("y90", Mat4::rotation_y(std::f64::consts::FRAC_PI_2)),
+        ] {
+            let dimple = z > 0.0;
+            let (mut topo, piece) = box_less_ball(z);
+            transform_solid(&mut topo, piece, &turn).unwrap();
+            let origin = turn.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
+            let up = turn.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 1.0)) - origin;
+            let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "z {z} {label}: open mesh");
+            let meshed = oriented_solid_volume(&topo, piece, 0.005).unwrap();
+            assert!(
+                (meshed - truth).abs() < 1e-3 * truth,
+                "z {z} {label}: mesh volume {meshed}, truth {truth}"
+            );
+            let mut sides = Vec::new();
+            for face in solid_faces(&topo, piece).unwrap() {
+                if !matches!(topo.face(face).unwrap().surface(), FaceSurface::Sphere(_)) {
+                    continue;
+                }
+                let heights: Vec<f64> = tessellate(&topo, face, 0.01)
+                    .unwrap()
+                    .positions
+                    .iter()
+                    .map(|p| (*p - origin).dot(up))
+                    .collect();
+                if dimple {
+                    assert!(
+                        heights.iter().all(|&t| t < 5.0 + 1e-6),
+                        "z {z} {label}: the dimple meshed above the box's top"
+                    );
+                } else {
+                    let below = heights.iter().all(|&t| t < 1e-6);
+                    let above = heights.iter().all(|&t| t > -1e-6);
+                    assert!(
+                        below || above,
+                        "z {z} {label}: a hemisphere crossed its rim"
+                    );
+                    sides.push(above);
+                }
+            }
+            if !dimple {
+                sides.sort_unstable();
+                assert_eq!(
+                    sides,
+                    [false, true],
+                    "z {z} {label}: one hemisphere each side"
+                );
+            }
+        }
+    }
+}

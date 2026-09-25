@@ -30,7 +30,10 @@ use crate::IoError;
 /// - Entity references cannot be resolved
 pub fn read_step(input: &str, topo: &mut Topology) -> Result<Vec<SolidId>, IoError> {
     let entities = parse_step_entities(input)?;
-    let mut builder = StepBuilder::new(topo, &entities);
+    let header = input.find("DATA;").map_or(input, |end| &input[..end]);
+    let legacy_bounds =
+        header.contains(super::EXPORT_DESCRIPTION) && !header.contains(super::ISO_FACE_BOUNDS);
+    let mut builder = StepBuilder::new(topo, &entities, legacy_bounds);
     builder.build_all_solids()
 }
 
@@ -105,15 +108,23 @@ struct StepBuilder<'a> {
     entities: &'a HashMap<u64, StepEntity>,
     vertex_cache: HashMap<u64, brepkit_topology::vertex::VertexId>,
     edge_cache: HashMap<u64, brepkit_topology::edge::EdgeId>,
+    /// An earlier brepkit export: its bounds already run about the surface's
+    /// normal.
+    legacy_bounds: bool,
 }
 
 impl<'a> StepBuilder<'a> {
-    fn new(topo: &'a mut Topology, entities: &'a HashMap<u64, StepEntity>) -> Self {
+    fn new(
+        topo: &'a mut Topology,
+        entities: &'a HashMap<u64, StepEntity>,
+        legacy_bounds: bool,
+    ) -> Self {
         Self {
             topo,
             entities,
             vertex_cache: HashMap::new(),
             edge_cache: HashMap::new(),
+            legacy_bounds,
         }
     }
 
@@ -193,9 +204,14 @@ impl<'a> StepBuilder<'a> {
             let is_outer = bound_entity.entity_type == "FACE_OUTER_BOUND";
             let bound_attrs = bound_entity.attrs.clone();
             let bound_refs = parse_refs(&bound_attrs);
+            let bound_tail = bound_attrs.trim_end_matches(')').trim();
+            let bound_reversed = bound_tail.ends_with(".F.") || bound_tail.ends_with(".FALSE.");
+            // A bound runs about the face's normal (reversed when its flag is
+            // false); brepkit stores every loop about the surface's normal.
+            let reverse = !self.legacy_bounds && bound_reversed != face_reversed;
 
             if let Some(&loop_ref) = bound_refs.first() {
-                let wire_id = self.build_edge_loop(loop_ref)?;
+                let wire_id = self.build_edge_loop(loop_ref, reverse)?;
                 if is_outer && outer_wire.is_none() {
                     outer_wire = Some(wire_id);
                 } else {
@@ -329,6 +345,7 @@ impl<'a> StepBuilder<'a> {
     fn build_edge_loop(
         &mut self,
         loop_ref: u64,
+        reverse: bool,
     ) -> Result<brepkit_topology::wire::WireId, IoError> {
         let attrs = self.get_entity(loop_ref)?.attrs.clone();
         let oe_refs = parse_list_refs(&attrs);
@@ -337,6 +354,12 @@ impl<'a> StepBuilder<'a> {
         for oe_ref in oe_refs {
             let oe = self.build_oriented_edge(oe_ref)?;
             oriented_edges.push(oe);
+        }
+        if reverse {
+            oriented_edges.reverse();
+            for oe in &mut oriented_edges {
+                *oe = OrientedEdge::new(oe.edge(), !oe.is_forward());
+            }
         }
 
         let wire = Wire::new(oriented_edges, true).map_err(|e| IoError::ParseError {
@@ -1115,7 +1138,7 @@ mod tests {
                 })
                 .unwrap();
             let mut imported = Topology::new();
-            let surface = StepBuilder::new(&mut imported, &entities)
+            let surface = StepBuilder::new(&mut imported, &entities, false)
                 .build_surface(sid)
                 .unwrap();
             let FaceSurface::Nurbs(actual) = surface else {
@@ -1164,7 +1187,7 @@ mod tests {
             })
             .unwrap();
         let mut imported = Topology::new();
-        let curve = StepBuilder::new(&mut imported, &entities)
+        let curve = StepBuilder::new(&mut imported, &entities, false)
             .build_curve_geometry(cid)
             .unwrap();
         let EdgeCurve::NurbsCurve(nurbs) = curve else {
@@ -1280,7 +1303,7 @@ mod tests {
             REPRESENTATION_ITEM('') SURFACE()); ENDSEC;";
         let entities = parse_step_entities(data).unwrap();
         let mut topo = Topology::new();
-        let result = StepBuilder::new(&mut topo, &entities).build_surface(2);
+        let result = StepBuilder::new(&mut topo, &entities, false).build_surface(2);
         assert!(
             result
                 .unwrap_err()
@@ -1711,7 +1734,7 @@ mod tests {
             REPRESENTATION_ITEM('')); ENDSEC;";
         let entities = parse_step_entities(data).unwrap();
         let mut topo = Topology::new();
-        let result = StepBuilder::new(&mut topo, &entities).build_curve_geometry(2);
+        let result = StepBuilder::new(&mut topo, &entities, false).build_curve_geometry(2);
         assert!(
             result
                 .unwrap_err()
