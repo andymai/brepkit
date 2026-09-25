@@ -1627,8 +1627,9 @@ pub fn solid_volume(
     // tessellate() handles face reversal (flips winding + normals), so raw
     // signed tets are correct even without a globally watertight mesh.
     // So does a torus face trimmed by a free-form curve, whose flux follows
-    // exactly along its boundary where a mesh would only inscribe it, and a
-    // whole ring (around a cavity, say), whose flux is its volume.
+    // exactly along its boundary where a mesh would only inscribe it, a
+    // whole ring (around a cavity, say), whose flux is its volume, and a
+    // sphere face whose outer loop winds none of its u (a rod's end cap).
     let needs_direct_tessellation = brepkit_topology::explorer::solid_faces(topo, solid)?
         .into_iter()
         .any(|fid| {
@@ -1638,6 +1639,7 @@ pub fn solid_volume(
                     || (matches!(f.surface(), FaceSurface::Torus(_))
                         && (is_whole_ring(topo, f)
                             || has_free_form_boundary(topo, fid).unwrap_or(false)))
+                    || sphere_patch_outer_area(topo, fid).is_ok_and(|area| area.is_some())
             })
         });
     if needs_direct_tessellation {
@@ -2494,7 +2496,7 @@ fn analytic_sphere_signed_volume(
     topo: &Topology,
     face_id: FaceId,
     about: Point3,
-) -> Result<f64, crate::OperationsError> {
+) -> Result<Option<f64>, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let sph = match face.surface() {
         FaceSurface::Sphere(s) => s,
@@ -2504,6 +2506,11 @@ fn analytic_sphere_signed_volume(
             });
         }
     };
+    // The closed form below spans the outer wire's (u, v) box, which is the
+    // face only when that wire runs along latitudes, meridians and chords.
+    if crate::tessellate::sphere_face_is_off_grid(topo, face, sph)? {
+        return Ok(None);
+    }
 
     let wire = topo.wire(face.outer_wire())?;
     let mut u_vals = Vec::new();
@@ -2513,7 +2520,10 @@ fn analytic_sphere_signed_volume(
             for &vid in &[edge.start(), edge.end()] {
                 if let Ok(vtx) = topo.vertex(vid) {
                     let (u, v) = sph.project_point(vtx.point());
-                    u_vals.push(u);
+                    // A pole's u is arbitrary: only its v bounds the box.
+                    if v.abs() < std::f64::consts::FRAC_PI_2 - 1e-6 {
+                        u_vals.push(u);
+                    }
                     v_vals.push(v);
                 }
             }
@@ -2546,7 +2556,7 @@ fn analytic_sphere_signed_volume(
         let v_boundary = f64::midpoint(v_min, v_max);
         let positions = crate::boolean::face_polygon(topo, face_id)?;
         if positions.is_empty() {
-            return Ok(0.0);
+            return Ok(Some(0.0));
         }
         let n = positions.len() as f64;
         let avg = Point3::new(
@@ -2565,6 +2575,12 @@ fn analytic_sphere_signed_volume(
     }
 
     let u_range = compute_angular_range(&mut u_vals);
+    // That box is the face only when each edge runs along one of its sides:
+    // a latitude or meridian inside it (a notch's step) leaves the face
+    // short of the box.
+    if !sphere_wire_on_box_sides(topo, face.outer_wire(), sph, u_range, (v_min, v_max))? {
+        return Ok(None);
+    }
 
     let r = sph.radius();
     let x_axis = sph.x_axis();
@@ -2609,30 +2625,145 @@ fn analytic_sphere_signed_volume(
             + r * cos_v_int * du);
     let mut vol = vol;
     for &wire in face.inner_wires() {
-        if let Some(hole) = sphere_hole_flux(topo, sph, wire, about)? {
-            vol -= hole;
-        }
+        // A hole left out would count its cap as material: the face's own
+        // mesh measures it instead.
+        let Some(hole) = sphere_hole_flux(topo, sph, wire, about)? else {
+            return Ok(None);
+        };
+        vol -= hole;
     }
 
-    Ok(if face.is_reversed() { -vol } else { vol })
+    Ok(Some(if face.is_reversed() { -vol } else { vol }))
+}
+
+/// Whether a sphere wire bounds the `(u, v)` box `u_range` x `v_range`:
+/// every edge runs at `v` equal to one of its ends (a latitude, or a chord of
+/// the equator), or, when the box spans less than a turn, at `u` equal to one
+/// of its ends (a meridian, whose u means nothing at a pole), or is a seam the
+/// wire runs both ways; and a wire clear of the poles winds the axis exactly
+/// when the box spans the turn (a notch's outline runs along a box's sides
+/// too, but around the rest).
+fn sphere_wire_on_box_sides(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    (u1, u2): (f64, f64),
+    (v1, v2): (f64, f64),
+) -> Result<bool, crate::OperationsError> {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let full_turn = u2 - u1 >= TAU - 1e-9;
+    let (mut progress, mut u_last, mut at_pole) = (0.0, None, false);
+    let edges = topo.wire(wire_id)?.edges();
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let mut samples: Vec<(f64, f64)> = Vec::new();
+        for (from, to) in traversal_spans(edge, oe.is_forward(), sp, ep) {
+            samples.extend((0..=8).map(|i| {
+                let t = (to - from).mul_add(f64::from(i) / 8.0, from);
+                sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep))
+            }));
+        }
+        for &(u, v) in &samples {
+            if v.abs() >= FRAC_PI_2 - 1e-6 {
+                at_pole = true;
+            } else {
+                if let Some(last) = u_last {
+                    progress += wrap(u - last);
+                }
+                u_last = Some(u);
+            }
+        }
+        let at_v = |side: f64| samples.iter().all(|&(_, v)| (v - side).abs() < 1e-7);
+        let seam = edges
+            .iter()
+            .any(|other| other.edge() == oe.edge() && other.is_forward() != oe.is_forward());
+        if at_v(v1) || at_v(v2) || seam {
+            continue;
+        }
+        let at_u = |side: f64| {
+            samples
+                .iter()
+                .filter(|&&(_, v)| v.abs() < FRAC_PI_2 - 1e-6)
+                .all(|&(u, _)| wrap(u - side).abs() < 1e-7)
+        };
+        if !full_turn && (at_u(u1) || at_u(u2)) {
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(at_pole || (progress.abs() > PI) == full_turn)
 }
 
 /// Divergence flux `(1/3) ∫ (P − about)·N dA` of the region of a sphere that
-/// a loop winding none of its u bounds (a drill's entry hole), under the
-/// sphere's outward normal: `R·area + (C − about)·∫N dA`, over three. Both
-/// come from the loop: the area is `R² ∮ −sin v du` and `∫N dA` is
-/// `½ ∮ (P − C) × dP`, taken counterclockwise about the normal (midpoint sums
-/// at two resolutions and a Richardson step). `None` for a loop around a pole.
+/// a hole's loop, winding none of its u, cuts out (a drill's entry, a
+/// pocket's bite through a pole): the smaller of the two regions the loop
+/// bounds. `None` for a loop around the axis.
 fn sphere_hole_flux(
     topo: &Topology,
     sphere: &brepkit_math::surfaces::SphericalSurface,
     wire_id: brepkit_topology::wire::WireId,
     about: Point3,
 ) -> Result<Option<f64>, crate::OperationsError> {
-    use std::f64::consts::{PI, TAU};
+    Ok(sphere_hole_area_and_flux(topo, sphere, wire_id, about)?.map(|(_, flux)| flux))
+}
+
+/// A hole's area and flux, as [`sphere_hole_flux`] reads them.
+fn sphere_hole_area_and_flux(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+    about: Point3,
+) -> Result<Option<(f64, f64)>, crate::OperationsError> {
+    use std::f64::consts::PI;
+    let radius = sphere.radius();
+    Ok(
+        sphere_loop_area_and_flux(topo, sphere, wire_id, about)?.map(|(area, flux)| {
+            if area > 2.0 * PI * radius * radius {
+                (
+                    4.0 * PI * radius * radius - area,
+                    4.0 / 3.0 * PI * radius.powi(3) - flux,
+                )
+            } else {
+                (area, flux)
+            }
+        }),
+    )
+}
+
+/// One of the two regions a loop winding none of a sphere's u bounds, as its
+/// area and its flux under the sphere's outward normal, `R·area + (C −
+/// about)·∫N dA` over three. The area is `∮ u w(v) dv`, free at the poles,
+/// whose sign orients the loop; `∫N dA` is `½ ∮ (P − C) × dP` taken the same
+/// way (midpoint sums at two resolutions and a Richardson step). The other
+/// region has the rest of the area and the ball's volume less the flux.
+/// `None` for a loop around the axis.
+fn sphere_loop_area_and_flux(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+    about: Point3,
+) -> Result<Option<(f64, f64)>, crate::OperationsError> {
+    let Some(signed) = super::area::sphere_wire_signed_area(topo, sphere, wire_id)? else {
+        return Ok(None);
+    };
+    sphere_loop_flux(topo, sphere, wire_id, signed, about).map(Some)
+}
+
+/// [`sphere_loop_area_and_flux`] for a loop whose signed area is known.
+fn sphere_loop_flux(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+    signed: f64,
+    about: Point3,
+) -> Result<(f64, f64), crate::OperationsError> {
     let centre = sphere.center();
-    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    let (mut turn, mut sweep, mut progress) = (0.0, Vec3::new(0.0, 0.0, 0.0), 0.0);
+    let mut sweep = Vec3::new(0.0, 0.0, 0.0);
     for oe in topo.wire(wire_id)?.edges() {
         let edge = topo.edge(oe.edge())?;
         let (sp, ep) = (
@@ -2641,45 +2772,95 @@ fn sphere_hole_flux(
         );
         let at = |t: f64| edge.curve().evaluate_with_endpoints(t, sp, ep);
         let sums = |(from, to): (f64, f64), n: usize| {
-            let (mut turn, mut sweep, mut progress) = (0.0, Vec3::new(0.0, 0.0, 0.0), 0.0);
+            let mut sweep = Vec3::new(0.0, 0.0, 0.0);
             #[allow(clippy::cast_precision_loss)]
             let step = (to - from) / n as f64;
             let mut p_prev = at(from);
-            let mut u_prev = sphere.project_point(p_prev).0;
             for k in 0..n {
                 #[allow(clippy::cast_precision_loss)]
                 let tk = from + step * k as f64;
                 let pm = at(tk + 0.5 * step);
                 let pn = at(tk + step);
-                let (_, vm) = sphere.project_point(pm);
-                let un = sphere.project_point(pn).0;
-                turn -= vm.sin() * wrap(un - u_prev);
                 sweep += (pm - centre).cross(pn - p_prev) * 0.5;
-                progress += wrap(un - u_prev);
                 p_prev = pn;
-                u_prev = un;
             }
-            (turn, sweep, progress)
+            sweep
         };
         for span in traversal_spans(edge, oe.is_forward(), sp, ep) {
-            let (tc, sc, _) = sums(span, 128);
-            let (tf, sf, pf) = sums(span, 256);
-            turn += (4.0 * tf - tc) / 3.0;
-            sweep += (sf * 4.0 - sc) * (1.0 / 3.0);
-            progress += pf;
+            sweep += (sums(span, 256) * 4.0 - sums(span, 128)) * (1.0 / 3.0);
         }
     }
-    if progress.abs() > PI {
-        return Ok(None);
-    }
-    let (turn, sweep) = if turn < 0.0 {
-        (-turn, sweep * -1.0)
+    let (area, sweep) = if signed < 0.0 {
+        (-signed, sweep * -1.0)
     } else {
-        (turn, sweep)
+        (signed, sweep)
     };
     let radius = sphere.radius();
-    let area = radius * radius * turn;
-    Ok(Some((radius * area + (centre - about).dot(sweep)) / 3.0))
+    Ok((area, (radius * area + (centre - about).dot(sweep)) / 3.0))
+}
+
+/// The signed area of a sphere face's outer loop when the face can take
+/// [`sphere_patch_flux`]: a loop with no chords that winds none of the
+/// sphere's u.
+fn sphere_patch_outer_area(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Option<f64>, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return Ok(None);
+    };
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        if matches!(
+            topo.edge(oe.edge())?.curve(),
+            brepkit_topology::edge::EdgeCurve::Line
+        ) {
+            return Ok(None);
+        }
+    }
+    super::area::sphere_wire_signed_area(topo, sphere, face.outer_wire())
+}
+
+/// The flux of a sphere face whose outer loop, with no chords, winds none
+/// of the sphere's u: the region inside the loop or the sphere past it (the
+/// ball's volume less the patch's flux), as the face's mesh tells them
+/// apart, less its holes. `None` for any other sphere face, or one too near
+/// half the sphere to tell.
+fn sphere_patch_flux(
+    topo: &Topology,
+    face_id: FaceId,
+    about: Point3,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use std::f64::consts::PI;
+    let Some(signed) = sphere_patch_outer_area(topo, face_id)? else {
+        return Ok(None);
+    };
+    let face = topo.face(face_id)?;
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return Ok(None);
+    };
+    let (loop_area, loop_flux) = sphere_loop_flux(topo, sphere, face.outer_wire(), signed, about)?;
+    let (mut hole_area, mut hole_flux) = (0.0, 0.0);
+    for &wid in face.inner_wires() {
+        let Some((area, flux)) = sphere_hole_area_and_flux(topo, sphere, wid, about)? else {
+            return Ok(None);
+        };
+        hole_area += area;
+        hole_flux += flux;
+    }
+    let radius = sphere.radius();
+    let patch = loop_area - hole_area;
+    let past = 4.0 * PI * radius * radius - loop_area - hole_area;
+    let Some(inside) = super::area::sphere_face_is_patch(topo, face_id, sphere, patch, past)?
+    else {
+        return Ok(None);
+    };
+    let flux = if inside {
+        loop_flux - hole_flux
+    } else {
+        4.0 / 3.0 * PI * radius.powi(3) - loop_flux - hole_flux
+    };
+    Ok(Some(if face.is_reversed() { -flux } else { flux }))
 }
 
 /// Exact signed volume contribution of a toroidal face via the divergence
@@ -3074,8 +3255,15 @@ pub fn volume_from_direct_face_tessellation(
                 continue;
             }
             FaceSurface::Sphere(_) => {
-                total += analytic_sphere_signed_volume(topo, fid, about)? * 6.0;
-                continue;
+                let flux = match sphere_patch_flux(topo, fid, about)? {
+                    Some(flux) => Some(flux),
+                    None => analytic_sphere_signed_volume(topo, fid, about)?,
+                };
+                // Neither closed form fits: the face's own mesh below.
+                if let Some(flux) = flux {
+                    total += flux * 6.0;
+                    continue;
+                }
             }
             FaceSurface::Torus(_) => {
                 total += analytic_torus_signed_volume(topo, fid, about)? * 6.0;
@@ -3879,6 +4067,85 @@ mod tests {
     use brepkit_topology::face::Face;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The upper hemisphere less a notch over `x > 0`, `y > 0`, `z < 1`, with
+    /// an exact equator: its outline runs along the sides of the `(u, v)` box
+    /// of its vertices, but the face is the rest of the hemisphere around
+    /// that box, so the closed form must decline it.
+    #[test]
+    fn sphere_box_declines_a_notched_hemisphere() {
+        let mut topo = Topology::new();
+        let r = 3.0_f64;
+        let rim = (r * r - 1.0).sqrt();
+        let o = Point3::new(0.0, 0.0, 0.0);
+        let [d, a, b, c] = [
+            Point3::new(0.0, r, 0.0),
+            Point3::new(r, 0.0, 0.0),
+            Point3::new(rim, 0.0, 1.0),
+            Point3::new(0.0, rim, 1.0),
+        ]
+        .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let arc = |topo: &mut Topology, from, to, centre, normal, radius| {
+            let circle = Circle3D::new(centre, normal, radius).unwrap();
+            topo.add_edge(Edge::new(from, to, EdgeCurve::Circle(circle)))
+        };
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let edges = [
+            arc(&mut topo, d, a, o, up, r),
+            arc(&mut topo, a, b, o, Vec3::new(0.0, -1.0, 0.0), r),
+            arc(&mut topo, b, c, Point3::new(0.0, 0.0, 1.0), up, rim),
+            arc(&mut topo, c, d, o, Vec3::new(-1.0, 0.0, 0.0), r),
+        ];
+        let wire = Wire::new(
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let sphere = brepkit_math::surfaces::SphericalSurface::new(o, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Sphere(sphere)));
+        assert!(
+            analytic_sphere_signed_volume(&topo, face, o)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A hemisphere bounded the way a file's seamed sphere is, by its equator
+    /// and a meridian seam the wire runs up and back down: the box of its
+    /// full turn is the face, `2 pi R³ / 3` of flux about the centre.
+    #[test]
+    fn sphere_box_takes_a_seamed_hemisphere() {
+        let mut topo = Topology::new();
+        let r = 3.0_f64;
+        let o = Point3::new(0.0, 0.0, 0.0);
+        let rim = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, 0.0), 1e-7));
+        let pole = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, r), 1e-7));
+        let equator = Circle3D::new(o, Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let meridian = Circle3D::new(o, Vec3::new(0.0, -1.0, 0.0), r).unwrap();
+        let equator = topo.add_edge(Edge::new(rim, rim, EdgeCurve::Circle(equator)));
+        let seam = topo.add_edge(Edge::new(rim, pole, EdgeCurve::Circle(meridian)));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(equator, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let sphere = brepkit_math::surfaces::SphericalSurface::new(o, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Sphere(sphere)));
+        let flux = analytic_sphere_signed_volume(&topo, face, o)
+            .unwrap()
+            .unwrap();
+        let truth = 2.0 * std::f64::consts::PI * r.powi(3) / 3.0;
+        assert!(
+            (flux - truth).abs() < 1e-9 * truth,
+            "flux {flux}, truth {truth}"
+        );
+    }
 
     fn wall_flux(topo: &Topology, solid: SolidId) -> f64 {
         let wall = brepkit_topology::explorer::solid_faces(topo, solid)

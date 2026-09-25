@@ -119,7 +119,14 @@ that does not exist yet; without it, stop.
   equator by the sagitta. Box-sphere was closed (#1006) with a case-specific seam-plane
   fit (`rg -n 'seam_plane' crates/`). The general fix is a UV-space arrangement
   splitter, a dedicated multi-day component not yet built. The boundary-plane
-  crossing technique is proven and reusable.
+  crossing technique is proven and reusable. Measured 2026-09-24 against
+  `make_sphere(3, 32)`: every box face crossing the equator falls back (a half
+  at any turn or tilt, a wedge, a slab at x > 0.5, a corner reaching below
+  z = 0), though a half or wedge crosses it at chord vertices: its first
+  failure is `split_noseam_face_direct`, which cannot chain two arcs meeting at
+  the pole, handing them to `split_noseam_by_arrangement`, which keeps only a
+  collar. REFUTED: an exact-circle equator in `make_sphere` as a drop-in (half
+  cuts turned 5, 11.25 or 30 degrees come back uncut, 2 faces, silently wrong).
 - **Gridfinity scoop fuse (3x3 scoop+label+lip).** Root: a lip-foot cone must be split
   with a coordinated staircase cone-split plus bracket-cap re-trim sharing the new edge;
   every one-sided attempt regresses. Many sequential autonomous passes exhausted.
@@ -182,14 +189,33 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 
 | **Stable row defect: per-face NURBS meshes ignore the trim** | `tessellate::tessellate` meshes a NURBS face over its whole surface, so `solid_volume`'s direct path, `face_area` and the glTF, OBJ and PLY writers read a trimmed NURBS face as its whole patch (a converted napkin ring: `solid_volume` 1613 against 587.7). A trimmed CDT for NURBS faces whose boundary leaves the domain edges is parked on branch `wip/per-face-nurbs-trim`. It waits on `sweep_smooth`: its rail edges are straight chords between the first and last rings while the side surfaces curve along the path, so a trimmed mesh follows the chords (a quarter-circle sweep reads 6.87 against 7.85); build its rails as #1700 built `loft_smooth`'s. The parked branch also holds a surface-measured refinement of long interior edges that moved an uneven loft's mesh 0.3% off its exact 32.0686, unexplained |
-| **Cone cuts parallel to the axis: the remaining fallbacks** (`cone_cut_parallel_to_its_axis` in `crates/operations/tests/cone_plane_cut.rs` lists the exact cells) | Safe fallbacks, none wrong. Both cones fall back when the piece the plane cuts off holds the seam (the pointed cone turned 17 degrees at x < 0.3 and beyond or turned 200 at x < -0.7 and below, the frustum at x < 1.2 and beyond at turns 0 and 17 or at x < -1 and below at turn 200): the section is anchored where it crosses the seam ruling, and the region the seam pinches still traces wrong. The pointed cone at turn 0 builds even so, since its hyperbola's vertex lands exactly on the seam. The loop, stripe-meshing and rim changes of the Closed entry are cone-only: on cylinders they broke a box less a quarter cylinder (the closed-rim sampling start) and six rod and knuckle fixtures, so a rod cut by a wall crossing one rim (tilted 10 or 25 degrees) still falls back where they would build it exactly |
+| **Cone cuts parallel to the axis: the remaining fallbacks** (`cone_cut_parallel_to_its_axis` in `crates/operations/tests/cone_plane_cut.rs` lists the exact cells) | Safe fallbacks, none wrong. Both cones fall back when the piece the plane cuts off holds the seam (the pointed cone turned 17 degrees at x < 0.3 and beyond or turned 200 at x < -0.7 and below, the frustum at x < 1.2 and beyond at turns 0 and 17 or at x < -1 and below at turn 200): the section is anchored where it crosses the seam ruling, and the region the seam pinches still traces wrong. The pointed cone at turn 0 builds even so, since its hyperbola's vertex lands exactly on the seam. The loop, stripe-meshing and rim changes of the Closed entry are cone-only: on cylinders they broke a box less a quarter cylinder (the closed-rim sampling start) and six rod and knuckle fixtures, so a rod cut by a wall crossing one rim (tilted 10 or 25 degrees) still falls back where they would build it exactly. Next idea: trace a cone in its unrolled window [u_s, u_s + 2 pi] with non-periodic keys so a seam vertex's two copies stay distinct and the piece the seam crosses becomes two faces sharing the seam edge; a pointed cone needs a synthetic apex edge to close (the DCEL retry on every pointed cone changed nothing) |
 
-| **Sphere face measure and meshing leftovers** | `analytic_sphere_signed_volume` (the per-face flux behind `volume_from_direct_face_tessellation`) reads only a sphere face's outer wire, so a holed sphere face in a solid that is not a ball less disc caps (a ball less a tilted cylinder or a box pocket) counts its hole's cap too; per-face `tessellate` of a sphere face bounded by one tilted circle meshes the whole sphere (the solid mesh is right). Repro: the tilted cases of `sphere_plane_cut.rs` with the ball-less-caps path skipped. A solid bounded by a ball zone between the chordal equator and a section circle measures off: `make_torus(4, 1.5)` less `make_sphere(3)` reads 166.4567 against 166.3658 (`torus_coaxial_tools.rs` bounds it at 1e-3), and `classify_point` on that Cut reads (2.8, 0, 0), on the equator plane, Inside where (2.8, 0, 0.3) reads Outside |
+| **Sphere measure leftovers: the chordal equator** | A solid bounded by a ball zone between the chordal equator and a section circle measures off: `make_torus(4, 1.5)` less `make_sphere(3)` reads 166.4567 against 166.3658 (`torus_coaxial_tools.rs` bounds it at 1e-3), and `classify_point` on that Cut reads (2.8, 0, 0), on the equator plane, Inside where (2.8, 0, 0.3) reads Outside; the ball less its positive octant measures 98.95105 against 98.96017 with every face's area exact. Both trace to the hemispheres meeting on chords (the quirk row below). Separately, a solid with no face that sends `solid_volume` down the direct path takes the whole-solid mesh: the ball's part inside a coaxial r=1 bore (two caps and a wall) reads 18.30905 against 18.31583, where the (u, v) box and the cylinder flux would be exact. Next for holes: a hole around the axis sends its face to the mesh, though the smaller cap beyond it has a closed flux, R times its area `R² (2π − abs(∮ sin v du))` plus (C − about) dotted with the loop's vector area signed like `∮ sin v du`, all over three |
+| **Sphere booleans that fall back clear of the equator** (probes in the session scratchpad) | Safe fallbacks. `make_sphere(3, 32)` within the box over y > 0, z > 1 (the y = 0 arc runs over the pole), and a rod through a trimmed patch: the box-corner piece (x > 1, y > 1.2, z > 0.8) less a vertical r = 0.2 rod at (1.8, 1.8), or the octant less one at (1, 1). A section through the pole is the same splitter gap as the half cuts in the chordal-equator TERMINAL entry |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **Sphere faces trimmed by a box or a rod: area, mesh and volume (CLOSED 2026-09-25; pins in `crates/operations/tests/sphere_face_area.rs`)**:
+  `face_area` read a sphere face as a zone from its boundary's mean
+  latitude to a pole (a box corner's 3.0867 patch read 84.70, an octant
+  a hemisphere), per-face `tessellate` gridded the loop's (u, v) box, and
+  the flux behind the direct volume path did the same, so a tilted rod's
+  piece of a ball measured 10.996346 against 11.000032. The area is now
+  Green's theorem in (u, v) with both poles free (`sphere_face_uv_area`,
+  the face's mesh choosing the patch or the sphere past it, or measuring a
+  face within 5% of half the sphere itself), and so is a hole's
+  (`sphere_hole_area`: a pocket through a pole read 15 pi against 16.5 pi).
+  A trimmed or pole-touching face meshes through the constrained CDT. The
+  direct volume path takes the patch flux (`sphere_patch_flux`) for an
+  outer loop without chords that winds none of u, the (u, v) box for a
+  wire along the box's sides (a notch's outline declines it, pinned by
+  `sphere_box_declines_a_notched_hemisphere`), and the face's mesh for the
+  rest, a hole around the axis included. An arc over a pole between its
+  vertices is split there (`half_cap_whose_arc_runs_over_the_pole`).
 
 - **A cone cut by a plane parallel to its axis (CLOSED 2026-09-25; pins `cone_halved_through_its_axis` and `cone_cut_parallel_to_its_axis` in `crates/operations/tests/cone_plane_cut.rs`)**:
   over 168 cases (both cones, four turns, seven offsets, three ops) main

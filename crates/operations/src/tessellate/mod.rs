@@ -34,6 +34,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::FaceId;
 
 // Re-export all public items.
+pub(crate) use face::sphere_face_is_off_grid;
 pub use face::{tessellate_with_uvs, tessellate_with_uvs_a};
 pub(crate) use mesh_ops::COINCIDENT_DEDUPE_GRID;
 pub use mesh_ops::{

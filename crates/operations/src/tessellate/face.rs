@@ -61,6 +61,79 @@ pub fn tessellate_with_uvs_a(
     tessellate_with_uvs_floor(topo, face, deflection, angular_tol, false)
 }
 
+/// Whether a sphere face's outer wire has an edge that is neither a latitude
+/// nor a meridian, or reaches a pole (where the grid's u range means
+/// nothing), or has fewer than three edges (a cap's one rim circle), whose
+/// vertices are too few for the grid to read its v range from. Chords (a
+/// primitive's hemispheres meet on them) keep the grid.
+fn sphere_face_is_trimmed(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<bool, crate::OperationsError> {
+    if topo.wire(face_data.outer_wire())?.edges().len() < 3 {
+        return Ok(true);
+    }
+    let (off_grid, at_pole) = sphere_outer_wire_shape(topo, face_data, sphere)?;
+    Ok(off_grid || at_pole)
+}
+
+/// Whether a sphere face's outer wire has an edge that is neither a latitude,
+/// a meridian nor a chord, so the face is not the (u, v) box its wire spans.
+pub fn sphere_face_is_off_grid(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<bool, crate::OperationsError> {
+    Ok(sphere_outer_wire_shape(topo, face_data, sphere)?.0)
+}
+
+/// Whether a sphere face's outer wire leaves the (u, v) grid, and whether it
+/// reaches a pole.
+fn sphere_outer_wire_shape(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<(bool, bool), crate::OperationsError> {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let mut at_pole = false;
+    for oe in topo.wire(face_data.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let samples: Vec<(f64, f64)> = (0..=8)
+            .map(|i| {
+                let t = (t1 - t0).mul_add(f64::from(i) / 8.0, t0);
+                sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep))
+            })
+            .collect();
+        at_pole |= samples.iter().any(|&(_, v)| v.abs() >= PI / 2.0 - 1e-6);
+        let latitude = samples
+            .iter()
+            .all(|&(_, v)| (v - samples[0].1).abs() < 1e-7);
+        // Off the poles, where u means nothing.
+        let away: Vec<f64> = samples
+            .iter()
+            .filter(|&&(_, v)| v.abs() < PI / 2.0 - 1e-6)
+            .map(|&(u, _)| u)
+            .collect();
+        let meridian = away
+            .first()
+            .is_none_or(|&u0| away.iter().all(|&u| wrap(u - u0).abs() < 1e-7));
+        if !latitude && !meridian {
+            return Ok((true, at_pole));
+        }
+    }
+    Ok((false, at_pole))
+}
+
 /// Whether a face is its whole surface: no holes, and an outer wire made of
 /// closed edges only (a torus's seam pair collapsed onto one vertex), which
 /// trims nothing away.
@@ -163,7 +236,14 @@ pub(super) fn tessellate_with_uvs_floor(
         }
         _ => false,
     };
-    let holed_wall = if holed_analytic || trimmed_nurbs {
+    // A sphere face trimmed by curves other than latitudes and meridians (a
+    // cap under a tilted circle, the patch a box corner bites out), or
+    // bounded by one rim circle, is not the (u, v) box the grid below fills.
+    let trimmed_sphere = match face_data.surface() {
+        FaceSurface::Sphere(sphere) => sphere_face_is_trimmed(topo, face_data, sphere)?,
+        _ => false,
+    };
+    let holed_wall = if holed_analytic || trimmed_nurbs || trimmed_sphere {
         match super::nonplanar::tessellate_holed_face_local(
             topo,
             face,

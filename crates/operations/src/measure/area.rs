@@ -108,6 +108,9 @@ pub fn face_area(
                 let rise = winding.dot(circle.center() - sph.center());
                 return Ok(2.0 * std::f64::consts::PI * r * (r - rise) - holes);
             }
+            if let Some(area) = sphere_face_uv_area(topo, face_id, sph, holes, deflection)? {
+                return Ok(area);
+            }
             if positions.len() >= 3 {
                 let v_vals: Vec<f64> = positions.iter().map(|p| sph.project_point(*p).1).collect();
                 let avg_v: f64 = v_vals.iter().sum::<f64>() / v_vals.len() as f64;
@@ -138,19 +141,97 @@ pub fn face_area(
     }
 }
 
-/// The area a hole takes from a sphere cap: `R² |∮ sin v du|` inside a loop
-/// that winds none of the sphere's u (a drill's entry), and for a loop around
-/// the cap's pole the cap beyond it, `R² (2π − |∮ sin v du|)` (a bore's rim).
-/// The integral runs along the loop by midpoint sums at two resolutions and
-/// a Richardson step.
+/// `∮ u w(v) dv` along a wire on a sphere, `w = R² cos v`, with u unwrapped
+/// and free to jump at a pole: plus or minus the area of one of the two
+/// regions the wire bounds. `None` when the wire winds the axis.
+pub(super) fn sphere_wire_signed_area(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Result<Option<f64>, crate::OperationsError> {
+    let (axis, radius) = (sphere.z_axis(), sphere.radius());
+    let project = |p: Point3| sphere.project_point(p);
+    // v = asin((P - C)·z / R), so along the surface dv = z·dP / (R cos v).
+    let grad_v = |p: Point3| {
+        let (_, v) = sphere.project_point(p);
+        axis * (1.0 / (radius * v.cos()))
+    };
+    let weight = |v: f64| radius * radius * v.cos();
+    let centre = sphere.center();
+    let poles = [centre + axis * radius, centre - axis * radius];
+    let metric = RevolutionMetric {
+        project: &project,
+        grad_v: &grad_v,
+        weight: &weight,
+        poles: &poles,
+        v_periodic: false,
+    };
+    wire_uv_area(topo, wire_id, &metric)
+}
+
+/// Whether a sphere face is the region of area `patch` its outer loop bounds
+/// rather than the sphere past it (`past`), by the face's own mesh. `None`
+/// when the two are too close to tell apart (a patch near half the sphere).
+pub(super) fn sphere_face_is_patch(
+    topo: &Topology,
+    face_id: FaceId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    patch: f64,
+    past: f64,
+) -> Result<Option<bool>, crate::OperationsError> {
+    let whole = 4.0 * std::f64::consts::PI * sphere.radius() * sphere.radius();
+    if (patch - past).abs() < 0.05 * whole {
+        return Ok(None);
+    }
+    let mesh = tessellate::tessellate(topo, face_id, 1e-2 * sphere.radius())?;
+    let meshed = triangle_mesh_area(&mesh);
+    Ok(Some((meshed - patch).abs() <= (meshed - past).abs()))
+}
+
+/// The area of a sphere face whose outer loop closes in u (through a pole if
+/// it meets one), where the area element is `R² cos v du dv`: the region that
+/// loop bounds or the sphere past it, less the `holes`. A face too near half
+/// the sphere to tell which takes its mesh's area. `None` when the outer loop
+/// winds the axis.
+fn sphere_face_uv_area(
+    topo: &Topology,
+    face_id: FaceId,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    holes: f64,
+    deflection: f64,
+) -> Result<Option<f64>, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let Some(outer) = sphere_wire_signed_area(topo, sphere, face.outer_wire())? else {
+        return Ok(None);
+    };
+    let whole = 4.0 * std::f64::consts::PI * sphere.radius() * sphere.radius();
+    let (patch, past) = (outer.abs() - holes, whole - outer.abs() - holes);
+    Ok(Some(
+        match sphere_face_is_patch(topo, face_id, sphere, patch, past)? {
+            Some(true) => patch,
+            Some(false) => past,
+            None => triangle_mesh_area(&tessellate::tessellate(topo, face_id, deflection)?),
+        },
+    ))
+}
+
+/// The area a hole takes from a sphere face: the smaller region inside a loop
+/// that winds none of the sphere's u (a drill's entry, a pocket through a
+/// pole), and for a loop around the axis the smaller cap beyond it,
+/// `R² (2π − |∮ sin v du|)` (a bore's rim), by midpoint sums at two
+/// resolutions and a Richardson step.
 fn sphere_hole_area(
     topo: &Topology,
     sphere: &brepkit_math::surfaces::SphericalSurface,
     wire_id: brepkit_topology::wire::WireId,
 ) -> Result<f64, crate::OperationsError> {
     use std::f64::consts::{PI, TAU};
+    let r2 = sphere.radius() * sphere.radius();
+    if let Some(signed) = sphere_wire_signed_area(topo, sphere, wire_id)? {
+        return Ok(signed.abs().min(2.0 * TAU * r2 - signed.abs()));
+    }
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    let (mut sweep, mut progress) = (0.0, 0.0);
+    let mut sweep = 0.0;
     for oe in topo.wire(wire_id)?.edges() {
         let edge = topo.edge(oe.edge())?;
         let (sp, ep) = (
@@ -161,7 +242,7 @@ fn sphere_hole_area(
         let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
         let at = |t: f64| sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
         let sums = |n: usize| {
-            let (mut sweep, mut progress) = (0.0, 0.0);
+            let mut sweep = 0.0;
             #[allow(clippy::cast_precision_loss)]
             let step = (to - from) / n as f64;
             let mut u_prev = at(from).0;
@@ -171,22 +252,68 @@ fn sphere_hole_area(
                 let (_, vm) = at(tk + 0.5 * step);
                 let (un, _) = at(tk + step);
                 sweep += vm.sin() * wrap(un - u_prev);
-                progress += wrap(un - u_prev);
                 u_prev = un;
             }
-            (sweep, progress)
+            sweep
         };
-        let (coarse, _) = sums(128);
-        let (fine, turned) = sums(256);
-        sweep += (4.0 * fine - coarse) / 3.0;
-        progress += turned;
+        sweep += (4.0 * sums(256) - sums(128)) / 3.0;
     }
-    let r2 = sphere.radius() * sphere.radius();
-    Ok(if progress.abs() > PI {
-        r2 * (TAU - sweep.abs())
+    Ok(r2 * (TAU - sweep.abs()))
+}
+
+/// The parameters strictly inside `(ta, tb)`, in traversal order, where a
+/// curve passes through one of `poles` (within `1e-7`): each local minimum of
+/// the distance over 64 probes that the curve could bring to the pole within
+/// its neighbouring probes, refined by ternary search.
+fn pole_crossings(at: &dyn Fn(f64) -> Point3, (ta, tb): (f64, f64), poles: &[Point3]) -> Vec<f64> {
+    const PROBES: usize = 64;
+    let mut found: Vec<f64> = Vec::new();
+    #[allow(clippy::cast_precision_loss)]
+    let ts: Vec<f64> = (0..=PROBES)
+        .map(|k| ta + (tb - ta) * k as f64 / PROBES as f64)
+        .collect();
+    let points: Vec<Point3> = ts.iter().map(|&t| at(t)).collect();
+    for &pole in poles {
+        let gap = |t: f64| (at(t) - pole).length();
+        let gaps: Vec<f64> = points.iter().map(|&p| (p - pole).length()).collect();
+        for k in 0..=PROBES {
+            let (before, after) = (k.saturating_sub(1), (k + 1).min(PROBES));
+            if gaps[k] > gaps[before] || gaps[k] > gaps[after] {
+                continue;
+            }
+            // Within the neighbouring probes the distance falls by at most
+            // the arc between them, about the chords' length.
+            let reach =
+                (points[before] - points[k]).length() + (points[after] - points[k]).length();
+            if gaps[k] > 1.5 * reach + 1e-7 {
+                continue;
+            }
+            let (mut lo, mut hi) = (ts[before], ts[after]);
+            for _ in 0..80 {
+                let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+                if gap(m1) < gap(m2) {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let t = 0.5 * (lo + hi);
+            let p = at(t);
+            if gap(t) <= 1e-7
+                && (p - at(ta)).length() > 1e-7
+                && (p - at(tb)).length() > 1e-7
+                && !found.iter().any(|&f| (at(f) - p).length() <= 1e-7)
+            {
+                found.push(t);
+            }
+        }
+    }
+    if tb < ta {
+        found.sort_by(|a, b| b.total_cmp(a));
     } else {
-        r2 * sweep.abs()
-    })
+        found.sort_by(f64::total_cmp);
+    }
+    found
 }
 
 /// A lateral of revolution read in its `(u, v)` parameters, where the area
@@ -197,9 +324,9 @@ struct RevolutionMetric<'a> {
     /// `dv/dt` is `grad_v · P'(t)`.
     grad_v: &'a dyn Fn(Point3) -> Vec3,
     weight: &'a dyn Fn(f64) -> f64,
-    /// A cone's apex, where the `u` lines collapse: a loop through it may
-    /// jump in `u` there, since the weight vanishes on it.
-    pole: Option<Point3>,
+    /// Where the `u` lines collapse (a cone's apex, a sphere's poles): a loop
+    /// through one may jump in `u` there, since the weight vanishes on it.
+    poles: &'a [Point3],
     /// Whether `v` wraps too (a torus's tube angle), so a loop must also
     /// return to its start in `v`.
     v_periodic: bool,
@@ -238,7 +365,7 @@ fn cylinder_face_uv_area(
             project: &project,
             grad_v: &grad_v,
             weight: &weight,
-            pole: None,
+            poles: &[],
             v_periodic: false,
         },
     )
@@ -291,7 +418,7 @@ fn cone_face_uv_area(
             project: &project,
             grad_v: &grad_v,
             weight: &weight,
-            pole: Some(apex),
+            poles: &[apex],
             v_periodic: false,
         },
     )
@@ -331,7 +458,7 @@ fn torus_face_uv_area(
         project: &project,
         grad_v: &grad_v,
         weight: &weight,
-        pole: None,
+        poles: &[],
         v_periodic: true,
     };
     // A whole ring's outer wire is its seam placeholders collapsed onto one
@@ -419,7 +546,7 @@ fn wire_uv_area(
     use std::f64::consts::{PI, TAU};
     const SEGMENTS: usize = 16;
     const ORDER: usize = 8;
-    let at_pole = |p: Point3| metric.pole.is_some_and(|q| (p - q).length() <= 1e-7);
+    let at_pole = |p: Point3| metric.poles.iter().any(|&q| (p - q).length() <= 1e-7);
     let mut touches_pole = false;
     let mut u_near = |p: Point3, near: Option<f64>| {
         if at_pole(p) {
@@ -446,73 +573,78 @@ fn wire_uv_area(
     };
     // The region's u has to jump by a turn somewhere on the loop, which is
     // free only across the pole (the weight vanishes there): walk from it.
-    let mut edges = topo.wire(wire_id)?.edges().to_vec();
-    let mut leaves_pole = Vec::with_capacity(edges.len());
-    for oe in &edges {
+    // An arc over a pole between its vertices is cut there, so its jump
+    // falls on a span end too.
+    let wire_edges = topo.wire(wire_id)?.edges().to_vec();
+    let mut spans: Vec<(usize, (f64, f64), bool)> = Vec::new();
+    for (k, oe) in wire_edges.iter().enumerate() {
         let edge = topo.edge(oe.edge())?;
-        let from = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        leaves_pole.push(at_pole(topo.vertex(from)?.point()));
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, start, end);
+        for (ta, tb) in traversal_spans(edge, oe.is_forward(), start, end) {
+            let mut from = ta;
+            for t in pole_crossings(&at, (ta, tb), metric.poles) {
+                spans.push((k, (from, t), at_pole(at(from))));
+                from = t;
+            }
+            spans.push((k, (from, tb), at_pole(at(from))));
+        }
     }
-    if let Some(k) = leaves_pole.iter().position(|&p| p) {
-        edges.rotate_left(k);
+    if let Some(k) = spans.iter().position(|&(_, _, leaves)| leaves) {
+        spans.rotate_left(k);
     }
-    for oe in &edges {
-        let edge = topo.edge(oe.edge())?;
+    for &(k, (ta, tb), _) in &spans {
+        let edge = topo.edge(wire_edges[k].edge())?;
         let start = topo.vertex(edge.start())?.point();
         let end = topo.vertex(edge.end())?.point();
         let curve = edge.curve();
         let at = |t: f64| curve.evaluate_with_endpoints(t, start, end);
-        for (ta, tb) in traversal_spans(edge, oe.is_forward(), start, end) {
-            let mut u_prev = u_near(at(ta), last_u);
-            if first_u.is_none() {
-                first_u = Some(u_prev);
-            }
-            walk_v(at(ta));
-            // A NURBS edge integrates knot span by knot span, where it is
-            // smooth; other curves in even segments.
-            #[allow(clippy::cast_precision_loss)]
-            let mut cuts: Vec<f64> = (0..=SEGMENTS)
-                .map(|seg| ta + (tb - ta) * seg as f64 / SEGMENTS as f64)
-                .collect();
-            if let EdgeCurve::NurbsCurve(nc) = curve {
-                let (lo, hi) = (ta.min(tb), ta.max(tb));
-                cuts = std::iter::once(ta)
-                    .chain(nc.knots().iter().copied().filter(|&k| k > lo && k < hi))
-                    .chain(std::iter::once(tb))
-                    .collect();
-                cuts.dedup();
-                if tb < ta {
-                    let last = cuts.len() - 1;
-                    cuts[1..last].reverse();
-                }
-            }
-            for w in cuts.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
-                for gp in points {
-                    let t = mid + half * gp.x;
-                    let p = at(t);
-                    let u = u_near(p, Some(u_prev));
-                    let tangent = match curve {
-                        EdgeCurve::Line => end - start,
-                        EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
-                        EdgeCurve::Ellipse(e) => e.tangent(t),
-                        EdgeCurve::NurbsCurve(nc) => nc.derivatives(t, 1)[1],
-                    };
-                    let (_, v) = (metric.project)(p);
-                    let dv = (metric.grad_v)(p).dot(tangent);
-                    sum += gp.w * half * u * (metric.weight)(v) * dv;
-                    u_prev = u;
-                    walk_v(p);
-                }
-            }
-            last_u = Some(u_near(at(tb), Some(u_prev)));
-            walk_v(at(tb));
+        let mut u_prev = u_near(at(ta), last_u);
+        if first_u.is_none() {
+            first_u = Some(u_prev);
         }
+        walk_v(at(ta));
+        // A NURBS edge integrates knot span by knot span, where it is
+        // smooth; other curves in even segments.
+        #[allow(clippy::cast_precision_loss)]
+        let mut cuts: Vec<f64> = (0..=SEGMENTS)
+            .map(|seg| ta + (tb - ta) * seg as f64 / SEGMENTS as f64)
+            .collect();
+        if let EdgeCurve::NurbsCurve(nc) = curve {
+            let (lo, hi) = (ta.min(tb), ta.max(tb));
+            cuts = std::iter::once(ta)
+                .chain(nc.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                .chain(std::iter::once(tb))
+                .collect();
+            cuts.dedup();
+            if tb < ta {
+                let last = cuts.len() - 1;
+                cuts[1..last].reverse();
+            }
+        }
+        for w in cuts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let (mid, half) = (0.5 * (a + b), 0.5 * (b - a));
+            for gp in points {
+                let t = mid + half * gp.x;
+                let p = at(t);
+                let u = u_near(p, Some(u_prev));
+                let tangent = match curve {
+                    EdgeCurve::Line => end - start,
+                    EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
+                    EdgeCurve::Ellipse(e) => e.tangent(t),
+                    EdgeCurve::NurbsCurve(nc) => nc.derivatives(t, 1)[1],
+                };
+                let (_, v) = (metric.project)(p);
+                let dv = (metric.grad_v)(p).dot(tangent);
+                sum += gp.w * half * u * (metric.weight)(v) * dv;
+                u_prev = u;
+                walk_v(p);
+            }
+        }
+        last_u = Some(u_near(at(tb), Some(u_prev)));
+        walk_v(at(tb));
     }
     let v_closes = !metric.v_periodic
         || matches!((first_v, v_walk), (Some(a), Some(b)) if (a - b).abs() <= 1e-6);
