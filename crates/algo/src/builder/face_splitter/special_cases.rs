@@ -255,10 +255,11 @@ fn split_noseam_by_arrangement(
     if open_sections.len() < 2 {
         return Vec::new();
     }
-    // The collar is traced only between arcs that each cross the seam at both
-    // ends. Arcs meeting inside the face (one section split over its crest)
-    // bound a region around the pole, which winds the axis like a collar but
-    // is not one; the half of the face it leaves out would go missing.
+    // The collar is the region inside every arc chain (a section split over
+    // its crest is one chain of two arcs), which the chains fence off from
+    // the seam only when at least three of them surround the pole: a single
+    // chain (a half-space) or two (a slab) leave regions on both sides of
+    // it, and the one this keeps would drop the rest.
     let seam_plane = {
         let pts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
         let mut n = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
@@ -281,11 +282,12 @@ fn split_noseam_by_arrangement(
     let Some((seam_n, seam_p)) = seam_plane else {
         return Vec::new();
     };
-    if open_sections.iter().any(|a| {
-        [a.start_3d, a.end_3d]
-            .iter()
-            .any(|&p| (p - seam_p).dot(seam_n).abs() > tol * 1e3)
-    }) {
+    let seam_ends = open_sections
+        .iter()
+        .flat_map(|a| [a.start_3d, a.end_3d])
+        .filter(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
+        .count();
+    if seam_ends < 6 {
         return Vec::new();
     }
 
