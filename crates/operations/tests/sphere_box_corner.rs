@@ -449,3 +449,60 @@ fn corner_outside_the_ball_is_not_an_octant() {
         "volume {volume}, truth {truth}"
     );
 }
+
+/// A box whose corner lies above the equator but on the far side of the axis
+/// takes a patch around the pole: the section loop on the upper hemisphere
+/// winds the axis, and the patch's interior sample has to land near the pole
+/// rather than at its loop's centroid, which lies in the ring around it. The
+/// Cut is exact, valid and watertight, and with the Intersect makes the ball;
+/// a point by the pole is removed and one below the box is kept. The volume
+/// bound covers the measure of a sphere face whose hole winds the pole (the
+/// roadmap's sphere measure row).
+#[test]
+fn a_corner_holding_the_pole_cuts_its_patch() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    for (a, b, c) in [(-0.7, -1.1, 0.1), (-0.3, -0.4, 0.2), (-0.3, -0.4, 1.2)] {
+        let label = format!("corner ({a}, {b}, {c})");
+        let mut volumes = Vec::new();
+        for op in [BooleanOp::Cut, BooleanOp::Intersect] {
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::translation(a, b, c)).unwrap();
+            let result = boolean(&mut topo, op, sphere, block).unwrap();
+            assert!(exact(&topo, result), "{label} {op:?}: fell back to a mesh");
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{label} {op:?}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(
+                is_watertight(&mesh),
+                "{label} {op:?}: open or non-manifold mesh"
+            );
+            volumes.push(solid_volume(&topo, result, 0.01).unwrap());
+            let at =
+                |p: Point3| classify_point(&topo, result, p, &ClassifyOptions::default()).unwrap();
+            let (by_pole, below) = if op == BooleanOp::Cut {
+                (PointClassification::Outside, PointClassification::Inside)
+            } else {
+                (PointClassification::Inside, PointClassification::Outside)
+            };
+            assert_eq!(
+                at(Point3::new(0.1, 0.1, 2.9)),
+                by_pole,
+                "{label} {op:?}: by the pole"
+            );
+            assert_eq!(
+                at(Point3::new(0.2, -0.3, -1.0)),
+                below,
+                "{label} {op:?}: below"
+            );
+        }
+        let sum = volumes[0] + volumes[1];
+        assert!(
+            (sum - ball).abs() < 5e-3 * ball,
+            "{label}: Cut {} + Intersect {} = {sum}, ball {ball}",
+            volumes[0],
+            volumes[1]
+        );
+    }
+}
