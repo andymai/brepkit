@@ -19,11 +19,12 @@ pub fn check_face_has_surface(
     Ok(vec![])
 }
 
-/// Check face orientation consistency: face normal should be consistent
-/// with the outer wire winding direction.
+/// Check face orientation consistency: the outer wire runs counter-clockwise
+/// about its surface's normal, on a reversed face too (the flag turns the
+/// face, not its wire).
 ///
 /// Uses Newell's method on the outer wire polygon to determine winding,
-/// then compares with the face surface normal at the polygon centroid.
+/// then compares with the surface normal at the polygon centroid.
 pub fn check_face_orientation(
     topo: &Topology,
     face_id: FaceId,
@@ -33,21 +34,26 @@ pub fn check_face_orientation(
         return Ok(vec![]); // Can't determine winding for degenerate polygon
     }
 
-    let wire_normal = newell_normal(&polygon);
-    if wire_normal.length() < 1e-15 {
-        return Ok(vec![]); // Degenerate polygon
+    // A loop whose projected area vanishes against its size (a full band's
+    // two opposite rims and doubled seam) has no winding to compare.
+    let area_vector = newell_vector(&polygon);
+    let extent = polygon
+        .iter()
+        .map(|p| (*p - polygon[0]).length())
+        .fold(0.0_f64, f64::max);
+    if area_vector.length() <= 1e-9 * extent * extent {
+        return Ok(vec![]);
     }
+    let wire_normal = area_vector * (1.0 / area_vector.length());
 
     let face = topo.face(face_id)?;
     let centroid = polygon_centroid(&polygon);
 
     let surface_normal = if let Some((u, v)) = face.surface().project_point(centroid) {
-        let n = face.surface().normal(u, v);
-        if face.is_reversed() { -n } else { n }
+        face.surface().normal(u, v)
     } else {
         // Plane: use stored normal directly
-        let n = face.surface().normal(0.0, 0.0);
-        if face.is_reversed() { -n } else { n }
+        face.surface().normal(0.0, 0.0)
     };
 
     // Check if normals agree (dot product > 0 means same direction)
@@ -66,9 +72,17 @@ pub fn check_face_orientation(
     Ok(vec![])
 }
 
-/// Compute polygon normal via Newell's method.
-fn newell_normal(verts: &[Point3]) -> Vec3 {
-    crate::util::polygon_normal(verts)
+/// Twice the polygon's vector area (Newell's method).
+fn newell_vector(verts: &[Point3]) -> Vec3 {
+    let mut sum = Vec3::new(0.0, 0.0, 0.0);
+    for (a, b) in verts.iter().zip(verts.iter().cycle().skip(1)) {
+        sum += Vec3::new(
+            (a.y() - b.y()) * (a.z() + b.z()),
+            (a.z() - b.z()) * (a.x() + b.x()),
+            (a.x() - b.x()) * (a.y() + b.y()),
+        );
+    }
+    sum
 }
 
 /// Compute polygon centroid.

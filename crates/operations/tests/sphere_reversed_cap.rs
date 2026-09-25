@@ -259,3 +259,102 @@ fn turned_dimple_and_cavity_mesh_their_own_sides() {
         }
     }
 }
+
+/// Both point classifiers read a reversed sphere face's side from its wire:
+/// points in the dimple or the cavity are outside the solid, points past the
+/// ball are inside.
+#[test]
+fn reversed_caps_classify_by_their_wire() {
+    use brepkit_check::classify::{ClassifyOptions, PointClassification as Check};
+    use brepkit_math::vec::Point3;
+    use brepkit_operations::classify::{PointClassification as Ops, classify_point};
+    for (z, points) in [
+        (
+            5.5,
+            [
+                ((0.0, 0.0, 4.0), false),
+                ((1.9, 0.0, 4.9), false),
+                ((0.3, 0.2, 4.5), false),
+                ((0.0, 0.0, 3.0), true),
+                ((0.0, 0.0, -4.0), true),
+            ],
+        ),
+        (
+            0.0,
+            [
+                ((0.0, 0.0, 0.0), false),
+                ((0.0, 0.0, 1.5), false),
+                ((1.2, -0.9, -0.8), false),
+                ((0.0, 0.0, 2.5), true),
+                ((0.0, 0.0, -2.5), true),
+            ],
+        ),
+    ] {
+        let (topo, piece) = box_less_ball(z);
+        for ((x, y, pz), inside) in points {
+            let p = Point3::new(x, y, pz);
+            let ops = classify_point(&topo, piece, p, 0.01, 1e-6).unwrap();
+            assert_eq!(
+                ops,
+                if inside { Ops::Inside } else { Ops::Outside },
+                "ball at z {z}: operations classifier at {p:?}"
+            );
+            let check = brepkit_check::classify::classify_point(
+                &topo,
+                piece,
+                p,
+                &ClassifyOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(
+                check,
+                if inside {
+                    Check::Inside
+                } else {
+                    Check::Outside
+                },
+                "ball at z {z}: check classifier at {p:?}"
+            );
+        }
+    }
+}
+
+/// A reversed face keeps its wire about its surface's normal, so validation
+/// raises no orientation warning on a dimple, a cavity, a pocket's walls or a
+/// bore's wall.
+#[test]
+fn reversed_faces_raise_no_orientation_warning() {
+    use brepkit_check::validate::{ValidateOptions, validate_solid as check_solid};
+    use brepkit_operations::primitives::make_cylinder;
+    for tool in 0..4 {
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(-5.0, -5.0, -5.0)).unwrap();
+        let (label, cutter) = match tool {
+            0 => {
+                let b = make_sphere(&mut topo, 2.0, 32).unwrap();
+                transform_solid(&mut topo, b, &Mat4::translation(0.0, 0.0, 5.5)).unwrap();
+                ("dimple", b)
+            }
+            1 => ("cavity", make_sphere(&mut topo, 2.0, 32).unwrap()),
+            2 => {
+                let b = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+                transform_solid(&mut topo, b, &Mat4::translation(-1.0, -1.0, 4.0)).unwrap();
+                ("pocket", b)
+            }
+            _ => {
+                let c = make_cylinder(&mut topo, 1.0, 20.0).unwrap();
+                transform_solid(&mut topo, c, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
+                ("bore", c)
+            }
+        };
+        let piece = boolean(&mut topo, BooleanOp::Cut, block, cutter).unwrap();
+        let report = check_solid(&topo, piece, &ValidateOptions::default()).unwrap();
+        let warned = report
+            .issues
+            .iter()
+            .filter(|i| i.description.contains("face normal inconsistent"))
+            .count();
+        assert_eq!(warned, 0, "{label}: orientation warnings");
+    }
+}

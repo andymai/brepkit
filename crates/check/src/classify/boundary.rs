@@ -284,12 +284,9 @@ fn count_3d_polygon_crossings(
     if verts.len() < 3 {
         return Ok(0);
     }
-    let mut normal = polygon_normal(&verts);
-    // If the face is reversed, the surface normal is flipped.
-    let face = topo.face(face_id)?;
-    if face.is_reversed() {
-        normal = -normal;
-    }
+    // The wire runs about the sphere's outward normal on a reversed face too,
+    // so its polygon normal points to the face's side of the boundary plane.
+    let normal = polygon_normal(&verts);
     let ref_pt = verts[0];
 
     let mut crossings = 0u32;
