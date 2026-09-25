@@ -2,7 +2,8 @@
 //! the hemisphere the corner reaches gets a hole bounded by three arcs, which
 //! must wind against the hemisphere's outer wire. Each piece is an exact,
 //! valid, watertight solid whose volume matches the corner's integral, above
-//! or below the equator. The box shortcut's octant feeds a second boolean.
+//! or below the equator. The box shortcut's octant feeds a second boolean,
+//! and it steps aside when the box's corner lies outside the ball.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -164,4 +165,48 @@ fn box_octant_feeds_a_second_boolean() {
             "corner lower {lower}: volume {volume}, truth {truth}"
         );
     }
+}
+
+/// A ball of radius 3 at `(1.8, 1.8, 1.8)` within the box over the positive
+/// octant meets all three of the box's corner planes, but the corner lies
+/// outside the ball, so the region is not an octant: the result keeps the
+/// z-extent above `z = 0` over `x, y >= 0` (Simpson in two dimensions,
+/// within 2%, a mesh allowed) rather than the octant shortcut's 82.09.
+#[test]
+fn corner_outside_the_ball_is_not_an_octant() {
+    let (c, r) = (1.8_f64, RADIUS);
+    let n = 600_u32;
+    let step = (c + r) / f64::from(n);
+    let weight = |k: u32| {
+        if k == 0 || k == n {
+            1.0
+        } else if k % 2 == 1 {
+            4.0
+        } else {
+            2.0
+        }
+    };
+    let mut sum = 0.0;
+    for i in 0..=n {
+        let x = step * f64::from(i);
+        for j in 0..=n {
+            let y = step * f64::from(j);
+            let rho2 = (x - c).powi(2) + (y - c).powi(2);
+            if rho2 < r * r {
+                let h = (r * r - rho2).sqrt();
+                sum += weight(i) * weight(j) * (c + h - (c - h).max(0.0));
+            }
+        }
+    }
+    let truth = sum * step * step / 9.0;
+    let mut topo = Topology::new();
+    let sphere = make_sphere(&mut topo, r, 32).unwrap();
+    transform_solid(&mut topo, sphere, &Mat4::translation(c, c, c)).unwrap();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Intersect, sphere, block).unwrap();
+    let volume = solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 2e-2 * truth,
+        "volume {volume}, truth {truth}"
+    );
 }

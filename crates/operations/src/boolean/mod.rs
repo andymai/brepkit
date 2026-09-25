@@ -1749,6 +1749,13 @@ fn build_box_sphere_octant(
         }
     }
     let o = Point3::new(o[0], o[1], o[2]);
+    // Three cutting planes do not put the corner inside the ball: out of it,
+    // the region is not the octant this builds (a ball of radius 3 at
+    // (1.8, 1.8, 1.8) in the box over the positive octant came out 82.09
+    // against 78.84).
+    if (o - sphere_center).length() >= r - tol.linear {
+        return Ok(None);
+    }
 
     // In-box direction perpendicular to each cutting plane = -n_i.
     let in_dirs: Vec<Vec3> = cut_planes
