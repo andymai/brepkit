@@ -161,8 +161,9 @@ fn reverse_face_wires(
 /// The boundary's own latitudes bound it. A face whose outer wire is one loop
 /// around the axis (no seam, no inner wires) is a cap, and which pole it
 /// holds follows from the loop's winding: the outer wire runs
-/// counter-clockwise about the face's outward normal, so it circles the
-/// sphere axis counter-clockwise exactly when that normal points north. A
+/// counter-clockwise about the surface's outward normal (a reversed face
+/// keeps its wire), so it circles the sphere axis counter-clockwise exactly
+/// when the cap holds the north pole. A
 /// primitive hemisphere is bounded by the equator alone and has no pole
 /// vertex, so neither its latitudes nor its vertices can tell the two apart.
 fn sphere_face_v_range(
@@ -215,7 +216,7 @@ fn sphere_face_v_range(
         .zip(samples.iter().cycle().skip(1))
         .map(|(&a, &b)| (a - center).cross(b - center).dot(axis))
         .sum();
-    let north = (winding > 0.0) != face.is_reversed();
+    let north = winding > 0.0;
     Ok(if north {
         (v_lo, FRAC_PI_2)
     } else {

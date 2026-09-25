@@ -3321,8 +3321,9 @@ fn inner_wire_uv_loops(
 /// Close a boundary loop that winds a NURBS or sphere face's periodic u
 /// direction once with no seam: such a face is a cap over a pole, a v-domain
 /// edge that collapses to one point (a hemisphere on its equator). The loop
-/// runs counter-clockwise in (u, v) about the face's normal, so the cap lies
-/// on its left, at the far v edge for a loop run toward +u. That edge is
+/// runs counter-clockwise in (u, v) about the surface's normal, a reversed
+/// face included (the boolean builders flip the flag and keep the wire), so
+/// the cap lies on its left, at the far v edge for a loop run toward +u. That edge is
 /// appended as virtual boundary samples, all welded to the pole, so the
 /// region closes in (u, v); a loop that winds toward a non-degenerate edge is
 /// left alone. So is a NURBS face with inner wires, and a sphere face with a
@@ -3346,27 +3347,23 @@ fn close_loop_at_pole(
     // The closing meridian's radius, for a surface whose seam sides are
     // sampled along it.
     let mut meridian_radius = None;
-    let (evaluate, (v_lo, v_hi), flipped): (SurfacePoint<'_>, (f64, f64), bool) =
-        match face_data.surface() {
-            FaceSurface::Nurbs(nurbs) if face_data.inner_wires().is_empty() => (
-                Box::new(|u, v| nurbs.evaluate(u, v)),
-                nurbs.domain_v(),
-                false,
-            ),
-            FaceSurface::Sphere(sphere) => {
-                let Some(spans) = hole_u_spans(topo, face_data, sphere)? else {
-                    return Ok(());
-                };
-                start_loop_clear_of_holes(boundary_uv, boundary_3d, &spans);
-                meridian_radius = Some(sphere.radius());
-                (
-                    Box::new(|u, v| sphere.evaluate(u, v)),
-                    (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
-                    face_data.is_reversed(),
-                )
-            }
-            _ => return Ok(()),
-        };
+    let (evaluate, (v_lo, v_hi)): (SurfacePoint<'_>, (f64, f64)) = match face_data.surface() {
+        FaceSurface::Nurbs(nurbs) if face_data.inner_wires().is_empty() => {
+            (Box::new(|u, v| nurbs.evaluate(u, v)), nurbs.domain_v())
+        }
+        FaceSurface::Sphere(sphere) => {
+            let Some(spans) = hole_u_spans(topo, face_data, sphere)? else {
+                return Ok(());
+            };
+            start_loop_clear_of_holes(boundary_uv, boundary_3d, &spans);
+            meridian_radius = Some(sphere.radius());
+            (
+                Box::new(|u, v| sphere.evaluate(u, v)),
+                (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+            )
+        }
+        _ => return Ok(()),
+    };
     let (Some((_, period)), _) = surface_periods(face_data.surface()) else {
         return Ok(());
     };
@@ -3391,11 +3388,7 @@ fn close_loop_at_pole(
     if (winding.abs() - period).abs() > 1e-6 * period {
         return Ok(());
     }
-    let v_far = if (winding > 0.0) == flipped {
-        v_lo
-    } else {
-        v_hi
-    };
+    let v_far = if winding > 0.0 { v_hi } else { v_lo };
     let pole = evaluate(first_u, v_far);
     let scale = (evaluate(last_u, last_v) - pole).length().max(1e-12);
     let degenerate = (0..8).all(|k| {

@@ -454,8 +454,12 @@ pub fn shell(
                 }
                 let new_sph = brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_r)
                     .map_err(crate::OperationsError::Math)?;
+                // A reversed sphere face's wire still runs counter-clockwise
+                // about the sphere's outward normal (the mesher closes a loop
+                // at the pole on its left), so it keeps the outer face's
+                // winding and the flag alone turns it inward.
                 result_specs.push(FaceSpec::Surface {
-                    vertices: inner_verts,
+                    vertices: inner_verts.into_iter().rev().collect(),
                     surface: FaceSurface::Sphere(new_sph),
                     reversed: true,
                     inner_wires: vec![],
