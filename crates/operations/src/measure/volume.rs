@@ -2638,10 +2638,11 @@ fn analytic_sphere_signed_volume(
 
 /// Whether a sphere wire bounds the `(u, v)` box `u_range` x `v_range`:
 /// every edge runs at `v` equal to one of its ends (a latitude, or a chord of
-/// the equator) or, when the box spans less than a turn, at `u` equal to one
-/// of its ends (a meridian, whose u means nothing at a pole), and a wire
-/// clear of the poles winds the axis exactly when the box spans the turn (a
-/// notch's outline runs along a box's sides too, but around the rest).
+/// the equator), or, when the box spans less than a turn, at `u` equal to one
+/// of its ends (a meridian, whose u means nothing at a pole), or is a seam the
+/// wire runs both ways; and a wire clear of the poles winds the axis exactly
+/// when the box spans the turn (a notch's outline runs along a box's sides
+/// too, but around the rest).
 fn sphere_wire_on_box_sides(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
@@ -2653,21 +2654,19 @@ fn sphere_wire_on_box_sides(
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
     let full_turn = u2 - u1 >= TAU - 1e-9;
     let (mut progress, mut u_last, mut at_pole) = (0.0, None, false);
-    for oe in topo.wire(wire_id)?.edges() {
+    let edges = topo.wire(wire_id)?.edges();
+    for oe in edges {
         let edge = topo.edge(oe.edge())?;
         let (sp, ep) = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        let mut samples: Vec<(f64, f64)> = (0..=8)
-            .map(|i| {
-                let t = (t1 - t0).mul_add(f64::from(i) / 8.0, t0);
+        let mut samples: Vec<(f64, f64)> = Vec::new();
+        for (from, to) in traversal_spans(edge, oe.is_forward(), sp, ep) {
+            samples.extend((0..=8).map(|i| {
+                let t = (to - from).mul_add(f64::from(i) / 8.0, from);
                 sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep))
-            })
-            .collect();
-        if !oe.is_forward() {
-            samples.reverse();
+            }));
         }
         for &(u, v) in &samples {
             if v.abs() >= FRAC_PI_2 - 1e-6 {
@@ -2680,7 +2679,10 @@ fn sphere_wire_on_box_sides(
             }
         }
         let at_v = |side: f64| samples.iter().all(|&(_, v)| (v - side).abs() < 1e-7);
-        if at_v(v1) || at_v(v2) {
+        let seam = edges
+            .iter()
+            .any(|other| other.edge() == oe.edge() && other.is_forward() != oe.is_forward());
+        if at_v(v1) || at_v(v2) || seam {
             continue;
         }
         let at_u = |side: f64| {
@@ -4106,6 +4108,42 @@ mod tests {
             analytic_sphere_signed_volume(&topo, face, o)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// A hemisphere bounded the way a file's seamed sphere is, by its equator
+    /// and a meridian seam the wire runs up and back down: the box of its
+    /// full turn is the face, `2 pi R³ / 3` of flux about the centre.
+    #[test]
+    fn sphere_box_takes_a_seamed_hemisphere() {
+        let mut topo = Topology::new();
+        let r = 3.0_f64;
+        let o = Point3::new(0.0, 0.0, 0.0);
+        let rim = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, 0.0), 1e-7));
+        let pole = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, r), 1e-7));
+        let equator = Circle3D::new(o, Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+        let meridian = Circle3D::new(o, Vec3::new(0.0, -1.0, 0.0), r).unwrap();
+        let equator = topo.add_edge(Edge::new(rim, rim, EdgeCurve::Circle(equator)));
+        let seam = topo.add_edge(Edge::new(rim, pole, EdgeCurve::Circle(meridian)));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(equator, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let sphere = brepkit_math::surfaces::SphericalSurface::new(o, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Sphere(sphere)));
+        let flux = analytic_sphere_signed_volume(&topo, face, o)
+            .unwrap()
+            .unwrap();
+        let truth = 2.0 * std::f64::consts::PI * r.powi(3) / 3.0;
+        assert!(
+            (flux - truth).abs() < 1e-9 * truth,
+            "flux {flux}, truth {truth}"
         );
     }
 

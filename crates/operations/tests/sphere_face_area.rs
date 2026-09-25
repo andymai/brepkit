@@ -353,38 +353,48 @@ fn box_less_the_balls_octant() {
 }
 
 /// Half the cap above `z = 1`, built by hand: the latitude on the `y > 0`
-/// side, then the arc in `y = 0` back over the pole to `z = 2`, which it
-/// passes between its two vertices off the middle of its span, and down to
-/// the latitude. Half the cap is `pi R h` with `h = R - 1`.
+/// side, then the arc in `y = 0` back over the pole to a vertex on the far
+/// side (at `z = 2`, or half a degree past the pole, inside the arc's last
+/// probe), which it passes between its two vertices off the middle of its
+/// span, and down to the latitude. Half the cap is `pi R h` with `h = R - 1`.
 #[test]
 fn half_cap_whose_arc_runs_over_the_pole() {
-    let mut topo = Topology::new();
     let rim = RADIUS.mul_add(RADIUS, -1.0).sqrt();
-    let o = Point3::new(0.0, 0.0, 0.0);
-    let east = topo.add_vertex(Vertex::new(Point3::new(rim, 0.0, 1.0), 1e-7));
-    let west = topo.add_vertex(Vertex::new(Point3::new(-rim, 0.0, 1.0), 1e-7));
-    let high = RADIUS.mul_add(RADIUS, -4.0).sqrt();
-    let peak = topo.add_vertex(Vertex::new(Point3::new(high, 0.0, 2.0), 1e-7));
-    let latitude =
-        Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), rim).unwrap();
-    let meridian = Circle3D::new(o, Vec3::new(0.0, 1.0, 0.0), RADIUS).unwrap();
-    let edges = [
-        topo.add_edge(Edge::new(east, west, EdgeCurve::Circle(latitude))),
-        topo.add_edge(Edge::new(west, peak, EdgeCurve::Circle(meridian.clone()))),
-        topo.add_edge(Edge::new(peak, east, EdgeCurve::Circle(meridian))),
-    ];
-    let wire = Wire::new(
-        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
-        true,
-    )
-    .unwrap();
-    let wid = topo.add_wire(wire);
-    let sphere = SphericalSurface::new(o, RADIUS).unwrap();
-    let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Sphere(sphere)));
-    let truth = PI * RADIUS * (RADIUS - 1.0);
-    let area = face_area(&topo, face, 0.005).unwrap();
-    assert!(
-        (area - truth).abs() < 1e-9 * truth,
-        "area {area}, truth {truth}"
-    );
+    let half_degree = 0.5_f64.to_radians();
+    for peak in [
+        Point3::new(RADIUS.mul_add(RADIUS, -4.0).sqrt(), 0.0, 2.0),
+        Point3::new(RADIUS * half_degree.sin(), 0.0, RADIUS * half_degree.cos()),
+    ] {
+        let mut topo = Topology::new();
+        let o = Point3::new(0.0, 0.0, 0.0);
+        let east = topo.add_vertex(Vertex::new(Point3::new(rim, 0.0, 1.0), 1e-7));
+        let west = topo.add_vertex(Vertex::new(Point3::new(-rim, 0.0, 1.0), 1e-7));
+        let peak_id = topo.add_vertex(Vertex::new(peak, 1e-7));
+        let latitude =
+            Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), rim).unwrap();
+        let meridian = Circle3D::new(o, Vec3::new(0.0, 1.0, 0.0), RADIUS).unwrap();
+        let edges = [
+            topo.add_edge(Edge::new(east, west, EdgeCurve::Circle(latitude))),
+            topo.add_edge(Edge::new(
+                west,
+                peak_id,
+                EdgeCurve::Circle(meridian.clone()),
+            )),
+            topo.add_edge(Edge::new(peak_id, east, EdgeCurve::Circle(meridian))),
+        ];
+        let wire = Wire::new(
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let sphere = SphericalSurface::new(o, RADIUS).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Sphere(sphere)));
+        let truth = PI * RADIUS * (RADIUS - 1.0);
+        let area = face_area(&topo, face, 0.005).unwrap();
+        assert!(
+            (area - truth).abs() < 1e-9 * truth,
+            "peak {peak:?}: area {area}, truth {truth}"
+        );
+    }
 }

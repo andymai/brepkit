@@ -263,22 +263,32 @@ fn sphere_hole_area(
 
 /// The parameters strictly inside `(ta, tb)`, in traversal order, where a
 /// curve passes through one of `poles` (within `1e-7`): each local minimum of
-/// the distance over 64 probes, refined by ternary search.
+/// the distance over 64 probes that the curve could bring to the pole within
+/// its neighbouring probes, refined by ternary search.
 fn pole_crossings(at: &dyn Fn(f64) -> Point3, (ta, tb): (f64, f64), poles: &[Point3]) -> Vec<f64> {
     const PROBES: usize = 64;
     let mut found: Vec<f64> = Vec::new();
+    #[allow(clippy::cast_precision_loss)]
+    let ts: Vec<f64> = (0..=PROBES)
+        .map(|k| ta + (tb - ta) * k as f64 / PROBES as f64)
+        .collect();
+    let points: Vec<Point3> = ts.iter().map(|&t| at(t)).collect();
     for &pole in poles {
         let gap = |t: f64| (at(t) - pole).length();
-        #[allow(clippy::cast_precision_loss)]
-        let ts: Vec<f64> = (0..=PROBES)
-            .map(|k| ta + (tb - ta) * k as f64 / PROBES as f64)
-            .collect();
-        let gaps: Vec<f64> = ts.iter().map(|&t| gap(t)).collect();
-        for k in 1..PROBES {
-            if gaps[k] > gaps[k - 1] || gaps[k] > gaps[k + 1] {
+        let gaps: Vec<f64> = points.iter().map(|&p| (p - pole).length()).collect();
+        for k in 0..=PROBES {
+            let (before, after) = (k.saturating_sub(1), (k + 1).min(PROBES));
+            if gaps[k] > gaps[before] || gaps[k] > gaps[after] {
                 continue;
             }
-            let (mut lo, mut hi) = (ts[k - 1], ts[k + 1]);
+            // Within the neighbouring probes the distance falls by at most
+            // the arc between them, about the chords' length.
+            let reach =
+                (points[before] - points[k]).length() + (points[after] - points[k]).length();
+            if gaps[k] > 1.5 * reach + 1e-7 {
+                continue;
+            }
+            let (mut lo, mut hi) = (ts[before], ts[after]);
             for _ in 0..80 {
                 let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
                 if gap(m1) < gap(m2) {
