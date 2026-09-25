@@ -1,8 +1,9 @@
 //! A ball cut out of a box leaves its sphere faces reversed: the builder flips
 //! the flag and keeps the wire, which runs about the sphere's outward normal.
 //! A pocket bounded by one circle (a dimple) meshes over its own side of the
-//! circle, a cavity's hemispheres each over their own half, and a dimpled
-//! box scaled unevenly keeps the dimple it had.
+//! circle, a cavity's hemispheres each over their own half, a dimpled
+//! box scaled unevenly keeps the dimple it had, and a hollowed ball's inner
+//! wall meshes as the bowl it bounds.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -11,8 +12,10 @@ use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{face_area, oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::{make_box, make_sphere};
+use brepkit_operations::shell_op::shell;
 use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
+use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceSurface;
@@ -140,5 +143,54 @@ fn dimple_survives_an_uneven_scale() {
     assert!(
         (volume - truth).abs() < 1e-3 * truth,
         "volume {volume}, truth {truth}"
+    );
+}
+
+/// A ball of radius 10 hollowed to a 1-thick wall with its north hemisphere
+/// open is a bowl: its inner wall is the reversed south hemisphere of radius
+/// 9, whose own mesh stays below the rim, and the rim's hole winds as a hole.
+#[test]
+fn hollowed_ball_meshes_its_bowl() {
+    let truth = 2.0 / 3.0 * PI * (1000.0 - 729.0);
+    let mut topo = Topology::new();
+    let ball = make_sphere(&mut topo, 10.0, 32).unwrap();
+    let mean_z = |topo: &Topology, f| {
+        let mesh = tessellate(topo, f, 0.05).unwrap();
+        #[allow(clippy::cast_precision_loss)]
+        let n = mesh.positions.len() as f64;
+        mesh.positions.iter().map(|p| p.z()).sum::<f64>() / n
+    };
+    let north = solid_faces(&topo, ball)
+        .unwrap()
+        .into_iter()
+        .max_by(|&a, &b| mean_z(&topo, a).total_cmp(&mean_z(&topo, b)))
+        .unwrap();
+    let bowl = shell(&mut topo, ball, 1.0, &[north]).unwrap();
+    assert!(
+        validate_solid(&topo, bowl).unwrap().is_valid(),
+        "invalid bowl"
+    );
+    let volume = solid_volume(&topo, bowl, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-9 * truth,
+        "volume {volume}, truth {truth}"
+    );
+    let mesh = tessellate_solid(&topo, bowl, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "open or non-manifold mesh");
+    let meshed = oriented_solid_volume(&topo, bowl, 0.01).unwrap();
+    assert!(
+        (meshed - truth).abs() < 1e-3 * truth,
+        "mesh volume {meshed}, truth {truth}"
+    );
+    let inner: Vec<_> = solid_faces(&topo, bowl)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| topo.face(f).unwrap().is_reversed())
+        .collect();
+    assert_eq!(inner.len(), 1, "one inner wall");
+    let wall = tessellate(&topo, inner[0], 0.05).unwrap();
+    assert!(
+        wall.positions.iter().all(|p| p.z() < 1e-6),
+        "the inner wall meshed above its rim"
     );
 }
