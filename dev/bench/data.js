@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790335738206,
+  "lastUpdate": 1790335906803,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39959,6 +39959,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 40694860,
             "range": "± 147734",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "04aa56356eb8d9e6fe41a6b7872be544ec45f2d8",
+          "message": "fix(operations): measure a hyperbola-trimmed cone wall exactly (#1764)\n\nHyperbola-trimmed cone walls now measure exactly through boundary flux\nintegration, with exact rational quadratic section arcs keeping their\nedges on both intersecting surfaces.\n\n## What was wrong\n\n- For `make_cone(3, 1.5, 6)` cut by the box over `x > 0.5`, whose plane\nmeets the wall in a hyperbola, Intersect measured 36.090120793 against\n36.096677353 from integrating the circular segment `r^2 acos(d/r) - d\nsqrt(r^2 - d^2)` over the height, 1.8e-4 off. Cut measured 62.861414252\nagainst 62.863491235, and the pieces summed 0.0087 short of the frustum.\n\n- Turning the geometry about an oblique axis or mirroring it changed the\nmeasurements. A pose audit found frustum and cone half-space and corner\ncuts drifting by 2e-6 to 2e-5 from their upright volumes.\n\n- `solid_volume` used its direct per-face path only for faces with\nholes, reversed curved faces, torus faces trimmed by a free-form curve\nor whole rings, and sphere patches. A cylinder or cone wall with a\nfree-form boundary left the solid on the whole-solid mesh.\n\n- Phase FF constructed a plane's parabola or hyperbola section of a cone\nfrom sampled points and a cubic NURBS interpolated through them. The\nresulting curve met the section only at those samples.\n\n## What this does\n\n- `solid_volume` also takes the direct path when a cylinder or cone face\nhas a free-form boundary, detected by `has_free_form_boundary`.\n`developable_face_flux` then integrates the wall's flux along its\nboundary.\n\n- `developable_face_flux` integrates each NURBS boundary edge per knot\nspan because Richardson extrapolation assumes a smooth integrand, which\na NURBS edge provides only between knots. A single-span edge keeps 128\nand 256 steps. Each of several spans gets at least 16 and 32.\n\n- `plane_cone_conic_arc` in `brepkit-math` constructs the exact arc of a\nplane's parabola or hyperbola section of a cone between two points as a\nrational quadratic NURBS. For a hyperbola `x = a cosh φ, y = b sinh φ`,\nit creates pieces spanning at most one unit of `φ`. Each middle control\npoint is the intersection of the endpoint tangents, with middle weight\n`cosh` of half the span. A parabola is one polynomial quadratic.\n\n- `plane_cone_conic_arc` declines coincident ends and checks every piece\nat a quarter, half, and three quarters of its parameter. A point at\nradius `ρ` and height `h` off the apex lies `|ρ sin α − |h| cos α|` from\nthe cone. The arc is declined when any check exceeds `1e-9` of the\nsection's scale, and the run uses interpolation. This guards closed\nforms whose omitted terms vanish only on the exact conic, including a\nvast ellipse from a plane a few `1e-10` short of parallel to a ruling\nthat can otherwise be read as a parabola.\n\n- Phase FF uses the exact construction for each clipped run of a cone\nsection, with interpolation as the fallback. The measure routing fixes\nthe volumes, while the exact arc places the section edge on both\nsurfaces and replaces an interpolation solve over hundreds of points\nwith a closed form.\n\n- `crate::perf::bump_section_fit_points`, the counter behind the\n`perf-counters` guard `tangent_graze_section_fit_is_clipped`, counts\nevery clipped section run point in phase FF's sampled plane-analytic\npath, whether the section uses the exact conic arc or interpolation. It\nreads graze 80 and overlap 352. Disabling the chain clip raises graze to\n2656, above the guard's bound of 600.\n\n- The roadmap records the closed row and the pose audit's other rows.\n\n## Verification\n\n- `frustum_half_space_in_any_pose` in\n`crates/operations/tests/cone_plane_cut.rs` covers the frustum and box\nover `x > 0.5`, upright, turned about an oblique axis, and mirrored\nthrough a slanted plane, under Intersect and Cut. Every piece is valid,\nmeshes watertight, and classifies a point in the kept part Inside and a\npoint in the removed part Outside, mapped through the pose. No mesh\nfallback occurs, and every volume is within `1e-8` of the segment\nintegral. Measured errors are at most 3.5e-10.\n\n- `cone_cut_parallel_to_its_axis` in the same file holds built pieces to\n`5e-9`. Across its 108 built cases, the largest error is 1.76e-9 on the\npointed cone.\n\n- `plane_cone_conic_arcs_lie_on_both_surfaces` in `brepkit-math` checks\na cone hyperbola from a plane parallel to the axis and a parabola from a\nplane parallel to a ruling. Each arc stays within `1e-9` of both the\nplane and cone at 201 points.\n\n- `plane_cone_conic_arc_declines_a_near_parabolic_ellipse` covers planes\n1e-10, 3e-10 and 8e-10 short of parallel to a ruling. Each arc is\ndeclined or lies within `1e-8` of the cone at 201 points. Without the\ncheck, the 8e-10 case returns an arc 1.0e-8 off the cone. It also checks\nthat coincident ends are declined.\n\n- `prism_vertical_corner_fillets_are_watertight` in `brepkit-wasm`\nmatches the closed-form volume, the box less four corners of `(1 - pi/4)\nr^2` each, within `1e-9`, with measured error 2.2e-11. Its inscribed\nmesh tolerance is `1e-3` of the volume because the mesh is 1.02e-4\nshort.\n\n- A pose audit covering 5 primitives, 4 tools, Cut and Intersect, and\nupright, turned, and mirrored poses matches every previously drifting\ncell to its upright volume: the cone's half-space Intersect mirrored\n(9e-6 on main), the frustum's half-space Cut turned (4e-6) and mirrored\n(2e-6), its half-space Intersect turned (2e-5), and its box-corner\nIntersect turned (2e-5) and mirrored (2e-5). No fallback appears or\ndisappears. A turned cylinder's box-corner Cut still drifts by 2e-6.\n\n- The workspace suite passes: 3074 tests run, 3074 passed, 20 skipped.",
+          "timestamp": "2026-09-25T11:25:39Z",
+          "tree_id": "038d7f8fef5bfc7df5930b0ab862499dca431e90",
+          "url": "https://github.com/andymai/brepkit/commit/04aa56356eb8d9e6fe41a6b7872be544ec45f2d8"
+        },
+        "date": 1790335902966,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1007950,
+            "range": "± 2147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1092257,
+            "range": "± 2495",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13119,
+            "range": "± 90",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 760749,
+            "range": "± 1656",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42192932,
+            "range": "± 84613",
             "unit": "ns/iter"
           }
         ]
