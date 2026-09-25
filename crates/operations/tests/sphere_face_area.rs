@@ -398,3 +398,62 @@ fn half_cap_whose_arc_runs_over_the_pole() {
         );
     }
 }
+
+/// A box whose corner lies above the equator on the far side of the axis
+/// keeps a patch of the ball around the pole: at longitude `u` it spans from
+/// the highest latitude any of the box's three planes allows to the pole, so
+/// its area is `R² ∫ (1 − sin v_b(u)) du` (Simpson). The patch's loop winds
+/// the axis, which a patch's `(u, v)` area does not cover.
+#[test]
+fn patch_around_the_pole() {
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(0.3);
+    for (a, b, c) in [(-0.7, -1.1, 0.1), (-0.3, -0.4, 0.2), (-0.3, -0.4, 1.2)] {
+        let v_b = |u: f64| {
+            let mut lo = (c / RADIUS).asin();
+            for (comp, bound) in [(u.cos(), a), (u.sin(), b)] {
+                let ratio = bound / (RADIUS * comp);
+                if comp < 0.0 && ratio < 1.0 {
+                    lo = lo.max(ratio.acos());
+                }
+            }
+            lo
+        };
+        let n = 20_000_u32;
+        let step = 2.0 * PI / f64::from(n);
+        let mut sum = 0.0;
+        for k in 0..=n {
+            let weight = if k == 0 || k == n {
+                1.0
+            } else if k % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            sum += weight * (1.0 - v_b(step * f64::from(k)).sin());
+        }
+        let truth = RADIUS * RADIUS * sum * step / 3.0;
+        for turned in [false, true] {
+            let label = format!("({a}, {b}, {c}) turned {turned}");
+            let mut topo = Topology::new();
+            let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::translation(a, b, c)).unwrap();
+            if turned {
+                transform_solid(&mut topo, ball, &turn).unwrap();
+                transform_solid(&mut topo, block, &turn).unwrap();
+            }
+            let piece = boolean(&mut topo, BooleanOp::Intersect, ball, block).unwrap();
+            let patches: Vec<_> = solid_faces(&topo, piece)
+                .unwrap()
+                .into_iter()
+                .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+                .collect();
+            assert_eq!(patches.len(), 1, "{label}: sphere faces");
+            let area = face_area(&topo, patches[0], 0.01).unwrap();
+            assert!(
+                (area - truth).abs() < 1e-6 * truth,
+                "{label}: area {area}, truth {truth}"
+            );
+        }
+    }
+}
