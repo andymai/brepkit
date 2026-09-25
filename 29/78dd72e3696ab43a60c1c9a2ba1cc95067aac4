@@ -1,0 +1,38 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_05b93f47555300 4043-4061,4065-4066
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_579eb367a565f7 364-366
+  s_ba2f7b5c6902b6::t_4d10626fe3182c 462,3184-3200,3204-3221,3223
+  s_ba2f7b5c6902b6::t_9f8095703f653c 3201-3203
+  s_ba2f7b5c6902b6::t_34460169fa09c0 478-479,3222,3224-3225
+  s_ba2f7b5c6902b6::t_99c1ddddb3ee4b 12,362-363,367-461,463-477
+crates/wasm/src/bindings/assembly_probe_tests.rs
+  s_ba2f7b5c6902b6::t_172aff7ffff789 326-335,337-339,342
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_1f811a50d4aa4b 190,199-206
+  s_ba2f7b5c6902b6::t_961143803b927e 207
+crates/operations/tests/cone_plane_cut.rs
+  s_ba2f7b5c6902b6::t_f06f66cc4ba49b 257-261,393
+  s_ba2f7b5c6902b6::t_9885615a035be0 17-18,20
+  s_ba2f7b5c6902b6::t_a54361a7d87c90 232-233,246,248-249,251,263
+  s_ba2f7b5c6902b6::t_364c73ff949e5e 384-387
+  s_ba2f7b5c6902b6::t_5295ff7063600e 406-443
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_12c7942446fad3 1629-1633,1640-1644
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2978dd72e3696ab43a60c1c9a2ba1cc95067aac4",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
