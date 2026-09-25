@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.24](https://github.com/andymai/brepkit/compare/v4.0.23...v4.0.24) (2026-09-25)
+
+
+### Bug Fixes
+
+* **operations:** keep a ball's box-corner pocket and the box-sphere octant exact ([#1760](https://github.com/andymai/brepkit/issues/1760)) ([8f045bf](https://github.com/andymai/brepkit/commit/8f045bf6b509ac0550b70577a1aeedfec7d83ed9))
+
 ## [4.0.23](https://github.com/andymai/brepkit/compare/v4.0.22...v4.0.23) (2026-09-25)
 
 
