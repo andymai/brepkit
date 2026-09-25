@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790354795838,
+  "lastUpdate": 1790357890585,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40391,6 +40391,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28670550,
             "range": "± 610031",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57402c2d6cda4480ff92f46db764c199336206d6",
+          "message": "fix(algo): hand a faceted equator's arc to both hemispheres (#1773)\n\nFaceted-equator sphere and box octants now remain exact on both sides of\nthe equator, including when passed into a second boolean.\n\n## What was wrong\n\n- `make_sphere(3, 32)` produces two hemispheres meeting on a faceted\nequator formed by chord edges. Intersecting it with the box over `[0,\n10]^2 x [-10, 0]`, with both turned 0.3 about `z` to avoid the box\nshortcut, fell back to a mesh: 94 faces and volume 13.937486265, against\n`pi R^3 / 6` = 14.137166941. The corresponding box above the equator\nproduced the exact octant.\n\n- The box's top face lies on the equator plane and meets both\nhemispheres along the same arc. `emit_split_circle_arcs` emitted the arc\nfor whichever hemisphere it paired with first, then skipped it as a\nduplicate for the other. Re-emitting it would give the plane face two\ncoincident sections.\n\n- Below the equator, the lower hemisphere therefore retained only its\ntwo meridian arcs to the south pole. Those arcs do not close a loop, so\nthe hemisphere stayed whole and the result had 3 faces and 3 free edges.\n\n## What this does\n\n- When an arc is skipped as a duplicate, the skipped pair's other face\nis recorded against the existing curve in `GfaArena::curve_extra_faces`.\n\n- `fill_section_sc` and `build_section_map` give that additional face\nthe curve's section. The plane face continues to receive the section\nonce.\n\n- The roadmap closes the octant's last fallback row.\n\n## Verification\n\n- The new `turned_octants_are_exact` test in\n`crates/operations/tests/sphere_box_corner.rs` covers octants above and\nbelow the equator, turned 0.3, 1.1 and -0.4 about `z`. Each result has 4\nfaces, is valid, and is within `1e-9` of `pi R^3 / 6`.\n\n- `box_octant_feeds_a_second_boolean` adds the turned octant below the\nequator, then subtracts a rod and a box corner. Each result is exact and\nvalid.\n\n- New test `ball_cut_and_fused_with_a_turned_octant_box` verifies that\nthe ball less the box over an octant and the ball fused with it, both\nturned 0.3 about `z`, above and below the equator, use no mesh fallback,\nare valid, and have volume within `2e-4`; the roadmap's chordal-equator\nmeasure row records 98.95105 for the ball less its octant against\n98.96017.\n- On main, both operations below the equator fall back to a mesh, with\n619 faces for the Cut and 622 for the Fuse, while above the equator they\nare already exact; their solid meshes are also open on main above the\nequator, as the roadmap row now records.\n\n- A pose audit covering 5 primitives x 4 tools x Cut and Intersect x\nupright, turned, mirrored matches main in every cell.\n\n- The workspace suite passes: 3090 tests run, 3090 passed, 20 skipped.",
+          "timestamp": "2026-09-25T10:35:42-07:00",
+          "tree_id": "2ee951ce69a0c9217bd21a1ad4da84831e83eb7c",
+          "url": "https://github.com/andymai/brepkit/commit/57402c2d6cda4480ff92f46db764c199336206d6"
+        },
+        "date": 1790357885222,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 817712,
+            "range": "± 1094",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 894674,
+            "range": "± 15111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11288,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 595092,
+            "range": "± 6368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 34965254,
+            "range": "± 455695",
             "unit": "ns/iter"
           }
         ]
