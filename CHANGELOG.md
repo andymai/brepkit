@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.27](https://github.com/andymai/brepkit/compare/v4.0.26...v4.0.27) (2026-09-25)
+
+
+### Bug Fixes
+
+* **io:** write and read a solid's cavities through STEP ([#1769](https://github.com/andymai/brepkit/issues/1769)) ([a634bb7](https://github.com/andymai/brepkit/commit/a634bb76009b0c7960cc826a9706bf6b700ee666))
+
 ## [4.0.26](https://github.com/andymai/brepkit/compare/v4.0.25...v4.0.26) (2026-09-25)
 
 
