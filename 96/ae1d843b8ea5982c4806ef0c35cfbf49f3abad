@@ -1,0 +1,22 @@
+crates/algo/src/classifier/ray_cast.rs
+  s_ba2f7b5c6902b6::t_05bcd443d63293 1585-1601,1603-1674
+  s_ba2f7b5c6902b6::t_3ce3ecb45e2c35 950
+  s_ba2f7b5c6902b6::t_aaf7c70701d8c5 986-987,991-995,998-1001,1006-1008,1050-1074
+  s_ba2f7b5c6902b6::t_646fd84c5c9b11 988-990,996-997,1602
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "96ae1d843b8ea5982c4806ef0c35cfbf49f3abad",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
