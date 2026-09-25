@@ -1,0 +1,25 @@
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_7a447a056779ac 250-257
+  s_ba2f7b5c6902b6::t_260754051e70f9 249
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_260754051e70f9 3102-3157
+crates/operations/tests/torus_face_mesh.rs
+  s_ba2f7b5c6902b6::t_4bdc7a5c0ed9cf 1-162
+  s_ba2f7b5c6902b6::t_16a43e7523c7bb 163-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "df04ff87446cfedee3544ad44e21e52f8f209faf",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
