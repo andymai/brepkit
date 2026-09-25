@@ -1,0 +1,59 @@
+crates/operations/src/boolean/assembly.rs
+  s_ba2f7b5c6902b6::t_aa5144e2589be6 708-722,725-734,739-740,742-754
+  s_ba2f7b5c6902b6::t_bc57d1913f4a82 723-724,735-738,741
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_23421bb6d107d9 6346
+  s_ba2f7b5c6902b6::t_7c01ed4987a693 1226,1232,1236-1237,4778-4780,4809,5653-5655,5685-5688,5690-5695,5770-5785,6325-6344,6350,7235,8038,8044,8048,8097
+  s_ba2f7b5c6902b6::t_8b2974908dc5ba 6345
+  s_ba2f7b5c6902b6::t_59f53792b5c7c2 1223-1225
+  s_ba2f7b5c6902b6::t_5d80e79d05f840 1227
+  s_ba2f7b5c6902b6::t_7ddfd553fc33c0 1233-1235
+  s_ba2f7b5c6902b6::t_c367d3022295ec 1238-1240
+  s_ba2f7b5c6902b6::t_d6049f730b36ba 4775-4777
+  s_ba2f7b5c6902b6::t_3247c25fdd84fe 4781-4783,4806-4808
+  s_ba2f7b5c6902b6::t_0d02d862bc3cca 4810-4812
+  s_ba2f7b5c6902b6::t_cf2a5008a744be 5650-5652
+  s_ba2f7b5c6902b6::t_6a114a3afb848c 5656-5658
+  s_ba2f7b5c6902b6::t_5a21b50ea54095 6347-6349
+  s_ba2f7b5c6902b6::t_fb362fe9e9d455 6351-6352
+  s_ba2f7b5c6902b6::t_df58e7c62c3850 8039-8043
+  s_ba2f7b5c6902b6::t_1ea73504435e4e 8045-8047
+  s_ba2f7b5c6902b6::t_a2c7ec452a0424 8049-8051
+  s_ba2f7b5c6902b6::t_232b03cb3c33c0 8094-8096
+  s_ba2f7b5c6902b6::t_2904d0dc96a5c9 8098
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_ba2f7b5c6902b6::t_7c01ed4987a693 134-137,141-148
+  s_ba2f7b5c6902b6::t_3616223c7e5d2a 149-150
+crates/algo/src/builder/mod.rs
+  s_ba2f7b5c6902b6::t_7bfa40dbd8fa19 363,504-508,515,522-527,921,923-927
+  s_ba2f7b5c6902b6::t_0bec02969d6a8d 550
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_bdb545ff9e795f 3522-3533,3940-3971,4013-4022,4070-4156,4257-4258,4260-4318
+  s_ba2f7b5c6902b6::t_373818d356a200 4259
+  s_ba2f7b5c6902b6::t_121a11fd37c0fb 4319
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_ba2f7b5c6902b6::t_7c01ed4987a693 354-362,370
+  s_ba2f7b5c6902b6::t_e7bcff4e1fca59 363-365,367-369
+  s_ba2f7b5c6902b6::t_0bb3432c5a66a2 371-373
+crates/algo/src/builder/fill_images_faces.rs
+  s_ba2f7b5c6902b6::t_7bfa40dbd8fa19 66,68-69,764
+  s_ba2f7b5c6902b6::t_240efd01028899 515-516,518-519,4430,4438-4440,4442,4444-4450,4460-4482,4484-4491,4509-4517
+  s_ba2f7b5c6902b6::t_d7f6df79bd8afa 517,4431-4437,4441,4443,4483,4492-4508,4518-4521
+  s_ba2f7b5c6902b6::t_9678ed82098c3c 4451-4459
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cc9ad75696be42af46ef8f3c466ba5279c63e494",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
