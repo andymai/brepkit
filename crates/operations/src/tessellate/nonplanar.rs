@@ -3019,8 +3019,9 @@ fn anchor_closed_edges_at_vertices(
 /// shared pool. A cylinder or cone wall goes through the constrained CDT. A
 /// sphere face goes through the latitude-band mesher when it is a band
 /// between two latitude rims, and through the constrained CDT otherwise. A
-/// torus face goes only through the latitude-band mesher, and comes back
-/// without triangles when that mesher declines it.
+/// torus face tries the solid mesher's structured bands (notch, two-rim,
+/// latitude) and then its constrained CDT. When no mesher takes the face, it
+/// comes back without triangles.
 pub(super) fn tessellate_holed_face_local(
     topo: &Topology,
     face_id: FaceId,
@@ -3098,15 +3099,50 @@ pub(super) fn tessellate_holed_face_local(
                 true
             }
         }
-        FaceSurface::Torus(_) => tessellate_latitude_band_shared(
-            topo,
-            face_data,
-            deflection,
-            angular_tol,
-            &pool,
-            &mut merged,
-            &mut point_to_global,
-        )?,
+        FaceSurface::Torus(_) => {
+            let banded = tessellate_torus_notch_band(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )? || tessellate_torus_two_rim_band(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )? || tessellate_latitude_band_shared(
+                topo,
+                face_data,
+                deflection,
+                angular_tol,
+                &pool,
+                &mut merged,
+                &mut point_to_global,
+            )?;
+            // The snap mesher re-enters the per-face mesher, so a face the
+            // CDT cannot take comes back empty for the caller's grid.
+            banded || {
+                let before = merged.indices.len();
+                let cdt = tessellate_nonplanar_cdt(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                    &pool,
+                    &mut merged,
+                    &mut point_to_global,
+                );
+                cdt.is_ok() && merged.indices.len() > before
+            }
+        }
         FaceSurface::Plane { .. } => false,
     };
     if !meshed {
@@ -3119,20 +3155,25 @@ pub(super) fn tessellate_holed_face_local(
         merged.normals[i] = surface.normal(u, v);
         uvs.push([u, v]);
     }
-    if let (Some((_, period)), _) = surface_periods(surface) {
-        split_uv_seam(&mut merged, &mut uvs, period);
+    let (u_period, v_period) = surface_periods(surface);
+    if let Some((_, period)) = u_period {
+        split_uv_seam(&mut merged, &mut uvs, 0, period);
+    }
+    if let Some((_, period)) = v_period {
+        split_uv_seam(&mut merged, &mut uvs, 1, period);
     }
     Ok(super::TriangleMeshUV { mesh: merged, uvs })
 }
 
-/// Give every triangle continuous `u`. A vertex welded on the seam carries
-/// one principal `u`, so a triangle beside it can span nearly a period;
-/// such a triangle takes copies of its low-side vertices one period on.
-fn split_uv_seam(mesh: &mut TriangleMesh, uvs: &mut Vec<[f64; 2]>, period: f64) {
+/// Give every triangle a continuous parameter `axis` (0 for u, 1 for v). A
+/// vertex welded on the seam carries one principal value, so a triangle
+/// beside it can span nearly a period; such a triangle takes copies of its
+/// low-side vertices one period on.
+fn split_uv_seam(mesh: &mut TriangleMesh, uvs: &mut Vec<[f64; 2]>, axis: usize, period: f64) {
     let mut copies: DetHashMap<u32, u32> = DetHashMap::default();
     for t in 0..mesh.indices.len() / 3 {
         let tri = [0, 1, 2].map(|k| mesh.indices[3 * t + k]);
-        let us = tri.map(|i| uvs[i as usize][0]);
+        let us = tri.map(|i| uvs[i as usize][axis]);
         let high = us.iter().copied().fold(f64::MIN, f64::max);
         if high - us.iter().copied().fold(f64::MAX, f64::min) <= period / 2.0 {
             continue;
@@ -3144,10 +3185,11 @@ fn split_uv_seam(mesh: &mut TriangleMesh, uvs: &mut Vec<[f64; 2]>, period: f64) 
             let copy = *copies.entry(i).or_insert_with(|| {
                 #[allow(clippy::cast_possible_truncation)]
                 let j = mesh.positions.len() as u32;
-                let [u, v] = uvs[i as usize];
+                let mut uv = uvs[i as usize];
+                uv[axis] += period;
                 mesh.positions.push(mesh.positions[i as usize]);
                 mesh.normals.push(mesh.normals[i as usize]);
-                uvs.push([u + period, v]);
+                uvs.push(uv);
                 j
             });
             mesh.indices[3 * t + k] = copy;
