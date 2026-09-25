@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790322779844,
+  "lastUpdate": 1790323607957,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -39689,6 +39689,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28724070,
             "range": "± 196849",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "198fcf7e35bef1f47073843c21fe64aaad3df58c",
+          "message": "chore(main): release 4.0.23 (#1761)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.23](https://github.com/andymai/brepkit/compare/v4.0.22...v4.0.23)\n(2026-09-25)\n\n\n### Bug Fixes\n\n* **operations:** mesh a trimmed torus face over the face, not its box\n([#1759](https://github.com/andymai/brepkit/issues/1759))\n([5e7875c](https://github.com/andymai/brepkit/commit/5e7875c19acf3432e6438cf6719488e55791cf69))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.23. Fixes torus face meshing so a trimmed torus\nface is meshed over the face itself instead of its bounding box.\n\n<sup>Written for commit 39d31055ec606dffd438bbb2886a8d46323f1804.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1761?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-25T08:04:05Z",
+          "tree_id": "9a777c2e433dded47ac3e9e63ba47ce7a2d72731",
+          "url": "https://github.com/andymai/brepkit/commit/198fcf7e35bef1f47073843c21fe64aaad3df58c"
+        },
+        "date": 1790323603451,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1016753,
+            "range": "± 7318",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1099539,
+            "range": "± 22616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13397,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 762127,
+            "range": "± 1439",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42478868,
+            "range": "± 125982",
             "unit": "ns/iter"
           }
         ]
