@@ -431,6 +431,9 @@ fn integrate_planar_face(
     normal: Vec3,
     about: Vec3,
 ) -> Result<FaceContribution, CheckError> {
+    if let Some(contrib) = planar_face_by_edges(topo, face_id, normal, about)? {
+        return Ok(contrib);
+    }
     let polygon = crate::util::face_polygon(topo, face_id)?;
     let mut contrib = integrate_planar_polygon(&polygon, normal, about);
 
@@ -450,6 +453,161 @@ fn integrate_planar_face(
     }
 
     Ok(contrib)
+}
+
+/// A plane face's contribution integrated along its edges' own curves by
+/// Green's theorem: each wire gives the area and the first and second
+/// moments of the region it bounds in the face's plane, and the face is the
+/// outer wire's region less its holes'. A curved edge is read exactly rather
+/// than through chords. `None` for a face with a wire that does not chain
+/// into a loop.
+fn planar_face_by_edges(
+    topo: &Topology,
+    face_id: FaceId,
+    normal: Vec3,
+    about: Vec3,
+) -> Result<Option<FaceContribution>, CheckError> {
+    let face = topo.face(face_id)?;
+    let outer = topo.wire(face.outer_wire())?;
+    let Some(first) = outer.edges().first() else {
+        return Ok(None);
+    };
+    let first_edge = topo.edge(first.edge())?;
+    let origin = topo.vertex(first.oriented_start(first_edge))?.point();
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(origin, normal) else {
+        return Ok(None);
+    };
+    let mut m = [0.0; 6];
+    for (k, wid) in std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .enumerate()
+    {
+        let Some(w) = wire_plane_moments(topo, wid, &frame)? else {
+            return Ok(None);
+        };
+        // Each wire counts its own region, whichever way it runs; holes
+        // are taken away.
+        let sign = w[0].signum() * if k == 0 { 1.0 } else { -1.0 };
+        for (total, part) in m.iter_mut().zip(w) {
+            *total = sign.mul_add(part, *total);
+        }
+    }
+    let [area, ix, iy, ixx, ixy, iyy] = m;
+    let (o, e1, e2) = (frame.origin, frame.x, frame.y);
+    // The integral over the region of the square of one coordinate
+    // `oc + c1 x + c2 y`.
+    let square = |oc: f64, c1: f64, c2: f64| {
+        (oc * oc).mul_add(
+            area,
+            (2.0 * oc).mul_add(
+                c1.mul_add(ix, c2 * iy),
+                (c1 * c1).mul_add(ixx, (2.0 * c1 * c2).mul_add(ixy, c2 * c2 * iyy)),
+            ),
+        )
+    };
+    let reach = Vec3::new(o.x(), o.y(), o.z()) - about;
+    Ok(Some(FaceContribution {
+        area,
+        volume: reach.dot(normal) * area / 3.0,
+        volume_moment_x: 0.5 * normal.x() * square(o.x(), e1.x(), e2.x()),
+        volume_moment_y: 0.5 * normal.y() * square(o.y(), e1.y(), e2.y()),
+        volume_moment_z: 0.5 * normal.z() * square(o.z(), e1.z(), e2.z()),
+        centroid_x: o.x().mul_add(area, e1.x().mul_add(ix, e2.x() * iy)),
+        centroid_y: o.y().mul_add(area, e1.y().mul_add(ix, e2.y() * iy)),
+        centroid_z: o.z().mul_add(area, e1.z().mul_add(ix, e2.z() * iy)),
+    }))
+}
+
+/// The integrals over the region a wire bounds in `frame`'s plane of `1`,
+/// `x`, `y`, `x²`, `xy` and `y²`, signed by the way the wire runs, each a
+/// line integral along the wire (`½∮(x dy - y dx)`, `½∮x² dy`, `-½∮y² dx`,
+/// `⅓∮x³ dy`, `½∮x²y dy`, `-⅓∮y³ dx`) taken on the edges' own curves by
+/// Gauss-Legendre quadrature. Edges are chained by their vertices, as
+/// `wire_polygon` chains them. `None` for a wire that does not close.
+fn wire_plane_moments(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    frame: &brepkit_math::frame::Frame3,
+) -> Result<Option<[f64; 6]>, CheckError> {
+    use std::f64::consts::FRAC_PI_8;
+    let wire = topo.wire(wire_id)?;
+    let gauss = gauss_legendre_points(8);
+    let mut m = [0.0; 6];
+    let mut prev: Option<(brepkit_topology::vertex::VertexId, Point3)> = None;
+    let mut first: Option<Point3> = None;
+    let mut scale = 0.0_f64;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (s, e) = (edge.start(), edge.end());
+        let (sp, ep) = (topo.vertex(s)?.point(), topo.vertex(e)?.point());
+        scale = scale.max((sp - frame.origin).length());
+        let forward = match prev {
+            Some((pe, _)) if s == pe && e != pe => true,
+            Some((pe, _)) if e == pe && s != pe => false,
+            _ if s == e => oe.is_forward(),
+            Some((_, last)) => (sp - last).length() <= (ep - last).length(),
+            None => oe.is_forward(),
+        };
+        let (from, to) = if forward { (sp, ep) } else { (ep, sp) };
+        first.get_or_insert(from);
+        prev = Some((if forward { e } else { s }, to));
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+        // The curve's own direction runs from `sp`, or (a NURBS edge's span)
+        // from `ep` back; a closed edge runs its way from its vertex.
+        let natural = s == e || {
+            let at = curve.evaluate_with_endpoints(t0, sp, ep);
+            (at - sp).length() <= (at - ep).length()
+        };
+        // Breaks between which the integrand is smooth: a NURBS curve's
+        // knots within the span, and pieces no wider than an eighth of a turn
+        // on a conic.
+        let mut breaks = vec![t0];
+        match curve {
+            EdgeCurve::Line => {}
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                let n = ((t1 - t0).abs() / FRAC_PI_8).ceil().max(1.0) as u32;
+                breaks.extend((1..n).map(|k| (t1 - t0).mul_add(f64::from(k) / f64::from(n), t0)));
+            }
+            EdgeCurve::NurbsCurve(c) => {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                breaks.extend(c.knots().iter().copied().filter(|&k| k > lo && k < hi));
+                breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (hi - lo).abs());
+            }
+        }
+        breaks.push(t1);
+        if forward != natural {
+            breaks.reverse();
+        }
+        for piece in breaks.windows(2) {
+            let (step, mid) = (piece[1] - piece[0], f64::midpoint(piece[0], piece[1]));
+            for gp in gauss {
+                let t = (0.5 * step).mul_add(gp.x, mid);
+                let w = 0.5 * step * gp.w;
+                let p = curve.evaluate_with_endpoints(t, sp, ep) - frame.origin;
+                let d = match curve {
+                    EdgeCurve::Line => ep - sp,
+                    EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
+                    EdgeCurve::Ellipse(c) => c.tangent(t),
+                    EdgeCurve::NurbsCurve(c) => c.derivatives(t, 1)[1],
+                };
+                let (x, y) = (p.dot(frame.x), p.dot(frame.y));
+                let (dx, dy) = (d.dot(frame.x), d.dot(frame.y));
+                m[0] += w * 0.5 * x.mul_add(dy, -(y * dx));
+                m[1] += w * 0.5 * x * x * dy;
+                m[2] -= w * 0.5 * y * y * dx;
+                m[3] += w * x * x * x * dy / 3.0;
+                m[4] += w * 0.5 * x * x * y * dy;
+                m[5] -= w * y * y * y * dx / 3.0;
+            }
+        }
+    }
+    let closes = match (first, prev) {
+        (Some(a), Some((_, b))) => (a - b).length() <= 1e-6 * scale.max(1.0),
+        _ => false,
+    };
+    Ok(closes.then_some(m))
 }
 
 /// Integrate a planar polygon's contribution via fan triangulation.
@@ -1092,6 +1250,50 @@ mod tests {
                 c.area
             );
         }
+    }
+
+    /// A disc of radius 2 at `z = 3` with a hole of radius 1, bounded by
+    /// closed circles: its area, flux and first moments come out exact, where
+    /// 32 chords a circle hold 0.64% less.
+    #[test]
+    fn a_plane_face_reads_its_circles_exactly() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let centre = Point3::new(1.0, -2.0, 3.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let mut ring = |r: f64, forward: bool| {
+            let v = topo.add_vertex(Vertex::new(Point3::new(1.0 + r, -2.0, 3.0), 1e-7));
+            let c = Circle3D::new(centre, up, r).unwrap();
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(c)));
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap())
+        };
+        let (outer, hole) = (ring(2.0, true), ring(1.0, false));
+        let plane = FaceSurface::Plane { normal: up, d: 3.0 };
+        let face = topo.add_face(Face::new(outer, vec![hole], plane));
+        let c = integrate_face(&topo, face, 5).unwrap();
+        let area = 3.0 * std::f64::consts::PI;
+        assert!((c.area - area).abs() < 1e-12, "area {}", c.area);
+        assert!((c.volume - area).abs() < 1e-12, "volume {}", c.volume);
+        assert!(
+            (c.centroid_x - area).abs() < 1e-12,
+            "x moment {}",
+            c.centroid_x
+        );
+        assert!(
+            (c.centroid_y + 2.0 * area).abs() < 1e-12,
+            "y moment {}",
+            c.centroid_y
+        );
+        assert!(
+            (c.volume_moment_z - 4.5 * area).abs() < 1e-12,
+            "z moment {}",
+            c.volume_moment_z
+        );
     }
 
     /// A unit cylinder's wall turning 270 degrees and 1 tall, its lower rim a
