@@ -1,0 +1,23 @@
+crates/operations/examples/pose_sweep.rs
+  s_ba2f7b5c6902b6::t_8a9eb1869e1d29 21-27,57-61,74-76,176-179,226-230,253-255,424-425,446-459,476-477
+  s_ba2f7b5c6902b6::t_a2d049ee8e7e77 1-14,18-20,28-56,62-73,77-175,180-225,231-252,256-410,427-429,431-445,460-475,478-485
+  s_ba2f7b5c6902b6::t_746e0abe599169 15-17,411-423,426,430
+.claude/skills/pr-workflow/SKILL.md
+  s_ba2f7b5c6902b6::t_d201a00a66a3f8 16,41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c281a15762cd4e8cb9ca8d7a3cd582dde7f8dfda",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
