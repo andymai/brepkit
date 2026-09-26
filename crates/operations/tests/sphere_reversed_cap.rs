@@ -367,3 +367,51 @@ fn reversed_faces_raise_no_orientation_warning() {
         assert_eq!(warned, 0, "{label}: orientation warnings");
     }
 }
+
+/// A rod along `z` through the dimple's floor: the dimple's face is reversed,
+/// and its pole axis follows the wire like any other face's, so the rod meets
+/// it and bores the floor. The volume bound covers the per-face measure of a
+/// sphere face whose hole winds its axis (the roadmap's sphere measure row).
+#[test]
+fn a_rod_bores_the_dimple_floor() {
+    use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
+    use brepkit_math::vec::Point3;
+    use brepkit_operations::primitives::make_cylinder;
+    let (r, h, rod_r) = (2.0_f64, 1.5_f64, 0.5_f64);
+    let (mut topo, dimple) = box_less_ball(5.5);
+    let rod = make_cylinder(&mut topo, rod_r, 14.5).unwrap();
+    transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, -10.0)).unwrap();
+    let piece = boolean(&mut topo, BooleanOp::Cut, dimple, rod).unwrap();
+    let faces = solid_faces(&topo, piece).unwrap();
+    assert!(
+        faces.len() <= 12,
+        "fell back to a mesh ({} faces)",
+        faces.len()
+    );
+    assert!(validate_solid(&topo, piece).unwrap().is_valid(), "invalid");
+    // The rod removes the column from the box's bottom up to the dimple's
+    // floor, `z = 5.5 - sqrt(r² - ρ²)`.
+    let column = 2.0
+        * PI
+        * (10.5 * rod_r * rod_r / 2.0
+            + (r.mul_add(r, -(rod_r * rod_r)).powf(1.5) - r.powi(3)) / 3.0);
+    let truth = 1000.0 - PI * h * h * (3.0 * r - h) / 3.0 - column;
+    let volume = solid_volume(&topo, piece, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 2e-4 * truth,
+        "volume {volume}, truth {truth}"
+    );
+    for (x, z, class) in [
+        (0.0, 0.0, PointClassification::Outside),
+        (0.4, 3.4, PointClassification::Outside),
+        (0.7, 3.4, PointClassification::Inside),
+        (0.0, 4.2, PointClassification::Outside),
+    ] {
+        let p = Point3::new(x, 0.0, z);
+        assert_eq!(
+            classify_point(&topo, piece, p, &ClassifyOptions::default()).unwrap(),
+            class,
+            "{p:?}"
+        );
+    }
+}

@@ -162,8 +162,10 @@ pub(super) fn split_noseam_face_direct(
                 pool.push(reverse_of(arc));
             }
         }
+        // When the open arcs do not chain into one loop, the face fails
+        // instead of being kept whole (see the arrangement below).
         let Some(remainder) = chain_closed_loop(pool, close_tol) else {
-            return unsplit();
+            return Vec::new();
         };
         // The remainder starts on the face's own boundary, so it keeps the
         // face's winding; the cap chained its arcs whichever way they came
@@ -267,27 +269,36 @@ fn split_noseam_by_arrangement(
     face_id: FaceId,
     tol: f64,
 ) -> Vec<SplitSubFace> {
-    let unsplit = || {
-        vec![SplitSubFace {
-            surface: surface.clone(),
-            outer_wire: boundary_edges.to_vec(),
-            inner_wires: Vec::new(),
-            reversed,
-            parent: face_id,
-            rank,
-            precomputed_interior: None,
-        }]
-    };
-
+    // Every arc here crosses the face, so when a region cannot be traced
+    // the face fails (an empty split) instead of being kept whole: one
+    // sample would then classify the whole hemisphere, which can close a
+    // wrong solid the result gates accept.
     // Need at least two arcs to interleave; one arc is handled by the cap path.
     if open_sections.len() < 2 {
-        return unsplit();
+        return Vec::new();
+    }
+    // The collar is the region inside every arc chain (a section split over
+    // its crest is one chain of two arcs), which the chains fence off from
+    // the seam only when at least three of them surround the pole: a single
+    // chain (a half-space) or two (a slab) leave regions on both sides of it,
+    // and the one this keeps would drop the rest.
+    let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
+    let Some((seam_n, seam_p)) = loop_plane(&verts) else {
+        return Vec::new();
+    };
+    let seam_ends = open_sections
+        .iter()
+        .flat_map(|a| [a.start_3d, a.end_3d])
+        .filter(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
+        .count();
+    if seam_ends < 6 {
+        return Vec::new();
     }
 
     // Reconstruct the seam as its exact circle and split it at the crossings,
     // so the seam arcs share endpoints EXACTLY with the open arcs.
     let Some(seam_arcs) = build_seam_arcs(surface, boundary_edges, open_sections, tol) else {
-        return unsplit();
+        return Vec::new();
     };
 
     // Half-edge soup: every seam arc and every open arc in both orientations,
@@ -372,7 +383,7 @@ fn split_noseam_by_arrangement(
     }
 
     let Some(region_idx) = best else {
-        return unsplit();
+        return Vec::new();
     };
     let mut region = loops[region_idx].clone();
     if net_u(&region) * parent_net_u > 0.0 {
@@ -411,34 +422,14 @@ fn build_seam_arcs(
     tol: f64,
 ) -> Option<Vec<OrientedPCurveEdge>> {
     use brepkit_math::curves::Circle3D;
-    use brepkit_math::vec::Vec3;
 
     let FaceSurface::Sphere(sphere) = surface else {
         return None;
     };
 
-    // Seam-plane normal + a point on it, from the boundary polygon (Newell).
+    // Seam-plane normal + a point on it, from the boundary polygon.
     let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
-    if verts.len() < 3 {
-        return None;
-    }
-    let mut nrm = Vec3::new(0.0, 0.0, 0.0);
-    let mut cen = Vec3::new(0.0, 0.0, 0.0);
-    let n = verts.len();
-    for i in 0..n {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        nrm += Vec3::new(
-            (a.y() - b.y()) * (a.z() + b.z()),
-            (a.z() - b.z()) * (a.x() + b.x()),
-            (a.x() - b.x()) * (a.y() + b.y()),
-        );
-        cen += Vec3::new(a.x(), a.y(), a.z());
-    }
-    let plane_n = nrm.normalize().ok()?;
-    #[allow(clippy::cast_precision_loss)]
-    let inv_n = 1.0 / n as f64;
-    let plane_pt = Point3::new(cen.x() * inv_n, cen.y() * inv_n, cen.z() * inv_n);
+    let (plane_n, plane_pt) = loop_plane(&verts)?;
 
     // Seam circle on the sphere: centre offset from the sphere centre along the
     // plane normal by the plane's signed distance; radius from Pythagoras.
@@ -665,6 +656,29 @@ fn loop_polyline(loop_edges: &[OrientedPCurveEdge]) -> Vec<brepkit_math::vec::Po
         }
     }
     poly
+}
+
+/// The plane of a closed polyline: its unit Newell normal (along its vector
+/// area, so the loop runs counter-clockwise about it) and its vertex centroid.
+/// `None` for fewer than three points or no area.
+fn loop_plane(pts: &[Point3]) -> Option<(brepkit_math::vec::Vec3, Point3)> {
+    use brepkit_math::vec::Vec3;
+    if pts.len() < 3 {
+        return None;
+    }
+    let mut n = Vec3::new(0.0, 0.0, 0.0);
+    let mut c = Vec3::new(0.0, 0.0, 0.0);
+    for (a, b) in pts.iter().zip(pts.iter().cycle().skip(1)) {
+        n += Vec3::new(
+            (a.y() - b.y()) * (a.z() + b.z()),
+            (a.z() - b.z()) * (a.x() + b.x()),
+            (a.x() - b.x()) * (a.y() + b.y()),
+        );
+        c += Vec3::new(a.x(), a.y(), a.z());
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let c = c * (1.0 / pts.len() as f64);
+    Some((n.normalize().ok()?, Point3::new(c.x(), c.y(), c.z())))
 }
 
 /// Reverse a loop's orientation (a hole is traversed opposite to the containing
@@ -2577,6 +2591,46 @@ pub(super) fn split_face_with_internal_loops(
             }
         }
     }
+    // On a sphere a loop's disc is the smaller cap, on the side of its plane
+    // away from the centre, and a loop whose samples all lie on that side is
+    // a hole of that disc; the smallest enclosing cap is the one whose plane
+    // lies farthest from the centre.
+    if let FaceSurface::Sphere(sph) = surface {
+        let caps: Vec<Option<(Point3, brepkit_math::vec::Vec3, f64)>> = loops
+            .iter()
+            .map(|l| {
+                let (n, c) = loop_plane(&sample_edges_3d(l))?;
+                let d = (c - sph.center()).dot(n);
+                if d.abs() <= tol_3d * 100.0 {
+                    return None;
+                }
+                Some((c, if d > 0.0 { n } else { -n }, d.abs()))
+            })
+            .collect();
+        for lj in 0..loops.len() {
+            let pts = sample_edges_3d(&loops[lj]);
+            let mut best: Option<(f64, usize)> = None;
+            for (li, cap) in caps.iter().enumerate() {
+                let Some((c, n, d)) = cap else {
+                    continue;
+                };
+                if li == lj || pts.is_empty() {
+                    continue;
+                }
+                if pts.iter().all(|p| (*p - *c).dot(*n) > tol_3d * 100.0)
+                    && best.is_none_or(|(bd, _)| *d > bd)
+                {
+                    best = Some((*d, li));
+                }
+            }
+            if let Some((_, li)) = best {
+                log::debug!(
+                    "split_face_with_internal_loops: face {face_id:?} loop {li} encloses loop {lj}"
+                );
+                parent_loop[lj] = Some(li);
+            }
+        }
+    }
     let into_solid = |p: Point3| -> Point3 {
         match surface {
             FaceSurface::Plane { normal, .. } => {
@@ -2587,6 +2641,10 @@ pub(super) fn split_face_with_internal_loops(
                     p.z() - n.z() * 1e-6,
                 )
             }
+            // A chord's midpoint lies inside the ball: push it back out.
+            FaceSurface::Sphere(sph) => (p - sph.center())
+                .normalize()
+                .map_or(p, |d| sph.center() + d * sph.radius()),
             _ => p,
         }
     };
