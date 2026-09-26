@@ -4758,13 +4758,14 @@ fn closed_circle_boundary_crossings(
     circle: &brepkit_math::curves::Circle3D,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
-    // Hits carry the boundary edge they came from when that edge is an ARC
-    // (`Some(edge_id)`); line-edge hits carry `None`. Adjacent same-arc hit
-    // pairs get a midpoint inserted below — the kept span between them would
-    // otherwise share BOTH endpoints with the boundary arc (a co-endpoint
-    // lens), which `merge_duplicate_edges` folds into one edge, collapsing
-    // the lens region to a zero-area slit. The midpoint split is the
-    // sanctioned splitter-side resolution (never make the shared merge
+    // Hits carry the boundary edge they came from (`Some(edge_id)`); the
+    // seam-plane crossings carry `None`. Adjacent hit pairs from one edge get
+    // a midpoint inserted below: the kept span between them would otherwise
+    // share BOTH endpoints with that edge's piece (a co-endpoint lens: an arc
+    // over an arc, or over a line, as a box wall's circle through a ball over
+    // the wall's bottom edge), which `merge_duplicate_edges` folds into one
+    // edge, collapsing the lens region to a zero-area slit. The midpoint split
+    // is the sanctioned splitter-side resolution (never make the shared merge
     // smarter).
     let face_hits = |fid: FaceId| -> Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> {
         let mut hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
@@ -4789,7 +4790,7 @@ fn closed_circle_boundary_crossings(
             match edge.curve() {
                 EdgeCurve::Line => {
                     for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
-                        edge_hits.push((t, p, None));
+                        edge_hits.push((t, p, Some(oe.edge())));
                     }
                 }
                 // Arc boundary edges (a plane face rimmed by a cone/cylinder
@@ -4960,10 +4961,11 @@ fn closed_circle_boundary_crossings(
     hits.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     // Midpoint-split spans whose BOTH ends were minted by the same boundary
-    // ARC edge: the span between them shares both endpoints with that arc (a
-    // co-endpoint lens) and `merge_duplicate_edges` would fold the pair,
-    // collapsing the lens region into a zero-area slit face. Inserting the
-    // angular midpoint keeps the section as two sub-arcs — no shared qpair.
+    // edge: the span between them shares both endpoints with that edge's
+    // piece (a co-endpoint lens) and `merge_duplicate_edges` would fold the
+    // pair, collapsing the lens region into a zero-area slit face. Inserting
+    // the angular midpoint keeps the section as two sub-arcs, with no shared
+    // endpoint pair.
     let n = hits.len();
     if n >= 2 {
         let mut mids: Vec<(f64, Point3)> = Vec::new();

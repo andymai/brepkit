@@ -8151,31 +8151,37 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
                 }
             };
             interior_uv = Point2::new(u_center, target_v);
-        } else if let Some(north) = winds_the_axis(&pts_2d) {
-            // The loop winds the axis, so the face holds the pole on the
-            // loop's left (progress toward +u puts the north pole there), and
-            // the loop's (u, v) polygon, open across the seam, encloses no
-            // part of it: its centroid can land beyond the loop. Aim between
-            // the loop's nearest approach to that pole and the pole, short of
-            // any hole that winds the axis too.
-            let toward = |v: f64| if north { v } else { -v };
-            let reach = pts_2d
-                .iter()
-                .map(|p| toward(p.y()))
-                .fold(f64::NEG_INFINITY, f64::max);
-            let mut far = std::f64::consts::FRAC_PI_2;
-            for hole in &sub_face.inner_wires {
-                let hole_2d = sample_wire_loop_uv(hole);
-                if winds_the_axis(&hole_2d).is_some() {
-                    let near = hole_2d
-                        .iter()
-                        .map(|p| toward(p.y()))
-                        .fold(f64::INFINITY, f64::min);
-                    far = far.min(near);
+        } else {
+            // A loop that winds the axis holds a pole on its left (progress
+            // toward +u puts the north pole there), and its (u, v) polygon,
+            // open across the seam, encloses no part of it: its centroid can
+            // land beyond the loop. Aim between the loop's nearest approach
+            // to that pole and the pole, short of any hole that winds the
+            // axis too. The loops are sampled on their edges' own curves: a
+            // pcurve can run past a pole, and holds a closed latitude circle
+            // as a single point.
+            let outer =
+                sampling::sample_wire_loop_uv_on_surface(&sub_face.outer_wire, &sub_face.surface);
+            if let Some(north) = winds_the_axis(&outer) {
+                let toward = |v: f64| if north { v } else { -v };
+                let reach = outer
+                    .iter()
+                    .map(|p| toward(p.y()))
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let mut far = std::f64::consts::FRAC_PI_2;
+                for hole in &sub_face.inner_wires {
+                    let hole_2d = sampling::sample_wire_loop_uv_on_surface(hole, &sub_face.surface);
+                    if winds_the_axis(&hole_2d).is_some() {
+                        let near = hole_2d
+                            .iter()
+                            .map(|p| toward(p.y()))
+                            .fold(f64::INFINITY, f64::min);
+                        far = far.min(near);
+                    }
                 }
-            }
-            if reach < far {
-                interior_uv = Point2::new(pts_2d[0].x(), toward(0.5 * (reach + far)));
+                if reach < far {
+                    interior_uv = Point2::new(outer[0].x(), toward(0.5 * (reach + far)));
+                }
             }
         }
     }

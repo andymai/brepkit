@@ -450,21 +450,79 @@ fn corner_outside_the_ball_is_not_an_octant() {
     );
 }
 
+/// The area of the disc of radius `r` about the axis where `x > a` and
+/// `y > b`: across `x`, the chord above `y = b` (or the whole chord where the
+/// line misses the disc below it) in closed form.
+fn disc_corner_area(r: f64, a: f64, b: f64) -> f64 {
+    if r <= 0.0 {
+        return 0.0;
+    }
+    // ∫ sqrt(r² − x²) dx from 0.
+    let half_chord = |x: f64| {
+        let x = x.clamp(-r, r);
+        0.5 * x.mul_add((r * r - x * x).max(0.0).sqrt(), r * r * (x / r).asin())
+    };
+    let x_b = (r * r - b * b).max(0.0).sqrt();
+    let from = a.max(-r);
+    let mut area = 0.0;
+    for (p, q, crossed) in [(-r, -x_b, false), (-x_b, x_b, true), (x_b, r, false)] {
+        let p = p.max(from);
+        if q <= p {
+            continue;
+        }
+        let under = half_chord(q) - half_chord(p);
+        if crossed {
+            area += b.mul_add(-(q - p), under);
+        } else if b < 0.0 {
+            area += 2.0 * under;
+        }
+    }
+    area
+}
+
+/// The ball's volume over `x > a`, `y > b` and `z0 < z < z1`, by Simpson in
+/// `z` over the closed-form slices.
+fn ball_in_box(a: f64, b: f64, z0: f64, z1: f64) -> f64 {
+    let (lo, hi) = (z0.max(-RADIUS), z1.min(RADIUS));
+    if hi <= lo {
+        return 0.0;
+    }
+    let n = 4000_u32;
+    let step = (hi - lo) / f64::from(n);
+    let slice = |z: f64| disc_corner_area(RADIUS.mul_add(RADIUS, -(z * z)).max(0.0).sqrt(), a, b);
+    let mut sum = slice(lo) + slice(hi);
+    for k in 1..n {
+        sum += if k % 2 == 1 { 4.0 } else { 2.0 } * slice(step.mul_add(f64::from(k), lo));
+    }
+    sum * step / 3.0
+}
+
 /// A box whose corner lies above the equator but on the far side of the axis
 /// takes a patch around the pole: the section loop on the upper hemisphere
 /// winds the axis, and the patch's interior sample has to land near the pole
 /// rather than at its loop's centroid, which lies in the ring around it. The
-/// Cut is exact, valid and watertight, and with the Intersect makes the ball;
-/// a point by the pole is removed and one below the box is kept. The volume
-/// bound covers the measure of a sphere face whose hole winds the pole (the
-/// roadmap's sphere measure row).
+/// Cut and the Intersect are exact, valid and watertight; a point by the pole
+/// is removed, one below the box and one in a lune beside it are kept. The
+/// Intersect measures its closed form; the Cut is held to the ball less it
+/// only loosely, for the measure of a sphere face whose hole winds the pole
+/// (the roadmap's sphere measure row). With the corner at `(-2.5, -2.5)` the
+/// box's walls cut lens faces from the ball whose arcs and lines share both
+/// ends.
 #[test]
 fn a_corner_holding_the_pole_cuts_its_patch() {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
-    for (a, b, c) in [(-0.7, -1.1, 0.1), (-0.3, -0.4, 0.2), (-0.3, -0.4, 1.2)] {
+    for (a, b, c) in [
+        (-0.7, -1.1, 0.1),
+        (-0.3, -0.4, 0.2),
+        (-0.3, -0.4, 1.2),
+        (-2.5, -2.5, 0.1),
+    ] {
         let label = format!("corner ({a}, {b}, {c})");
-        let mut volumes = Vec::new();
-        for op in [BooleanOp::Cut, BooleanOp::Intersect] {
+        let piece = ball_in_box(a, b, c, c + 10.0);
+        for (op, truth, bound) in [
+            (BooleanOp::Cut, ball - piece, 5e-3),
+            (BooleanOp::Intersect, piece, 1e-4),
+        ] {
             let mut topo = Topology::new();
             let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
             let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -478,31 +536,49 @@ fn a_corner_holding_the_pole_cuts_its_patch() {
                 is_watertight(&mesh),
                 "{label} {op:?}: open or non-manifold mesh"
             );
-            volumes.push(solid_volume(&topo, result, 0.01).unwrap());
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < bound * truth,
+                "{label} {op:?}: volume {volume}, truth {truth}"
+            );
             let at =
                 |p: Point3| classify_point(&topo, result, p, &ClassifyOptions::default()).unwrap();
-            let (by_pole, below) = if op == BooleanOp::Cut {
+            let (by_pole, kept) = if op == BooleanOp::Cut {
                 (PointClassification::Outside, PointClassification::Inside)
             } else {
                 (PointClassification::Inside, PointClassification::Outside)
             };
-            assert_eq!(
-                at(Point3::new(0.1, 0.1, 2.9)),
-                by_pole,
-                "{label} {op:?}: by the pole"
-            );
-            assert_eq!(
-                at(Point3::new(0.2, -0.3, -1.0)),
-                below,
-                "{label} {op:?}: below"
-            );
+            for (p, class, place) in [
+                (Point3::new(0.1, 0.1, 2.9), by_pole, "by the pole"),
+                (Point3::new(0.2, -0.3, -1.0), kept, "below"),
+                (Point3::new(-2.717, 0.202, 0.735), kept, "in a lune"),
+            ] {
+                assert_eq!(at(p), class, "{label} {op:?}: {place}");
+            }
         }
-        let sum = volumes[0] + volumes[1];
-        assert!(
-            (sum - ball).abs() < 5e-3 * ball,
-            "{label}: Cut {} + Intersect {} = {sum}, ball {ball}",
-            volumes[0],
-            volumes[1]
-        );
     }
+}
+
+/// The ball's patch around the pole, cut again by a box over `z > 2.95`:
+/// the second cut takes the patch's cap, and the piece left is exact.
+#[test]
+fn a_patch_around_the_pole_takes_a_second_cut() {
+    let mut topo = Topology::new();
+    let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    transform_solid(&mut topo, block, &Mat4::translation(-0.7, -1.1, 0.1)).unwrap();
+    let patch = boolean(&mut topo, BooleanOp::Intersect, sphere, block).unwrap();
+    let top = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    transform_solid(&mut topo, top, &Mat4::translation(-5.0, -5.0, 2.95)).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Cut, patch, top).unwrap();
+    assert!(exact(&topo, result), "fell back to a mesh");
+    assert!(validate_solid(&topo, result).unwrap().is_valid(), "invalid");
+    let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "open or non-manifold mesh");
+    let truth = ball_in_box(-0.7, -1.1, 0.1, 2.95);
+    let volume = solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 2e-4 * truth,
+        "volume {volume}, truth {truth}"
+    );
 }
