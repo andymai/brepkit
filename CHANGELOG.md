@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.40](https://github.com/andymai/brepkit/compare/v4.0.39...v4.0.40) (2026-09-26)
+
+
+### Bug Fixes
+
+* **operations:** extrude and measure arcs past half a turn along their own span ([#1796](https://github.com/andymai/brepkit/issues/1796)) ([cd5753e](https://github.com/andymai/brepkit/commit/cd5753eaa919738f9bf2b3dfb25517405c9528ee))
+
 ## [4.0.39](https://github.com/andymai/brepkit/compare/v4.0.38...v4.0.39) (2026-09-26)
 
 
