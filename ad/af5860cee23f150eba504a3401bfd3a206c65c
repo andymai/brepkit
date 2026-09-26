@@ -1,0 +1,33 @@
+crates/operations/examples/pose_sweep.rs
+  s_ba2f7b5c6902b6::t_3b72cb0a4b5920 193-198,336-340
+.claude/skills/roadmap/SKILL.md
+  s_6231a44d9b968c::t_9461af894254a6 219-225
+crates/operations/src/boolean/mod.rs
+  s_ba2f7b5c6902b6::t_8f60a5e7282f6c 725,2840-2846,2849,2890-2895
+crates/operations/tests/box_less_frustum.rs
+  s_ba2f7b5c6902b6::t_2ec35c573f2cec 1-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "adaf5860cee23f150eba504a3401bfd3a206c65c",
+  "prompts": {},
+  "sessions": {
+    "s_6231a44d9b968c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7fec2226-cc08-48b6-ae40-734b2c169a27",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
