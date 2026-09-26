@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.33](https://github.com/andymai/brepkit/compare/v4.0.32...v4.0.33) (2026-09-26)
+
+
+### Bug Fixes
+
+* **algo:** sample a sphere patch around the pole near the pole ([#1779](https://github.com/andymai/brepkit/issues/1779)) ([5391f75](https://github.com/andymai/brepkit/commit/5391f75e3f35154ff54717479a1fd589dda83d43))
+
 ## [4.0.32](https://github.com/andymai/brepkit/compare/v4.0.31...v4.0.32) (2026-09-26)
 
 
