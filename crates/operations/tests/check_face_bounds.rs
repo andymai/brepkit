@@ -14,7 +14,8 @@ use brepkit_topology::Topology;
 
 /// A unit ball less its positive octant, as made and turned four ways: the
 /// wall keeping 270 degrees above the equator runs down a meridian from the
-/// pole and up another, and reads its volume `7π/6`.
+/// pole and up another, and reads its volume `7π/6`; as made, its centre of
+/// mass sits at `-3/56` on each axis.
 #[test]
 fn a_ball_less_an_octant_reads_its_volume() {
     let truth = 7.0 * PI / 6.0;
@@ -41,6 +42,15 @@ fn a_ball_less_an_octant_reads_its_volume() {
             (volume - truth).abs() < 1e-6 * truth,
             "{name}: volume {volume}, truth {truth}"
         );
+        if name == "as made" {
+            let c = center_of_mass(&topo, rest, &PropertiesOptions::default()).unwrap();
+            let want = -3.0 / 56.0;
+            let off = (c.x() - want).hypot(c.y() - want).hypot(c.z() - want);
+            assert!(
+                off < 1e-6,
+                "centre of mass {c:?}, truth {want} on each axis"
+            );
+        }
     }
 }
 
