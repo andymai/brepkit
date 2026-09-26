@@ -2456,3 +2456,89 @@ fn cdt_covers_steiner_vertices_from_constraint_recovery() {
         assert!(idx < n, "triangle index {idx} out of bounds (len {n})");
     }
 }
+
+/// A right triangle with a vertex on the axis, revolved a quarter turn: the
+/// revolve leaves an edge collapsed onto the cone's apex, and the cone face
+/// meshed on its own covers its quarter (`π √5 / 4`) however the solid is
+/// turned or mirrored.
+#[test]
+fn a_revolved_cone_quarter_meshes_its_own_span() {
+    use brepkit_math::mat::Mat4;
+
+    let truth = std::f64::consts::PI * 5.0_f64.sqrt() / 4.0;
+    for pose in 0..4 {
+        let mut topo = Topology::new();
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 2.0),
+        ];
+        let ids: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let edges = (0..3)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(ids[i], ids[(i + 1) % 3], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, -1.0, 0.0),
+            d: 0.0,
+        };
+        let profile = topo.add_face(Face::new(wire, vec![], plane));
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut solid = crate::revolve::revolve(
+            &mut topo,
+            profile,
+            origin,
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+        match pose {
+            1 => crate::transform::transform_solid(
+                &mut topo,
+                solid,
+                &Mat4::rotation_x(std::f64::consts::PI),
+            )
+            .unwrap(),
+            2 => crate::transform::transform_solid(
+                &mut topo,
+                solid,
+                &Mat4::rotation_y(std::f64::consts::FRAC_PI_2),
+            )
+            .unwrap(),
+            3 => {
+                solid = crate::mirror::mirror(
+                    &mut topo,
+                    solid,
+                    Point3::new(0.1, 0.0, 0.0),
+                    Vec3::new(1.0, 0.2, 0.0),
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let cone = faces
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
+            .unwrap();
+        let mesh = tessellate(&topo, cone, 0.002).unwrap();
+        let area: f64 = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                0.5 * (b - a).cross(c - a).length()
+            })
+            .sum();
+        assert!(
+            (area - truth).abs() < 2e-3 * truth,
+            "pose {pose}: cone meshed alone has area {area}, truth {truth}"
+        );
+    }
+}

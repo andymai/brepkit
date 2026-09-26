@@ -329,9 +329,20 @@ fn build_arc_wire(
             continue;
         }
 
+        // The join spans the corner's exterior angle, short of half a turn,
+        // from one offset end to the next; its circle's normal makes that
+        // span run counter-clockwise, as edges store arcs (a clockwise loop
+        // turns its joins the other way about the face normal).
         let center = verts[next];
-        let circle =
-            Circle3D::new(center, face_normal, radius).map_err(crate::OperationsError::Math)?;
+        let turn = (offset_ends[i] - center)
+            .cross(offset_starts[next] - center)
+            .dot(face_normal);
+        let normal = if turn < 0.0 {
+            -face_normal
+        } else {
+            face_normal
+        };
+        let circle = Circle3D::new(center, normal, radius).map_err(crate::OperationsError::Math)?;
 
         let arc_edge = topo.add_edge(Edge::new(
             line_end_vids[i],
@@ -561,6 +572,55 @@ mod tests {
             "CW bottom face offset +2 should enclose area 576, got {}",
             wire_signed_area(&topo, outward).abs()
         );
+    }
+
+    /// A 2x2 square with normal +Z wound clockwise, offset 0.5 with arc
+    /// joins: each join turns a quarter counter-clockwise about its own
+    /// normal, and the offset face measures `4 + 4 + π/4`.
+    #[test]
+    fn arc_joins_on_a_clockwise_loop_turn_a_quarter() {
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (0.0, 2.0), (2.0, 2.0), (2.0, 0.0)];
+        let ids: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let edges = (0..4)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(ids[i], ids[(i + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wid = topo.add_wire(Wire::new(edges, true).unwrap());
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let face = topo.add_face(Face::new(wid, vec![], plane.clone()));
+
+        let offset = offset_wire_with_join(&mut topo, face, 0.5, JoinType::Arc).unwrap();
+        let mut arcs = 0;
+        for oe in topo.wire(offset).unwrap().edges() {
+            let edge = topo.edge(oe.edge()).unwrap();
+            if matches!(edge.curve(), EdgeCurve::Circle(_)) {
+                let (s, e) = (
+                    topo.vertex(edge.start()).unwrap().point(),
+                    topo.vertex(edge.end()).unwrap().point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(s, e);
+                assert!(
+                    (t1 - t0 - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+                    "join spans {}",
+                    t1 - t0
+                );
+                arcs += 1;
+            }
+        }
+        assert_eq!(arcs, 4);
+        let grown = topo.add_face(Face::new(offset, vec![], plane));
+        let area = crate::measure::face_area(&topo, grown, 0.001).unwrap();
+        let truth = 8.0 + std::f64::consts::FRAC_PI_4;
+        assert!((area - truth).abs() < 1e-9, "area {area}, truth {truth}");
     }
 
     #[test]

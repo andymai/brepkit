@@ -401,6 +401,32 @@ fn extrude_wire_vertices_with(
     ))
 }
 
+/// Whether the cylinder swept from a circular arc (`p0` to `p1` in wire
+/// order) must flip its radial normal to face out. The arc lies wholly on one
+/// side of its chord, the side the radial at its middle points to, so any
+/// point inside its span tells that side, past half a turn too. A closed
+/// circle has no chord and keeps the radial normal.
+fn arc_wall_reversed(
+    curve: &EdgeCurve,
+    p0: Point3,
+    p1: Point3,
+    curve_start: Point3,
+    curve_end: Point3,
+    offset: Vec3,
+    outer_is_cw: bool,
+) -> bool {
+    let edge_dir = p1 - p0;
+    let expected = if outer_is_cw {
+        offset.cross(edge_dir)
+    } else {
+        edge_dir.cross(offset)
+    };
+    let (t0, t1) = curve.domain_with_endpoints(curve_start, curve_end);
+    let inside = curve.evaluate_with_endpoints(f64::midpoint(t0, t1), curve_start, curve_end);
+    let chord_mid = p0 + edge_dir * 0.5;
+    (inside - chord_mid).dot(expected) < 0.0
+}
+
 /// Build the appropriate `FaceSurface` for a side face created by extruding
 /// the given edge curve along the offset direction.
 ///
@@ -446,23 +472,8 @@ fn side_face_surface(
                 circle.radius(),
             )
             .map_err(crate::OperationsError::Math)?;
-            // Check whether the cylinder's natural radial normal agrees with
-            // the expected outward direction (same logic as NURBS reversal).
-            let edge_dir = p1 - p0;
-            let expected = if outer_is_cw {
-                offset.cross(edge_dir)
-            } else {
-                edge_dir.cross(offset)
-            };
-            // Cylinder natural normal at p0: radial direction from axis.
-            let to_pt = Vec3::new(
-                p0.x() - circle.center().x(),
-                p0.y() - circle.center().y(),
-                p0.z() - circle.center().z(),
-            );
-            let along_axis = cyl.axis() * cyl.axis().dot(to_pt);
-            let radial = to_pt - along_axis;
-            let reversed = radial.dot(expected) < 0.0;
+            let reversed =
+                arc_wall_reversed(curve, p0, p1, curve_start, curve_end, offset, outer_is_cw);
             Ok((FaceSurface::Cylinder(cyl), reversed))
         }
         EdgeCurve::NurbsCurve(nc) => {
@@ -486,16 +497,8 @@ fn side_face_surface(
                     radius,
                 )
                 .map_err(crate::OperationsError::Math)?;
-                let edge_dir = p1 - p0;
-                let expected = if outer_is_cw {
-                    offset.cross(edge_dir)
-                } else {
-                    edge_dir.cross(offset)
-                };
-                let to_pt = p0 - center;
-                let along_axis = cyl.axis() * cyl.axis().dot(to_pt);
-                let radial = to_pt - along_axis;
-                let reversed = radial.dot(expected) < 0.0;
+                let reversed =
+                    arc_wall_reversed(curve, p0, p1, curve_start, curve_end, offset, outer_is_cw);
                 return Ok((FaceSurface::Cylinder(cyl), reversed));
             }
             let surface = ruled_nurbs_surface(nc, offset)?;

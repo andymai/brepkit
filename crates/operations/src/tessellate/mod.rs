@@ -67,31 +67,6 @@ pub(super) fn point_merge_key(pt: Point3, grid: f64) -> (i64, i64, i64) {
     )
 }
 
-/// Compute the shorter arc range (<=pi) from an edge's start to end on a circle.
-///
-/// Returns `(t_start, t_end)` where the shorter arc goes from `t_start` to `t_end`.
-/// When the shorter arc is CW, `t_end < t_start` so that linear interpolation
-/// between them traces the correct (shorter) path via `circle.evaluate()`.
-pub(super) fn shorter_arc_range(
-    circle: &brepkit_math::curves::Circle3D,
-    topo: &Topology,
-    edge: &brepkit_topology::edge::Edge,
-) -> Result<(f64, f64), crate::OperationsError> {
-    let sp = topo.vertex(edge.start())?.point();
-    let ep = topo.vertex(edge.end())?.point();
-    let ts = circle.project(sp);
-    let te_raw = circle.project(ep);
-    let fwd_span = (te_raw - ts).rem_euclid(std::f64::consts::TAU);
-    if fwd_span <= std::f64::consts::PI {
-        // CCW arc is the shorter path.
-        Ok((ts, ts + fwd_span))
-    } else {
-        // CW arc is shorter: t_end < t_start so interpolation goes backward.
-        let rev_span = std::f64::consts::TAU - fwd_span;
-        Ok((ts, ts - rev_span))
-    }
-}
-
 /// A triangle mesh produced by tessellation.
 #[derive(Debug, Clone, Default)]
 pub struct TriangleMesh {

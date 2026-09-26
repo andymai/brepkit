@@ -82,8 +82,7 @@ pub(crate) fn integrate_face_about(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary =
-                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
+            let uv_boundary = build_face_uv_boundary(topo, face_id, s, true, false)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -103,8 +102,7 @@ pub(crate) fn integrate_face_about(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            let uv_boundary =
-                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
+            let uv_boundary = build_face_uv_boundary(topo, face_id, s, true, false)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -132,8 +130,7 @@ pub(crate) fn integrate_face_about(
                 } else {
                     bounds
                 };
-            let uv_boundary =
-                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, false)?;
+            let uv_boundary = build_face_uv_boundary(topo, face_id, s, true, false)?;
             let hole_vs = full_revolution_hole_vs(topo, face_id, s);
             Ok(integrate_with_trimming(
                 s,
@@ -151,8 +148,7 @@ pub(crate) fn integrate_face_about(
         FaceSurface::Torus(s) => {
             let full = ((0.0, std::f64::consts::TAU), (0.0, std::f64::consts::TAU));
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, true, full)?;
-            let uv_boundary =
-                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true, true)?;
+            let uv_boundary = build_face_uv_boundary(topo, face_id, s, true, true)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -172,13 +168,7 @@ pub(crate) fn integrate_face_about(
             let periodic_v = s.is_periodic_v();
             let (u_range, v_range) =
                 face_uv_bounds(topo, face_id, s, periodic_u, periodic_v, full)?;
-            let uv_boundary = build_face_uv_boundary(
-                topo,
-                face_id,
-                |p| s.project_point(p),
-                periodic_u,
-                periodic_v,
-            )?;
+            let uv_boundary = build_face_uv_boundary(topo, face_id, s, periodic_u, periodic_v)?;
             Ok(integrate_with_trimming(
                 s,
                 u_range,
@@ -273,8 +263,9 @@ fn full_revolution_hole_vs<S: ParametricSurface>(
     out
 }
 
-/// Compute UV bounds for a parametric face by projecting boundary vertices
-/// onto the surface and taking the min/max of the resulting parameters.
+/// Compute UV bounds for a parametric face by projecting its outer wire's
+/// vertices, and points along each curved edge, onto the surface and taking
+/// the min/max of the resulting parameters.
 ///
 /// For surfaces with periodic u or v coordinates (cylinders, cones, spheres,
 /// tori), sequentially unwraps the angular coordinates so that faces straddling
@@ -300,12 +291,38 @@ fn face_uv_bounds<S: ParametricSurface>(
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
 
+    // Each edge's start and, for a curved edge, points along its own span in
+    // traversal order: an arc past half a turn between two vertices would
+    // otherwise unwrap the short way below.
     let mut uvs = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
         let vid = oe.oriented_start(edge);
         let pt = topo.vertex(vid)?.point();
         uvs.push(surface.project_point(pt));
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) && !edge.is_closed() {
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            // A NURBS edge's span is its whole knot range, which may run from
+            // the edge's end back to its start.
+            let first = edge.curve().evaluate_with_endpoints(t0, sp, ep);
+            let from_start = (first - sp).length() <= (first - ep).length();
+            for k in 1..4 {
+                let f = f64::from(k) / 4.0;
+                let f = if oe.is_forward() == from_start {
+                    f
+                } else {
+                    1.0 - f
+                };
+                let p = edge
+                    .curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep);
+                uvs.push(surface.project_point(p));
+            }
+        }
     }
 
     if uvs.is_empty() {
@@ -315,15 +332,46 @@ fn face_uv_bounds<S: ParametricSurface>(
     }
 
     // Unwrap periodic coordinates sequentially so seam-straddling faces
-    // produce a contiguous range instead of the full [0, 2pi).
-    if periodic_u || periodic_v {
+    // produce a contiguous range instead of the full [0, 2pi). A point where
+    // the surface has no `u` of its own (a sphere's pole, a cone's apex)
+    // projects to an arbitrary `u`: it stays out of the range, the walk
+    // starts just after the first such point, and the point after any later
+    // one is unwrapped toward the middle of the range so far, which picks its
+    // representative nearest that range.
+    if periodic_u {
+        let mut singular: Vec<bool> = uvs.iter().map(|&uv| singular_in_u(surface, uv)).collect();
+        if let Some(first) = singular.iter().position(|&s| s) {
+            uvs.rotate_left(first + 1);
+            singular.rotate_left(first + 1);
+        }
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        let mut prev: Option<f64> = None;
+        let mut after_singular = false;
+        for (uv, &at_singular) in uvs.iter_mut().zip(&singular) {
+            if at_singular {
+                after_singular = true;
+                continue;
+            }
+            let u = match prev {
+                None => uv.0,
+                Some(p) if !after_singular => unwrap_angle(p, uv.0),
+                Some(_) => unwrap_angle(f64::midpoint(lo, hi), uv.0),
+            };
+            uv.0 = u;
+            lo = lo.min(u);
+            hi = hi.max(u);
+            prev = Some(u);
+            after_singular = false;
+        }
+        if let Some(p) = prev {
+            for (uv, _) in uvs.iter_mut().zip(&singular).filter(|(_, s)| **s) {
+                uv.0 = p;
+            }
+        }
+    }
+    if periodic_v {
         for i in 1..uvs.len() {
-            if periodic_u {
-                uvs[i].0 = unwrap_angle(uvs[i - 1].0, uvs[i].0);
-            }
-            if periodic_v {
-                uvs[i].1 = unwrap_angle(uvs[i - 1].1, uvs[i].1);
-            }
+            uvs[i].1 = unwrap_angle(uvs[i - 1].1, uvs[i].1);
         }
     }
 
@@ -657,16 +705,15 @@ fn integrate_with_trimming<S: ParametricSurface>(
         .fold(f64::NEG_INFINITY, f64::max);
 
     // Winding number of the boundary around the periodic u-axis: ±TAU for a
-    // face that wraps a full revolution, ~0 for a partially-trimmed face.
-    // Computed from shortest signed steps so it is independent of the
-    // boundary's discretization (segment count).
+    // face that wraps a full revolution, ~0 for a partially-trimmed face. The
+    // polygon is already unwrapped (a pole's side may run past half a turn),
+    // so its steps telescope and only the closing step is wrapped.
     let tau = std::f64::consts::TAU;
-    let winding: f64 = (0..uv_boundary.len())
-        .map(|i| {
-            let d = uv_boundary[(i + 1) % uv_boundary.len()].0 - uv_boundary[i].0;
-            d - tau * ((d + std::f64::consts::PI) / tau).floor()
-        })
-        .sum();
+    let winding: f64 = {
+        let (first, last) = (uv_boundary[0].0, uv_boundary[uv_boundary.len() - 1].0);
+        let close = first - last;
+        last - first + close - tau * ((close + std::f64::consts::PI) / tau).floor()
+    };
     let full_revolution = u_periodic && winding.abs() >= tau - 1e-3;
     let v_degenerate = (v_max - v_min) <= 1e-9;
 
@@ -749,11 +796,18 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     use brepkit_math::predicates::point_in_polygon;
     use brepkit_math::vec::Point2;
 
+    // The same patches as `integrate_parametric`: one Gauss rule over a whole
+    // period misses the periodic terms of a moment or of a flux about a point
+    // off the axis.
+    const MAX_PATCHES: usize = 16;
     let gauss_pts = gauss_legendre_points(gauss_order);
-    let u_scale = (u_range.1 - u_range.0) / 2.0;
-    let u_mid = f64::midpoint(u_range.0, u_range.1);
-    let v_scale = (v_range.1 - v_range.0) / 2.0;
-    let v_mid = f64::midpoint(v_range.0, v_range.1);
+    let patch = std::f64::consts::FRAC_PI_4;
+    let nu = (((u_range.1 - u_range.0).abs() / patch).ceil() as usize).clamp(1, MAX_PATCHES);
+    let nv = (((v_range.1 - v_range.0).abs() / patch).ceil() as usize).clamp(1, MAX_PATCHES);
+    let du_patch = (u_range.1 - u_range.0) / nu as f64;
+    let dv_patch = (v_range.1 - v_range.0) / nv as f64;
+    let u_scale = du_patch / 2.0;
+    let v_scale = dv_patch / 2.0;
 
     let uv_poly: Vec<Point2> = uv_boundary
         .iter()
@@ -796,55 +850,64 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     let mut cy = 0.0;
     let mut cz = 0.0;
 
-    for gpu in gauss_pts {
-        let u = u_scale.mul_add(gpu.x, u_mid);
-        for gpv in gauss_pts {
-            let v = v_scale.mul_add(gpv.x, v_mid);
+    let points = (0..nu)
+        .flat_map(|iu| (0..nv).map(move |iv| (iu, iv)))
+        .flat_map(|(iu, iv)| {
+            let u_mid = du_patch.mul_add(iu as f64, u_range.0) + u_scale;
+            let v_mid = dv_patch.mul_add(iv as f64, v_range.0) + v_scale;
+            gauss_pts.iter().flat_map(move |gpu| {
+                gauss_pts.iter().map(move |gpv| {
+                    (
+                        u_scale.mul_add(gpu.x, u_mid),
+                        v_scale.mul_add(gpv.x, v_mid),
+                        gpu.w * gpv.w * u_scale * v_scale,
+                    )
+                })
+            })
+        });
+    for (u, v, w) in points {
+        let test_u = if u_periodic {
+            let tau = std::f64::consts::TAU;
+            let diff = u - u_bcenter;
+            u_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
+        } else {
+            u
+        };
 
-            let test_u = if u_periodic {
-                let tau = std::f64::consts::TAU;
-                let diff = u - u_bcenter;
-                u_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
-            } else {
-                u
-            };
+        let test_v = if v_periodic {
+            let tau = std::f64::consts::TAU;
+            let diff = v - v_bcenter;
+            v_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
+        } else {
+            v
+        };
 
-            let test_v = if v_periodic {
-                let tau = std::f64::consts::TAU;
-                let diff = v - v_bcenter;
-                v_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
-            } else {
-                v
-            };
-
-            if !point_in_polygon(Point2::new(test_u, test_v), &uv_poly) {
-                continue;
-            }
-
-            let w = gpu.w * gpv.w * u_scale * v_scale;
-            let p = surface.evaluate(u, v);
-            let du = surface.partial_u(u, v);
-            let dv = surface.partial_v(u, v);
-            let n = Vec3::new(
-                du.y() * dv.z() - du.z() * dv.y(),
-                du.z() * dv.x() - du.x() * dv.z(),
-                du.x() * dv.y() - du.y() * dv.x(),
-            );
-            let n_len = n.length();
-
-            area += w * n_len;
-
-            let pv = Vec3::new(p.x(), p.y(), p.z()) - about;
-            vol += w * pv.dot(n) / 3.0;
-
-            mx += w * 0.5 * p.x() * p.x() * n.x();
-            my += w * 0.5 * p.y() * p.y() * n.y();
-            mz += w * 0.5 * p.z() * p.z() * n.z();
-
-            cx += w * p.x() * n_len;
-            cy += w * p.y() * n_len;
-            cz += w * p.z() * n_len;
+        if !point_in_polygon(Point2::new(test_u, test_v), &uv_poly) {
+            continue;
         }
+
+        let p = surface.evaluate(u, v);
+        let du = surface.partial_u(u, v);
+        let dv = surface.partial_v(u, v);
+        let n = Vec3::new(
+            du.y() * dv.z() - du.z() * dv.y(),
+            du.z() * dv.x() - du.x() * dv.z(),
+            du.x() * dv.y() - du.y() * dv.x(),
+        );
+        let n_len = n.length();
+
+        area += w * n_len;
+
+        let pv = Vec3::new(p.x(), p.y(), p.z()) - about;
+        vol += w * pv.dot(n) / 3.0;
+
+        mx += w * 0.5 * p.x() * p.x() * n.x();
+        my += w * 0.5 * p.y() * p.y() * n.y();
+        mz += w * 0.5 * p.z() * p.z() * n.z();
+
+        cx += w * p.x() * n_len;
+        cy += w * p.y() * n_len;
+        cz += w * p.z() * n_len;
     }
 
     FaceContribution {
@@ -863,35 +926,75 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
 ///
 /// Projects each boundary vertex onto the surface to obtain (u, v) coordinates,
 /// then unwraps periodic u-coordinates to avoid seam discontinuities.
-fn build_face_uv_boundary<F>(
+fn build_face_uv_boundary<S: ParametricSurface>(
     topo: &Topology,
     face_id: FaceId,
-    project: F,
+    surface: &S,
     u_periodic: bool,
     v_periodic: bool,
-) -> Result<Vec<(f64, f64)>, CheckError>
-where
-    F: Fn(Point3) -> (f64, f64),
-{
+) -> Result<Vec<(f64, f64)>, CheckError> {
     let polygon = crate::util::face_polygon(topo, face_id)?;
     if polygon.len() < 3 {
         return Ok(vec![]);
     }
 
-    let mut uv: Vec<(f64, f64)> = polygon.iter().map(|&p| project(p)).collect();
+    let mut uv: Vec<(f64, f64)> = polygon.iter().map(|&p| surface.project_point(p)).collect();
 
-    // A band running over a v-periodic surface's v seam (a torus's v = 0
-    // line) keeps a contiguous v only when v is unwrapped too.
-    for i in 1..uv.len() {
-        if u_periodic {
+    if u_periodic && let Some(first) = uv.iter().position(|&p| singular_in_u(surface, p)) {
+        // A point with no `u` of its own (a pole, an apex) is a side of the
+        // polygon along its `v`, from the `u` before it to the `u` after it.
+        // The walk starts just after the first such point and closes along
+        // it; the point after any later one is unwrapped toward the middle
+        // of the range so far, as in `face_uv_bounds`.
+        uv.rotate_left(first + 1);
+        let mut out: Vec<(f64, f64)> = Vec::with_capacity(uv.len() + 2);
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        let mut pole: Option<f64> = None;
+        for &(u, v) in &uv {
+            if singular_in_u(surface, (u, v)) {
+                if let Some(&(last, _)) = out.last() {
+                    out.push((last, v));
+                }
+                pole = Some(v);
+                continue;
+            }
+            let u = match (out.last(), pole) {
+                (None, _) => u,
+                (Some(&(last, _)), None) => unwrap_angle(last, u),
+                (Some(_), Some(_)) => unwrap_angle(f64::midpoint(lo, hi), u),
+            };
+            if let (Some(pv), false) = (pole, out.is_empty()) {
+                out.push((u, pv));
+            }
+            pole = None;
+            lo = lo.min(u);
+            hi = hi.max(u);
+            out.push((u, v));
+        }
+        if let (Some(pv), Some(&(u0, _))) = (pole, out.first()) {
+            out.push((u0, pv));
+        }
+        uv = out;
+    } else if u_periodic {
+        for i in 1..uv.len() {
             uv[i].0 = unwrap_angle(uv[i - 1].0, uv[i].0);
         }
-        if v_periodic {
+    }
+    // A band running over a v-periodic surface's v seam (a torus's v = 0
+    // line) keeps a contiguous v only when v is unwrapped too.
+    if v_periodic {
+        for i in 1..uv.len() {
             uv[i].1 = unwrap_angle(uv[i - 1].1, uv[i].1);
         }
     }
 
     Ok(uv)
+}
+
+/// Whether the surface has no `u` of its own at `(u, v)` (a sphere's pole, a
+/// cone's apex), where a point projects to an arbitrary `u`.
+fn singular_in_u<S: ParametricSurface>(surface: &S, (u, v): (f64, f64)) -> bool {
+    surface.partial_u(u, v).length() <= 1e-6 * surface.partial_v(u, v).length()
 }
 
 #[cfg(test)]
@@ -928,5 +1031,121 @@ mod tests {
         let rev: Vec<Point3> = poly.iter().rev().copied().collect();
         let c2 = integrate_planar_polygon(&rev, up, Vec3::new(0.0, 0.0, 0.0));
         assert!((c2.area - 75.0).abs() < 1e-9, "rev area {}", c2.area);
+    }
+
+    /// The part of a unit ball's upper hemisphere 270 degrees wide, its wire
+    /// (up a meridian to the pole, down another, along the equator) started
+    /// at each of its edges and run either way, its pole vertex on the axis
+    /// or 1e-7 off it: the pole's `u` is arbitrary, and the face reads its
+    /// area `3π/2` however its wire runs.
+    #[test]
+    fn a_wedge_through_a_pole_reads_its_area_from_any_start() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let turn = 1.5 * std::f64::consts::PI;
+        let (east, west) = (
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(turn.cos(), turn.sin(), 0.0),
+        );
+        let arc = |a: Point3, b: Point3| {
+            let normal = (a - origin).cross(b - origin);
+            EdgeCurve::Circle(Circle3D::new(origin, normal, 1.0).unwrap())
+        };
+        for (first, reversed, off) in (0..3).flat_map(|f| {
+            [(false, 0.0), (true, 0.0), (false, 1e-7), (true, 1e-7)].map(|(r, o)| (f, r, o))
+        }) {
+            let pole = Point3::new(off, 0.0, (1.0_f64 - off * off).sqrt());
+            let mut topo = Topology::new();
+            let [ve, vp, vw] = [east, pole, west].map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let equator = Circle3D::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+            let mut edges = vec![
+                topo.add_edge(Edge::new(vw, vp, arc(west, pole))),
+                topo.add_edge(Edge::new(vp, ve, arc(pole, east))),
+                topo.add_edge(Edge::new(ve, vw, EdgeCurve::Circle(equator))),
+            ];
+            edges.rotate_left(first);
+            let edges = if reversed {
+                edges
+                    .into_iter()
+                    .rev()
+                    .map(|e| OrientedEdge::new(e, false))
+                    .collect()
+            } else {
+                edges
+                    .into_iter()
+                    .map(|e| OrientedEdge::new(e, true))
+                    .collect()
+            };
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            let ball = SphericalSurface::new(origin, 1.0).unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
+            let c = integrate_face(&topo, face, 5).unwrap();
+            assert!(
+                (c.area - turn).abs() < 1e-6,
+                "wire started at edge {first}, reversed {reversed}, pole {off} off: area {}, truth {turn}",
+                c.area
+            );
+        }
+    }
+
+    /// A unit cylinder's wall turning 270 degrees and 1 tall, its lower rim a
+    /// NURBS arc stored either way round: the wall reads its area whichever
+    /// end the rim's knot span starts at.
+    #[test]
+    fn a_rim_stored_end_to_start_reads_its_span() {
+        use brepkit_geometry::convert::circle_to_nurbs;
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let turn = 1.5 * std::f64::consts::PI;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let at = |a: f64, z: f64| Point3::new(a.cos(), a.sin(), z);
+        for end_to_start in [false, true] {
+            let mut topo = Topology::new();
+            let [a0, b0, a1, b1] = [(0.0, 0.0), (turn, 0.0), (0.0, 1.0), (turn, 1.0)]
+                .map(|(a, z)| topo.add_vertex(Vertex::new(at(a, z), 1e-7)));
+            let up = Circle3D::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+            let rim = if end_to_start {
+                let down = Circle3D::new(origin, Vec3::new(0.0, 0.0, -1.0), 1.0).unwrap();
+                let t0 = down.project(at(turn, 0.0));
+                circle_to_nurbs(&down, t0, t0 + turn).unwrap()
+            } else {
+                let t0 = up.project(at(0.0, 0.0));
+                circle_to_nurbs(&up, t0, t0 + turn).unwrap()
+            };
+            let top = Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), 1.0);
+            let edges = [
+                (
+                    topo.add_edge(Edge::new(a0, b0, EdgeCurve::NurbsCurve(rim))),
+                    true,
+                ),
+                (topo.add_edge(Edge::new(b0, b1, EdgeCurve::Line)), true),
+                (
+                    topo.add_edge(Edge::new(a1, b1, EdgeCurve::Circle(top.unwrap()))),
+                    false,
+                ),
+                (topo.add_edge(Edge::new(a1, a0, EdgeCurve::Line)), true),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(e, forward));
+            let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+            let cylinder = CylindricalSurface::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(cylinder)));
+            let c = integrate_face(&topo, face, 5).unwrap();
+            assert!(
+                (c.area - turn).abs() < 1e-9,
+                "end to start {end_to_start}: area {}, truth {turn}",
+                c.area
+            );
+        }
     }
 }

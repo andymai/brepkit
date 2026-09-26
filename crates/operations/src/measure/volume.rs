@@ -545,7 +545,8 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
 /// Whether a cylinder or cone face is a rectangle in `(u, v)`: every line a
 /// ruling (along the axis, or through a cone's apex) running its full height,
 /// every other edge a rim arc at its bottom or top spanning at most a half
-/// turn (the angular-range reader takes an arc's shorter side).
+/// turn (the cone's angular-range reader takes an arc's shorter side, and a
+/// cylinder is held to the same bound).
 fn ruled_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> {
     use brepkit_topology::edge::EdgeCurve;
     let face = topo.face(face_id).ok()?;
@@ -2251,21 +2252,17 @@ fn analytic_cylinder_signed_volume(
                     v_vals.push(v);
                 }
             }
-            // Sample circle-edge midpoints for angular coverage.
+            // Sample circle-edge midpoints (along the edge's own span) for
+            // angular coverage.
             if !edge.is_closed()
-                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let brepkit_topology::edge::EdgeCurve::Circle(_) = edge.curve()
                 && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
             {
-                let ts = circle.project(sv.point());
-                let te = circle.project(ev.point());
-                // Choose the shorter arc for the midpoint.
-                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                let mid_t = if fwd <= std::f64::consts::PI {
-                    ts + fwd * 0.5
-                } else {
-                    ts - (std::f64::consts::TAU - fwd) * 0.5
-                };
-                let mid = circle.evaluate(mid_t);
+                let (sp, ep) = (sv.point(), ev.point());
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                let mid = edge
+                    .curve()
+                    .evaluate_with_endpoints(f64::midpoint(t0, t1), sp, ep);
                 let (u, _) = cyl.project_point(mid);
                 u_vals.push(u);
             }

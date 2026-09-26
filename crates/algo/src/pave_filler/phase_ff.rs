@@ -5358,12 +5358,10 @@ fn emit_split_circle_arcs(
     // leave its crossing vertices orphaned in the topology (no edges
     // reference them) — visible to any downstream pass that iterates all
     // vertices. We also split each surviving arc into sub-arcs of span
-    // ≤ π so the resulting `EdgeCurve::Circle` is unambiguous: several
-    // downstream consumers (tessellation's `shorter_arc_range` in
-    // `tessellate/mod.rs`, wire sampling in `topology/builder.rs`)
-    // interpret an open circle edge as the *shorter* arc between its
-    // endpoints, so a span > π would be flipped to the complementary
-    // arc and break face splitting/classification.
+    // ≤ π so the resulting `EdgeCurve::Circle` is unambiguous to any
+    // consumer that reads an open circle edge as the *shorter* arc between
+    // its endpoints, where a span > π would flip to the complementary arc
+    // and break face splitting/classification.
     //
     // Each survivor records the inserted crossing points along with
     // their (t, 3D) values; pass 2 then materialises just those
