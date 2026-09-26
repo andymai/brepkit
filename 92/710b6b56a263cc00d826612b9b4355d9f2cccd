@@ -1,0 +1,45 @@
+crates/operations/tests/rod_through_plate_edge.rs
+  s_ba2f7b5c6902b6::t_6eb8fc139443df 239-243,247-251,258,323-400
+  s_ba2f7b5c6902b6::t_5499e1076fa1a3 19,401-454
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_35692c56746a97 3315-3326
+  s_ba2f7b5c6902b6::t_019fc8286b3b02 2211
+  s_ba2f7b5c6902b6::t_01dd952c14ed12 2278-2300,2302-2318
+  s_ba2f7b5c6902b6::t_4ba823927fad2b 2274-2277,2450,2456-2466,2476,2478,2503
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_923201624d17f7 1821-1826,1829-1830,1837-1840,1842-1849,1961
+  s_ba2f7b5c6902b6::t_c4dd98f25cd53e 1827-1828,1831,1835-1836
+  s_ba2f7b5c6902b6::t_01dd952c14ed12 1832-1834
+  s_ba2f7b5c6902b6::t_019fc8286b3b02 1841
+crates/math/src/curves.rs
+  s_ba2f7b5c6902b6::t_922ab081ec5c4c 28-54,274-284,756-763,765
+  s_ba2f7b5c6902b6::t_9da861c16a7d70 764
+  s_ba2f7b5c6902b6::t_5c33d881fc6567 766
+crates/algo/src/classifier/ray_cast.rs
+  s_ba2f7b5c6902b6::t_6312081ed4f6af 1488-1490,1494,1500,1505-1513,1517-1522,1525-1526,1535
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_ef2c17afea166b 263-264
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_ef2c17afea166b 2428,3849-3873,3882-3885,3891-3903
+  s_ba2f7b5c6902b6::t_6eb8fc139443df 3874-3881,3886-3890
+  s_ba2f7b5c6902b6::t_543409de5fab37 3904-3905
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_96f05773f0e84b 188
+  s_ba2f7b5c6902b6::t_bfe44a2079a229 217-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "92710b6b56a263cc00d826612b9b4355d9f2cccd",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
