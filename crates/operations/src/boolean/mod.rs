@@ -2889,11 +2889,13 @@ fn all_component_centers_outside(
             brepkit_algo::classifier::classify_ray_cast(topo, result, centre),
             Ok(FaceClass::Outside)
         );
-        let beside_the_tool = comp.iter().any(|&fid| {
-            planar_face_centroid(topo, fid)
-                .is_some_and(|c| matches!(classifier.classify(c, tol), Some(FaceClass::Outside)))
-        });
-        if held || !beside_the_tool {
+        if held
+            || !comp.iter().any(|&fid| {
+                planar_face_centroid(topo, fid).is_some_and(|c| {
+                    matches!(classifier.classify(c, tol), Some(FaceClass::Outside))
+                })
+            })
+        {
             return false;
         }
     }
@@ -2903,6 +2905,9 @@ fn all_component_centers_outside(
 /// The area centroid of a plane face's sampled boundary, when it lies in the
 /// face.
 fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
+    if !topo.face(fid).ok()?.surface().is_planar() {
+        return None;
+    }
     let (outer, holes, normal) =
         brepkit_algo::classifier::planar_face_polygons(topo, fid).ok()??;
     let base = outer[0];
@@ -2913,7 +2918,10 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
         weight += area;
         sum += (a + b) * (area / 3.0);
     }
-    if weight.abs() <= f64::EPSILON {
+    let extent = outer
+        .iter()
+        .fold(0.0_f64, |m, p| m.max((*p - base).length()));
+    if weight.abs() <= 1e-12 * extent * extent {
         return None;
     }
     let centroid = base + sum * (1.0 / weight);
