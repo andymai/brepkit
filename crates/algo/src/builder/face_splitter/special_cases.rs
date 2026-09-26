@@ -118,6 +118,22 @@ pub(super) fn split_noseam_face_direct(
             tol,
         );
     };
+    // A closed section inside the face (a box's top across a patch around
+    // the pole) splits one of the two pieces below, which they do not
+    // follow: fail the face rather than keep a piece whole over it. One in
+    // the boundary's own plane runs along the boundary.
+    let boundary_pts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
+    let boundary_plane = loop_plane(&boundary_pts);
+    let on_boundary = |c: &OrientedPCurveEdge| {
+        boundary_plane.is_some_and(|(n, at)| {
+            edge_samples(c, 8)
+                .iter()
+                .all(|p| (*p - at).dot(n).abs() <= 1e3 * tol)
+        })
+    };
+    if closed_sections.iter().any(|c| !on_boundary(c)) {
+        return Vec::new();
+    }
 
     // Boundary edges covered by a cap arc: both segment endpoints lie on
     // the arc's circle within its angular span. Those edges are replaced

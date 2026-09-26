@@ -8151,6 +8151,38 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
                 }
             };
             interior_uv = Point2::new(u_center, target_v);
+        } else {
+            // A loop that winds the axis holds a pole on its left (progress
+            // toward +u puts the north pole there), and its (u, v) polygon,
+            // open across the seam, encloses no part of it: its centroid can
+            // land beyond the loop. Aim between the loop's nearest approach
+            // to that pole and the pole, short of any hole that winds the
+            // axis too. The loops are sampled on their edges' own curves: a
+            // pcurve can run past a pole, and holds a closed latitude circle
+            // as a single point.
+            let outer =
+                sampling::sample_wire_loop_uv_on_surface(&sub_face.outer_wire, &sub_face.surface);
+            if let Some(north) = winds_the_axis(&outer) {
+                let toward = |v: f64| if north { v } else { -v };
+                let reach = outer
+                    .iter()
+                    .map(|p| toward(p.y()))
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let mut far = std::f64::consts::FRAC_PI_2;
+                for hole in &sub_face.inner_wires {
+                    let hole_2d = sampling::sample_wire_loop_uv_on_surface(hole, &sub_face.surface);
+                    if winds_the_axis(&hole_2d).is_some() {
+                        let near = hole_2d
+                            .iter()
+                            .map(|p| toward(p.y()))
+                            .fold(f64::INFINITY, f64::min);
+                        far = far.min(near);
+                    }
+                }
+                if reach < far {
+                    interior_uv = Point2::new(outer[0].x(), toward(0.5 * (reach + far)));
+                }
+            }
         }
     }
 
@@ -8199,6 +8231,24 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
         });
     let n = sub_face.outer_wire.len() as f64;
     Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
+}
+
+/// Whether a sphere loop sampled in `(u, v)` winds the axis, and which way:
+/// `Some(true)` when its progress in `u` runs a turn toward `+u`, which puts
+/// the north pole on its left. A loop through a pole winds nothing: its
+/// crossing there has no longitude, and its `(u, v)` polygon closes anyway.
+fn winds_the_axis(pts: &[Point2]) -> Option<bool> {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    if pts.iter().any(|p| p.y().abs() >= FRAC_PI_2 - 1e-6) {
+        return None;
+    }
+    let us: Vec<f64> = pts.iter().map(|p| p.x()).collect();
+    let progress: f64 = us
+        .iter()
+        .zip(us.iter().cycle().skip(1))
+        .map(|(a, b)| (b - a + PI).rem_euclid(TAU) - PI)
+        .sum();
+    (progress.abs() > PI).then_some(progress > 0.0)
 }
 
 /// Detect section edges (lines, open arcs, and open NURBS conics) forming
