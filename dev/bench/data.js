@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790394821812,
+  "lastUpdate": 1790402765647,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41039,6 +41039,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35946897,
             "range": "± 277723",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ef6d8b223c974ed6129e32fa5151a0c6302682bf",
+          "message": "fix(algo): keep a bored ball's bore through a box holding its pole (#1785)\n\nThe sphere boolean shortcuts now preserve bore topology through\npole-holding boxes, produce exact valid solids with watertight meshes\nacross the new regression matrix, and return 973.480267 for the original\nCut against 973.4739967967269.\n\n## What was wrong\n\n- `make_box(10, 10, 10)` at `(-0.7, -1.1, 0.1)`, holding the north pole\nof `make_sphere(3, 32)`, less a coaxial `make_cylinder(0.3, 10)` from `z\n= -5`, returned 7 faces and no cylinder. Its volume, 972.657217, was\nexactly the box less the plain ball, although the rod's piece inside the\nbox should remain as a post. The bored ball within the box fell back to\na 207-face mesh.\n\n- On the axis, `split_noseam_face_direct` splits the ball's upper face,\nbounded by the chordal equator, using the box's section loop but never\nreceives the face's holes. The pole patch therefore lacks the bore rim.\nThe bore piece is classified correctly, but joins no shell and is\ndiscarded as an open sliver.\n\n- Off the axis, the rims are marched NURBS curves and expose three more\nreaders. `sphere_face_loops` accepts only coplanar loops or circle arcs,\nso every other loop uses the flat polygon through the chordal equator\nand reads the bored ball inside out. With rods at `(1, 0)`, `(0, 1)`,\n`(-1, 0)`, and `(0.3, 0)`, a point in the bore at `z = 0.1` reads Inside\nwhile points in the ball's material read Outside. `band_stack` accepts\nonly circle rims, so a bore wall cut by the box floor follows the\ngeneric path and loses one loop from each piece, including the upper\npiece's floor circle. At `(-0.3, 0.4)`, the patch sample aimed between\nthe loop's highest latitude and the pole at its first longitude lands in\nthe hole; the generic fallback moves it to `(-0.746, 2.817, 0.712)`,\noutside the box. On main, `(1, 0)` produces the same 7-face Cut, while\nthe other two booleans fall back to 393 and 894 faces.\n\n## What this does\n\n- `attach_sphere_holes` assigns each shortcut-face hole to the innermost\npiece whose region contains it. That region is the outer loop's `(u, v)`\npolygon with continuous `u`, closed through the pole on its left when\nthe loop winds the axis. Holes no piece holds, and the holes of the\nshortcut's pieces on other surfaces, go to `attach_whole_holes`.\n\n- `SphereLoop::Rim` handles a hole whose rim is neither coplanar nor\ncomposed of circle arcs when it lies within the open hemisphere directed\nfrom the sphere centre toward the rim centroid. The hole is the portion\nwhose projection along that direction lies within the rim's projection.\nBecause a hemisphere is a graph over its base plane, the test is exact\nup to 64 samples per edge. Rims outside the hemisphere or running the\nwrong way retain the flat fallback.\n\n- `band_stack` accepts closed NURBS and ellipse rims that turn once\naround the axis. The turn supplies the seam sense, while `q_bot` and\n`q_top` provide `v` on the opposite meridian for both band splitters'\ninterior samples. Patch sampling tries 16 longitudes at its latitude and\nkeeps the first uncovered by every hole.\n\n- `join_winding_hole` in `tessellate/nonplanar.rs` joins a band's\nperiodic winding hole to its outer loop along a virtual seam. It\nsupports sphere and NURBS faces, one winding hole among other holes, and\nchooses the first of 32 outer samples whose seam crosses no other hole.\n\n- Preserving holes introduces two sphere-mesher shapes: a band with both\na winding hole and another hole, from a bore at `(-1.5, 0)` clear of the\nbox or a pocket in the band, and a patch with a marched hole around the\npole, from a bore at `(0.2, 0)`. Both meshed wrong. For the bore at\n`(-1.5, 0)`, the band's mesh covered 18.9568 of its 33.4595 area, and\nthe ball less the box read 46.843 against 84.291 with an open mesh,\nwhere main fell back to a watertight mesh.\n\n- `split_noseam_by_arrangement` orients the retained collar, a\nhemisphere inside a column's walls, with the pole on its left like the\nhemisphere boundary. The opposite orientation represents the rest of the\nsphere: the ball within `|x|, |y| < 2.5` read 179.57 against 104.20 on\nmain. With a bore inside the column, retaining its hole now reaches the\nsame exact path instead of main's fallback.\n\n## Verification\n\n- `a_bored_ball_keeps_its_bore_in_a_box_holding_the_pole` covers bores\nat `(0, 0)`, `(1, 0)`, and `(-0.3, 0.4)`, boxes around both poles,\nupright and obliquely transformed configurations, and all three boolean\ndirections, for 54 booleans. Every result is exact, valid, watertight,\nand classifies points in and beside the post correctly. Volumes are\nwithin `1e-4` relative of slice-based truth, or `5e-3` for the roadmap's\nchordal-equator ball-less-box row. The truth uses closed-form ball\nslices and Simpson's rule for the lens shared by the rod disc and each\nslice.\n\n- `a_band_keeps_its_other_holes` covers the `(-1.5, 0)` bore and the\nball less the box over `x < -2.2`, `y > -0.5`, `z > 1`, each less the\npole box. `a_column_through_both_poles_keeps_its_collars` covers bored\nand plain balls within the column and the column less them. Results are\nexact, valid, watertight, and within `1e-3` of slice-based truth,\nincluding the bore chord integrated by Simpson's rule in polar\ncoordinates and four caps `pi h^2 (3R - h) / 3`, `h = 0.5`. The\nbored-ball pin adds `(0.2, 0)`, bringing the total to 72 booleans.\n\n- An independent line-interval integration battery reads the `(-1.5, 0)`\ncase as 84.2838 against 84.291, the pocket as 85.193655 against\n85.199084, the `(0.2, 0)` bore within the box as 26.5276 against 26.528,\nand the ball within the column as 104.192320 against 104.196101. All are\nwithin `1e-3` and watertight.\n\n- Each fix reproduces its isolated failure when removed: 7 faces without\nhole attachment, an inside-out off-axis ray cast without the rim reader,\nno floor circle without the `band_stack` support, and fallback for\n`(-0.3, 0.4)` without the longitude search. The workspace suite reports\n3109 passed, 20 skipped, from 3109 tests run. Replacing the new\nplacement with `attach_whole_holes` fails\n`a_band_keeps_its_other_holes`.\n\n- Open roadmap rows remain. The ray cast marks `(1, 0, 2.9)` Inside\nbecause it tests the bore cylinder over its whole axial band from 2.704\nto 2.917. The ball less the column falls back to an invalid mesh, 8.318\nagainst 8.902, because the arrangement retains the collar but drops four\nrequired lunes. The collar's flat-polygon ray cast misreads 33 of 120\nrandom points. A bore at `(2.69, 0)`, whose floor circle passes 0.008\nfrom the ball arc, is exact within `1e-3` but open at deflection 0.01\nbecause the arc chords sag up to 0.01.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a box holding a pole of a ball bored along its axis so the bore's\npost is kept; before, the Cut dropped the post and returned 7 faces with\nno cylinder. The sphere mesher now also handles the band shapes the kept\nholes expose, and a column through both poles keeps its collars.\n\n- On the axis, the shortcut sphere splitter `split_noseam_face_direct`\nsplit the pole patch without the face's holes, so the bore's piece\njoined no shell. `attach_sphere_holes` now gives each hole to the\ninnermost piece whose region holds it.\n- Off the axis, three readers failed on the bore's marched rims: the ray\ncast read the flat equator polygon (every point classified inside out),\n`band_stack` took only circle rims and lost a loop from each piece, and\nthe patch interior sample could land in a hole and move off the patch.\n- `SphereLoop::Rim` now covers a rim within one open hemisphere,\n`band_stack` takes a closed NURBS or ellipse rim that winds once, and\nthe sample tries 16 longitudes until one is clear.\n- `join_winding_hole` now joins a winding band's hole among others,\nstarting its seam where it crosses none; the collar a column through\nboth poles keeps now runs with the pole on its left.\n- The pins `a_bored_ball_keeps_its_bore_in_a_box_holding_the_pole` (54\nbooleans), `a_band_keeps_its_other_holes`, and\n`a_column_through_both_poles_keeps_its_collars` are exact, valid,\nwatertight, and correctly classified. One gap remains on the roadmap:\nthe engine's ray cast reads a point just above an off-axis bore's mouth\nas Inside.\n\n<sup>Written for commit 9e7bd76a6b76bcf6fe464f85c29104ab1e327eb9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1785?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T06:03:38Z",
+          "tree_id": "2794e8a92188ba9ebf9782b7313d658f9b0422dd",
+          "url": "https://github.com/andymai/brepkit/commit/ef6d8b223c974ed6129e32fa5151a0c6302682bf"
+        },
+        "date": 1790402761122,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 851933,
+            "range": "± 969",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 888269,
+            "range": "± 7238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11316,
+            "range": "± 78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 599915,
+            "range": "± 1280",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36054902,
+            "range": "± 140795",
             "unit": "ns/iter"
           }
         ]
