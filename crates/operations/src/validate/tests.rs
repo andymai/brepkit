@@ -144,8 +144,9 @@ fn solids_with_cavities_validate() {
     }
 }
 
-/// A block cut in two by a slab keeps both pieces in its outer shell; each is
-/// a closed piece of its own in the Euler term.
+/// A block cut in two by a slab keeps both pieces in its outer shell (the
+/// two slabs' volume, a point in each inside and one in the gap outside);
+/// each is a closed piece of its own in the Euler term.
 #[test]
 fn a_solid_cut_in_two_validates() {
     use brepkit_math::mat::Mat4;
@@ -159,6 +160,17 @@ fn a_solid_cut_in_two_validates() {
         .unwrap();
     let pieces = boolean(&mut topo, BooleanOp::Cut, block, slab).unwrap();
     assert!(topo.solid(pieces).unwrap().inner_shells().is_empty());
+    let volume = crate::measure::solid_volume(&topo, pieces, 0.01).unwrap();
+    assert!((volume - 800.0).abs() < 1e-6, "volume {volume}");
+    for (z, want) in [
+        (2.0, crate::classify::PointClassification::Inside),
+        (5.0, crate::classify::PointClassification::Outside),
+        (8.0, crate::classify::PointClassification::Inside),
+    ] {
+        let p = brepkit_math::vec::Point3::new(5.0, 5.0, z);
+        let got = crate::classify::classify_point(&topo, pieces, p, 0.01, 1e-7).unwrap();
+        assert_eq!(got, want, "z = {z}");
+    }
     let report = validate_solid(&topo, pieces).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
 }

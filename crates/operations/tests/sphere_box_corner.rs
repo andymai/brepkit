@@ -820,6 +820,70 @@ fn a_ball_less_a_turned_column_keeps_its_four_caps() {
     }
 }
 
+/// The ball less a square column through both poles and a thin rod along
+/// `z` through one of its caps, cut at once: each hemisphere's cap past the
+/// wall `x = 2.5` holds the rod's section as a hole, which runs against the
+/// cap. Exact, valid and watertight, the caps less the rod's chord (by
+/// Simpson in polar coordinates), and the rod reads outside, the cap beside
+/// it inside, to both classifiers.
+#[test]
+fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
+    let h: f64 = 0.5;
+    let caps = 4.0 * PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let bore = simpson(200, 0.0, 0.1, &|r: f64| {
+        r * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
+            let (x, y) = (r.mul_add(th.cos(), 2.75), r * th.sin());
+            2.0 * RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
+        })
+    });
+    let mut topo = Topology::new();
+    let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+    let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
+    transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
+    let rod = make_cylinder(&mut topo, 0.1, 10.0).unwrap();
+    transform_solid(&mut topo, rod, &Mat4::translation(2.75, 0.0, -5.0)).unwrap();
+    let tool = boolean(&mut topo, BooleanOp::Fuse, column, rod).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Cut, sphere, tool).unwrap();
+    assert!(exact(&topo, result), "fell back to a mesh");
+    let report = validate_solid(&topo, result).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "open or non-manifold mesh");
+    let volume = solid_volume(&topo, result, 0.01).unwrap();
+    let truth = caps - bore;
+    assert!(
+        (volume - truth).abs() < 1e-3 * truth,
+        "volume {volume}, truth {truth}"
+    );
+    for (p, inside) in [
+        (Point3::new(2.75, 0.0, 0.5), false),
+        (Point3::new(2.75, 0.0, -0.5), false),
+        (Point3::new(2.75, 0.4, 0.5), true),
+        (Point3::new(2.75, -0.4, -0.5), true),
+    ] {
+        let (want_check, want_engine) = if inside {
+            (PointClassification::Inside, brepkit_algo::FaceClass::Inside)
+        } else {
+            (
+                PointClassification::Outside,
+                brepkit_algo::FaceClass::Outside,
+            )
+        };
+        let got = classify_point(&topo, result, p, &ClassifyOptions::default()).unwrap();
+        assert_eq!(got, want_check, "{p:?}");
+        let got = brepkit_algo::classifier::classify_ray_cast(&topo, result, p).unwrap();
+        assert_eq!(got, want_engine, "engine: {p:?}");
+    }
+}
+
 /// The ball within the square column `|x|, |y| < 2.5` through both poles, the
 /// column less the ball and the ball less the column, bored by a rod at
 /// `(0.5, 0.5)` or not: each hemisphere keeps the collar inside the column's

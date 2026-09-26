@@ -407,23 +407,6 @@ fn split_noseam_by_arrangement(
         region = reverse_loop(&region);
     }
 
-    // 3D interior sample for classification (a point on the collar surface).
-    let interior_3d = patch_interior_point(surface, &hole_loops, open_sections);
-
-    // Each latitude cap on this hemisphere is an inner hole of the collar.
-    let region_holes: Vec<Vec<OrientedPCurveEdge>> =
-        hole_loops.iter().map(|hl| reverse_loop(hl)).collect();
-
-    let mut pieces = vec![SplitSubFace {
-        surface: surface.clone(),
-        outer_wire: region,
-        inner_wires: region_holes,
-        reversed,
-        parent: face_id,
-        rank,
-        precomputed_interior: Some(interior_3d),
-    }];
-
     // The lunes past the chains (a wall's cap cut off by the seam) lie on the
     // face too, and a cut keeps them. The walk traces every region of the
     // face with one orientation, the region past the seam with the other, so
@@ -433,30 +416,67 @@ fn split_noseam_by_arrangement(
             .iter()
             .all(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
     };
-    let Some(collar_way) = loops[region_idx]
+    let mut lunes: Vec<(&Vec<OrientedPCurveEdge>, Point3)> = Vec::new();
+    if let Some(collar_way) = loops[region_idx]
         .iter()
         .find(|e| on_seam(e))
         .map(|e| e.forward)
-    else {
-        return pieces;
-    };
-    for (i, l) in loops.iter().enumerate() {
-        if i == region_idx || loop_is_sliver(l) {
-            continue;
+    {
+        for (i, l) in loops.iter().enumerate() {
+            if i == region_idx || loop_is_sliver(l) || l.iter().all(&on_seam) {
+                continue;
+            }
+            let Some(seam) = l.iter().find(|e| on_seam(e) && e.forward == collar_way) else {
+                continue;
+            };
+            let Some(interior) = lune_interior(surface, seam, l, seam_n, seam_p) else {
+                return Vec::new();
+            };
+            lunes.push((l, interior));
         }
-        let Some(seam) = l.iter().find(|e| on_seam(e) && e.forward == collar_way) else {
+    }
+
+    // Each latitude cap on this hemisphere is an inner hole of the region it
+    // lies in: a lune is the face's part past its wall's plane.
+    let mut lune_holes: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); lunes.len()];
+    let mut collar_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
+    for hl in &hole_loops {
+        let Some(at) = hl.first().map(|e| e.start_3d) else {
             continue;
         };
-        if l.iter().all(&on_seam) {
-            continue;
+        let mut home = None;
+        for (k, (l, interior)) in lunes.iter().enumerate() {
+            let Some((c, n)) = lune_wall(l, &on_seam, tol) else {
+                return Vec::new();
+            };
+            let side = (*interior - c).dot(n);
+            if (at - c).dot(n) * side.signum() > tol * 1e3 {
+                home = Some(k);
+                break;
+            }
         }
-        let Some(interior) = lune_interior(surface, seam, l, seam_n, seam_p) else {
-            return Vec::new();
-        };
+        match home {
+            Some(k) => lune_holes[k].push(as_hole(hl)),
+            None => collar_holes.push(hl.clone()),
+        }
+    }
+
+    // 3D interior sample for classification (a point on the collar surface).
+    let interior_3d = patch_interior_point(surface, &collar_holes, open_sections);
+    let mut pieces = vec![SplitSubFace {
+        surface: surface.clone(),
+        outer_wire: region,
+        inner_wires: collar_holes.iter().map(|hl| as_hole(hl)).collect(),
+        reversed,
+        parent: face_id,
+        rank,
+        precomputed_interior: Some(interior_3d),
+    }];
+    for ((l, interior), holes) in lunes.into_iter().zip(lune_holes) {
         pieces.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: if flip { reverse_loop(l) } else { l.clone() },
-            inner_wires: Vec::new(),
+            inner_wires: holes,
             reversed,
             parent: face_id,
             rank,
@@ -464,6 +484,61 @@ fn split_noseam_by_arrangement(
         });
     }
     pieces
+}
+
+/// A closed section as a hole of the region around it: the regions run
+/// counter-clockwise in `(u, v)` (the face's boundary does), so a hole runs
+/// clockwise, `u` unwrapped along it (a hole can straddle the seam).
+fn as_hole(section: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
+    use std::f64::consts::{PI, TAU};
+    let poly = loop_polyline(section);
+    let mut u = poly.first().map_or(0.0, |p| p.x());
+    let mut unwrapped = Vec::with_capacity(poly.len());
+    for (i, p) in poly.iter().enumerate() {
+        if i > 0 {
+            let d = p.x() - poly[i - 1].x();
+            u += d - TAU * ((d + PI) / TAU).floor();
+        }
+        unwrapped.push((u, p.y()));
+    }
+    let area: f64 = (0..unwrapped.len())
+        .map(|i| {
+            let (a, b) = (unwrapped[i], unwrapped[(i + 1) % unwrapped.len()]);
+            a.0.mul_add(b.1, -(b.0 * a.1))
+        })
+        .sum();
+    if area > 0.0 {
+        reverse_loop(section)
+    } else {
+        section.to_vec()
+    }
+}
+
+/// The plane of a lune's wall (`point`, `normal`): the circle its edges off
+/// the seam share, or `None` when they are not arcs of one circle.
+fn lune_wall(
+    lune: &[OrientedPCurveEdge],
+    on_seam: &dyn Fn(&OrientedPCurveEdge) -> bool,
+    tol: f64,
+) -> Option<(Point3, brepkit_math::vec::Vec3)> {
+    let mut wall: Option<&brepkit_math::curves::Circle3D> = None;
+    for e in lune.iter().filter(|e| !on_seam(e)) {
+        let EdgeCurve::Circle(c) = &e.curve_3d else {
+            return None;
+        };
+        match wall {
+            None => wall = Some(c),
+            Some(w) => {
+                let same = (w.center() - c.center()).length() <= tol * 100.0
+                    && (w.radius() - c.radius()).abs() <= tol * 100.0
+                    && w.normal().cross(c.normal()).length() <= 1e-9;
+                if !same {
+                    return None;
+                }
+            }
+        }
+    }
+    wall.map(|w| (w.center(), w.normal()))
 }
 
 /// A point inside a lune of a sphere face: halfway along the great circle
