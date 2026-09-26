@@ -120,7 +120,8 @@ fn meshed_area(topo: &Topology, face: FaceId) -> f64 {
 
 /// The solid extruded 0.2 from a face of `area` whose arcs turn `wall`
 /// (their radius times their angle) is valid and watertight and measures
-/// `area * 0.2` by integration (to `1e-4`) and by its mesh (to `2e-3`, the
+/// `area * 0.2` by integration (to `1e-4`, and to `1e-6` in the check crate)
+/// and by its mesh (to `2e-3`, the
 /// chords of a unit circle at deflection `0.001` holding 0.13% less); the
 /// check crate's integrator reads its walls' area to `1e-6`, each cap
 /// measures `area` (to `1e-4`), each plane face tessellated on its own
@@ -141,6 +142,13 @@ fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
     assert!(
         (meshed - truth).abs() < 2e-3 * truth,
         "{name}: mesh volume {meshed}, truth {truth}"
+    );
+    let checked =
+        brepkit_check::properties::solid_volume(topo, solid, &PropertiesOptions::default())
+            .unwrap();
+    assert!(
+        (checked - truth).abs() < 1e-6 * truth,
+        "{name}: checked volume {checked}, truth {truth}"
     );
     let wall_truth = wall * 0.2;
     let (mut walls, mut walls_meshed) = (0.0, 0.0);
