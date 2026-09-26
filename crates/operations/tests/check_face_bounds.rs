@@ -71,11 +71,10 @@ fn a_cone_less_a_quadrant_reads_its_volume() {
     );
 }
 
-/// A pointed cone as made, moved off the origin and tipped onto its side
-/// (its base kept through the origin, where the base disc's chords add no
-/// flux): its wall runs from the base circle up a seam to the apex and back,
-/// and it reads its volume `2π / 3` and its centre of mass a quarter of the
-/// way up its axis.
+/// A pointed cone as made, moved off the origin, and tipped onto its side
+/// about the origin and moved so its base disc lies in `x = 1`: its wall runs
+/// from the base circle up a seam to the apex and back, and it reads its
+/// volume `2π / 3` and its centre of mass a quarter of the way up its axis.
 #[test]
 fn a_cone_reads_its_centre_of_mass_on_its_axis() {
     let truth = 2.0 * PI / 3.0;
@@ -90,6 +89,11 @@ fn a_cone_reads_its_centre_of_mass_on_its_axis() {
             "tipped onto its side",
             Mat4::rotation_y(FRAC_PI_2),
             (0.5, 0.0, 0.0),
+        ),
+        (
+            "tipped and moved",
+            Mat4::translation(1.0, 0.0, 0.0) * Mat4::rotation_y(FRAC_PI_2),
+            (1.5, 0.0, 0.0),
         ),
     ] {
         let mut topo = Topology::new();
