@@ -190,10 +190,9 @@ fn sample_edge_curve(
 /// from the arcs its outer wire actually covers rather than from a sparse
 /// sample of vertex angles.
 ///
-/// Each circle or ellipse boundary edge is walked along the shorter arc
-/// between its endpoints (the convention the midpoint sampling this replaces
-/// followed; a single rim edge past 180 degrees reads short here as it did
-/// there), unwrapped so the walk never jumps a period, and
+/// Each circle or ellipse boundary edge is walked along its own span (counter-
+/// clockwise in its parameter from its stored start to its stored end, past
+/// half a turn as it may be), unwrapped so the walk never jumps a period, and
 /// contributes the interval of `u` it covers (`project` returns the surface
 /// `u` of a point); the union of those intervals is the face's extent and the
 /// largest uncovered gap is its opening. A wall keeping 270 degrees around a
@@ -209,7 +208,7 @@ pub(super) fn angular_range_from_wire_arcs(
     project: impl Fn(Point3) -> f64,
 ) -> Option<(f64, f64)> {
     use brepkit_topology::edge::EdgeCurve;
-    use std::f64::consts::{PI, TAU};
+    use std::f64::consts::TAU;
     const SAMPLES: usize = 16;
     let mut intervals: Vec<(f64, f64)> = Vec::new();
     for oe in wire.edges() {
@@ -228,30 +227,10 @@ pub(super) fn angular_range_from_wire_arcs(
         if edge.is_closed() {
             return Some((0.0, TAU));
         }
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         let point_at = |f: f64| -> Point3 {
-            match edge.curve() {
-                EdgeCurve::Circle(c) => {
-                    let (ts, te) = (c.project(sp), c.project(ep));
-                    let fwd = (te - ts).rem_euclid(TAU);
-                    let a = if fwd <= PI {
-                        fwd.mul_add(f, ts)
-                    } else {
-                        (TAU - fwd).mul_add(-f, ts)
-                    };
-                    c.evaluate(a)
-                }
-                EdgeCurve::Ellipse(e) => {
-                    let (ts, te) = (e.project(sp), e.project(ep));
-                    let fwd = (te - ts).rem_euclid(TAU);
-                    let a = if fwd <= PI {
-                        fwd.mul_add(f, ts)
-                    } else {
-                        (TAU - fwd).mul_add(-f, ts)
-                    };
-                    e.evaluate(a)
-                }
-                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => sp,
-            }
+            edge.curve()
+                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
         };
         let mut prev: Option<f64> = None;
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);

@@ -300,12 +300,30 @@ fn face_uv_bounds<S: ParametricSurface>(
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
 
+    // Each edge's start and, for a curved edge, points along its own span in
+    // traversal order: an arc past half a turn between two vertices would
+    // otherwise unwrap the short way below.
     let mut uvs = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
         let vid = oe.oriented_start(edge);
         let pt = topo.vertex(vid)?.point();
         uvs.push(surface.project_point(pt));
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) && !edge.is_closed() {
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            for k in 1..4 {
+                let f = f64::from(k) / 4.0;
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                let p = edge
+                    .curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep);
+                uvs.push(surface.project_point(p));
+            }
+        }
     }
 
     if uvs.is_empty() {

@@ -448,18 +448,23 @@ fn side_face_surface(
             .map_err(crate::OperationsError::Math)?;
             // Check whether the cylinder's natural radial normal agrees with
             // the expected outward direction (same logic as NURBS reversal).
+            // The chord runs along the arc's tangent at the arc's middle
+            // (past half a turn too, where the tangent at `p0` turns back),
+            // so the radial direction is read there.
             let edge_dir = p1 - p0;
             let expected = if outer_is_cw {
                 offset.cross(edge_dir)
             } else {
                 edge_dir.cross(offset)
             };
-            // Cylinder natural normal at p0: radial direction from axis.
-            let to_pt = Vec3::new(
-                p0.x() - circle.center().x(),
-                p0.y() - circle.center().y(),
-                p0.z() - circle.center().z(),
-            );
+            let at = if (curve_end - curve_start).length() < 1e-9 {
+                p0
+            } else {
+                let (t0, t1) = curve.domain_with_endpoints(curve_start, curve_end);
+                curve.evaluate_with_endpoints(0.5 * (t0 + t1), curve_start, curve_end)
+            };
+            // Cylinder natural normal there: radial direction from axis.
+            let to_pt = at - circle.center();
             let along_axis = cyl.axis() * cyl.axis().dot(to_pt);
             let radial = to_pt - along_axis;
             let reversed = radial.dot(expected) < 0.0;
