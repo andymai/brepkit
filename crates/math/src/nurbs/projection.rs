@@ -600,6 +600,49 @@ mod tests {
         );
     }
 
+    /// A cubic B-spline over four spans: points on it at and beside its
+    /// interior knots, and points off it, project to the closest of 100,001
+    /// samples or closer.
+    #[test]
+    fn project_across_knot_spans() {
+        let c = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(2.0, -1.0, 0.5),
+                Point3::new(3.0, 2.5, 0.0),
+                Point3::new(4.0, 0.0, -0.5),
+                Point3::new(5.0, 1.5, 0.0),
+                Point3::new(6.0, 0.0, 0.0),
+            ],
+            vec![1.0; 7],
+        )
+        .expect("valid cubic");
+        let dense: Vec<Point3> = (0..=100_000)
+            .map(|k| c.evaluate(f64::from(k) / 100_000.0))
+            .collect();
+        for u in [0.25, 0.25 + 1e-3, 0.5 - 1e-3, 0.5, 0.75, 0.75 + 1e-3] {
+            let on = c.evaluate(u);
+            let res = project_point_to_curve(&c, on, TOL).expect("should converge");
+            assert!(res.distance < TOL, "u={u}: dist {}", res.distance);
+            for off in [Point3::new(0.0, 0.3, 0.2), Point3::new(0.1, -0.4, 0.0)] {
+                let p = on + (off - Point3::new(0.0, 0.0, 0.0));
+                let res = project_point_to_curve(&c, p, TOL).expect("should converge");
+                let brute = dense
+                    .iter()
+                    .map(|q| (*q - p).length())
+                    .fold(f64::INFINITY, f64::min);
+                assert!(
+                    res.distance <= brute + 1e-9,
+                    "u={u}: {} > {brute}",
+                    res.distance
+                );
+            }
+        }
+    }
+
     // -- Surface tests -----------------------------------------------------
 
     #[test]

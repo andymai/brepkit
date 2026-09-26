@@ -501,4 +501,37 @@ mod tests {
         let k = line.curvature(0.5).expect("curvature should compute");
         assert!(k < 1e-10, "straight line curvature should be ~0, got {k}");
     }
+
+    /// A rational cubic over four spans: its second derivative matches the
+    /// central difference of its first, beside each interior knot and
+    /// mid-span.
+    #[test]
+    fn second_derivative_matches_finite_differences() {
+        let c = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(2.0, -1.0, 0.5),
+                Point3::new(3.0, 2.5, 0.0),
+                Point3::new(4.0, 0.0, -0.5),
+                Point3::new(5.0, 1.5, 0.0),
+                Point3::new(6.0, 0.0, 0.0),
+            ],
+            vec![1.0, 0.7, 1.3, 1.0, 0.9, 1.2, 1.0],
+        )
+        .expect("valid cubic");
+        let h = 1e-6;
+        for u in [
+            0.1, 0.2499, 0.2501, 0.375, 0.4999, 0.5001, 0.7499, 0.7501, 0.9,
+        ] {
+            let d2 = c.derivatives(u, 2)[2];
+            let fd = (c.derivatives(u + h, 1)[1] - c.derivatives(u - h, 1)[1]) * (0.5 / h);
+            assert!(
+                (d2 - fd).length() < 1e-4 * (1.0 + fd.length()),
+                "u={u}: {d2:?} vs {fd:?}"
+            );
+        }
+    }
 }

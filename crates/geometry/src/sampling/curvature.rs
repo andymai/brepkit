@@ -54,21 +54,20 @@ fn subdivide(
         return;
     }
 
-    // Approximate arc-length of this interval by the chord.
-    let interval_len = chord(p_a, p_b);
+    // The interval's arc by the polyline through its midpoint, and its
+    // sharpest bend among its ends and midpoint: an arc that doubles back
+    // has a short chord and can be gentle at both ends.
+    let t_m = 0.5 * (t_a + t_b);
+    let p_m = curve.evaluate(t_m);
+    let interval_len = chord(p_a, p_m) + chord(p_m, p_b);
+    let kappa = curvature_at(curve, t_a)
+        .max(curvature_at(curve, t_m))
+        .max(curvature_at(curve, t_b));
 
-    // Average curvature at the two endpoints.
-    let kappa_a = curvature_at(curve, t_a);
-    let kappa_b = curvature_at(curve, t_b);
-    let kappa_avg = 0.5 * (kappa_a + kappa_b);
-
-    if kappa_avg * interval_len <= tolerance {
+    if kappa * interval_len <= tolerance {
         // Angular change is within tolerance — no further subdivision needed.
         return;
     }
-
-    let t_m = 0.5 * (t_a + t_b);
-    let p_m = curve.evaluate(t_m);
 
     subdivide(curve, t_a, p_a, t_m, p_m, tolerance, depth + 1, out);
     out.push((t_m, p_m));
@@ -77,8 +76,9 @@ fn subdivide(
 
 /// Curvature-adaptive sampling for NURBS curves.
 ///
-/// Subdivides intervals where the product of curvature and interval arc-length
-/// exceeds `tolerance` (roughly: angular change per segment ≤ tolerance).
+/// Subdivides intervals where the product of their sharpest curvature and
+/// their arc length exceeds `tolerance` (roughly: angular change per segment
+/// ≤ tolerance).
 ///
 /// Always returns at least the two endpoints. If `tolerance` is non-positive,
 /// only the two endpoints are returned.
