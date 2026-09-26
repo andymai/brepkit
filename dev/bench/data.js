@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790382265942,
+  "lastUpdate": 1790387974855,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40715,6 +40715,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42329440,
             "range": "± 1703865",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5391f75e3f35154ff54717479a1fd589dda83d43",
+          "message": "fix(algo): sample a sphere patch around the pole near the pole (#1779)\n\nSphere patch sampling now classifies pole containing sub-faces\ncorrectly, fixing the affected sphere and box booleans while preserving\nexact, valid, watertight results where supported.\n\n## What was wrong\n\n- `make_sphere(3, 32)` less a 10-unit `make_box` translated to `(-0.7,\n-1.1, 0.1)`, `(-0.3, -0.4, 0.2)`, or `(-0.3, -0.4, 1.2)` returned a\nwrong solid with 4 faces: three box planes and one sphere patch.\n`validate_solid` flagged it invalid, but the boolean's result gates\naccepted it. At `(-0.7, -1.1, 0.1)`, it measured 18.18 against 85.75. In\nthese placements the box holds the ball's north pole, with its corner\nabove the equator on the far side of the axis. With the corner below the\nequator, the same `Cut` fell back to a mesh, while the `Intersect` was\nright.\n\n- The upper hemisphere's three-arc section loop winds the axis. The\nsplit sub-face holding the pole took its `interior_point_3d` sample in\n`crates/algo/src/builder/face_splitter/mod.rs` at the centroid of its\nloop's `(u, v)` polygon. That polygon is open across the seam, so the\nsample landed in the ring around the patch. Both sub-faces classified\noutside the box, and the `Cut` kept the patch.\n\n## What this does\n\n- A sphere sub-face whose outer loop winds the axis holds the pole on\nthe loop's left, since progress toward `+u` puts the north pole there.\nIts sample is now taken at the latitude halfway between the loop's\nnearest approach to that pole and the pole, short of any hole that also\nwinds the axis. A loop through a pole does not count as winding because\nits `(u, v)` polygon closes. This rule applies where the existing thin\nlatitude strip rule does not. `sample_wire_loop_uv_on_surface` samples\nloops on their edges' 3D curves because a pcurve can run past a pole and\ncan hold a closed latitude circle as a single point.\n\n- Correct classification exposed another defect at `(-2.5, -2.5, 0.1)`.\nThe box walls miss the ball's vertical extent, and each wall cuts a lens\nface whose section arc and bottom line share both ends.\n`merge_duplicate_edges` folded the arc into the line, producing a valid,\nwatertight `Cut` missing both lunes and measuring 59.335 against 61.376.\nThis case had fallen back to a mesh. `closed_circle_boundary_crossings`\nin phase FF already splits a section circle at the midpoint between two\ncrossings of one boundary arc. Boundary line crossings now carry their\nedge too, so a span between two crossings of one line receives the same\nmidpoint split.\n\n- `split_noseam_face_direct` pairs chained open arcs into a cap and its\nremainder and sets aside closed sections. When a box top at `z = 2.95`\ncuts a full circle inside the patch, several poses returned an invalid\n4-face `Cut` measuring 18.178 against 85.777. A closed section outside\nthe face boundary's own plane now fails the face, causing mesh fallback.\nProperly nesting that circle remains a roadmap row.\n\n## Verification\n\n- `a_corner_holding_the_pole_cuts_its_patch` in\n`crates/operations/tests/sphere_box_corner.rs` covers the three\nplacements, `(-2.5, -2.5, 0.1)`, and the first placement mirrored\nthrough `z = 0` so the box holds the south pole. Every `Cut` and\n`Intersect` is exact, valid, and has a watertight mesh. A point by the\npole is removed from the `Cut` and inside the `Intersect`; a point past\nthe box's face and one in a lune beside it produce the reverse. Each\n`Intersect` measures within `1e-4` of a closed-form oracle using the\nball's slices over `x > a`, `y > b`, by Simpson in `z`.\n\n- `a_patch_around_the_pole_takes_a_second_cut` cuts the `Intersect`\npatch with a box over `z > 2.95`. The result is exact, valid,\nwatertight, and within `2e-4`.\n\n- The `Cut` is held to the ball less the `Intersect` within `5e-3`. The\nremaining gap is measurement, not geometry. Its ring face, bounded by\n`make_sphere`'s chordal equator with an axis-winding hole, uses the\nper-face mesh in `solid_volume`: 85.702 against 85.754 at `(-0.7, -1.1,\n0.1)`, and 95.230 against 95.533 at `(-0.3, -0.4, 0.2)`. Near the pole\nthat face meshes off the sphere. At `(-0.0001, -1.1, 0.1)`, the `Cut`\nreads 66.34 against 92.56, although fewer than 3 of about 28,000 grid\npoints classify wrong. Both issues are roadmap rows.\n\n- Across 432 upright corners, with `a`, `b` from -2.8 to -0.2 and `c`\nfrom -1.0 to 2.0 for `Cut` and `Intersect`, main returns 72 wrong\nresults, 210 mesh fallbacks, and 150 exact results. This branch returns\n4 wrong near-pole `Cut` results that measure short, 102 fallbacks, and\n326 exact results. No case is worse.\n\n- Across 11 boxes in 10 poses of the ball for `Cut`, `Intersect`, and\n`Fuse`, main has 73 wrong, 159 fallbacks, and 98 exact results. This\nbranch has 37 wrong, 170 fallbacks, and 123 exact results. The top-cut\nbox's `Intersect` falls back in nine poses on main, but one mirrored\npose returned 4 exact-looking faces measuring 27.34292, the volume of\nthe uncapped patch, because main ignored the box's top face. It now\nfalls back in every pose, and no cell becomes wrong.\n\n- A pose audit covering 5 primitives, 4 tools, `Cut` and `Intersect`,\nand upright, turned, and mirrored poses shows no cell change.\n\n- The workspace suite passes: 3101 tests run, 3101 passed, 20 skipped.",
+          "timestamp": "2026-09-26T01:56:50Z",
+          "tree_id": "50f9da5e61e759ad8e9e2811c4734841cd894f31",
+          "url": "https://github.com/andymai/brepkit/commit/5391f75e3f35154ff54717479a1fd589dda83d43"
+        },
+        "date": 1790387969817,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1009906,
+            "range": "± 1471",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1095823,
+            "range": "± 3904",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13090,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 754244,
+            "range": "± 2438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42644562,
+            "range": "± 121732",
             "unit": "ns/iter"
           }
         ]
