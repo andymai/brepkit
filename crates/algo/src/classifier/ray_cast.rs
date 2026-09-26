@@ -12,6 +12,7 @@ use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
+use std::f64::consts::TAU;
 
 use crate::builder::FaceClass;
 use crate::error::AlgoError;
@@ -682,7 +683,6 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
         if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
             && face.inner_wires().is_empty()
         {
-            use std::f64::consts::TAU;
             let verts = wire_polygon(topo, face.outer_wire())?;
             if verts.len() < 3 {
                 // Degenerate boundary: the untrimmed whole torus.
@@ -852,8 +852,6 @@ fn cylinder_hole_bands(
     face: &brepkit_topology::face::Face,
     cyl: &brepkit_math::surfaces::CylindricalSurface,
 ) -> Result<Vec<(f64, f64)>, AlgoError> {
-    use std::f64::consts::TAU;
-
     let mut bands = Vec::with_capacity(face.inner_wires().len());
     for &iw in face.inner_wires() {
         let pts = wire_polygon(topo, iw)?;
@@ -987,7 +985,6 @@ fn sphere_face_loops(
 ) -> Result<Option<Vec<SphereLoop>>, AlgoError> {
     use brepkit_topology::edge::EdgeCurve;
     const SAMPLES: usize = 8;
-    const RING: usize = 64;
     let r = surface.radius();
     let slack = 1e-9 * r.max(1.0);
     let mut loops = Vec::new();
@@ -1096,34 +1093,132 @@ fn sphere_face_loops(
         } else {
             return Ok(None);
         };
-        // The half-spaces bound the loop's region only when each arc is the
-        // whole of its circle that lies on the region's side of the other
-        // planes: a column narrower than the ball meets the sphere twice, and
-        // its far end would read as part of a dome bounded by its top arcs.
+        // The half-spaces bound the loop's region only when the loop's arcs on
+        // each circle cover exactly the part of that circle lying on the
+        // region's side of the other planes: a column narrower than the ball
+        // meets the sphere twice, and its far end would read as part of a
+        // dome bounded by its top arcs. Each side meets a circle in one arc,
+        // so that part is exact, however short its runs.
         for (j, (_, circle)) in edges.iter().enumerate() {
             let Some(circle) = circle else {
                 return Ok(None);
             };
-            let admitted: Vec<bool> = (0..RING)
-                .map(|k| {
-                    #[allow(clippy::cast_precision_loss)]
-                    let p = circle.evaluate(std::f64::consts::TAU * k as f64 / RING as f64);
-                    planes.iter().enumerate().all(|(i, &(c, n))| {
-                        let d = (p - c).dot(n);
-                        i == j || if any { d <= slack } else { d >= -slack }
-                    })
-                })
-                .collect();
-            let runs = (0..RING)
-                .filter(|&k| admitted[k] && !admitted[(k + RING - 1) % RING])
-                .count();
-            if runs != 1 {
+            let rho = circle.radius();
+            let mut admitted: AngleSet = vec![(0.0, TAU)];
+            let s = if any { -1.0 } else { 1.0 };
+            for (i, &(c, n)) in planes.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let k = s * (circle.center() - c).dot(n);
+                let (a, b) = (
+                    s * rho * n.dot(circle.u_axis()),
+                    s * rho * n.dot(circle.v_axis()),
+                );
+                let amp = a.hypot(b);
+                let side = if amp <= slack {
+                    if k >= -slack {
+                        vec![(0.0, TAU)]
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    let t = (-slack - k) / amp;
+                    if t <= -1.0 {
+                        vec![(0.0, TAU)]
+                    } else if t > 1.0 {
+                        Vec::new()
+                    } else {
+                        let half = t.acos();
+                        angle_arc(b.atan2(a) - half, 2.0 * half)
+                    }
+                };
+                admitted = angle_intersection(&admitted, &side);
+            }
+            let mut covered: AngleSet = Vec::new();
+            let mut arcs_on_circle = 0_usize;
+            for (pts, other) in &edges {
+                let same = other.as_ref().is_some_and(|o| {
+                    (o.center() - circle.center()).length() <= slack
+                        && (o.radius() - rho).abs() <= slack
+                        && o.normal().cross(circle.normal()).length() <= 1e-9
+                });
+                if !same {
+                    continue;
+                }
+                arcs_on_circle += 1;
+                let angle = |p: Point3| circle.project(p);
+                let (a0, a1) = (angle(pts[0]), angle(pts[pts.len() - 1]));
+                let am = angle(pts[pts.len() / 2]);
+                let to_end = (a1 - a0).rem_euclid(TAU);
+                covered.extend(if (pts[0] - pts[pts.len() - 1]).length() <= slack {
+                    angle_arc(0.0, TAU)
+                } else if (am - a0).rem_euclid(TAU) <= to_end {
+                    angle_arc(a0, to_end)
+                } else {
+                    angle_arc(a1, TAU - to_end)
+                });
+            }
+            let covered = angle_union(covered);
+            let both = angle_intersection(&admitted, &covered);
+            let either = angle_union(admitted.iter().chain(&covered).copied().collect());
+            #[allow(clippy::cast_precision_loss)]
+            let allowance =
+                1e-6 * r.max(1.0) / rho * (2 * (admitted.len() + arcs_on_circle)) as f64;
+            if admitted.is_empty() || angle_measure(&either) - angle_measure(&both) > allowance {
                 return Ok(None);
             }
         }
         loops.push(SphereLoop::HalfSpaces { planes, any });
     }
     Ok(Some(loops))
+}
+
+/// A set of angles on a circle, as disjoint sorted intervals of `[0, 2π]`.
+type AngleSet = Vec<(f64, f64)>;
+
+/// The arc from `start` running `span` counter-clockwise (a whole turn at
+/// most).
+fn angle_arc(start: f64, span: f64) -> AngleSet {
+    if span >= TAU {
+        return vec![(0.0, TAU)];
+    }
+    let a = start.rem_euclid(TAU);
+    let b = a + span;
+    if b <= TAU {
+        vec![(a, b)]
+    } else {
+        vec![(0.0, b - TAU), (a, TAU)]
+    }
+}
+
+fn angle_union(mut set: AngleSet) -> AngleSet {
+    set.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out: AngleSet = Vec::with_capacity(set.len());
+    for (a, b) in set {
+        match out.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
+}
+
+fn angle_intersection(x: &AngleSet, y: &AngleSet) -> AngleSet {
+    let mut out = Vec::new();
+    for &(a0, a1) in x {
+        for &(b0, b1) in y {
+            let (lo, hi) = (a0.max(b0), a1.min(b1));
+            if lo <= hi {
+                out.push((lo, hi));
+            }
+        }
+    }
+    angle_union(out)
+}
+
+fn angle_measure(set: &AngleSet) -> f64 {
+    set.iter().map(|(a, b)| b - a).sum()
 }
 
 /// A hole's rim as a [`SphereLoop::Rim`], about the direction from the
@@ -1322,7 +1417,6 @@ fn ray_cylinder_crossings(
 
 /// Whether `u` lies within `eps` of either border of the excluded gap.
 fn near_gap_border(u: f64, gap: (f64, f64), eps: f64) -> bool {
-    use std::f64::consts::TAU;
     let u = u.rem_euclid(TAU);
     for border in [gap.0.rem_euclid(TAU), gap.1.rem_euclid(TAU)] {
         let d = (u - border).abs();
@@ -1347,7 +1441,6 @@ fn ray_torus_crossings(
     v_band: Option<(f64, f64)>,
     tol: Tolerance,
 ) -> (i32, bool) {
-    use std::f64::consts::TAU;
     let near = 10.0 * tol.linear;
     let Ok(dir) = ray_dir.normalize() else {
         return (0, false);
@@ -1465,7 +1558,6 @@ fn ray_cone_crossings(
 /// Whether circumferential parameter `u` lies in the excluded angular gap
 /// `(lo, hi)` (CCW from `lo` to `hi`, possibly wrapping past 2π).
 pub fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
-    use std::f64::consts::TAU;
     let eps = 1e-6;
     let u = u.rem_euclid(TAU);
     let (lo, hi) = (gap.0.rem_euclid(TAU), gap.1.rem_euclid(TAU));
@@ -1480,7 +1572,6 @@ pub fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
 /// partial-cylinder face does NOT cover. `None` for too-few samples or a gap
 /// too small to be a genuine partial arc.
 pub fn largest_u_gap(u_samples: &[f64]) -> Option<(f64, f64)> {
-    use std::f64::consts::TAU;
     let mut us: Vec<f64> = u_samples.iter().map(|&u| u.rem_euclid(TAU)).collect();
     us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     us.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
@@ -1747,31 +1838,34 @@ mod tests {
     #[test]
     fn sphere_arc_loops_bound_only_their_own_region() {
         let mut topo = Topology::default();
-        let h = 7.0_f64.sqrt();
-        let dome = sphere_patch(
-            &mut topo,
-            5.0,
-            &[
-                Point3::new(3.0, 3.0, h),
-                Point3::new(-3.0, 3.0, h),
-                Point3::new(-3.0, -3.0, h),
-                Point3::new(3.0, -3.0, h),
-            ],
-            &[
-                Point3::new(0.0, 3.0, 0.0),
-                Point3::new(-3.0, 0.0, 0.0),
-                Point3::new(0.0, -3.0, 0.0),
-                Point3::new(3.0, 0.0, 0.0),
-            ],
-        );
-        let face = topo.face(dome).unwrap();
-        let FaceSurface::Sphere(s) = face.surface() else {
-            unreachable!()
-        };
-        assert!(
-            sphere_face_loops(&topo, face, s).unwrap().is_none(),
-            "the column dome's arcs declined"
-        );
+        // A thin column's far dome is tiny.
+        for w in [3.0, 0.1] {
+            let h = 2.0f64.mul_add(-w * w, 25.0).sqrt();
+            let dome = sphere_patch(
+                &mut topo,
+                5.0,
+                &[
+                    Point3::new(w, w, h),
+                    Point3::new(-w, w, h),
+                    Point3::new(-w, -w, h),
+                    Point3::new(w, -w, h),
+                ],
+                &[
+                    Point3::new(0.0, w, 0.0),
+                    Point3::new(-w, 0.0, 0.0),
+                    Point3::new(0.0, -w, 0.0),
+                    Point3::new(w, 0.0, 0.0),
+                ],
+            );
+            let face = topo.face(dome).unwrap();
+            let FaceSurface::Sphere(s) = face.surface() else {
+                unreachable!()
+            };
+            assert!(
+                sphere_face_loops(&topo, face, s).unwrap().is_none(),
+                "the dome's arcs in the column {w} wide declined"
+            );
+        }
 
         let origin = Point3::new(0.0, 0.0, 0.0);
         let octant = sphere_patch(
