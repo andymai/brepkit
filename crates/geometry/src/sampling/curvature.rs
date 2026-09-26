@@ -57,48 +57,74 @@ fn turn(a: &Probe, b: &Probe) -> f64 {
     }
 }
 
+/// The turning of the curve through `probes` (in order), estimated two
+/// ways: its sharpest curvature among them times the polyline through them
+/// (an arc that doubles back has a short chord and can be gentle at both
+/// ends), and the turn between their tangents (an S has no curvature at its
+/// inflection and can have none at its ends).
+fn turning(probes: &[&Probe]) -> f64 {
+    let kappa = probes.iter().map(|q| q.kappa).fold(0.0, f64::max);
+    let length: f64 = probes
+        .windows(2)
+        .map(|w| (w[1].point - w[0].point).length())
+        .sum();
+    let turns: f64 = probes.windows(2).map(|w| turn(w[0], w[1])).sum();
+    (kappa * length).max(turns)
+}
+
 /// Recursively subdivide the interval between probes `a` and `b` while its
-/// estimated turning exceeds `tolerance`, or while `depth` is below
-/// `min_depth`. New interior points are appended to `out`.
+/// turning exceeds `tolerance`, reading its midpoint `m` (probed here unless
+/// given). New interior points are appended to `out`.
 fn subdivide(
     curve: &NurbsCurve,
     a: &Probe,
     b: &Probe,
+    m: Option<Probe>,
     tolerance: f64,
-    (depth, min_depth): (u32, u32),
+    depth: u32,
     out: &mut Vec<(f64, Point3)>,
 ) {
     if depth >= MAX_DEPTH {
         return;
     }
-
-    // Two estimates of the interval's turning: its sharpest curvature among
-    // its ends and midpoint times the polyline through its midpoint (an arc
-    // that doubles back has a short chord and can be gentle at both ends),
-    // and the turn between the tangents there (an S has no curvature at
-    // its inflection and can have none at its ends).
-    let m = probe(curve, 0.5 * (a.t + b.t));
-    let length = (m.point - a.point).length() + (b.point - m.point).length();
-    let bend = a.kappa.max(m.kappa).max(b.kappa) * length;
-    let turning = turn(a, &m) + turn(&m, b);
-
-    if depth >= min_depth && bend.max(turning) <= tolerance {
+    let m = m.unwrap_or_else(|| probe(curve, 0.5 * (a.t + b.t)));
+    if turning(&[a, &m, b]) <= tolerance {
         return;
     }
-
-    subdivide(curve, a, &m, tolerance, (depth + 1, min_depth), out);
+    subdivide(curve, a, &m, None, tolerance, depth + 1, out);
     out.push((m.t, m.point));
-    subdivide(curve, &m, b, tolerance, (depth + 1, min_depth), out);
+    subdivide(curve, &m, b, None, tolerance, depth + 1, out);
+}
+
+/// Sample one knot span (one polynomial piece) between probes `a` and `b`,
+/// reading it at its midpoint and quarter points before keeping it as one
+/// segment.
+fn sample_span(
+    curve: &NurbsCurve,
+    a: &Probe,
+    b: &Probe,
+    tolerance: f64,
+    out: &mut Vec<(f64, Point3)>,
+) {
+    let m = probe(curve, 0.5 * (a.t + b.t));
+    let q1 = probe(curve, 0.5 * (a.t + m.t));
+    let q3 = probe(curve, 0.5 * (m.t + b.t));
+    if turning(&[a, &q1, &m, &q3, b]) <= tolerance {
+        return;
+    }
+    subdivide(curve, a, &m, Some(q1), tolerance, 1, out);
+    out.push((m.t, m.point));
+    subdivide(curve, &m, b, Some(q3), tolerance, 1, out);
 }
 
 /// Curvature-adaptive sampling for NURBS curves.
 ///
 /// Splits the range at the curve's knots, where its tangent or curvature may
-/// jump, and then subdivides each span at least once and every interval
-/// whose estimated turning exceeds `tolerance` (roughly: angular change per
-/// segment ≤ tolerance). Each span is one polynomial piece, read at its
-/// ends, midpoint and quarter points at least: a non-rational cubic piece
-/// with no curvature at all five is straight.
+/// jump, and subdivides every interval whose estimated turning exceeds
+/// `tolerance` (roughly: angular change per segment ≤ tolerance). Each span
+/// is one polynomial piece, read at its ends, midpoint and quarter points at
+/// least: a non-rational cubic piece with no curvature at all five is
+/// straight.
 ///
 /// Always returns at least the two endpoints. If `tolerance` is non-positive,
 /// only the two endpoints are returned.
@@ -117,9 +143,12 @@ pub fn sample_curvature(
     }
 
     let mut cuts = vec![lo];
-    cuts.extend(curve.knots().iter().copied().filter(|&k| k > lo && k < hi));
+    for &k in curve.knots() {
+        if k - cuts[cuts.len() - 1] >= f64::EPSILON && hi - k >= f64::EPSILON {
+            cuts.push(k);
+        }
+    }
     cuts.push(hi);
-    cuts.dedup_by(|x, y| (*x - *y).abs() < f64::EPSILON);
     let mut spans: Vec<(Probe, Probe)> = cuts
         .windows(2)
         .map(|w| (probe(curve, w[0]), probe_below(curve, w[1])))
@@ -128,7 +157,7 @@ pub fn sample_curvature(
         spans = spans.into_iter().rev().map(|(a, b)| (b, a)).collect();
     }
     for (a, b) in &spans {
-        subdivide(curve, a, b, tolerance, (0, 1), &mut out);
+        sample_span(curve, a, b, tolerance, &mut out);
         out.push((b.t, b.point));
     }
     out
@@ -279,8 +308,8 @@ mod tests {
     /// Curves whose curvature vanishes at their ends and midpoint (an ogee
     /// over four spans, a symmetric quintic S, a wave over eight spans), a
     /// closed circle, and a V with a corner at a double knot turn by at most
-    /// the tolerance within each segment. The V's two pieces are straight
-    /// and split once each, however sharp its corner.
+    /// the tolerance within each segment. The V's two straight pieces are a
+    /// segment each, however sharp its corner.
     #[test]
     fn segments_turn_within_tolerance() {
         let w = std::f64::consts::FRAC_1_SQRT_2;
@@ -374,7 +403,22 @@ mod tests {
                 );
             }
         }
-        assert_eq!(sample_curvature(&vee, 0.0, 1.0, 0.02).len(), 5);
+        assert_eq!(sample_curvature(&vee, 0.0, 1.0, 0.02).len(), 3);
+
+        // A range walked backwards gives the same points in reverse, and one
+        // bounded by knots starts and ends on them.
+        let forward = sample_curvature(&wave, 0.0, 1.0, 0.05);
+        let backward = sample_curvature(&wave, 1.0, 0.0, 0.05);
+        assert_eq!(forward.len(), backward.len());
+        for (f, b) in forward.iter().zip(backward.iter().rev()) {
+            assert!((f.0 - b.0).abs() < 1e-15, "{} vs {}", f.0, b.0);
+        }
+        let inner = sample_curvature(&wave, 0.25, 0.75, 0.05);
+        assert!(
+            (inner[0].0 - 0.25).abs() < 1e-15 && (inner[inner.len() - 1].0 - 0.75).abs() < 1e-15
+        );
+        assert!(inner.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(max_turn_per_segment(&wave, &inner) <= 0.05);
     }
 
     #[test]

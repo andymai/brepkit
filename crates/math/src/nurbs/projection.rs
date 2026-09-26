@@ -97,60 +97,102 @@ pub fn project_point_to_curve(
 /// into segments first costs knot insertions, on every projection, for the
 /// same points.
 ///
-/// Returns the candidates (best first) with the span each came from, as
+/// Returns the candidates with the span each came from, as
 /// `(u, span_start, span_end)`. Newton runs inside its seed's span, where
 /// the curve is one polynomial piece: at a corner (a knot of multiplicity
 /// `p`) the other piece's derivatives would carry it away from the corner.
-/// A knot ends one span and starts the next, so it seeds a run in each; an
-/// interior span ends one step below its knot, since the curve is read
-/// there by the next piece.
+/// So the seeds are the closest sample of each of the closest spans (a
+/// short span's crowded samples take one seed, not all of them, and a knot
+/// ends one span and starts the next, so it can seed both) and the closest
+/// local minima of the sampled distance along the curve (several basins in
+/// one span). An interior span ends one step below its knot, since the
+/// curve is read there by the next piece.
 #[allow(clippy::cast_precision_loss)]
 fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<(f64, f64, f64)> {
+    type Span = (f64, f64, Vec<(f64, f64)>);
+    const SEEDS: usize = 5;
     let knots = curve.knots();
     let p = curve.degree();
     let (lo, hi) = (knots[p], knots[knots.len() - p - 1]);
 
-    // Collect all (distance_sq, parameter, span start, span end) samples.
-    let mut samples: Vec<(f64, f64, f64, f64)> = Vec::new();
-
+    // Each span's (start, end) and its (parameter, distance_sq) samples, in
+    // order along the curve.
+    let n_samples = (p + 1).max(5) * 2;
+    let mut spans: Vec<Span> = Vec::new();
     for span in knots.windows(2) {
         let (u_start, u_end) = (span[0], span[1]);
         if u_end <= u_start || u_start < lo || u_end > hi {
             continue;
         }
-
-        // Sample points along the segment.
         let top = if u_end < hi { u_end.next_down() } else { u_end };
-        let n_samples = (p + 1).max(5) * 2;
-        for i in 0..=n_samples {
-            let t = i as f64 / n_samples as f64;
-            let u = t.mul_add(u_end - u_start, u_start).min(top);
-            let pt = curve.evaluate(u);
-            let d_sq = (pt - point).length_squared();
-            samples.push((d_sq, u, u_start, top));
-        }
+        let samples = (0..=n_samples)
+            .map(|i| {
+                let t = i as f64 / n_samples as f64;
+                let u = t.mul_add(u_end - u_start, u_start).min(top);
+                (u, (curve.evaluate(u) - point).length_squared())
+            })
+            .collect();
+        spans.push((u_start, top, samples));
     }
 
-    // Sort by distance and return the best candidates.
-    samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Take the top few unique candidates (spatially separated).
-    let mut candidates: Vec<(f64, f64, f64)> = Vec::new();
-    let max_candidates = 5;
-    for &(_, u, u_start, u_end) in &samples {
-        if candidates.len() >= max_candidates {
-            break;
-        }
-        // Skip candidates too close to one we already have in the same span.
-        let dominated = candidates
+    let closest = |samples: &[(f64, f64)]| {
+        samples
             .iter()
-            .any(|c| (c.0 - u).abs() < 1e-10 && (c.1 - u_start).abs() < 1e-10);
-        if !dominated {
-            candidates.push((u, u_start, u_end));
+            .copied()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap_or((0.0, f64::INFINITY))
+    };
+    let mut nearest: Vec<(f64, f64, f64, f64)> = spans
+        .iter()
+        .map(|(u_start, top, samples)| {
+            let (u, d) = closest(samples);
+            (d, u, *u_start, *top)
+        })
+        .collect();
+    nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
+    nearest.truncate(SEEDS);
+
+    // A sample's neighbours along the curve; a span's end sample is the
+    // next span's start, so it looks past it. A run of equal minima counts
+    // once.
+    let mut minima: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for (s, (u_start, top, samples)) in spans.iter().enumerate() {
+        let last = samples.len() - 1;
+        let mut in_run = false;
+        for (i, &(u, d)) in samples.iter().enumerate() {
+            let prev = if i > 0 {
+                Some(samples[i - 1].1)
+            } else {
+                s.checked_sub(1).map(|r| {
+                    let before = &spans[r].2;
+                    before[before.len() - 2].1
+                })
+            };
+            let next = if i < last {
+                Some(samples[i + 1].1)
+            } else {
+                spans.get(s + 1).map(|after| after.2[1].1)
+            };
+            let minimum = prev.is_none_or(|q| d <= q) && next.is_none_or(|q| d <= q);
+            if minimum && !in_run {
+                minima.push((d, u, *u_start, *top));
+            }
+            in_run = minimum;
         }
     }
+    minima.sort_by(|a, b| a.0.total_cmp(&b.0));
+    minima.truncate(SEEDS);
 
-    candidates
+    let mut seeds: Vec<(f64, f64, f64)> = Vec::new();
+    for (_, u, u_start, top) in nearest.into_iter().chain(minima) {
+        if !seeds
+            .iter()
+            .any(|s| s.0.to_bits() == u.to_bits() && s.1.to_bits() == u_start.to_bits())
+        {
+            seeds.push((u, u_start, top));
+        }
+    }
+    seeds
 }
 
 /// Newton–Raphson refinement for curve point projection.
@@ -673,9 +715,9 @@ mod tests {
 
     /// A rational quadratic with a corner (a double knot) at `u = 0.5`:
     /// points on it beside the corner project to themselves, and points
-    /// below the corner to the closest of 100,001 samples or closer. Newton
-    /// seeded at the corner reads the far piece's derivatives there, which
-    /// carried it to the curve's far end.
+    /// below the corner to the closest of 100,001 samples or closer. A run
+    /// seeded at the corner reads the far piece's derivatives there unless
+    /// it stays in its own span.
     #[test]
     fn project_beside_a_rational_corner() {
         let c = NurbsCurve::new(
@@ -714,6 +756,38 @@ mod tests {
                     res.distance
                 );
             }
+        }
+    }
+
+    /// A quadratic with a span 0.0008 long beside a long one: the short
+    /// span's samples crowd together, and points on the long span beside it
+    /// project to themselves.
+    #[test]
+    fn project_beside_a_short_span() {
+        let pts = [
+            (0.369, 2.254, 0.523),
+            (1.49, 0.935, 1.239),
+            (2.611, 2.353, 0.691),
+            (3.864, 0.113, 0.841),
+            (4.381, 1.241, 0.004),
+            (5.108, 0.051, 1.203),
+            (6.235, 2.743, 1.368),
+        ];
+        let c = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 0.404, 0.404, 0.5225, 0.5233, 1.0, 1.0, 1.0],
+            pts.iter().map(|&(x, y, z)| Point3::new(x, y, z)).collect(),
+            vec![1.0; 7],
+        )
+        .expect("valid quadratic");
+        for u in [0.526, 0.527, 0.528, 0.53, 0.535, 0.54] {
+            let res = project_point_to_curve(&c, c.evaluate(u), TOL).expect("should converge");
+            assert!(
+                res.distance < TOL,
+                "u={u}: at {} dist {}",
+                res.parameter,
+                res.distance
+            );
         }
     }
 

@@ -302,7 +302,9 @@ impl NurbsSurface {
         );
 
         // Compute homogeneous derivatives Aw[k][l] = (wx, wy, wz, w). Those
-        // above the degrees are zero, but the rational surface's are not.
+        // above the degrees are zero, but a rational surface's are not (a
+        // polynomial one's are, and the quotient would only add rounding).
+        let (top_u, top_v) = if self.is_rational() { (d, d) } else { (du, dv) };
         let mut aw = vec![vec![[0.0f64; 4]; d + 1]; d + 1];
         for k in 0..=du {
             for l in 0..=dv {
@@ -332,8 +334,8 @@ impl NurbsSurface {
         let mut skl = vec![vec![zero; d + 1]; d + 1];
         let w0 = aw[0][0][3];
 
-        for k in 0..=d {
-            for l in 0..=d - k {
+        for k in 0..=top_u {
+            for l in 0..=top_v.min(d - k) {
                 let mut v3 = [aw[k][l][0], aw[k][l][1], aw[k][l][2]];
 
                 for j in 1..=l {

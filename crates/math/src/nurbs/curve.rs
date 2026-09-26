@@ -213,7 +213,9 @@ impl NurbsCurve {
         );
 
         // Compute homogeneous derivatives: Aw[k] = (Aw_x, Aw_y, Aw_z, w) for k-th deriv.
-        // Those above the degree are zero, but the rational curve's are not.
+        // Those above the degree are zero, but a rational curve's are not (a
+        // polynomial one's are, and the quotient would only add rounding).
+        let top = if self.is_rational() { d } else { du };
         let mut aw = vec![[0.0f64; 4]; d + 1];
         for (k, aw_k) in aw.iter_mut().enumerate().take(du + 1) {
             for j in 0..=p {
@@ -230,7 +232,7 @@ impl NurbsCurve {
 
         // Apply rational quotient rule (A4.2).
         let mut ck = vec![Vec3::new(0.0, 0.0, 0.0); d + 1];
-        for k in 0..=d {
+        for k in 0..=top {
             let mut v = [aw[k][0], aw[k][1], aw[k][2]];
             for i in 1..=k {
                 #[allow(clippy::cast_precision_loss)]
