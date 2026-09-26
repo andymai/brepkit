@@ -1096,14 +1096,42 @@ fn sphere_face_loops(
         } else {
             return Ok(None);
         };
-        // The half-spaces bound the loop's region only when each arc is the
-        // whole of its circle that lies on the region's side of the other
-        // planes: a column narrower than the ball meets the sphere twice, and
-        // its far end would read as part of a dome bounded by its top arcs.
+        // The half-spaces bound the loop's region only when the loop's arcs on
+        // each circle cover the whole of that circle lying on the region's
+        // side of the other planes: a column narrower than the ball meets the
+        // sphere twice, and its far end would read as part of a dome bounded
+        // by its top arcs. The arcs may split a run (a wall's arc cut at its
+        // crest) and a circle may hold several runs (the equator between a
+        // wide column's four walls), so their lengths are compared.
         for (j, (_, circle)) in edges.iter().enumerate() {
             let Some(circle) = circle else {
                 return Ok(None);
             };
+            let mut arcs_on_circle = 0_usize;
+            let mut covered = 0.0;
+            for (pts, other) in &edges {
+                let same = other.as_ref().is_some_and(|o| {
+                    (o.center() - circle.center()).length() <= slack
+                        && (o.radius() - circle.radius()).abs() <= slack
+                        && o.normal().cross(circle.normal()).length() <= 1e-9
+                });
+                if !same {
+                    continue;
+                }
+                arcs_on_circle += 1;
+                let tau = std::f64::consts::TAU;
+                let angle = |p: Point3| circle.project(p);
+                let (a0, a1) = (angle(pts[0]), angle(pts[pts.len() - 1]));
+                let am = angle(pts[pts.len() / 2]);
+                let to_end = (a1 - a0).rem_euclid(tau);
+                covered += if (pts[0] - pts[pts.len() - 1]).length() <= slack {
+                    tau
+                } else if (am - a0).rem_euclid(tau) <= to_end {
+                    to_end
+                } else {
+                    tau - to_end
+                };
+            }
             let admitted: Vec<bool> = (0..RING)
                 .map(|k| {
                     #[allow(clippy::cast_precision_loss)]
@@ -1117,7 +1145,15 @@ fn sphere_face_loops(
             let runs = (0..RING)
                 .filter(|&k| admitted[k] && !admitted[(k + RING - 1) % RING])
                 .count();
-            if runs != 1 {
+            #[allow(clippy::cast_precision_loss)]
+            let admitted_len = std::f64::consts::TAU
+                * admitted.iter().filter(|&&a| a).count() as f64
+                / RING as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let step = std::f64::consts::TAU / RING as f64;
+            #[allow(clippy::cast_precision_loss)]
+            let allowance = (runs + arcs_on_circle) as f64 * step;
+            if runs == 0 || (covered - admitted_len).abs() > allowance {
                 return Ok(None);
             }
         }

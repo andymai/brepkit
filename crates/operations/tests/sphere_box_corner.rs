@@ -836,3 +836,44 @@ fn a_column_through_both_poles_keeps_its_collars() {
         }
     }
 }
+
+/// The ball within the square column `|x|, |y| < 2.5` keeps a collar on each
+/// hemisphere, bounded by the four walls' arcs and four arcs of the equator.
+/// The engine's ray cast reads the collar by its planes: every point of a
+/// grid over the ball, clear of its surfaces by 0.05, lands on the right side.
+#[test]
+fn the_engine_reads_a_collar_by_its_planes() {
+    let mut topo = Topology::new();
+    let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+    let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
+    transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Intersect, sphere, column).unwrap();
+    assert!(exact(&topo, result), "fell back to a mesh");
+    let steps = 13;
+    let mut checked = 0;
+    for i in 0..steps {
+        for j in 0..steps {
+            for k in 0..steps {
+                let at = |n: i32| -3.3 + 6.6 * f64::from(n) / f64::from(steps - 1);
+                let p = Point3::new(at(i), at(j), at(k));
+                let rho = (p - Point3::new(0.0, 0.0, 0.0)).length();
+                let near = (rho - RADIUS).abs() < 0.05
+                    || (p.x().abs() - 2.5).abs() < 0.05
+                    || (p.y().abs() - 2.5).abs() < 0.05;
+                if near {
+                    continue;
+                }
+                let inside = rho < RADIUS && p.x().abs() < 2.5 && p.y().abs() < 2.5;
+                let got = brepkit_algo::classifier::classify_ray_cast(&topo, result, p).unwrap();
+                let want = if inside {
+                    brepkit_algo::FaceClass::Inside
+                } else {
+                    brepkit_algo::FaceClass::Outside
+                };
+                assert_eq!(got, want, "{p:?}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 1000, "{checked} points checked");
+}
