@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.41](https://github.com/andymai/brepkit/compare/v4.0.40...v4.0.41) (2026-09-26)
+
+
+### Bug Fixes
+
+* **algo:** keep a ball's lunes past a column, read results in pieces as valid ([#1792](https://github.com/andymai/brepkit/issues/1792)) ([ee5bf4b](https://github.com/andymai/brepkit/commit/ee5bf4b5e69246ab1cc808264ece8dad6d60d33a))
+
 ## [4.0.40](https://github.com/andymai/brepkit/compare/v4.0.39...v4.0.40) (2026-09-26)
 
 
