@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790406620866,
+  "lastUpdate": 1790411663291,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41255,6 +41255,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41934557,
             "range": "± 208309",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0fa34417b8ffa032bce33676ed7b8adfef45f120",
+          "message": "fix(algo): read a ball's collar by its planes in the engine ray cast (#1791)\n\n`classify_ray_cast` now reads a ball's collar by the half-spaces of its\narcs' planes, and classifies the ball within a square column right.\n\n## What was wrong\n\n- `make_sphere(3, 32)` within `make_box(5, 5, 10)` at `(-2.5, -2.5, -5)`\nis exact with 6 faces: four wall patches and a collar on each\nhemisphere. Each collar is bounded by the four walls' arcs and four arcs\nof the equator. On main, `classify_ray_cast` misreads 456 of 2077 points\nof a 13-step grid over the ball, with points within 0.05 of a surface\nskipped. The first failure is `(-2.2, -1.65, -0.55)`, read Outside.\n\n- `sphere_face_loops` reads a sphere face from the half-spaces of its\narcs' planes only when each circle's arcs cover the part of the circle\non the region's side of the other planes. It sampled that part at 64\npoints and required exactly one run. The collar's four equator arcs\nshare one circle containing four runs, while the wall arcs arrive cut at\ntheir crest. The check declined, and the face took the flat-polygon\nfallback.\n\n## What this does\n\n- Each other plane's side meets a circle in one closed arc, found in\nclosed form. The admitted part of each circle is now the exact\nintersection of those arcs, however short its runs.\n\n- The loop's oriented arcs on the circle must cover exactly that\nadmitted part. The covered and admitted parts may differ by at most\n`1e-6` times the ball's radius (taken as at least 1) of arc length per\narc end. This accepts several runs on one circle and arcs split at their\ncrest.\n\n- A dome in a column narrower than the ball still declines. On each wall\ncircle, its arc covers one of two admitted runs.\n`sphere_arc_loops_bound_only_their_own_region` pins this for a ball of\nradius 5 in columns 6 and 0.2 wide. In the 0.2 column, each run is\nshorter than a 64-point sampling step.\n\n## Verification\n\n- `the_engine_reads_a_collar_by_its_planes` in\n`crates/operations/tests/sphere_box_corner.rs` asserts that every grid\npoint described above lands on the right side. The workspace suite\npasses: 3116 tests run, 3116 passed, 20 skipped.\n\n- Still open in the roadmap: the ball within or less a column narrower\nthan itself, `make_box(3.6, 3.6, 10)` at `(-1.8, -1.8, -5)`, falls back\nto a mesh, on main as well.",
+          "timestamp": "2026-09-26T08:31:07Z",
+          "tree_id": "c311f40cd34a7759bd77bec6cdd360244009449c",
+          "url": "https://github.com/andymai/brepkit/commit/0fa34417b8ffa032bce33676ed7b8adfef45f120"
+        },
+        "date": 1790411659177,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1014051,
+            "range": "± 2191",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1100285,
+            "range": "± 1353",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13390,
+            "range": "± 103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 754852,
+            "range": "± 4218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42134825,
+            "range": "± 81402",
             "unit": "ns/iter"
           }
         ]
