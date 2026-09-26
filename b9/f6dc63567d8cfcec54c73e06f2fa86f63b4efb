@@ -1,0 +1,27 @@
+crates/check/src/properties/face_integrator.rs
+  s_ba2f7b5c6902b6::t_99b125d1959fa9 318-321,324-328
+  s_ba2f7b5c6902b6::t_ce0a178e6159fe 958-1012
+crates/operations/src/extrude.rs
+  s_ba2f7b5c6902b6::t_5433dd08110056 404-429,475-476,500-501
+crates/operations/tests/extrude_major_arcs.rs
+  s_ba2f7b5c6902b6::t_1f65be4daf76e9 1-3
+  s_ba2f7b5c6902b6::t_d18567a88f7bf5 9,91-96,101,106-108,120-121,123-131
+  s_ba2f7b5c6902b6::t_6038078e631f35 122,132
+  s_ba2f7b5c6902b6::t_cb26625c059255 6,8,10,23-48,59,69-74,144-153,164,166,173-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b9f6dc63567d8cfcec54c73e06f2fa86f63b4efb",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
