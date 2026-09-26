@@ -12,7 +12,7 @@ pub use analytic::{AnalyticClassifier, classify_analytic, try_build_analytic_cla
 pub use ray_cast::{
     RayCastGeoms, classify_ray_cast, classify_ray_cast_cached, compute_solid_bbox,
     planar_face_polygons, point_in_face_3d, point_in_planar_region, ray_cast_inside_votes,
-    ray_cast_inside_votes_cached,
+    ray_cast_inside_votes_cached, ray_parity_cached,
 };
 pub(crate) use ray_cast::{largest_u_gap, u_in_gap};
 
