@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.45](https://github.com/andymai/brepkit/compare/v4.0.44...v4.0.45) (2026-09-26)
+
+
+### Performance
+
+* **operations:** build the result's ray-cast geometry once in the Cut gate ([#1806](https://github.com/andymai/brepkit/issues/1806)) ([ca6de1e](https://github.com/andymai/brepkit/commit/ca6de1e43f5a58e0ac4ff08b7497c87e0494f1c6))
+
 ## [4.0.44](https://github.com/andymai/brepkit/compare/v4.0.43...v4.0.44) (2026-09-26)
 
 
