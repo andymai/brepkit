@@ -114,7 +114,7 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<f64> {
 
     for span in knots.windows(2) {
         let (u_start, u_end) = (span[0], span[1]);
-        if u_end - u_start < 1e-15 || u_start < lo || u_end > hi {
+        if u_end <= u_start || u_start < lo || u_end > hi {
             continue;
         }
 
