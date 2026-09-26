@@ -260,25 +260,48 @@ pub(super) fn tessellate_with_uvs_floor(
             }
             seams_only
         });
-    let holed_wall = if holed_analytic || trimmed_nurbs || trimmed_sphere || trimmed_torus {
-        match super::nonplanar::tessellate_holed_face_local(
-            topo,
-            face,
-            face_data,
-            deflection,
-            angular_tol,
-            curvature_floor,
-        ) {
-            Ok(mesh) if !mesh.mesh.indices.is_empty() => Some(mesh),
-            Ok(_) => None,
-            Err(e) => {
-                log::debug!("holed wall {face:?} falls back to the analytic grid: {e}");
-                None
-            }
+    // So is a cylinder or cone wall that a hole straddling its seam notches:
+    // its outer wire carries the hole between two closed rims and the seam's
+    // two copies.
+    let notched_wall = matches!(
+        face_data.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    ) && {
+        let edges = topo.wire(face_data.outer_wire())?.edges();
+        let mut rims = 0;
+        let mut seam_twice = false;
+        for oe in edges {
+            let edge = topo.edge(oe.edge())?;
+            rims += usize::from(edge.start() == edge.end());
+            seam_twice |= matches!(edge.curve(), EdgeCurve::Line)
+                && edges
+                    .iter()
+                    .filter(|other| other.edge() == oe.edge())
+                    .count()
+                    == 2;
         }
-    } else {
-        None
+        edges.len() > 4 && rims == 2 && seam_twice
     };
+    let holed_wall =
+        if holed_analytic || notched_wall || trimmed_nurbs || trimmed_sphere || trimmed_torus {
+            match super::nonplanar::tessellate_holed_face_local(
+                topo,
+                face,
+                face_data,
+                deflection,
+                angular_tol,
+                curvature_floor,
+            ) {
+                Ok(mesh) if !mesh.mesh.indices.is_empty() => Some(mesh),
+                Ok(_) => None,
+                Err(e) => {
+                    log::debug!("holed wall {face:?} falls back to the analytic grid: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
     let mut result = if let Some(mesh) = holed_wall {
         Ok(mesh)
     } else {

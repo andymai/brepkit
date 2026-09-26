@@ -334,9 +334,9 @@ struct RevolutionMetric<'a> {
 
 /// The area of a cylinder face whose boundary is not a rectangle in
 /// `(u, v)` (a wall trimmed by an oblique plane's ellipse, say): `r` times
-/// the region's area in `(u, v)`. `Ok(None)` for a face bounded only by
-/// rulings and rims, which the rectangle below measures exactly, or when a
-/// wire's unwrapped `u` does not close.
+/// the region's area in `(u, v)`. `Ok(None)` for a box of rulings and rims
+/// (four outer edges and no holes), which the rectangle below measures
+/// exactly, or when a wire's unwrapped `u` does not close.
 fn cylinder_face_uv_area(
     topo: &Topology,
     face_id: FaceId,
@@ -352,7 +352,14 @@ fn cylinder_face_uv_area(
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
         })
     })?;
-    if rectangular {
+    // A box in (u, v) measures in closed form; a rectilinear outline with a
+    // notch (a window straddling the seam, carried by the outer wire) or a
+    // hole is no box.
+    let face = topo.face(face_id)?;
+    if rectangular
+        && face.inner_wires().is_empty()
+        && topo.wire(face.outer_wire())?.edges().len() <= 4
+    {
         return Ok(None);
     }
     let project = |p: Point3| cyl.project_point(p);
@@ -373,9 +380,9 @@ fn cylinder_face_uv_area(
 
 /// The area of a cone face whose boundary is not a rectangle in `(u, v)`
 /// (a wall trimmed by an oblique plane's ellipse), where the area element
-/// is `v cos(a) du dv`. `Ok(None)` for a face bounded only by rulings and
-/// coaxial rims, which [`analytic_cone_face_area`] measures exactly, or
-/// when a wire's unwrapped `u` does not close.
+/// is `v cos(a) du dv`. `Ok(None)` for a box of rulings and coaxial rims,
+/// which [`analytic_cone_face_area`] measures exactly, or when a wire's
+/// unwrapped `u` does not close.
 fn cone_face_uv_area(
     topo: &Topology,
     face_id: FaceId,
@@ -399,7 +406,12 @@ fn cone_face_uv_area(
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
         })
     })?;
-    if rectangular {
+    // As for a cylinder: a notched or holed rectilinear outline is no box.
+    let face = topo.face(face_id)?;
+    if rectangular
+        && face.inner_wires().is_empty()
+        && topo.wire(face.outer_wire())?.edges().len() <= 4
+    {
         return Ok(None);
     }
     let cos_a = cone.half_angle().cos();
