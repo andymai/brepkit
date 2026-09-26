@@ -573,6 +573,9 @@ fn wire_plane_moments(
             EdgeCurve::NurbsCurve(c) => {
                 let (lo, hi) = (t0.min(t1), t0.max(t1));
                 breaks.extend(c.knots().iter().copied().filter(|&k| k > lo && k < hi));
+                if t0 > t1 {
+                    breaks[1..].reverse();
+                }
                 breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (hi - lo).abs());
             }
         }
@@ -1348,6 +1351,64 @@ mod tests {
                 "end to start {end_to_start}: area {}, truth {turn}",
                 c.area
             );
+        }
+    }
+
+    /// A sector of radius 2 at `z = 3` turning 270 degrees, its rim a stretch
+    /// of an open NURBS arc of 330 degrees whose edge runs with the curve's
+    /// parameter or against it: the rim is read between its knots either
+    /// way, so the area, flux and first moments come out as the sector's.
+    #[test]
+    fn a_rim_running_against_its_curve_reads_between_its_knots() {
+        use brepkit_geometry::convert::circle_to_nurbs;
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let centre = Point3::new(1.0, -2.0, 3.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new(centre, up, 2.0).unwrap();
+        let arc = circle_to_nurbs(&circle, 0.0, 330_f64.to_radians()).unwrap();
+        let (a, b) = (30_f64.to_radians(), 300_f64.to_radians());
+        let half = 0.5 * (b - a);
+        let area = 4.0 * half;
+        let reach = 4.0 * half.sin() / (3.0 * half);
+        let toward = (circle.evaluate(a + half) - centre) * 0.5;
+        for against in [false, true] {
+            let mut topo = Topology::new();
+            let [vc, va, vb] = [centre, circle.evaluate(a), circle.evaluate(b)]
+                .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let rim = if against {
+                Edge::new(vb, va, EdgeCurve::NurbsCurve(arc.clone()))
+            } else {
+                Edge::new(va, vb, EdgeCurve::NurbsCurve(arc.clone()))
+            };
+            let edges = [
+                (topo.add_edge(rim), !against),
+                (topo.add_edge(Edge::new(vb, vc, EdgeCurve::Line)), true),
+                (topo.add_edge(Edge::new(vc, va, EdgeCurve::Line)), true),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(e, forward));
+            let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+            let plane = FaceSurface::Plane { normal: up, d: 3.0 };
+            let face = topo.add_face(Face::new(wire, vec![], plane));
+            let c = integrate_face(&topo, face, 5).unwrap();
+            let x = area * reach.mul_add(toward.x(), centre.x());
+            let y = area * reach.mul_add(toward.y(), centre.y());
+            for (what, got, truth) in [
+                ("area", c.area, area),
+                ("volume", c.volume, area),
+                ("x moment", c.centroid_x, x),
+                ("y moment", c.centroid_y, y),
+                ("z moment", c.volume_moment_z, 4.5 * area),
+            ] {
+                assert!(
+                    (got - truth).abs() < 1e-8 * truth.abs(),
+                    "against {against}: {what} {got}, truth {truth}"
+                );
+            }
         }
     }
 }
