@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790457524736,
+  "lastUpdate": 1790458634844,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41903,6 +41903,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42347309,
             "range": "± 208254",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "967901b8c77ef73501eb01a451bfc3ab885f7a94",
+          "message": "fix(algo): read cone and cylinder faces against their own wires in the ray cast (#1798)\n\nCone and cylinder faces, and plane faces with curved edges, are now read\nagainst their actual wires. All five measured cases read 0 misreads.\n\n## What was wrong\n\n- On main, `classify_ray_cast` was compared with analytic truth on a 29\nby 29 by 29 grid over `[-6, 6]^2 x [-1, 11]`, skipping points within\n0.02 of either operand's surface. `make_cone(5, 2, 10)` within the box\nover `|x|, |y| < 3` misread 1053 of 22347 points, the same cone less the\nbox over `x > 1` misread 172 of 22224, and `make_cone(5, 0, 10)` less\nthat box misread 788 of 22252. The frustum less a slab tilted 0.4 about\nx, with its lower face through `(0, 0, 7)`, misread 110 of 24210, while\n`make_cylinder(5, 10)` less that slab misread 256 of 23938.\n\n- The ray cast treated a cone face with a closed circle edge as a full\nband between the lowest and highest boundary `v`, and treated any other\ncone or cylinder patch as that `v` range with one `u` gap. This is exact\nonly when every edge is a ruling or an axis circle at the face's two\nheights. A hyperbola from a box cutting a cone, or an ellipse from a\nslab cutting a cylinder, makes the trim vary with height, so hits\nbetween the band and the actual boundary were misread.\n\n- A plane face's curved non-circle edge was represented by a polygon\nthrough three interior samples. At `(3, 1.8, 5)` for the grid point\n`(1.8, 1.8, 5)`, a ray hitting 0.005 below the hyperbola therefore\nmissed the face.\n\n- A ray up the axis of a pointed cone meets the apex in a double root,\nwhich `ray_cone_crossings` treated as a harmless graze. The apex also\nprojects to the arbitrary angle `u = atan2(0, 0)`; including it while\nfinding a rectangular face's `u` gap could split the gap and classify\npart of the removed surface as face.\n\n## What this does\n\n- `is_uv_rectangle` identifies cone and cylinder faces whose edges are\nall rulings and axis circles at their two heights. Those faces retain\nthe `v` range and `u` gap read. Other cone and cylinder faces use\n`UvTrim`, where a hit belongs to the face when a ray from it along `v`\ncrosses the face's wires an odd number of times.\n\n- Each edge is sampled so no piece turns more than an eighth of a turn,\nand `UvEdge::v_at` solves crossings on the edge's own curve by regula\nfalsi. Each sample is assigned once by the sign of its offset from the\nhit's `u`, ensuring that two pieces sharing a sample agree about which\npiece holds a crossing. Holes use the same test, so cylinder walls with\nnon-band holes also leave the flat polygon fallback.\n\n- A cone face's wires lie on one nappe. Hits on the other nappe are\nskipped, and the `(u, v)` ray runs away from the apex so it cannot reach\nthe point where an apex wire closes. Faces spanning both nappes, and\nhits at an apex reached by the face, are reported as unreliable.\n\n- The rectangle path excludes the apex from the samples used to find the\n`u` gap. Together with the nappe handling, this makes a pointed cone's\napex read correctly. A ray through the apex is also reported as\nunreliable when the face reaches it, allowing the classifier to discount\nthat ray.\n\n- A plane face's curved non-circle edge is represented by its chord plus\na `CurvePiece`. Parity of an in-plane ray's crossings with the edge and\nchord identifies the region between them, or the region bounded by a\nclosed edge, with edge crossings solved on the curve. These pieces join\nthe existing circular segments in the chord polygon's XOR.\n\n- The new public function\n`brepkit_algo::classifier::ray_parity_cached(geoms, point, dir)` returns\nwhether a ray crosses the faces an odd number of times and whether the\nvote would discount it as unreliable. It is public so tests can check\nsingle rays.\n\n- The roadmap's OPEN row for the cone ray cast is closed.\n\n## Verification\n\n- All five measured cases now read 0 misreads on the same 29 by 29 by 29\ngrid.\n\n- `crates/operations/tests/cone_cylinder_trims.rs` checks face counts\nper surface type, so a mesh fallback fails, then checks a 21 by 21 by 21\ngrid over the same box. Every point and each of its three undiscounted\naxis rays must classify correctly, preventing a single-ray error from\nhiding behind the 2-of-3 vote.\n\n- Coverage includes the cone within the box, the cone and pointed cone\nless `x > 1`, the cone and cylinder less the slant slab, and the pointed\ncone less the four axis half-spaces `x > 0`, `x < 0`, `y > 0`, and `y <\n0`. For less `x < 0`, the kept half contains the seam and produces two\ncone faces.\n\n- Without the nappe handling and the apex exclusion, pointed cone less\n`x > 1` had 178 points with an undiscounted ray misreading, first at\n`(-6, 0, 10.4)` where rays meet the other nappe, and pointed cone less\n`x < 0` misread 1368 points. The apex exclusion alone brings the second\nto 0 and leaves the first at 178. With both, each reads 0.\n\n- Across 210 boolean results, covering 14 primitive pairs in five poses\nand three operations, face counts, validity, mesh closure, and volumes\nare identical to main at `ee5bf4b5`. Misreads on a 13 by 13 by 13 grid\ndrop from 2403 to 682. All 682 remaining cases are the unit ball less\nits octant box (`a - b`), identical on main and unrelated to cones.\n\n- `cargo nextest run --workspace` passes: 3151 tests run, 3151 passed,\n20 skipped.\n\n- `cargo bench -p brepkit-operations --bench boolean_tracking` reports\n`cut_box_box` -0.43%, `fuse_box_box` +0.49%, `intersect_box_box` -1.89%,\nand `cut_cylinder_through_box` +0.77%, with criterion detecting no\nchange. `perforated_cut_36` reads +2.07%, while main against the same\nbaseline reads +1.48%, placing the difference within run-to-run drift.\nThese benchmarks contain no cone faces.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the ray cast so cone and cylinder faces cut by non-axis-aligned\nplanes are read against their own wires in `(u, v)`, a cone face on its\nown nappe, and a plane face's curved non-circle edge as its chord plus\nthe curved region. A ray through a cone's apex is reported unreliable\nrather than read as a graze, and the apex takes no part in the rectangle\npath's `u` gap.\n\n**Bug Fixes**\n- The five previously failing analytic comparisons now read 0 misreads\non a 29 by 29 by 29 grid; the apex double-root flag fires only for a\nface that reaches its apex.\n- `crates/operations/tests/cone_cylinder_trims.rs` covers the five cases\nand asserts each result keeps its analytic cone or cylinder face, using\nthe exported `ray_parity_cached` so any non-discounted ray misreading\nfails the test; the workspace suite passes with no meaningful benchmark\nchange.\n\n<sup>Written for commit 1d15bd756fcdb0c67f312d84f151601c3cba9d90.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1798?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T21:34:35Z",
+          "tree_id": "e485fc23928d2f9aa951cd6e45b8fa2dd6528374",
+          "url": "https://github.com/andymai/brepkit/commit/967901b8c77ef73501eb01a451bfc3ab885f7a94"
+        },
+        "date": 1790458629941,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 826230,
+            "range": "± 1593",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 901874,
+            "range": "± 10051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10361,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 615533,
+            "range": "± 1653",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 37206887,
+            "range": "± 97128",
             "unit": "ns/iter"
           }
         ]
