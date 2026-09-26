@@ -235,10 +235,11 @@ One line each; the fixture/PR carries the story. Newest first.
   circles at its two heights was read as a constant `v` band with one `u`
   gap (on a grid over `make_cone(5, 2, 10)` within the box over
   `|x|, |y| < 3`, 1053 of 22347 points misread); such a face is read in
-  `(u, v)` now against its own wires, a wire through a cone's apex gets
-  a side along the apex's `v`, and a plane face's curved edge that is not
-  a circle is read as its chord and the region between them, crossings
-  solved on the curve.
+  `(u, v)` now against its own wires, a cone face on its own nappe with
+  its ray running away from the apex (the apex has no `u`, so it also
+  takes no part in a band's `u` gap), and a plane face's curved edge that
+  is not a circle is read as its chord and the region between them,
+  crossings solved on the curve.
 - **The engine's ray cast read a ball's hole cut by a column by its flat polygon (CLOSED 2026-09-26; pin `the_engine_reads_a_hole_by_its_planes` in `crates/operations/tests/sphere_box_corner.rs`)**:
   the hole's four wall circles also run below the equator, where the
   hemisphere's outer loop already ends the face, so the exact arc check
