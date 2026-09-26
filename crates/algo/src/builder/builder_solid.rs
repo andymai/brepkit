@@ -900,19 +900,20 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
         // leaves only an INWARD cavity component is still rejected. A shell
         // whose corners all lie in one plane (a ball's cap cut off by a wall:
         // two lunes and the wall, cornered on the wall) has no corner-fan
-        // volume, so its sign is rounding and the flux decides it too. Other
-        // shells of a multi-shell result keep the volume-sign split (a Cut can
-        // leave the tool's interior as a separate negative-volume cavity).
-        let is_growth = if fan_is_flat(topo, shell, signed_vol) {
-            shell_is_outward_oriented(topo, shell).unwrap_or(signed_vol >= 0.0)
-        } else if signed_vol >= 0.0 {
+        // volume, so a negative sign is rounding and the flux decides it too
+        // (a positive one stands: the flux reads a curved face over its
+        // boundary's parameter box, which a drilled ring's torus face does
+        // not span). Other shells of a multi-shell result keep the
+        // volume-sign split (a Cut can leave the tool's interior as a
+        // separate negative-volume cavity).
+        let is_growth = if signed_vol >= 0.0 {
             // Positive corner-fan volume already reads outward — keep the
             // historical behaviour for every solid that integrates cleanly
             // (planar, and curved shells whose constant-v boundaries the fan
             // captures, e.g. the sphere − through-cylinder band). The robust
             // test is consulted ONLY below, never overriding a positive volume.
             true
-        } else if shells.len() == 1 {
+        } else if shells.len() == 1 || fan_is_flat(topo, shell, signed_vol) {
             // A LONE shell read NEGATIVE: either it is genuinely inward (a Cut
             // leaving only a cavity component — must be rejected) or its
             // corner-fan volume sign-flipped on a doubly-curved band whose
