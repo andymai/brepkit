@@ -30,6 +30,11 @@ enum FaceGeom {
         /// crossing while reading clean (the circleinsert pocket-mouth
         /// sample: a hit 0.03 inside the r=10 pocket rim, sagitta ~0.09).
         circle_holes: Vec<(Point3, f64)>,
+        /// The circular segments between the outer wire's in-plane arcs and
+        /// their chords (`verts` runs along the chords), and the same for
+        /// each of `holes`: a chord-sampled arc misses a hit by its sagitta.
+        arcs: Vec<ArcSegment>,
+        hole_arcs: Vec<Vec<ArcSegment>>,
         normal: Vec3,
         d: f64,
     },
@@ -86,6 +91,36 @@ enum FaceGeom {
         surface: brepkit_math::surfaces::SphericalSurface,
         loops: Vec<SphereLoop>,
     },
+}
+
+/// The region between an arc of a circle in a plane face's plane and its
+/// chord. A wire's crossing parity is its chord polygon's XOR each of these,
+/// whichever way the arcs bulge.
+#[derive(Debug, Clone, Copy)]
+struct ArcSegment {
+    center: Point3,
+    radius: f64,
+    a: Point3,
+    b: Point3,
+    /// A point of the arc between `a` and `b`.
+    mid: Point3,
+}
+
+impl ArcSegment {
+    /// Which side of the chord `p` lies on, about `normal`.
+    fn side(&self, p: Point3, normal: Vec3) -> f64 {
+        (self.b - self.a).cross(p - self.a).dot(normal)
+    }
+
+    fn contains(&self, p: Point3, normal: Vec3) -> bool {
+        (p - self.center).length() < self.radius
+            && self.side(p, normal) * self.side(self.mid, normal) > 0.0
+    }
+
+    fn grazes(&self, p: Point3, normal: Vec3, near: f64) -> bool {
+        ((p - self.center).length() - self.radius).abs() <= near
+            && self.side(p, normal) * self.side(self.mid, normal) >= 0.0
+    }
 }
 
 /// One loop of a spherical face as the region it leaves on its left about the
@@ -465,15 +500,43 @@ fn wire_polygon(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
 ) -> Result<Vec<Point3>, AlgoError> {
+    wire_polygon_arcs(topo, wire_id, None).map(|(verts, _)| verts)
+}
+
+/// [`wire_polygon`], with each open arc of a circle in the plane through
+/// `plane` (a normal) kept as its chord and returned as an [`ArcSegment`].
+fn wire_polygon_arcs(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    plane: Option<Vec3>,
+) -> Result<(Vec<Point3>, Vec<ArcSegment>), AlgoError> {
     let wire = topo.wire(wire_id)?;
 
     let mut polylines: Vec<Vec<Point3>> = Vec::with_capacity(wire.edges().len());
+    let mut arcs = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
         let raw_start = topo.vertex(edge.start())?.point();
         let raw_end = topo.vertex(edge.end())?.point();
         let mut pts = vec![raw_start];
-        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+        let in_plane_arc = match (edge.curve(), plane) {
+            (brepkit_topology::edge::EdgeCurve::Circle(c), Some(n)) => {
+                (raw_start - raw_end).length() >= 1e-9 && c.normal().cross(n).length() <= 1e-6
+            }
+            _ => false,
+        };
+        if in_plane_arc && let brepkit_topology::edge::EdgeCurve::Circle(c) = edge.curve() {
+            let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
+            arcs.push(ArcSegment {
+                center: c.center(),
+                radius: c.radius(),
+                a: raw_start,
+                b: raw_end,
+                mid: edge
+                    .curve()
+                    .evaluate_with_endpoints(0.5 * (t0 + t1), raw_start, raw_end),
+            });
+        } else if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
             let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
             let is_closed = (raw_start - raw_end).length() < 1e-9;
             let n_samples = if is_closed { 16_i32 } else { 3_i32 };
@@ -493,7 +556,7 @@ fn wire_polygon(
     let mut used = vec![false; polylines.len()];
     let mut verts: Vec<Point3> = Vec::new();
     let Some(first) = polylines.first() else {
-        return Ok(verts);
+        return Ok((verts, arcs));
     };
     verts.extend_from_slice(first);
     used[0] = true;
@@ -540,7 +603,7 @@ fn wire_polygon(
             verts.pop();
         }
     }
-    Ok(verts)
+    Ok((verts, arcs))
 }
 
 /// Collect per-face ray-cast geometry from a solid.
@@ -760,23 +823,24 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             continue;
         }
 
-        let verts = wire_polygon(topo, face.outer_wire())?;
-        if verts.len() < 3 {
-            continue;
-        }
-
-        let mut holes = Vec::with_capacity(face.inner_wires().len());
-        let mut circle_holes: Vec<(Point3, f64)> = Vec::new();
-        // Analytic holes only on a genuine plane face: the fallback path
-        // reaches here for non-planar surfaces via a Newell normal, where a
-        // hole's circle need not be coplanar with the polygon and the exact
-        // distance test below would be wrong.
+        // Analytic arcs and holes only on a genuine plane face: the fallback
+        // path reaches here for non-planar surfaces via a Newell normal, where
+        // a circle need not be coplanar with the polygon and the exact tests
+        // below would be wrong.
         let plane_normal =
             if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() {
                 Some(*normal)
             } else {
                 None
             };
+        let (verts, arcs) = wire_polygon_arcs(topo, face.outer_wire(), plane_normal)?;
+        if verts.len() < 3 && arcs.is_empty() {
+            continue;
+        }
+
+        let mut holes = Vec::with_capacity(face.inner_wires().len());
+        let mut hole_arcs = Vec::with_capacity(face.inner_wires().len());
+        let mut circle_holes: Vec<(Point3, f64)> = Vec::new();
         for &iw in face.inner_wires() {
             // A hole whose edges all lie on ONE circle IN THE FACE PLANE
             // stays analytic.
@@ -809,9 +873,10 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                 circle_holes.push(ch);
                 continue;
             }
-            let hole = wire_polygon(topo, iw)?;
-            if hole.len() >= 3 {
+            let (hole, arcs) = wire_polygon_arcs(topo, iw, plane_normal)?;
+            if hole.len() >= 3 || !arcs.is_empty() {
                 holes.push(hole);
+                hole_arcs.push(arcs);
             }
         }
 
@@ -827,11 +892,16 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             raw_normal
         };
 
-        let d = dot_normal_point(normal, verts[0]);
+        let Some(&on_plane) = verts.first().or_else(|| arcs.first().map(|a| &a.a)) else {
+            continue;
+        };
+        let d = dot_normal_point(normal, on_plane);
         result.push(FaceGeom::Planar {
             verts,
             holes,
             circle_holes,
+            arcs,
+            hole_arcs,
             normal,
             d,
         });
@@ -896,13 +966,15 @@ fn ray_geom_crossings(
             verts,
             holes,
             circle_holes,
+            arcs,
+            hole_arcs,
             normal,
             d,
         } => ray_face_crossing(
             origin,
             ray_dir,
-            verts,
-            holes,
+            (verts, arcs),
+            (holes, hole_arcs),
             circle_holes,
             *normal,
             *d,
@@ -1094,7 +1166,7 @@ fn sphere_face_loops(
         } else {
             return Ok(None);
         };
-        arc_loops.push((loops.len(), edges));
+        arc_loops.push((loops.len(), edges, planes.clone(), any));
         loops.push(SphereLoop::HalfSpaces { planes, any });
     }
     // The half-spaces bound the face's region only when each loop's arcs on
@@ -1104,16 +1176,13 @@ fn sphere_face_loops(
     // read as part of a dome bounded by its top arcs, while a hole's far run
     // that the outer loop already excludes bounds nothing. Each side meets a
     // circle in one arc, so that part is exact, however short its runs.
-    for (at, edges) in &arc_loops {
-        let SphereLoop::HalfSpaces { planes, any } = &loops[*at] else {
-            return Ok(None);
-        };
+    for (at, edges, planes, any) in &arc_loops {
+        let s = if *any { -1.0 } else { 1.0 };
         for (j, (_, circle)) in edges.iter().enumerate() {
             let Some(circle) = circle else {
                 return Ok(None);
             };
             let rho = circle.radius();
-            let s = if *any { -1.0 } else { 1.0 };
             let mut admitted: AngleSet = vec![(0.0, TAU)];
             for (i, &(c, n)) in planes.iter().enumerate() {
                 if i != j {
@@ -1131,17 +1200,15 @@ fn sphere_face_loops(
                 if k == *at {
                     continue;
                 }
-                let mut sides = other_planes
+                let sides = other_planes
                     .iter()
                     .map(|&(c, n)| side_arc(circle, c, n, slack));
                 let within = if *other_any {
                     angle_union(sides.flatten().collect())
                 } else {
-                    sides
-                        .try_fold(vec![(0.0, TAU)], |acc, side| {
-                            Some(angle_intersection(&acc, &side))
-                        })
-                        .unwrap_or_default()
+                    sides.fold(vec![(0.0, TAU)], |acc, side| {
+                        angle_intersection(&acc, &side)
+                    })
                 };
                 admitted = angle_intersection(&admitted, &within);
             }
@@ -1327,8 +1394,8 @@ fn sphere_rim(
 fn ray_face_crossing(
     origin: Point3,
     ray_dir: Vec3,
-    verts: &[Point3],
-    holes: &[Vec<Point3>],
+    (verts, arcs): (&[Point3], &[ArcSegment]),
+    (holes, hole_arcs): (&[Vec<Point3>], &[Vec<ArcSegment>]),
     circle_holes: &[(Point3, f64)],
     normal: Vec3,
     d: f64,
@@ -1359,11 +1426,19 @@ fn ray_face_crossing(
             .any(|h| dist_to_polygon_boundary(hit, h) <= near)
         || circle_holes
             .iter()
-            .any(|(c, r)| ((hit - *c).length() - r).abs() <= near);
-    if !point_in_face_3d(hit, verts, &normal) {
+            .any(|(c, r)| ((hit - *c).length() - r).abs() <= near)
+        || arcs
+            .iter()
+            .chain(hole_arcs.iter().flatten())
+            .any(|a| a.grazes(hit, normal, near));
+    let within = |poly: &[Point3], segments: &[ArcSegment]| {
+        let in_segments = segments.iter().filter(|a| a.contains(hit, normal)).count() % 2 == 1;
+        point_in_face_3d(hit, poly, &normal) != in_segments
+    };
+    if !within(verts, arcs) {
         return (0, boundary_graze);
     }
-    if holes.iter().any(|h| point_in_face_3d(hit, h, &normal)) {
+    if holes.iter().zip(hole_arcs).any(|(h, a)| within(h, a)) {
         return (0, boundary_graze);
     }
     if circle_holes.iter().any(|(c, r)| (hit - *c).length() < *r) {
