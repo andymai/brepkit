@@ -507,17 +507,18 @@ fn ball_in_box(a: f64, b: f64, z0: f64, z1: f64) -> f64 {
 /// only loosely, for the measure of a sphere face whose hole winds the pole
 /// (the roadmap's sphere measure row). With the corner at `(-2.5, -2.5)` the
 /// box's walls cut lens faces from the ball whose arcs and lines share both
-/// ends.
+/// ends. The first box mirrored through `z = 0` holds the south pole.
 #[test]
 fn a_corner_holding_the_pole_cuts_its_patch() {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
-    for (a, b, c) in [
-        (-0.7, -1.1, 0.1),
-        (-0.3, -0.4, 0.2),
-        (-0.3, -0.4, 1.2),
-        (-2.5, -2.5, 0.1),
+    for (a, b, c, up) in [
+        (-0.7, -1.1, 0.1, 1.0),
+        (-0.3, -0.4, 0.2, 1.0),
+        (-0.3, -0.4, 1.2, 1.0),
+        (-2.5, -2.5, 0.1, 1.0),
+        (-0.7, -1.1, 0.1, -1.0),
     ] {
-        let label = format!("corner ({a}, {b}, {c})");
+        let label = format!("corner ({a}, {b}, {c}) side {up}");
         let piece = ball_in_box(a, b, c, c + 10.0);
         for (op, truth, bound) in [
             (BooleanOp::Cut, ball - piece, 5e-3),
@@ -526,7 +527,8 @@ fn a_corner_holding_the_pole_cuts_its_patch() {
             let mut topo = Topology::new();
             let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
             let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
-            transform_solid(&mut topo, block, &Mat4::translation(a, b, c)).unwrap();
+            let z0 = if up > 0.0 { c } else { -c - 10.0 };
+            transform_solid(&mut topo, block, &Mat4::translation(a, b, z0)).unwrap();
             let result = boolean(&mut topo, op, sphere, block).unwrap();
             assert!(exact(&topo, result), "{label} {op:?}: fell back to a mesh");
             let report = validate_solid(&topo, result).unwrap();
@@ -549,9 +551,9 @@ fn a_corner_holding_the_pole_cuts_its_patch() {
                 (PointClassification::Inside, PointClassification::Outside)
             };
             for (p, class, place) in [
-                (Point3::new(0.1, 0.1, 2.9), by_pole, "by the pole"),
-                (Point3::new(0.2, -0.3, -1.0), kept, "below"),
-                (Point3::new(-2.717, 0.202, 0.735), kept, "in a lune"),
+                (Point3::new(0.1, 0.1, 2.9 * up), by_pole, "by the pole"),
+                (Point3::new(0.2, -0.3, -up), kept, "past the box's face"),
+                (Point3::new(-2.717, 0.202, 0.735 * up), kept, "in a lune"),
             ] {
                 assert_eq!(at(p), class, "{label} {op:?}: {place}");
             }
