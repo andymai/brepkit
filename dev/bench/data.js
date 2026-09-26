@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790424992449,
+  "lastUpdate": 1790434871163,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41579,6 +41579,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35372548,
             "range": "± 156753",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cd5753eaa919738f9bf2b3dfb25517405c9528ee",
+          "message": "fix(operations): extrude and measure arcs past half a turn along their own span (#1796)\n\nExtrusion, measurement, per face tessellation, and check integration now\nfollow major circular arcs along their stored spans, producing valid,\nwatertight solids with the expected geometry.\n\n## What was wrong\n\n- The reproducer is a square `[-3, 3]^2` in `z = 0` whose top side opens\nthrough a mouth 1 wide into a keyhole chamber: an arc of 323 degrees of\nthe circle about `(0, 1.5)` through `(±0.5, 3)`, extruded 0.2. A second\ncase extrudes the circle's part below that chord as its own face,\nbounded by the chord and the same outward bulging arc. On main,\n`extrude` returned solids that `validate_solid` read valid but whose\nmeshes were open. They measured 7.319806 against 5.640079 for the\nkeyhole, and 0.512723 against 1.559921 for the major segment.\n\n- In `side_face_surface` in `crates/operations/src/extrude.rs`, the\ncylinder wall for a circular arc was oriented by comparing the chord's\noutward direction with the radial direction at the arc's start. Past\nhalf a turn, that radial direction points the other way, so the wall\ncame out inside out.\n\n- Several consumers read a 323 degree arc as the 37 degrees between its\nends. `analytic_cylinder_signed_volume` sampled each circle edge's\nmidpoint on the shorter arc, so even with the wall oriented correctly\nthe keyhole measured 6.272776. `angular_range_from_wire_arcs` walked\neach arc the short way. The check crate's `face_uv_bounds` projected\nonly wire vertices and unwrapped each step the short way.\n\n- The per face tessellator had the same ambiguity in two places.\n`tessellate_planar` and `sample_wire_positions` read each open circle\nedge as its shorter arc. Tessellated alone, the keyhole cap measured\n36.053821 against 28.200395 and the major segment measured 0.053821\nagainst 7.799605. `compute_angular_range` bounded a curved face's `u`\nrange from arc midpoints taken the short way, so the keyhole wall\ntessellated alone measured 0.203458 against 1.783425.\n\n- A plane face's area walked a NURBS edge across the curve's whole knot\nrange. A major segment whose NURBS arc runs 0.05 past each vertex\ntherefore measured 7.810611 against 7.799605. `offset_wire` also built\neach arc join's circle with the face normal regardless of winding. For a\nclockwise loop, quarter turn joins were stored clockwise and read as\nthree-quarter turns. A 2 by 2 clockwise square offset 0.5 with arc joins\nmeasured 5.643806 against 8.785398 by `face_area` on main.\n\n- On main, a revolve edge collapsed onto a cone's apex could add\nrounding noise to the per face tessellator's `u` range. Revolving the\ntriangle `(0, 0, 0)`, `(1, 0, 0)`, `(0, 0, 2)` a quarter turn about z\nproduced a cone face that meshed alone to 3.508713 against `π√5/4 =\n1.756204`.\n\n- The check crate's curved face quadrature was clipped by a `(u, v)`\npolygon unwrapped straight through a pole's or apex's arbitrary `u`. On\nmain, `make_sphere(1, 16)` less its positive octant read as the whole\nball, 4.188790 against `7π/6 = 3.665191`. `make_cone(1, 0, 2)` less the\nquadrant `x, y > 0` read 2.814929 against `π/2 = 1.570796`.\n\n## What this does\n\n- `arc_wall_reversed` orients an extrusion wall from the side of its\nchord occupied by the arc, sampled inside the arc's span. An arc lies\nwholly on one side of its chord, and the radial direction at its middle\npoints to that side, so the test holds for any arc length. A closed\ncircle has no chord and keeps its radial normal. A NURBS edge recognized\nas a circle uses the same test. `extrude` rewrites profile NURBS circle\narcs as circles before building walls, so this branch handles edges the\nrewrite declines, such as a NURBS arc running past its vertices.\n\n- The cylinder wall volume readers and the per face tessellator walk\nevery arc along its own span, counter-clockwise in parameter from its\nstored start to its stored end, matching the solid tessellator. Plane\nface area walks a NURBS edge over its own span in traversal order.\n\n- The per face tessellator bounds a curved face's `u` range by walking\nevery edge along its own span, just inside its ends, then taking the\nlargest gap left by the covered intervals. A wire that does not close on\nitself keeps the full turn. It skips an edge whose samples collapse to\none point.\n\n- `face_uv_bounds` samples each curved edge's interior in traversal\norder. It reads a NURBS edge from whichever end its knot span starts at.\nA sphere pole or cone apex, where the surface has no `u` of its own,\nstays out of the `u` range. The walk starts just after the first such\npoint, and the point after any later one is unwrapped toward the middle\nof the range accumulated so far.\n\n- `offset_wire` assigns every arc join the circle normal that makes its\nspan, short of half a turn, run counter-clockwise.\n\n- In the check crate, the `(u, v)` clip polygon represents a pole or\napex as a side along its `v`, from the preceding `u` to the following\n`u`, starting just after the first such point. Axis wrapping is decided\nby winding that telescopes over the unwrapped polygon, so a pole side\nlonger than half a turn is not mistaken for a wrap. Clipped quadrature\nis tiled into patches no wider than an eighth of a turn, matching\nunclipped quadrature. Without that tiling, one Gauss rule across a whole\nturn put a plain cone's centre of mass 0.057021 off its axis after the\ncone wall took the clipped path.\n\n## Verification\n\n- `crates/operations/tests/extrude_major_arcs.rs` covers the keyhole,\nmajor segment, a square with an exact half turn disc notch, a plate with\nthe major segment as a hole in both wire directions, and a disc bounded\nby arcs of 300 degrees and 60. Each arc is built as a circle, a NURBS\nstored start to end, and a NURBS stored end to start. It also covers the\nmajor segment with a NURBS arc running 0.05 past each vertex. Every\nsolid must be valid and watertight. Integrated volume must be within\nrelative `1e-4`, and mesh volume within relative `2e-3`, of face area\ntimes 0.2. Cap `face_area` must be within relative `1e-4`; independently\ntessellated plane faces and walls within relative `2e-3`; and check\ncrate `integrate_face` wall area within relative `1e-6`. The keyhole now\nintegrates to 5.640079 and meshes to 5.641246.\n\n- `a_rim_stored_end_to_start_reads_its_span` in\n`crates/check/src/properties/face_integrator.rs` covers a 270 degree\ncylinder wall 1 tall with its lower rim stored either way as a NURBS.\nIts area is 4.712389. Reading the rim from its stored start gives\n11.077715.\n\n- `crates/operations/tests/check_face_bounds.rs` checks `make_sphere(1,\n16)` less its positive octant, as made and turned four ways, against\n`7π/6` within relative `1e-6`. As made, its centre of mass is `-3/56` on\nevery axis within `1e-6`; unwrapping past the pole's `u` reads the\nturned ball as 3.439462. It checks the cone less its quadrant against\n`π/2` within relative `1e-6`, and `make_cone(1, 0, 2)` as made,\ntranslated along x, and tipped onto its side against `2π/3`, with centre\nof mass within `1e-6`.\n\n- `a_wedge_through_a_pole_reads_its_area_from_any_start` covers the 270\ndegree wide part of a unit ball's upper hemisphere. Its wire starts at\neach of three edges, runs either way, and places its pole on the axis or\n1e-7 off it. Its area is `3π/2` within `1e-6`. Walking from the wire's\nown start gives 3.278601, while the old clip polygon reads a reversed\nwire as 6.283185.\n\n- `a_revolved_cone_quarter_meshes_its_own_span` in\n`crates/operations/src/tessellate/tests.rs` checks the quarter cone face\nas made, turned two ways, and mirrored within relative `2e-3` of\n1.756204. `arc_joins_on_a_clockwise_loop_turn_a_quarter` in\n`crates/operations/src/offset_wire.rs` checks every clockwise square\njoin as a quarter turn and the offset face as 8.785398 within `1e-9`;\nusing the face normal makes the joins span 4.712389.\n\n- The check crate integrates the keyhole to 5.642508. Plane faces are\nintegrated through 32 chords per curved edge, giving a cap area of\n28.236832 against 28.200395, which accounts for the gap.\n\n- The workspace suite passes: 3141 tests run, 3141 passed, 20 skipped.\n\n- New OPEN roadmap rows record the engine's ray cast misreading cone\nfaces on main, with `make_cone(5, 2, 10)` inside the box over `|x|, |y|\n< 3` misclassifying 2056 of 23248 grid points and less the box over `x >\n1` misclassifying 206; the check integrator approximating plane faces\nwith chords, with a plain cone tipped onto its side and its base in `x =\n1` reading 2.101111 against `2π/3`; a partial revolve with a half-circle\nprofile side meshing open at 270 degrees, 3.326937 against 11.162384; an\nIGES round trip turning a 240 degree cylinder wall into planes, 0.166667\nagainst 2.527408; and the keyhole less the slab `z > 0.1` falling back\nto the mesh boolean, 2.827083 against 2.820039. The partial revolve and\nIGES cases were also measured on main.",
+          "timestamp": "2026-09-26T07:58:29-07:00",
+          "tree_id": "cce107c3ced9c8aad640893f2bfd08c02a15a2a4",
+          "url": "https://github.com/andymai/brepkit/commit/cd5753eaa919738f9bf2b3dfb25517405c9528ee"
+        },
+        "date": 1790434866938,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1018591,
+            "range": "± 1185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1103986,
+            "range": "± 2952",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13284,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 754764,
+            "range": "± 1488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42363169,
+            "range": "± 1695000",
             "unit": "ns/iter"
           }
         ]
