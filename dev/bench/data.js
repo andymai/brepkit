@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790459815480,
+  "lastUpdate": 1790464989265,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42065,6 +42065,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35611415,
             "range": "± 410314",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1e54dfe21412c32d718bc0dd235fed12abd58f50",
+          "message": "fix(operations): keep a Cut's piece that rings the tool (#1804)\n\n`Cut` now keeps the exact multi-piece result when a retained piece rings\nthe tool, instead of falling back to the mesh boolean.\n\n## What was wrong\n\n- The box `|x|, |y| < 3`, `-1 < z < 11` less `make_cone(5, 2, 10)` fell\nback in all five pose-sweep poses, measuring 135.7535 instead of the\nclosed-form 135.39573. Upright, the fallback produced 57 plane faces.\n- The engine result was already exact: 13 faces (one cone and 12\nplanes), a closed manifold with two disjoint pieces and Euler\ncharacteristic 4. The frustum fills the box's section below `z = 2.52`,\nleaving a slab under it; above, the box's corners join into a ring\naround the frustum's top.\n- Multi-piece acceptance required `cut_safe`, using\n`all_component_centers_outside`. The ring's bounding-box centre lies on\nthe axis inside the frustum, so the gate rejected the exact result.\n- The fix is in the acceptance gate, not the engine, because the\nengine's result was already exact.\n\n## What this does\n\n- A piece whose centre reads inside the tool remains rejected when\n`classify_ray_cast` says the result holds that centre, or cannot\nclassify it. A centre held by another piece also rejects conservatively.\n- When the result does not hold the centre, the centre lies in the\npiece's own hole. The piece passes if `planar_face_centroid` finds a\nplane-face area centroid inside that face and outside the tool.\n- A stray piece of the tool interior cannot pass because every face is\ninside the tool or on its surface, regardless of shape or face\norientation. Other pieces retain the existing behavior.\n- The `frustum | box 3` pose-sweep case now has closed forms for all\nthree operations, from the frustum's part within the box\n(296.60427404095594): the frustum (`130π`) less it, it, and the box\n(`432`) less it. The roadmap Closed section records the case.\n\n## Verification\n\n- New `box_less_frustum` coverage checks upright, turned (`rotation_z(1)\n* rotation_y(0.3)`), and mirrored cases: one cone, 12 planes, validity,\nclosed mesh, volume within `1e-9` relative of 135.39572595904406, and\nsix ray-cast classifications. Without the change it fails on its face\ncensus.\n- `a_ring_inside_the_tool_is_a_stray_piece` verifies that a square ring\nwithin a slab is rejected, including when flush and flipped inside out,\nwhile the ring clear of the slab passes.\n- Only the five `frustum | box 3` `b-a` sweep lines change, from\nfallback at 135.7535 to 13 faces at 135.3957. Every operation is within\n`6.1e-11` of its closed form in every pose.\n- `cargo nextest run --workspace`: 3155 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nKeeps a Cut's exact result when a retained piece rings the tool, so a\nbox less a frustum through it no longer falls back to a mesh boolean.\n\n- The multi-piece gate now rejects only centres the result holds inside\nthe tool; a genuine ring's centre lies in its own hole, and passes when\none of its plane faces lies outside the tool, read at the face's area\ncentroid inside the face. A stray piece of the tool's interior has no\nface outside the tool, so it is rejected. The previous stepped-point\ncheck is gone: it could leave a thin piece or run against a face\noriented the wrong way, and the confirming ray cast misreads trimmed\ntorus patches.\n- Adds `box_less_frustum.rs` for upright, turned, and mirrored poses,\nchecking face census, validity, watertightness, and volume against the\nclosed form.\n- The pose sweep's `frustum | box 3` case now carries closed forms for\nall three operations instead of falling back.\n\n<sup>Written for commit 42db89296f1ee50149bee4df3b1298abe0603dbb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1804?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T23:20:56Z",
+          "tree_id": "5c29ecbdb37d016d270d8d0bd4c3d0ab008f3b78",
+          "url": "https://github.com/andymai/brepkit/commit/1e54dfe21412c32d718bc0dd235fed12abd58f50"
+        },
+        "date": 1790464984989,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 547296,
+            "range": "± 8285",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 597496,
+            "range": "± 3068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7760,
+            "range": "± 213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 437000,
+            "range": "± 8227",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26438623,
+            "range": "± 221186",
             "unit": "ns/iter"
           }
         ]
