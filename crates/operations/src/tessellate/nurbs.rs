@@ -210,12 +210,24 @@ where
             }
             EdgeCurve::NurbsCurve(_) => 32,
         };
+        let points: Vec<Point3> = (0..=pieces)
+            .map(|k| {
+                let f = (1.0 - 2.0 * INSET).mul_add(f64::from(k) / f64::from(pieces), INSET);
+                curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+            })
+            .collect();
+        // An edge collapsed to one point (a revolve's edge at a cone's apex)
+        // has no `u` of its own.
+        let reach = points
+            .iter()
+            .fold(0.0_f64, |m, p| m.max((*p - points[0]).length()));
+        if reach <= 1e-9 * (sp - Point3::new(0.0, 0.0, 0.0)).length().max(1.0) {
+            continue;
+        }
         let mut prev: Option<f64> = None;
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for k in 0..=pieces {
-            let f = (1.0 - 2.0 * INSET).mul_add(f64::from(k) / f64::from(pieces), INSET);
-            let (mut u, _) =
-                project(curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep));
+        for p in points {
+            let (mut u, _) = project(p);
             if let Some(p) = prev {
                 u -= ((u - p) / TAU).round() * TAU;
             }
