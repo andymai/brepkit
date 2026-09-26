@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.39](https://github.com/andymai/brepkit/compare/v4.0.38...v4.0.39) (2026-09-26)
+
+
+### Bug Fixes
+
+* **algo:** read a ball's hole by its planes and a plane face's arcs exactly in the ray cast ([#1794](https://github.com/andymai/brepkit/issues/1794)) ([0ae17eb](https://github.com/andymai/brepkit/commit/0ae17ebebc4d0ab2a5b08939655bd893721d7d9a))
+
 ## [4.0.38](https://github.com/andymai/brepkit/compare/v4.0.37...v4.0.38) (2026-09-26)
 
 
