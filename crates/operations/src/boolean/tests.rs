@@ -8278,3 +8278,45 @@ fn cut_wedge_by_thin_radial_strut_is_not_empty() {
         "vol(A−B) + vol(A∩B) = vol(A) violated: {cut_vol} + {overlap_vol} ≠ {base_vol}"
     );
 }
+
+/// The multi-region Cut gate's stray-piece checks on a square ring (a frame
+/// whose bounding-box centre lies in its hole): within a slab tool it is a
+/// stray piece of the tool's interior with no point outside the tool, though
+/// the result does not hold its centre; clear of the slab it is a genuine
+/// piece and passes both checks.
+#[test]
+fn a_ring_inside_the_tool_is_a_stray_piece() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+
+    for (z, stray) in [(0.0, true), (3.0, false)] {
+        let mut topo = Topology::new();
+        let frame = crate::primitives::make_box(&mut topo, 4.0, 4.0, 1.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            frame,
+            &Mat4::translation(-2.0, -2.0, z - 0.5),
+        )
+        .unwrap();
+        let hole = crate::primitives::make_box(&mut topo, 2.0, 2.0, 3.0).unwrap();
+        crate::transform::transform_solid(&mut topo, hole, &Mat4::translation(-1.0, -1.0, z - 1.5))
+            .unwrap();
+        let ring = boolean(&mut topo, BooleanOp::Cut, frame, hole).unwrap();
+        let slab = crate::primitives::make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+        crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(-5.0, -5.0, -1.0))
+            .unwrap();
+        let tool = brepkit_algo::classifier::try_build_analytic_classifier(&topo, slab).unwrap();
+        let comps = vec![solid_faces(&topo, ring).unwrap()];
+        let tol = Tolerance::new();
+
+        assert!(
+            all_component_centers_outside(&topo, ring, &comps, &tool, tol),
+            "z = {z}: the ring holds its centre"
+        );
+        assert_eq!(
+            every_component_has_a_point_outside(&topo, &comps, &tool, tol),
+            !stray,
+            "z = {z}: a point outside the slab"
+        );
+    }
+}
