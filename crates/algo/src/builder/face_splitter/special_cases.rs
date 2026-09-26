@@ -579,8 +579,10 @@ fn region_sample(
 ) -> Option<Point3> {
     use brepkit_math::vec::Point2;
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
-    const NU: usize = 48;
-    const NV: usize = 24;
+    // Grid points across `u` and `v`: a coarse grid first, the fine one for a
+    // region the coarse one misses.
+    const COARSE: (usize, usize) = (12, 6);
+    const FINE: (usize, usize) = (48, 24);
     let FaceSurface::Sphere(sphere) = surface else {
         return None;
     };
@@ -597,7 +599,7 @@ fn region_sample(
         }
         poly
     };
-    let outer_pts = loop_polyline(outer);
+    let outer_pts = sphere_loop_polyline(sphere, outer);
     if outer_pts.len() < 3 {
         return None;
     }
@@ -606,7 +608,7 @@ fn region_sample(
     // what a hole that winds the axis closes around.
     let hole_uv: Vec<Vec<Point2>> = holes
         .iter()
-        .map(|h| region(&loop_polyline(&reverse_loop(h))))
+        .map(|h| region(&sphere_loop_polyline(sphere, &reverse_loop(h))))
         .filter(|h| h.len() >= 3)
         .collect();
     let shifted = |poly: &[Point2], p: Point2| -> [Point2; 3] {
@@ -617,27 +619,27 @@ fn region_sample(
     let inside = |poly: &[Point2], p: Point2| {
         shifted(poly, p)
             .into_iter()
-            .any(|q| super::super::classify_2d::point_in_polygon_2d(q, poly))
+            .find(|&q| super::super::classify_2d::point_in_polygon_2d(q, poly))
     };
-    let clearance = |poly: &[Point2], p: Point2| -> f64 {
-        shifted(poly, p)
-            .into_iter()
-            .map(|q| {
-                (0..poly.len())
-                    .map(|k| {
-                        let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
-                        let (ab, aq) = (b - a, q - a);
-                        let t = (aq.x().mul_add(ab.x(), aq.y() * ab.y())
-                            / ab.x()
-                                .mul_add(ab.x(), ab.y() * ab.y())
-                                .max(f64::MIN_POSITIVE))
-                        .clamp(0.0, 1.0);
-                        let (dx, dy) = (aq.x() - ab.x() * t, aq.y() - ab.y() * t);
-                        dx.hypot(dy)
-                    })
-                    .fold(f64::INFINITY, f64::min)
-            })
-            .fold(f64::INFINITY, f64::min)
+    // The squared distance from `q` to `poly`'s sides, or any value no more
+    // than `floor` once it is known to be at most that.
+    let reach = |poly: &[Point2], q: Point2, floor: f64| -> f64 {
+        let mut near = f64::INFINITY;
+        for k in 0..poly.len() {
+            let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+            let (ab, aq) = (b - a, q - a);
+            let t = (aq.x().mul_add(ab.x(), aq.y() * ab.y())
+                / ab.x()
+                    .mul_add(ab.x(), ab.y() * ab.y())
+                    .max(f64::MIN_POSITIVE))
+            .clamp(0.0, 1.0);
+            let (dx, dy) = (aq.x() - ab.x() * t, aq.y() - ab.y() * t);
+            near = near.min(dx.mul_add(dx, dy * dy));
+            if near <= floor {
+                break;
+            }
+        }
+        near
     };
     let (u_lo, u_hi) = outer_uv
         .iter()
@@ -649,25 +651,41 @@ fn region_sample(
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| {
             (a.min(q.y()), b.max(q.y()))
         });
-    let mut best: Option<(f64, Point2)> = None;
-    for i in 0..NU {
-        for j in 0..NV {
-            #[allow(clippy::cast_precision_loss)]
-            let p = Point2::new(
-                (u_hi - u_lo).mul_add((i as f64 + 0.5) / NU as f64, u_lo),
-                (v_hi - v_lo).mul_add((j as f64 + 0.5) / NV as f64, v_lo),
-            );
-            if !inside(&outer_uv, p) || hole_uv.iter().any(|h| inside(h, p)) {
-                continue;
-            }
-            let room = hole_uv
-                .iter()
-                .map(|h| clearance(h, p))
-                .fold(clearance(&outer_uv, p), f64::min);
-            if best.is_none_or(|(r, _)| room > r) {
-                best = Some((room, p));
+    // The point of a grid over `(u, v)` farthest from the region's sides.
+    let search = |(u0, u1): (f64, f64),
+                  (v0, v1): (f64, f64),
+                  (nu, nv): (usize, usize),
+                  best: &mut Option<(f64, Point2)>| {
+        for i in 0..nu {
+            for j in 0..nv {
+                #[allow(clippy::cast_precision_loss)]
+                let p = Point2::new(
+                    (u1 - u0).mul_add((i as f64 + 0.5) / nu as f64, u0),
+                    (v1 - v0).mul_add((j as f64 + 0.5) / nv as f64, v0),
+                );
+                let Some(q) = inside(&outer_uv, p) else {
+                    continue;
+                };
+                if hole_uv.iter().any(|h| inside(h, p).is_some()) {
+                    continue;
+                }
+                let floor = best.map_or(-1.0, |(r, _)| r);
+                let mut room = reach(&outer_uv, q, floor);
+                for h in &hole_uv {
+                    for s in shifted(h, p) {
+                        room = room.min(reach(h, s, floor));
+                    }
+                }
+                if room > floor {
+                    *best = Some((room, p));
+                }
             }
         }
+    };
+    let mut best: Option<(f64, Point2)> = None;
+    search((u_lo, u_hi), (v_lo, v_hi), COARSE, &mut best);
+    if best.is_none() {
+        search((u_lo, u_hi), (v_lo, v_hi), FINE, &mut best);
     }
     let (_, p) = best?;
     Some(sphere.evaluate(p.x(), p.y()))
@@ -928,6 +946,43 @@ fn sample_half_edge_uv(e: &OrientedPCurveEdge, f: f64) -> brepkit_math::vec::Poi
             e.start_uv.y() + (e.end_uv.y() - e.start_uv.y()) * f,
         ),
     }
+}
+
+/// A loop's polyline in a sphere's `(u, v)`, from points along each edge's
+/// own curve: a fitted pcurve can overshoot the pole's `v` near it. A point at
+/// a pole has no `u` of its own and takes its neighbour's within its edge.
+fn sphere_loop_polyline(
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    loop_edges: &[OrientedPCurveEdge],
+) -> Vec<brepkit_math::vec::Point2> {
+    use brepkit_math::vec::Point2;
+    let mut poly = Vec::new();
+    for e in loop_edges {
+        let n = if matches!(e.curve_3d, EdgeCurve::Line) {
+            1
+        } else {
+            16
+        };
+        let mut uv: Vec<Point2> = edge_samples(e, n)
+            .into_iter()
+            .map(|p| {
+                let (u, v) = sphere.project_point(p);
+                Point2::new(u, v)
+            })
+            .collect();
+        for k in 0..uv.len() {
+            if std::f64::consts::FRAC_PI_2 - uv[k].y().abs() <= 1e-9 {
+                let near = if k + 1 < uv.len() {
+                    k + 1
+                } else {
+                    k.saturating_sub(1)
+                };
+                uv[k] = Point2::new(uv[near].x(), uv[k].y());
+            }
+        }
+        poly.extend_from_slice(&uv[..n]);
+    }
+    poly
 }
 
 /// Polyline (UV) approximation of a loop, sampling curved edges.
