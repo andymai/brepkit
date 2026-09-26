@@ -2651,22 +2651,24 @@ pub(super) fn tessellate_nonplanar_cdt(
                 radius
             }
         };
-        // The shared boundary is sampled once for the whole solid, and a
-        // triangle along its coarsest edge sags at least as far as that edge
-        // however it is split: halving toward it only mints slivers against
-        // it. Measured as sag, an edge through a cone's apex spans any `u` at
-        // no radius.
-        let boundary_sag = std::iter::once(&boundary_uv)
-            .chain(hole_polys.iter())
-            .flat_map(|ring| {
-                ring.iter()
-                    .zip(ring.iter().cycle().skip(1))
-                    .map(|(a, b)| radius_at(a.1.max(b.1)) * (1.0 - (0.5 * (b.0 - a.0).abs()).cos()))
-            })
-            .fold(0.0, f64::max);
         let mut converged = false;
         for _ in 0..MAX_HALVING_PASSES {
             let vertices = cdt.vertices();
+            // A constrained edge is shared boundary sampled once for the whole
+            // solid, and a triangle touching it sags at least as far as it
+            // however that triangle is split: each vertex allows the sag of
+            // its coarsest constrained edge. Measured as sag, an edge through
+            // a cone's apex spans any `u` at no radius.
+            let mut allowed: DetHashMap<usize, f64> = DetHashMap::default();
+            for &(a, b) in cdt.constraint_edges() {
+                let (pa, pb) = (from_cdt(vertices[a]), from_cdt(vertices[b]));
+                let sag =
+                    radius_at(pa.y().max(pb.y())) * (1.0 - (0.5 * (pb.x() - pa.x()).abs()).cos());
+                for k in [a, b] {
+                    let entry = allowed.entry(k).or_insert(0.0);
+                    *entry = entry.max(sag);
+                }
+            }
             let mut splits = Vec::new();
             for (i0, i1, i2) in cdt.triangles() {
                 if i0 < 3 || i1 < 3 || i2 < 3 {
@@ -2686,7 +2688,11 @@ pub(super) fn tessellate_nonplanar_cdt(
                 let local_radius = corners.iter().map(|c| radius_at(c.y())).fold(0.0, f64::max);
                 let span = corners[hi].x() - corners[lo].x();
                 if stripe_span_within_tolerance(local_radius, span, deflection, angular_tol)
-                    || local_radius * (1.0 - (0.5 * span).cos()) <= boundary_sag
+                    || local_radius * (1.0 - (0.5 * span).cos())
+                        <= ids
+                            .iter()
+                            .map(|k| allowed.get(k).copied().unwrap_or(0.0))
+                            .fold(0.0, f64::max)
                 {
                     continue;
                 }

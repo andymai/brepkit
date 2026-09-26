@@ -1,11 +1,10 @@
-//! A rod or a cone standing through a plate's edge, fused with the plate:
-//! the plate takes a window out of the tool's wall, and where the window
-//! straddles the wall's seam the wall's outer wire carries it as a notch
-//! between two rims and the seam's two copies. Meshed as the box of its
-//! rims, the wall fanned rim samples to the notch's corners through the
-//! solid, and the fuse measured short while passing every check; measured
-//! as the box, its area missed the window. Each fuse here matches its closed
-//! form and each wall its area, whichever way the tool's seam points.
+//! A rod or a cone frustum standing through a plate's edge, fused with the
+//! plate: the plate takes a window out of the tool's wall, and where the
+//! window straddles the wall's seam the wall's outer wire carries it as a
+//! notch between two rims and the seam's two copies, which is no box in
+//! `(u, v)`. Each fuse matches its closed form, each wall its area, and each
+//! wall's own mesh stays within the deflection of the surface, whichever way
+//! the tool's seam points.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -44,20 +43,37 @@ fn fuse(cone: bool, cx: f64, spin: f64) -> (Topology, SolidId) {
     (topo, fused)
 }
 
-fn mesh_area(topo: &Topology, face: brepkit_topology::face::FaceId) -> f64 {
-    let mesh = tessellate(topo, face, 0.002).unwrap();
-    mesh.indices
-        .chunks(3)
-        .map(|t| {
-            let (p, q, w) = (
-                mesh.positions[t[0] as usize],
-                mesh.positions[t[1] as usize],
-                mesh.positions[t[2] as usize],
+/// A wall's own mesh at deflection `DEFLECTION`: its area, and how far the
+/// midpoint of any of its edges falls inside the wall, whose radius at
+/// height `z` is `radius(z)` about the vertical axis through `(cx, 5)`.
+fn wall_mesh(
+    topo: &Topology,
+    face: brepkit_topology::face::FaceId,
+    cx: f64,
+    radius: &dyn Fn(f64) -> f64,
+) -> (f64, f64) {
+    let mesh = tessellate(topo, face, DEFLECTION).unwrap();
+    let (mut area, mut sag) = (0.0, 0.0_f64);
+    for t in mesh.indices.chunks(3) {
+        let corners = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+        area += (corners[1] - corners[0])
+            .cross(corners[2] - corners[0])
+            .length()
+            / 2.0;
+        for k in 0..3 {
+            let (a, b) = (corners[k], corners[(k + 1) % 3]);
+            let (x, y, z) = (
+                0.5 * (a.x() + b.x()),
+                0.5 * (a.y() + b.y()),
+                0.5 * (a.z() + b.z()),
             );
-            (q - p).cross(w - p).length() / 2.0
-        })
-        .sum()
+            sag = sag.max(radius(z) - (x - cx).hypot(y - 5.0));
+        }
+    }
+    (area, sag)
 }
+
+const DEFLECTION: f64 = 0.002;
 
 #[test]
 fn a_rod_through_a_plate_edge_fuses_whole() {
@@ -99,10 +115,14 @@ fn a_rod_through_a_plate_edge_fuses_whole() {
                 (area - wall).abs() < 1e-9 * wall,
                 "{label}: wall area {area}, truth {wall}"
             );
-            let meshed = mesh_area(&topo, walls[0]);
+            let (meshed, sag) = wall_mesh(&topo, walls[0], cx, &|_| 1.0);
             assert!(
                 (meshed - wall).abs() < 2e-3 * wall,
                 "{label}: wall mesh area {meshed}, truth {wall}"
+            );
+            assert!(
+                sag <= DEFLECTION * (1.0 + 1e-6),
+                "{label}: wall mesh sags {sag}"
             );
         }
     }
@@ -141,10 +161,14 @@ fn a_cone_through_a_plate_edge_fuses_whole() {
             for f in faces {
                 if matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)) {
                     let area = face_area(&topo, f, 0.01).unwrap();
-                    let meshed = mesh_area(&topo, f);
+                    let (meshed, sag) = wall_mesh(&topo, f, cx, &radius);
                     assert!(
                         (meshed - area).abs() < 2e-3 * area,
                         "{label}: wall area {area}, mesh {meshed}"
+                    );
+                    assert!(
+                        sag <= DEFLECTION * (1.0 + 1e-6),
+                        "{label}: wall mesh sags {sag}"
                     );
                 }
             }

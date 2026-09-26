@@ -334,9 +334,9 @@ struct RevolutionMetric<'a> {
 
 /// The area of a cylinder face whose boundary is not a rectangle in
 /// `(u, v)` (a wall trimmed by an oblique plane's ellipse, say): `r` times
-/// the region's area in `(u, v)`. `Ok(None)` for a face bounded only by
-/// rulings and rims, which the rectangle below measures exactly, or when a
-/// wire's unwrapped `u` does not close.
+/// the region's area in `(u, v)`. `Ok(None)` for a box of rulings and rims
+/// (four outer edges and no holes), which the rectangle below measures
+/// exactly, or when a wire's unwrapped `u` does not close.
 fn cylinder_face_uv_area(
     topo: &Topology,
     face_id: FaceId,
