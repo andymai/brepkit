@@ -402,7 +402,7 @@ fn split_noseam_by_arrangement(
         return Vec::new();
     };
     let mut region = loops[region_idx].clone();
-    if net_u(&region) * parent_net_u > 0.0 {
+    if net_u(&region) * parent_net_u < 0.0 {
         region = reverse_loop(&region);
     }
 
