@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790434871163,
+  "lastUpdate": 1790435779880,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41633,6 +41633,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42363169,
             "range": "± 1695000",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "672a401a5a2060a9a1b3805ce2517bf0f725e88d",
+          "message": "chore(main): release 4.0.40 (#1797)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.40](https://github.com/andymai/brepkit/compare/v4.0.39...v4.0.40)\n(2026-09-26)\n\n\n### Bug Fixes\n\n* **operations:** extrude and measure arcs past half a turn along their\nown span ([#1796](https://github.com/andymai/brepkit/issues/1796))\n([cd5753e](https://github.com/andymai/brepkit/commit/cd5753eaa919738f9bf2b3dfb25517405c9528ee))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.40, which fixes extrude and measure operations on\narcs longer than half a turn so they are evaluated along their own span.\n\n**Bug Fixes**\n- Extrude and measure now handle arcs past half a turn correctly along\ntheir own span.\n\n<sup>Written for commit 5b8a1a26cfe190e22e1df90db583b2e00742a6e5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1797?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-26T15:13:33Z",
+          "tree_id": "1d70d54ccb0efc8e0286942f47a136b5921d0ba0",
+          "url": "https://github.com/andymai/brepkit/commit/672a401a5a2060a9a1b3805ce2517bf0f725e88d"
+        },
+        "date": 1790435775068,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1014716,
+            "range": "± 3996",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1099321,
+            "range": "± 4391",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13087,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 757304,
+            "range": "± 3207",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42767765,
+            "range": "± 192098",
             "unit": "ns/iter"
           }
         ]
