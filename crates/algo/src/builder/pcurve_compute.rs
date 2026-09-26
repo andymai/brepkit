@@ -255,6 +255,7 @@ pub(super) fn sample_edge_to_uv(
     // circle's own frame puts parameter 0, so its UV samples start where the
     // seam lines leaving that vertex do.
     let closed_cone_rim = matches!(surface, FaceSurface::Cone(_)) && (start - end).length() < 1e-10;
+    let at = edge_point_at(curve_3d, start, end);
     for i in 0..=n {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f64 / n as f64;
@@ -265,7 +266,7 @@ pub(super) fn sample_edge_to_uv(
             EdgeCurve::Ellipse(e) if closed_cone_rim => {
                 ParametricCurve::evaluate(e, e.project(start) + TAU * t)
             }
-            _ => evaluate_edge_at_t(curve_3d, start, end, t),
+            _ => at(t),
         };
         pts_3d.push(p);
     }
@@ -291,6 +292,33 @@ pub(super) fn sample_edge_to_uv(
 /// For open `Circle`/`Ellipse` edges, traces the shorter arc between the
 /// endpoints. For closed edges and `NurbsCurve`, uses the curve domain.
 pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, t: f64) -> Point3 {
+    edge_point_at(curve, start, end)(t)
+}
+
+/// [`evaluate_edge_at_t`] for many `t` along one edge: the span a closed or
+/// NURBS curve covers is read once, since a NURBS edge on part of its curve
+/// finds it by projecting both end vertices.
+pub(super) fn edge_point_at(
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+) -> impl Fn(f64) -> Point3 + '_ {
+    let span = match curve {
+        EdgeCurve::Line => None,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) if (start - end).length() > 1e-12 => None,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+            Some(curve.domain_with_endpoints(start, end))
+        }
+    };
+    move |t| match span {
+        Some((t0, t1)) => curve.evaluate_with_endpoints(t0 + (t1 - t0) * t, start, end),
+        None => evaluate_open_edge_at_t(curve, start, end, t),
+    }
+}
+
+/// An edge at fraction `t`, an open circle or ellipse along its shorter arc
+/// and any other curve over its span.
+fn evaluate_open_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, t: f64) -> Point3 {
     match curve {
         EdgeCurve::Line => Point3::new(
             start.x() + (end.x() - start.x()) * t,
@@ -366,11 +394,11 @@ fn sample_edge_to_uv_via_frame(
 ) -> Vec<Point2> {
     let n = PCURVE_SAMPLES;
     let mut uv_pts = Vec::with_capacity(n + 1);
+    let at = edge_point_at(curve_3d, start, end);
     for i in 0..=n {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f64 / n as f64;
-        let p = evaluate_edge_at_t(curve_3d, start, end, t);
-        uv_pts.push(frame.project(p));
+        uv_pts.push(frame.project(at(t)));
     }
     uv_pts
 }
@@ -706,6 +734,43 @@ mod tests {
     /// The batch sampler must agree with per-sample `evaluate_edge_at_t` on
     /// every curve arm and both traversal directions — it exists only to
     /// hoist the per-arm setup, never to change the sampled points.
+    /// A NURBS edge on part of its curve, either way along it: each sample
+    /// is the curve at the matching fraction of the edge's own span.
+    #[test]
+    fn edge_point_at_walks_a_nurbs_sub_span() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::EdgeCurve;
+
+        let nurbs = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(2.0, -1.0, 1.0),
+                Point3::new(3.0, 1.0, 0.0),
+                Point3::new(4.0, 0.0, 0.0),
+            ],
+            vec![1.0, 0.8, 1.2, 1.0, 1.0],
+        )
+        .unwrap();
+        let curve = EdgeCurve::NurbsCurve(nurbs.clone());
+        for (u0, u1) in [(0.2, 0.8), (0.8, 0.2), (0.35, 0.6)] {
+            let (start, end) = (nurbs.evaluate(u0), nurbs.evaluate(u1));
+            let at = edge_point_at(&curve, start, end);
+            for k in 0..=8 {
+                let t = f64::from(k) / 8.0;
+                let want = nurbs.evaluate(u0 + (u1 - u0) * t);
+                assert!(
+                    (at(t) - want).length() < 1e-7,
+                    "({u0}, {u1}) t={t}: {:?} vs {want:?}",
+                    at(t)
+                );
+                assert!((evaluate_edge_at_t(&curve, start, end, t) - want).length() < 1e-7);
+            }
+        }
+    }
+
     #[test]
     fn native_sampler_traces_the_major_arc() {
         use brepkit_math::curves::Circle3D;
