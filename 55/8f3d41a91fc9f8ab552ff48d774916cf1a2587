@@ -1,0 +1,19 @@
+crates/operations/tests/sphere_box_corner.rs
+  s_ba2f7b5c6902b6::t_3ca94408f995e8 510,514-519,521,530-531,554-556
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "558f3d41a91fc9f8ab552ff48d774916cf1a2587",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
