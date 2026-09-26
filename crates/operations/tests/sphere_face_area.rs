@@ -573,3 +573,46 @@ fn nurbs_loop_around_the_pole() {
         );
     }
 }
+
+#[test]
+fn latitude_loop_split_at_opposite_longitudes() {
+    let z = 1.0_f64;
+    let rho = (RADIUS * RADIUS - z * z).sqrt();
+    let north = 2.0 * PI * RADIUS * (RADIUS - z);
+    for (reverse, truth) in [(false, north), (true, 4.0 * PI * RADIUS * RADIUS - north)] {
+        let mut topo = Topology::new();
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), rho).unwrap();
+        let ends = [
+            topo.add_vertex(Vertex::new(Point3::new(rho, 0.0, z), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(-rho, 0.0, z), 1e-7)),
+        ];
+        let halves = [
+            topo.add_edge(Edge::new(
+                ends[0],
+                ends[1],
+                EdgeCurve::Circle(circle.clone()),
+            )),
+            topo.add_edge(Edge::new(ends[1], ends[0], EdgeCurve::Circle(circle))),
+        ];
+        let oes = if reverse {
+            vec![
+                OrientedEdge::new(halves[1], false),
+                OrientedEdge::new(halves[0], false),
+            ]
+        } else {
+            vec![
+                OrientedEdge::new(halves[0], true),
+                OrientedEdge::new(halves[1], true),
+            ]
+        };
+        let outer = topo.add_wire(Wire::new(oes, true).unwrap());
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), RADIUS).unwrap();
+        let face = topo.add_face(Face::new(outer, vec![], FaceSurface::Sphere(sphere)));
+        let area = face_area(&topo, face, 0.01).unwrap();
+        assert!(
+            (area - truth).abs() < 1e-6 * truth,
+            "reverse {reverse}: {area} against {truth}"
+        );
+    }
+}
