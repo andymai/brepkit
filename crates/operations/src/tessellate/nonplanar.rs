@@ -2422,10 +2422,10 @@ pub(super) fn tessellate_nonplanar_cdt(
     // chords through the solid. Triangulate it in the developed
     // (radius * u, v) metric and refine by angular extent, like a stripe.
     // A hole straddling the seam is carried by the outer wire instead (the
-    // seam cannot cross it): two closed rims, a seam of lines, and marched
-    // pieces notching the wire between the seam's two copies. It leaves the
-    // same rim-to-hole fans.
-    let notched_wall = nurbs_boundaries > 0 && {
+    // seam cannot cross it): two closed rims, a seam of lines, and the hole's
+    // edges (arcs, lines or marched pieces) notching the wire between the
+    // seam's two copies. It leaves the same rim-to-hole fans.
+    let notched_wall = wire.edges().len() > 4 && {
         let mut uses: DetHashMap<usize, (usize, bool)> = DetHashMap::default();
         let mut closed_rims = 0;
         for oriented in wire.edges() {
@@ -2641,6 +2641,29 @@ pub(super) fn tessellate_nonplanar_cdt(
         .or(holed_wall_radius)
     {
         const MAX_HALVING_PASSES: usize = 16;
+        // A cone's rims are sampled at their own radius, so a triangle's
+        // sag is bounded by its widest corner (the radius is linear in v),
+        // not the face's widest end.
+        let radius_at = |v: f64| {
+            if let FaceSurface::Cone(cone) = face_data.surface() {
+                cone.radius_at(v).abs().min(radius)
+            } else {
+                radius
+            }
+        };
+        // The shared boundary is sampled once for the whole solid, and a
+        // triangle along its coarsest edge sags at least as far as that edge
+        // however it is split: halving toward it only mints slivers against
+        // it. Measured as sag, an edge through a cone's apex spans any `u` at
+        // no radius.
+        let boundary_sag = std::iter::once(&boundary_uv)
+            .chain(hole_polys.iter())
+            .flat_map(|ring| {
+                ring.iter()
+                    .zip(ring.iter().cycle().skip(1))
+                    .map(|(a, b)| radius_at(a.1.max(b.1)) * (1.0 - (0.5 * (b.0 - a.0).abs()).cos()))
+            })
+            .fold(0.0, f64::max);
         let mut converged = false;
         for _ in 0..MAX_HALVING_PASSES {
             let vertices = cdt.vertices();
@@ -2660,24 +2683,11 @@ pub(super) fn tessellate_nonplanar_cdt(
                         hi = corner;
                     }
                 }
-                // A cone's rims are sampled at their own radius, so a
-                // triangle's sag is bounded by its widest corner (the radius
-                // is linear in v), not the face's widest end.
-                let local_radius = if let FaceSurface::Cone(cone) = face_data.surface() {
-                    corners
-                        .iter()
-                        .map(|c| cone.radius_at(c.y()).abs())
-                        .fold(0.0, f64::max)
-                        .min(radius)
-                } else {
-                    radius
-                };
-                if stripe_span_within_tolerance(
-                    local_radius,
-                    corners[hi].x() - corners[lo].x(),
-                    deflection,
-                    angular_tol,
-                ) {
+                let local_radius = corners.iter().map(|c| radius_at(c.y())).fold(0.0, f64::max);
+                let span = corners[hi].x() - corners[lo].x();
+                if stripe_span_within_tolerance(local_radius, span, deflection, angular_tol)
+                    || local_radius * (1.0 - (0.5 * span).cos()) <= boundary_sag
+                {
                     continue;
                 }
                 // A constrained edge is a shared boundary sampled once for the
