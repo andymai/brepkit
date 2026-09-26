@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790445448293,
+  "lastUpdate": 1790456499761,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41795,6 +41795,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45114035,
             "range": "± 115592",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5caf87e7c89cdde33eb5ecf06654ab1890fbc58d",
+          "message": "fix(check): integrate a plane face along its edges' own curves (#1799)\n\nPlane-face integration now follows each edge's own curve, closing the\ncheck crate's plane-face roadmap row.\n\n## What was wrong\n\n- On main, `integrate_planar_face` in\n`crates/check/src/properties/face_integrator.rs` integrated area, flux,\nand moments over wires sampled into 32 chords per curved edge by\n`wire_polygon` in `crates/check/src/util.rs`. Curved boundaries\ntherefore read short by their sagitta segments. A 32-chord circle holds\n0.64% less than its disc.\n\n- The keyhole extruded in\n`crates/operations/tests/extrude_major_arcs.rs`, a square with a\n323-degree notch arc of radius 1.58, read 5.642508 against 5.640079. Its\ncap read 28.236832 against 28.200395.\n\n- `make_cone(1, 0, 2)`, tipped onto its side with its base disc in the\nplane `x = 1`, read 2.101111 against 2π/3 = 2.094395.\n`operations::measure::solid_volume` sends solids with a bored quadric\nface through this integrator.\n\n## What this does\n\n- `planar_face_by_edges` integrates each wire along its edges' own\ncurves using Green's theorem. `wire_plane_moments` computes area and\nfirst and second moments in the face's plane with `½∮(x dy - y dx)`,\n`½∮x² dy`, `-½∮y² dx`, `⅓∮x³ dy`, `½∮x²y dy`, and `-⅓∮y³ dx`.\n\n- Integration uses 8-point Gauss-Legendre quadrature between a NURBS\ncurve's knots, on circle or ellipse pieces no wider than an eighth of a\nturn, and on each line whole. Curve derivatives are exact, including a\ncircle's unit tangent times its radius.\n\n- Edges are chained by their vertices as `wire_polygon` chains them.\nEach wire counts its own region whichever way it runs, holes are\nsubtracted, and a wire that does not close falls back to the chord\npolygon. The face's volume, moments, and centroid follow from the\nplane's frame.\n\n## Verification\n\n- `a_plane_face_reads_its_circles_exactly` checks a disc of radius 2 at\n`z = 3` with a hole of radius 1. Its area 3π, flux, first moments, and\n`z` moment hold within `1e-12`. Through chords, its area reads 9.364335.\n\n- `crates/operations/tests/extrude_major_arcs.rs` now holds every\nextruded solid's check-crate volume within a relative `1e-6`. The\nkeyhole read 5.642508 through chords.\n\n- `a_cone_reads_its_centre_of_mass_on_its_axis` in\n`crates/operations/tests/check_face_bounds.rs` adds the tipped and moved\ncone whose base lies in `x = 1`. It read 2.101111 through chords.\n\n- The workspace suite passes: 3142 tests run, 3142 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes plane-face integration in `crates/check` so curved boundaries read\nalong their own curves instead of as 32 chords, which measured a circle\n0.64% short.\n\nPlane faces' area, flux, and moments were computed by sampling each\ncurved edge into 32 chords, so the keyhole read 5.642508 against\n5.640079 and a cone tipped with its base in `x = 1` read 2.101111\nagainst 2.094395. Each wire now integrates along its edges' own curves\nby Green's theorem using 8-point Gauss-Legendre quadrature between a\nNURBS curve's knots or on conic pieces no wider than an eighth of a\nturn. Wires that don't chain into a loop still fall back to the chord\npolygon.\n\n**Bug Fixes**\n- New tests pin exact values for a disc with a hole, the extruded\nkeyhole, and the tipped and moved cone.\n- Reversed NURBS rims now walk their knots from the edge's start so\nquadrature pieces don't span knots (previously missed a 270° sector's\narea by 1.2%).\n\n<sup>Written for commit 7f8ec80313ed5ab13d45d7b826b402ee0bfe194b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1799?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T20:59:26Z",
+          "tree_id": "2e6239fcd997d6b8a822a0efabc75c88d07e5a16",
+          "url": "https://github.com/andymai/brepkit/commit/5caf87e7c89cdde33eb5ecf06654ab1890fbc58d"
+        },
+        "date": 1790456495198,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 570090,
+            "range": "± 22604",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 612577,
+            "range": "± 7799",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7994,
+            "range": "± 376",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 433425,
+            "range": "± 6129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28176065,
+            "range": "± 1404023",
             "unit": "ns/iter"
           }
         ]
