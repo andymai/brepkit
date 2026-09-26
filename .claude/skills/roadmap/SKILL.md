@@ -205,6 +205,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Heal's sphere recognition keeps an inward NURBS face's side** (`crates/heal/src/custom/convert_to_elementary.rs` near line 65; found by reading, not yet reproduced) | The NURBS face's surface is swapped for the recognized sphere with its flag and wire kept, without comparing the NURBS normal (`Su x Sv`) with the sphere's outward normal: a patch whose parameterization faces inward (a mirrored NURBS sphere patch, whose transform flips the flag and keeps the wire) would come out wound against its new surface. Next: pin it with a mirrored NURBS patch, and turn the flag and the wires over when the normals oppose |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere |
 | **Point classification reads plane discs and cylinder walls through chords** (grid probe `zz_mirrod` in the session scratchpad) | Both `classify_point`s test a ray's hit on a plane or cylinder face against its boundary sampled into chords (32 per closed circle), so a hit within a sagitta of a circular rim is misread: on the exact mirrored ball less the slab `1 < z < 2` (#1775), a point under the slab reads Outside because two of its rays cross the slab's discs within 0.006 of their rims. The operations classifier also votes with two rays and needs both for Inside, so one miss reads Outside, and it reads a point as on the boundary by its distance to a sphere face's whole sphere, trimmed or not. A sphere face bounded by one wire of two rims joined by a seam (a band, as a file may store a ball between two planes) is misread by both: neither planar nor a seam alone, it takes the polygon path along a Newell normal the two rims mostly cancel; a cap bounded by its rim and a seam takes the same path, with the rim's chords. Dropping the seam's out-and-back run from the loop would leave the rims to the side tests |
+| **The engine's ray cast misreads cone faces** (`make_cone(5, 2, 10)` within the box over `|x|, |y| < 3`, and less the box over `x > 1`) | `classify_ray_cast` misreads 2056 of 23248 and 206 of 23248 points of a grid over the cone (points within 0.02 of a surface skipped), on main as well: a cone face read as a `v` band with one `u` gap takes a trim that varies with height as constant, and a closed circle makes the whole face a full band. Undug |
 
 ## Closed: root cause + where the detail lives
 
@@ -215,6 +216,13 @@ One line each; the fixture/PR carries the story. Newest first.
   hemisphere's outer loop already ends the face, so the exact arc check
   declined it; a loop's admitted arcs are now restricted to the part of
   each circle the face's other half-space loops admit.
+- **Extruding an arc past half a turn built an inside-out wall (CLOSED 2026-09-26; pins in `crates/operations/tests/extrude_major_arcs.rs`)**:
+  extrude oriented a circular arc's cylinder wall by the chord against
+  the radius at the arc's start, which past half a turn points back, so a
+  keyhole notch or a major segment extruded into a solid that read valid
+  but measured wrong with an open mesh; it reads the side of the chord
+  the arc lies on now, and the volume integrators walk each arc along its
+  own span.
 - **The engine's ray cast read a ball's collar by its flat polygon (CLOSED 2026-09-26; pins `the_engine_reads_a_collar_by_its_planes` in `crates/operations/tests/sphere_box_corner.rs` and `sphere_arc_loops_bound_only_their_own_region` in `crates/algo/src/classifier/ray_cast.rs`)**:
   `sphere_face_loops` sampled each circle's admitted part and wanted one
   run, and the collar of the ball within a square column has four arcs
