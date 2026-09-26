@@ -87,26 +87,70 @@ enum FaceGeom {
     },
 }
 
-/// One loop of a spherical face as the half-spaces its region lies in: the
-/// side each boundary plane leaves on the loop's left about the sphere's
-/// outward normal. A loop in one plane is one half-space; a loop of arcs in
-/// several planes bounds either their intersection (a convex patch) or,
-/// running the other way around it, its complement (`any`: a convex hole).
-struct SphereLoop {
-    /// `(point on the plane, normal toward the region)`.
-    planes: Vec<(Point3, Vec3)>,
-    any: bool,
+/// One loop of a spherical face as the region it leaves on its left about the
+/// sphere's outward normal.
+enum SphereLoop {
+    /// The half-spaces the region lies in: the side each boundary plane
+    /// leaves on the loop's left. A loop in one plane is one half-space; a
+    /// loop of arcs in several planes bounds either their intersection (a
+    /// convex patch) or, running the other way around it, its complement
+    /// (`any`: a convex hole).
+    HalfSpaces {
+        /// `(point on the plane, normal toward the region)`.
+        planes: Vec<(Point3, Vec3)>,
+        any: bool,
+    },
+    /// A hole whose rim is neither in one plane nor made of circle arcs (a
+    /// bore's rim off the ball's centre), lying within the open hemisphere
+    /// about `frame.z` (the frame sits at the sphere's centre): a hemisphere
+    /// is a graph over its base plane, so the hole is the part of it whose
+    /// projection along `frame.z` falls within the rim's (`flat`).
+    Rim {
+        frame: brepkit_math::frame::Frame3,
+        flat: Vec<Point2>,
+    },
 }
 
 impl SphereLoop {
     fn admits(&self, p: Point3, slack: f64) -> bool {
-        let inside = |&(c, n): &(Point3, Vec3)| (p - c).dot(n) >= -slack;
-        if self.any {
-            self.planes.iter().any(inside)
-        } else {
-            self.planes.iter().all(inside)
+        match self {
+            Self::HalfSpaces { planes, any } => {
+                let inside = |&(c, n): &(Point3, Vec3)| (p - c).dot(n) >= -slack;
+                if *any {
+                    planes.iter().any(inside)
+                } else {
+                    planes.iter().all(inside)
+                }
+            }
+            Self::Rim { frame, flat } => {
+                (p - frame.origin).dot(frame.z) <= 0.0
+                    || !point_in_polygon(rim_flat(frame, p), flat)
+            }
         }
     }
+
+    /// Whether `p` lies within `near` of the loop's boundary.
+    fn grazes(&self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::HalfSpaces { planes, .. } => {
+                planes.iter().any(|&(c, n)| (p - c).dot(n).abs() <= near)
+            }
+            Self::Rim { frame, flat } => {
+                let q = rim_flat(frame, p);
+                flat.iter().zip(flat.iter().cycle().skip(1)).any(|(a, b)| {
+                    let (ab, aq) = (*b - *a, q - *a);
+                    let t = (aq.dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+                    (aq - ab * t).length() <= near
+                })
+            }
+        }
+    }
+}
+
+/// `p` projected along a rim frame's axis onto its base plane.
+fn rim_flat(frame: &brepkit_math::frame::Frame3, p: Point3) -> Point2 {
+    let d = p - frame.origin;
+    Point2::new(d.dot(frame.x), d.dot(frame.y))
 }
 
 /// Classify a point by ray casting against the solid's faces.
@@ -924,11 +968,7 @@ fn ray_sphere_crossings(
             continue;
         }
         let hit = origin + ray_dir * t;
-        suspicious |= loops.iter().any(|l| {
-            l.planes
-                .iter()
-                .any(|&(c, n)| (hit - c).dot(n).abs() <= near)
-        });
+        suspicious |= loops.iter().any(|l| l.grazes(hit, near));
         if loops.iter().all(|l| l.admits(hit, tol.linear)) {
             crossings += 1;
         }
@@ -1007,11 +1047,20 @@ fn sphere_face_loops(
             .iter()
             .all(|p| (*p - centroid).dot(normal).abs() <= slack)
         {
-            loops.push(SphereLoop {
+            loops.push(SphereLoop::HalfSpaces {
                 planes: vec![(centroid, normal)],
                 any: false,
             });
             continue;
+        }
+        if wire_id != face.outer_wire() && edges.iter().any(|(_, circle)| circle.is_none()) {
+            match sphere_rim(topo, wire, surface)? {
+                Some(rim) => {
+                    loops.push(rim);
+                    continue;
+                }
+                None => return Ok(None),
+            }
         }
         // Arcs in several planes: each arc's side is the one its left points
         // into at its middle sample.
@@ -1072,9 +1121,72 @@ fn sphere_face_loops(
                 return Ok(None);
             }
         }
-        loops.push(SphereLoop { planes, any });
+        loops.push(SphereLoop::HalfSpaces { planes, any });
     }
     Ok(Some(loops))
+}
+
+/// A hole's rim as a [`SphereLoop::Rim`], about the direction from the
+/// sphere's centre to the rim's centroid. `None` when the rim leaves that
+/// open hemisphere, or runs about its projection with the region inside on
+/// its left, where the face would be.
+fn sphere_rim(
+    topo: &Topology,
+    wire: &brepkit_topology::wire::Wire,
+    surface: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<Option<SphereLoop>, AlgoError> {
+    const SAMPLES: usize = 64;
+    let mut rim: Vec<Point3> = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let mut pts: Vec<Point3> = (0..SAMPLES)
+            .map(|k| {
+                #[allow(clippy::cast_precision_loss)]
+                let f = k as f64 / SAMPLES as f64;
+                edge.curve()
+                    .evaluate_with_endpoints(t0 + (t1 - t0) * f, sp, ep)
+            })
+            .collect();
+        if !oe.is_forward() {
+            pts.reverse();
+            pts.rotate_right(1);
+            if let Some(first) = pts.first_mut() {
+                *first = edge.curve().evaluate_with_endpoints(t1, sp, ep);
+            }
+        }
+        rim.extend(pts);
+    }
+    let center = surface.center();
+    let sum = rim
+        .iter()
+        .fold(Vec3::new(0.0, 0.0, 0.0), |acc, p| acc + (*p - center));
+    let Ok(axis) = sum.normalize() else {
+        return Ok(None);
+    };
+    let margin = 1e-6 * surface.radius();
+    if rim.iter().any(|p| (*p - center).dot(axis) <= margin) {
+        return Ok(None);
+    }
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(center, axis) else {
+        return Ok(None);
+    };
+    let flat: Vec<Point2> = rim.iter().map(|&p| rim_flat(&frame, p)).collect();
+    let twice_area: f64 = flat
+        .iter()
+        .zip(flat.iter().cycle().skip(1))
+        .map(|(a, b)| a.x() * b.y() - b.x() * a.y())
+        .sum();
+    // Seen from outside the sphere down `axis`, a hole's rim runs clockwise
+    // about the face on its left.
+    if twice_area >= 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(SphereLoop::Rim { frame, flat }))
 }
 
 /// Test a single face polygon against a ray for crossing parity.
