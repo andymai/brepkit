@@ -436,28 +436,58 @@ fn split_noseam_by_arrangement(
         }
     }
 
-    // Each latitude cap on this hemisphere is an inner hole of the region it
-    // lies in: a lune is the face's part past its wall's plane.
+    // Each closed section on this hemisphere (a latitude cap, a bore's rim)
+    // is a hole of the region holding most of its samples in `(u, v)`, and
+    // bounds a patch of its own.
+    let lune_uv: Vec<Vec<brepkit_math::vec::Point2>> = lunes
+        .iter()
+        .map(|(l, _)| super::unwrapped_u(&loop_polyline(l)))
+        .collect();
+    let holds = |poly: &[brepkit_math::vec::Point2], p: brepkit_math::vec::Point2| {
+        use std::f64::consts::TAU;
+        let u_min = poly.iter().map(|q| q.x()).fold(f64::INFINITY, f64::min);
+        let u = u_min + (p.x() - u_min).rem_euclid(TAU);
+        [u, u + TAU, u - TAU].into_iter().any(|u| {
+            super::super::classify_2d::point_in_polygon_2d(
+                brepkit_math::vec::Point2::new(u, p.y()),
+                poly,
+            )
+        })
+    };
     let mut lune_holes: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); lunes.len()];
     let mut collar_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
+    let mut patches: Vec<(Vec<OrientedPCurveEdge>, Point3)> = Vec::new();
     for hl in &hole_loops {
-        let Some(at) = hl.first().map(|e| e.start_3d) else {
-            continue;
+        let samples = loop_polyline(hl);
+        let home = lune_uv
+            .iter()
+            .position(|r| samples.iter().filter(|&&p| holds(r, p)).count() * 2 > samples.len());
+        let boundary = home.map_or(region[0].start_3d, |k| lunes[k].0[0].start_3d);
+        let Some(apex) = cap_apex(surface, hl, boundary, tol) else {
+            return Vec::new();
         };
-        let mut home = None;
-        for (k, (l, interior)) in lunes.iter().enumerate() {
-            let Some((c, n)) = lune_wall(l, &on_seam, tol) else {
-                return Vec::new();
-            };
-            let side = (*interior - c).dot(n);
-            if (at - c).dot(n) * side.signum() > tol * 1e3 {
-                home = Some(k);
-                break;
-            }
-        }
+        let hole = as_hole(hl, parent_net_u);
+        patches.push((reverse_loop(&hole), apex));
         match home {
-            Some(k) => lune_holes[k].push(as_hole(hl)),
-            None => collar_holes.push(hl.clone()),
+            Some(k) => lune_holes[k].push(hole),
+            None => collar_holes.push(hole),
+        }
+    }
+    // A section inside another's patch would leave that patch a hole short.
+    for (i, a) in hole_loops.iter().enumerate() {
+        let a_pts: Vec<Point3> = a.iter().flat_map(|e| edge_samples(e, 8)).collect();
+        let Some((n, c)) = loop_plane(&a_pts) else {
+            return Vec::new();
+        };
+        let apex_side = (patches[i].1 - c).dot(n);
+        for (j, b) in hole_loops.iter().enumerate() {
+            if i != j
+                && b.iter()
+                    .flat_map(|e| edge_samples(e, 8))
+                    .all(|p| (p - c).dot(n) * apex_side > 0.0)
+            {
+                return Vec::new();
+            }
         }
     }
 
@@ -466,7 +496,7 @@ fn split_noseam_by_arrangement(
     let mut pieces = vec![SplitSubFace {
         surface: surface.clone(),
         outer_wire: region,
-        inner_wires: collar_holes.iter().map(|hl| as_hole(hl)).collect(),
+        inner_wires: collar_holes,
         reversed,
         parent: face_id,
         rank,
@@ -483,13 +513,25 @@ fn split_noseam_by_arrangement(
             precomputed_interior: Some(interior),
         });
     }
+    for (outer_wire, interior) in patches {
+        pieces.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(interior),
+        });
+    }
     pieces
 }
 
-/// A closed section as a hole of the region around it: the regions run
-/// counter-clockwise in `(u, v)` (the face's boundary does), so a hole runs
-/// clockwise, `u` unwrapped along it (a hole can straddle the seam).
-fn as_hole(section: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
+/// A closed section as a hole of the region around it. The regions wind as
+/// the face's boundary does (`parent_net_u`), so a hole that winds the axis
+/// (a latitude cap's rim) winds against it, and any other hole runs
+/// clockwise in `(u, v)`, `u` unwrapped along it (it can straddle the seam).
+fn as_hole(section: &[OrientedPCurveEdge], parent_net_u: f64) -> Vec<OrientedPCurveEdge> {
     use std::f64::consts::{PI, TAU};
     let poly = loop_polyline(section);
     let mut u = poly.first().map_or(0.0, |p| p.x());
@@ -501,44 +543,48 @@ fn as_hole(section: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
         }
         unwrapped.push((u, p.y()));
     }
-    let area: f64 = (0..unwrapped.len())
-        .map(|i| {
-            let (a, b) = (unwrapped[i], unwrapped[(i + 1) % unwrapped.len()]);
-            a.0.mul_add(b.1, -(b.0 * a.1))
-        })
-        .sum();
-    if area > 0.0 {
+    let net_u = poly.last().map_or(0.0, |last| {
+        let d = poly[0].x() - last.x();
+        u + d - TAU * ((d + PI) / TAU).floor() - poly[0].x()
+    });
+    let reverse = if net_u.abs() > PI {
+        net_u * parent_net_u > 0.0
+    } else {
+        let area: f64 = (0..unwrapped.len())
+            .map(|i| {
+                let (a, b) = (unwrapped[i], unwrapped[(i + 1) % unwrapped.len()]);
+                a.0.mul_add(b.1, -(b.0 * a.1))
+            })
+            .sum();
+        area > 0.0
+    };
+    if reverse {
         reverse_loop(section)
     } else {
         section.to_vec()
     }
 }
 
-/// The plane of a lune's wall (`point`, `normal`): the circle its edges off
-/// the seam share, or `None` when they are not arcs of one circle.
-fn lune_wall(
-    lune: &[OrientedPCurveEdge],
-    on_seam: &dyn Fn(&OrientedPCurveEdge) -> bool,
+/// The apex of the cap a closed section bounds on a sphere face: the point
+/// of the sphere along its plane's normal on the side away from `boundary`
+/// (a point of the region around it). `None` when that side is unclear.
+fn cap_apex(
+    surface: &FaceSurface,
+    section: &[OrientedPCurveEdge],
+    boundary: Point3,
     tol: f64,
-) -> Option<(Point3, brepkit_math::vec::Vec3)> {
-    let mut wall: Option<&brepkit_math::curves::Circle3D> = None;
-    for e in lune.iter().filter(|e| !on_seam(e)) {
-        let EdgeCurve::Circle(c) = &e.curve_3d else {
-            return None;
-        };
-        match wall {
-            None => wall = Some(c),
-            Some(w) => {
-                let same = (w.center() - c.center()).length() <= tol * 100.0
-                    && (w.radius() - c.radius()).abs() <= tol * 100.0
-                    && w.normal().cross(c.normal()).length() <= 1e-9;
-                if !same {
-                    return None;
-                }
-            }
-        }
+) -> Option<Point3> {
+    let FaceSurface::Sphere(sphere) = surface else {
+        return None;
+    };
+    let pts: Vec<Point3> = section.iter().flat_map(|e| edge_samples(e, 8)).collect();
+    let (n, c) = loop_plane(&pts)?;
+    let side = (boundary - c).dot(n);
+    if side.abs() <= tol * 1e3 {
+        return None;
     }
-    wall.map(|w| (w.center(), w.normal()))
+    let dir = if side > 0.0 { -n } else { n };
+    Some(sphere.center() + dir * sphere.radius())
 }
 
 /// A point inside a lune of a sphere face: halfway along the great circle
@@ -720,8 +766,9 @@ fn trace_region_loops(soup: &[OrientedPCurveEdge], tol: f64) -> Vec<Vec<Oriented
             let tan = nurbs.tangent(t_at);
             (tan.x() * sign, tan.y() * sign)
         } else if let Curve2D::Line(line) = &e.pcurve {
-            // A line's own direction: its end's `u` may be a turn or more
-            // from its start's (a seam arc past half a turn).
+            // A line's own direction: its end's `u` may be more than half a
+            // turn from its start's (a seam arc past half a turn), which the
+            // wrapped difference below would read backwards.
             let sign = if from_start == e.forward { 1.0 } else { -1.0 };
             let d = line.direction();
             return (d.y() * sign).atan2(d.x() * sign).rem_euclid(TAU);

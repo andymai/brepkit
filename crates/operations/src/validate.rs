@@ -159,9 +159,11 @@ fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
 }
 
 /// Issues with how a solid's pieces sit: a vertex shared by two pieces (a
-/// pinch), or two pieces of one shell whose vertex boxes overlap and which
-/// face the same way (a lump inside a lump; a cavity kept in the outer shell
-/// faces inward, against the piece around it).
+/// pinch), or a piece of one shell inside another that faces the same way (a
+/// lump inside a lump; a cavity kept in the outer shell faces inward, against
+/// the piece around it). A piece is inside another when most of three rays
+/// from one of its vertices cross the other an odd number of times (one ray
+/// can leave through an edge or a corner).
 fn piece_issues(
     topo: &Topology,
     solid: SolidId,
@@ -171,14 +173,12 @@ fn piece_issues(
     use std::collections::HashMap;
     let mut owner: HashMap<usize, usize> = HashMap::new();
     let mut shared = 0_usize;
-    let mut boxes: HashMap<usize, brepkit_math::aabb::Aabb3> = HashMap::new();
+    let mut corner: HashMap<usize, brepkit_math::vec::Point3> = HashMap::new();
+    let mut members: HashMap<usize, Vec<brepkit_topology::face::FaceId>> = HashMap::new();
     for (i, &fid) in faces.iter().enumerate() {
+        members.entry(piece[i]).or_default().push(fid);
         for vid in explorer::face_vertices(topo, fid)? {
-            let at = topo.vertex(vid)?.point();
-            boxes
-                .entry(piece[i])
-                .and_modify(|b| *b = b.union(brepkit_math::aabb::Aabb3::from_points([at])))
-                .or_insert_with(|| brepkit_math::aabb::Aabb3::from_points([at]));
+            corner.entry(piece[i]).or_insert(topo.vertex(vid)?.point());
             match owner.get(&vid.index()) {
                 Some(&p) if p != piece[i] => shared += 1,
                 Some(_) => {}
@@ -200,7 +200,37 @@ fn piece_issues(
         .enumerate()
         .map(|(i, f)| (f.index(), i))
         .collect();
+    let mut volume: HashMap<usize, f64> = HashMap::new();
+    let mut volume_of = |p: usize| -> Result<f64, crate::OperationsError> {
+        if let Some(&v) = volume.get(&p) {
+            return Ok(v);
+        }
+        let mut v = 0.0;
+        for &fid in &members[&p] {
+            v += brepkit_check::properties::face_integrator::integrate_face(topo, fid, 4)?.volume;
+        }
+        volume.insert(p, v);
+        Ok(v)
+    };
+    let rays = [
+        brepkit_math::vec::Vec3::new(
+            0.534_522_483_824_848_8,
+            0.801_783_725_737_273_2,
+            0.267_261_241_912_424_4,
+        ),
+        brepkit_math::vec::Vec3::new(
+            -0.447_213_595_499_957_9,
+            0.365_148_371_670_110_7,
+            0.816_496_580_927_726,
+        ),
+        brepkit_math::vec::Vec3::new(
+            0.620_173_672_946_042_4,
+            -0.248_069_469_178_417,
+            -0.744_208_407_535_250_9,
+        ),
+    ];
     let solid_data = topo.solid(solid)?;
+    let mut nested = false;
     for shell_id in
         std::iter::once(solid_data.outer_shell()).chain(solid_data.inner_shells().iter().copied())
     {
@@ -212,38 +242,33 @@ fn piece_issues(
             .collect();
         in_shell.sort_unstable();
         in_shell.dedup();
-        let tol = Tolerance::new().linear;
-        let volume = |p: usize| -> Result<f64, crate::OperationsError> {
-            let mut v = 0.0;
-            for (i, &fid) in faces.iter().enumerate() {
-                if piece[i] == p {
-                    v += brepkit_check::properties::face_integrator::integrate_face(topo, fid, 4)?
-                        .volume;
+        for &a in &in_shell {
+            for &b in &in_shell {
+                if a == b || nested {
+                    continue;
                 }
-            }
-            Ok(v)
-        };
-        let mut overlap = false;
-        for (k, &a) in in_shell.iter().enumerate() {
-            for &b in &in_shell[k + 1..] {
-                let (ba, bb) = (&boxes[&a], &boxes[&b]);
-                let boxes_meet = ba.min.x() < bb.max.x() - tol
-                    && bb.min.x() < ba.max.x() - tol
-                    && ba.min.y() < bb.max.y() - tol
-                    && bb.min.y() < ba.max.y() - tol
-                    && ba.min.z() < bb.max.z() - tol
-                    && bb.min.z() < ba.max.z() - tol;
-                if boxes_meet && volume(a)? * volume(b)? > 0.0 {
-                    overlap = true;
+                let mut odd = 0;
+                for ray in rays {
+                    let crossings = crate::classify::count_ray_crossings(
+                        topo,
+                        &members[&b],
+                        corner[&a],
+                        ray,
+                        0.01,
+                    )?;
+                    odd += crossings % 2;
+                }
+                if odd >= 2 && volume_of(a)? * volume_of(b)? > 0.0 {
+                    nested = true;
                 }
             }
         }
-        if overlap {
-            issues.push(ValidationIssue {
-                severity: Severity::Error,
-                description: "a shell holds a piece inside another facing the same way".into(),
-            });
-        }
+    }
+    if nested {
+        issues.push(ValidationIssue {
+            severity: Severity::Error,
+            description: "a shell holds a piece inside another facing the same way".into(),
+        });
     }
     Ok(issues)
 }

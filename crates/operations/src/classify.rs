@@ -192,7 +192,7 @@ fn is_on_boundary(
 }
 
 /// Counts the number of times a ray crosses the solid's boundary.
-fn count_ray_crossings(
+pub(crate) fn count_ray_crossings(
     topo: &Topology,
     faces: &[FaceId],
     origin: Point3,

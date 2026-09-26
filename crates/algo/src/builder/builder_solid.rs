@@ -958,7 +958,6 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
     (growth, holes)
 }
 
-/// Whether a shell's corner-fan volume is rounding next to its extent.
 /// The box of a shell's outer-wire corners.
 fn shell_corner_box(topo: &Topology, faces: &[FaceId]) -> brepkit_math::aabb::Aabb3 {
     let corners = faces
