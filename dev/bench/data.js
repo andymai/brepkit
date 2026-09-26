@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790458634844,
+  "lastUpdate": 1790458973260,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41957,6 +41957,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 37206887,
             "range": "± 97128",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "297672ec5bd55612fd6a7d0968254bb3b45340db",
+          "message": "test(operations): diff primitive booleans in turned and mirrored poses (#1802)\n\n`crates/operations/examples/pose_sweep.rs` is a diagnostic program for\ncomparing boolean, classifier, measurement, and tessellation behavior\nacross branches.\n\n## What it prints\n\n- The sweep runs 14 primitive pairs using balls, blocks, rods, cones,\nand frustums. Each pair runs in five scene poses: identity, turned 0.5\nabout z, turned 0.35 about x, turned 0.3 about y then 1 about z, and\nmirrored in x.\n- It runs `a-b`, `a&b`, and `b-a` for each case, producing one line for\neach of 210 booleans. A release run takes about 30 s.\n- Each line reports the face count, using `fallback` for the mesh\nboolean's all-plane result and `error` when the boolean fails. It also\nreports whether `validate_solid` accepts the result and whether its mesh\nis closed.\n- Volume output includes the operations volume and its error against a\nclosed form where available. It also includes the check crate's\n`solid_volume` error against the same closed form, or against the\noperations volume when no closed form exists.\n- Classification output counts points that the engine's ray cast\nmisreads against the operands' analytic distances. Sampling uses a 13 by\n13 by 13 grid over the operands and skips points within 0.02 of either\nsurface.\n- This is a diagnostic, not a test. It asserts nothing and prints the\nstate, so output on main records open defects rather than failing CI.\n\n## When to run it\n\n- For changes to booleans, classification, measurement, or tessellation,\ndiff the sweep output against main before review. The contributor\nworkflow now records this in `.claude/skills/pr-workflow/SKILL.md`.\n- Run `cargo run --release --example pose_sweep -p brepkit-operations >\nmain.txt` on main, run the same command on the branch with output\ndirected to `branch.txt`, then run `diff main.txt branch.txt`.\n- The sweep covers turned and mirrored poses that the in-crate tests\nrarely do.\n- On #1798, the diff showed only misread counts moving. On #1799, it\nshowed only the check crate's volume column moving.\n\n## On main today\n\nAt `72093d98`:\n\n- 23 of 210 results have an open mesh: the unit ball less its octant box\nin 7 results, and a tilted ball or tilted column in 16.\n- `frustum | box 3` with `b-a` falls back to the mesh boolean in all\nfive poses.\n- The check crate's volume is off by more than 1e-3 in 165 results. The\nworst error is 1.1 for the ball turned 0.35 about x less a column.\n- The ray cast misreads 2403 grid points in total, including 682 on the\nball less its octant box.\n- Operations volumes are within 2.6e-4 of their closed forms where one\nexists, except for the ball against the tilted column in the pose turned\n0.3 about y then 1 about z. Its `a&b` and `b-a` errors are 4.1e-3 and\n9.6e-3.\n- These defects show what the sweep catches. This PR does not fix them.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a pose sweep diagnostic for comparing boolean, classification,\nmeasurement, and tessellation behavior between branches. The new example\nruns 14 primitive pairs in five scene poses with three operations and\nprints per-case results (face count, validity, mesh closure, volumes,\nray-cast misreads). Diffing its output on main and the branch surfaces\nregressions in turned and mirrored poses that in-crate tests rarely\ncover.\n\nAlso updates the PR workflow skill to include running the pose sweep for\nchanges to booleans, classification, measurement, or tessellation.\n\nThe tool is diagnostic, not a test: it asserts nothing and prints the\ncurrent state, so output on main records open defects without failing\nCI.\n\n<sup>Written for commit 9ac680c474f68eff5f2062d4bc9cd3127d0806c9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1802?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T14:40:30-07:00",
+          "tree_id": "cf970825562672efc57a235f62e2a79e85899fbc",
+          "url": "https://github.com/andymai/brepkit/commit/297672ec5bd55612fd6a7d0968254bb3b45340db"
+        },
+        "date": 1790458969022,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 676384,
+            "range": "± 1612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 742642,
+            "range": "± 2213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8731,
+            "range": "± 307",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 501255,
+            "range": "± 3687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30931197,
+            "range": "± 82205",
             "unit": "ns/iter"
           }
         ]
