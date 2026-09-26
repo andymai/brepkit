@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.0.36](https://github.com/andymai/brepkit/compare/v4.0.35...v4.0.36) (2026-09-26)
+
+
+### Bug Fixes
+
+* **algo:** keep a bored ball's bore through a box holding its pole ([#1785](https://github.com/andymai/brepkit/issues/1785)) ([ef6d8b2](https://github.com/andymai/brepkit/commit/ef6d8b223c974ed6129e32fa5151a0c6302682bf))
+
+
+### Performance
+
+* **math:** project onto a NURBS curve without decomposing it ([#1786](https://github.com/andymai/brepkit/issues/1786)) ([37ac0ae](https://github.com/andymai/brepkit/commit/37ac0ae5bf565201d490a47d46a665c743d8068c))
+
 ## [4.0.35](https://github.com/andymai/brepkit/compare/v4.0.34...v4.0.35) (2026-09-26)
 
 
