@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.43](https://github.com/andymai/brepkit/compare/v4.0.42...v4.0.43) (2026-09-26)
+
+
+### Bug Fixes
+
+* **algo:** read cone and cylinder faces against their own wires in the ray cast ([#1798](https://github.com/andymai/brepkit/issues/1798)) ([967901b](https://github.com/andymai/brepkit/commit/967901b8c77ef73501eb01a451bfc3ab885f7a94))
+
 ## [4.0.42](https://github.com/andymai/brepkit/compare/v4.0.41...v4.0.42) (2026-09-26)
 
 
