@@ -159,14 +159,15 @@ fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
 }
 
 /// Issues with how a solid's pieces sit: a vertex shared by two pieces (a
-/// pinch), or a piece of one shell inside another that faces the same way (a
-/// lump inside a lump; a cavity kept in the outer shell faces inward, against
-/// the piece around it). A piece is inside another when most of three rays
-/// from one of its vertices cross the other an odd number of times (one ray
-/// can leave through an edge or a corner).
+/// pinch), or a piece inside another that faces the same way with no piece
+/// facing the other way between them (a lump inside a lump; an island in a
+/// cavity kept in the outer shell has the cavity between). A piece is inside
+/// another when most of three rays from one of its vertices cross the other
+/// an odd number of times (one ray can leave through an edge or a corner).
+/// Only pieces facing the same way are tested: a cavity kept in the outer
+/// shell faces inward, against the piece around it.
 fn piece_issues(
     topo: &Topology,
-    solid: SolidId,
     faces: &[brepkit_topology::face::FaceId],
     piece: &[usize],
 ) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
@@ -195,11 +196,6 @@ fn piece_issues(
             description: format!("{shared} vertex uses join separate pieces"),
         });
     }
-    let index: HashMap<usize, usize> = faces
-        .iter()
-        .enumerate()
-        .map(|(i, f)| (f.index(), i))
-        .collect();
     let mut volume: HashMap<usize, f64> = HashMap::new();
     let mut volume_of = |p: usize| -> Result<f64, crate::OperationsError> {
         if let Some(&v) = volume.get(&p) {
@@ -229,38 +225,47 @@ fn piece_issues(
             -0.744_208_407_535_250_9,
         ),
     ];
-    let solid_data = topo.solid(solid)?;
+    let pieces: Vec<usize> = {
+        let mut all: Vec<usize> = piece.to_vec();
+        all.sort_unstable();
+        all.dedup();
+        all
+    };
+    let mut inside_memo: HashMap<(usize, usize), bool> = HashMap::new();
+    let mut inside = |a: usize, b: usize| -> Result<bool, crate::OperationsError> {
+        if let Some(&known) = inside_memo.get(&(a, b)) {
+            return Ok(known);
+        }
+        let mut odd = 0;
+        for ray in rays {
+            let crossings =
+                crate::classify::count_ray_crossings(topo, &members[&b], corner[&a], ray, 0.01)?;
+            odd += crossings % 2;
+        }
+        inside_memo.insert((a, b), odd >= 2);
+        Ok(odd >= 2)
+    };
     let mut nested = false;
-    for shell_id in
-        std::iter::once(solid_data.outer_shell()).chain(solid_data.inner_shells().iter().copied())
-    {
-        let mut in_shell: Vec<usize> = topo
-            .shell(shell_id)?
-            .faces()
-            .iter()
-            .filter_map(|f| index.get(&f.index()).map(|&i| piece[i]))
-            .collect();
-        in_shell.sort_unstable();
-        in_shell.dedup();
-        for &a in &in_shell {
-            for &b in &in_shell {
-                if a == b || nested {
-                    continue;
+    'pairs: for &a in &pieces {
+        for &b in &pieces {
+            if a == b || (volume_of(a)? > 0.0) != (volume_of(b)? > 0.0) || !inside(a, b)? {
+                continue;
+            }
+            let mut between = false;
+            for &c in &pieces {
+                if c != a
+                    && c != b
+                    && (volume_of(c)? > 0.0) != (volume_of(a)? > 0.0)
+                    && inside(a, c)?
+                    && inside(c, b)?
+                {
+                    between = true;
+                    break;
                 }
-                let mut odd = 0;
-                for ray in rays {
-                    let crossings = crate::classify::count_ray_crossings(
-                        topo,
-                        &members[&b],
-                        corner[&a],
-                        ray,
-                        0.01,
-                    )?;
-                    odd += crossings % 2;
-                }
-                if odd >= 2 && volume_of(a)? * volume_of(b)? > 0.0 {
-                    nested = true;
-                }
+            }
+            if !between {
+                nested = true;
+                break 'pairs;
             }
         }
     }
@@ -362,7 +367,7 @@ pub fn validate_solid_with_options(
         });
     }
     if pieces > 1 {
-        issues.extend(piece_issues(topo, solid, &faces, &piece)?);
+        issues.extend(piece_issues(topo, &faces, &piece)?);
     }
     let mut boundary_edges = 0;
     let mut non_manifold_edges = 0;

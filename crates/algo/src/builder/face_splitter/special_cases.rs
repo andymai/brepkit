@@ -416,7 +416,7 @@ fn split_noseam_by_arrangement(
             .iter()
             .all(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
     };
-    let mut lunes: Vec<(&Vec<OrientedPCurveEdge>, Point3)> = Vec::new();
+    let mut lunes: Vec<&Vec<OrientedPCurveEdge>> = Vec::new();
     if let Some(collar_way) = loops[region_idx]
         .iter()
         .find(|e| on_seam(e))
@@ -426,13 +426,9 @@ fn split_noseam_by_arrangement(
             if i == region_idx || loop_is_sliver(l) || l.iter().all(&on_seam) {
                 continue;
             }
-            let Some(seam) = l.iter().find(|e| on_seam(e) && e.forward == collar_way) else {
-                continue;
-            };
-            let Some(interior) = lune_interior(surface, seam, l, seam_n, seam_p) else {
-                return Vec::new();
-            };
-            lunes.push((l, interior));
+            if l.iter().any(|e| on_seam(e) && e.forward == collar_way) {
+                lunes.push(l);
+            }
         }
     }
 
@@ -441,7 +437,7 @@ fn split_noseam_by_arrangement(
     // bounds a patch of its own.
     let lune_uv: Vec<Vec<brepkit_math::vec::Point2>> = lunes
         .iter()
-        .map(|(l, _)| super::unwrapped_u(&loop_polyline(l)))
+        .map(|l| super::unwrapped_u(&loop_polyline(l)))
         .collect();
     let holds = |poly: &[brepkit_math::vec::Point2], p: brepkit_math::vec::Point2| {
         use std::f64::consts::TAU;
@@ -462,12 +458,12 @@ fn split_noseam_by_arrangement(
         let home = lune_uv
             .iter()
             .position(|r| samples.iter().filter(|&&p| holds(r, p)).count() * 2 > samples.len());
-        let boundary = home.map_or(region[0].start_3d, |k| lunes[k].0[0].start_3d);
-        let Some(apex) = cap_apex(surface, hl, boundary, tol) else {
+        let hole = as_hole(hl, parent_net_u);
+        let patch = reverse_loop(&hole);
+        let Some(inside) = region_sample(surface, &patch, &[]) else {
             return Vec::new();
         };
-        let hole = as_hole(hl, parent_net_u);
-        patches.push((reverse_loop(&hole), apex));
+        patches.push((patch, inside));
         match home {
             Some(k) => lune_holes[k].push(hole),
             None => collar_holes.push(hole),
@@ -491,8 +487,11 @@ fn split_noseam_by_arrangement(
         }
     }
 
-    // 3D interior sample for classification (a point on the collar surface).
-    let interior_3d = patch_interior_point(surface, &collar_holes, open_sections);
+    // Each region's classification sample lies inside it and clear of its
+    // holes: a sample in a hole reads the hole's patch instead.
+    let Some(interior_3d) = region_sample(surface, &region, &collar_holes) else {
+        return Vec::new();
+    };
     let mut pieces = vec![SplitSubFace {
         surface: surface.clone(),
         outer_wire: region,
@@ -502,10 +501,14 @@ fn split_noseam_by_arrangement(
         rank,
         precomputed_interior: Some(interior_3d),
     }];
-    for ((l, interior), holes) in lunes.into_iter().zip(lune_holes) {
+    for (l, holes) in lunes.into_iter().zip(lune_holes) {
+        let outer_wire = if flip { reverse_loop(l) } else { l.clone() };
+        let Some(interior) = region_sample(surface, &outer_wire, &holes) else {
+            return Vec::new();
+        };
         pieces.push(SplitSubFace {
             surface: surface.clone(),
-            outer_wire: if flip { reverse_loop(l) } else { l.clone() },
+            outer_wire,
             inner_wires: holes,
             reversed,
             parent: face_id,
@@ -565,54 +568,109 @@ fn as_hole(section: &[OrientedPCurveEdge], parent_net_u: f64) -> Vec<OrientedPCu
     }
 }
 
-/// The apex of the cap a closed section bounds on a sphere face: the point
-/// of the sphere along its plane's normal on the side away from `boundary`
-/// (a point of the region around it). `None` when that side is unclear.
-fn cap_apex(
+/// A point of a sphere face region well inside it: the candidate of a grid
+/// over its `(u, v)` box that lies within its outer loop (closed through the
+/// pole on its left when it winds the axis) and outside its holes, farthest
+/// from all of them.
+fn region_sample(
     surface: &FaceSurface,
-    section: &[OrientedPCurveEdge],
-    boundary: Point3,
-    tol: f64,
+    outer: &[OrientedPCurveEdge],
+    holes: &[Vec<OrientedPCurveEdge>],
 ) -> Option<Point3> {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    const NU: usize = 48;
+    const NV: usize = 24;
     let FaceSurface::Sphere(sphere) = surface else {
         return None;
     };
-    let pts: Vec<Point3> = section.iter().flat_map(|e| edge_samples(e, 8)).collect();
-    let (n, c) = loop_plane(&pts)?;
-    let side = (boundary - c).dot(n);
-    if side.abs() <= tol * 1e3 {
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let region = |pts: &[Point2]| -> Vec<Point2> {
+        let mut poly = super::unwrapped_u(pts);
+        if let Some(north) = super::winds_the_axis(pts) {
+            let pole = if north { FRAC_PI_2 } else { -FRAC_PI_2 };
+            let (first, last) = (pts[0], poly[poly.len() - 1]);
+            let turned = last.x() + wrap(first.x() - last.x());
+            poly.push(Point2::new(turned, first.y()));
+            poly.push(Point2::new(turned, pole));
+            poly.push(Point2::new(first.x(), pole));
+        }
+        poly
+    };
+    let outer_pts = loop_polyline(outer);
+    if outer_pts.len() < 3 {
         return None;
     }
-    let dir = if side > 0.0 { -n } else { n };
-    Some(sphere.center() + dir * sphere.radius())
-}
-
-/// A point inside a lune of a sphere face: halfway along the great circle
-/// from the middle of its seam arc to the point of its other edges farthest
-/// from the seam plane.
-fn lune_interior(
-    surface: &FaceSurface,
-    seam: &OrientedPCurveEdge,
-    lune: &[OrientedPCurveEdge],
-    seam_n: brepkit_math::vec::Vec3,
-    seam_p: Point3,
-) -> Option<Point3> {
-    let FaceSurface::Sphere(sphere) = surface else {
-        return None;
-    };
-    let base = edge_samples(seam, 2)[1];
-    let crest = lune
+    let outer_uv = region(&outer_pts);
+    // A hole runs against its region, so its own patch (on its right) is
+    // what a hole that winds the axis closes around.
+    let hole_uv: Vec<Vec<Point2>> = holes
         .iter()
-        .flat_map(|e| edge_samples(e, 8))
-        .max_by(|a, b| {
-            let da = (*a - seam_p).dot(seam_n).abs();
-            let db = (*b - seam_p).dot(seam_n).abs();
-            da.total_cmp(&db)
-        })?;
-    let dir = ((base - sphere.center()) + (crest - sphere.center()))
-        .normalize()
-        .ok()?;
-    Some(sphere.center() + dir * sphere.radius())
+        .map(|h| region(&loop_polyline(&reverse_loop(h))))
+        .filter(|h| h.len() >= 3)
+        .collect();
+    let shifted = |poly: &[Point2], p: Point2| -> [Point2; 3] {
+        let u_min = poly.iter().map(|q| q.x()).fold(f64::INFINITY, f64::min);
+        let u = u_min + (p.x() - u_min).rem_euclid(TAU);
+        [u, u + TAU, u - TAU].map(|u| Point2::new(u, p.y()))
+    };
+    let inside = |poly: &[Point2], p: Point2| {
+        shifted(poly, p)
+            .into_iter()
+            .any(|q| super::super::classify_2d::point_in_polygon_2d(q, poly))
+    };
+    let clearance = |poly: &[Point2], p: Point2| -> f64 {
+        shifted(poly, p)
+            .into_iter()
+            .map(|q| {
+                (0..poly.len())
+                    .map(|k| {
+                        let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+                        let (ab, aq) = (b - a, q - a);
+                        let t = (aq.x().mul_add(ab.x(), aq.y() * ab.y())
+                            / ab.x()
+                                .mul_add(ab.x(), ab.y() * ab.y())
+                                .max(f64::MIN_POSITIVE))
+                        .clamp(0.0, 1.0);
+                        let (dx, dy) = (aq.x() - ab.x() * t, aq.y() - ab.y() * t);
+                        dx.hypot(dy)
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (u_lo, u_hi) = outer_uv
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| {
+            (a.min(q.x()), b.max(q.x()))
+        });
+    let (v_lo, v_hi) = outer_uv
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| {
+            (a.min(q.y()), b.max(q.y()))
+        });
+    let mut best: Option<(f64, Point2)> = None;
+    for i in 0..NU {
+        for j in 0..NV {
+            #[allow(clippy::cast_precision_loss)]
+            let p = Point2::new(
+                (u_hi - u_lo).mul_add((i as f64 + 0.5) / NU as f64, u_lo),
+                (v_hi - v_lo).mul_add((j as f64 + 0.5) / NV as f64, v_lo),
+            );
+            if !inside(&outer_uv, p) || hole_uv.iter().any(|h| inside(h, p)) {
+                continue;
+            }
+            let room = hole_uv
+                .iter()
+                .map(|h| clearance(h, p))
+                .fold(clearance(&outer_uv, p), f64::min);
+            if best.is_none_or(|(r, _)| room > r) {
+                best = Some((room, p));
+            }
+        }
+    }
+    let (_, p) = best?;
+    Some(sphere.evaluate(p.x(), p.y()))
 }
 
 /// Reconstruct a sphere face's seam (boundary) as its exact circle and split it
@@ -931,47 +989,6 @@ fn reverse_loop(loop_edges: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
             pave_block_id: e.pave_block_id,
         })
         .collect()
-}
-
-/// A 3D interior sample on the in-solid collar patch, for classification.
-///
-/// When the face has a latitude cap, the sample is a point on the cap's
-/// latitude nudged toward the equator so it lands on the collar surface (not in
-/// the removed cap). Otherwise the patch reaches the pole, so use a near-pole
-/// point on the hemisphere the open arcs bulge toward.
-fn patch_interior_point(
-    surface: &FaceSurface,
-    hole_loops: &[Vec<OrientedPCurveEdge>],
-    open_sections: &[OrientedPCurveEdge],
-) -> Point3 {
-    use brepkit_math::vec::Vec3;
-    let FaceSurface::Sphere(sphere) = surface else {
-        return Point3::new(0.0, 0.0, 0.0);
-    };
-
-    if let Some(cap) = hole_loops.first().and_then(|h| h.first()) {
-        let (u_cap, v_cap) = sphere.project_point(cap.start_3d);
-        let v_sample = v_cap - v_cap.signum() * (v_cap.abs() * 0.25 + 0.05);
-        return sphere.evaluate(u_cap, v_sample);
-    }
-
-    // No cap: aim toward the pole the open arcs bulge to.
-    let mut dir = Vec3::new(0.0, 0.0, 0.0);
-    for e in open_sections {
-        let mid = super::super::pcurve_compute::evaluate_edge_at_t(
-            &e.curve_3d,
-            e.start_3d,
-            e.end_3d,
-            0.5,
-        );
-        if let Ok(d) = (mid - sphere.center()).normalize() {
-            dir += d;
-        }
-    }
-    match dir.normalize() {
-        Ok(d) => sphere.center() + d * sphere.radius(),
-        Err(_) => sphere.center() + Vec3::new(0.0, 0.0, sphere.radius()),
-    }
 }
 
 /// Greedily chain edges into one closed loop by matching 3D endpoints,

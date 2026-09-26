@@ -892,14 +892,22 @@ fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
 
 /// The ball with a square column through both poles and a thin rod along
 /// `z` through one of its caps, fused into one tool: the ball less it, within
-/// it and the tool less the ball. Each hemisphere's cap past the wall
-/// `x = 2.5` holds the rod's section as a hole, and the section bounds a
-/// patch of its own. Each is exact, valid and watertight and within `1e-3` of
-/// its closed form (the rod's chord by Simpson in polar coordinates), and the
-/// ball less the tool reads the rod outside and the cap beside it inside to
-/// both classifiers.
+/// it and the tool less the ball, the rod of radius 0.1 at `(2.75, 0)` or of
+/// radius 0.05 at `(2.872, 0)` (over the middle of the cap, where a sample
+/// taken without its holes would read the rod). Each hemisphere's cap past
+/// the wall `x = 2.5` holds the rod's section as a hole, and the section
+/// bounds a patch of its own. Each is exact, valid and watertight and within
+/// `1e-3` of its closed form (the rod's chord by Simpson in polar
+/// coordinates), and the ball less the tool reads the rod outside and the cap
+/// beside it inside to both classifiers.
 #[test]
 fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
+    for (at, radius) in [(2.75, 0.1), (2.872, 0.05)] {
+        rod_through_a_cap(at, radius);
+    }
+}
+
+fn rod_through_a_cap(at: f64, radius: f64) {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
     let h: f64 = 0.5;
     let caps = 4.0 * PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
@@ -911,14 +919,14 @@ fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
         }
         sum * step / 3.0
     };
-    let bore = simpson(200, 0.0, 0.1, &|r: f64| {
+    let bore = simpson(200, 0.0, radius, &|r: f64| {
         r * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
-            let (x, y) = (r.mul_add(th.cos(), 2.75), r * th.sin());
+            let (x, y) = (r.mul_add(th.cos(), at), r * th.sin());
             2.0 * RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
         })
     });
     let within = ball - caps + bore;
-    let tool_volume = PI.mul_add(0.01 * 10.0, 250.0);
+    let tool_volume = PI.mul_add(radius * radius * 10.0, 250.0);
     for (name, truth) in [
         ("ball less tool", caps - bore),
         ("ball within tool", within),
@@ -928,8 +936,8 @@ fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
         let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
         let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
         transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
-        let rod = make_cylinder(&mut topo, 0.1, 10.0).unwrap();
-        transform_solid(&mut topo, rod, &Mat4::translation(2.75, 0.0, -5.0)).unwrap();
+        let rod = make_cylinder(&mut topo, radius, 10.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(at, 0.0, -5.0)).unwrap();
         let tool = boolean(&mut topo, BooleanOp::Fuse, column, rod).unwrap();
         let result = match name {
             "ball less tool" => boolean(&mut topo, BooleanOp::Cut, sphere, tool),
@@ -937,6 +945,7 @@ fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
             _ => boolean(&mut topo, BooleanOp::Cut, tool, sphere),
         }
         .unwrap();
+        let name = format!("{name}, rod {radius} at {at}");
         assert!(exact(&topo, result), "{name}: fell back to a mesh");
         let report = validate_solid(&topo, result).unwrap();
         assert!(report.is_valid(), "{name}: {:?}", report.issues);
@@ -947,14 +956,14 @@ fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
             (volume - truth).abs() < 1e-3 * truth,
             "{name}: volume {volume}, truth {truth}"
         );
-        if name != "ball less tool" {
+        if !name.starts_with("ball less tool") {
             continue;
         }
         for (p, inside) in [
-            (Point3::new(2.75, 0.0, 0.5), false),
-            (Point3::new(2.75, 0.0, -0.5), false),
-            (Point3::new(2.75, 0.4, 0.5), true),
-            (Point3::new(2.75, -0.4, -0.5), true),
+            (Point3::new(at, 0.0, 0.5), false),
+            (Point3::new(at, 0.0, -0.5), false),
+            (Point3::new(2.7, 0.4, 0.5), true),
+            (Point3::new(2.7, -0.4, -0.5), true),
         ] {
             let (want_check, want_engine) = if inside {
                 (PointClassification::Inside, brepkit_algo::FaceClass::Inside)
@@ -965,39 +974,51 @@ fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
                 )
             };
             let got = classify_point(&topo, result, p, &ClassifyOptions::default()).unwrap();
-            assert_eq!(got, want_check, "{p:?}");
+            assert_eq!(got, want_check, "{name}: {p:?}");
             let got = brepkit_algo::classifier::classify_ray_cast(&topo, result, p).unwrap();
-            assert_eq!(got, want_engine, "engine: {p:?}");
+            assert_eq!(got, want_engine, "{name}, engine: {p:?}");
         }
     }
 }
 
 /// The ball and a square column wider than the ball at its corners that
-/// ends inside it at `z = 2.8`: the column's top cuts the upper hemisphere
-/// in a latitude circle, a hole of the collar that winds the axis, and the
-/// polar cap over it `pi h² (3R - h) / 3`, `h = 0.2`, is a patch of its own.
+/// ends inside it at `z = 2.8` or `z = 2`: the column's top cuts the upper
+/// hemisphere in a latitude circle, a hole of the collar that winds the axis,
+/// and the polar cap over it `pi h² (3R - h) / 3`, `h = R - z`, is a patch of
+/// its own (at `z = 2` a sample nudged off the hole toward the equator would
+/// land past a wall).
 /// The ball less the column keeps the four caps past the walls and the polar
 /// cap, the ball within it and the column less the ball lose it; each is
 /// exact, valid, watertight and within `1e-3` of its closed form.
 #[test]
 fn a_column_ending_in_the_ball_keeps_the_cap_over_it() {
+    for top in [2.8, 2.0] {
+        column_ending_in_the_ball(top);
+    }
+}
+
+fn column_ending_in_the_ball(top: f64) {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
     let side_caps = 4.0 * PI * 0.25 * 0.5f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
-    let polar = PI * 0.04 * 0.2f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let h = RADIUS - top;
+    let polar = PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
     let within = ball - side_caps - polar;
     for (name, truth) in [
         ("ball less column", side_caps + polar),
         ("ball within column", within),
-        ("column less ball", 5.0 * 5.0 * 7.8 - within),
+        ("column less ball", 5.0 * 5.0 * (5.0 + top) - within),
     ] {
+        let name = format!("{name} ending at {top}");
         let mut topo = Topology::new();
         let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
-        let column = make_box(&mut topo, 5.0, 5.0, 7.8).unwrap();
+        let column = make_box(&mut topo, 5.0, 5.0, 5.0 + top).unwrap();
         transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
-        let result = match name {
-            "ball less column" => boolean(&mut topo, BooleanOp::Cut, sphere, column),
-            "ball within column" => boolean(&mut topo, BooleanOp::Intersect, sphere, column),
-            _ => boolean(&mut topo, BooleanOp::Cut, column, sphere),
+        let result = if name.starts_with("ball less") {
+            boolean(&mut topo, BooleanOp::Cut, sphere, column)
+        } else if name.starts_with("ball within") {
+            boolean(&mut topo, BooleanOp::Intersect, sphere, column)
+        } else {
+            boolean(&mut topo, BooleanOp::Cut, column, sphere)
         }
         .unwrap();
         assert!(exact(&topo, result), "{name}: fell back to a mesh");

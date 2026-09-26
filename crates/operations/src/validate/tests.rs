@@ -175,6 +175,33 @@ fn a_solid_cut_in_two_validates() {
     assert!(report.is_valid(), "{:?}", report.issues);
 }
 
+/// A block less a hollow box around a small block: the cavity and the island
+/// in it land in the outer shell as pieces, the cavity facing inward at depth
+/// one and the island outward at depth two.
+#[test]
+fn an_island_in_a_cavity_validates() {
+    use brepkit_math::mat::Mat4;
+
+    use crate::boolean::{BooleanOp, boolean};
+
+    let mut topo = Topology::new();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-5.0, -5.0, -5.0))
+        .unwrap();
+    let shell = crate::primitives::make_box(&mut topo, 6.0, 6.0, 6.0).unwrap();
+    crate::transform::transform_solid(&mut topo, shell, &Mat4::translation(-3.0, -3.0, -3.0))
+        .unwrap();
+    let core = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, core, &Mat4::translation(-1.0, -1.0, -1.0))
+        .unwrap();
+    let hollow = boolean(&mut topo, BooleanOp::Cut, shell, core).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Cut, block, hollow).unwrap();
+    let volume = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!((volume - 792.0).abs() < 1e-6, "volume {volume}");
+    let report = validate_solid(&topo, result).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}
+
 #[test]
 fn cylinder_solid_validates() {
     let mut topo = Topology::new();
