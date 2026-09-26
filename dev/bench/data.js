@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790414590330,
+  "lastUpdate": 1790424233734,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41471,6 +41471,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42013719,
             "range": "± 1895043",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0ae17ebebc4d0ab2a5b08939655bd893721d7d9a",
+          "message": "fix(algo): read a ball's hole by its planes and a plane face's arcs exactly in the ray cast (#1794)\n\n`classify_ray_cast` now reads the hole a square column leaves in a\nball's hemisphere by its wall planes and a plane face's circular edges\nexactly, and classifies the ball less the column right.\n\n## What was wrong\n\n- For `make_sphere(3, 32)` less `make_box(2w, 2w, 10)` at `(-w, -w,\n-1)`, a square column enters the ball from below and leaves a four wall\narc hole in the upper hemisphere. On main, `classify_ray_cast` misreads,\non a 17-step grid skipping points within 0.05 of a surface, 855 of 4721\npoints at `w = 0.1`, 840 of 4721 at `w = 0.6`, 527 of 3657 at `w = 1.2`,\nand 624 of 4721 at `w = 1.8`.\n\n- `sphere_face_loops` reads an arc loop by its planes only when its arcs\ncover exactly the circle portions admitted by the loop's other planes.\nEach wall circle also runs below the equator, where the other hole\nplanes admit it, but the hemisphere's outer loop already ends the face\nat the equator. Because the hole arcs omit that run, the check declined\nand the face took the flat polygon.\n\n- A plane face was read as a polygon with three samples per open arc, so\na hit under an arc could be missed by its sagitta. On main the sphere\nface was chordal too, and the errors cancelled. With the sphere read\nexactly, a ray 0.029 under a wall arc and above its chord missed the\nwall and hit the sphere: with `make_box(3.2, 3.2, 10)` at `(-1.6, -1.6,\n-1)`, `(0.4125, 0.4125, 2.475)` read Inside.\n\n## What this does\n\n- The arc check runs after every face loop is read. It restricts each\nloop's admitted circle portion to the part admitted by the face's other\nhalf-space loops: the union of their planes' side arcs for a hole read\nas `any`, and the intersection otherwise. A `SphereLoop::Rim` adds no\nrestriction, which only makes the check stricter.\n\n- This is sound because every boundary point of the intersection of the\nloop readings lies on some loop's circle, within that loop's admitted\npart, and inside every other loop. It therefore lies on the face's own\narcs. The region remains on the face's side of every arc, so the\nintersection is the face.\n\n- Each open circle arc in a plane face's own plane becomes an\n`ArcSegment`, its chord plus the circular segment between chord and arc.\nEach closed circle becomes its disc. This applies to the outer wire and\nevery hole. With arcs present, the chord polygon uses crossing parity,\nits winding number mod 2, and the wire reading is the polygon reading\nXOR every segment reading. This holds for either arc bulge and wherever\nthe boundary crosses a chord. Segments also read faces whose chords\ncollapse, including a half disc and a lens. A segment determines its\nchord side from the arc's middle, independent of the face normal.\n\n## Verification\n\n- `the_engine_reads_a_hole_by_its_planes` in\n`crates/operations/tests/sphere_box_corner.rs` checks a 13-step grid for\n`w = 0.1`, `0.6`, and `1.6`, with the column entering from below and\nabove, and checks the point under the wall arc. It fails on main and\nwithout the plane-face change. On the 17-step grid, this branch misreads\nno point at `w = 0.1`, `0.6`, `1.2`, `1.6`, or `1.8`, entering from\neither end.\n\n- In `crates/operations/tests/plane_face_arcs.rs`,\n`a_finger_across_a_notchs_chord_reads_inside` extrudes a plate with a\n120 degree concave notch and a finger entering it across the arc's\nchord, and turns it. Every point of a 40 by 40 grid through the finger\nreads inside, and a small box cut from the finger is exact. Read by\nnonzero winding, 330 of 1600 points were wrong and the cut fell back to\n29 planar faces measuring 9.718763 against 9.712652.\n`a_turned_cylinder_reads_its_cap_to_the_rim` reads points just below a\nturned cylinder's top cap, out to 0.02 from its rim, inside. With\nsixteen chords, as on main, 823 of 4320 points were wrong.\n\n- The workspace suite passes: 3128 tests run, 3128 passed, 20 skipped.\n\n- The roadmap's chords row keeps the two `classify_point`s. A new row\nrecords that a column entering from below whose end corners lie outside\nthe ball, `make_box(4.1, 4.1, 10)` at `(-2.05, -2.05, -1)` and\n`make_box(4.4, 4.4, 10)` at `(-2.2, -2.2, -1)`, falls back to 555 and\n545 planar faces, on main as well. Columns 0.2 to 3.8 wide are exact.",
+          "timestamp": "2026-09-26T12:01:07Z",
+          "tree_id": "63731f69fcd3aba6b5602a887a8aafad34db7f00",
+          "url": "https://github.com/andymai/brepkit/commit/0ae17ebebc4d0ab2a5b08939655bd893721d7d9a"
+        },
+        "date": 1790424229324,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1059773,
+            "range": "± 1299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1153675,
+            "range": "± 4580",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14203,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 766205,
+            "range": "± 1852",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45702835,
+            "range": "± 250160",
             "unit": "ns/iter"
           }
         ]
