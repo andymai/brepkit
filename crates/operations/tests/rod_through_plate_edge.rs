@@ -302,11 +302,10 @@ fn a_rod_cut_at_a_plate_edge_keeps_its_segments() {
     }
 }
 
-/// An N-way fuse of the plate, a tool and a far unit box: watertight, within
-/// `1e-3` of `truth`, and holding a point in the tool clear of the plate, one
-/// in the plate, one in the far box, and none beside them. (The far box
-/// lands in the same shell, which `validate_solid` reads as a wrong Euler
-/// characteristic: the roadmap's N-way row.)
+/// An N-way fuse of the plate, a tool and a far unit box: valid (the far box
+/// a piece of the same shell), watertight, within `1e-3` of `truth`, and
+/// holding a point in the tool clear of the plate, one in the plate, one in
+/// the far box, and none beside them.
 fn assert_n_way_fuse(topo: &Topology, fused: SolidId, truth: f64, in_tool: Point3, label: &str) {
     use PointClassification::{Inside, Outside};
     let report = validate_solid(topo, fused).unwrap();

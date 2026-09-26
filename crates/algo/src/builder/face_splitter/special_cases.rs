@@ -269,11 +269,11 @@ pub(super) fn split_noseam_face_direct(
 /// polygon inscribed in the seam circle, so the arcs land OFF its chords (by
 /// the polygon sagitta) and the chords cannot be split at them. Instead
 /// reconstruct the seam as its exact circle, split that at the crossings, and
-/// trace the arrangement of (seam arcs + open arcs) in UV. The wanted region —
-/// the slice of this hemisphere inside the cutting solid — is an annular collar
-/// (it wraps fully around longitude) bounded by a scalloped "bottom chain"
-/// (seam arcs alternating with great-circle arcs) with any interior latitude
-/// cap as an inner hole.
+/// trace the arrangement of (seam arcs + open arcs) in UV. Its regions are an
+/// annular collar (it wraps fully around longitude) bounded by a scalloped
+/// "bottom chain" (seam arcs alternating with the arcs), and a lune past each
+/// chain of arcs, bounded by one seam arc; each interior latitude cap is an
+/// inner hole of the region holding it.
 #[allow(clippy::too_many_arguments)]
 fn split_noseam_by_arrangement(
     surface: &FaceSurface,
@@ -382,8 +382,8 @@ fn split_noseam_by_arrangement(
     };
 
     // The collar's outer wire is the unique non-sliver loop encircling the
-    // sphere once in longitude. Orient it to oppose the parent boundary's
-    // winding (so the collar, not the discarded lunes, is its interior).
+    // sphere once in longitude. Orient it to wind as the parent boundary
+    // does, so the collar is its interior.
     let parent_net_u = net_u(boundary_edges);
     let mut best: Option<usize> = None;
     for (i, l) in loops.iter().enumerate() {
@@ -583,6 +583,7 @@ fn build_seam_arcs(
     tol: f64,
 ) -> Option<Vec<OrientedPCurveEdge>> {
     use brepkit_math::curves::Circle3D;
+    use std::f64::consts::{PI, TAU};
 
     let FaceSurface::Sphere(sphere) = surface else {
         return None;
@@ -634,19 +635,32 @@ fn build_seam_arcs(
         if (start_3d - end_3d).length() < tol * 100.0 {
             continue;
         }
+        // The arc runs counter-clockwise from `start_3d` to `end_3d` about the
+        // seam's normal, past half a turn or across the seam meridian as it
+        // may: its pcurve follows that span, and its end's `u` is carried on
+        // from its start's through its middle.
         let curve = EdgeCurve::Circle(seam_circle.clone());
-        let pcurve = super::super::pcurve_compute::compute_pcurve_on_surface(
+        let pcurve = super::super::pcurve_compute::compute_boundary_pcurve_on_surface(
             &curve,
             start_3d,
             end_3d,
+            true,
             surface,
             &[],
             None,
         );
         let start_uv =
             super::super::pcurve_compute::project_point_on_surface(start_3d, surface, &[], None);
-        let end_uv =
+        let (a0, a1) = (by_angle[i].0, by_angle[(i + 1) % m].0);
+        let mid_3d = seam_circle.evaluate(a0 + 0.5 * (a1 - a0).rem_euclid(TAU));
+        let project_u = |p: Point3| {
+            super::super::pcurve_compute::project_point_on_surface(p, surface, &[], None).x()
+        };
+        let wrap = |d: f64| d - TAU * ((d + PI) / TAU).floor();
+        let mid_u = start_uv.x() + wrap(project_u(mid_3d) - start_uv.x());
+        let end_uv0 =
             super::super::pcurve_compute::project_point_on_surface(end_3d, surface, &[], None);
+        let end_uv = brepkit_math::vec::Point2::new(mid_u + wrap(end_uv0.x() - mid_u), end_uv0.y());
         arcs.push(OrientedPCurveEdge {
             curve_3d: curve,
             pcurve,
@@ -672,8 +686,8 @@ fn build_seam_arcs(
 /// the first one counter-clockwise from the incoming edge's reverse at the
 /// shared vertex (the standard DCEL face walk). Directions are read from each
 /// pcurve so curved arcs that share a vertex with straight seam segments at the
-/// same latitude are distinguished. Returns every traced loop (callers drop the
-/// outer face / lunes by winding).
+/// same latitude are distinguished. Returns every traced loop, the region past
+/// the seam included (callers tell the regions apart).
 fn trace_region_loops(soup: &[OrientedPCurveEdge], tol: f64) -> Vec<Vec<OrientedPCurveEdge>> {
     use std::collections::HashMap;
     use std::f64::consts::TAU;
@@ -705,6 +719,12 @@ fn trace_region_loops(soup: &[OrientedPCurveEdge], tol: f64) -> Vec<Vec<Oriented
             };
             let tan = nurbs.tangent(t_at);
             (tan.x() * sign, tan.y() * sign)
+        } else if let Curve2D::Line(line) = &e.pcurve {
+            // A line's own direction: its end's `u` may be a turn or more
+            // from its start's (a seam arc past half a turn).
+            let sign = if from_start == e.forward { 1.0 } else { -1.0 };
+            let d = line.direction();
+            return (d.y() * sign).atan2(d.x() * sign).rem_euclid(TAU);
         } else if from_start {
             (e.end_uv.x() - e.start_uv.x(), e.end_uv.y() - e.start_uv.y())
         } else {

@@ -125,11 +125,12 @@ fn face_all_edges_straight(
     Ok(true)
 }
 
-/// The number of connected groups of faces, joined across shared edges.
+/// Each face's piece: the connected groups of faces, joined across shared
+/// edges, labelled by a representative face's index in `faces`.
 fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
     faces: &[brepkit_topology::face::FaceId],
     edge_map: &std::collections::HashMap<usize, U>,
-) -> usize {
+) -> Vec<usize> {
     fn root(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
             parent[i] = parent[parent[i]];
@@ -154,9 +155,97 @@ fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
             parent[a] = b;
         }
     }
-    (0..faces.len())
-        .filter(|&i| root(&mut parent, i) == i)
-        .count()
+    (0..faces.len()).map(|i| root(&mut parent, i)).collect()
+}
+
+/// Issues with how a solid's pieces sit: a vertex shared by two pieces (a
+/// pinch), or two pieces of one shell whose vertex boxes overlap and which
+/// face the same way (a lump inside a lump; a cavity kept in the outer shell
+/// faces inward, against the piece around it).
+fn piece_issues(
+    topo: &Topology,
+    solid: SolidId,
+    faces: &[brepkit_topology::face::FaceId],
+    piece: &[usize],
+) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
+    use std::collections::HashMap;
+    let mut owner: HashMap<usize, usize> = HashMap::new();
+    let mut shared = 0_usize;
+    let mut boxes: HashMap<usize, brepkit_math::aabb::Aabb3> = HashMap::new();
+    for (i, &fid) in faces.iter().enumerate() {
+        for vid in explorer::face_vertices(topo, fid)? {
+            let at = topo.vertex(vid)?.point();
+            boxes
+                .entry(piece[i])
+                .and_modify(|b| *b = b.union(brepkit_math::aabb::Aabb3::from_points([at])))
+                .or_insert_with(|| brepkit_math::aabb::Aabb3::from_points([at]));
+            match owner.get(&vid.index()) {
+                Some(&p) if p != piece[i] => shared += 1,
+                Some(_) => {}
+                None => {
+                    owner.insert(vid.index(), piece[i]);
+                }
+            }
+        }
+    }
+    let mut issues = Vec::new();
+    if shared > 0 {
+        issues.push(ValidationIssue {
+            severity: Severity::Error,
+            description: format!("{shared} vertex uses join separate pieces"),
+        });
+    }
+    let index: HashMap<usize, usize> = faces
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.index(), i))
+        .collect();
+    let solid_data = topo.solid(solid)?;
+    for shell_id in
+        std::iter::once(solid_data.outer_shell()).chain(solid_data.inner_shells().iter().copied())
+    {
+        let mut in_shell: Vec<usize> = topo
+            .shell(shell_id)?
+            .faces()
+            .iter()
+            .filter_map(|f| index.get(&f.index()).map(|&i| piece[i]))
+            .collect();
+        in_shell.sort_unstable();
+        in_shell.dedup();
+        let tol = Tolerance::new().linear;
+        let volume = |p: usize| -> Result<f64, crate::OperationsError> {
+            let mut v = 0.0;
+            for (i, &fid) in faces.iter().enumerate() {
+                if piece[i] == p {
+                    v += brepkit_check::properties::face_integrator::integrate_face(topo, fid, 4)?
+                        .volume;
+                }
+            }
+            Ok(v)
+        };
+        let mut overlap = false;
+        for (k, &a) in in_shell.iter().enumerate() {
+            for &b in &in_shell[k + 1..] {
+                let (ba, bb) = (&boxes[&a], &boxes[&b]);
+                let boxes_meet = ba.min.x() < bb.max.x() - tol
+                    && bb.min.x() < ba.max.x() - tol
+                    && ba.min.y() < bb.max.y() - tol
+                    && bb.min.y() < ba.max.y() - tol
+                    && ba.min.z() < bb.max.z() - tol
+                    && bb.min.z() < ba.max.z() - tol;
+                if boxes_meet && volume(a)? * volume(b)? > 0.0 {
+                    overlap = true;
+                }
+            }
+        }
+        if overlap {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: "a shell holds a piece inside another facing the same way".into(),
+            });
+        }
+    }
+    Ok(issues)
 }
 
 /// Validate a solid, returning a report of all issues found.
@@ -233,8 +322,9 @@ pub fn validate_solid_with_options(
     // Adjusted Euler: subtract inner loops to get the standard characteristic.
     let adjusted_euler = euler - total_inner_loops;
     let edge_map = explorer::edge_to_face_map(topo, solid)?;
+    let piece = connected_pieces(&faces, &edge_map);
     #[allow(clippy::cast_possible_wrap)]
-    let pieces = connected_pieces(&faces, &edge_map) as i64;
+    let pieces = piece.iter().enumerate().filter(|&(i, &p)| i == p).count() as i64;
     let genus_times_2 = 2 * pieces - adjusted_euler;
     if genus_times_2 < 0 || genus_times_2 % 2 != 0 {
         issues.push(ValidationIssue {
@@ -245,6 +335,9 @@ pub fn validate_solid_with_options(
                  pieces and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
             ),
         });
+    }
+    if pieces > 1 {
+        issues.extend(piece_issues(topo, solid, &faces, &piece)?);
     }
     let mut boundary_edges = 0;
     let mut non_manifold_edges = 0;
@@ -533,10 +626,10 @@ pub fn validate_solid_with_options(
 /// - Edge vertex consistency
 ///
 /// Skipped in relaxed mode:
-/// - Euler-Poincaré characteristic (assembled shells may have multiple components)
+/// - Euler-Poincaré characteristic and how pieces sit (vertices shared by
+///   separate pieces, a piece nested in another)
 /// - Boundary edges (faces from different operations may not share edges)
 /// - Non-manifold edges (edge duplication is expected in assembled geometry)
-/// - Shell connectivity (multiple disconnected face groups are valid)
 ///
 /// # Errors
 ///

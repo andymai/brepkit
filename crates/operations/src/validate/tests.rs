@@ -517,21 +517,29 @@ fn validate_detects_zero_length_edge() {
     );
 }
 
+/// Pieces are separate only when they stay apart: two blocks fused along a
+/// shared edge join at its vertices, and a block merged inside another into
+/// one shell cannot be told from a cavity. Both are invalid.
 #[test]
-fn validate_connected_shell_passes() {
-    let mut topo = Topology::new();
-    let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+fn pinched_and_nested_pieces_are_invalid() {
+    use brepkit_math::mat::Mat4;
 
-    let report = validate_solid(&topo, solid).unwrap();
-    let has_disconnect = report
-        .issues
-        .iter()
-        .any(|i| i.description.contains("disconnected"));
-    assert!(
-        !has_disconnect,
-        "valid box should not be disconnected: {:?}",
-        report.issues
-    );
+    use crate::boolean::{BooleanOp, boolean};
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(1.0, 1.0, 0.0)).unwrap();
+    let pinched = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let report = validate_solid(&topo, pinched).unwrap();
+    assert!(!report.is_valid(), "pinched blocks read valid");
+
+    let outer = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let inner = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, inner, &Mat4::translation(4.0, 4.0, 4.0)).unwrap();
+    let nested = crate::compound_ops::merge_disjoint_solids(&mut topo, &[outer, inner]).unwrap();
+    let report = validate_solid(&topo, nested).unwrap();
+    assert!(!report.is_valid(), "a block inside a block reads valid");
 }
 
 #[test]

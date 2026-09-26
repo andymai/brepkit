@@ -779,14 +779,15 @@ fn a_band_keeps_its_other_holes() {
 
 /// The ball less a square column through both poles, wider than the ball at
 /// its corners, is four caps `pi h² (3R - h) / 3`, `h = R - a`, however the
-/// column turns about the poles. Each cap is two lunes and a piece of wall,
-/// all cornered on the wall, and assembles as a solid piece rather than a
-/// cavity. Each result is exact, valid and watertight, measures the caps,
-/// and classifies a point in a cap inside and the centre and a pole outside.
+/// column turns about the poles and wherever the pair sits. Each cap is two
+/// lunes and a piece of wall, all cornered on the wall, and assembles as a
+/// solid piece rather than a cavity. Each result is exact, valid and
+/// watertight, measures the caps, and classifies a point in a cap inside and
+/// the centre and a pole outside.
 #[test]
 fn a_ball_less_a_turned_column_keeps_its_four_caps() {
-    for (a, turn) in [(2.5, 0.3), (2.2, 0.3)] {
-        let label = format!("column {a} turned {turn}");
+    for (a, turn, x) in [(2.5, 0.3, 0.0), (2.2, 0.3, 0.0), (2.2, 0.0, 10.0)] {
+        let label = format!("column {a} turned {turn} at x = {x}");
         let h = RADIUS - a;
         let caps = 4.0 * PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
         let mut topo = Topology::new();
@@ -794,6 +795,8 @@ fn a_ball_less_a_turned_column_keeps_its_four_caps() {
         let column = make_box(&mut topo, 2.0 * a, 2.0 * a, 10.0).unwrap();
         transform_solid(&mut topo, column, &Mat4::translation(-a, -a, -5.0)).unwrap();
         transform_solid(&mut topo, column, &Mat4::rotation_z(turn)).unwrap();
+        transform_solid(&mut topo, sphere, &Mat4::translation(x, 0.0, 0.0)).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(x, 0.0, 0.0)).unwrap();
         let result = boolean(&mut topo, BooleanOp::Cut, sphere, column).unwrap();
         assert!(exact(&topo, result), "{label}: fell back to a mesh");
         let report = validate_solid(&topo, result).unwrap();
@@ -808,15 +811,70 @@ fn a_ball_less_a_turned_column_keeps_its_four_caps() {
         let in_cap = 0.5 * (a + RADIUS);
         for (p, want) in [
             (
-                Point3::new(in_cap * turn.cos(), in_cap * turn.sin(), 0.1),
+                Point3::new(in_cap.mul_add(turn.cos(), x), in_cap * turn.sin(), 0.1),
                 PointClassification::Inside,
             ),
-            (Point3::new(0.0, 0.0, 0.0), PointClassification::Outside),
-            (Point3::new(0.1, 0.1, -2.9), PointClassification::Outside),
+            (Point3::new(x, 0.0, 0.0), PointClassification::Outside),
+            (
+                Point3::new(x + 0.1, 0.1, -2.9),
+                PointClassification::Outside,
+            ),
         ] {
             let got = classify_point(&topo, result, p, &ClassifyOptions::default());
             assert_eq!(got.unwrap(), want, "{label}: {p:?}");
         }
+    }
+}
+
+/// The ball within the column over `-2.5 < x, y < 2`, whose corner at
+/// `(2, 2)` lies inside the ball, and the column less the ball: the walls
+/// `x = 2` and `y = 2` meet on the sphere, and the region past them owns a
+/// seam arc longer than half a turn. Both are exact, valid and watertight,
+/// and within `1e-3` of the ball's chords over the column (by Simpson over
+/// `x`, each chord's integral over `y` in closed form).
+#[test]
+fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
+    let r2 = RADIUS * RADIUS;
+    let chords = |x: f64| {
+        let c2 = r2 - x * x;
+        if c2 <= 0.0 {
+            return 0.0;
+        }
+        let c = c2.sqrt();
+        let part = |y: f64| {
+            let y = y.clamp(-c, c);
+            y.mul_add((c2 - y * y).max(0.0).sqrt(), c2 * (y / c).asin())
+        };
+        part(2.0) - part(-2.5)
+    };
+    let n = 2000;
+    let step = 4.5 / f64::from(n);
+    let mut within = chords(-2.5) + chords(2.0);
+    for k in 1..n {
+        within += if k % 2 == 1 { 4.0 } else { 2.0 } * chords(step.mul_add(f64::from(k), -2.5));
+    }
+    within *= step / 3.0;
+    for (name, truth) in [("within", within), ("column less ball", 202.5 - within)] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let column = make_box(&mut topo, 4.5, 4.5, 10.0).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
+        let result = if name == "within" {
+            boolean(&mut topo, BooleanOp::Intersect, sphere, column)
+        } else {
+            boolean(&mut topo, BooleanOp::Cut, column, sphere)
+        }
+        .unwrap();
+        assert!(exact(&topo, result), "{name}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "{name}: volume {volume}, truth {truth}"
+        );
     }
 }
 
