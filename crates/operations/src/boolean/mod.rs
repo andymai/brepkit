@@ -2847,6 +2847,8 @@ fn all_component_centers_outside(
     tol: brepkit_math::tolerance::Tolerance,
 ) -> bool {
     use brepkit_algo::FaceClass;
+    use brepkit_algo::classifier::{RayCastGeoms, classify_ray_cast_cached};
+    let mut geoms: Option<RayCastGeoms> = None;
     for comp in components {
         let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
         let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -2885,10 +2887,12 @@ fn all_component_centers_outside(
         if !matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
             continue;
         }
-        let held = !matches!(
-            brepkit_algo::classifier::classify_ray_cast(topo, result, centre),
-            Ok(FaceClass::Outside)
-        );
+        if geoms.is_none() {
+            geoms = RayCastGeoms::new(topo, result).ok();
+        }
+        let held = !geoms
+            .as_ref()
+            .is_some_and(|g| matches!(classify_ray_cast_cached(g, centre), Ok(FaceClass::Outside)));
         if held
             || !comp.iter().any(|&fid| {
                 planar_face_centroid(topo, fid).is_some_and(|c| {
