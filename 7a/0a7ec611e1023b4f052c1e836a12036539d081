@@ -1,0 +1,34 @@
+crates/operations/tests/cone_cylinder_trims.rs
+  s_ba2f7b5c6902b6::t_a0d000c4997558 200-202,205-209,218
+  s_ba2f7b5c6902b6::t_2366d4c0ff4ecf 9,11,76-77,85-90,101-107
+  s_ba2f7b5c6902b6::t_2950e751778ff5 198,203-204
+  s_ba2f7b5c6902b6::t_7ef00a152833e7 199,210-217,219-223
+  s_ba2f7b5c6902b6::t_f4147793a26442 224
+crates/algo/src/classifier/ray_cast.rs
+  s_ba2f7b5c6902b6::t_81d5afa1ad2d3d 486-490
+  s_ba2f7b5c6902b6::t_c24321948fd642 491-502
+  s_ba2f7b5c6902b6::t_54438d48eb4ef6 1273,1278
+  s_ba2f7b5c6902b6::t_c972b4e9a602df 1298-1300,1305,1332
+  s_ba2f7b5c6902b6::t_416a39809996b8 2059,2204-2207,2232-2239
+  s_ba2f7b5c6902b6::t_19c3a98e473667 1231,1242
+  s_ba2f7b5c6902b6::t_76df8298adf78b 948-961,2228-2231,2241
+  s_ba2f7b5c6902b6::t_19a72a0dc4fde0 1172-1176,1183
+crates/algo/src/classifier/mod.rs
+  s_ba2f7b5c6902b6::t_2366d4c0ff4ecf 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7a0a7ec611e1023b4f052c1e836a12036539d081",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
