@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790404066350,
+  "lastUpdate": 1790406620866,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41201,6 +41201,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42501983,
             "range": "± 112623",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5a26d8e894767bf800b75173156182d77f502772",
+          "message": "fix(algo): split a rod's floor arc that spans a plate edge, bound curved solids (#1787)\n\nCurved solids now split correctly where a rod's floor arc spans a plate\nedge, remain bounded through boolean phases, and join N-way fuses\nwithout silently losing or misclassifying geometry.\n\n## What was wrong\n\n- For `make_cylinder(1, 10)` at `(x, 5, -4)`, turned about its axis and\nstraddling the `x = 0` edge of `make_box(10, 10, 2)`, several booleans\non main returned exact, valid, watertight, but silently wrong results.\nAt `x = -0.5`, turned pi, rod less plate had 4 faces and measured\n30.597013 against 30.187557. Its wall window was a flat rectangle of\nchords, with the plate's floor and top segments missing. Rod within\nplate measured 1.194978 against 1.228370. At `x = 0.1`, turned 2.0 and\n2.5, rod less plate returned the uncut rod, 31.415927 against 27.875003.\n\n- `brepkit_algo::gfa::fuse_n` also silently lost or misbounded curved\noperands. Fusing the plate, the rod at `x = 0.4` turned pi, and a far\nunit box measured 201.000000 against 227.718088. Replacing the rod with\n`make_sphere(1, 32)` at `(5, 5, -0.5)` measured 201.000000 against\n204.534292, with the ball lost. Using a torus `(2, 0.5)` at `(-2.2, 5,\n1)` turned pi measured 210.869604 against 210.585601.\n\n- In the exact-arc path in `trim_ellipse_to_boundary_crossings` in\n`phase_ff.rs`, the kept floor arc ran between two crossings of the plate\nedge and shared both endpoints with that edge's piece.\n`merge_duplicate_edges` then folded the pair as the roadmap's\nco-endpoint lens. The sanctioned repair point is the splitter, where the\narc can receive a distinct midpoint vertex.\n\n- Bounding boxes were not conservative. `compute_face_bbox` in\n`phase_ff.rs` sampled each boundary arc at nine points, missing the\nwall's widest reach by the sagitta and dropping the rulings there.\nTurned 2.0, the samples covered `y` from 4.063 to 5.938 while the\nrulings sit at 4.046 and 5.954, so the wall was never cut. The solid box\ngating phases VV, VE and EF, and the N-way pair filter, used vertices\nplus one point per curve. None captured a sphere's or torus's bulge\nbeyond its edges.\n\n- A crossing retained only the first source edge that met it. When the\nrod seam passed through a window corner, the other source association\nwas absent and the lens was not detected.\n\n- `split_periodic_face_around_seam_holes` sampled each half-disc beside\nthe seam level with the middle edge's middle sample. Where that edge\nslopes back toward the seam, a point level with its sample lies outside\nthe half. It also read offsets from the seam after wrapping past the\nopposite meridian. With the plate turned about `y`, one window half was\nsampled outside itself and dropped.\n\n- `is_notched_wall`, shared by both meshers, required two closed rims.\nWhen the rims arrived cut into arcs, the wall was meshed as a plain box\nand its window was filled. The resulting wall mesh measured 62.73097\nagainst its area of 57.76744.\n\n## What this does\n\n- An exact arc whose two endpoints share a source edge is split at its\nmidpoint, preventing the co-endpoint lens from being folded by\n`merge_duplicate_edges`.\n\n- `Circle3D::arc_aabb` and `Ellipse3D::arc_aabb` compute exact arc boxes\nfrom the endpoints and every full-turn extremum lying on the arc.\n`compute_face_bbox` uses these boxes. `compute_solid_bbox` combines them\nwith sphere, torus and NURBS surface boxes, and `solid_aabb` uses\n`compute_solid_bbox`.\n\n- Every crossing retains every source edge that met it, so seam and\nwindow-corner coincidences preserve the associations needed to detect\nthe lens.\n\n- A half-disc is sampled at the seam segment's mid-height, halfway to\nthe point where its chain first crosses that height. Chain offsets\nremain continuous instead of wrapping at the opposite meridian.\n\n- A wall is considered notched when its seam line is used twice between\nrims at both ends of its axial extent, whether the rims are closed or\ncut into arcs, and another edge runs between them.\n\n## Verification\n\n- `crates/operations/tests/rod_through_plate_edge.rs` pins the rod and\nplate cases. `a_rod_cut_at_a_plate_edge_keeps_its_segments` covers `x =\n-0.5`, `-0.3` and `0.4`, turned 0, 1, 2, 2.5 and pi, plus `x = -0.3`\nturned `acos(0.3)` with the seam through the window corner. It excludes\n`x = 0.4` turned 2, whose rod less plate meshes open. Rod less plate,\nplate less rod and rod within plate are each exact, valid, watertight,\nwithin `1e-3` of closed form, and classify points in the overlap, in the\nrod beside the plate and in the plate correctly.\n\n- `a_turned_plate_cuts_a_turned_rod` turns the plate about `y` by `(0.2,\n-0.3, 0.5)` against rods whose seams cross the window. Each operation is\nexact, valid, watertight and within `1e-3` of a truth computed by\nintegrating, over the rod's disc, the length of its vertical line inside\nthe turned slab.\n\n- `a_turned_rod_joins_an_n_way_fuse` and\n`a_ball_and_a_ring_join_an_n_way_fuse` fuse the plate with the rod\nturned pi, a ball dipping below it, or a torus `(2, 0.5)` through its\nedge, each with a far box. Results are within `1e-3`, using the ball\nless its cap in closed form and the ring by Simpson integration over its\nradius, mesh watertight, and put a point in the tool, the plate and the\nfar box inside and points beside them outside. Without the surface\nboxes, the ball case reads 201 against 204.53429173528852. The far box\nlands in the same shell as the rest, which `validate_solid` reads as a\nwrong Euler characteristic, on main as well (a roadmap row).\n\n- `tilted_conic_boxes_match_their_samples` holds a tilted circle's and a\ntilted ellipse's boxes, whole and over six arcs, to 20,000 samples of\neach: every sample inside, every extreme within `1e-6`.\n\n- A reviewer's battery runs 1,084 cases on main and this branch: rods\nand cones at several offsets and turns, plates turned about `y`, the\nentire setup turned about `z`, N-way fuses, spheres and tori. Every case\nuses closed-form or integrated truth plus classification points. This\nbranch has 870 exact and right cases against main's 499, 147 fallbacks\nagainst 428, 53 silently wrong against 131, and 14 exact but open meshes\nagainst 4. There are 367 better cases and none worse. All 14 open meshes\nare exact within `1e-6`, and each is open, wrong or falling back on\nmain.\n\n- The workspace suite runs 3114 tests: 3114 passed and 20 skipped.\n\n- Roadmap cases remain open on main and this branch. With the seam\nthrough a window corner at `-acos(-x)`, rods at `x = -0.3`, `-0.1` and\n`0.4` fall back in every operation. At `x = -0.5` turned `acos(0.5)`,\nrod less plate and Fuse fall back, with meshes up to 2.1% off. Turned 1\nradian, rods at `x = 0` or `x = 0.7` fall back.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes exact booleans when a rod's seam is turned off a plate edge, and\nbounds curved solids so N-way fuse filtering no longer drops them.\n\n**Bug Fixes**\n- An arc whose crossings both come from the same plane-face boundary\nedge shared both endpoints with that edge's piece, so the duplicate-edge\nmerge folded it into a flat chord; such arcs are now split at their\nmidpoint.\n- `compute_solid_bbox` and the face-pair filter miss a cylinder's rim\nwhen its seam lies off the solid; circles and ellipses now add exact\nwhole-arc boxes, sphere, torus and NURBS surfaces bound the solid box,\nand `solid_aabb` uses `compute_solid_bbox`.\n- Crossings now keep every source edge, so a seam through a window\ncorner no longer hides the lens.\n- A half-disc beside the seam is sampled at its mid-height instead of\nlevel with a chain sample, which read its offsets wrapped past the\nopposite meridian.\n- A notched wall is now detected by its seam used twice between rims at\nboth ends, closed or cut into arcs, instead of by two closed rims.\n\n**Verification**\n- Tilted circle and ellipse arc boxes hold and touch 20,000 samples of\neach arc across full-turn and partial spans.\n- Rod-through-plate, turned-plate, and N-way fuse (rod, ball, torus)\ntests assert exact, valid, watertight results within `1e-3` of\nclosed-form or integrated truth, plus classification points.\n\n<sup>Written for commit 4a2b3db4524cb684dac2e611bc5c860282d4736d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1787?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T07:07:25Z",
+          "tree_id": "6ba20f301ad3ef944e1e3b1c77ac464f8abf7f1f",
+          "url": "https://github.com/andymai/brepkit/commit/5a26d8e894767bf800b75173156182d77f502772"
+        },
+        "date": 1790406616709,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 966996,
+            "range": "± 20018",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1057583,
+            "range": "± 12023",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12284,
+            "range": "± 138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 720458,
+            "range": "± 3187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41934557,
+            "range": "± 208309",
             "unit": "ns/iter"
           }
         ]
