@@ -1,0 +1,30 @@
+crates/math/src/nurbs/projection.rs
+  s_ba2f7b5c6902b6::t_b5df96f4e315d3 73,98-102,107-110,115-119,126,149
+  s_ba2f7b5c6902b6::t_215bc1db1fe38a 55-56,60-62
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_08761074f113d1 194
+crates/algo/src/builder/pcurve_compute.rs
+  s_ba2f7b5c6902b6::t_bc0a6bd15ddaac 321,397
+  s_ba2f7b5c6902b6::t_7269d2706f22d6 258,269,295-320,401
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1a36af77ed227306432b447ff5be92357a94fa84",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  },
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
