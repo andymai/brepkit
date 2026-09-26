@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.34](https://github.com/andymai/brepkit/compare/v4.0.33...v4.0.34) (2026-09-26)
+
+
+### Bug Fixes
+
+* **operations:** mesh and measure a wall notched across its seam ([#1781](https://github.com/andymai/brepkit/issues/1781)) ([f31d75a](https://github.com/andymai/brepkit/commit/f31d75a54710825a8fac52b9ca8b98a9424de9a2))
+
 ## [4.0.33](https://github.com/andymai/brepkit/compare/v4.0.32...v4.0.33) (2026-09-26)
 
 
