@@ -8091,6 +8091,8 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     } else if matches!(&sub_face.surface, FaceSurface::Cylinder(_)) {
         let (u_period, v_period) = super::pcurve_compute::surface_periods(&sub_face.surface);
         sample_wire_loop_uv_periodic(&sub_face.outer_wire, u_period, v_period)
+    } else if let Some(pts) = sphere_loop_uv(sub_face) {
+        pts
     } else if let (FaceSurface::Plane { .. }, Some(f)) = (&sub_face.surface, frame) {
         // Plane faces with a frame: sample the 3D curves, never the pcurves.
         // A wire can mix pcurve orientation conventions (reversed boundary
@@ -8343,6 +8345,24 @@ fn attach_sphere_holes(pieces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveE
 }
 
 /// A loop's `(u, v)` samples with `u` carried continuously along it.
+/// A sphere piece's outer loop in `(u, v)`, sampled on its edges' own curves
+/// and read in one continuous `u` window, when it closes there (it neither
+/// winds the axis nor runs through a pole). Pcurves computed on demand (a
+/// mirrored ball's) can hand consecutive edges windows a turn apart, which
+/// folds the polygon and puts its interior on the far side of the sphere.
+fn sphere_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
+    if !matches!(sub_face.surface, FaceSurface::Sphere(_)) {
+        return None;
+    }
+    let pts = sampling::sample_wire_loop_uv_on_surface(&sub_face.outer_wire, &sub_face.surface);
+    if pts.len() < 3 {
+        return None;
+    }
+    let pts = unwrapped_u(&pts);
+    let closes = (pts[pts.len() - 1].x() - pts[0].x()).abs() < std::f64::consts::PI;
+    closes.then_some(pts)
+}
+
 fn unwrapped_u(pts: &[Point2]) -> Vec<Point2> {
     use std::f64::consts::{PI, TAU};
     let mut u = pts[0].x();

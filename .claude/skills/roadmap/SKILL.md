@@ -217,6 +217,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A mirrored ball less a box corner kept the corner's patch (CLOSED 2026-09-26; pin `a_mirrored_ball_less_a_box_corner_keeps_its_region` in `crates/operations/tests/sphere_box_corner.rs`)**:
+  a mirrored ball's section pcurves, computed afresh, handed the corner's
+  arcs `u` windows a turn apart, so the corner's `(u, v)` polygon crossed
+  itself and its interior sample fell on the ball's far side: the Cut kept
+  the corner's patch and dropped the rest (13.04 where upright it reads
+  103.08). A sphere piece's interior now reads its loop on the edges' own
+  curves in one continuous `u` window when the loop closes there.
+
 - **The engine's ray cast read a sphere face that planes do not bound by its flat polygon (CLOSED 2026-09-26; pin `a_ball_less_a_box_corner_reads_by_its_wires` in `crates/operations/tests/sphere_ray_cast.rs`)**:
   the upper hemisphere less a quarter (a box corner at the ball's centre)
   is neither an intersection nor a union of half-spaces, so it took the

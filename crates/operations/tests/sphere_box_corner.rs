@@ -38,10 +38,11 @@ fn exact(topo: &Topology, solid: SolidId) -> bool {
 }
 
 /// The ball's piece past `x = a`, `y = b` and `z = c`: across `y` the height
-/// `sqrt(R² - x² - y²) - c` integrates in closed form, leaving a Simpson
-/// integral in `x`, substituted `x = end - s²` where the piece pinches off.
+/// `sqrt(R² - x² - y²) - c` integrates in closed form (from `b`, or from the
+/// section circle where it lies past `b`), leaving a Simpson integral in `x`,
+/// substituted `x = end - s²` where the piece pinches off.
 fn corner_piece(a: f64, b: f64, c: f64) -> f64 {
-    let x_end = (RADIUS * RADIUS - b * b - c * c).sqrt();
+    let x_end = (RADIUS * RADIUS - b.max(0.0).powi(2) - c * c).sqrt();
     let across = |x: f64| {
         let c2 = RADIUS.mul_add(RADIUS, -(x * x));
         let y_end = (c2 - c * c).max(0.0).sqrt();
@@ -51,7 +52,7 @@ fn corner_piece(a: f64, b: f64, c: f64) -> f64 {
                 c2 * (y / c2.sqrt()).asin(),
             ) - c * y
         };
-        g(y_end) - g(b)
+        g(y_end) - g(b.max(-y_end))
     };
     let f = |s: f64| across(s.mul_add(-s, x_end)) * 2.0 * s;
     let (n, span) = (800_u32, (x_end - a).sqrt());
@@ -113,6 +114,73 @@ fn ball_less_a_box_corner() {
                 "{label}: corner"
             );
             assert_eq!(at(Point3::new(-2.0, -1.0, 0.3)), far, "{label}: far side");
+        }
+    }
+}
+
+/// The ball less, and within, a box corner with the whole scene mirrored
+/// through `x = 0` or `y = 0`: the same region as upright, measuring what the
+/// upright result does (both within `1e-4` of the closed form, the sphere
+/// measure's chordal-equator gap). A mirrored ball's section pcurves,
+/// computed afresh, could hand the corner's arcs `u` windows a turn apart, so
+/// the corner's interior sample fell on the ball's far side and the Cut kept
+/// the corner's patch.
+#[test]
+fn a_mirrored_ball_less_a_box_corner_keeps_its_region() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    for (a, b, c) in [(0.5, -0.5, 0.5), (0.0, 0.0, 1.0), (0.0, 0.0, 0.5)] {
+        let piece = corner_piece(a, b, c);
+        for (op, truth) in [
+            (BooleanOp::Cut, ball - piece),
+            (BooleanOp::Intersect, piece),
+        ] {
+            let mut upright = None;
+            for (mirror, pose) in [
+                ("none", Mat4::identity()),
+                ("x", Mat4::scale(-1.0, 1.0, 1.0)),
+                ("y", Mat4::scale(1.0, -1.0, 1.0)),
+            ] {
+                let label = format!("({a}, {b}, {c}) mirrored in {mirror} {op:?}");
+                let mut topo = Topology::new();
+                let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+                let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+                transform_solid(&mut topo, block, &(pose * Mat4::translation(a, b, c))).unwrap();
+                transform_solid(&mut topo, sphere, &pose).unwrap();
+                let result = boolean(&mut topo, op, sphere, block).unwrap();
+                assert!(exact(&topo, result), "{label}: fell back to a mesh");
+                let report = validate_solid(&topo, result).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let volume = solid_volume(&topo, result, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-4 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+                let upright = *upright.get_or_insert(volume);
+                assert!(
+                    (volume - upright).abs() < 1e-9 * truth,
+                    "{label}: volume {volume}, upright {upright}"
+                );
+                let at = |p: Point3| {
+                    classify_point(
+                        &topo,
+                        result,
+                        pose.mul_point(p),
+                        &ClassifyOptions::default(),
+                    )
+                    .unwrap()
+                };
+                let (pocket, far) = if op == BooleanOp::Cut {
+                    (PointClassification::Outside, PointClassification::Inside)
+                } else {
+                    (PointClassification::Inside, PointClassification::Outside)
+                };
+                assert_eq!(
+                    at(Point3::new(a + 0.05, b + 0.05, c + 0.05)),
+                    pocket,
+                    "{label}: corner"
+                );
+                assert_eq!(at(Point3::new(-2.0, -1.0, -0.3)), far, "{label}: far side");
+            }
         }
     }
 }
