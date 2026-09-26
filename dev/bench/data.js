@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790376812466,
+  "lastUpdate": 1790381224742,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40607,6 +40607,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27450916,
             "range": "± 436722",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b67b427f794ae07d864ef6e7ca5b8e7ef845b3d6",
+          "message": "fix(algo): keep a turned or mirrored ball's booleans exact (#1775)\n\n`make_sphere(3, 32)` now stays exact and valid for corner, rod, and slab\nCut and Intersect operations when turned about an oblique axis or\nmirrored through a slanted plane, with the tool moved alongside.\n\n## What was wrong\n\n- The affected ball uses `rotation_z(0.7) * rotation_x(0.4) *\nrotation_y(0.3)`, or a mirror through a slanted plane. The tools are a\nbox corner, a rod along `y` of radius 0.6 through `(0.5, _, 1)`, and a\nslab bounded by `1 < z < 2`. Each Cut and Intersect fell back to a mesh.\n\n- A hemisphere bounded by its equator spans no `v` along that boundary.\nOn a turned ball, rounding leaves a sliver about 1e-16 wide.\n`face_v_range` in phase FF interpreted that sliver as the face's extent\nand clipped away every section inside the face.\n\n- Once sections reach the faces, the slab exposes nested latitude\ncircles on one hemisphere. `split_face_with_internal_loops` detected\nnesting only on planes, so it emitted each circle's cap whole. The\noverlapping result was valid, but the turned slab Cut measured 54.45\nagainst 92.15.\n\n- `split_noseam_face_direct` and the collar arrangement retained a whole\nhemisphere when they could not trace a region. A single sample then\nclassified the entire hemisphere. The resulting turned half-space\nIntersect measured 3 times its volume.\n\n- The check crate's Gauss integrator had the same degenerate-boundary\nissue. `face_uv_bounds` treated a turned equator's `v` sliver as the\nface's range and integrated a zero band. The turned slab Cut\nconsequently measured 35.62 against 92.15.\n\n- The rod tunnel leaves a shell whose hemisphere boundary boxes are\nslivers on the equator. The builder's orientation vote,\n`shell_is_outward_oriented` in `builder_solid.rs`, then sums only the\ntunnel wall's flux, whose sign follows the pose.\n\n- `sphere_region_axis` negated the pole axis for a reversed sphere face.\nA reversed face's wire still runs about the sphere's outward normal like\nany other face's. The incorrect axis made a rod along `z` through the\nfloor of a dimple, formed as a box less a ball, fall back to a 200-face\nmesh.\n\n## What this does\n\n- `face_v_range` treats a boundary sliver as unbounded when its length\nmeasured on the surface is at most the linear tolerance. The measured\nlength is the `v` span times the sphere's radius, or a torus's tube\nradius. Other surfaces retain the rule `v_min < v_max`.\n\n- A sphere face whose outer loop winds the axis is extended to the pole\non the loop's left. Progress in `u` toward `+u` places the north pole on\nthat side. Only samples clear of a pole contribute to the decision.\n`FaceExtent` uses a margin of 10 times the linear tolerance over the\nradius when a sphere range reaches a pole, because a hundredth of a\nhemisphere's span would admit latitudes past its boundary.\n\n- Sphere loops now participate in nesting. A loop's disc is the smaller\ncap on the side of its plane away from the centre. A loop whose samples\nall lie on that side is a hole of the disc.\n\n- `split_noseam_face_direct` returns no split when it cannot trace a\nregion, allowing the boolean to fall back. The collar arrangement\nrequires three or more arc chains.\n\n- For sphere integration, `face_uv_bounds` reads a `v` span whose\nsurface length is within the linear tolerance as the full domain,\nmatching the upright case.\n\n- The builder extends the boundary box of a sphere face to the pole on\nthe left of a loop that winds the axis. This calculation also counts\nonly samples clear of a pole, restoring the hemisphere contribution to\nthe shell orientation vote.\n\n- `sphere_region_axis` uses the sphere's outward-normal winding for\nreversed faces without negating the pole axis.\n\n- `loop_plane` in `special_cases.rs` centralizes three copies of the\nsame Newell plane computation.\n\n## Verification\n\n- `turned_and_mirrored_balls_stay_exact` in\n`crates/operations/tests/sphere_box_corner.rs` covers turned and\nmirrored corner, slab, and rod cases for both Cut and Intersect. Every\nresult is exact by face census, valid, and has a watertight mesh. Probes\nplaced like the solids correctly classify a point in the tool's part of\nthe ball and a point in the remainder.\n\n- Measurements are checked against a closed form or Simpson oracle with\nbounds of `1e-9` for the slab Intersect, `1e-7` for the corner Intersect\nand rod Cut, `1e-6` for the rod Intersect, and `2e-4` for the corner and\nslab Cuts. The last bound covers the chordal equator's measure and is\nrecorded as a roadmap row. The classification probes rely on #1776, the\ncheck crate's sphere face reading, which has merged. Before it, the\nmirrored rod Cut's point in the rest of the ball read Outside.\n\n- `a_rod_bores_the_dimple_floor` in\n`crates/operations/tests/sphere_reversed_cap.rs` pins the reversed-face\naxis. Its result is exact, valid, within `2e-4` of the closed form, and\ncovered by four classification probes.\n\n- A pose audit of 5 primitives x 4 tools x Cut and Intersect x upright,\nturned, mirrored changes only sphere cells against main. The corner,\nrod, and slab Cut and Intersect become exact when turned and mirrored.\nUpright, the slab Intersect becomes exact. The slab Cut becomes exact\nbut invalid because its two pieces share one shell, matching the\nrepresentation used by the cylinder and cone slab Cuts. No cell becomes\nwrong.\n\n- The workspace suite passes with 3099 tests run, 3099 passed, and 20\nskipped, on the branch rebased onto main after #1776 merged.\n\n- Remaining roadmap rows cover a ball against the half-space `x > 0.5`,\nwhich falls back in every pose, and the upright slab Cut's shared shell.\nA cone `make_cone(1.2, 0.4, 10)` through `make_sphere(3, 32)`, off the\naxis at `(1, 0.5, -5)`, takes 770 s on main for the Cut, which falls\nback, and more than 730 s for the Intersect. A run of the same case on\nthis branch was stopped after 30 minutes.",
+          "timestamp": "2026-09-25T17:04:07-07:00",
+          "tree_id": "63e389df961372146c4ecead949ac4d7d6ba1921",
+          "url": "https://github.com/andymai/brepkit/commit/b67b427f794ae07d864ef6e7ca5b8e7ef845b3d6"
+        },
+        "date": 1790381219661,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 984423,
+            "range": "± 3110",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081226,
+            "range": "± 53449",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13234,
+            "range": "± 51",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 723440,
+            "range": "± 1080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41652353,
+            "range": "± 360706",
             "unit": "ns/iter"
           }
         ]
