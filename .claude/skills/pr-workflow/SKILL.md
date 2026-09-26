@@ -13,6 +13,7 @@ End-to-end change flow for this repo: branch, commit, push, PR, AI review gate, 
 |------|---------|
 | Branch | `git checkout -b <type>/<kebab-description>` (e.g. `feat/render-lod`, `fix/ci-crates-io-flake`) |
 | Local gate before push | `cargo nextest run -p <touched-crate>` and, if any `Cargo.toml` changed, `./scripts/check-boundaries.sh` |
+| Pose sweep (booleans, classification, measurement, tessellation) | `cargo run --release --example pose_sweep -p brepkit-operations > out.txt` on `main` and on the branch, then `diff` the two |
 | Compliance grep | See "Banned-name compliance" below |
 | Push (sandbox) | `git push "https://x-access-token:$(gh auth token)@github.com/andymai/brepkit.git" <branch>` |
 | Verify remote head | `gh pr view <N> --json headRefOid` (never `git rev-parse origin/<branch>`) |
@@ -37,7 +38,7 @@ Hard rules:
 ## Procedure: land a change
 
 1. **Branch** off `main` as `<type>/<kebab-description>`. Never commit to `main` directly.
-2. **Develop and test locally.** `cargo nextest run -p <crate>` for touched crates; `./scripts/check-boundaries.sh` if you touched any `Cargo.toml` (this check only runs in CI, catch it early).
+2. **Develop and test locally.** `cargo nextest run -p <crate>` for touched crates; `./scripts/check-boundaries.sh` if you touched any `Cargo.toml` (this check only runs in CI, catch it early). For a change to booleans, classification, measurement or tessellation, diff the pose sweep's output against main's: it runs primitive booleans in turned and mirrored poses, the ones the in-crate tests rarely cover, and a line that changes is a regression or a fix to account for before review.
 3. **Commit.** Conventional message. Never commit plan/spec working documents: if `git status` shows untracked planning docs (ad-hoc `*-plan.md` or `*-spec.md` working documents), leave them untracked.
 4. **Compliance grep** (below). Expect zero output.
 5. **Push.** Plain `git push` hangs: `origin` is SSH and SSH is blocked in this sandbox, and a global `insteadOf` rewrite converts bare `https://github.com/...` URLs back to SSH. Use the token-embedded URL from the quick reference. Checkpoint: `gh pr view <N> --json headRefOid` matches `git rev-parse HEAD`. Local `origin/<branch>` refs do not update after explicit-URL pushes, so never trust them.
