@@ -315,9 +315,17 @@ fn face_uv_bounds<S: ParametricSurface>(
                 topo.vertex(edge.end())?.point(),
             );
             let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            // A NURBS edge's span is its whole knot range, which may run from
+            // the edge's end back to its start.
+            let first = edge.curve().evaluate_with_endpoints(t0, sp, ep);
+            let from_start = (first - sp).length() <= (first - ep).length();
             for k in 1..4 {
                 let f = f64::from(k) / 4.0;
-                let f = if oe.is_forward() { f } else { 1.0 - f };
+                let f = if oe.is_forward() == from_start {
+                    f
+                } else {
+                    1.0 - f
+                };
                 let p = edge
                     .curve()
                     .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep);
@@ -946,5 +954,60 @@ mod tests {
         let rev: Vec<Point3> = poly.iter().rev().copied().collect();
         let c2 = integrate_planar_polygon(&rev, up, Vec3::new(0.0, 0.0, 0.0));
         assert!((c2.area - 75.0).abs() < 1e-9, "rev area {}", c2.area);
+    }
+
+    /// A unit cylinder's wall turning 270 degrees and 1 tall, its lower rim a
+    /// NURBS arc stored either way round: the wall reads its area whichever
+    /// end the rim's knot span starts at.
+    #[test]
+    fn a_rim_stored_end_to_start_reads_its_span() {
+        use brepkit_geometry::convert::circle_to_nurbs;
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let turn = 1.5 * std::f64::consts::PI;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let at = |a: f64, z: f64| Point3::new(a.cos(), a.sin(), z);
+        for end_to_start in [false, true] {
+            let mut topo = Topology::new();
+            let [a0, b0, a1, b1] = [(0.0, 0.0), (turn, 0.0), (0.0, 1.0), (turn, 1.0)]
+                .map(|(a, z)| topo.add_vertex(Vertex::new(at(a, z), 1e-7)));
+            let up = Circle3D::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+            let rim = if end_to_start {
+                let down = Circle3D::new(origin, Vec3::new(0.0, 0.0, -1.0), 1.0).unwrap();
+                let t0 = down.project(at(turn, 0.0));
+                circle_to_nurbs(&down, t0, t0 + turn).unwrap()
+            } else {
+                let t0 = up.project(at(0.0, 0.0));
+                circle_to_nurbs(&up, t0, t0 + turn).unwrap()
+            };
+            let top = Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), 1.0);
+            let edges = [
+                (
+                    topo.add_edge(Edge::new(a0, b0, EdgeCurve::NurbsCurve(rim))),
+                    true,
+                ),
+                (topo.add_edge(Edge::new(b0, b1, EdgeCurve::Line)), true),
+                (
+                    topo.add_edge(Edge::new(a1, b1, EdgeCurve::Circle(top.unwrap()))),
+                    false,
+                ),
+                (topo.add_edge(Edge::new(a1, a0, EdgeCurve::Line)), true),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(e, forward));
+            let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+            let cylinder = CylindricalSurface::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(cylinder)));
+            let c = integrate_face(&topo, face, 5).unwrap();
+            assert!(
+                (c.area - turn).abs() < 1e-9,
+                "end to start {end_to_start}: area {}, truth {turn}",
+                c.area
+            );
+        }
     }
 }
