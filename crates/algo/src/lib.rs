@@ -29,6 +29,5 @@ pub mod classifier;
 pub use builder::FaceClass;
 pub use builder::pcurve_compute::compute_pcurve_on_surface;
 pub use builder::plane_frame::PlaneFrame;
-pub use builder::sample_face_interior;
 pub(crate) mod ds;
 pub(crate) mod pave_filler;

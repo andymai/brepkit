@@ -220,10 +220,9 @@ One line each; the fixture/PR carries the story. Newest first.
   the engine's two pieces (a slab under the frustum, the box's corners
   ringing its top) were exact, but the multi-piece gate rejected a Cut
   whose piece's bounding-box centre read inside the tool, and a ring's
-  centre lies in its own hole; a centre counts now only when the result
-  holds it, and a stray ring is caught instead by holding no point outside
-  the tool (`every_component_has_a_point_outside`: face samples stepped
-  inward).
+  centre lies in its own hole; a centre the result does not hold passes now
+  when one of the piece's plane faces lies outside the tool, which no stray
+  piece of the tool's interior can show.
 
 - **The ball less a column through both poles fell back, and results in pieces read invalid (CLOSED 2026-09-26; pins `a_column_through_both_poles_keeps_its_collars` and `a_ball_less_a_turned_column_keeps_its_four_caps` in `crates/operations/tests/sphere_box_corner.rs`, `a_solid_cut_in_two_validates` in `crates/operations/src/validate/tests.rs`)**:
   `split_noseam_by_arrangement` returned only the collar and dropped the

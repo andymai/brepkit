@@ -1165,12 +1165,7 @@ pub fn whole_ring(
 ///
 /// The offset distance is scaled relative to the face's bounding box
 /// diagonal to handle both very small and very large faces correctly.
-///
-/// # Errors
-///
-/// Returns [`AlgoError`] if the face has an empty outer wire or a topology
-/// lookup fails.
-pub fn sample_face_interior(
+fn sample_face_interior(
     topo: &Topology,
     face_id: FaceId,
     tol: Tolerance,

@@ -8279,23 +8279,28 @@ fn cut_wedge_by_thin_radial_strut_is_not_empty() {
     );
 }
 
-/// The multi-region Cut gate's stray-piece checks on a square ring (a frame
+/// The multi-region Cut gate's stray-piece check on a square ring (a frame
 /// whose bounding-box centre lies in its hole): within a slab tool it is a
-/// stray piece of the tool's interior with no point outside the tool, though
-/// the result does not hold its centre; clear of the slab it is a genuine
-/// piece and passes both checks.
+/// stray piece of the tool's interior, rejected though the ring does not hold
+/// its centre, since none of its plane faces lies outside the slab; clear of
+/// the slab it is a genuine piece. A stray ring flush with the slab's faces
+/// and oriented inside out (as a Cut keeps the tool's faces) is rejected too.
 #[test]
 fn a_ring_inside_the_tool_is_a_stray_piece() {
     use brepkit_math::mat::Mat4;
     use brepkit_topology::explorer::solid_faces;
 
-    for (z, stray) in [(0.0, true), (3.0, false)] {
+    for (z, height, flipped, stray) in [
+        (0.0, 1.0, false, true),
+        (3.0, 1.0, false, false),
+        (0.0, 2.0, true, true),
+    ] {
         let mut topo = Topology::new();
-        let frame = crate::primitives::make_box(&mut topo, 4.0, 4.0, 1.0).unwrap();
+        let frame = crate::primitives::make_box(&mut topo, 4.0, 4.0, height).unwrap();
         crate::transform::transform_solid(
             &mut topo,
             frame,
-            &Mat4::translation(-2.0, -2.0, z - 0.5),
+            &Mat4::translation(-2.0, -2.0, z - height / 2.0),
         )
         .unwrap();
         let hole = crate::primitives::make_box(&mut topo, 2.0, 2.0, 3.0).unwrap();
@@ -8307,16 +8312,19 @@ fn a_ring_inside_the_tool_is_a_stray_piece() {
             .unwrap();
         let tool = brepkit_algo::classifier::try_build_analytic_classifier(&topo, slab).unwrap();
         let comps = vec![solid_faces(&topo, ring).unwrap()];
+        if flipped {
+            for &face in &comps[0] {
+                let face = topo.face_mut(face).unwrap();
+                let reversed = face.is_reversed();
+                face.set_reversed(!reversed);
+            }
+        }
         let tol = Tolerance::new();
 
-        assert!(
-            all_component_centers_outside(&topo, ring, &comps, &tool, tol),
-            "z = {z}: the ring holds its centre"
-        );
         assert_eq!(
-            every_component_has_a_point_outside(&topo, &comps, &tool, tol),
+            all_component_centers_outside(&topo, ring, &comps, &tool, tol),
             !stray,
-            "z = {z}: a point outside the slab"
+            "z = {z}, flipped {flipped}: a genuine piece"
         );
     }
 }

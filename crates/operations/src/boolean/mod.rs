@@ -723,12 +723,6 @@ fn boolean_inner(
                         .as_ref()
                         .is_none_or(|cls_b| {
                             all_component_centers_outside(topo, result, &components_vec, cls_b, tol)
-                                && every_component_has_a_point_outside(
-                                    topo,
-                                    &components_vec,
-                                    cls_b,
-                                    tol,
-                                )
                         });
                 // Intersect's mirror hazard: GFA could emit a piece that is not
                 // part of A∩B at all. Reject when any component's AABB-centre
@@ -2835,13 +2829,16 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
     specs
 }
 
-/// Check that no component's AABB centre lies both inside the supplied
-/// classifier and inside the result. Used with
-/// [`every_component_has_a_point_outside`] to reject multi-region GFA Cut results that
-/// erroneously include the tool's interior as one of the pieces. A piece
-/// ringing the tool (a box's corners around a cone) has its centre in its
-/// own hole, inside the tool, so only a centre the result holds counts; a
-/// centre held by another piece rejects too, conservatively.
+/// Check that no component's AABB centre lies inside the supplied
+/// classifier, unless the piece rings the tool. Used to reject multi-region
+/// GFA Cut results that erroneously include the tool's interior as one of
+/// the pieces. A piece ringing the tool (a box's corners around a cone) has
+/// its centre in its own hole, inside the tool, so a centre the result does
+/// not hold passes when one of the piece's plane faces lies outside the tool
+/// (its centroid, taken inside the face): a stray piece of the tool's
+/// interior has every face inside the tool or on it, whatever its shape or
+/// its faces' orientation. A centre held by another piece rejects too,
+/// conservatively.
 fn all_component_centers_outside(
     topo: &Topology,
     result: SolidId,
@@ -2885,64 +2882,43 @@ fn all_component_centers_outside(
             (min.y() + max.y()) * 0.5,
             (min.z() + max.z()) * 0.5,
         );
-        if matches!(classifier.classify(centre, tol), Some(FaceClass::Inside))
-            && !matches!(
-                brepkit_algo::classifier::classify_ray_cast(topo, result, centre),
-                Ok(FaceClass::Outside)
-            )
-        {
+        if !matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
+            continue;
+        }
+        let held = !matches!(
+            brepkit_algo::classifier::classify_ray_cast(topo, result, centre),
+            Ok(FaceClass::Outside)
+        );
+        let beside_the_tool = comp.iter().any(|&fid| {
+            planar_face_centroid(topo, fid)
+                .is_some_and(|c| matches!(classifier.classify(c, tol), Some(FaceClass::Outside)))
+        });
+        if held || !beside_the_tool {
             return false;
         }
     }
     true
 }
 
-/// Check that every component holds a point outside the supplied
-/// classifier, found by stepping from a face's interior sample a little way
-/// against its outward normal. A genuine Cut piece's material lies outside
-/// the tool, while a stray piece of the tool's interior lies inside it,
-/// whatever its shape: a stray ring has its centre in its own hole, where
-/// [`all_component_centers_outside`] cannot see it. The step works from the
-/// tool's own faces too (off them, into the piece), and one point read
-/// outside is enough, so a sample that lands on a face's boundary and steps
-/// out of the piece does not reject a genuine one.
-fn every_component_has_a_point_outside(
-    topo: &Topology,
-    components: &[Vec<FaceId>],
-    classifier: &brepkit_algo::classifier::AnalyticClassifier,
-    tol: brepkit_math::tolerance::Tolerance,
-) -> bool {
-    use brepkit_algo::FaceClass;
-    components.iter().all(|comp| {
-        let Some(centre) = component_aabb_centre(topo, comp) else {
-            return false;
-        };
-        let size = comp
-            .iter()
-            .filter_map(|&fid| brepkit_algo::sample_face_interior(topo, fid, tol).ok())
-            .fold(0.0_f64, |m, p| m.max((p - centre).length()));
-        let step = (size * 2e-4).max(100.0 * tol.linear);
-        comp.iter().any(|&fid| {
-            let Ok(face) = topo.face(fid) else {
-                return false;
-            };
-            let Ok(p) = brepkit_algo::sample_face_interior(topo, fid, tol) else {
-                return false;
-            };
-            let normal = match face.surface() {
-                FaceSurface::Plane { normal, .. } => *normal,
-                surface => match surface.project_point(p) {
-                    Some((u, v)) => surface.normal(u, v),
-                    None => return false,
-                },
-            };
-            let outward = if face.is_reversed() { -normal } else { normal };
-            matches!(
-                classifier.classify(p - outward * step, tol),
-                Some(FaceClass::Outside)
-            )
-        })
-    })
+/// The area centroid of a plane face's sampled boundary, when it lies in the
+/// face.
+fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
+    let (outer, holes, normal) =
+        brepkit_algo::classifier::planar_face_polygons(topo, fid).ok()??;
+    let base = outer[0];
+    let (mut weight, mut sum) = (0.0, Vec3::new(0.0, 0.0, 0.0));
+    for pair in outer[1..].windows(2) {
+        let (a, b) = (pair[0] - base, pair[1] - base);
+        let area = a.cross(b).dot(normal);
+        weight += area;
+        sum += (a + b) * (area / 3.0);
+    }
+    if weight.abs() <= f64::EPSILON {
+        return None;
+    }
+    let centroid = base + sum * (1.0 / weight);
+    brepkit_algo::classifier::point_in_planar_region(centroid, &outer, &holes, &normal)
+        .then_some(centroid)
 }
 
 /// Centre of a face component's vertex AABB, or `None` for an empty component.
