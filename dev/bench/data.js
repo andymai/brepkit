@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790435779880,
+  "lastUpdate": 1790444567261,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41687,6 +41687,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42767765,
             "range": "± 192098",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ee5bf4b5e69246ab1cc808264ece8dad6d60d33a",
+          "message": "fix(algo): keep a ball's lunes past a column, read results in pieces as valid (#1792)\n\nThe ball less a square column through both poles now keeps its four caps\nexact and valid, a closed section on the ball bounds a patch of its own,\nand `validate_solid` accepts results the engine keeps as disjoint pieces\nin one shell.\n\n## What was wrong\n\n- For `make_sphere(3, 32)` less `make_box(5, 5, 10)` at `(-2.5, -2.5,\n-5)`, the expected four caps have volume `pi h² (3R - h) / 3` with `h =\n0.5` (8.901). Main falls back to 252 planar faces measuring 8.3181,\nrejected by `validate_solid`. Turning the column 0.3 rad about the poles\ngives 262 faces measuring 8.3276. A 4.4 wide column turned 0.3 rad gives\n378 faces measuring 21.0741 instead of 21.9825. With `make_cylinder(0.1,\n10)` at `(2.75, 0, -5)` fused with the column and cut at once, main\nreturns an exact 7-face solid measuring 46.69045. This branch measures\n8.82633, within `1e-3` of the caps less the rod's chord.\n\n- In `split_noseam_by_arrangement` and `build_seam_arcs` in\n`crates/algo/src/builder/face_splitter/special_cases.rs`, the sphere\narrangement returned only the collar inside the walls and dropped the\nfour lunes past them, which the Cut keeps. The seam was split at every\nopen arc's end, including a wall arc's crest off the seam, so each lune\ntraced as two slivers. Each closed section, such as a latitude cap rim\nor bore rim, went to the collar with its section direction, while the\npatch inside it was never emitted.\n\n- With the seam split only where arcs cross it, a seam arc longer than\nhalf a turn took the shorter-arc pcurve, and `trace_region_loops` read a\nline pcurve's direction from its wrapped end points. For `make_box(4.5,\n4.5, 10)` at `(-2.5, -2.5, -5)`, whose `x = 2` and `y = 2` walls meet on\nthe sphere, the region past the corner walls is bounded by a 186.4\ndegree seam arc and traced wrong.\n\n- In `BuilderSolid` at `crates/algo/src/builder/builder_solid.rs`,\n`perform_areas` reads a shell's sign from corner-fan volume. A cap made\nfrom two lunes and a wall piece has every corner on that wall, producing\nzero fan volume and a rounding-dependent sign. With a 0.3 rad turn, two\nof four caps assembled as cavities. `shell_is_outward_oriented`\nintegrated positions from the world origin over each curved face's whole\nparameter box, so its answer depended on placement: the ball and a 4.4\nwide column moved 10 along `x` fell back.\n\n- `validate_solid` counted shells as S in `V - E + F = 2(S - g) + L` and\nrequired each shell to be connected, although `assemble` merges closed\ngrowth shells and `merge_disjoint_solids` keeps a result's pieces in its\nouter shell. A 10 x 10 x 10 block cut in two by a slab read `V - E + F =\n4` against S=1 and is invalid on main, as are N-way fuses with a\ndisjoint operand. A turned ball cut by a slab validated on main only\nbecause its zero-volume cap fan is stored as a cavity shell.\n\n## What this does\n\n- The sphere arrangement returns every lune: a traced loop other than\nthe collar that follows a seam arc in the collar's direction and is\nflipped with the collar. Its interior point lies halfway along the great\ncircle from the seam arc's middle toward the point farthest from the\nseam plane.\n\n- The seam splits only where arcs cross the seam plane. Seam arcs follow\ntheir own counter-clockwise span through\n`compute_boundary_pcurve_on_surface`, carrying the end's `u` forward\nfrom the start through the middle. The tracer reads a line pcurve's own\ndirection.\n\n- Each closed section is assigned to the lune containing most of its\n`(u, v)` samples, or to the collar. As a hole it runs clockwise in the\nface's `(u, v)`, or against the collar when it winds the axis. It also\nbounds its own patch. Nested sections fail the face. Sections are placed\nagainst the same 3D-traced region polygons as the samples, and a section\nheld by neither a lune nor the collar fails the face rather than\nbecoming a collar hole outside the collar.\n\n- Each region (collar, lune, patch) takes as its classification sample\nthe point of a grid over its `(u, v)` box that lies inside its outer\nloop (closed through the pole when it winds the axis) and clear of its\nholes, farthest from both. The loops are traced from points along each\nedge's own 3D curve projected onto the sphere, since a fitted pcurve\novershoots the pole's `v` near it. A 12 by 6 grid runs first, and a 48\nby 24 grid only when the coarse one finds no point. A sample taken\nwithout the holes could land in a hole and read the hole's patch.\n\n- The trace keys each point by its `u` wrapped after quantizing, so a\nwall arc cresting on the seam, one half ending at `u = 2π` and the other\nat 0, meets itself; a loop of seam arcs alone is never taken as the\ncollar.\n\n- A shell whose corner-fan volume is negative and within `1e-9` of its\nextent times the square of its reach from the origin is decided by flux,\nas a lone negative shell already is. A positive reading stands because\nthe flux integrates a curved face over its boundary's parameter box,\nwhich a drilled ring's torus face does not span. Flux positions are\nmeasured from the shell's own corner-box centre.\n\n- `validate_solid` counts connected groups of faces joined across shared\nedges as S. It reports a vertex shared by two pieces, and a piece inside\nanother facing the same way with no opposite-facing piece between them.\nContainment uses the majority of three rays from one vertex crossing the\nother an odd number of times, and facing the sign of the faces' volume\nintegral. A cavity kept in the outer shell faces inward and stays valid,\nas does an island inside such a cavity.\n\n## Verification\n\n- `crates/operations/tests/sphere_box_corner.rs` pins the affected\nsphere arrangements. `a_column_through_both_poles_keeps_its_collars`\ncovers the ball less the column, with and without the bore.\n`a_ball_less_a_turned_column_keeps_its_four_caps` covers 5 and 4.4 wide\ncolumns turned 0.3 rad, plus the ball and 4.4 wide column moved 10 along\n`x`. `a_rod_through_a_cap_leaves_its_hole_in_the_cap` checks the ball\nless, within, and outside the fused column and rod (radius 0.1 at\n`(2.75, 0)`, and radius 0.05 at `(2.872, 0)` over the middle of the\ncap), and gives the rod outside and adjacent cap inside to both\nclassifiers. It also runs the first rod with the ball turned 0.35 about\nx, which puts the wall `x = 2.5`'s crest on the ball's seam.\n`a_column_ending_in_the_ball_keeps_the_cap_over_it` covers columns\nending at `z = 2.8` and `z = 2` and their polar caps `pi h² (3R - h) /\n3`, `h = R - z`. The pin also turns the ball 0.35 about x for the\ncolumns ending at `z = 2.8` and `z = 2`. The same pin also turns the\ncolumn `rotation_x(-0.2)` with its top at `z = 2.93093` (its rim 0.015\nrad past the pole) and at `z = 2.95675`, and `rotation_x(-0.35)` with\nits top at `3 cos(0.365)`, where the closed forms still hold because the\nball is unchanged by the tilt; tilted, the ball less the column stays\nwatertight, while the other two are exact, valid and within `1e-3` but\nmesh open at `z = 2.93093` and in the 0.35 turn, as do those two with\nthe ball turned 0.35 and the column ending at `z = 2.8` (the roadmap's\ntilted column row).\n`a_column_with_a_corner_in_the_ball_keeps_its_collars` covers the ball\nwithin the corner column and the column less the ball, both through the\nball and ending at `z = 2.8`. Every result is exact, valid, and within\n`1e-3` of its closed form, and watertight except those cases. The caps,\nrod, cut-in-two, and N-way pins fail on main. The corner-column and\npinched-and-nested pins preserve main's behavior. Without the\nclosed-section patch, the ending-column case reads 8.90118 against\n9.26979; with a lune's sample taken without its holes, the rod at\n`(2.872, 0)` reads 6.66877 against 8.88762, exact and valid. With loops\ntraced from pcurves, the ball less the column tilted 0.2 and ending at\n`z = 2.93093` reads 8.90118 against 8.94580. Without the wrapped key,\nthe ball turned 0.35 about x less the column and rod reads 2.22529\nagainst 8.82633, and less the column ending at `z = 2.8` reads 2.59257\nagainst 9.26979.\n\n- In `crates/operations/src/validate/tests.rs`,\n`a_solid_cut_in_two_validates` checks that the block less the slab\nmeasures 800, classifies one point in each half inside and one in the\ngap outside, and validates. `pinched_and_nested_pieces_are_invalid`\nrejects two blocks fused along an edge and a block merged inside\nanother; `an_island_in_a_cavity_validates` validates a block less a\nhollow box around a small block (792). `assert_n_way_fuse` in\n`crates/operations/tests/rod_through_plate_edge.rs` asserts validity.\n\n- Probes cover ball cuts by columns 5 and 4.4 wide, turned 0, 0.3, and\n0.55 rad, at six placements up to 200 from the origin. All 36 of 36\ncases are exact with 12 faces, valid, and within `1e-3` of the caps. For\ncolumns 5 and 4.4 wide turned 0 and 0.3, the ball within the column,\nball less column, and column less ball are exact and watertight, within\n`1.1e-4` of integrated truth, and classify every point of an 11-step\ngrid over the ball correctly.\n\n- In a debug build, the ball less the 5 wide column takes 27.8 ms\nthrough both poles and 30.9 ms ending at `z = 2.8` (the best of five\nruns), against 22.1 and 24.6 ms with the samples this branch replaced\nand 348.4 and 343.8 ms with the 48 by 24 grid alone.\n\n- The validator accepts two concentric square frames fused, a square\ntube cut by a slab turned 0.3 rad, a C-shaped plate with a block in its\nmouth, and a block cut in two by a slab turned 45 degrees. Main rejects\nthe last two. The workspace suite reports 3147 tests run, 3147 passed,\n20 skipped.\n\n- Open roadmap cases, also present on main, remain: a column narrower\nthan the ball at its corners falls back; a column with a corner inside\nthe ball falls back once offset and turned, and the ball less it always;\na column tilted by `rotation_x(0.3) * rotation_y(0.2)` produces exact\nresults that mesh open and measure 104.40620 against 104.19624; the\ncolumn and a rod at `(-2.7, -0.9)`, radius 0.15, less the ball is exact\nand valid but meshes open.\n\n- A new roadmap row records that `make_sphere(3, 32)` less the column\n`|x|, |y| < 2.2`, `-5 < z < 2`, whose top rim pierces the ball, is exact\nwith every face's area matching its closed form, but its sphere face\nholding the pole meshes to 50.2209 against its `face_area` of 48.8942,\nso `solid_volume` reads 31.8122 against 30.3591 and the mesh is open;\nmain falls back to a 545-face mesh reading 29.2408.\n\n- The roadmap's tilted column row now also records the ball turned\n`rotation_y(0.3)` then `rotation_z(1)` against the column fused with the\nrod: the tool less the ball is exact and valid but not watertight and\nreads 145.9082 (about 146.04 by the rod pin's closed form), and the ball\nless the tool and within it fall back, as they do on main.\n\n- A new roadmap row records that `make_sphere(3, 32)` transformed by\n`rotation_x(0.35)` within `make_box(5, 5, 5 + top)` at `(-2.5, -2.5,\n-5)`, where `top = 3 cos(0.35)` makes the column rim pass through the\nball pole, is exact, valid, and read correctly by the engine's ray cast,\nbut meshes open and `solid_volume` reads 88.4143 against 103.8907;\nmoving the rim 0.0003 rad off the pole yields a reading within 2e-3.",
+          "timestamp": "2026-09-26T17:39:58Z",
+          "tree_id": "d54c09c80e71ef6878171c0a75963d07d285042a",
+          "url": "https://github.com/andymai/brepkit/commit/ee5bf4b5e69246ab1cc808264ece8dad6d60d33a"
+        },
+        "date": 1790444562785,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1018104,
+            "range": "± 4720",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1096628,
+            "range": "± 7948",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13157,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 757768,
+            "range": "± 3982",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42202092,
+            "range": "± 136323",
             "unit": "ns/iter"
           }
         ]
