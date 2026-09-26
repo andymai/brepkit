@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.35](https://github.com/andymai/brepkit/compare/v4.0.34...v4.0.35) (2026-09-26)
+
+
+### Bug Fixes
+
+* **operations:** measure a sphere patch around the pole by its loop ([#1782](https://github.com/andymai/brepkit/issues/1782)) ([f76f731](https://github.com/andymai/brepkit/commit/f76f731bc877a34fc989074d1e56a3da9b47198d))
+
 ## [4.0.34](https://github.com/andymai/brepkit/compare/v4.0.33...v4.0.34) (2026-09-26)
 
 
