@@ -288,13 +288,10 @@ fn init_pave_blocks_n(
     Ok(())
 }
 
-/// Axis-aligned bounding box of a solid from its vertices.
+/// Axis-aligned bounding box of a solid, curved edges included: a cylinder's
+/// only vertices sit on its seam.
 fn solid_aabb(topo: &Topology, solid: SolidId) -> Option<brepkit_math::aabb::Aabb3> {
-    let mut pts = Vec::new();
-    for vid in brepkit_topology::explorer::solid_vertices(topo, solid).ok()? {
-        pts.push(topo.vertex(vid).ok()?.point());
-    }
-    brepkit_math::aabb::Aabb3::try_from_points(pts)
+    crate::classifier::compute_solid_bbox(topo, solid).ok()
 }
 
 /// Source-index pairs `(i, j)` with `i < j` whose bounding boxes overlap (each

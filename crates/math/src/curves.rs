@@ -6,8 +6,24 @@
 use std::f64::consts::PI;
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::frame::Frame3;
 use crate::vec::{Point3, Vec3};
+
+/// The box of `center + a cos(t) u + b sin(t) v` over a full turn: along
+/// each axis the offset reaches `sqrt((a u_i)² + (b v_i)²)`.
+fn conic_aabb(center: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)) -> Aabb3 {
+    let reach = |ui: f64, vi: f64| (a * ui).hypot(b * vi);
+    let r = Vec3::new(
+        reach(u.x(), v.x()),
+        reach(u.y(), v.y()),
+        reach(u.z(), v.z()),
+    );
+    Aabb3 {
+        min: center - r,
+        max: center + r,
+    }
+}
 
 // ── Line3D ─────────────────────────────────────────────────────────
 
@@ -215,6 +231,17 @@ impl Circle3D {
     #[must_use]
     pub const fn v_axis(&self) -> Vec3 {
         self.v_axis
+    }
+
+    /// The whole circle's axis-aligned bounding box, which also bounds any
+    /// arc of it.
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        conic_aabb(
+            self.center,
+            (self.radius, self.u_axis),
+            (self.radius, self.v_axis),
+        )
     }
 
     /// Create a circle with explicit basis vectors (for transform/copy).
@@ -675,6 +702,17 @@ impl Ellipse3D {
     #[must_use]
     pub const fn v_axis(&self) -> Vec3 {
         self.v_axis
+    }
+
+    /// The whole ellipse's axis-aligned bounding box, which also bounds any
+    /// arc of it.
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        conic_aabb(
+            self.center,
+            (self.semi_major, self.u_axis),
+            (self.semi_minor, self.v_axis),
+        )
     }
 
     /// Create an ellipse with explicit basis vectors (for transform/copy).

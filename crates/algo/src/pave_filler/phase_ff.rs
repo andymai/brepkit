@@ -2270,44 +2270,48 @@ fn trim_ellipse_to_boundary_crossings(
     // plane (it is a plane-boundary edge) and the analytic surface, hence on
     // the section ellipse.
     let face = topo.face(plane_face).ok()?;
-    let mut crossings: Vec<Point3> = Vec::new();
-    let push_crossing = |p: Point3, crossings: &mut Vec<Point3>| {
-        // Keep only points actually on the section curve (rejects a cone's
-        // far-nappe root or a seam-line crossing that misses the ellipse —
-        // both land millimetres away). The band is fitted-geometry scale,
-        // not exact scale: a swept faceted solid's boundary edges sit up to
-        // ~6e-5 off its own fitted face planes, so the edge x surface
-        // crossing lands that far off the plane x surface section. A 1e-6
-        // gate rejected the TRUE crossing (including the inter-segment
-        // triple point), left an ODD crossing count on a closed section,
-        // and the surviving over-long arc split the analytic partner along
-        // a curve its neighbours never shared (the kumiko strut slivers).
-        let foot = sec.evaluate(sec.project(p));
-        let off_curve = (foot - p).length();
-        if off_curve > 1e-4 {
-            if std::env::var("BK_TRIM_ELL").is_ok() {
-                log::debug!(
-                    "TRIM_ELL reject off-curve d={off_curve:.3e} p=({:.4},{:.4},{:.4})",
-                    p.x(),
-                    p.y(),
-                    p.z()
-                );
+    // Each crossing keeps the plane face's boundary edge it came from, if any.
+    let mut crossings: Vec<(Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
+    let push_crossing =
+        |p: Point3,
+         src: Option<brepkit_topology::edge::EdgeId>,
+         crossings: &mut Vec<(Point3, Option<brepkit_topology::edge::EdgeId>)>| {
+            // Keep only points actually on the section curve (rejects a cone's
+            // far-nappe root or a seam-line crossing that misses the ellipse —
+            // both land millimetres away). The band is fitted-geometry scale,
+            // not exact scale: a swept faceted solid's boundary edges sit up to
+            // ~6e-5 off its own fitted face planes, so the edge x surface
+            // crossing lands that far off the plane x surface section. A 1e-6
+            // gate rejected the TRUE crossing (including the inter-segment
+            // triple point), left an ODD crossing count on a closed section,
+            // and the surviving over-long arc split the analytic partner along
+            // a curve its neighbours never shared (the kumiko strut slivers).
+            let foot = sec.evaluate(sec.project(p));
+            let off_curve = (foot - p).length();
+            if off_curve > 1e-4 {
+                if std::env::var("BK_TRIM_ELL").is_ok() {
+                    log::debug!(
+                        "TRIM_ELL reject off-curve d={off_curve:.3e} p=({:.4},{:.4},{:.4})",
+                        p.x(),
+                        p.y(),
+                        p.z()
+                    );
+                }
+                return;
             }
-            return;
-        }
-        // Dedup tolerance: the SAME geometric crossing reached two ways (an
-        // exact seam-line × plane intersection, and the line-cylinder quadratic
-        // root for a tread boundary that meets the seam) can disagree by a
-        // little over 1e-6 at these coordinates. A tighter threshold leaves
-        // both, spawning a near-degenerate sliver arc whose drifted endpoint
-        // then fails the downstream 1e-7 boundary split and dangles. Treads
-        // are ~1e-4 apart, so 1e-5 collapses the duplicate without merging
-        // genuinely-distinct crossings. Seam crossings are pushed first, so the
-        // exact-on-seam point is the one kept.
-        if !crossings.iter().any(|q| (*q - p).length() < 1e-5) {
-            crossings.push(p);
-        }
-    };
+            // Dedup tolerance: the SAME geometric crossing reached two ways (an
+            // exact seam-line × plane intersection, and the line-cylinder quadratic
+            // root for a tread boundary that meets the seam) can disagree by a
+            // little over 1e-6 at these coordinates. A tighter threshold leaves
+            // both, spawning a near-degenerate sliver arc whose drifted endpoint
+            // then fails the downstream 1e-7 boundary split and dangles. Treads
+            // are ~1e-4 apart, so 1e-5 collapses the duplicate without merging
+            // genuinely-distinct crossings. Seam crossings are pushed first, so the
+            // exact-on-seam point is the one kept.
+            if !crossings.iter().any(|(q, _)| (*q - p).length() < 1e-5) {
+                crossings.push((p, src));
+            }
+        };
     // Split at the analytic FACE's seam boundary FIRST: where the ellipse
     // crosses a seam (the quarter-cylinder's straight u-boundary edge), the
     // arc must terminate so it connects to that seam edge and the part beyond
@@ -2333,7 +2337,7 @@ fn trim_ellipse_to_boundary_crossings(
                     if let Some(p) =
                         line_segment_plane_crossing(sv.point(), ev.point(), *plane_n, *plane_d)
                     {
-                        push_crossing(p, &mut crossings);
+                        push_crossing(p, None, &mut crossings);
                     }
                 }
                 // The band's RIM is where the face ends, exactly as its seam
@@ -2347,7 +2351,7 @@ fn trim_ellipse_to_boundary_crossings(
                     for p in
                         circle_arc_plane_crossings(c, sv.point(), ev.point(), *plane_n, *plane_d)
                     {
-                        push_crossing(p, &mut crossings);
+                        push_crossing(p, None, &mut crossings);
                     }
                 }
                 _ => {}
@@ -2367,7 +2371,7 @@ fn trim_ellipse_to_boundary_crossings(
         let ep = topo.vertex(edge.end()).ok()?.point();
         plane_poly.push(if oe.is_forward() { sp } else { ep });
         for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
-            push_crossing(p, &mut crossings);
+            push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
 
@@ -2439,9 +2443,9 @@ fn trim_ellipse_to_boundary_crossings(
     }
 
     // Map each crossing to its angular parameter, sort by angle.
-    let mut t_pts: Vec<(f64, Point3)> = crossings
+    let mut t_pts: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = crossings
         .into_iter()
-        .map(|p| (sec.project(p).rem_euclid(std::f64::consts::TAU), p))
+        .map(|(p, src)| (sec.project(p).rem_euclid(std::f64::consts::TAU), p, src))
         .collect();
     t_pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Drop near-duplicate parameters (a crossing hit by two adjacent edges).
@@ -2455,9 +2459,9 @@ fn trim_ellipse_to_boundary_crossings(
     let mut arcs = Vec::new();
     let m = t_pts.len();
     for i in 0..m {
-        let (t0, p0) = t_pts[i];
+        let (t0, p0, src0) = t_pts[i];
         let next = (i + 1) % m;
-        let (mut t1, p1) = t_pts[next];
+        let (mut t1, p1, src1) = t_pts[next];
         if t1 <= t0 {
             t1 += std::f64::consts::TAU;
         }
@@ -2475,9 +2479,18 @@ fn trim_ellipse_to_boundary_crossings(
         // open Circle/Ellipse edge as the SHORTER arc between its endpoints,
         // so a span ≥ π would flip to the complementary arc, and a diametric
         // pair would collide in the endpoint-keyed edge merge.
+        //
+        // An arc whose ends both lie on one of the plane face's straight
+        // edges shares both endpoints with that edge's piece (a co-endpoint
+        // lens: a rod's floor section over the plate edge it pokes past),
+        // which `merge_duplicate_edges` would fold into one edge, so it is
+        // split at its midpoint too.
         let span = t1 - t0;
+        let lens = src0.is_some() && src0 == src1;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n_sub = (span / (std::f64::consts::PI * 0.999)).ceil().max(1.0) as usize;
+        let n_sub = (span / (std::f64::consts::PI * 0.999))
+            .ceil()
+            .max(if lens { 2.0 } else { 1.0 }) as usize;
         #[allow(clippy::cast_precision_loss)]
         let step = span / n_sub as f64;
         let mut prev_t = t0;

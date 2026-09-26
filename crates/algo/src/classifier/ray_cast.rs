@@ -1607,6 +1607,7 @@ pub fn compute_solid_bbox(
     topo: &Topology,
     solid: SolidId,
 ) -> Result<brepkit_math::aabb::Aabb3, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
     let mut points = Vec::new();
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     for fid in faces {
@@ -1614,18 +1615,19 @@ pub fn compute_solid_bbox(
         let wire = topo.wire(face.outer_wire())?;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let start_pos = topo.vertex(edge.start())?.point();
-            let end_pos = topo.vertex(edge.end())?.point();
-            points.push(start_pos);
-            points.push(end_pos);
-            // Curved edges can bulge beyond their endpoints
-            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
-                let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
-                let mid = edge
-                    .curve()
-                    .evaluate_with_endpoints(t_mid, start_pos, end_pos);
-                points.push(mid);
+            points.push(topo.vertex(edge.start())?.point());
+            points.push(topo.vertex(edge.end())?.point());
+            // A curved edge bulges past its endpoints, a closed rim all the
+            // way round from its one vertex: the pre-filters this box gates
+            // prune only what it truly misses.
+            let bulge = match edge.curve() {
+                EdgeCurve::Line => None,
+                EdgeCurve::Circle(c) => Some(c.aabb()),
+                EdgeCurve::Ellipse(e) => Some(e.aabb()),
+                EdgeCurve::NurbsCurve(n) => Some(n.aabb()),
+            };
+            if let Some(b) = bulge {
+                points.extend([b.min, b.max]);
             }
         }
     }

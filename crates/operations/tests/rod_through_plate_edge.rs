@@ -5,7 +5,8 @@
 //! `(u, v)`. Each fuse matches its closed form and classifies points on
 //! either side of the tool's wall right, each wall matches its area, and
 //! each wall's own mesh stays within the deflection of the surface, whichever
-//! way the tool's seam points.
+//! way the tool's seam points. The rod cut by the plate, cutting it and within
+//! it is exact too, and joins an N-way fuse, with its seam away from the plate.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -218,5 +219,98 @@ fn a_cone_through_a_plate_edge_fuses_whole() {
                 "{label}: wall mesh sags {sag}"
             );
         }
+    }
+}
+
+/// The rod `make_cylinder(1, 10)` at `(cx, 5, -4)`, turned `spin` about its
+/// axis, with the plate `[0, 10] x [0, 10] x [0, 2]`.
+fn rod_and_plate(cx: f64, spin: f64) -> (Topology, SolidId, SolidId) {
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+    let rod = make_cylinder(&mut topo, 1.0, 10.0).unwrap();
+    let place = Mat4::translation(cx, 5.0, -4.0) * Mat4::rotation_z(spin);
+    transform_solid(&mut topo, rod, &place).unwrap();
+    (topo, rod, plate)
+}
+
+/// Turned so its seam lies away from the plate, the rod's floor and top
+/// sections each run from one crossing of the plate's edge at `x = 0` to the
+/// other, sharing both ends with that edge's piece; the Cut, the plate less
+/// the rod and the Intersect keep the segments between them. Each is exact,
+/// valid, watertight, within `1e-3` of its closed form, and puts a point in
+/// the overlap, one in the rod beside the plate and one in the plate right.
+#[test]
+fn a_rod_cut_at_a_plate_edge_keeps_its_segments() {
+    use PointClassification::{Inside, Outside};
+    for cx in [-0.5, -0.3, 0.4] {
+        let overlap = 2.0 * disc_past_zero(1.0, cx);
+        let (in_overlap, beside) = (
+            Point3::new(0.5 * (cx.max(0.0) + cx + 1.0), 5.0, 1.0),
+            Point3::new(0.5 * (cx - 1.0), 5.0, 1.0),
+        );
+        let in_plate = Point3::new(5.0, 5.0, 1.0);
+        for spin in [0.0, 1.0, PI] {
+            for (name, truth, classes) in [
+                (
+                    "rod less plate",
+                    10.0 * PI - overlap,
+                    [Outside, Inside, Outside],
+                ),
+                (
+                    "plate less rod",
+                    200.0 - overlap,
+                    [Outside, Outside, Inside],
+                ),
+                ("rod within plate", overlap, [Inside, Outside, Outside]),
+            ] {
+                let label = format!("cx {cx} spin {spin}: {name}");
+                let (mut topo, rod, plate) = rod_and_plate(cx, spin);
+                let result = match name {
+                    "rod less plate" => boolean(&mut topo, BooleanOp::Cut, rod, plate),
+                    "plate less rod" => boolean(&mut topo, BooleanOp::Cut, plate, rod),
+                    _ => boolean(&mut topo, BooleanOp::Intersect, rod, plate),
+                }
+                .unwrap();
+                assert!(
+                    solid_faces(&topo, result).unwrap().len() <= 12,
+                    "{label}: fell back to a mesh"
+                );
+                assert!(
+                    validate_solid(&topo, result).unwrap().is_valid(),
+                    "{label}: invalid"
+                );
+                let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                let volume = solid_volume(&topo, result, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-3 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+                for (p, want) in [in_overlap, beside, in_plate].into_iter().zip(classes) {
+                    let got =
+                        classify_point(&topo, result, p, &ClassifyOptions::default()).unwrap();
+                    assert_eq!(got, want, "{label}: {p:?}");
+                }
+            }
+        }
+    }
+}
+
+/// The plate, the rod turned so its only vertices lie off the plate, and a
+/// box far from both, fused at once: the rod's curved rims reach the plate,
+/// so the pair takes part and the fuse matches its closed form.
+#[test]
+fn a_turned_rod_joins_an_n_way_fuse() {
+    for cx in [-0.5, 0.4] {
+        let (mut topo, rod, plate) = rod_and_plate(cx, PI);
+        let far = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        transform_solid(&mut topo, far, &Mat4::translation(20.0, 20.0, 20.0)).unwrap();
+        let fused = brepkit_algo::gfa::fuse_n(&mut topo, &[plate, rod, far]).unwrap();
+        let truth = 200.0 + 10.0 * PI - 2.0 * disc_past_zero(1.0, cx) + 1.0;
+        let volume = solid_volume(&topo, fused, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "cx {cx}: volume {volume}, truth {truth}"
+        );
     }
 }
