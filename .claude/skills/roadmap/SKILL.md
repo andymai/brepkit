@@ -216,6 +216,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A box less a frustum through it fell back to a mesh (CLOSED 2026-09-26; pin `a_box_less_a_frustum_through_it_keeps_both_pieces` in `crates/operations/tests/box_less_frustum.rs`)**:
+  the engine's two pieces (a slab under the frustum, the box's corners
+  ringing its top) were exact, but the multi-piece gate rejected a Cut
+  whose piece's bounding-box centre read inside the tool, and a ring's
+  centre lies in its own hole; a centre the result does not hold passes now
+  when one of the piece's plane faces lies outside the tool, which no stray
+  piece of the tool's interior can show.
+
 - **The ball less a column through both poles fell back, and results in pieces read invalid (CLOSED 2026-09-26; pins `a_column_through_both_poles_keeps_its_collars` and `a_ball_less_a_turned_column_keeps_its_four_caps` in `crates/operations/tests/sphere_box_corner.rs`, `a_solid_cut_in_two_validates` in `crates/operations/src/validate/tests.rs`)**:
   `split_noseam_by_arrangement` returned only the collar and dropped the
   lunes past the walls, and split the seam at the wall arcs' crests too;

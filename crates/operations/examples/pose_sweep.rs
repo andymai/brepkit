@@ -190,6 +190,12 @@ struct Case {
     truth: Option<[f64; 3]>,
 }
 
+/// The frustum `make_cone(5, 2, 10)` within the box `|x|, |y| < 3`: its
+/// section is a disc while `r = 5 - 0.3 z` is at most 3, the disc less four
+/// segments up to `3 sqrt(2)`, then the whole square, integrated in `z`
+/// (Simpson over each stretch, 20000 panels).
+const FRUSTUM_IN_BOX_3: f64 = 296.604_274_040_955_94;
+
 /// The four caps of a ball of radius 3 past the walls `|x|, |y| = 3 - h`.
 fn caps(h: f64) -> f64 {
     4.0 * PI * h * h * (9.0 - h) / 3.0
@@ -327,7 +333,11 @@ fn cases() -> Vec<Case> {
                 lo: [-3.0, -3.0, -1.0],
                 hi: [3.0, 3.0, 11.0],
             })]),
-            truth: None,
+            truth: Some([
+                130.0 * PI - FRUSTUM_IN_BOX_3,
+                FRUSTUM_IN_BOX_3,
+                432.0 - FRUSTUM_IN_BOX_3,
+            ]),
         },
         Case {
             name: "frustum | x > 1",

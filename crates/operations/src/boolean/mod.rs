@@ -722,7 +722,7 @@ fn boolean_inner(
                     || brepkit_algo::classifier::try_build_analytic_classifier(topo, b)
                         .as_ref()
                         .is_none_or(|cls_b| {
-                            all_component_centers_outside(topo, &components_vec, cls_b, tol)
+                            all_component_centers_outside(topo, result, &components_vec, cls_b, tol)
                         });
                 // Intersect's mirror hazard: GFA could emit a piece that is not
                 // part of A∩B at all. Reject when any component's AABB-centre
@@ -2829,19 +2829,19 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
     specs
 }
 
-/// True when the outer-shell face components represent disjoint solid
-/// pieces (e.g., a previous cut split one solid into N parts), false
-/// when one component is concentric inside another (a hollow solid:
-/// outer surface + cavity surface both live in the outer shell).
-///
-/// The check is AABB-based: if any component's bounding box is
-/// strictly contained in another's, treat the whole solid as hollow
-/// and skip the multi-region split path.
-/// Check that every component's AABB centre classifies as outside the
-/// supplied classifier. Used to reject multi-region GFA Cut results that
-/// erroneously include the tool's interior as one of the pieces.
+/// Check that no component's AABB centre lies inside the supplied
+/// classifier, unless the piece rings the tool. Used to reject multi-region
+/// GFA Cut results that erroneously include the tool's interior as one of
+/// the pieces. A piece ringing the tool (a box's corners around a cone) has
+/// its centre in its own hole, inside the tool, so a centre the result does
+/// not hold passes when one of the piece's plane faces lies outside the tool
+/// (its centroid, taken inside the face): a stray piece of the tool's
+/// interior has every face inside the tool or on it, whatever its shape or
+/// its faces' orientation. A centre held by another piece rejects too,
+/// conservatively.
 fn all_component_centers_outside(
     topo: &Topology,
+    result: SolidId,
     components: &[Vec<FaceId>],
     classifier: &brepkit_algo::classifier::AnalyticClassifier,
     tol: brepkit_math::tolerance::Tolerance,
@@ -2882,11 +2882,51 @@ fn all_component_centers_outside(
             (min.y() + max.y()) * 0.5,
             (min.z() + max.z()) * 0.5,
         );
-        if matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
+        if !matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
+            continue;
+        }
+        let held = !matches!(
+            brepkit_algo::classifier::classify_ray_cast(topo, result, centre),
+            Ok(FaceClass::Outside)
+        );
+        if held
+            || !comp.iter().any(|&fid| {
+                planar_face_centroid(topo, fid).is_some_and(|c| {
+                    matches!(classifier.classify(c, tol), Some(FaceClass::Outside))
+                })
+            })
+        {
             return false;
         }
     }
     true
+}
+
+/// The area centroid of a plane face's sampled boundary, when it lies in the
+/// face.
+fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
+    if !topo.face(fid).ok()?.surface().is_planar() {
+        return None;
+    }
+    let (outer, holes, normal) =
+        brepkit_algo::classifier::planar_face_polygons(topo, fid).ok()??;
+    let base = outer[0];
+    let (mut weight, mut sum) = (0.0, Vec3::new(0.0, 0.0, 0.0));
+    for pair in outer[1..].windows(2) {
+        let (a, b) = (pair[0] - base, pair[1] - base);
+        let area = a.cross(b).dot(normal);
+        weight += area;
+        sum += (a + b) * (area / 3.0);
+    }
+    let extent = outer
+        .iter()
+        .fold(0.0_f64, |m, p| m.max((*p - base).length()));
+    if weight.abs() <= 1e-12 * extent * extent {
+        return None;
+    }
+    let centroid = base + sum * (1.0 / weight);
+    brepkit_algo::classifier::point_in_planar_region(centroid, &outer, &holes, &normal)
+        .then_some(centroid)
 }
 
 /// Centre of a face component's vertex AABB, or `None` for an empty component.
@@ -2985,6 +3025,11 @@ fn any_vertex_of(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
     None
 }
 
+/// True when the face components are side-by-side pieces (a cut split one
+/// solid into N parts), false when one nests inside another (a hollow solid:
+/// outer surface and cavity surface in one shell). Overlapping boxes pass;
+/// a box inside another's is only a suspect, rejected when a ray-parity
+/// probe finds the inner piece enclosed.
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
     let aabbs: Vec<(Point3, Point3)> = components
         .iter()

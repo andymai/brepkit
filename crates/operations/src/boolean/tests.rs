@@ -8278,3 +8278,53 @@ fn cut_wedge_by_thin_radial_strut_is_not_empty() {
         "vol(A−B) + vol(A∩B) = vol(A) violated: {cut_vol} + {overlap_vol} ≠ {base_vol}"
     );
 }
+
+/// The multi-region Cut gate's stray-piece check on a square ring (a frame
+/// whose bounding-box centre lies in its hole): within a slab tool it is a
+/// stray piece of the tool's interior, rejected though the ring does not hold
+/// its centre, since none of its plane faces lies outside the slab; clear of
+/// the slab it is a genuine piece. A stray ring flush with the slab's faces
+/// and oriented inside out (as a Cut keeps the tool's faces) is rejected too.
+#[test]
+fn a_ring_inside_the_tool_is_a_stray_piece() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+
+    for (z, height, flipped, stray) in [
+        (0.0, 1.0, false, true),
+        (3.0, 1.0, false, false),
+        (0.0, 2.0, true, true),
+    ] {
+        let mut topo = Topology::new();
+        let frame = crate::primitives::make_box(&mut topo, 4.0, 4.0, height).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            frame,
+            &Mat4::translation(-2.0, -2.0, z - height / 2.0),
+        )
+        .unwrap();
+        let hole = crate::primitives::make_box(&mut topo, 2.0, 2.0, 3.0).unwrap();
+        crate::transform::transform_solid(&mut topo, hole, &Mat4::translation(-1.0, -1.0, z - 1.5))
+            .unwrap();
+        let ring = boolean(&mut topo, BooleanOp::Cut, frame, hole).unwrap();
+        let slab = crate::primitives::make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+        crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(-5.0, -5.0, -1.0))
+            .unwrap();
+        let tool = brepkit_algo::classifier::try_build_analytic_classifier(&topo, slab).unwrap();
+        let comps = vec![solid_faces(&topo, ring).unwrap()];
+        if flipped {
+            for &face in &comps[0] {
+                let face = topo.face_mut(face).unwrap();
+                let reversed = face.is_reversed();
+                face.set_reversed(!reversed);
+            }
+        }
+        let tol = Tolerance::new();
+
+        assert_eq!(
+            all_component_centers_outside(&topo, ring, &comps, &tool, tol),
+            !stray,
+            "z = {z}, flipped {flipped}: a genuine piece"
+        );
+    }
+}
