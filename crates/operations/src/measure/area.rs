@@ -111,6 +111,13 @@ pub fn face_area(
             if let Some(area) = sphere_face_uv_area(topo, face_id, sph, holes, deflection)? {
                 return Ok(area);
             }
+            // The outer loop winds the axis, so the face is the region on its
+            // left around a pole. A simple loop turns 0 or a full turn, less the
+            // steps across the gaps a curve's ends may leave at its vertices.
+            let (turn, sweep) = sphere_wire_sweeps(topo, sph, face.outer_wire())?;
+            if turn.abs() > std::f64::consts::PI {
+                return Ok(r * r * (std::f64::consts::TAU - sweep) - holes);
+            }
             if positions.len() >= 3 {
                 let v_vals: Vec<f64> = positions.iter().map(|p| sph.project_point(*p).1).collect();
                 let avg_v: f64 = v_vals.iter().sum::<f64>() / v_vals.len() as f64;
@@ -225,40 +232,57 @@ fn sphere_hole_area(
     sphere: &brepkit_math::surfaces::SphericalSurface,
     wire_id: brepkit_topology::wire::WireId,
 ) -> Result<f64, crate::OperationsError> {
-    use std::f64::consts::{PI, TAU};
+    use std::f64::consts::TAU;
     let r2 = sphere.radius() * sphere.radius();
     if let Some(signed) = sphere_wire_signed_area(topo, sphere, wire_id)? {
         return Ok(signed.abs().min(2.0 * TAU * r2 - signed.abs()));
     }
+    let (_, sweep) = sphere_wire_sweeps(topo, sphere, wire_id)?;
+    Ok(r2 * (TAU - sweep.abs()))
+}
+
+/// `(∮ du, ∮ sin v du)` along a sphere wire as it runs: a loop winding the
+/// axis once makes a turn in `u`, and the region on its left (the pole the
+/// turn's sign names) has area `R² (2π − ∮ sin v du)` for either pole. The
+/// sine sweep takes midpoint sums at two resolutions and a Richardson step.
+fn sphere_wire_sweeps(
+    topo: &Topology,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Result<(f64, f64), crate::OperationsError> {
+    use std::f64::consts::{PI, TAU};
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
-    let mut sweep = 0.0;
+    let (mut turn, mut sweep) = (0.0, 0.0);
     for oe in topo.wire(wire_id)?.edges() {
         let edge = topo.edge(oe.edge())?;
         let (sp, ep) = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
         let at = |t: f64| sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
-        let sums = |n: usize| {
-            let mut sweep = 0.0;
-            #[allow(clippy::cast_precision_loss)]
-            let step = (to - from) / n as f64;
-            let mut u_prev = at(from).0;
-            for k in 0..n {
+        for (from, to) in super::helpers::traversal_spans(edge, oe.is_forward(), sp, ep) {
+            let sums = |n: usize| {
+                let (mut turn, mut sweep) = (0.0, 0.0);
                 #[allow(clippy::cast_precision_loss)]
-                let tk = from + step * k as f64;
-                let (_, vm) = at(tk + 0.5 * step);
-                let (un, _) = at(tk + step);
-                sweep += vm.sin() * wrap(un - u_prev);
-                u_prev = un;
-            }
-            sweep
-        };
-        sweep += (4.0 * sums(256) - sums(128)) / 3.0;
+                let step = (to - from) / n as f64;
+                let mut u_prev = at(from).0;
+                for k in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let tk = from + step * k as f64;
+                    let (_, vm) = at(tk + 0.5 * step);
+                    let (un, _) = at(tk + step);
+                    turn += wrap(un - u_prev);
+                    sweep += vm.sin() * wrap(un - u_prev);
+                    u_prev = un;
+                }
+                (turn, sweep)
+            };
+            let ((turn_fine, fine), (_, coarse)) = (sums(256), sums(128));
+            turn += turn_fine;
+            sweep += (4.0 * fine - coarse) / 3.0;
+        }
     }
-    Ok(r2 * (TAU - sweep.abs()))
+    Ok((turn, sweep))
 }
 
 /// The parameters strictly inside `(ta, tb)`, in traversal order, where a
