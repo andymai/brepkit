@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.44](https://github.com/andymai/brepkit/compare/v4.0.43...v4.0.44) (2026-09-26)
+
+
+### Bug Fixes
+
+* **operations:** keep a Cut's piece that rings the tool ([#1804](https://github.com/andymai/brepkit/issues/1804)) ([1e54dfe](https://github.com/andymai/brepkit/commit/1e54dfe21412c32d718bc0dd235fed12abd58f50))
+
 ## [4.0.43](https://github.com/andymai/brepkit/compare/v4.0.42...v4.0.43) (2026-09-26)
 
 
