@@ -94,32 +94,55 @@ enum FaceGeom {
 }
 
 /// The region between an arc of a circle in a plane face's plane and its
-/// chord. A wire's crossing parity is its chord polygon's XOR each of these,
-/// whichever way the arcs bulge.
+/// chord, or the whole disc of a closed circle. A wire's crossing parity is
+/// its chord polygon's XOR each of these, whichever way the arcs bulge.
 #[derive(Debug, Clone, Copy)]
 struct ArcSegment {
     center: Point3,
     radius: f64,
+    /// A point of the chord, and the direction across it toward the arc
+    /// (zero for a whole disc).
     a: Point3,
-    b: Point3,
-    /// A point of the arc between `a` and `b`.
-    mid: Point3,
+    toward: Vec3,
 }
 
 impl ArcSegment {
-    /// Which side of the chord `p` lies on, about `normal`.
-    fn side(&self, p: Point3, normal: Vec3) -> f64 {
-        (self.b - self.a).cross(p - self.a).dot(normal)
+    /// The segment between the arc from `a` to `b` through `mid` and its chord.
+    fn new(center: Point3, radius: f64, a: Point3, b: Point3, mid: Point3) -> Self {
+        let chord = b - a;
+        let off = mid - a;
+        let along = off.dot(chord) / chord.dot(chord).max(f64::MIN_POSITIVE);
+        Self {
+            center,
+            radius,
+            a,
+            toward: off - chord * along,
+        }
     }
 
-    fn contains(&self, p: Point3, normal: Vec3) -> bool {
-        (p - self.center).length() < self.radius
-            && self.side(p, normal) * self.side(self.mid, normal) > 0.0
+    fn disc(center: Point3, radius: f64) -> Self {
+        Self {
+            center,
+            radius,
+            a: center,
+            toward: Vec3::new(0.0, 0.0, 0.0),
+        }
     }
 
-    fn grazes(&self, p: Point3, normal: Vec3, near: f64) -> bool {
-        ((p - self.center).length() - self.radius).abs() <= near
-            && self.side(p, normal) * self.side(self.mid, normal) >= 0.0
+    fn beyond_chord(&self, p: Point3) -> f64 {
+        if self.toward.length_squared() == 0.0 {
+            1.0
+        } else {
+            (p - self.a).dot(self.toward)
+        }
+    }
+
+    fn contains(&self, p: Point3) -> bool {
+        (p - self.center).length() < self.radius && self.beyond_chord(p) > 0.0
+    }
+
+    fn grazes(&self, p: Point3, near: f64) -> bool {
+        ((p - self.center).length() - self.radius).abs() <= near && self.beyond_chord(p) >= 0.0
     }
 }
 
@@ -503,8 +526,9 @@ fn wire_polygon(
     wire_polygon_arcs(topo, wire_id, None).map(|(verts, _)| verts)
 }
 
-/// [`wire_polygon`], with each open arc of a circle in the plane through
-/// `plane` (a normal) kept as its chord and returned as an [`ArcSegment`].
+/// [`wire_polygon`], with each arc of a circle whose normal is parallel to
+/// `plane` (the face's normal) kept as its chord, or no chord for a closed
+/// circle, and returned as an [`ArcSegment`].
 fn wire_polygon_arcs(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
@@ -519,23 +543,24 @@ fn wire_polygon_arcs(
         let raw_start = topo.vertex(edge.start())?.point();
         let raw_end = topo.vertex(edge.end())?.point();
         let mut pts = vec![raw_start];
-        let in_plane_arc = match (edge.curve(), plane) {
-            (brepkit_topology::edge::EdgeCurve::Circle(c), Some(n)) => {
-                (raw_start - raw_end).length() >= 1e-9 && c.normal().cross(n).length() <= 1e-6
-            }
-            _ => false,
-        };
-        if in_plane_arc && let brepkit_topology::edge::EdgeCurve::Circle(c) = edge.curve() {
-            let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
-            arcs.push(ArcSegment {
-                center: c.center(),
-                radius: c.radius(),
-                a: raw_start,
-                b: raw_end,
-                mid: edge
+        if let (brepkit_topology::edge::EdgeCurve::Circle(c), Some(n)) = (edge.curve(), plane)
+            && c.normal().cross(n).length() <= 1e-6
+        {
+            if (raw_start - raw_end).length() < 1e-9 {
+                arcs.push(ArcSegment::disc(c.center(), c.radius()));
+            } else {
+                let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
+                let mid = edge
                     .curve()
-                    .evaluate_with_endpoints(0.5 * (t0 + t1), raw_start, raw_end),
-            });
+                    .evaluate_with_endpoints(0.5 * (t0 + t1), raw_start, raw_end);
+                arcs.push(ArcSegment::new(
+                    c.center(),
+                    c.radius(),
+                    raw_start,
+                    raw_end,
+                    mid,
+                ));
+            }
         } else if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
             let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
             let is_closed = (raw_start - raw_end).length() < 1e-9;
@@ -892,10 +917,7 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             raw_normal
         };
 
-        let Some(&on_plane) = verts.first().or_else(|| arcs.first().map(|a| &a.a)) else {
-            continue;
-        };
-        let d = dot_normal_point(normal, on_plane);
+        let d = dot_normal_point(normal, verts[0]);
         result.push(FaceGeom::Planar {
             verts,
             holes,
@@ -1430,10 +1452,15 @@ fn ray_face_crossing(
         || arcs
             .iter()
             .chain(hole_arcs.iter().flatten())
-            .any(|a| a.grazes(hit, normal, near));
+            .any(|a| a.grazes(hit, near));
+    // With arcs, the chord polygon is read by crossing parity: a boundary can
+    // cross an arc's chord, where the polygon winds twice.
     let within = |poly: &[Point3], segments: &[ArcSegment]| {
-        let in_segments = segments.iter().filter(|a| a.contains(hit, normal)).count() % 2 == 1;
-        point_in_face_3d(hit, poly, &normal) != in_segments
+        if segments.is_empty() {
+            return point_in_face_3d(hit, poly, &normal);
+        }
+        let in_segments = segments.iter().filter(|a| a.contains(hit)).count() % 2 == 1;
+        (winding_in_plane(hit, poly, &normal) % 2 != 0) != in_segments
     };
     if !within(verts, arcs) {
         return (0, boundary_graze);
@@ -1702,6 +1729,23 @@ pub fn largest_u_gap(u_samples: &[f64]) -> Option<(f64, f64)> {
         }
     }
     if best > 0.2 { Some(gap) } else { None }
+}
+
+/// The winding number of a closed polygon about a point in its plane, read
+/// in the coordinate plane the normal leans toward most.
+fn winding_in_plane(point: Point3, polygon: &[Point3], normal: &Vec3) -> i32 {
+    let (ax, ay, az) = (normal.x().abs(), normal.y().abs(), normal.z().abs());
+    let flat = |p: &Point3| {
+        if az >= ax && az >= ay {
+            Point2::new(p.x(), p.y())
+        } else if ay >= ax {
+            Point2::new(p.x(), p.z())
+        } else {
+            Point2::new(p.y(), p.z())
+        }
+    };
+    let poly: Vec<Point2> = polygon.iter().map(flat).collect();
+    brepkit_math::predicates::winding_number(flat(&point), &poly)
 }
 
 /// Test if a 3D point lies inside a planar face polygon by projecting to 2D.
