@@ -903,13 +903,16 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
             // captures, e.g. the sphere − through-cylinder band). The robust
             // test is consulted ONLY below, never overriding a positive volume.
             true
-        } else if shells.len() == 1 {
+        } else if shells.len() == 1 || fan_is_flat(topo, shell, signed_vol) {
             // A LONE shell read NEGATIVE: either it is genuinely inward (a Cut
             // leaving only a cavity component — must be rejected) or its
             // corner-fan volume sign-flipped on a doubly-curved band whose
             // corners barely bound the wrapped surface (the torus−box notch
             // band). Disambiguate with the curvature-robust surface-normal flux;
             // fall back to the (negative) volume sign if it is inconclusive.
+            // A shell whose corners all lie in one plane (a ball's cap cut off
+            // by a wall: two lunes and the wall, cornered on the wall) has no
+            // corner-fan volume, so its sign is rounding, lone or not.
             shell_is_outward_oriented(topo, shell).unwrap_or(false)
         } else {
             // Multi-shell: a negative shell is the tool's interior cavity (hole).
@@ -946,6 +949,21 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
     );
 
     (growth, holes)
+}
+
+/// Whether a shell's corner-fan volume is rounding next to its extent.
+fn fan_is_flat(topo: &Topology, faces: &[FaceId], signed_vol: f64) -> bool {
+    let corners = faces
+        .iter()
+        .filter_map(|&fid| topo.face(fid).ok())
+        .filter_map(|face| topo.wire(face.outer_wire()).ok())
+        .flat_map(|wire| wire.edges().to_vec())
+        .filter_map(|oe| topo.edge(oe.edge()).ok())
+        .filter_map(|edge| topo.vertex(edge.start()).ok())
+        .map(brepkit_topology::vertex::Vertex::point);
+    let bbox = brepkit_math::aabb::Aabb3::from_points(corners);
+    let extent = (bbox.max - bbox.min).length();
+    signed_vol.abs() <= 1e-9 * extent * extent * extent
 }
 
 /// Whether a shell is closed: every quantized boundary edge is shared by an

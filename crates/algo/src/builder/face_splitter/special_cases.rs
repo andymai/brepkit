@@ -402,7 +402,8 @@ fn split_noseam_by_arrangement(
         return Vec::new();
     };
     let mut region = loops[region_idx].clone();
-    if net_u(&region) * parent_net_u < 0.0 {
+    let flip = net_u(&region) * parent_net_u < 0.0;
+    if flip {
         region = reverse_loop(&region);
     }
 
@@ -413,7 +414,7 @@ fn split_noseam_by_arrangement(
     let region_holes: Vec<Vec<OrientedPCurveEdge>> =
         hole_loops.iter().map(|hl| reverse_loop(hl)).collect();
 
-    vec![SplitSubFace {
+    let mut pieces = vec![SplitSubFace {
         surface: surface.clone(),
         outer_wire: region,
         inner_wires: region_holes,
@@ -421,7 +422,76 @@ fn split_noseam_by_arrangement(
         parent: face_id,
         rank,
         precomputed_interior: Some(interior_3d),
-    }]
+    }];
+
+    // The lunes past the chains (a wall's cap cut off by the seam) lie on the
+    // face too, and a cut keeps them. The walk traces every region of the
+    // face with one orientation, the region past the seam with the other, so
+    // a lune is a loop that runs a seam arc the way the collar does.
+    let on_seam = |e: &OrientedPCurveEdge| {
+        edge_samples(e, 2)
+            .iter()
+            .all(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
+    };
+    let Some(collar_way) = loops[region_idx]
+        .iter()
+        .find(|e| on_seam(e))
+        .map(|e| e.forward)
+    else {
+        return pieces;
+    };
+    for (i, l) in loops.iter().enumerate() {
+        if i == region_idx || loop_is_sliver(l) {
+            continue;
+        }
+        let Some(seam) = l.iter().find(|e| on_seam(e) && e.forward == collar_way) else {
+            continue;
+        };
+        if l.iter().all(&on_seam) {
+            continue;
+        }
+        let Some(interior) = lune_interior(surface, seam, l, seam_n, seam_p) else {
+            return Vec::new();
+        };
+        pieces.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: if flip { reverse_loop(l) } else { l.clone() },
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(interior),
+        });
+    }
+    pieces
+}
+
+/// A point inside a lune of a sphere face: halfway along the great circle
+/// from the middle of its seam arc to the point of its other edges farthest
+/// from the seam plane.
+fn lune_interior(
+    surface: &FaceSurface,
+    seam: &OrientedPCurveEdge,
+    lune: &[OrientedPCurveEdge],
+    seam_n: brepkit_math::vec::Vec3,
+    seam_p: Point3,
+) -> Option<Point3> {
+    let FaceSurface::Sphere(sphere) = surface else {
+        return None;
+    };
+    let base = edge_samples(seam, 2)[1];
+    let crest = lune
+        .iter()
+        .flat_map(|e| edge_samples(e, 8))
+        .max_by(|a, b| {
+            let da = (*a - seam_p).dot(seam_n).abs();
+            let db = (*b - seam_p).dot(seam_n).abs();
+            da.total_cmp(&db)
+        })?;
+    let dir = ((base - sphere.center()) + (crest - sphere.center()))
+        .normalize()
+        .ok()?;
+    Some(sphere.center() + dir * sphere.radius())
 }
 
 /// Reconstruct a sphere face's seam (boundary) as its exact circle and split it
@@ -458,9 +528,13 @@ fn build_seam_arcs(
     let seam_center = sphere.center() + plane_n * h;
     let seam_circle = Circle3D::new(seam_center, plane_n, seam_radius).ok()?;
 
-    // Crossing points = the open arcs' endpoints (they lie on the seam circle).
+    // Crossing points = the open arcs' ends on the seam circle (an arc split
+    // at its crest also ends off it, where the seam has no vertex).
     let mut unique: Vec<Point3> = Vec::new();
     for p in open_sections.iter().flat_map(|a| [a.start_3d, a.end_3d]) {
+        if (p - plane_pt).dot(plane_n).abs() > tol * 1e3 {
+            continue;
+        }
         if !unique.iter().any(|q| (*q - p).length() < tol * 100.0) {
             unique.push(p);
         }

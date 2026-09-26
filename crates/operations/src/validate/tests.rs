@@ -144,6 +144,25 @@ fn solids_with_cavities_validate() {
     }
 }
 
+/// A block cut in two by a slab keeps both pieces in its outer shell; each is
+/// a closed piece of its own in the Euler term.
+#[test]
+fn a_solid_cut_in_two_validates() {
+    use brepkit_math::mat::Mat4;
+
+    use crate::boolean::{BooleanOp, boolean};
+
+    let mut topo = Topology::new();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let slab = crate::primitives::make_box(&mut topo, 20.0, 20.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(-5.0, -5.0, 4.0))
+        .unwrap();
+    let pieces = boolean(&mut topo, BooleanOp::Cut, block, slab).unwrap();
+    assert!(topo.solid(pieces).unwrap().inner_shells().is_empty());
+    let report = validate_solid(&topo, pieces).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}
+
 #[test]
 fn cylinder_solid_validates() {
     let mut topo = Topology::new();

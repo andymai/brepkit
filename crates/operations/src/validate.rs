@@ -108,9 +108,6 @@ pub fn euler_characteristic(
     Ok(euler)
 }
 
-/// Validate a solid, returning a report of all issues found.
-///
-/// Checks performed:
 /// Returns `true` if every edge in the face is a straight line.
 fn face_all_edges_straight(
     topo: &Topology,
@@ -128,8 +125,47 @@ fn face_all_edges_straight(
     Ok(true)
 }
 
+/// The number of connected groups of faces, joined across shared edges.
+fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
+    faces: &[brepkit_topology::face::FaceId],
+    edge_map: &std::collections::HashMap<usize, U>,
+) -> usize {
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let index: std::collections::HashMap<usize, usize> = faces
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.index(), i))
+        .collect();
+    let mut parent: Vec<usize> = (0..faces.len()).collect();
+    for users in edge_map.values() {
+        let mut users = users
+            .as_ref()
+            .iter()
+            .filter_map(|f| index.get(&f.index()).copied());
+        let Some(first) = users.next() else { continue };
+        for other in users {
+            let (a, b) = (root(&mut parent, first), root(&mut parent, other));
+            parent[a] = b;
+        }
+    }
+    (0..faces.len())
+        .filter(|&i| root(&mut parent, i) == i)
+        .count()
+}
+
+/// Validate a solid, returning a report of all issues found.
+///
+/// Checks performed:
 /// 1. **Euler-Poincaré**: V - E + F = 2(S - g) + L for a genus-g closed
-///    solid of S shells whose faces carry L inner loops
+///    solid of S pieces (connected groups of faces: the outer shell, each
+///    cavity, and each disjoint lump a boolean leaves in the outer shell)
+///    whose faces carry L inner loops
 /// 2. **Manifold edges**: each edge shared by exactly 2 faces
 /// 3. **Boundary edges**: no edge shared by only 1 face (open shell)
 /// 4. **Degenerate faces**: each face has at least 3 vertices
@@ -138,9 +174,8 @@ fn face_all_edges_straight(
 /// 7. **Degenerate face area**: near-zero polygon area warning for planar faces
 /// 8. **Zero-length edges**: edges with coincident start/end vertices
 /// 9. **Empty wires**: wires with no edges
-/// 10. **Shell connectivity**: all faces reachable from any face
-/// 11. **Redundant faces**: same face ID appearing twice in shell
-/// 12. **Edge vertex consistency**: edge vertices belong to the solid
+/// 10. **Redundant faces**: same face ID appearing twice in shell
+/// 11. **Edge vertex consistency**: edge vertices belong to the solid
 ///
 /// # Errors
 ///
@@ -177,9 +212,12 @@ pub fn validate_solid_with_options(
 
     // Euler-Poincaré formula for a cell complex with inner loops:
     //   V - E + F = 2(S - g) + L
-    // where S is the number of shells (the outer one plus each cavity), g is
-    // the total genus and L is the total number of inner wire loops across
-    // all faces. For a genus-0 solid with no cavities or holes: V-E+F = 2.
+    // where S is the number of connected pieces, g is the total genus and L
+    // is the total number of inner wire loops across all faces. For a
+    // genus-0 solid with no cavities or holes: V-E+F = 2. A cavity is a
+    // piece of its own (it shares no edge with the outer shell), and so is
+    // each disjoint lump a boolean keeps in the outer shell (a ball cut in
+    // two by a slab).
     let mut total_inner_loops: i64 = 0;
     let faces = explorer::solid_faces(topo, solid)?;
     for fid in &faces {
@@ -194,21 +232,20 @@ pub fn validate_solid_with_options(
     let euler = (v as i64) - (e as i64) + (f as i64);
     // Adjusted Euler: subtract inner loops to get the standard characteristic.
     let adjusted_euler = euler - total_inner_loops;
+    let edge_map = explorer::edge_to_face_map(topo, solid)?;
     #[allow(clippy::cast_possible_wrap)]
-    let shells = 1 + topo.solid(solid)?.inner_shells().len() as i64;
-    let genus_times_2 = 2 * shells - adjusted_euler;
+    let pieces = connected_pieces(&faces, &edge_map) as i64;
+    let genus_times_2 = 2 * pieces - adjusted_euler;
     if genus_times_2 < 0 || genus_times_2 % 2 != 0 {
         issues.push(ValidationIssue {
             severity: Severity::Error,
             description: format!(
                 "Euler characteristic V-E+F = {euler} is invalid \
-                 (expected V-E+F = 2(S-g)+L for a genus g >= 0, with S={shells} \
-                 shells and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
+                 (expected V-E+F = 2(S-g)+L for a genus g >= 0, with S={pieces} \
+                 pieces and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
             ),
         });
     }
-
-    let edge_map = explorer::edge_to_face_map(topo, solid)?;
     let mut boundary_edges = 0;
     let mut non_manifold_edges = 0;
 
@@ -403,53 +440,6 @@ pub fn validate_solid_with_options(
                         "wire {} on face {} has no edges",
                         wire_id.index(),
                         fid.index()
-                    ),
-                });
-            }
-        }
-    }
-
-    // Shell connectivity: within each shell, every face must be reachable
-    // from any other across shared edges. A cavity is its own shell and
-    // shares no edge with the outer one. Solids of genus > 0 skip the check.
-    if genus_times_2 == 0 {
-        let solid_data = topo.solid(solid)?;
-        let shells: Vec<_> = std::iter::once(solid_data.outer_shell())
-            .chain(solid_data.inner_shells().iter().copied())
-            .collect();
-        for shell_id in shells {
-            let shell_faces = topo.shell(shell_id)?.faces();
-            let Some(first) = shell_faces.first() else {
-                continue;
-            };
-            let face_set: std::collections::HashSet<usize> =
-                shell_faces.iter().map(|f| f.index()).collect();
-            let mut visited = std::collections::HashSet::new();
-            let mut queue = std::collections::VecDeque::new();
-
-            visited.insert(first.index());
-            queue.push_back(*first);
-
-            while let Some(current) = queue.pop_front() {
-                for adj_faces in edge_map.values() {
-                    if adj_faces.iter().any(|f| f.index() == current.index()) {
-                        for neighbor in adj_faces {
-                            if face_set.contains(&neighbor.index())
-                                && visited.insert(neighbor.index())
-                            {
-                                queue.push_back(*neighbor);
-                            }
-                        }
-                    }
-                }
-            }
-
-            let unreachable = face_set.len() - visited.len();
-            if unreachable > 0 {
-                issues.push(ValidationIssue {
-                    severity: Severity::Error,
-                    description: format!(
-                        "shell is disconnected: {unreachable} face(s) not reachable from first face"
                     ),
                 });
             }

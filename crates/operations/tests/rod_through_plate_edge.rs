@@ -309,6 +309,8 @@ fn a_rod_cut_at_a_plate_edge_keeps_its_segments() {
 /// characteristic: the roadmap's N-way row.)
 fn assert_n_way_fuse(topo: &Topology, fused: SolidId, truth: f64, in_tool: Point3, label: &str) {
     use PointClassification::{Inside, Outside};
+    let report = validate_solid(topo, fused).unwrap();
+    assert!(report.is_valid(), "{label}: {:?}", report.issues);
     let mesh = tessellate_solid(topo, fused, 0.01).unwrap();
     assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
     let volume = solid_volume(topo, fused, 0.01).unwrap();
