@@ -25,6 +25,33 @@ fn conic_aabb(center: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)) -> Aabb3
     }
 }
 
+/// The box of the same conic from angle `t0` to `t1`: its ends, and along
+/// each axis the full turn's extremes whose angles lie on the arc.
+fn conic_arc_aabb(
+    center: Point3,
+    (a, u): (f64, Vec3),
+    (b, v): (f64, Vec3),
+    (t0, t1): (f64, f64),
+) -> Aabb3 {
+    use std::f64::consts::TAU;
+    if (t1 - t0).abs() >= TAU {
+        return conic_aabb(center, (a, u), (b, v));
+    }
+    let (lo, hi) = if t1 >= t0 { (t0, t1) } else { (t1, t0) };
+    let at = |t: f64| center + u * (a * t.cos()) + v * (b * t.sin());
+    let mut pts = vec![at(lo), at(hi)];
+    for (ui, vi) in [(u.x(), v.x()), (u.y(), v.y()), (u.z(), v.z())] {
+        let peak = (b * vi).atan2(a * ui);
+        for t in [peak, peak + PI] {
+            let t = lo + (t - lo).rem_euclid(TAU);
+            if t <= hi {
+                pts.push(at(t));
+            }
+        }
+    }
+    Aabb3::from_points(pts)
+}
+
 // ── Line3D ─────────────────────────────────────────────────────────
 
 /// A 3D line defined by origin and direction.
@@ -241,6 +268,17 @@ impl Circle3D {
             self.center,
             (self.radius, self.u_axis),
             (self.radius, self.v_axis),
+        )
+    }
+
+    /// The axis-aligned bounding box of the arc from angle `t0` to `t1`.
+    #[must_use]
+    pub fn arc_aabb(&self, t0: f64, t1: f64) -> Aabb3 {
+        conic_arc_aabb(
+            self.center,
+            (self.radius, self.u_axis),
+            (self.radius, self.v_axis),
+            (t0, t1),
         )
     }
 
@@ -712,6 +750,17 @@ impl Ellipse3D {
             self.center,
             (self.semi_major, self.u_axis),
             (self.semi_minor, self.v_axis),
+        )
+    }
+
+    /// The axis-aligned bounding box of the arc from angle `t0` to `t1`.
+    #[must_use]
+    pub fn arc_aabb(&self, t0: f64, t1: f64) -> Aabb3 {
+        conic_arc_aabb(
+            self.center,
+            (self.semi_major, self.u_axis),
+            (self.semi_minor, self.v_axis),
+            (t0, t1),
         )
     }
 
