@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790413680534,
+  "lastUpdate": 1790414590330,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41417,6 +41417,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 31516032,
             "range": "± 2009274",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0ad85a81966db6281d7f935e5b799374b7cf8afc",
+          "message": "chore(main): release 4.0.38 (#1793)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.38](https://github.com/andymai/brepkit/compare/v4.0.37...v4.0.38)\n(2026-09-26)\n\n\n### Bug Fixes\n\n* **math:** correct NURBS derivatives, curve projection and curvature\nsampling ([#1789](https://github.com/andymai/brepkit/issues/1789))\n([43cc986](https://github.com/andymai/brepkit/commit/43cc986353a14e3cde69ea0504b1dd8806f070ea))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.38 with a fix for NURBS derivative calculations,\ncurve projection, and curvature sampling in `brepkit-math`.\n\n<sup>Written for commit 9aed31212028bb8b6f4a3974ca723934a63389d6.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1793?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-26T09:20:26Z",
+          "tree_id": "f475313a9ebb4b991149f05697e20a20aeac55f7",
+          "url": "https://github.com/andymai/brepkit/commit/0ad85a81966db6281d7f935e5b799374b7cf8afc"
+        },
+        "date": 1790414586897,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012112,
+            "range": "± 2250",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1095229,
+            "range": "± 32658",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13112,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 754875,
+            "range": "± 1909",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42013719,
+            "range": "± 1895043",
             "unit": "ns/iter"
           }
         ]
