@@ -2208,6 +2208,7 @@ fn trim_ellipse_to_boundary_crossings(
     ext_a: &FaceExtent,
     ext_b: &FaceExtent,
 ) -> Option<Vec<RawCurve>> {
+    type Sources = Vec<brepkit_topology::edge::EdgeId>;
     use brepkit_math::curves::{Circle3D, Ellipse3D};
 
     // The raw plane×analytic section: a tilted plane yields an Ellipse, a
@@ -2270,8 +2271,13 @@ fn trim_ellipse_to_boundary_crossings(
     // plane (it is a plane-boundary edge) and the analytic surface, hence on
     // the section ellipse.
     let face = topo.face(plane_face).ok()?;
-    let mut crossings: Vec<Point3> = Vec::new();
-    let push_crossing = |p: Point3, crossings: &mut Vec<Point3>| {
+    // Each crossing keeps the plane face's boundary edges that met it: a
+    // corner meets two, and the analytic face's seam through an edge's
+    // crossing adds none of its own.
+    let mut crossings: Vec<(Point3, Sources)> = Vec::new();
+    let push_crossing = |p: Point3,
+                         src: Option<brepkit_topology::edge::EdgeId>,
+                         crossings: &mut Vec<(Point3, Sources)>| {
         // Keep only points actually on the section curve (rejects a cone's
         // far-nappe root or a seam-line crossing that misses the ellipse —
         // both land millimetres away). The band is fitted-geometry scale,
@@ -2304,8 +2310,10 @@ fn trim_ellipse_to_boundary_crossings(
         // are ~1e-4 apart, so 1e-5 collapses the duplicate without merging
         // genuinely-distinct crossings. Seam crossings are pushed first, so the
         // exact-on-seam point is the one kept.
-        if !crossings.iter().any(|q| (*q - p).length() < 1e-5) {
-            crossings.push(p);
+        if let Some((_, sources)) = crossings.iter_mut().find(|(q, _)| (*q - p).length() < 1e-5) {
+            sources.extend(src.filter(|e| !sources.contains(e)));
+        } else {
+            crossings.push((p, src.into_iter().collect()));
         }
     };
     // Split at the analytic FACE's seam boundary FIRST: where the ellipse
@@ -2333,7 +2341,7 @@ fn trim_ellipse_to_boundary_crossings(
                     if let Some(p) =
                         line_segment_plane_crossing(sv.point(), ev.point(), *plane_n, *plane_d)
                     {
-                        push_crossing(p, &mut crossings);
+                        push_crossing(p, None, &mut crossings);
                     }
                 }
                 // The band's RIM is where the face ends, exactly as its seam
@@ -2347,7 +2355,7 @@ fn trim_ellipse_to_boundary_crossings(
                     for p in
                         circle_arc_plane_crossings(c, sv.point(), ev.point(), *plane_n, *plane_d)
                     {
-                        push_crossing(p, &mut crossings);
+                        push_crossing(p, None, &mut crossings);
                     }
                 }
                 _ => {}
@@ -2367,7 +2375,7 @@ fn trim_ellipse_to_boundary_crossings(
         let ep = topo.vertex(edge.end()).ok()?.point();
         plane_poly.push(if oe.is_forward() { sp } else { ep });
         for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
-            push_crossing(p, &mut crossings);
+            push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
 
@@ -2439,13 +2447,23 @@ fn trim_ellipse_to_boundary_crossings(
     }
 
     // Map each crossing to its angular parameter, sort by angle.
-    let mut t_pts: Vec<(f64, Point3)> = crossings
+    let mut t_pts: Vec<(f64, Point3, Sources)> = crossings
         .into_iter()
-        .map(|p| (sec.project(p).rem_euclid(std::f64::consts::TAU), p))
+        .map(|(p, src)| (sec.project(p).rem_euclid(std::f64::consts::TAU), p, src))
         .collect();
     t_pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     // Drop near-duplicate parameters (a crossing hit by two adjacent edges).
-    t_pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9);
+    t_pts.dedup_by(|a, b| {
+        let same = (a.0 - b.0).abs() < 1e-9;
+        if same {
+            for e in a.2.drain(..) {
+                if !b.2.contains(&e) {
+                    b.2.push(e);
+                }
+            }
+        }
+        same
+    });
     if t_pts.len() < 2 {
         return None;
     }
@@ -2455,9 +2473,9 @@ fn trim_ellipse_to_boundary_crossings(
     let mut arcs = Vec::new();
     let m = t_pts.len();
     for i in 0..m {
-        let (t0, p0) = t_pts[i];
+        let (t0, p0, ref src0) = t_pts[i];
         let next = (i + 1) % m;
-        let (mut t1, p1) = t_pts[next];
+        let (mut t1, p1, ref src1) = t_pts[next];
         if t1 <= t0 {
             t1 += std::f64::consts::TAU;
         }
@@ -2475,9 +2493,18 @@ fn trim_ellipse_to_boundary_crossings(
         // open Circle/Ellipse edge as the SHORTER arc between its endpoints,
         // so a span ≥ π would flip to the complementary arc, and a diametric
         // pair would collide in the endpoint-keyed edge merge.
+        //
+        // An arc whose ends both lie on one of the plane face's straight
+        // edges shares both endpoints with that edge's piece (a co-endpoint
+        // lens: a rod's floor section over the plate edge it pokes past),
+        // which `merge_duplicate_edges` would fold into one edge, so it is
+        // split at its midpoint too.
         let span = t1 - t0;
+        let lens = src0.iter().any(|e| src1.contains(e));
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n_sub = (span / (std::f64::consts::PI * 0.999)).ceil().max(1.0) as usize;
+        let n_sub = (span / (std::f64::consts::PI * 0.999))
+            .ceil()
+            .max(if lens { 2.0 } else { 1.0 }) as usize;
         #[allow(clippy::cast_precision_loss)]
         let step = span / n_sub as f64;
         let mut prev_t = t0;
@@ -3285,6 +3312,18 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
 
+        // A sampled arc can miss its own extreme by the sagitta between two
+        // samples, enough to drop a section along the face's silhouette (a
+        // wall's ruling at its widest).
+        let arc = match edge.curve() {
+            EdgeCurve::Circle(c) => Some(c.arc_aabb(t0, t1)),
+            EdgeCurve::Ellipse(e) => Some(e.arc_aabb(t0, t1)),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+        };
+        if let Some(b) = arc {
+            points.extend([b.min, b.max]);
+            continue;
+        }
         let n: usize = 8;
         for i in 0..=n {
             let t = t0 + (t1 - t0) * (i as f64 / n as f64);

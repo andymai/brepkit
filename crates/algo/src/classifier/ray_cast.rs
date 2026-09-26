@@ -1597,40 +1597,54 @@ pub fn point_in_planar_region(
     !holes.iter().any(|h| point_in_face_3d(point, h, normal))
 }
 
-/// Compute the solid-level AABB from boundary vertices.
+/// A box around a solid: its boundary edges, each by its whole extent, and
+/// the faces that bulge past their edges (a sphere, a torus, a NURBS
+/// patch) by their surfaces' boxes.
 ///
 /// # Errors
 ///
-/// Returns [`AlgoError::ClassificationFailed`] if the solid has no boundary
-/// vertices.
+/// Returns [`AlgoError::ClassificationFailed`] if the solid has no boundary.
 pub fn compute_solid_bbox(
     topo: &Topology,
     solid: SolidId,
 ) -> Result<brepkit_math::aabb::Aabb3, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
     let mut points = Vec::new();
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     for fid in faces {
         let face = topo.face(fid)?;
+        let surface = match face.surface() {
+            FaceSurface::Sphere(s) => Some(s.aabb()),
+            FaceSurface::Torus(t) => Some(t.aabb()),
+            FaceSurface::Nurbs(n) => Some(n.aabb()),
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => None,
+        };
+        if let Some(b) = surface {
+            points.extend([b.min, b.max]);
+        }
         let wire = topo.wire(face.outer_wire())?;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let start_pos = topo.vertex(edge.start())?.point();
-            let end_pos = topo.vertex(edge.end())?.point();
-            points.push(start_pos);
-            points.push(end_pos);
-            // Curved edges can bulge beyond their endpoints
-            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
-                let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
-                let mid = edge
-                    .curve()
-                    .evaluate_with_endpoints(t_mid, start_pos, end_pos);
-                points.push(mid);
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            points.extend([sp, ep]);
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let bulge = match edge.curve() {
+                EdgeCurve::Line => None,
+                EdgeCurve::Circle(c) => Some(c.arc_aabb(t0, t1)),
+                EdgeCurve::Ellipse(e) => Some(e.arc_aabb(t0, t1)),
+                EdgeCurve::NurbsCurve(n) => Some(n.aabb()),
+            };
+            if let Some(b) = bulge {
+                points.extend([b.min, b.max]);
             }
         }
     }
     brepkit_math::aabb::Aabb3::try_from_points(points)
-        .ok_or_else(|| AlgoError::ClassificationFailed("solid has no boundary vertices".into()))
+        .ok_or_else(|| AlgoError::ClassificationFailed("solid has no boundary".into()))
 }
 
 /// Compute polygon normal via Newell's method.

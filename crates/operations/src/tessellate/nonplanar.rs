@@ -2425,26 +2425,7 @@ pub(super) fn tessellate_nonplanar_cdt(
     // seam cannot cross it): two closed rims, a seam of lines, and the hole's
     // edges (arcs, lines or marched pieces) notching the wire between the
     // seam's two copies. It leaves the same rim-to-hole fans.
-    let notched_wall = wire.edges().len() > 4 && {
-        let mut uses: DetHashMap<usize, (usize, bool)> = DetHashMap::default();
-        let mut closed_rims = 0;
-        for oriented in wire.edges() {
-            let edge = topo.edge(oriented.edge())?;
-            let use_count = uses
-                .entry(oriented.edge().index())
-                .or_insert_with(|| (0, matches!(edge.curve(), EdgeCurve::Line)));
-            use_count.0 += 1;
-            if matches!(edge.curve(), EdgeCurve::Circle(_)) && edge.start() == edge.end() {
-                closed_rims += 1;
-            }
-        }
-        let repeated: Vec<bool> = uses
-            .values()
-            .filter(|&&(n, _)| n > 1)
-            .map(|&(_, line)| line)
-            .collect();
-        closed_rims == 2 && !repeated.is_empty() && repeated.iter().all(|&line| line)
-    };
+    let notched_wall = is_notched_wall(topo, face_data)?;
     let holed_wall_radius = if holes.is_empty() && !notched_wall {
         None
     } else {
@@ -3925,6 +3906,63 @@ fn segments_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) ->
     let (d1, d2) = (side(a, b, c), side(a, b, d));
     let (d3, d4) = (side(c, d, a), side(c, d, b));
     d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+/// Whether a cylinder or cone wall's outer wire carries a notch (a hole that
+/// straddles its seam): it wraps round, its seam line used twice, between
+/// rims at both ends of its axial extent, closed or cut into arcs, and some
+/// other edge runs between them.
+pub(super) fn is_notched_wall(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    let surface = face_data.surface();
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return Ok(false);
+    }
+    let edges = topo.wire(face_data.outer_wire())?.edges();
+    if edges.len() <= 4 {
+        return Ok(false);
+    }
+    let mut ends: Vec<(f64, f64)> = Vec::with_capacity(edges.len());
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        let v = |id| -> Result<f64, crate::OperationsError> {
+            let p = topo.vertex(id)?.point();
+            Ok(surface.project_point(p).map_or(f64::NAN, |(_, v)| v))
+        };
+        ends.push((v(edge.start())?, v(edge.end())?));
+    }
+    let v_min = ends
+        .iter()
+        .flat_map(|&(a, b)| [a, b])
+        .fold(f64::INFINITY, f64::min);
+    let v_max = ends
+        .iter()
+        .flat_map(|&(a, b)| [a, b])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let tol = 1e-7 * (1.0 + v_max.abs().max(v_min.abs()));
+    let (mut rim_low, mut rim_high, mut seam_twice, mut between) = (false, false, false, false);
+    for (oe, &(va, vb)) in edges.iter().zip(&ends) {
+        let edge = topo.edge(oe.edge())?;
+        let repeated = edges
+            .iter()
+            .filter(|other| other.edge() == oe.edge())
+            .count()
+            > 1;
+        match edge.curve() {
+            EdgeCurve::Line if repeated => seam_twice = true,
+            _ if repeated => return Ok(false),
+            EdgeCurve::Circle(_) if (va - vb).abs() <= tol && (va - v_min).abs() <= tol => {
+                rim_low = true;
+            }
+            EdgeCurve::Circle(_) if (va - vb).abs() <= tol && (va - v_max).abs() <= tol => {
+                rim_high = true;
+            }
+            _ => between = true,
+        }
+    }
+    Ok(seam_twice && rim_low && rim_high && between)
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.

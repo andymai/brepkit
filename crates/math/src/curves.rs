@@ -6,8 +6,51 @@
 use std::f64::consts::PI;
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::frame::Frame3;
 use crate::vec::{Point3, Vec3};
+
+/// The box of `center + a cos(t) u + b sin(t) v` over a full turn: along
+/// each axis the offset reaches `sqrt((a u_i)² + (b v_i)²)`.
+fn conic_aabb(center: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)) -> Aabb3 {
+    let reach = |ui: f64, vi: f64| (a * ui).hypot(b * vi);
+    let r = Vec3::new(
+        reach(u.x(), v.x()),
+        reach(u.y(), v.y()),
+        reach(u.z(), v.z()),
+    );
+    Aabb3 {
+        min: center - r,
+        max: center + r,
+    }
+}
+
+/// The box of the same conic from angle `t0` to `t1`: its ends, and along
+/// each axis the full turn's extremes whose angles lie on the arc.
+fn conic_arc_aabb(
+    center: Point3,
+    (a, u): (f64, Vec3),
+    (b, v): (f64, Vec3),
+    (t0, t1): (f64, f64),
+) -> Aabb3 {
+    use std::f64::consts::TAU;
+    if (t1 - t0).abs() >= TAU {
+        return conic_aabb(center, (a, u), (b, v));
+    }
+    let (lo, hi) = if t1 >= t0 { (t0, t1) } else { (t1, t0) };
+    let at = |t: f64| center + u * (a * t.cos()) + v * (b * t.sin());
+    let mut pts = vec![at(lo), at(hi)];
+    for (ui, vi) in [(u.x(), v.x()), (u.y(), v.y()), (u.z(), v.z())] {
+        let peak = (b * vi).atan2(a * ui);
+        for t in [peak, peak + PI] {
+            let t = lo + (t - lo).rem_euclid(TAU);
+            if t <= hi {
+                pts.push(at(t));
+            }
+        }
+    }
+    Aabb3::from_points(pts)
+}
 
 // ── Line3D ─────────────────────────────────────────────────────────
 
@@ -215,6 +258,28 @@ impl Circle3D {
     #[must_use]
     pub const fn v_axis(&self) -> Vec3 {
         self.v_axis
+    }
+
+    /// The whole circle's axis-aligned bounding box, which also bounds any
+    /// arc of it.
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        conic_aabb(
+            self.center,
+            (self.radius, self.u_axis),
+            (self.radius, self.v_axis),
+        )
+    }
+
+    /// The axis-aligned bounding box of the arc from angle `t0` to `t1`.
+    #[must_use]
+    pub fn arc_aabb(&self, t0: f64, t1: f64) -> Aabb3 {
+        conic_arc_aabb(
+            self.center,
+            (self.radius, self.u_axis),
+            (self.radius, self.v_axis),
+            (t0, t1),
+        )
     }
 
     /// Create a circle with explicit basis vectors (for transform/copy).
@@ -675,6 +740,28 @@ impl Ellipse3D {
     #[must_use]
     pub const fn v_axis(&self) -> Vec3 {
         self.v_axis
+    }
+
+    /// The whole ellipse's axis-aligned bounding box, which also bounds any
+    /// arc of it.
+    #[must_use]
+    pub fn aabb(&self) -> Aabb3 {
+        conic_aabb(
+            self.center,
+            (self.semi_major, self.u_axis),
+            (self.semi_minor, self.v_axis),
+        )
+    }
+
+    /// The axis-aligned bounding box of the arc from angle `t0` to `t1`.
+    #[must_use]
+    pub fn arc_aabb(&self, t0: f64, t1: f64) -> Aabb3 {
+        conic_arc_aabb(
+            self.center,
+            (self.semi_major, self.u_axis),
+            (self.semi_minor, self.v_axis),
+            (t0, t1),
+        )
     }
 
     /// Create an ellipse with explicit basis vectors (for transform/copy).

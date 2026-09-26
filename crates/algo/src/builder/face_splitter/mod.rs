@@ -1820,12 +1820,35 @@ fn split_periodic_face_around_seam_holes(
             pave_block_id: None,
         })
     };
-    // A point inside a half-disc: halfway between the seam and the half's
-    // middle sample.
-    let half_interior = |half: &[(usize, bool)]| -> Option<Point3> {
-        let samples = entry_samples(&half[half.len() / 2])?;
-        let (d, v) = samples[samples.len() / 2];
-        surface.evaluate(seam_u + 0.5 * d, v)
+    // A point inside a half-disc on the seam from `v_a` to `v_b`: at their
+    // mid-height, halfway from the seam to where the half's chain first
+    // crosses that height. A point level with one of the chain's samples
+    // can leave the half where its edge slopes back toward the seam.
+    let half_interior = |half: &[(usize, bool)], v_a: f64, v_b: f64| -> Option<Point3> {
+        let v_mid = 0.5 * (v_a + v_b);
+        // Offsets from the seam carried continuously along the chain: a half
+        // wider than half a turn runs past the opposite meridian.
+        let mut chain: Vec<(f64, f64)> = Vec::new();
+        for entry in half {
+            for (d, v) in entry_samples(entry)? {
+                let d = chain
+                    .last()
+                    .map_or(d, |&(prev, _)| prev + wrap_pi(d - prev));
+                chain.push((d, v));
+            }
+        }
+        let mut nearest: Option<f64> = None;
+        for w in chain.windows(2) {
+            let ((d0, v0), (d1, v1)) = (w[0], w[1]);
+            if (v0 - v_mid) * (v1 - v_mid) > 0.0 || (v1 - v0).abs() < f64::EPSILON {
+                continue;
+            }
+            let d = d0 + (d1 - d0) * (v_mid - v0) / (v1 - v0);
+            if d.abs() > 1e-12 && nearest.is_none_or(|n| d.abs() < n.abs()) {
+                nearest = Some(d);
+            }
+        }
+        surface.evaluate(seam_u + 0.5 * nearest?, v_mid)
     };
 
     let mut straddles: Vec<Straddle> = Vec::new();
@@ -1937,7 +1960,7 @@ fn split_periodic_face_around_seam_holes(
                 reversed,
                 parent: face_id,
                 rank,
-                precomputed_interior: Some(half_interior(half)?),
+                precomputed_interior: Some(half_interior(half, s.v_a, s.v_b)?),
             });
         }
     }
