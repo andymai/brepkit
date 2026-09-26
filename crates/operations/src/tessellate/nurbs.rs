@@ -167,6 +167,23 @@ where
     let Ok(wire) = topo.wire(face_data.outer_wire()) else {
         return (0.0, TAU);
     };
+    // The walk reads a closed loop; a wire that does not close on itself
+    // bounds nothing to read, and keeps the full turn.
+    let ends = |oe: &brepkit_topology::wire::OrientedEdge| {
+        topo.edge(oe.edge())
+            .ok()
+            .map(|e| (oe.oriented_start(e), oe.oriented_end(e)))
+    };
+    let closes = match (
+        wire.edges().first().and_then(ends),
+        wire.edges().last().and_then(ends),
+    ) {
+        (Some((start, _)), Some((_, end))) => start == end,
+        _ => false,
+    };
+    if !closes {
+        return (0.0, TAU);
+    }
     let mut intervals: Vec<(f64, f64)> = Vec::new();
     for oe in wire.edges() {
         let Ok(edge) = topo.edge(oe.edge()) else {
