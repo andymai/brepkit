@@ -1,0 +1,19 @@
+crates/operations/tests/sphere_face_area.rs
+  s_ba2f7b5c6902b6::t_258c935b0e9cf3 576-618
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f53cd261c777761f7b3f1712450aff0f4ff3454e",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}

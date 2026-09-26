@@ -1,0 +1,81 @@
+crates/operations/tests/sphere_classify.rs
+  s_ba2f7b5c6902b6::t_b8a0d9393870ee 1-18,21-127,134-146,148,329-330
+  s_ba2f7b5c6902b6::t_114620c865a3a9 19-20,128-133
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_ac6875b441a1f2 256-263
+  s_ba2f7b5c6902b6::t_935e50bb9e655e 264
+  s_ba2f7b5c6902b6::t_a619b96a9000dc 242-249,255
+  s_ba2f7b5c6902b6::t_619d847e18e0c9 194,250-254
+  s_ba2f7b5c6902b6::t_c46a6919f131b0 193
+  s_ba2f7b5c6902b6::t_459fd4499c0f83 227-232
+  s_ba2f7b5c6902b6::t_29769aa3f88c57 241
+  s_ba2f7b5c6902b6::t_d40c239bd9ee24 190-191,233-240
+  s_ba2f7b5c6902b6::t_51c540fcc77bb5 189,206-212
+crates/check/src/classify/boundary.rs
+  s_ba2f7b5c6902b6::t_b36b58ba5b068e 121-167,168,210,213-214
+crates/operations/src/classify.rs
+  s_ba2f7b5c6902b6::t_b36b58ba5b068e 442-444,480-483,499,507-518,519,521,564-599
+  s_ba2f7b5c6902b6::t_9ea61fa86b16aa 600
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_5d46c708987908 3490-3496
+  s_ba2f7b5c6902b6::t_1a2ec329387ce9 3457-3461,3468-3473,3476,3479-3486,3509
+  s_ba2f7b5c6902b6::t_b42e10ef8d6b13 1051-1062
+  s_ba2f7b5c6902b6::t_370ceb51d33a19 3334,3379
+  s_ba2f7b5c6902b6::t_3730060c3a267f 3497-3508,3510
+  s_ba2f7b5c6902b6::t_1a13d98123c55f 3335-3338,3380-3383
+  s_ba2f7b5c6902b6::t_4acc246606f864 4763,4967-4968
+  s_ba2f7b5c6902b6::t_e6beb6f242e348 4761-4762,4764-4768,4793,4964-4966
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_ba2f7b5c6902b6::t_33b8dc587bdf77 184,294-300,303-311,317,402
+  s_ba2f7b5c6902b6::t_f0bf833b5d244d 2610-2617,2619-2649,2660-2663
+  s_ba2f7b5c6902b6::t_b0759ce3f61346 181-182,288-291
+  s_ba2f7b5c6902b6::t_11d5f0ceb702de 301-302,446,448,677-699,2618
+  s_ba2f7b5c6902b6::t_8fb5887bd8acfd 121-136
+crates/operations/tests/sphere_box_corner.rs
+  s_ba2f7b5c6902b6::t_43275a300e1f3d 16,298-300,305-327,331,339-344,346-372,373-386,405-408
+  s_ba2f7b5c6902b6::t_ba9d1543e39831 301-304,345
+  s_ba2f7b5c6902b6::t_e75a9eeeb9ce13 328-330,332-338,387-404
+  s_ba2f7b5c6902b6::t_80fa81b45956a4 537-540
+  s_ba2f7b5c6902b6::t_5008e9e1f6a0c2 452,500-503,511-513,527-529,532-536,546-547,549-552,560,561-562
+  s_ba2f7b5c6902b6::t_7987271328ae0f 453-499,504-509,520,522-526,541-545,548,553,557-559,563-586
+crates/algo/src/builder/builder_solid.rs
+  s_ba2f7b5c6902b6::t_d1863e3724bbec 723-738
+  s_ba2f7b5c6902b6::t_a02306a6cf7239 715,719-722,739-744
+crates/operations/tests/sphere_reversed_cap.rs
+  s_ba2f7b5c6902b6::t_78069930b9f9c5 370-417
+crates/check/src/properties/face_integrator.rs
+  s_ba2f7b5c6902b6::t_282f136a8ab1db 9,126-134,356
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_fbf8e4b83896b4 8184,8185,8236-8237,8240-8241,8246-8251
+  s_ba2f7b5c6902b6::t_bc7567cfaccdce 8238-8239,8242-8245
+  s_ba2f7b5c6902b6::t_3b3bb0f7a8be09 8252-8253
+  s_ba2f7b5c6902b6::t_dde63a969c8ec4 8154-8183
+crates/operations/tests/sphere_face_area.rs
+  s_ba2f7b5c6902b6::t_1db3021987f594 401-459
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_1a090023f29a2c 114-119,234,239-252,254,265,274,278,280-282,284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e9549dba0620158afc734010ee51423c3f59c555",
+  "prompts": {},
+  "sessions": {
+    "s_a00c93b912fe09": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4bec276d-0e9f-46d6-b88e-11ff784c95c7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}

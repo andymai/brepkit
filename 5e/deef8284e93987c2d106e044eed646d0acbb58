@@ -1,0 +1,25 @@
+crates/operations/tests/sphere_face_area.rs
+  s_ba2f7b5c6902b6::t_ba5dfc2ad4eac7 15,468-575
+  s_ba2f7b5c6902b6::t_d2d668bed56fcf 436-439,443-444,449-453
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_0f495833781630 189
+  s_ba2f7b5c6902b6::t_f37596102f89ff 190
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_d2d668bed56fcf 115-116,118,263-265,267-283
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5edeef8284e93987c2d106e044eed646d0acbb58",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
