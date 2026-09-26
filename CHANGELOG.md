@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.32](https://github.com/andymai/brepkit/compare/v4.0.31...v4.0.32) (2026-09-26)
+
+
+### Bug Fixes
+
+* **algo:** keep a turned or mirrored ball's booleans exact ([#1775](https://github.com/andymai/brepkit/issues/1775)) ([b67b427](https://github.com/andymai/brepkit/commit/b67b427f794ae07d864ef6e7ca5b8e7ef845b3d6))
+
 ## [4.0.31](https://github.com/andymai/brepkit/compare/v4.0.30...v4.0.31) (2026-09-25)
 
 
