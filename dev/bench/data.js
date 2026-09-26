@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790465997755,
+  "lastUpdate": 1790466144958,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42173,6 +42173,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42538702,
             "range": "± 145463",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ca6de1e43f5a58e0ac4ff08b7497c87e0494f1c6",
+          "message": "perf(operations): build the result's ray-cast geometry once in the Cut gate (#1806)\n\nThe multi-piece `Cut` gate now reuses the result's ray-cast geometry\nacross centre checks, removing repeated collection without changing\nbehaviour.\n\n- `all_component_centers_outside` checks whether the result holds each\npiece's bounding-box centre when it reads inside the tool.\n`classify_ray_cast` collected the whole result's ray-cast geometry on\nevery call.\n- `RayCastGeoms` is built once on first need, then each centre uses\n`classify_ray_cast_cached`. A centre the ray cast cannot read, including\nwhen geometry cannot be built, still counts as held and rejects the\n`Cut`.\n- Lint is clean. All 174 boolean module unit tests,\n`a_box_less_a_frustum_through_it_keeps_both_pieces`, and\n`bar_through_the_ring` pass.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBuilds the Cut gate's result ray-cast geometry once per call instead of\nrecollecting it for every component centre check, with no behaviour\nchange.\n\n- `RayCastGeoms` is created on first need and reused via\n`classify_ray_cast_cached`; centres the ray cast cannot read still count\nas held.\n- All 174 boolean unit tests and the geometry regression tests pass.\n\n<sup>Written for commit 8d4f7332f5a6b15038d67825c2d962f7226457ce.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1806?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T23:39:27Z",
+          "tree_id": "83aabe89c595fe011d56c9f5def540d93e117156",
+          "url": "https://github.com/andymai/brepkit/commit/ca6de1e43f5a58e0ac4ff08b7497c87e0494f1c6"
+        },
+        "date": 1790466140688,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 680630,
+            "range": "± 1256",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 743298,
+            "range": "± 3418",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8882,
+            "range": "± 463",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 496823,
+            "range": "± 6570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 31019133,
+            "range": "± 562682",
             "unit": "ns/iter"
           }
         ]
