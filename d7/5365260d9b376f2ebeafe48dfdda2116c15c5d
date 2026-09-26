@@ -1,0 +1,28 @@
+crates/check/src/properties/face_integrator.rs
+  s_ba2f7b5c6902b6::t_77f52bcea31b91 996-1045
+  s_ba2f7b5c6902b6::t_edc62de0a6c984 347-350,352,358-361
+crates/operations/tests/extrude_major_arcs.rs
+  s_ba2f7b5c6902b6::t_f2153c5a7a6105 126-128,146,152,174-176
+  s_ba2f7b5c6902b6::t_24bfec3f582a11 177
+crates/operations/src/tessellate/nurbs.rs
+  s_ba2f7b5c6902b6::t_b83ee575f8ac11 150-154,164-165,167-188,190-206,208-209,211,215-224,226-237,239,241-242,245,248-250
+crates/operations/src/offset_wire.rs
+  s_ba2f7b5c6902b6::t_e90db15b16af7e 332-335,337-345,577-623
+  s_ba2f7b5c6902b6::t_123c9169610c60 624-625
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d75365260d9b376f2ebeafe48dfdda2116c15c5d",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
