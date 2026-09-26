@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.0.37](https://github.com/andymai/brepkit/compare/v4.0.36...v4.0.37) (2026-09-26)
+
+
+### Bug Fixes
+
+* **algo:** read a ball's collar by its planes in the engine ray cast ([#1791](https://github.com/andymai/brepkit/issues/1791)) ([0fa3441](https://github.com/andymai/brepkit/commit/0fa34417b8ffa032bce33676ed7b8adfef45f120))
+* **algo:** split a rod's floor arc that spans a plate edge, bound curved solids ([#1787](https://github.com/andymai/brepkit/issues/1787)) ([5a26d8e](https://github.com/andymai/brepkit/commit/5a26d8e894767bf800b75173156182d77f502772))
+
 ## [4.0.36](https://github.com/andymai/brepkit/compare/v4.0.35...v4.0.36) (2026-09-26)
 
 
