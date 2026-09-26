@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790403181168,
+  "lastUpdate": 1790404066350,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41147,6 +41147,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42319354,
             "range": "± 249717",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "df3d0a61d631c593fa6e8a29ad52b88ea49ff047",
+          "message": "chore(main): release 4.0.36 (#1788)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.36](https://github.com/andymai/brepkit/compare/v4.0.35...v4.0.36)\n(2026-09-26)\n\n\n### Bug Fixes\n\n* **algo:** keep a bored ball's bore through a box holding its pole\n([#1785](https://github.com/andymai/brepkit/issues/1785))\n([ef6d8b2](https://github.com/andymai/brepkit/commit/ef6d8b223c974ed6129e32fa5151a0c6302682bf))\n\n\n### Performance\n\n* **math:** project onto a NURBS curve without decomposing it\n([#1786](https://github.com/andymai/brepkit/issues/1786))\n([37ac0ae](https://github.com/andymai/brepkit/commit/37ac0ae5bf565201d490a47d46a665c743d8068c))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.36, bumping all crate versions and updating the\nchangelog.\n\nThe release bundles a fix that keeps a bored ball's bore through a box\nholding its pole, plus a math performance improvement that projects onto\nNURBS curves without decomposing them.\n\n<sup>Written for commit 998e6cf9a82a545c9af57eaf83d1a4b10cf8bb92.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1788?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-26T06:24:56Z",
+          "tree_id": "fe56987a934949d02e82cbb6159635bd25866b26",
+          "url": "https://github.com/andymai/brepkit/commit/df3d0a61d631c593fa6e8a29ad52b88ea49ff047"
+        },
+        "date": 1790404061872,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1013323,
+            "range": "± 1186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1101079,
+            "range": "± 25247",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13184,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 758934,
+            "range": "± 2976",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42501983,
+            "range": "± 112623",
             "unit": "ns/iter"
           }
         ]
