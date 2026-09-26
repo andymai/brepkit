@@ -112,9 +112,10 @@ pub fn face_area(
                 return Ok(area);
             }
             // The outer loop winds the axis, so the face is the region on its
-            // left around a pole.
+            // left around a pole. A simple loop turns 0 or a full turn, less the
+            // steps across the gaps a curve's ends may leave at its vertices.
             let (turn, sweep) = sphere_wire_sweeps(topo, sph, face.outer_wire())?;
-            if (turn.abs() - std::f64::consts::TAU).abs() < 1e-6 {
+            if turn.abs() > std::f64::consts::PI {
                 return Ok(r * r * (std::f64::consts::TAU - sweep) - holes);
             }
             if positions.len() >= 3 {
@@ -258,28 +259,28 @@ fn sphere_wire_sweeps(
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
         let at = |t: f64| sphere.project_point(edge.curve().evaluate_with_endpoints(t, sp, ep));
-        let sums = |n: usize| {
-            let (mut turn, mut sweep) = (0.0, 0.0);
-            #[allow(clippy::cast_precision_loss)]
-            let step = (to - from) / n as f64;
-            let mut u_prev = at(from).0;
-            for k in 0..n {
+        for (from, to) in super::helpers::traversal_spans(edge, oe.is_forward(), sp, ep) {
+            let sums = |n: usize| {
+                let (mut turn, mut sweep) = (0.0, 0.0);
                 #[allow(clippy::cast_precision_loss)]
-                let tk = from + step * k as f64;
-                let (_, vm) = at(tk + 0.5 * step);
-                let (un, _) = at(tk + step);
-                turn += wrap(un - u_prev);
-                sweep += vm.sin() * wrap(un - u_prev);
-                u_prev = un;
-            }
-            (turn, sweep)
-        };
-        let ((turn_fine, fine), (_, coarse)) = (sums(256), sums(128));
-        turn += turn_fine;
-        sweep += (4.0 * fine - coarse) / 3.0;
+                let step = (to - from) / n as f64;
+                let mut u_prev = at(from).0;
+                for k in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let tk = from + step * k as f64;
+                    let (_, vm) = at(tk + 0.5 * step);
+                    let (un, _) = at(tk + step);
+                    turn += wrap(un - u_prev);
+                    sweep += vm.sin() * wrap(un - u_prev);
+                    u_prev = un;
+                }
+                (turn, sweep)
+            };
+            let ((turn_fine, fine), (_, coarse)) = (sums(256), sums(128));
+            turn += turn_fine;
+            sweep += (4.0 * fine - coarse) / 3.0;
+        }
     }
     Ok((turn, sweep))
 }

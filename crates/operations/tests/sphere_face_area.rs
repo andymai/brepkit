@@ -12,6 +12,7 @@ use std::f64::consts::PI;
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
+use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::surfaces::SphericalSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
@@ -432,17 +433,24 @@ fn patch_around_the_pole() {
             sum += weight * (1.0 - v_b(step * f64::from(k)).sin());
         }
         let truth = RADIUS * RADIUS * sum * step / 3.0;
-        for turned in [false, true] {
-            let label = format!("({a}, {b}, {c}) turned {turned}");
+        // The south pole's patch mirrors the north's, and the block less the
+        // ball keeps the same patch reversed.
+        for (south, dimple, turned) in (0..8).map(|k| (k & 1 == 1, k & 2 == 2, k & 4 == 4)) {
+            let label = format!("({a}, {b}, {c}) south {south} dimple {dimple} turned {turned}");
             let mut topo = Topology::new();
             let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
             let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
-            transform_solid(&mut topo, block, &Mat4::translation(a, b, c)).unwrap();
+            let z = if south { -c - 10.0 } else { c };
+            transform_solid(&mut topo, block, &Mat4::translation(a, b, z)).unwrap();
             if turned {
                 transform_solid(&mut topo, ball, &turn).unwrap();
                 transform_solid(&mut topo, block, &turn).unwrap();
             }
-            let piece = boolean(&mut topo, BooleanOp::Intersect, ball, block).unwrap();
+            let piece = if dimple {
+                boolean(&mut topo, BooleanOp::Cut, block, ball).unwrap()
+            } else {
+                boolean(&mut topo, BooleanOp::Intersect, ball, block).unwrap()
+            };
             let patches: Vec<_> = solid_faces(&topo, piece)
                 .unwrap()
                 .into_iter()
@@ -455,5 +463,113 @@ fn patch_around_the_pole() {
                 "{label}: area {area}, truth {truth}"
             );
         }
+    }
+}
+
+/// The circle where the plane `n · p = d` (`n` tilted `tilt` from `z`) meets
+/// the ball, as three rational quadratic arcs running about `n`. `flip` stores
+/// one arc's curve from its end vertex to its start, `over` stretches each
+/// curve past its vertices by that far, and `reverse` runs the loop backwards.
+fn arcs_around_the_pole(
+    topo: &mut Topology,
+    (tilt, d): (f64, f64),
+    flip: Option<usize>,
+    over: f64,
+    reverse: bool,
+) -> brepkit_topology::wire::WireId {
+    let n = Vec3::new(tilt.sin(), 0.0, tilt.cos());
+    let e1 = Vec3::new(tilt.cos(), 0.0, -tilt.sin());
+    let e2 = Vec3::new(0.0, 1.0, 0.0);
+    let c = Point3::new(0.0, 0.0, 0.0) + n * d;
+    let rho = (RADIUS * RADIUS - d * d).sqrt();
+    let at = |a: f64| c + e1 * (rho * a.cos()) + e2 * (rho * a.sin());
+    let angles = [0.3, 0.3 + 2.0 * PI / 3.0, 0.3 + 4.0 * PI / 3.0];
+    let verts: Vec<_> = angles
+        .iter()
+        .map(|&a| topo.add_vertex(Vertex::new(at(a), 1e-7)))
+        .collect();
+    let mut edges = Vec::new();
+    for k in 0..3 {
+        let (a0, a1) = (
+            angles[k] - over / rho,
+            angles[k] + 2.0 * PI / 3.0 + over / rho,
+        );
+        let half = 0.5 * (a1 - a0);
+        let mid = 0.5 * (a0 + a1);
+        let peak = c + (e1 * mid.cos() + e2 * mid.sin()) * (rho / half.cos());
+        let mut points = vec![at(a0), peak, at(a1)];
+        if flip == Some(k) {
+            points.reverse();
+        }
+        let curve = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            points,
+            vec![1.0, half.cos(), 1.0],
+        )
+        .unwrap();
+        edges.push(topo.add_edge(Edge::new(
+            verts[k],
+            verts[(k + 1) % 3],
+            EdgeCurve::NurbsCurve(curve),
+        )));
+    }
+    let oes: Vec<_> = if reverse {
+        edges
+            .iter()
+            .rev()
+            .map(|&e| OrientedEdge::new(e, false))
+            .collect()
+    } else {
+        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect()
+    };
+    topo.add_wire(Wire::new(oes, true).unwrap())
+}
+
+#[test]
+fn nurbs_loop_around_the_pole() {
+    let sphere =
+        || FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), RADIUS).unwrap());
+    let cap = |d: f64| 2.0 * PI * RADIUS * (RADIUS - d);
+    // A curve that runs against its edge is walked from the edge's start.
+    for flip in [None, Some(0), Some(1)] {
+        let mut topo = Topology::new();
+        let outer = arcs_around_the_pole(&mut topo, (0.3, 1.0), flip, 0.0, false);
+        let face = topo.add_face(Face::new(outer, vec![], sphere()));
+        let area = face_area(&topo, face, 0.01).unwrap();
+        assert!(
+            (area - cap(1.0)).abs() < 1e-6 * cap(1.0),
+            "flip {flip:?}: {area} against {}",
+            cap(1.0)
+        );
+
+        let mut topo = Topology::new();
+        let hole = arcs_around_the_pole(&mut topo, (0.3, 1.0), flip, 0.0, true);
+        let z0 = -2.0_f64;
+        let r0 = (RADIUS * RADIUS - z0 * z0).sqrt();
+        let rim = Circle3D::new(Point3::new(0.0, 0.0, z0), Vec3::new(0.0, 0.0, 1.0), r0).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r0, 0.0, z0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(outer, vec![hole], sphere()));
+        let area = face_area(&topo, face, 0.01).unwrap();
+        let truth = cap(z0) - cap(1.0);
+        assert!(
+            (area - truth).abs() < 1e-6 * truth,
+            "hole flip {flip:?}: {area} against {truth}"
+        );
+    }
+    // Curve ends may miss their vertices by up to 1e-6, which near the pole
+    // leaves the turn short by more than a rounding error.
+    for over in [3e-7, 9e-7] {
+        let mut topo = Topology::new();
+        let outer = arcs_around_the_pole(&mut topo, (0.05, 2.8), None, over, false);
+        let face = topo.add_face(Face::new(outer, vec![], sphere()));
+        let area = face_area(&topo, face, 0.01).unwrap();
+        assert!(
+            (area - cap(2.8)).abs() < 1e-4 * cap(2.8),
+            "over {over}: {area} against {}",
+            cap(2.8)
+        );
     }
 }
