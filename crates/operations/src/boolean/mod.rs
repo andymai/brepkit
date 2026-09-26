@@ -722,7 +722,7 @@ fn boolean_inner(
                     || brepkit_algo::classifier::try_build_analytic_classifier(topo, b)
                         .as_ref()
                         .is_none_or(|cls_b| {
-                            all_component_centers_outside(topo, &components_vec, cls_b, tol)
+                            all_component_centers_outside(topo, result, &components_vec, cls_b, tol)
                         });
                 // Intersect's mirror hazard: GFA could emit a piece that is not
                 // part of A∩B at all. Reject when any component's AABB-centre
@@ -2837,11 +2837,16 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
 /// The check is AABB-based: if any component's bounding box is
 /// strictly contained in another's, treat the whole solid as hollow
 /// and skip the multi-region split path.
-/// Check that every component's AABB centre classifies as outside the
-/// supplied classifier. Used to reject multi-region GFA Cut results that
-/// erroneously include the tool's interior as one of the pieces.
+/// Check that no component's AABB centre lies both in the component and
+/// inside the supplied classifier. Used to reject multi-region GFA Cut
+/// results that erroneously include the tool's interior as one of the
+/// pieces. A piece ringing the tool (a box's corners around a cone) has its
+/// centre in its own hole, inside the tool, so only a centre the result
+/// holds counts; the components' boxes are disjoint, so a centre the result
+/// holds is held by its own component.
 fn all_component_centers_outside(
     topo: &Topology,
+    result: SolidId,
     components: &[Vec<FaceId>],
     classifier: &brepkit_algo::classifier::AnalyticClassifier,
     tol: brepkit_math::tolerance::Tolerance,
@@ -2882,7 +2887,12 @@ fn all_component_centers_outside(
             (min.y() + max.y()) * 0.5,
             (min.z() + max.z()) * 0.5,
         );
-        if matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
+        if matches!(classifier.classify(centre, tol), Some(FaceClass::Inside))
+            && !matches!(
+                brepkit_algo::classifier::classify_ray_cast(topo, result, centre),
+                Ok(FaceClass::Outside)
+            )
+        {
             return false;
         }
     }
