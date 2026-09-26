@@ -123,8 +123,9 @@ fn meshed_area(topo: &Topology, face: FaceId) -> f64 {
 /// `area * 0.2` by integration (to `1e-4`) and by its mesh (to `2e-3`, the
 /// chords of a unit circle at deflection `0.001` holding 0.13% less); the
 /// check crate's integrator reads its walls' area to `1e-6`, each cap
-/// measures `area` (to `1e-4`), and each plane face tessellated on its own
-/// meshes its measured area to `2e-3`.
+/// measures `area` (to `1e-4`), each plane face tessellated on its own
+/// meshes its measured area to `2e-3`, and the walls tessellated on their own
+/// mesh their area to `2e-3`.
 fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
     let report = validate_solid(topo, solid).unwrap();
     assert!(report.is_valid(), "{name}: {:?}", report.issues);
@@ -142,12 +143,13 @@ fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
         "{name}: mesh volume {meshed}, truth {truth}"
     );
     let wall_truth = wall * 0.2;
-    let mut walls = 0.0;
+    let (mut walls, mut walls_meshed) = (0.0, 0.0);
     for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
         match topo.face(fid).unwrap().surface() {
             FaceSurface::Cylinder(_) => {
                 let gauss = PropertiesOptions::default().gauss_order;
                 walls += integrate_face(topo, fid, gauss).unwrap().area;
+                walls_meshed += meshed_area(topo, fid);
             }
             FaceSurface::Plane { normal, .. } => {
                 let (own, exact) = (meshed_area(topo, fid), face_area(topo, fid, 0.01).unwrap());
@@ -168,6 +170,10 @@ fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
     assert!(
         (walls - wall_truth).abs() < 1e-6 * wall_truth,
         "{name}: checked wall area {walls}, truth {wall_truth}"
+    );
+    assert!(
+        (walls_meshed - wall_truth).abs() < 2e-3 * wall_truth,
+        "{name}: walls meshed alone have area {walls_meshed}, truth {wall_truth}"
     );
 }
 

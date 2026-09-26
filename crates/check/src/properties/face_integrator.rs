@@ -344,16 +344,21 @@ fn face_uv_bounds<S: ParametricSurface>(
     // Unwrap periodic coordinates sequentially so seam-straddling faces
     // produce a contiguous range instead of the full [0, 2pi). A point where
     // the surface has no `u` of its own (a sphere's pole, a cone's apex)
-    // projects to an arbitrary `u`: it stays out of the range, and the next
-    // point is unwrapped toward the middle of the range so far, which picks
-    // its representative nearest that range.
+    // projects to an arbitrary `u`: it stays out of the range, the walk
+    // starts just after the first such point, and the point after any later
+    // one is unwrapped toward the middle of the range so far, which picks its
+    // representative nearest that range.
     if periodic_u {
-        let singular: Vec<bool> = uvs
+        let mut singular: Vec<bool> = uvs
             .iter()
             .map(|&(u, v)| {
                 surface.partial_u(u, v).length() <= 1e-6 * surface.partial_v(u, v).length()
             })
             .collect();
+        if let Some(first) = singular.iter().position(|&s| s) {
+            uvs.rotate_left(first + 1);
+            singular.rotate_left(first + 1);
+        }
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
         let mut prev: Option<f64> = None;
         let mut after_singular = false;
@@ -986,6 +991,56 @@ mod tests {
         let rev: Vec<Point3> = poly.iter().rev().copied().collect();
         let c2 = integrate_planar_polygon(&rev, up, Vec3::new(0.0, 0.0, 0.0));
         assert!((c2.area - 75.0).abs() < 1e-9, "rev area {}", c2.area);
+    }
+
+    /// The part of a unit ball's upper hemisphere 270 degrees wide, its wire
+    /// (up a meridian to the pole, down another, along the equator) started
+    /// at each of its edges: the pole's `u` is arbitrary, and the face reads
+    /// its area `3π/2` whichever edge the wire starts at.
+    #[test]
+    fn a_wedge_through_a_pole_reads_its_area_from_any_start() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let turn = 1.5 * std::f64::consts::PI;
+        let (east, pole, west) = (
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(turn.cos(), turn.sin(), 0.0),
+        );
+        let arc = |a: Point3, b: Point3| {
+            let normal = (a - origin).cross(b - origin);
+            EdgeCurve::Circle(Circle3D::new(origin, normal, 1.0).unwrap())
+        };
+        for first in 0..3 {
+            let mut topo = Topology::new();
+            let [ve, vp, vw] = [east, pole, west].map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let equator = Circle3D::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+            let mut edges = vec![
+                topo.add_edge(Edge::new(vw, vp, arc(west, pole))),
+                topo.add_edge(Edge::new(vp, ve, arc(pole, east))),
+                topo.add_edge(Edge::new(ve, vw, EdgeCurve::Circle(equator))),
+            ];
+            edges.rotate_left(first);
+            let edges = edges
+                .into_iter()
+                .map(|e| OrientedEdge::new(e, true))
+                .collect();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            let ball = SphericalSurface::new(origin, 1.0).unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
+            let c = integrate_face(&topo, face, 5).unwrap();
+            assert!(
+                (c.area - turn).abs() < 1e-6,
+                "wire started at edge {first}: area {}, truth {turn}",
+                c.area
+            );
+        }
     }
 
     /// A unit cylinder's wall turning 270 degrees and 1 tall, its lower rim a

@@ -147,11 +147,11 @@ pub(super) fn compute_axial_range(
 
 /// Compute the angular (u) range for an analytic face from its wire boundary.
 ///
-/// Projects boundary edge vertices -- and midpoints of curved edges -- onto
-/// the surface and collects their u-parameters. If the face doesn't span
-/// the full revolution, returns the tighter `[u_min, u_max]` range.
-/// Returns `(0, 2*pi)` for full-circle faces or when fewer than 3 boundary
-/// vertices exist.
+/// Each edge of the outer wire is walked along its own span, just inside its
+/// ends (a pole or apex vertex has no `u` of its own), unwrapped so the walk
+/// never jumps a period, and contributes the interval of `u` it covers; the
+/// largest gap the intervals leave is the face's opening. Returns `(0, 2*pi)`
+/// for a face whose edges cover the full revolution.
 pub(super) fn compute_angular_range<F>(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -161,111 +161,93 @@ where
     F: Fn(Point3) -> (f64, f64),
 {
     use brepkit_topology::edge::EdgeCurve;
-    use std::f64::consts::TAU;
+    use std::f64::consts::{PI, TAU};
+    const INSET: f64 = 1e-6;
 
-    let mut angles: Vec<f64> = Vec::new();
-
-    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
-        for oe in wire.edges() {
-            if let Ok(edge) = topo.edge(oe.edge()) {
-                for &vid in &[edge.start(), edge.end()] {
-                    if let Ok(vertex) = topo.vertex(vid) {
-                        let (u, _v) = project(vertex.point());
-                        angles.push(u);
-                    }
-                }
-
-                // Sample edge midpoints to provide angular coverage
-                // between vertices.
-                if !edge.is_closed()
-                    && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
-                {
-                    match edge.curve() {
-                        EdgeCurve::Circle(circle) => {
-                            let ts = circle.project(sv.point());
-                            let te = circle.project(ev.point());
-                            let fwd = (te - ts).rem_euclid(TAU);
-                            let mid_t = if fwd <= std::f64::consts::PI {
-                                ts + fwd * 0.5
-                            } else {
-                                ts - (TAU - fwd) * 0.5
-                            };
-                            let mid = circle.evaluate(mid_t);
-                            let (u, _) = project(mid);
-                            angles.push(u);
-                        }
-                        EdgeCurve::Ellipse(ellipse) => {
-                            let ts = ellipse.project(sv.point());
-                            let te = ellipse.project(ev.point());
-                            let fwd = (te - ts).rem_euclid(TAU);
-                            let mid_t = if fwd <= std::f64::consts::PI {
-                                ts + fwd * 0.5
-                            } else {
-                                ts - (TAU - fwd) * 0.5
-                            };
-                            let mid = ellipse.evaluate(mid_t);
-                            let (u, _) = project(mid);
-                            angles.push(u);
-                        }
-                        EdgeCurve::NurbsCurve(nurbs) => {
-                            let (t0, t1) = nurbs.domain();
-                            let mid = nurbs.evaluate(f64::midpoint(t0, t1));
-                            let (u, _) = project(mid);
-                            angles.push(u);
-                        }
-                        EdgeCurve::Line => {}
-                    }
-                }
-            }
-        }
-    }
-
-    if angles.len() < 3 {
+    let Ok(wire) = topo.wire(face_data.outer_wire()) else {
         return (0.0, TAU);
-    }
-
-    angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    angles.dedup_by(|a, b| (*a - *b).abs() < brepkit_math::tolerance::Tolerance::default().linear);
-
-    if angles.len() < 3 {
-        return (0.0, TAU);
-    }
-
-    let mut max_gap = 0.0_f64;
-    let mut gap_end_idx = 0_usize;
-    for i in 0..angles.len() {
-        let j = (i + 1) % angles.len();
-        let gap = if j > i {
-            angles[j] - angles[i]
-        } else {
-            angles[j] + TAU - angles[i]
-        };
-        if gap > max_gap {
-            max_gap = gap;
-            gap_end_idx = j;
-        }
-    }
-
-    let n_angles = angles.len() as f64;
-    let even_gap = TAU / n_angles;
-    let gap_threshold = (2.5 * even_gap).min(TAU / 3.0);
-    if max_gap < gap_threshold {
-        return (0.0, TAU);
-    }
-
-    let u_start = angles[gap_end_idx];
-    let gap_start_idx = if gap_end_idx == 0 {
-        angles.len() - 1
-    } else {
-        gap_end_idx - 1
     };
-    let u_end = angles[gap_start_idx];
-
-    if u_end > u_start {
-        (u_start, u_end)
-    } else {
-        (u_start, u_end + TAU)
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        let curve = edge.curve();
+        if matches!(curve, EdgeCurve::Line) && (ep - sp).length() < 1e-12 {
+            continue;
+        }
+        let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+        let pieces: u32 = match curve {
+            EdgeCurve::Line => 1,
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                ((t1 - t0).abs() / (PI / 16.0)).ceil().max(1.0) as u32
+            }
+            EdgeCurve::NurbsCurve(_) => 32,
+        };
+        let mut prev: Option<f64> = None;
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for k in 0..=pieces {
+            let f = (1.0 - 2.0 * INSET).mul_add(f64::from(k) / f64::from(pieces), INSET);
+            let (mut u, _) =
+                project(curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep));
+            if let Some(p) = prev {
+                u -= ((u - p) / TAU).round() * TAU;
+            }
+            prev = Some(u);
+            lo = lo.min(u);
+            hi = hi.max(u);
+        }
+        if hi - lo >= TAU - 1e-6 {
+            return (0.0, TAU);
+        }
+        let shift = lo.rem_euclid(TAU) - lo;
+        intervals.push((lo + shift, hi + shift));
     }
+    if intervals.is_empty() {
+        return (0.0, TAU);
+    }
+
+    // Union on the circle: split intervals crossing the period end, sort,
+    // merge, then find the widest uncovered gap.
+    let mut pieces: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in intervals {
+        if b > TAU {
+            pieces.push((a, TAU));
+            pieces.push((0.0, b - TAU));
+        } else {
+            pieces.push((a, b));
+        }
+    }
+    pieces.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in pieces {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 + 1e-9 => last.1 = last.1.max(b),
+            _ => merged.push((a, b)),
+        }
+    }
+    let mut best = (0.0_f64, 0.0_f64, 0.0_f64);
+    for (i, &(_, b)) in merged.iter().enumerate() {
+        let next = if i + 1 < merged.len() {
+            merged[i + 1].0
+        } else {
+            merged[0].0 + TAU
+        };
+        if next - b > best.0 {
+            best = (next - b, b, next);
+        }
+    }
+    if best.0 <= 1e-9 {
+        return (0.0, TAU);
+    }
+    let u_start = best.2.rem_euclid(TAU);
+    let u_end = u_start + (TAU - best.0);
+    (u_start, u_end)
 }
 
 /// Compute the latitude (v) range for a sphere face from its wire boundary.
