@@ -6,9 +6,9 @@
 use std::collections::BTreeMap;
 
 use brepkit_algo::FaceClass;
-use brepkit_algo::classifier::classify_ray_cast;
+use brepkit_algo::classifier::{RayCastGeoms, classify_ray_cast_cached, ray_parity_cached};
 use brepkit_math::mat::Mat4;
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::transform::transform_solid;
@@ -73,7 +73,8 @@ fn census(topo: &Topology, solid: SolidId) -> BTreeMap<&'static str, usize> {
 
 /// Every point of a grid over `[-6, 6]^2 x [-1, 11]` more than [`NEAR`] from
 /// both operands' surfaces reads as `inside` says (from the operands' signed
-/// distances).
+/// distances), and so does each axis ray from it the ray cast does not
+/// discount, so one ray misreading a face is not hidden by the vote.
 fn reads_right(
     name: &str,
     topo: &Topology,
@@ -81,6 +82,12 @@ fn reads_right(
     distances: &dyn Fn(Point3) -> (f64, f64),
     inside: fn(f64, f64) -> bool,
 ) {
+    let geoms = RayCastGeoms::new(topo, solid).unwrap();
+    let axes = [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    ];
     let mut wrong = Vec::new();
     for i in 0..21 {
         for j in 0..21 {
@@ -91,8 +98,13 @@ fn reads_right(
                 if a.abs() < NEAR || b.abs() < NEAR {
                     continue;
                 }
-                let got = classify_ray_cast(topo, solid, p).unwrap() == FaceClass::Inside;
-                if got != inside(a, b) {
+                let expected = inside(a, b);
+                let got = classify_ray_cast_cached(&geoms, p).unwrap() == FaceClass::Inside;
+                let ray_misreads = axes.iter().any(|&dir| {
+                    let (odd, discounted) = ray_parity_cached(&geoms, p, dir);
+                    !discounted && odd != expected
+                });
+                if got != expected || ray_misreads {
                     wrong.push(p);
                 }
             }
@@ -181,5 +193,32 @@ fn a_cone_and_a_cylinder_cut_on_a_slant_read_by_their_wires() {
             &distances,
             cut,
         );
+    }
+}
+
+/// A pointed cone less each half-space through its axis: two rulings from
+/// the apex and half the base circle, whose apex has no `u` of its own (a
+/// half holding the cone's seam keeps it as a third ruling, between two
+/// faces).
+#[test]
+fn a_pointed_cone_less_a_half_space_through_its_axis_reads_by_its_wires() {
+    for (name, lo, hi, cones) in [
+        ("x > 0", [0.0, -6.0, -1.0], [6.0, 6.0, 11.0], 1),
+        ("x < 0", [-6.0, -6.0, -1.0], [0.0, 6.0, 11.0], 2),
+        ("y > 0", [-6.0, 0.0, -1.0], [6.0, 6.0, 11.0], 1),
+        ("y < 0", [-6.0, -6.0, -1.0], [6.0, 0.0, 11.0], 1),
+    ] {
+        let mut topo = Topology::new();
+        let base = make_cone(&mut topo, 5.0, 0.0, 10.0).unwrap();
+        let tool = boxed(&mut topo, lo, hi);
+        let r = boolean(&mut topo, BooleanOp::Cut, base, tool).unwrap();
+        let name = format!("pointed cone less {name}");
+        assert_eq!(
+            census(&topo, r),
+            BTreeMap::from([("cone", cones), ("plane", 2)]),
+            "{name}: faces"
+        );
+        let distances = |p: Point3| (cone(p, 0.0), in_box(p, lo, hi));
+        reads_right(&name, &topo, r, &distances, cut);
     }
 }
