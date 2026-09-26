@@ -796,11 +796,18 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     use brepkit_math::predicates::point_in_polygon;
     use brepkit_math::vec::Point2;
 
+    // The same patches as `integrate_parametric`: one Gauss rule over a whole
+    // period misses the periodic terms of a moment or of a flux about a point
+    // off the axis.
+    const MAX_PATCHES: usize = 16;
     let gauss_pts = gauss_legendre_points(gauss_order);
-    let u_scale = (u_range.1 - u_range.0) / 2.0;
-    let u_mid = f64::midpoint(u_range.0, u_range.1);
-    let v_scale = (v_range.1 - v_range.0) / 2.0;
-    let v_mid = f64::midpoint(v_range.0, v_range.1);
+    let patch = std::f64::consts::FRAC_PI_4;
+    let nu = (((u_range.1 - u_range.0).abs() / patch).ceil() as usize).clamp(1, MAX_PATCHES);
+    let nv = (((v_range.1 - v_range.0).abs() / patch).ceil() as usize).clamp(1, MAX_PATCHES);
+    let du_patch = (u_range.1 - u_range.0) / nu as f64;
+    let dv_patch = (v_range.1 - v_range.0) / nv as f64;
+    let u_scale = du_patch / 2.0;
+    let v_scale = dv_patch / 2.0;
 
     let uv_poly: Vec<Point2> = uv_boundary
         .iter()
@@ -843,55 +850,64 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     let mut cy = 0.0;
     let mut cz = 0.0;
 
-    for gpu in gauss_pts {
-        let u = u_scale.mul_add(gpu.x, u_mid);
-        for gpv in gauss_pts {
-            let v = v_scale.mul_add(gpv.x, v_mid);
+    let points = (0..nu)
+        .flat_map(|iu| (0..nv).map(move |iv| (iu, iv)))
+        .flat_map(|(iu, iv)| {
+            let u_mid = du_patch.mul_add(iu as f64, u_range.0) + u_scale;
+            let v_mid = dv_patch.mul_add(iv as f64, v_range.0) + v_scale;
+            gauss_pts.iter().flat_map(move |gpu| {
+                gauss_pts.iter().map(move |gpv| {
+                    (
+                        u_scale.mul_add(gpu.x, u_mid),
+                        v_scale.mul_add(gpv.x, v_mid),
+                        gpu.w * gpv.w * u_scale * v_scale,
+                    )
+                })
+            })
+        });
+    for (u, v, w) in points {
+        let test_u = if u_periodic {
+            let tau = std::f64::consts::TAU;
+            let diff = u - u_bcenter;
+            u_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
+        } else {
+            u
+        };
 
-            let test_u = if u_periodic {
-                let tau = std::f64::consts::TAU;
-                let diff = u - u_bcenter;
-                u_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
-            } else {
-                u
-            };
+        let test_v = if v_periodic {
+            let tau = std::f64::consts::TAU;
+            let diff = v - v_bcenter;
+            v_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
+        } else {
+            v
+        };
 
-            let test_v = if v_periodic {
-                let tau = std::f64::consts::TAU;
-                let diff = v - v_bcenter;
-                v_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
-            } else {
-                v
-            };
-
-            if !point_in_polygon(Point2::new(test_u, test_v), &uv_poly) {
-                continue;
-            }
-
-            let w = gpu.w * gpv.w * u_scale * v_scale;
-            let p = surface.evaluate(u, v);
-            let du = surface.partial_u(u, v);
-            let dv = surface.partial_v(u, v);
-            let n = Vec3::new(
-                du.y() * dv.z() - du.z() * dv.y(),
-                du.z() * dv.x() - du.x() * dv.z(),
-                du.x() * dv.y() - du.y() * dv.x(),
-            );
-            let n_len = n.length();
-
-            area += w * n_len;
-
-            let pv = Vec3::new(p.x(), p.y(), p.z()) - about;
-            vol += w * pv.dot(n) / 3.0;
-
-            mx += w * 0.5 * p.x() * p.x() * n.x();
-            my += w * 0.5 * p.y() * p.y() * n.y();
-            mz += w * 0.5 * p.z() * p.z() * n.z();
-
-            cx += w * p.x() * n_len;
-            cy += w * p.y() * n_len;
-            cz += w * p.z() * n_len;
+        if !point_in_polygon(Point2::new(test_u, test_v), &uv_poly) {
+            continue;
         }
+
+        let p = surface.evaluate(u, v);
+        let du = surface.partial_u(u, v);
+        let dv = surface.partial_v(u, v);
+        let n = Vec3::new(
+            du.y() * dv.z() - du.z() * dv.y(),
+            du.z() * dv.x() - du.x() * dv.z(),
+            du.x() * dv.y() - du.y() * dv.x(),
+        );
+        let n_len = n.length();
+
+        area += w * n_len;
+
+        let pv = Vec3::new(p.x(), p.y(), p.z()) - about;
+        vol += w * pv.dot(n) / 3.0;
+
+        mx += w * 0.5 * p.x() * p.x() * n.x();
+        my += w * 0.5 * p.y() * p.y() * n.y();
+        mz += w * 0.5 * p.z() * p.z() * n.z();
+
+        cx += w * p.x() * n_len;
+        cy += w * p.y() * n_len;
+        cz += w * p.z() * n_len;
     }
 
     FaceContribution {
