@@ -894,7 +894,9 @@ fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
 /// `z` through one of its caps, fused into one tool: the ball less it, within
 /// it and the tool less the ball, the rod of radius 0.1 at `(2.75, 0)` or of
 /// radius 0.05 at `(2.872, 0)` (over the middle of the cap, where a sample
-/// taken without its holes would read the rod). Each hemisphere's cap past
+/// taken without its holes would read the rod), and the first again with the
+/// ball turned 0.35 about x (the wall `x = 2.5` then crests on the ball's
+/// seam, where its two halves must meet in the trace). Each hemisphere's cap past
 /// the wall `x = 2.5` holds the rod's section as a hole, and the section
 /// bounds a patch of its own. Each is exact, valid and watertight and within
 /// `1e-3` of its closed form (the rod's chord by Simpson in polar
@@ -902,12 +904,12 @@ fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
 /// beside it inside to both classifiers.
 #[test]
 fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
-    for (at, radius) in [(2.75, 0.1), (2.872, 0.05)] {
-        rod_through_a_cap(at, radius);
+    for (at, radius, turn) in [(2.75, 0.1, 0.0), (2.872, 0.05, 0.0), (2.75, 0.1, 0.35)] {
+        rod_through_a_cap(at, radius, turn);
     }
 }
 
-fn rod_through_a_cap(at: f64, radius: f64) {
+fn rod_through_a_cap(at: f64, radius: f64, turn: f64) {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
     let h: f64 = 0.5;
     let caps = 4.0 * PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
@@ -934,6 +936,7 @@ fn rod_through_a_cap(at: f64, radius: f64) {
     ] {
         let mut topo = Topology::new();
         let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        transform_solid(&mut topo, sphere, &Mat4::rotation_x(turn)).unwrap();
         let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
         transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
         let rod = make_cylinder(&mut topo, radius, 10.0).unwrap();
@@ -945,7 +948,7 @@ fn rod_through_a_cap(at: f64, radius: f64) {
             _ => boolean(&mut topo, BooleanOp::Cut, tool, sphere),
         }
         .unwrap();
-        let name = format!("{name}, rod {radius} at {at}");
+        let name = format!("{name}, rod {radius} at {at}, ball turned {turn}");
         assert!(exact(&topo, result), "{name}: fell back to a mesh");
         let report = validate_solid(&topo, result).unwrap();
         assert!(report.is_valid(), "{name}: {:?}", report.issues);
@@ -991,23 +994,26 @@ fn rod_through_a_cap(at: f64, radius: f64) {
 /// cap, the ball within it and the column less the ball lose it; each is
 /// exact, valid, watertight and within `1e-3` of its closed form. Tilted 0.2
 /// or 0.35 about x, the column's top circle passes within 0.03 of the pole
-/// (the closed forms hold, the ball being unchanged by the tilt); the ball
-/// less the column still meshes watertight there, the other two do not (a
-/// roadmap row).
+/// (the closed forms hold, the ball being unchanged by the tilt), and the
+/// ball turned 0.35 about x puts a wall's crest on the ball's seam; the ball
+/// less the column still meshes watertight there and the column ending at 2
+/// throughout, the others do not (a roadmap row).
 #[test]
 fn a_column_ending_in_the_ball_keeps_the_cap_over_it() {
-    for (top, tilt) in [
-        (2.8, 0.0),
-        (2.0, 0.0),
-        (2.930_93, 0.2),
-        (2.956_75, 0.2),
-        (3.0 * 0.365_f64.cos(), 0.35),
+    for (top, tilt, turn) in [
+        (2.8, 0.0, 0.0),
+        (2.0, 0.0, 0.0),
+        (2.930_93, 0.2, 0.0),
+        (2.956_75, 0.2, 0.0),
+        (3.0 * 0.365_f64.cos(), 0.35, 0.0),
+        (2.8, 0.0, 0.35),
+        (2.0, 0.0, 0.35),
     ] {
-        column_ending_in_the_ball(top, tilt);
+        column_ending_in_the_ball(top, tilt, turn);
     }
 }
 
-fn column_ending_in_the_ball(top: f64, tilt: f64) {
+fn column_ending_in_the_ball(top: f64, tilt: f64, turn: f64) {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
     let side_caps = 4.0 * PI * 0.25 * 0.5f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
     let h = RADIUS - top;
@@ -1018,9 +1024,10 @@ fn column_ending_in_the_ball(top: f64, tilt: f64) {
         ("ball within column", within),
         ("column less ball", 5.0 * 5.0 * (5.0 + top) - within),
     ] {
-        let name = format!("{name} ending at {top}, tilted {tilt}");
+        let name = format!("{name} ending at {top}, tilted {tilt}, ball turned {turn}");
         let mut topo = Topology::new();
         let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        transform_solid(&mut topo, sphere, &Mat4::rotation_x(turn)).unwrap();
         let column = make_box(&mut topo, 5.0, 5.0, 5.0 + top).unwrap();
         let pose = Mat4::rotation_x(-tilt) * Mat4::translation(-2.5, -2.5, -5.0);
         transform_solid(&mut topo, column, &pose).unwrap();
@@ -1036,7 +1043,7 @@ fn column_ending_in_the_ball(top: f64, tilt: f64) {
         let report = validate_solid(&topo, result).unwrap();
         assert!(report.is_valid(), "{name}: {:?}", report.issues);
         let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
-        if tilt == 0.0 || name.starts_with("ball less") {
+        if (tilt == 0.0 && turn == 0.0) || top < 2.5 || name.starts_with("ball less") {
             assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
         }
         let volume = solid_volume(&topo, result, 0.01).unwrap();
