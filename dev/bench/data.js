@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790412529152,
+  "lastUpdate": 1790413680534,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41363,6 +41363,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42467413,
             "range": "± 362941",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "43cc986353a14e3cde69ea0504b1dd8806f070ea",
+          "message": "fix(math): correct NURBS derivatives, curve projection and curvature sampling (#1789)\n\nNURBS curve and surface derivatives now follow A2.3, A4.2 and A4.4, and\ncurve projection and curvature sampling, which leaned on the wrong\nvalues, now hold at corners, beside short spans and through inflections.\n\n## What was wrong\n\n- `ders_basis_funs_into` in `crates/math/src/nurbs/basis.rs` ported A2.3\nwith `j2 = p - rk`, meaning `p - r + k`, instead of `j2 = p - r` when `r\n- 1 > p - k`. The extra iterations divided by basis values in the upper\ntriangle of `ndu`, corrupting the last `k - 1` basis functions for the\nk-th derivative. This line dates from the math crate's first commit.\n\n- Consequently, every NURBS curve and surface of degree two or more,\nthrough `NurbsCurve::derivatives` and `NurbsSurface::derivatives`, read\na wrong second derivative. A rational cubic over four spans read\n`(-221.6, -300.8, 14.2)` at `u = 0.1`, while a central difference of its\nfirst derivative gives `(-48.0, -141.4, 2.3)`. A non-rational cubic read\nNaN at an interior knot and about 2e14 just past it. A quadratic basis\nfunction read -5984.6 instead of 14.8. `NurbsCurve::derivatives(u, 3)`\non a cubic panicked with an index out of bounds.\n\n- Rational quotient-rule evaluation stopped at the degree instead of the\nrequested derivative order. A degree-1 line with weights 1 and 3\ntherefore read `C''(0.5) = 0`, while `C(u) = 3u / (1 + 2u)` gives -1.5.\n\n- Correct second derivatives exposed two faults in\n`project_point_to_curve`. At a corner with knot multiplicity `p`, Newton\nread the next piece's derivatives and ran to the far end. On a rational\nquadratic V with a double knot at `u = 0.5`, `(1.038, -0.282, 0)`\nprojected to `u = 1.0` at distance 1.6028 instead of the corner at\ndistance 0.2845. On a 30 by 30 grid below that corner, 238 of 900\nprojections were worse than on `main`. Newton could also overshoot a\nminimum, clamp back to a knot and cycle.\n\n- `sample_curvature` in `crates/geometry/src/sampling/curvature.rs`,\nwhich is exported but called nowhere in the workspace, judged intervals\nonly at their ends and midpoint. An S-shaped curve with zero curvature\nat all three became one chord at every tolerance. The resulting single\nsegment turned 0.785 rad for an ogee over four cubic spans, 0.50 rad for\na symmetric quintic S and 0.59 rad for a wave over eight spans.\n\n## What this does\n\n- A2.3 now uses `p - r`. Rational quotient rules run through the\nrequested order, while polynomial curve and surface derivatives past the\ndegree remain exactly zero.\n\n- Each projection run stays within its seed's knot span. An interior\nspan ends one step below its knot because evaluation at a knot selects\nthe piece above it. The seeds are the closest sample of each of the five\nclosest spans and the five closest local minima of the sampled distance\nalong the curve: a short span's crowded samples take one seed, a knot\ncan seed the spans on both sides, a span can hold several basins, a\nplateau counts once, and a span's end sample looks past its knot.\n\n- Projection tracks the closest iterate and starts every step from it. A\nfarther result is halved back toward that iterate by a backtracking line\nsearch. Where the Newton model is concave, the Gauss-Newton step is used\ninstead. Each run returns the closest point it evaluated.\n\n- Curvature sampling splits the range at knots and probes each span's\nend using the piece below it. Before keeping a span as one segment, it\nreads the span's ends, midpoint and quarter points. Turning is bounded\nboth by the sharpest curvature times the probe polyline length and by\nthe turn between probe tangents. Each point, curvature and tangent is\ncomputed once and passed down.\n\n## Verification\n\n- Derivative tests compare every basis derivative against the central\ndifference of the derivative below it for degrees 2 to 4 over uneven\nknots, repeat that check for a rational cubic, verify weighted line and\nplane-patch derivatives past their degrees against closed form, and hold\nrational quarter-circle curvature to 1 within `1e-12` at five\nparameters.\n\n- Projection tests cover a four-span cubic, the rational V and its\ncorner, Newton cycling on a rational quartic, and a quadratic beside a\nspan 0.0008 long. Points below the V's corner project to the closest of\n100,001 samples or closer. The sampler test bounds turning for the ogee,\nquintic S, wave, closed circle and V, holds the V's straight pieces to 3\npoints, and covers backwards and knot-bounded ranges. Without these\nchanges, the derivative, corner and sampler tests fail. The overshoot\ncase requires the line search, and the short-span case fails when seeds\nare merely the five closest samples.\n\n- Random probes recover 5908 of 5908 non-rational and 5894 of 5894\nrational on-curve points within 0.02 of a corner to within `1e-7`, where\n`main` missed 2016 and 2141. On random multi-span curves, 10000 of 10000\non-curve points meet `1e-7`, and none of 4000 off-curve points exceeds a\nbrute-force reference by more than `1e-9`, for both non-rational and\nrational curves. `main` missed 1538 and 1588 on-curve cases and 1025 and\n1090 off-curve cases.\n\n- A 40 by 40 grid over a quadratic L, the rational V and a cubic with a\ntriple knot stays within `1e-6` of a 200,001-sample brute force. Three\nNURBS circles match exact grid distances within `1e-7`. Across 10,079\nprojections beside spans 1e-8 to 1e-2 long, 2 exceed a 4,001-sample\nreference, compared with 2,649 on `main`. Across 94,746 random-curve\nprojections, 15 do, all beside a span 1e-13 long, compared with 17,533\non `main`.\n\n- Across eight curves, the sampler's maximum turn is 0.0982 rad per\nsegment at tolerance 0.1, 0.0499 at 0.05 and 0.0099 at 0.01. The\nworkspace suite reports 3124 tests run, 3124 passed, 20 skipped.",
+          "timestamp": "2026-09-26T09:05:37Z",
+          "tree_id": "10a795f3cd0e7a8bf6e15154d108e58837663a07",
+          "url": "https://github.com/andymai/brepkit/commit/43cc986353a14e3cde69ea0504b1dd8806f070ea"
+        },
+        "date": 1790413675696,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 650481,
+            "range": "± 2925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 714017,
+            "range": "± 49940",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9126,
+            "range": "± 54",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 479285,
+            "range": "± 4945",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 31516032,
+            "range": "± 2009274",
             "unit": "ns/iter"
           }
         ]
