@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.38](https://github.com/andymai/brepkit/compare/v4.0.37...v4.0.38) (2026-09-26)
+
+
+### Bug Fixes
+
+* **math:** correct NURBS derivatives, curve projection and curvature sampling ([#1789](https://github.com/andymai/brepkit/issues/1789)) ([43cc986](https://github.com/andymai/brepkit/commit/43cc986353a14e3cde69ea0504b1dd8806f070ea))
+
 ## [4.0.37](https://github.com/andymai/brepkit/compare/v4.0.36...v4.0.37) (2026-09-26)
 
 
