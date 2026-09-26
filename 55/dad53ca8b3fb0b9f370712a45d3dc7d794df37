@@ -1,0 +1,31 @@
+crates/operations/src/validate/tests.rs
+  s_ba2f7b5c6902b6::t_cbb7a7b9b122de 178-204
+crates/operations/src/validate.rs
+  s_ba2f7b5c6902b6::t_fb977b8d83c1d1 370
+  s_ba2f7b5c6902b6::t_2951dc0a6d7002 165,228-233,250,252-253,269
+  s_ba2f7b5c6902b6::t_5fe625350122e6 162-164,166-168,234-247,249,251,254-263,266-268
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_ba2f7b5c6902b6::t_9938639cdefeef 419,440,461-463,466,490-494,504-508,511,571-575,577-578,580-581,587-601,604,607,610-620,622-630,634-641,652-673
+  s_ba2f7b5c6902b6::t_cba010b72a8701 605-606,609
+  s_ba2f7b5c6902b6::t_9ca40f5c97349f 582-583
+  s_ba2f7b5c6902b6::t_cbb7a7b9b122de 608,631-633,642-647,649-651
+  s_ba2f7b5c6902b6::t_2351944a941e71 429-431
+crates/operations/tests/sphere_box_corner.rs
+  s_ba2f7b5c6902b6::t_cbb7a7b9b122de 895-902,905-910,922,924,929,939-940,948,959,963-966,977,979,985-989,995-1000,1003-1004,1009,1011,1014,1016-1021
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "55dad53ca8b3fb0b9f370712a45d3dc7d794df37",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
