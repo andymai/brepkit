@@ -687,3 +687,67 @@ fn circle_intersect_circle_disjoint_and_non_coplanar_empty() {
     let e = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5).unwrap();
     assert!(a.intersect_circle(&e, 1e-9).is_empty());
 }
+
+type Sampler<'a> = &'a dyn Fn(f64) -> Point3;
+type ArcBox<'a> = &'a dyn Fn(f64, f64) -> crate::aabb::Aabb3;
+
+/// A tilted circle's and a tilted ellipse's boxes, whole and over arcs that
+/// hold some of the full turn's extremes (both ways, and across angle zero),
+/// hold every one of 20,000 samples and touch the samples' extremes.
+#[test]
+fn tilted_conic_boxes_match_their_samples() {
+    let circle = Circle3D::new(Point3::new(1.0, -2.0, 0.5), Vec3::new(1.0, 2.0, 3.0), 1.7).unwrap();
+    let ellipse = Ellipse3D::new(
+        Point3::new(-0.5, 0.3, 2.0),
+        Vec3::new(-2.0, 0.5, 1.0),
+        2.3,
+        0.9,
+    )
+    .unwrap();
+    let eval: [(Sampler<'_>, ArcBox<'_>); 2] = [
+        (&|t| circle.evaluate(t), &|a, b| circle.arc_aabb(a, b)),
+        (&|t| ellipse.evaluate(t), &|a, b| ellipse.arc_aabb(a, b)),
+    ];
+    for (k, (at, arc)) in eval.iter().enumerate() {
+        for (t0, t1) in [
+            (0.0, 2.0 * PI),
+            (0.3, 1.9),
+            (1.9, 0.3),
+            (-2.5, 0.4),
+            (4.0, 7.5),
+            (2.0, 5.5),
+        ] {
+            let b = arc(t0, t1);
+            let n = 20_000;
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for i in 0..=n {
+                let p = at(t0 + (t1 - t0) * f64::from(i) / f64::from(n));
+                for (axis, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+                    lo[axis] = lo[axis].min(c);
+                    hi[axis] = hi[axis].max(c);
+                }
+            }
+            let (bmin, bmax) = (
+                [b.min.x(), b.min.y(), b.min.z()],
+                [b.max.x(), b.max.y(), b.max.z()],
+            );
+            for axis in 0..3 {
+                assert!(
+                    bmin[axis] <= lo[axis] + 1e-12 && bmax[axis] >= hi[axis] - 1e-12,
+                    "conic {k} ({t0}, {t1}) axis {axis}: box misses a sample"
+                );
+                assert!(
+                    lo[axis] - bmin[axis] < 1e-6 && bmax[axis] - hi[axis] < 1e-6,
+                    "conic {k} ({t0}, {t1}) axis {axis}: box too loose"
+                );
+            }
+        }
+        let whole = if k == 0 {
+            circle.aabb()
+        } else {
+            ellipse.aabb()
+        };
+        let full = arc(0.0, 2.0 * PI);
+        assert!((whole.min - full.min).length() < 1e-12 && (whole.max - full.max).length() < 1e-12);
+    }
+}

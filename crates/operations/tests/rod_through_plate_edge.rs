@@ -302,6 +302,32 @@ fn a_rod_cut_at_a_plate_edge_keeps_its_segments() {
     }
 }
 
+/// An N-way fuse of the plate, a tool and a far unit box: watertight, within
+/// `1e-3` of `truth`, and holding a point in the tool clear of the plate, one
+/// in the plate, one in the far box, and none beside them. (The far box
+/// lands in the same shell, which `validate_solid` reads as a wrong Euler
+/// characteristic: the roadmap's N-way row.)
+fn assert_n_way_fuse(topo: &Topology, fused: SolidId, truth: f64, in_tool: Point3, label: &str) {
+    use PointClassification::{Inside, Outside};
+    let mesh = tessellate_solid(topo, fused, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+    let volume = solid_volume(topo, fused, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-3 * truth,
+        "{label}: volume {volume}, truth {truth}"
+    );
+    for (p, want) in [
+        (in_tool, Inside),
+        (Point3::new(8.0, 8.0, 1.0), Inside),
+        (Point3::new(20.5, 20.5, 20.5), Inside),
+        (Point3::new(-5.0, 5.0, 1.0), Outside),
+        (Point3::new(5.0, 5.0, 4.0), Outside),
+    ] {
+        let got = classify_point(topo, fused, p, &ClassifyOptions::default()).unwrap();
+        assert_eq!(got, want, "{label}: {p:?}");
+    }
+}
+
 /// The plate, the rod turned so its only vertices lie off the plate, and a
 /// box far from both, fused at once: the rod's curved rims reach the plate,
 /// so the pair takes part and the fuse matches its closed form.
@@ -313,11 +339,8 @@ fn a_turned_rod_joins_an_n_way_fuse() {
         transform_solid(&mut topo, far, &Mat4::translation(20.0, 20.0, 20.0)).unwrap();
         let fused = brepkit_algo::gfa::fuse_n(&mut topo, &[plate, rod, far]).unwrap();
         let truth = 200.0 + 10.0 * PI - 2.0 * disc_past_zero(1.0, cx) + 1.0;
-        let volume = solid_volume(&topo, fused, 0.01).unwrap();
-        assert!(
-            (volume - truth).abs() < 1e-3 * truth,
-            "cx {cx}: volume {volume}, truth {truth}"
-        );
+        let in_rod = Point3::new(cx, 5.0, -2.0);
+        assert_n_way_fuse(&topo, fused, truth, in_rod, &format!("cx {cx}"));
     }
 }
 
@@ -432,23 +455,27 @@ fn a_ball_and_a_ring_join_an_n_way_fuse() {
     for ball in [true, false] {
         let mut topo = Topology::new();
         let plate = make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
-        let (tool, truth) = if ball {
+        let (tool, truth, in_tool) = if ball {
             let s = make_sphere(&mut topo, 1.0, 32).unwrap();
             transform_solid(&mut topo, s, &Mat4::translation(5.0, 5.0, -0.5)).unwrap();
-            (s, 200.0 + 4.0 * PI / 3.0 - cap + 1.0)
+            (
+                s,
+                200.0 + 4.0 * PI / 3.0 - cap + 1.0,
+                Point3::new(5.0, 5.0, -1.0),
+            )
         } else {
             let t = make_torus(&mut topo, rr, r0, 16).unwrap();
             let place = Mat4::translation(tcx, 5.0, 1.0) * Mat4::rotation_z(PI);
             transform_solid(&mut topo, t, &place).unwrap();
-            (t, 200.0 + ring - ring_overlap + 1.0)
+            (
+                t,
+                200.0 + ring - ring_overlap + 1.0,
+                Point3::new(tcx - rr, 5.0, 1.0),
+            )
         };
         let far = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         transform_solid(&mut topo, far, &Mat4::translation(20.0, 20.0, 20.0)).unwrap();
         let fused = brepkit_algo::gfa::fuse_n(&mut topo, &[plate, tool, far]).unwrap();
-        let volume = solid_volume(&topo, fused, 0.01).unwrap();
-        assert!(
-            (volume - truth).abs() < 1e-3 * truth,
-            "ball {ball}: volume {volume}, truth {truth}"
-        );
+        assert_n_way_fuse(&topo, fused, truth, in_tool, &format!("ball {ball}"));
     }
 }
