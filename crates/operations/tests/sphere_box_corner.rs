@@ -877,3 +877,51 @@ fn the_engine_reads_a_collar_by_its_planes() {
     }
     assert!(checked > 1000, "{checked} points checked");
 }
+
+/// The ball less a square column that enters it from below (`z > -1`): the
+/// upper hemisphere keeps a hole of four wall arcs, whose wall circles also
+/// run below the equator, where the hemisphere's own boundary already ends
+/// the face. The engine's ray cast reads the hole by its planes: every point
+/// of a grid over the ball, clear of its surfaces by 0.05, lands on the
+/// right side.
+#[test]
+fn the_engine_reads_a_hole_by_its_planes() {
+    for half in [0.1, 0.6] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let column = make_box(&mut topo, 2.0 * half, 2.0 * half, 10.0).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(-half, -half, -1.0)).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, sphere, column).unwrap();
+        assert!(exact(&topo, result), "{half}: fell back to a mesh");
+        let steps = 13;
+        let mut checked = 0;
+        for i in 0..steps {
+            for j in 0..steps {
+                for k in 0..steps {
+                    let at = |n: i32| -3.3 + 6.6 * f64::from(n) / f64::from(steps - 1);
+                    let p = Point3::new(at(i), at(j), at(k));
+                    let rho = (p - Point3::new(0.0, 0.0, 0.0)).length();
+                    let near = (rho - RADIUS).abs() < 0.05
+                        || (p.x().abs() - half).abs() < 0.05
+                        || (p.y().abs() - half).abs() < 0.05
+                        || (p.z() + 1.0).abs() < 0.05;
+                    if near {
+                        continue;
+                    }
+                    let in_column = p.x().abs() < half && p.y().abs() < half && p.z() > -1.0;
+                    let inside = rho < RADIUS && !in_column;
+                    let got =
+                        brepkit_algo::classifier::classify_ray_cast(&topo, result, p).unwrap();
+                    let want = if inside {
+                        brepkit_algo::FaceClass::Inside
+                    } else {
+                        brepkit_algo::FaceClass::Outside
+                    };
+                    assert_eq!(got, want, "{half}: {p:?}");
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 1000, "{half}: {checked} points checked");
+    }
+}

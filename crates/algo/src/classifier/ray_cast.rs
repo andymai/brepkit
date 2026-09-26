@@ -988,6 +988,7 @@ fn sphere_face_loops(
     let r = surface.radius();
     let slack = 1e-9 * r.max(1.0);
     let mut loops = Vec::new();
+    let mut arc_loops = Vec::new();
     for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         let wire = topo.wire(wire_id)?;
         // Each edge's samples in traversal order, and its circle if it is one.
@@ -1093,51 +1094,60 @@ fn sphere_face_loops(
         } else {
             return Ok(None);
         };
-        // The half-spaces bound the loop's region only when the loop's arcs on
-        // each circle cover exactly the part of that circle lying on the
-        // region's side of the other planes: a column narrower than the ball
-        // meets the sphere twice, and its far end would read as part of a
-        // dome bounded by its top arcs. Each side meets a circle in one arc,
-        // so that part is exact, however short its runs.
+        arc_loops.push((loops.len(), edges));
+        loops.push(SphereLoop::HalfSpaces { planes, any });
+    }
+    // The half-spaces bound the face's region only when each loop's arcs on
+    // each circle cover exactly the part of that circle lying on the loop's
+    // side of its other planes and within the face's other loops: a column
+    // narrower than the ball meets the sphere twice, and its far end would
+    // read as part of a dome bounded by its top arcs, while a hole's far run
+    // that the outer loop already excludes bounds nothing. Each side meets a
+    // circle in one arc, so that part is exact, however short its runs.
+    for (at, edges) in &arc_loops {
+        let SphereLoop::HalfSpaces { planes, any } = &loops[*at] else {
+            return Ok(None);
+        };
         for (j, (_, circle)) in edges.iter().enumerate() {
             let Some(circle) = circle else {
                 return Ok(None);
             };
             let rho = circle.radius();
+            let s = if *any { -1.0 } else { 1.0 };
             let mut admitted: AngleSet = vec![(0.0, TAU)];
-            let s = if any { -1.0 } else { 1.0 };
             for (i, &(c, n)) in planes.iter().enumerate() {
-                if i == j {
+                if i != j {
+                    admitted = angle_intersection(&admitted, &side_arc(circle, c, n * s, slack));
+                }
+            }
+            for (k, other) in loops.iter().enumerate() {
+                let SphereLoop::HalfSpaces {
+                    planes: other_planes,
+                    any: other_any,
+                } = other
+                else {
+                    continue;
+                };
+                if k == *at {
                     continue;
                 }
-                let k = s * (circle.center() - c).dot(n);
-                let (a, b) = (
-                    s * rho * n.dot(circle.u_axis()),
-                    s * rho * n.dot(circle.v_axis()),
-                );
-                let amp = a.hypot(b);
-                let side = if amp <= slack {
-                    if k >= -slack {
-                        vec![(0.0, TAU)]
-                    } else {
-                        Vec::new()
-                    }
+                let mut sides = other_planes
+                    .iter()
+                    .map(|&(c, n)| side_arc(circle, c, n, slack));
+                let within = if *other_any {
+                    angle_union(sides.flatten().collect())
                 } else {
-                    let t = (-slack - k) / amp;
-                    if t <= -1.0 {
-                        vec![(0.0, TAU)]
-                    } else if t > 1.0 {
-                        Vec::new()
-                    } else {
-                        let half = t.acos();
-                        angle_arc(b.atan2(a) - half, 2.0 * half)
-                    }
+                    sides
+                        .try_fold(vec![(0.0, TAU)], |acc, side| {
+                            Some(angle_intersection(&acc, &side))
+                        })
+                        .unwrap_or_default()
                 };
-                admitted = angle_intersection(&admitted, &side);
+                admitted = angle_intersection(&admitted, &within);
             }
             let mut covered: AngleSet = Vec::new();
             let mut arcs_on_circle = 0_usize;
-            for (pts, other) in &edges {
+            for (pts, other) in edges {
                 let same = other.as_ref().is_some_and(|o| {
                     (o.center() - circle.center()).length() <= slack
                         && (o.radius() - rho).abs() <= slack
@@ -1169,9 +1179,33 @@ fn sphere_face_loops(
                 return Ok(None);
             }
         }
-        loops.push(SphereLoop::HalfSpaces { planes, any });
     }
     Ok(Some(loops))
+}
+
+/// The closed arc of `circle` on the side of the plane through `c` that `n`
+/// points into (within `slack`).
+fn side_arc(circle: &brepkit_math::curves::Circle3D, c: Point3, n: Vec3, slack: f64) -> AngleSet {
+    let rho = circle.radius();
+    let k = (circle.center() - c).dot(n);
+    let (a, b) = (rho * n.dot(circle.u_axis()), rho * n.dot(circle.v_axis()));
+    let amp = a.hypot(b);
+    if amp <= slack {
+        return if k >= -slack {
+            vec![(0.0, TAU)]
+        } else {
+            Vec::new()
+        };
+    }
+    let t = (-slack - k) / amp;
+    if t <= -1.0 {
+        vec![(0.0, TAU)]
+    } else if t > 1.0 {
+        Vec::new()
+    } else {
+        let half = t.acos();
+        angle_arc(b.atan2(a) - half, 2.0 * half)
+    }
 }
 
 /// A set of angles on a circle, as disjoint sorted intervals of `[0, 2π]`.
