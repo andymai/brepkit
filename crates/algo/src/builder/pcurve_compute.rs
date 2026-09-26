@@ -297,7 +297,7 @@ pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, 
 
 /// [`evaluate_edge_at_t`] for many `t` along one edge: the span a closed or
 /// NURBS curve covers is read once, since a NURBS edge on part of its curve
-/// finds it by projecting both end vertices, a Bezier decomposition each.
+/// finds it by projecting both end vertices.
 pub(super) fn edge_point_at(
     curve: &EdgeCurve,
     start: Point3,
