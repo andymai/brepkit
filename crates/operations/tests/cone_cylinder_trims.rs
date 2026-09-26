@@ -3,6 +3,8 @@
 //! apex, a cylinder cut on a slant) against the face's own wires.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::BTreeMap;
+
 use brepkit_algo::FaceClass;
 use brepkit_algo::classifier::classify_ray_cast;
 use brepkit_math::mat::Mat4;
@@ -11,6 +13,7 @@ use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::solid::SolidId;
 
 /// Points this close to a surface are not checked.
@@ -54,6 +57,18 @@ fn slab(topo: &mut Topology) -> (SolidId, Mat4) {
         * Mat4::translation(-10.0, -10.0, 0.0);
     transform_solid(topo, b, &pose).unwrap();
     (b, pose)
+}
+
+/// The count of each surface type among `solid`'s faces: a mesh fallback
+/// keeps no cone or cylinder face.
+fn census(topo: &Topology, solid: SolidId) -> BTreeMap<&'static str, usize> {
+    let mut census = BTreeMap::new();
+    for face in solid_faces(topo, solid).unwrap() {
+        *census
+            .entry(topo.face(face).unwrap().surface().type_tag())
+            .or_default() += 1;
+    }
+    census
 }
 
 /// Every point of a grid over `[-6, 6]^2 x [-1, 11]` more than [`NEAR`] from
@@ -107,6 +122,11 @@ fn a_cone_within_a_box_reads_by_its_wires() {
     let (lo, hi) = ([-3.0, -3.0, -1.0], [3.0, 3.0, 11.0]);
     let tool = boxed(&mut topo, lo, hi);
     let r = boolean(&mut topo, BooleanOp::Intersect, base, tool).unwrap();
+    assert_eq!(
+        census(&topo, r),
+        BTreeMap::from([("cone", 1), ("plane", 6)]),
+        "cone within a box: faces"
+    );
     let distances = |p: Point3| (cone(p, 2.0), in_box(p, lo, hi));
     reads_right("cone within a box", &topo, r, &distances, intersect);
 }
@@ -115,20 +135,20 @@ fn a_cone_within_a_box_reads_by_its_wires() {
 /// to the apex's side of a pointed cone.
 #[test]
 fn a_cone_less_a_half_space_reads_by_its_wires() {
-    for top in [2.0, 0.0] {
+    for (top, planes) in [(2.0, 3), (0.0, 2)] {
         let mut topo = Topology::new();
         let base = make_cone(&mut topo, 5.0, top, 10.0).unwrap();
         let (lo, hi) = ([1.0, -6.0, -1.0], [6.0, 6.0, 11.0]);
         let tool = boxed(&mut topo, lo, hi);
         let r = boolean(&mut topo, BooleanOp::Cut, base, tool).unwrap();
-        let distances = |p: Point3| (cone(p, top), in_box(p, lo, hi));
-        reads_right(
-            &format!("cone to radius {top} less x > 1"),
-            &topo,
-            r,
-            &distances,
-            cut,
+        let name = format!("cone to radius {top} less x > 1");
+        assert_eq!(
+            census(&topo, r),
+            BTreeMap::from([("cone", 1), ("plane", planes)]),
+            "{name}: faces"
         );
+        let distances = |p: Point3| (cone(p, top), in_box(p, lo, hi));
+        reads_right(&name, &topo, r, &distances, cut);
     }
 }
 
@@ -144,6 +164,11 @@ fn a_cone_and_a_cylinder_cut_on_a_slant_read_by_their_wires() {
         };
         let (tool, pose) = slab(&mut topo);
         let r = boolean(&mut topo, BooleanOp::Cut, base, tool).unwrap();
+        assert_eq!(
+            census(&topo, r),
+            BTreeMap::from([(name, 1), ("plane", 2)]),
+            "{name} less a slant slab: faces"
+        );
         let back = pose.inverse().unwrap();
         let distances = |p: Point3| {
             let own = if is_cone { cone(p, 2.0) } else { cylinder(p) };
