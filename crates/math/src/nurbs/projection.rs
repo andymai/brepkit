@@ -9,7 +9,6 @@
 
 use crate::MathError;
 use crate::nurbs::curve::NurbsCurve;
-use crate::nurbs::decompose::curve_to_bezier_segments;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::Point3;
 
@@ -53,12 +52,14 @@ pub struct SurfaceProjection {
 
 /// Find the closest point on a NURBS curve to the given point.
 ///
-/// Uses Bezier decomposition for initial guess, then Newton–Raphson
-/// refinement (NURBS Book A6.1 + A6.3–A6.4).
+/// Samples each Bezier segment (knot span) for initial guesses, then
+/// Newton–Raphson refinement (NURBS Book A6.1 + A6.3–A6.4).
 ///
 /// # Errors
 ///
-/// Returns an error if Bezier decomposition fails (invalid curve data).
+/// None for a curve that constructed: the `Result` stays in the public
+/// signature, which callers across the workspace match on.
+#[allow(clippy::unnecessary_wraps)]
 pub fn project_point_to_curve(
     curve: &NurbsCurve,
     point: Point3,
@@ -69,7 +70,7 @@ pub fn project_point_to_curve(
     let u_min = knots[p];
     let u_max = knots[knots.len() - p - 1];
 
-    let candidates = curve_coarse_search(curve, point)?;
+    let candidates = curve_coarse_search(curve, point);
 
     // Run Newton from each candidate and keep the globally closest result.
     let mut best_u = u_min;
@@ -94,30 +95,35 @@ pub fn project_point_to_curve(
     })
 }
 
-/// Coarse search: decompose into Bezier segments and sample points to find
-/// multiple candidate parameter values for Newton refinement.
+/// Coarse search: sample each knot span (each of the curve's Bezier
+/// segments) to find multiple candidate parameter values for Newton
+/// refinement. The spans are sampled on the curve itself: decomposing it
+/// into segments first costs knot insertions, on every projection, for the
+/// same points.
 ///
 /// Returns a sorted list of candidate parameters (best first) to use as
 /// Newton seeds. Using multiple seeds avoids converging to a local minimum.
 #[allow(clippy::cast_precision_loss)]
-fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Result<Vec<f64>, MathError> {
-    let segments = curve_to_bezier_segments(curve)?;
+fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Vec<f64> {
+    let knots = curve.knots();
+    let p = curve.degree();
+    let (lo, hi) = (knots[p], knots[knots.len() - p - 1]);
 
     // Collect all (distance_sq, parameter) samples.
     let mut samples: Vec<(f64, f64)> = Vec::new();
 
-    for seg in &segments {
-        let knots = seg.knots();
-        let p = seg.degree();
-        let u_start = knots[p];
-        let u_end = knots[knots.len() - p - 1];
+    for span in knots.windows(2) {
+        let (u_start, u_end) = (span[0], span[1]);
+        if u_end - u_start < 1e-15 || u_start < lo || u_end > hi {
+            continue;
+        }
 
         // Sample points along the segment.
         let n_samples = (p + 1).max(5) * 2;
         for i in 0..=n_samples {
             let t = i as f64 / n_samples as f64;
             let u = t.mul_add(u_end - u_start, u_start);
-            let pt = seg.evaluate(u);
+            let pt = curve.evaluate(u);
             let d_sq = (pt - point).length_squared();
             samples.push((d_sq, u));
         }
@@ -140,7 +146,7 @@ fn curve_coarse_search(curve: &NurbsCurve, point: Point3) -> Result<Vec<f64>, Ma
         }
     }
 
-    Ok(candidates)
+    candidates
 }
 
 /// Newton–Raphson refinement for curve point projection.
