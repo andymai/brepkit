@@ -30,11 +30,11 @@ enum FaceGeom {
         /// crossing while reading clean (the circleinsert pocket-mouth
         /// sample: a hit 0.03 inside the r=10 pocket rim, sagitta ~0.09).
         circle_holes: Vec<(Point3, f64)>,
-        /// The circular segments between the outer wire's in-plane arcs and
-        /// their chords (`verts` runs along the chords), and the same for
-        /// each of `holes`: a chord-sampled arc misses a hit by its sagitta.
-        arcs: Vec<ArcSegment>,
-        hole_arcs: Vec<Vec<ArcSegment>>,
+        /// The regions between the outer wire's curved edges and their chords
+        /// (`verts` runs along the chords), and the same for each of
+        /// `holes`: a chord-sampled edge misses a hit by its sagitta.
+        arcs: Vec<Segment>,
+        hole_arcs: Vec<Vec<Segment>>,
         normal: Vec3,
         d: f64,
     },
@@ -55,6 +55,9 @@ enum FaceGeom {
         /// (circumferential parameter) falls in this gap is off the patch and
         /// excluded. `None` for a full-period lateral.
         u_gap: Option<(f64, f64)>,
+        /// The face's wires, for a face the range, bands and gap cannot
+        /// describe; it replaces them when present.
+        trim: Option<UvTrim>,
     },
     /// A conical face without inner wires, full-period or partial-arc.
     /// Crossings come from the ray/double-cone quadratic filtered to the
@@ -67,6 +70,8 @@ enum FaceGeom {
         v_min: f64,
         v_max: f64,
         u_gap: Option<(f64, f64)>,
+        /// As for [`FaceGeom::Cylinder`].
+        trim: Option<UvTrim>,
     },
     /// A toroidal face covering the full major (u) revolution: either the
     /// whole torus (degenerate fundamental-polygon boundary — previously
@@ -143,6 +148,169 @@ impl ArcSegment {
 
     fn grazes(&self, p: Point3, near: f64) -> bool {
         ((p - self.center).length() - self.radius).abs() <= near && self.beyond_chord(p) >= 0.0
+    }
+}
+
+/// A region a plane face's wire is read against beyond its chord polygon:
+/// a circular segment, or the region between another curved edge and its
+/// chord.
+#[derive(Debug, Clone)]
+enum Segment {
+    Arc(ArcSegment),
+    Curve(Box<CurvePiece>),
+}
+
+impl Segment {
+    fn contains(&self, p: Point3) -> bool {
+        match self {
+            Self::Arc(a) => a.contains(p),
+            Self::Curve(c) => c.contains(p),
+        }
+    }
+
+    fn grazes(&self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::Arc(a) => a.grazes(p, near),
+            Self::Curve(c) => c.grazes(p, near),
+        }
+    }
+}
+
+/// The region between a plane face's curved edge that is not a circle (a
+/// conic section, a marched curve) and its chord, or the region a closed one
+/// bounds, read by the parity of an in-plane ray's crossings with the edge
+/// and its chord; each crossing with the edge is solved on its curve.
+#[derive(Debug, Clone)]
+struct CurvePiece {
+    curve: brepkit_topology::edge::EdgeCurve,
+    start: Point3,
+    end: Point3,
+    frame: brepkit_math::frame::Frame3,
+    /// `(t, x, y)` along the edge in the face's plane.
+    samples: Vec<(f64, f64, f64)>,
+    closed: bool,
+}
+
+impl CurvePiece {
+    fn new(
+        curve: &brepkit_topology::edge::EdgeCurve,
+        start: Point3,
+        end: Point3,
+        normal: Vec3,
+    ) -> Option<Self> {
+        let frame = brepkit_math::frame::Frame3::from_normal(start, normal).ok()?;
+        let closed = (start - end).length() < 1e-9;
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        let pieces: u32 = if closed { 64 } else { 32 };
+        let mut samples: Vec<(f64, f64, f64)> = (0..=pieces)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(pieces), t0);
+                let q = rim_flat(&frame, curve.evaluate_with_endpoints(t, start, end));
+                (t, q.x(), q.y())
+            })
+            .collect();
+        let last = samples.len() - 1;
+        if closed {
+            (samples[last].1, samples[last].2) = (samples[0].1, samples[0].2);
+        } else {
+            // The ends sit on the vertices, where the chord meets them; the
+            // curve's span may run from its end vertex back.
+            let first = curve.evaluate_with_endpoints(t0, start, end);
+            let (a, b) = if (first - start).length() <= (first - end).length() {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            let (qa, qb) = (rim_flat(&frame, a), rim_flat(&frame, b));
+            (samples[0].1, samples[0].2) = (qa.x(), qa.y());
+            (samples[last].1, samples[last].2) = (qb.x(), qb.y());
+        }
+        Some(Self {
+            curve: curve.clone(),
+            start,
+            end,
+            frame,
+            samples,
+            closed,
+        })
+    }
+
+    fn contains(&self, p: Point3) -> bool {
+        let q = rim_flat(&self.frame, p);
+        let crosses = |a: (f64, f64, f64), b: (f64, f64, f64)| (a.2 > q.y()) != (b.2 > q.y());
+        let mut odd = false;
+        for w in self.samples.windows(2) {
+            if crosses(w[0], w[1]) && self.x_at(w[0], w[1], q.y()) > q.x() {
+                odd = !odd;
+            }
+        }
+        if !self.closed
+            && let (Some(&a), Some(&b)) = (self.samples.last(), self.samples.first())
+            && crosses(a, b)
+        {
+            let x = (b.1 - a.1).mul_add((q.y() - a.2) / (b.2 - a.2), a.1);
+            if x > q.x() {
+                odd = !odd;
+            }
+        }
+        odd
+    }
+
+    fn grazes(&self, p: Point3, near: f64) -> bool {
+        let q = rim_flat(&self.frame, p);
+        self.samples.windows(2).any(|w| {
+            let (ax, ay, bx, by) = (w[0].1, w[0].2, w[1].1, w[1].2);
+            let (sx, sy, px, py) = (bx - ax, by - ay, q.x() - ax, q.y() - ay);
+            let len2 = sx.mul_add(sx, sy * sy);
+            let s = if len2 > 0.0 {
+                (px.mul_add(sx, py * sy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            sx.mul_add(-s, px).hypot(sy.mul_add(-s, py)) <= near
+        })
+    }
+
+    /// The `x` where the edge between samples `a` and `b`, on either side of
+    /// `y`, reaches it, found on the curve by regula falsi with the Illinois
+    /// step.
+    fn x_at(&self, a: (f64, f64, f64), b: (f64, f64, f64), y: f64) -> f64 {
+        let (mut t_lo, mut g_lo, mut x_lo) = (a.0, a.2 - y, a.1);
+        let (mut t_hi, mut g_hi, mut x_hi) = (b.0, b.2 - y, b.1);
+        if g_lo == 0.0 {
+            return x_lo;
+        }
+        if g_hi == 0.0 {
+            return x_hi;
+        }
+        let mut side = 0_i8;
+        for _ in 0..64 {
+            let t = (t_lo * g_hi - t_hi * g_lo) / (g_hi - g_lo);
+            let q = rim_flat(
+                &self.frame,
+                self.curve.evaluate_with_endpoints(t, self.start, self.end),
+            );
+            let g = q.y() - y;
+            if g.abs() <= 1e-14 * (1.0 + y.abs())
+                || (t_hi - t_lo).abs() <= 1e-15 * t_lo.abs().max(1.0)
+            {
+                return q.x();
+            }
+            if (g < 0.0) == (g_lo < 0.0) {
+                (t_lo, g_lo, x_lo) = (t, g, q.x());
+                if side == -1 {
+                    g_hi *= 0.5;
+                }
+                side = -1;
+            } else {
+                (t_hi, g_hi, x_hi) = (t, g, q.x());
+                if side == 1 {
+                    g_lo *= 0.5;
+                }
+                side = 1;
+            }
+        }
+        (x_hi - x_lo).mul_add(g_lo / (g_lo - g_hi), x_lo)
     }
 }
 
@@ -526,14 +694,15 @@ fn wire_polygon(
     wire_polygon_arcs(topo, wire_id, None).map(|(verts, _)| verts)
 }
 
-/// [`wire_polygon`], with each arc of a circle whose normal is parallel to
-/// `plane` (the face's normal) kept as its chord, or no chord for a closed
-/// circle, and returned as an [`ArcSegment`].
+/// [`wire_polygon`], with each curved edge of a face in `plane` (the face's
+/// normal) kept as its chord, or no chord for a closed one, and returned as a
+/// [`Segment`]: an [`ArcSegment`] for an arc of a circle in the plane, a
+/// [`CurvePiece`] for any other.
 fn wire_polygon_arcs(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
     plane: Option<Vec3>,
-) -> Result<(Vec<Point3>, Vec<ArcSegment>), AlgoError> {
+) -> Result<(Vec<Point3>, Vec<Segment>), AlgoError> {
     let wire = topo.wire(wire_id)?;
 
     let mut polylines: Vec<Vec<Point3>> = Vec::with_capacity(wire.edges().len());
@@ -547,20 +716,25 @@ fn wire_polygon_arcs(
             && c.normal().cross(n).length() <= 1e-6
         {
             if (raw_start - raw_end).length() < 1e-9 {
-                arcs.push(ArcSegment::disc(c.center(), c.radius()));
+                arcs.push(Segment::Arc(ArcSegment::disc(c.center(), c.radius())));
             } else {
                 let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
                 let mid = edge
                     .curve()
                     .evaluate_with_endpoints(0.5 * (t0 + t1), raw_start, raw_end);
-                arcs.push(ArcSegment::new(
+                arcs.push(Segment::Arc(ArcSegment::new(
                     c.center(),
                     c.radius(),
                     raw_start,
                     raw_end,
                     mid,
-                ));
+                )));
             }
+        } else if let Some(n) = plane
+            && !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+            && let Some(piece) = CurvePiece::new(edge.curve(), raw_start, raw_end, n)
+        {
+            arcs.push(Segment::Curve(Box::new(piece)));
         } else if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
             let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
             let is_closed = (raw_start - raw_end).length() < 1e-9;
@@ -644,9 +818,12 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
         // circle edge, so the face wraps the entire circumference and the
         // analytic crossing test applies. Inner wires are accepted only when
         // each is a full-circumference v-band (the shape a flush-cap
-        // interaction carves out); any non-banded hole forces the polygon
-        // fallback. Partial cylinder patches also fall through.
+        // interaction carves out). A face whose wires are not all rulings
+        // and axis circles at its two heights, or that neither path below
+        // takes, is read against its own wires.
         if let brepkit_topology::face::FaceSurface::Cylinder(cyl) = face.surface() {
+            let project = |p: Point3| cyl.project_point(p);
+            let rectangle = is_uv_rectangle(topo, face, &project)?;
             let wire = topo.wire(face.outer_wire())?;
             let mut has_closed_circle = false;
             for oe in wire.edges() {
@@ -658,7 +835,7 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                     break;
                 }
             }
-            if has_closed_circle {
+            if rectangle && has_closed_circle {
                 let verts = wire_polygon(topo, face.outer_wire())?;
                 let mut v_min = f64::INFINITY;
                 let mut v_max = f64::NEG_INFINITY;
@@ -676,6 +853,7 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                         v_max,
                         hole_bands,
                         u_gap: None,
+                        trim: None,
                     });
                     continue;
                 }
@@ -685,7 +863,7 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             // no closed-circle edge, so the full-period path skipped it.
             // Collect it analytically with an angular trim rather than the
             // polygon fallback, whose non-planar boundary mis-counts crossings.
-            if face.inner_wires().is_empty() {
+            if rectangle && face.inner_wires().is_empty() {
                 let verts = wire_polygon(topo, face.outer_wire())?;
                 if verts.len() >= 3 {
                     let mut pv_min = f64::INFINITY;
@@ -707,10 +885,23 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                             v_max: pv_max,
                             hole_bands: Vec::new(),
                             u_gap: Some(gap),
+                            trim: None,
                         });
                         continue;
                     }
                 }
+            }
+
+            if let Some(trim) = UvTrim::new(topo, face, &project, &|_| cyl.radius())? {
+                result.push(FaceGeom::Cylinder {
+                    surface: cyl.clone(),
+                    v_min: f64::NEG_INFINITY,
+                    v_max: f64::INFINITY,
+                    hole_bands: Vec::new(),
+                    u_gap: None,
+                    trim: Some(trim),
+                });
+                continue;
             }
         }
 
@@ -718,9 +909,11 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
         // slant distance from the apex, so projecting the boundary polygon
         // yields the patch's `[v_min, v_max]`; a closed circle edge marks a
         // full-period band (no angular trim), otherwise the largest angular
-        // gap trims the patch like the partial-arc cylinder path above.
+        // gap trims the patch like the partial-arc cylinder path above. Any
+        // other cone face is read against its own wires.
         if let brepkit_topology::face::FaceSurface::Cone(cone) = face.surface()
             && face.inner_wires().is_empty()
+            && is_uv_rectangle(topo, face, &|p| cone.project_point(p))?
         {
             let wire = topo.wire(face.outer_wire())?;
             let mut has_closed_circle = false;
@@ -756,10 +949,26 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                             v_min: pv_min,
                             v_max: pv_max,
                             u_gap,
+                            trim: None,
                         });
                         continue;
                     }
                 }
+            }
+        }
+
+        if let brepkit_topology::face::FaceSurface::Cone(cone) = face.surface() {
+            let project = |p: Point3| cone.project_point(p);
+            if let Some(trim) = UvTrim::new(topo, face, &project, &|v| cone.radius_at(v))? {
+                let (v_min, v_max) = trim.v_bounds();
+                result.push(FaceGeom::Cone {
+                    surface: cone.clone(),
+                    v_min,
+                    v_max,
+                    u_gap: None,
+                    trim: Some(trim),
+                });
+                continue;
             }
         }
 
@@ -932,6 +1141,368 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
     Ok(result)
 }
 
+/// `x` wrapped into `[-π, π)`.
+fn wrap_pi(x: f64) -> f64 {
+    (x + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI
+}
+
+/// A cylinder or cone face's wires in its `(u, v)` parameters. A hit at
+/// `(u, v)` is on the face when a ray from it toward growing `v` crosses the
+/// wires an odd number of times, and each crossing is solved on the edge's
+/// own curve, so the hit is read exactly however an edge bows between its
+/// samples.
+struct UvTrim {
+    edges: Vec<UvEdge>,
+}
+
+/// One edge of a [`UvTrim`]: its curve and end points, and samples
+/// `(t, u, v)` in the curve's own order, none of them turning more than an
+/// eighth of a turn from the next. A `flat` edge is a cone's apex read as a
+/// side of the face along its `v`.
+struct UvEdge {
+    curve: brepkit_topology::edge::EdgeCurve,
+    start: Point3,
+    end: Point3,
+    samples: Vec<(f64, f64, f64)>,
+    flat: bool,
+}
+
+impl UvTrim {
+    /// The trim of `face` on a surface projecting a point to `(u, v)` by
+    /// `project`, with radius `radius(v)` about its axis. `None` for a face
+    /// whose wires hold no edge of any length.
+    fn new(
+        topo: &Topology,
+        face: &brepkit_topology::face::Face,
+        project: &dyn Fn(Point3) -> (f64, f64),
+        radius: &dyn Fn(f64) -> f64,
+    ) -> Result<Option<Self>, AlgoError> {
+        use brepkit_topology::edge::EdgeCurve;
+        const PIECES: u32 = 16;
+        const MAX_SAMPLES: usize = 4096;
+        let max_turn = std::f64::consts::FRAC_PI_8;
+        let mut edges = Vec::new();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            // Each edge with whether its samples run in the wire's order, and
+            // the point the wire leaves it at.
+            let mut wire_edges: Vec<(UvEdge, bool, Point3)> = Vec::new();
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let start = topo.vertex(edge.start())?.point();
+                let end = topo.vertex(edge.end())?.point();
+                let (leaves_from, leaves_at) = if oe.is_forward() {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                let curve = edge.curve().clone();
+                let is_line = matches!(curve, EdgeCurve::Line);
+                if is_line && (end - start).length() < 1e-12 {
+                    continue;
+                }
+                let (t0, t1) = curve.domain_with_endpoints(start, end);
+                let at = |t: f64| project(curve.evaluate_with_endpoints(t, start, end));
+                let pieces = if is_line { 1 } else { PIECES };
+                let mut samples: Vec<(f64, f64, f64)> = (0..=pieces)
+                    .map(|i| {
+                        let t = (t1 - t0).mul_add(f64::from(i) / f64::from(pieces), t0);
+                        let (u, v) = at(t);
+                        (t, u, v)
+                    })
+                    .collect();
+                // An open edge's ends sit on its vertices, so neighbouring
+                // edges meet exactly (a NURBS edge's span may run from its end
+                // back); a closed edge starts at its curve's own origin, which
+                // need not be its vertex, and closes on itself.
+                let last = samples.len() - 1;
+                let along = if edge.start() == edge.end() {
+                    (samples[last].1, samples[last].2) = (samples[0].1, samples[0].2);
+                    oe.is_forward()
+                } else {
+                    let first = curve.evaluate_with_endpoints(t0, start, end);
+                    let (a, b) = if (first - start).length() <= (first - end).length() {
+                        (start, end)
+                    } else {
+                        (end, start)
+                    };
+                    (samples[0].1, samples[0].2) = project(a);
+                    (samples[last].1, samples[last].2) = project(b);
+                    (a - leaves_from).length() <= (a - leaves_at).length()
+                };
+                // A sample on the axis (a cone's apex) has no `u` of its own:
+                // it takes its neighbour's, so the piece runs along `v`.
+                let scale = samples
+                    .iter()
+                    .fold(0.0_f64, |m, s| m.max(radius(s.2).abs()));
+                for k in 0..samples.len() {
+                    if radius(samples[k].2).abs() <= 1e-9 * scale.max(1.0) {
+                        let near = if k + 1 < samples.len() {
+                            k + 1
+                        } else {
+                            k.saturating_sub(1)
+                        };
+                        samples[k].1 = samples[near].1;
+                    }
+                }
+                let mut i = 0;
+                while i + 1 < samples.len() {
+                    let (ta, ua, _) = samples[i];
+                    let (tb, ub, _) = samples[i + 1];
+                    let split = wrap_pi(ub - ua).abs() > max_turn
+                        && (tb - ta).abs() > 1e-9 * (t1 - t0).abs()
+                        && samples.len() < MAX_SAMPLES;
+                    if split {
+                        let tm = f64::midpoint(ta, tb);
+                        let (um, vm) = at(tm);
+                        samples.insert(i + 1, (tm, um, vm));
+                    } else {
+                        i += 1;
+                    }
+                }
+                let edge = UvEdge {
+                    curve,
+                    start,
+                    end,
+                    samples,
+                    flat: false,
+                };
+                wire_edges.push((edge, along, leaves_at));
+            }
+            if let Some(side) = apex_side(&wire_edges, project, radius) {
+                edges.push(side);
+            }
+            edges.extend(wire_edges.into_iter().map(|(e, _, _)| e));
+        }
+        Ok(if edges.is_empty() {
+            None
+        } else {
+            Some(Self { edges })
+        })
+    }
+
+    /// The lowest and highest `v` the wires' samples reach.
+    fn v_bounds(&self) -> (f64, f64) {
+        self.edges
+            .iter()
+            .flat_map(|e| e.samples.iter())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| {
+                (lo.min(s.2), hi.max(s.2))
+            })
+    }
+
+    /// Whether `(u, v)` is on the face, and whether it lies within `near` of
+    /// a wire (`radius` the surface's radius there).
+    fn contains(
+        &self,
+        u: f64,
+        v: f64,
+        radius: f64,
+        near: f64,
+        project: &dyn Fn(Point3) -> (f64, f64),
+    ) -> (bool, bool) {
+        // Each sample is placed once by the sign of its offset from `u`, so
+        // two pieces sharing a sample agree on which of them holds a
+        // crossing there. A piece with an offset beyond a quarter turn lies
+        // on the far side of the surface, where the offset wraps.
+        let near_u = near / radius.max(near);
+        let mut crossings = 0_u32;
+        let mut suspicious = false;
+        for e in &self.edges {
+            let mut ga = wrap_pi(e.samples[0].1 - u);
+            for w in e.samples.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                let gb = wrap_pi(b.1 - u);
+                let g = (ga, gb);
+                ga = gb;
+                if g.0.abs() > std::f64::consts::FRAC_PI_2
+                    || g.1.abs() > std::f64::consts::FRAC_PI_2
+                {
+                    continue;
+                }
+                if (g.0 >= 0.0) != (g.1 >= 0.0) {
+                    let vc = e.v_at(a, b, g, u, project);
+                    suspicious |= (vc - v).abs() <= near;
+                    if vc > v {
+                        crossings += 1;
+                    }
+                }
+                if g.0.min(g.1) > near_u || g.0.max(g.1) < -near_u {
+                    continue;
+                }
+                // Beside the piece: its chord's distance in `(u·r, v)`.
+                let (px, py) = (-g.0 * radius, v - a.2);
+                let (sx, sy) = ((g.1 - g.0) * radius, b.2 - a.2);
+                let len2 = sx.mul_add(sx, sy * sy);
+                let s = if len2 > 0.0 {
+                    (px.mul_add(sx, py * sy) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                suspicious |= sx.mul_add(-s, px).hypot(sy.mul_add(-s, py)) <= near;
+            }
+        }
+        (crossings % 2 == 1, suspicious)
+    }
+}
+
+impl UvEdge {
+    /// The `v` where the edge between samples `a` and `b` (offset `ga` and
+    /// `gb` from `u`) reaches `u`, found on the curve by regula falsi with
+    /// the Illinois step.
+    fn v_at(
+        &self,
+        a: (f64, f64, f64),
+        b: (f64, f64, f64),
+        (ga, gb): (f64, f64),
+        u: f64,
+        project: &dyn Fn(Point3) -> (f64, f64),
+    ) -> f64 {
+        if self.flat {
+            return a.2;
+        }
+        let (mut t_lo, mut g_lo, mut v_lo) = (a.0, ga, a.2);
+        let (mut t_hi, mut g_hi, mut v_hi) = (b.0, gb, b.2);
+        if g_lo == 0.0 {
+            return v_lo;
+        }
+        if g_hi == 0.0 {
+            return v_hi;
+        }
+        // `ga` and `gb` have opposite signs (a crossing) and neither is zero,
+        // and each step keeps the bracket, so `g_hi - g_lo` never vanishes.
+        let mut side = 0_i8;
+        for _ in 0..64 {
+            let t = (t_lo * g_hi - t_hi * g_lo) / (g_hi - g_lo);
+            let (tu, tv) = project(self.curve.evaluate_with_endpoints(t, self.start, self.end));
+            let g = wrap_pi(tu - u);
+            if g.abs() <= 1e-14 || (t_hi - t_lo).abs() <= 1e-15 * t_lo.abs().max(1.0) {
+                return tv;
+            }
+            if (g < 0.0) == (g_lo < 0.0) {
+                (t_lo, g_lo, v_lo) = (t, g, tv);
+                if side == -1 {
+                    g_hi *= 0.5;
+                }
+                side = -1;
+            } else {
+                (t_hi, g_hi, v_hi) = (t, g, tv);
+                if side == 1 {
+                    g_lo *= 0.5;
+                }
+                side = 1;
+            }
+        }
+        (v_hi - v_lo).mul_add(g_lo / (g_lo - g_hi), v_lo)
+    }
+}
+
+/// The side a wire through a cone's apex runs along the apex's `v`. The wire
+/// meets the apex as a point, so in `(u, v)` it leaves the apex at another
+/// `u` than it reached it at; the side between them turns so that the whole
+/// wire turns no net amount about the axis (a face of the full cone about its
+/// apex has a side of a full turn there). `None` for a wire without exactly
+/// one pass through an apex.
+fn apex_side(
+    wire_edges: &[(UvEdge, bool, Point3)],
+    project: &dyn Fn(Point3) -> (f64, f64),
+    radius: &dyn Fn(f64) -> f64,
+) -> Option<UvEdge> {
+    let scale = wire_edges
+        .iter()
+        .flat_map(|(e, _, _)| e.samples.iter())
+        .fold(0.0_f64, |m, s| m.max(radius(s.2).abs()));
+    let mut apexes = wire_edges.iter().filter_map(|(e, along, leaves_at)| {
+        let (_, v) = project(*leaves_at);
+        (radius(v).abs() <= 1e-9 * scale.max(1.0)).then(|| {
+            let reached = if *along {
+                e.samples.last()
+            } else {
+                e.samples.first()
+            };
+            reached.map(|s| (s.1, v, *leaves_at))
+        })
+    });
+    let (u, v, at) = apexes.next()??;
+    if apexes.next().is_some() {
+        return None;
+    }
+    let turn: f64 = wire_edges
+        .iter()
+        .map(|(e, along, _)| {
+            let d: f64 = e.samples.windows(2).map(|w| wrap_pi(w[1].1 - w[0].1)).sum();
+            if *along { d } else { -d }
+        })
+        .sum();
+    if turn.abs() <= 1e-9 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pieces = (turn.abs() / std::f64::consts::FRAC_PI_8).ceil().max(1.0) as u32;
+    let samples = (0..=pieces)
+        .map(|k| {
+            let f = f64::from(k) / f64::from(pieces);
+            (f, (-turn).mul_add(f, u), v)
+        })
+        .collect();
+    Some(UvEdge {
+        curve: brepkit_topology::edge::EdgeCurve::Line,
+        start: at,
+        end: at,
+        samples,
+        flat: true,
+    })
+}
+
+/// Whether a cylinder or cone face is a band or a patch between two rulings,
+/// which a constant `v` range and one `u` gap read exactly: every edge of
+/// each wire a line (a ruling, on these surfaces) running between the wire's
+/// lowest and highest `v`, or an arc keeping one of those two.
+fn is_uv_rectangle(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    project: &dyn Fn(Point3) -> (f64, f64),
+) -> Result<bool, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let eps = 1e-9;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let wire = topo.wire(wid)?;
+        let mut ends = Vec::with_capacity(wire.edges().len());
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (s, e) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (vs, ve) = (project(s).1, project(e).1);
+            lo = lo.min(vs).min(ve);
+            hi = hi.max(vs).max(ve);
+            ends.push((edge.curve(), s, e, vs, ve));
+        }
+        let scale = eps * lo.abs().max(hi.abs()).max(1.0);
+        let at_end = |v: f64| (v - lo).abs() <= scale || (v - hi).abs() <= scale;
+        for (curve, s, e, vs, ve) in ends {
+            let fits = match curve {
+                EdgeCurve::Line => {
+                    (s - e).length() <= scale
+                        || ((vs - lo).abs() <= scale && (ve - hi).abs() <= scale)
+                        || ((vs - hi).abs() <= scale && (ve - lo).abs() <= scale)
+                }
+                EdgeCurve::Circle(_) => {
+                    let (t0, t1) = curve.domain_with_endpoints(s, e);
+                    let mid = project(curve.evaluate_with_endpoints(f64::midpoint(t0, t1), s, e)).1;
+                    at_end(vs) && (vs - ve).abs() <= scale && (vs - mid).abs() <= scale
+                }
+                EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+            };
+            if !fits {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// Collect full-circumference v-band holes carved out of a cylindrical face.
 ///
 /// Each inner wire is sampled and projected into `(u, v)`. A wire is treated
@@ -1008,6 +1579,7 @@ fn ray_geom_crossings(
             v_max,
             hole_bands,
             u_gap,
+            trim,
         } => ray_cylinder_crossings(
             origin,
             ray_dir,
@@ -1015,6 +1587,7 @@ fn ray_geom_crossings(
             (*v_min, *v_max),
             hole_bands,
             *u_gap,
+            trim.as_ref(),
             tol,
         ),
         FaceGeom::Cone {
@@ -1022,7 +1595,16 @@ fn ray_geom_crossings(
             v_min,
             v_max,
             u_gap,
-        } => ray_cone_crossings(origin, ray_dir, surface, (*v_min, *v_max), *u_gap, tol),
+            trim,
+        } => ray_cone_crossings(
+            origin,
+            ray_dir,
+            surface,
+            (*v_min, *v_max),
+            *u_gap,
+            trim.as_ref(),
+            tol,
+        ),
         FaceGeom::Torus { surface, v_band } => {
             ray_torus_crossings(origin, ray_dir, surface, *v_band, tol)
         }
@@ -1416,8 +1998,8 @@ fn sphere_rim(
 fn ray_face_crossing(
     origin: Point3,
     ray_dir: Vec3,
-    (verts, arcs): (&[Point3], &[ArcSegment]),
-    (holes, hole_arcs): (&[Vec<Point3>], &[Vec<ArcSegment>]),
+    (verts, arcs): (&[Point3], &[Segment]),
+    (holes, hole_arcs): (&[Vec<Point3>], &[Vec<Segment>]),
     circle_holes: &[(Point3, f64)],
     normal: Vec3,
     d: f64,
@@ -1455,7 +2037,7 @@ fn ray_face_crossing(
             .any(|a| a.grazes(hit, near));
     // With arcs, the chord polygon is read by crossing parity: a boundary can
     // cross an arc's chord, where the polygon winds twice.
-    let within = |poly: &[Point3], segments: &[ArcSegment]| {
+    let within = |poly: &[Point3], segments: &[Segment]| {
         if segments.is_empty() {
             return point_in_face_3d(hit, poly, &normal);
         }
@@ -1480,6 +2062,7 @@ fn ray_face_crossing(
 /// parameter falls within the face's v-range but outside any `hole_bands`
 /// (full-circumference v-ranges carved out of the lateral). Tangent grazes
 /// (discriminant ≈ 0) count as zero crossings, which preserves parity.
+#[allow(clippy::too_many_arguments)]
 fn ray_cylinder_crossings(
     origin: Point3,
     ray_dir: Vec3,
@@ -1487,6 +2070,7 @@ fn ray_cylinder_crossings(
     v_range: (f64, f64),
     hole_bands: &[(f64, f64)],
     u_gap: Option<(f64, f64)>,
+    trim: Option<&UvTrim>,
     tol: Tolerance,
 ) -> (i32, bool) {
     let near = 10.0 * tol.linear;
@@ -1522,6 +2106,14 @@ fn ray_cylinder_crossings(
             origin.y() + ray_dir.y() * t,
             origin.z() + ray_dir.z() * t,
         );
+        if let Some(trim) = trim {
+            let (u, v) = surface.project_point(hit);
+            let project = |p: Point3| surface.project_point(p);
+            let (on, close) = trim.contains(u, v, surface.radius(), near, &project);
+            suspicious |= close;
+            crossings += i32::from(on);
+            continue;
+        }
         let v = axis.dot(hit - surface.origin());
         suspicious |= (v - v_min).abs() <= near || (v - v_max).abs() <= near;
         if v < v_min - tol.linear || v > v_max + tol.linear {
@@ -1629,6 +2221,7 @@ fn ray_cone_crossings(
     surface: &brepkit_math::surfaces::ConicalSurface,
     v_range: (f64, f64),
     u_gap: Option<(f64, f64)>,
+    trim: Option<&UvTrim>,
     tol: Tolerance,
 ) -> (i32, bool) {
     let near = 10.0 * tol.linear;
@@ -1656,7 +2249,14 @@ fn ray_cone_crossings(
     } else {
         let disc = half_b.mul_add(half_b, -(a * c));
         if disc < 1e-12 * a.abs() * r_max * r_max {
-            return (0, false);
+            // A ray through the apex meets the cone in a double root there:
+            // it passes the solid's boundary at a point, which no crossing
+            // count reads reliably.
+            let t = -half_b / a;
+            let at = origin + ray_dir * t;
+            let through_apex =
+                t > tol.linear && (at - surface.apex()).length() <= near.max(1e-9 * r_max);
+            return (0, through_apex);
         }
         let sqrt_disc = disc.sqrt();
         roots[0] = Some((-half_b - sqrt_disc) / a);
@@ -1675,6 +2275,13 @@ fn ray_cone_crossings(
             origin.z() + ray_dir.z() * t,
         );
         let (u, v) = surface.project_point(hit);
+        if let Some(trim) = trim {
+            let project = |p: Point3| surface.project_point(p);
+            let (on, close) = trim.contains(u, v, surface.radius_at(v).abs(), near, &project);
+            suspicious |= close;
+            crossings += i32::from(on);
+            continue;
+        }
         suspicious |= (v - v_min).abs() <= near || (v - v_max).abs() <= near;
         if v < v_min - tol.linear || v > v_max + tol.linear {
             continue;
