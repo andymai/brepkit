@@ -96,6 +96,20 @@ enum FaceGeom {
         surface: brepkit_math::surfaces::SphericalSurface,
         loops: Vec<SphereLoop>,
     },
+    /// A spherical face that planes do not bound (a hemisphere less a
+    /// quarter), read in `(u, v)` about an axis whose poles lie clear of its
+    /// wires by a [`UvTrim`]. A primitive's equator chords stand for the
+    /// great-circle arcs they project to.
+    SphereTrim {
+        surface: brepkit_math::surfaces::SphericalSurface,
+        frame: SphereFrame,
+        trim: UvTrim,
+        /// The ray's direction along `v`, away from a pole the face holds.
+        away: f64,
+        /// The face holds both poles, so the ray also crosses it at the pole
+        /// it runs toward.
+        beyond: bool,
+    },
 }
 
 /// The region between an arc of a circle in a plane face's plane and its
@@ -584,6 +598,7 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
                         FaceGeom::Cone { .. } => "cone".to_string(),
                         FaceGeom::Torus { .. } => "torus".to_string(),
                         FaceGeom::Sphere { loops, .. } => format!("sphere[{} loops]", loops.len()),
+                        FaceGeom::SphereTrim { .. } => "sphere trim".to_string(),
                     };
                     log::debug!(
                         "RAYHIT {label} dir=({:.3},{:.3},{:.3}) geom#{gi} {tag} c={c} susp={s}",
@@ -1069,14 +1084,18 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             }
         }
 
-        if let brepkit_topology::face::FaceSurface::Sphere(sph) = face.surface()
-            && let Some(loops) = sphere_face_loops(topo, face, sph)?
-        {
-            result.push(FaceGeom::Sphere {
-                surface: sph.clone(),
-                loops,
-            });
-            continue;
+        if let brepkit_topology::face::FaceSurface::Sphere(sph) = face.surface() {
+            if let Some(loops) = sphere_face_loops(topo, face, sph)? {
+                result.push(FaceGeom::Sphere {
+                    surface: sph.clone(),
+                    loops,
+                });
+                continue;
+            }
+            if let Some(geom) = sphere_trim(topo, face, sph)? {
+                result.push(geom);
+                continue;
+            }
         }
 
         // Analytic arcs and holes only on a genuine plane face: the fallback
@@ -1558,6 +1577,13 @@ fn ray_geom_crossings(
         FaceGeom::Sphere { surface, loops } => {
             ray_sphere_crossings(origin, ray_dir, surface, loops, tol)
         }
+        FaceGeom::SphereTrim {
+            surface,
+            frame,
+            trim,
+            away,
+            beyond,
+        } => ray_sphere_trim_crossings(origin, ray_dir, surface, frame, trim, *away, *beyond, tol),
     }
 }
 
@@ -1572,6 +1598,28 @@ fn ray_sphere_crossings(
     tol: Tolerance,
 ) -> (i32, bool) {
     let near = 10.0 * tol.linear;
+    let mut crossings = 0;
+    let mut suspicious = false;
+    for hit in sphere_hits(origin, ray_dir, surface, tol)
+        .into_iter()
+        .flatten()
+    {
+        suspicious |= loops.iter().any(|l| l.grazes(hit, near));
+        if loops.iter().all(|l| l.admits(hit, tol.linear)) {
+            crossings += 1;
+        }
+    }
+    (crossings, suspicious)
+}
+
+/// The ray's hits on the sphere past its origin; none for a ray that misses
+/// it or only touches it.
+fn sphere_hits(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::surfaces::SphericalSurface,
+    tol: Tolerance,
+) -> [Option<Point3>; 2] {
     let r = surface.radius();
     let m = origin - surface.center();
     let a = ray_dir.dot(ray_dir);
@@ -1579,22 +1627,203 @@ fn ray_sphere_crossings(
     let c = r.mul_add(-r, m.dot(m));
     let disc = b.mul_add(b, -4.0 * a * c);
     if disc < 1e-12 * a * r * r {
-        return (0, false);
+        return [None, None];
     }
     let sqrt_disc = disc.sqrt();
+    [(-b - sqrt_disc) / (2.0 * a), (-b + sqrt_disc) / (2.0 * a)]
+        .map(|t| (t > tol.linear).then(|| origin + ray_dir * t))
+}
+
+/// Count ray crossings with a spherical face read by its [`UvTrim`]: each
+/// hit is on the face when a ray from it along `v` crosses the wires an odd
+/// number of times, one more when the face holds the pole it runs toward.
+#[allow(clippy::too_many_arguments)]
+fn ray_sphere_trim_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::surfaces::SphericalSurface,
+    frame: &SphereFrame,
+    trim: &UvTrim,
+    away: f64,
+    beyond: bool,
+    tol: Tolerance,
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
+    let r = surface.radius();
+    let project = |p: Point3| frame.project(p);
     let mut crossings = 0;
     let mut suspicious = false;
-    for t in [(-b - sqrt_disc) / (2.0 * a), (-b + sqrt_disc) / (2.0 * a)] {
-        if t <= tol.linear {
-            continue;
-        }
-        let hit = origin + ray_dir * t;
-        suspicious |= loops.iter().any(|l| l.grazes(hit, near));
-        if loops.iter().all(|l| l.admits(hit, tol.linear)) {
-            crossings += 1;
-        }
+    for hit in sphere_hits(origin, ray_dir, surface, tol)
+        .into_iter()
+        .flatten()
+    {
+        let (u, v) = frame.project(hit);
+        let (on, close) = trim.contains(u, v, away, r * v.cos(), near, &project);
+        suspicious |= close;
+        crossings += i32::from(on != beyond);
     }
     (crossings, suspicious)
+}
+
+/// Longitude `u` and latitude `v` on a sphere about an axis of its own.
+struct SphereFrame {
+    center: Point3,
+    axis: Vec3,
+    x: Vec3,
+    y: Vec3,
+}
+
+impl SphereFrame {
+    fn new(center: Point3, axis: Vec3) -> Option<Self> {
+        let helper = if axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let x = axis.cross(helper).normalize().ok()?;
+        let y = axis.cross(x);
+        Some(Self { center, axis, x, y })
+    }
+
+    /// A point's `(u, v)`, by its direction from the centre (so a chord
+    /// reads as the great-circle arc it projects to).
+    fn project(&self, p: Point3) -> (f64, f64) {
+        let w = p - self.center;
+        let len = w.length();
+        if len < 1e-15 {
+            return (0.0, 0.0);
+        }
+        (
+            w.dot(self.y).atan2(w.dot(self.x)).rem_euclid(TAU),
+            (w.dot(self.axis) / len).clamp(-1.0, 1.0).asin(),
+        )
+    }
+}
+
+/// A spherical face as a [`FaceGeom::SphereTrim`]: its wires in `(u, v)`
+/// about the candidate axis whose poles lie farthest from them, the ray run
+/// away from the pole the face holds. Each wire's turn about the axis (the
+/// face on its left) says which: a total of one turn holds the north pole,
+/// minus one the south; with none, a wire that winds makes a band, a patch
+/// holds neither pole, and a face whose every wire is a hole holds both.
+/// `None` when no candidate keeps the poles clear of the wires.
+fn sphere_trim(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    surface: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<Option<FaceGeom>, AlgoError> {
+    const SAMPLES: u32 = 32;
+    let center = surface.center();
+    // Each wire's samples in traversal order.
+    let mut wires: Vec<Vec<Point3>> = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let mut pts = Vec::new();
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let start = topo.vertex(edge.start())?.point();
+            let end = topo.vertex(edge.end())?.point();
+            let curve = edge.curve();
+            if matches!(curve, brepkit_topology::edge::EdgeCurve::Line)
+                && (end - start).length() < 1e-12
+            {
+                continue;
+            }
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let mut run: Vec<Point3> = (0..=SAMPLES)
+                .map(|k| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+                    curve.evaluate_with_endpoints(t, start, end)
+                })
+                .collect();
+            if edge.start() != edge.end() && (run[0] - start).length() > (run[0] - end).length() {
+                run.reverse();
+            }
+            if !oe.is_forward() {
+                run.reverse();
+            }
+            run.pop();
+            pts.extend(run);
+        }
+        if pts.len() < 3 {
+            return Ok(None);
+        }
+        wires.push(pts);
+    }
+    let candidates = [
+        surface.z_axis(),
+        surface.x_axis(),
+        surface.y_axis(),
+        Vec3::new(
+            0.447_213_595_499_957_9,
+            0.547_722_557_505_166_1,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ),
+        Vec3::new(-0.5, 0.763_762_615_825_973_4, 0.408_248_290_463_863),
+        Vec3::new(
+            0.597_614_304_667_196_8,
+            -0.377_964_473_009_227_2,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ),
+    ];
+    let reach = |axis: Vec3| {
+        wires.iter().flatten().fold(0.0_f64, |m, p| {
+            let w = *p - center;
+            m.max((w.dot(axis) / w.length().max(1e-300)).abs())
+        })
+    };
+    let Some(axis) = candidates
+        .into_iter()
+        .min_by(|a, b| reach(*a).total_cmp(&reach(*b)))
+        .filter(|a| reach(*a) <= 3.0_f64.to_radians().cos())
+    else {
+        return Ok(None);
+    };
+    let Some(frame) = SphereFrame::new(center, axis) else {
+        return Ok(None);
+    };
+    let (mut total, mut winds, mut patch) = (0_i64, false, false);
+    for pts in &wires {
+        let uv: Vec<(f64, f64)> = pts.iter().map(|p| frame.project(*p)).collect();
+        let (mut turn, mut twice_area, mut u) = (0.0, 0.0, uv[0].0);
+        for i in 0..uv.len() {
+            let (a, b) = (uv[i], uv[(i + 1) % uv.len()]);
+            let du = wrap_pi(b.0 - a.0);
+            if du.abs() > std::f64::consts::FRAC_PI_4 {
+                return Ok(None);
+            }
+            twice_area += u.mul_add(b.1, -(u + du) * a.1);
+            u += du;
+            turn += du;
+        }
+        let turns = (turn / TAU).round();
+        if (turn - turns * TAU).abs() > 1e-6 {
+            return Ok(None);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let turns = turns as i64;
+        total += turns;
+        winds |= turns != 0;
+        patch |= turns == 0 && twice_area > 0.0;
+    }
+    let (away, beyond) = match total {
+        1 => (-1.0, false),
+        -1 => (1.0, false),
+        0 if winds || patch => (1.0, false),
+        0 => (-1.0, true),
+        _ => return Ok(None),
+    };
+    let r = surface.radius();
+    let project = |p: Point3| frame.project(p);
+    let Some(trim) = UvTrim::new(topo, face, &project, &|v| r * v.cos())? else {
+        return Ok(None);
+    };
+    Ok(Some(FaceGeom::SphereTrim {
+        surface: surface.clone(),
+        frame,
+        trim,
+        away,
+        beyond,
+    }))
 }
 
 /// A spherical face's loops as [`SphereLoop`]s, each wire walked in its
