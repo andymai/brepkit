@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790388828381,
+  "lastUpdate": 1790392814525,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40823,6 +40823,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42219726,
             "range": "± 251047",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f31d75a54710825a8fac52b9ca8b98a9424de9a2",
+          "message": "fix(operations): mesh and measure a wall notched across its seam (#1781)\n\nA wall notch that crosses a tool's seam now meshes and measures\ncorrectly, allowing the affected rod and cone fuses to return the\ncomplete solid.\n\n## What was wrong\n\n- Fusing `make_box(10, 10, 2)` with `make_cylinder(1, 10)` through its\nedge at `(0, 5, -4)` returned 10 faces, valid, with a watertight mesh\nand no fallback, but measured 219.41 against 228.27. The same occurred\nat `x = 0.3`, `-0.4`, and `0.7`. With `make_cone(1.2, 0.6, 10)`, it\nmeasured 216.61 against 223.84. The Cut and the Intersect were right.\n\n- The plate removes a window from the tool's wall. When the window\nstraddles the seam, the outer wire represents a 12-edge notch: two\nclosed rims, the seam's pieces, and the window's arcs and lines. Three\nreaders instead treated the wall as the `(u, v)` box of its rims.\n\n- The solid mesher's CDT path, `tessellate_nonplanar_cdt`, had no\ninterior rows between the rims and the notch's corners. It fanned rim\nsamples to those corners across up to about 1.5 radians, sagging up to\n0.71 through the solid. Its notched-wall rule, using a developed\n`(radius * u, v)` metric with refinement by angular extent, recognized\nonly notches made from marched NURBS pieces.\n\n- `face_area`, through `cylinder_face_uv_area` and `cone_face_uv_area`,\napplied the closed form to any outline of axial lines and perpendicular\ncircles. It therefore reported the rod's wall box as 62.83 against\n56.55. The same closed form ignored holes: a pointed cone wall\ncontaining the window as a hole read 37.970 against 34.173. The per-face\nmesher also filled the box, producing a mesh area of 31.40.\n\n- Applying the notched-wall rule to the cone exposed a refinement\nfailure. One shared rim edge spans 0.4887 radians at radius 1.2, coarser\nthan deflection 0.01 permits. Halving toward that constraint minted\nslivers until all 16 passes ran out. The face then used the snap mesher,\nwhich cracked the boundary and left 123 open mesh edges.\n\n## What this does\n\n- The notched-wall rule now accepts a notch made from any edges: an\nouter wire with more than four edges, two closed rims, and seam lines\nused twice.\n\n- The closed-form box area applies only to a four-edge outline with no\nholes. Every other outline is integrated along its loops as `∮ u w(v)\ndv`.\n\n- The per-face mesher sends walls matching the same notched-wall test\nthrough its hole-aware path.\n\n- Refinement gives each vertex the sag of the coarsest constrained\nshared-boundary edge incident to it. A triangle is accepted when its sag\nis no greater than the largest allowance at its corners. This floor is\nmeasured as sag. An edge through a pointed cone's apex may span any `u`\nat zero radius and therefore contributes no floor.\n\n## Verification\n\n- `a_rod_through_a_plate_edge_fuses_whole` and\n`a_cone_through_a_plate_edge_fuses_whole`, in\n`crates/operations/tests/rod_through_plate_edge.rs`, fuse the plate with\neach tool at `x = 0` and `x = 0.4`, rotated 0, 1, and pi radians about\nits axis. The rod at `x = 0` rotated 1 radian falls back to a mesh on\nmain too, so that case is omitted.\n\n- Every tested fuse is exact, with no fallback, valid, watertight, and\nwithin `1e-3` of closed form. The reference is the plate plus the tool\nminus the part past `x = 0` inside the plate, using closed form for the\nrod and Simpson's rule over slices for the cone. `classify_point`\ncorrectly places seven points: just inside and outside the wall beside,\nbelow, and above the plate, plus one in the plate past the tool.\n\n- Each test finds exactly one wall. The rod wall is within `1e-9` of `2\npi * 10` less twice the window's angular span. The cone wall is within\n`1e-6` of its whole side less the window, using Simpson's rule over the\nwindow's height. At deflection 0.002, each wall mesh is within `2e-3` of\nthat area, and no mesh-edge midpoint lies inside the surface by more\nthan the deflection. A single per-face floor from the coarsest boundary\nedge violates this bound: the cone wall at `x = 0` sags 0.002017. Both\ntests fail on main, at 219.41 against 228.27 and 216.61 against 223.84.\n\n- The pointed-cone pocket tests, `cone_pocket`, pass. They fail when the\nfloor is measured as an angle because an apex edge spans any `u`.\n\n- The workspace suite runs 3103 tests: 3103 passed and 20 skipped.\n\n- Two roadmap rows remain. With the rod rotated 2 radians at `x = 0.4`,\nthe window ends within a degree of the seam and the solid mesh is open,\non main as well. Rim samples lie about 0.068 radians off the surface\nprojection in `(u, v)`, so the window crosses the seam and the hole\nflood clears the adjacent sliver. A pointed cone, `make_cone(1.2, 0,\n10)` at `(0, 5, -4)`, fuses at 208.22 against 213.93 with an open mesh,\nalso on main. Both notched-wall tests require two closed rims.",
+          "timestamp": "2026-09-26T03:17:55Z",
+          "tree_id": "89c86e18fdbe39ab98ecdbf0dd928d44020d7844",
+          "url": "https://github.com/andymai/brepkit/commit/f31d75a54710825a8fac52b9ca8b98a9424de9a2"
+        },
+        "date": 1790392810495,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 681322,
+            "range": "± 5845",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 745324,
+            "range": "± 25758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10046,
+            "range": "± 398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 497158,
+            "range": "± 1291",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30694488,
+            "range": "± 74151",
             "unit": "ns/iter"
           }
         ]
