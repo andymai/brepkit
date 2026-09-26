@@ -2,14 +2,17 @@
 //! plate: the plate takes a window out of the tool's wall, and where the
 //! window straddles the wall's seam the wall's outer wire carries it as a
 //! notch between two rims and the seam's two copies, which is no box in
-//! `(u, v)`. Each fuse matches its closed form, each wall its area, and each
-//! wall's own mesh stays within the deflection of the surface, whichever way
-//! the tool's seam points.
+//! `(u, v)`. Each fuse matches its closed form and classifies points on
+//! either side of the tool's wall right, each wall matches its area, and
+//! each wall's own mesh stays within the deflection of the surface, whichever
+//! way the tool's seam points.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
 
+use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
@@ -75,6 +78,31 @@ fn wall_mesh(
 
 const DEFLECTION: f64 = 0.002;
 
+/// Points just inside and just outside the tool's wall beside the plate,
+/// above it and below it, and in the plate past the tool.
+fn assert_classifies(
+    topo: &Topology,
+    fused: SolidId,
+    cx: f64,
+    radius: &dyn Fn(f64) -> f64,
+    label: &str,
+) {
+    use PointClassification::{Inside, Outside};
+    for (x, z, want) in [
+        (cx - 0.9 * radius(1.0), 1.0, Inside),
+        (cx - 1.1 * radius(1.0), 1.0, Outside),
+        (cx - 0.9 * radius(-2.0), -2.0, Inside),
+        (cx + 1.1 * radius(-2.0), -2.0, Outside),
+        (cx + 0.9 * radius(4.0), 4.0, Inside),
+        (cx + 1.1 * radius(4.0), 4.0, Outside),
+        (cx + 1.5, 1.0, Inside),
+    ] {
+        let p = Point3::new(x, 5.0, z);
+        let got = classify_point(topo, fused, p, &ClassifyOptions::default()).unwrap();
+        assert_eq!(got, want, "{label}: ({x}, 5, {z})");
+    }
+}
+
 #[test]
 fn a_rod_through_a_plate_edge_fuses_whole() {
     for cx in [0.0, 0.4] {
@@ -105,6 +133,7 @@ fn a_rod_through_a_plate_edge_fuses_whole() {
                 (volume - truth).abs() < 1e-3 * truth,
                 "{label}: volume {volume}, truth {truth}"
             );
+            assert_classifies(&topo, fused, cx, &|_| 1.0, &label);
             let walls: Vec<_> = faces
                 .into_iter()
                 .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
@@ -133,15 +162,25 @@ fn a_cone_through_a_plate_edge_fuses_whole() {
     // The cone's radius at height z (the plate spans z in [0, 2]).
     let radius = |z: f64| 0.06f64.mul_add(-(z + 4.0), 1.2);
     let cone = PI * 10.0 / 3.0 * (1.2f64.powi(2) + 1.2 * 0.6 + 0.6f64.powi(2));
+    // The wall's area per unit height, per radian, over its radius.
+    let slant = 0.06f64.hypot(1.0);
     for cx in [0.0, 0.4] {
-        let n = 2000_u32;
-        let step = 2.0 / f64::from(n);
-        let mut sum = disc_past_zero(radius(0.0), cx) + disc_past_zero(radius(2.0), cx);
-        for k in 1..n {
-            let z = step * f64::from(k);
-            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * disc_past_zero(radius(z), cx);
-        }
-        let truth = 200.0 + cone - sum * step / 3.0;
+        let simpson = |f: &dyn Fn(f64) -> f64| {
+            let n = 2000_u32;
+            let step = 2.0 / f64::from(n);
+            let mut sum = f(0.0) + f(2.0);
+            for k in 1..n {
+                sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step * f64::from(k));
+            }
+            sum * step / 3.0
+        };
+        let truth = 200.0 + cone - simpson(&|z| disc_past_zero(radius(z), cx));
+        // The whole side less the window, where the wall lies over x > 0.
+        let window = simpson(&|z| {
+            let r = radius(z);
+            r * 2.0 * (-cx / r).clamp(-1.0, 1.0).acos()
+        });
+        let wall = slant * (PI * (1.2 + 0.6) * 10.0 - window);
         for spin in [0.0, 1.0, PI] {
             let label = format!("cx {cx} spin {spin}");
             let (topo, fused) = fuse(true, cx, spin);
@@ -158,20 +197,26 @@ fn a_cone_through_a_plate_edge_fuses_whole() {
                 (volume - truth).abs() < 1e-3 * truth,
                 "{label}: volume {volume}, truth {truth}"
             );
-            for f in faces {
-                if matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)) {
-                    let area = face_area(&topo, f, 0.01).unwrap();
-                    let (meshed, sag) = wall_mesh(&topo, f, cx, &radius);
-                    assert!(
-                        (meshed - area).abs() < 2e-3 * area,
-                        "{label}: wall area {area}, mesh {meshed}"
-                    );
-                    assert!(
-                        sag <= DEFLECTION * (1.0 + 1e-6),
-                        "{label}: wall mesh sags {sag}"
-                    );
-                }
-            }
+            assert_classifies(&topo, fused, cx, &radius, &label);
+            let walls: Vec<_> = faces
+                .into_iter()
+                .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
+                .collect();
+            assert_eq!(walls.len(), 1, "{label}: walls");
+            let area = face_area(&topo, walls[0], 0.01).unwrap();
+            assert!(
+                (area - wall).abs() < 1e-6 * wall,
+                "{label}: wall area {area}, truth {wall}"
+            );
+            let (meshed, sag) = wall_mesh(&topo, walls[0], cx, &radius);
+            assert!(
+                (meshed - wall).abs() < 2e-3 * wall,
+                "{label}: wall mesh area {meshed}, truth {wall}"
+            );
+            assert!(
+                sag <= DEFLECTION * (1.0 + 1e-6),
+                "{label}: wall mesh sags {sag}"
+            );
         }
     }
 }
