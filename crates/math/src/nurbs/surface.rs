@@ -301,7 +301,8 @@ impl NurbsSurface {
             &mut ders_v_buf[..(dv + 1) * stride_v],
         );
 
-        // Compute homogeneous derivatives Aw[k][l] = (wx, wy, wz, w)
+        // Compute homogeneous derivatives Aw[k][l] = (wx, wy, wz, w). Those
+        // above the degrees are zero, but the rational surface's are not.
         let mut aw = vec![vec![[0.0f64; 4]; d + 1]; d + 1];
         for k in 0..=du {
             for l in 0..=dv {
@@ -331,11 +332,8 @@ impl NurbsSurface {
         let mut skl = vec![vec![zero; d + 1]; d + 1];
         let w0 = aw[0][0][3];
 
-        for k in 0..=du {
-            for l in 0..=dv {
-                if k + l > d {
-                    continue;
-                }
+        for k in 0..=d {
+            for l in 0..=d - k {
                 let mut v3 = [aw[k][l][0], aw[k][l][1], aw[k][l][2]];
 
                 for j in 1..=l {
@@ -464,6 +462,40 @@ mod tests {
             vec![vec![1.0, 1.0], vec![1.0, 1.0]],
         )
         .expect("valid bilinear surface")
+    }
+
+    /// A plane patch whose weights differ along `u` is
+    /// `S(u, v) = (3u / (1 + 2u), v, 0)`: past its degrees its second
+    /// derivative along `u` is -1.5 at `u = 0.5`, and the others are zero.
+    #[test]
+    fn rational_derivatives_past_the_degrees() {
+        let s = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![3.0, 3.0]],
+        )
+        .expect("valid patch");
+        let d = s.derivatives(0.5, 0.3, 2);
+        let cases = [
+            (1, 0, Vec3::new(0.75, 0.0, 0.0)),
+            (0, 1, Vec3::new(0.0, 1.0, 0.0)),
+            (2, 0, Vec3::new(-1.5, 0.0, 0.0)),
+            (1, 1, Vec3::new(0.0, 0.0, 0.0)),
+            (0, 2, Vec3::new(0.0, 0.0, 0.0)),
+        ];
+        for (k, l, want) in cases {
+            assert!(
+                (d[k][l] - want).length() < 1e-12,
+                "S_({k},{l}) = {:?}",
+                d[k][l]
+            );
+        }
     }
 
     /// A bicubic surface patch.

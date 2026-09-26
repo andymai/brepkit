@@ -213,7 +213,8 @@ impl NurbsCurve {
         );
 
         // Compute homogeneous derivatives: Aw[k] = (Aw_x, Aw_y, Aw_z, w) for k-th deriv.
-        let mut aw = vec![[0.0f64; 4]; du + 1];
+        // Those above the degree are zero, but the rational curve's are not.
+        let mut aw = vec![[0.0f64; 4]; d + 1];
         for (k, aw_k) in aw.iter_mut().enumerate().take(du + 1) {
             for j in 0..=p {
                 let db = ders_bf_buf[k * stride + j];
@@ -229,7 +230,7 @@ impl NurbsCurve {
 
         // Apply rational quotient rule (A4.2).
         let mut ck = vec![Vec3::new(0.0, 0.0, 0.0); d + 1];
-        for k in 0..=du {
+        for k in 0..=d {
             let mut v = [aw[k][0], aw[k][1], aw[k][2]];
             for i in 1..=k {
                 #[allow(clippy::cast_precision_loss)]
@@ -245,7 +246,6 @@ impl NurbsCurve {
                 ck[k] = Vec3::new(v[0] / w0, v[1] / w0, v[2] / w0);
             }
         }
-        // Higher derivatives beyond degree are zero (already initialized).
         ck
     }
 
@@ -478,14 +478,10 @@ mod tests {
     #[test]
     fn curvature_quarter_circle() {
         let c = quarter_circle();
-        // For rational NURBS, curvature() uses parameter-space derivatives
-        // which don't directly give geometric curvature. The returned value
-        // is still useful for relative comparisons (higher curvature = sharper).
-        let k = c.curvature(0.5).expect("curvature should compute");
-        assert!(
-            k > 0.0,
-            "quarter circle should have positive curvature, got {k}"
-        );
+        for u in [0.0, 0.1, 0.5, 0.9, 1.0] {
+            let k = c.curvature(u).expect("curvature should compute");
+            assert!((k - 1.0).abs() < 1e-12, "u={u}: curvature {k}");
+        }
     }
 
     #[test]
@@ -531,6 +527,26 @@ mod tests {
             assert!(
                 (d2 - fd).length() < 1e-4 * (1.0 + fd.length()),
                 "u={u}: {d2:?} vs {fd:?}"
+            );
+        }
+    }
+    /// A line whose weights differ is `C(u) = 3u / (1 + 2u)` along `x`: past
+    /// its degree its derivatives at `u = 0.5` are -1.5 and 4.5.
+    #[test]
+    fn rational_derivatives_past_the_degree() {
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            vec![1.0, 3.0],
+        )
+        .expect("valid line");
+        let d = line.derivatives(0.5, 3);
+        for (k, want) in [(1, 0.75), (2, -1.5), (3, 4.5)] {
+            assert!(
+                (d[k] - Vec3::new(want, 0.0, 0.0)).length() < 1e-12,
+                "C^({k}) = {:?}",
+                d[k]
             );
         }
     }
