@@ -1,0 +1,29 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_7c46453f9c4f61 2654,2660-2663,2665-2666,2687,2690
+  s_ba2f7b5c6902b6::t_6d0c56e40b9a8a 2425-2428
+  s_ba2f7b5c6902b6::t_716580e6d5dec7 2644-2653,2655-2659,2664,2686,2688-2689
+crates/operations/src/measure/area.rs
+  s_ba2f7b5c6902b6::t_7b23503507f12a 355-362
+  s_ba2f7b5c6902b6::t_ff030f1bfa6b8e 383-385,409-414
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_58829ae34ae724 263-281,283,285-304
+crates/operations/tests/rod_through_plate_edge.rs
+  s_ba2f7b5c6902b6::t_70a613229656a0 1-69,77-153
+  s_ba2f7b5c6902b6::t_ee3c7dc78f32ea 70-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "958fb99a4c37d30ee75a7a26be4441710fc925c5",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
