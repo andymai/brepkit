@@ -122,8 +122,9 @@ fn meshed_area(topo: &Topology, face: FaceId) -> f64 {
 /// (their radius times their angle) is valid and watertight and measures
 /// `area * 0.2` by integration (to `1e-4`) and by its mesh (to `2e-3`, the
 /// chords of a unit circle at deflection `0.001` holding 0.13% less); the
-/// check crate's integrator reads its walls' area to `1e-6`, and each plane
-/// face tessellated on its own meshes its area to `2e-3`.
+/// check crate's integrator reads its walls' area to `1e-6`, each cap
+/// measures `area` (to `1e-4`), and each plane face tessellated on its own
+/// meshes its measured area to `2e-3`.
 fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
     let report = validate_solid(topo, solid).unwrap();
     assert!(report.is_valid(), "{name}: {:?}", report.issues);
@@ -148,12 +149,18 @@ fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
                 let gauss = PropertiesOptions::default().gauss_order;
                 walls += integrate_face(topo, fid, gauss).unwrap().area;
             }
-            FaceSurface::Plane { .. } => {
+            FaceSurface::Plane { normal, .. } => {
                 let (own, exact) = (meshed_area(topo, fid), face_area(topo, fid, 0.01).unwrap());
                 assert!(
                     (own - exact).abs() < 2e-3 * exact,
                     "{name}: face meshed alone has area {own}, truth {exact}"
                 );
+                if normal.z().abs() > 0.5 {
+                    assert!(
+                        (exact - area).abs() < 1e-4 * area,
+                        "{name}: cap area {exact}, truth {area}"
+                    );
+                }
             }
             _ => {}
         }
@@ -270,4 +277,40 @@ fn a_disc_of_two_arcs_extrudes_to_its_area() {
         let name = format!("{kind} two-arc disc");
         check(&topo, PI, TAU, solid, &name);
     }
+}
+
+/// The major segment whose arc is a NURBS running 0.05 past each vertex:
+/// `extrude` keeps it a NURBS (its ends are not the vertices) and builds its
+/// wall from the circle it recognizes.
+#[test]
+fn a_nurbs_arc_past_its_vertices_extrudes_to_its_area() {
+    let (radius, chamber) = chamber();
+    let circle =
+        Circle3D::new(Point3::new(0.0, 1.5, 0.0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+    let (a, b) = (Point3::new(-0.5, 3.0, 0.0), Point3::new(0.5, 3.0, 0.0));
+    let ta = circle.project(a);
+    let tb = ta + (circle.project(b) - ta).rem_euclid(TAU);
+    let spline = circle_to_nurbs(&circle, ta - 0.05, tb + 0.05).unwrap();
+    let mut topo = Topology::new();
+    let (va, vb) = (
+        topo.add_vertex(Vertex::new(a, 1e-7)),
+        topo.add_vertex(Vertex::new(b, 1e-7)),
+    );
+    let chord = topo.add_edge(Edge::new(vb, va, EdgeCurve::Line));
+    let arc = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(spline)));
+    let edges = vec![OrientedEdge::new(chord, true), OrientedEdge::new(arc, true)];
+    let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+    let segment = face(&mut topo, outer, vec![]);
+    let solid = extrude(&mut topo, segment, Vec3::new(0.0, 0.0, 1.0), 0.2).unwrap();
+    assert!(
+        matches!(topo.edge(arc).unwrap().curve(), EdgeCurve::NurbsCurve(_)),
+        "the arc stays a NURBS"
+    );
+    check(
+        &topo,
+        chamber,
+        radius * arc_angle(),
+        solid,
+        "NURBS arc past its vertices",
+    );
 }

@@ -133,16 +133,21 @@ pub(super) fn collect_wire_positions(
                 );
             }
             EdgeCurve::NurbsCurve(nc) => {
-                let (u0, u1) = nc.domain();
-                sample_edge_curve(
-                    &|t| nc.evaluate(t),
-                    u0,
-                    u1,
-                    n_samples,
-                    oe.is_forward(),
-                    tol,
-                    &mut positions,
-                );
+                // The edge's own span, which may be part of the curve and may
+                // run from the edge's end vertex back.
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                for (a, b) in traversal_spans(edge, oe.is_forward(), sp, ep) {
+                    sample_edge_curve(
+                        &|t| nc.evaluate(t),
+                        a,
+                        b,
+                        n_samples,
+                        true,
+                        tol,
+                        &mut positions,
+                    );
+                }
             }
         }
     }
