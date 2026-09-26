@@ -683,7 +683,6 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
         if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
             && face.inner_wires().is_empty()
         {
-            use std::f64::consts::TAU;
             let verts = wire_polygon(topo, face.outer_wire())?;
             if verts.len() < 3 {
                 // Degenerate boundary: the untrimmed whole torus.
@@ -853,8 +852,6 @@ fn cylinder_hole_bands(
     face: &brepkit_topology::face::Face,
     cyl: &brepkit_math::surfaces::CylindricalSurface,
 ) -> Result<Vec<(f64, f64)>, AlgoError> {
-    use std::f64::consts::TAU;
-
     let mut bands = Vec::with_capacity(face.inner_wires().len());
     for &iw in face.inner_wires() {
         let pts = wire_polygon(topo, iw)?;
@@ -1108,11 +1105,11 @@ fn sphere_face_loops(
             };
             let rho = circle.radius();
             let mut admitted: AngleSet = vec![(0.0, TAU)];
+            let s = if any { -1.0 } else { 1.0 };
             for (i, &(c, n)) in planes.iter().enumerate() {
                 if i == j {
                     continue;
                 }
-                let s = if any { -1.0 } else { 1.0 };
                 let k = s * (circle.center() - c).dot(n);
                 let (a, b) = (
                     s * rho * n.dot(circle.u_axis()),
@@ -1420,7 +1417,6 @@ fn ray_cylinder_crossings(
 
 /// Whether `u` lies within `eps` of either border of the excluded gap.
 fn near_gap_border(u: f64, gap: (f64, f64), eps: f64) -> bool {
-    use std::f64::consts::TAU;
     let u = u.rem_euclid(TAU);
     for border in [gap.0.rem_euclid(TAU), gap.1.rem_euclid(TAU)] {
         let d = (u - border).abs();
@@ -1445,7 +1441,6 @@ fn ray_torus_crossings(
     v_band: Option<(f64, f64)>,
     tol: Tolerance,
 ) -> (i32, bool) {
-    use std::f64::consts::TAU;
     let near = 10.0 * tol.linear;
     let Ok(dir) = ray_dir.normalize() else {
         return (0, false);
@@ -1563,7 +1558,6 @@ fn ray_cone_crossings(
 /// Whether circumferential parameter `u` lies in the excluded angular gap
 /// `(lo, hi)` (CCW from `lo` to `hi`, possibly wrapping past 2π).
 pub fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
-    use std::f64::consts::TAU;
     let eps = 1e-6;
     let u = u.rem_euclid(TAU);
     let (lo, hi) = (gap.0.rem_euclid(TAU), gap.1.rem_euclid(TAU));
@@ -1578,7 +1572,6 @@ pub fn u_in_gap(u: f64, gap: (f64, f64)) -> bool {
 /// partial-cylinder face does NOT cover. `None` for too-few samples or a gap
 /// too small to be a genuine partial arc.
 pub fn largest_u_gap(u_samples: &[f64]) -> Option<(f64, f64)> {
-    use std::f64::consts::TAU;
     let mut us: Vec<f64> = u_samples.iter().map(|&u| u.rem_euclid(TAU)).collect();
     us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     us.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
@@ -1845,8 +1838,7 @@ mod tests {
     #[test]
     fn sphere_arc_loops_bound_only_their_own_region() {
         let mut topo = Topology::default();
-        // The far end's arcs are shorter than any sampling step once the
-        // column is thin.
+        // A thin column's far dome is tiny.
         for w in [3.0, 0.1] {
             let h = 2.0f64.mul_add(-w * w, 25.0).sqrt();
             let dome = sphere_patch(
