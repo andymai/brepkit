@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790393827276,
+  "lastUpdate": 1790394008650,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -40931,6 +40931,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41920550,
             "range": "± 157430",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f76f731bc877a34fc989074d1e56a3da9b47198d",
+          "message": "fix(operations): measure a sphere patch around the pole by its loop (#1782)\n\nSphere faces whose outer loops wind the axis are now measured from the\noriented loop, producing the correct pole patch area for either pole.\n\n## What was wrong\n\n- A sphere face whose outer loop winds the axis has no `(u, v)` area, so\n`face_area` in `crates/operations/src/measure/area.rs` fell back to the\nzone from the loop's mean latitude to the pole.\n- The patch retained by `make_sphere(3, 32)` within a 10-unit box whose\ncorner is at `(-0.7, -1.1, 0.1)` read 34.738 against 22.761. The box\ncontains the ball's north pole.\n\n## What this does\n\n- The face is treated as the region on the loop's left around a pole.\nIts area is `R² (2π − ∮ sin v du)` along the loop as it runs, for either\npole.\n- `sphere_wire_sweeps` computes the sine sweep, which a hole around the\naxis also uses, and returns the loop's turn in `u`.\n- `sphere_wire_sweeps` walks every edge over `traversal_spans`, from the\nedge's traversal start to its end. A NURBS curve stored from its edge's\nend vertex to its start is therefore integrated in the correct\ndirection.\n- The walk advances 1/256 of an edge at a time and wraps each step's\nchange in `u`. This preserves the correct turn when a loop is split into\nedges at opposite longitudes.\n- A simple loop turns 0 or a full turn, less the steps across gaps that\na NURBS curve's ends may leave at its vertices, up to 1e-6 from them.\nNear a pole, those gaps can leave the turn short by more than a rounding\nerror, so any turn past half a turn counts as a full one.\n- The roadmap gains a closed entry. Its open row for these Cuts\nidentifies the remaining `solid_volume` issue: 85.702 against 85.754 for\nthe first box, and 95.230 against 95.533 for the box at `(-0.3, -0.4,\n0.2)`. The ring face, bounded by the chordal equator with a hole winding\nthe axis, takes the per-face mesh.\n- A review finding is also recorded as open. `make_box(10, 10, 10)` at\n`(-0.7, -1.1, 0.1)` less `make_sphere(3, 32)`, bored through its poles\nby a coaxial `make_cylinder(0.3, 10)`, reads 972.657217 with no cylinder\nface. This matches the box less the plain ball, although the rod's piece\nin the box should stay.\n\n## Verification\n\n- `patch_around_the_pole` checks boxes at `(-0.7, -1.1, 0.1)`, `(-0.3,\n-0.4, 0.2)`, and `(-0.3, -0.4, 1.2)`. Each is tested around the north\npole and mirrored around the south pole, as the `Intersect` of ball and\nbox and as the box less the ball with the patch reversed, upright and\nturned about an oblique axis.\n- Each patch is within `1e-6` relative of `R² ∫ (1 − sin v_b(u)) du` by\nSimpson's rule, where `v_b(u)` is the highest latitude allowed by the\nbox's planes at longitude `u`.\n- `nurbs_loop_around_the_pole` builds a tilted circle from three\nrational quadratic arcs, with one curve stored end to start. Outer-loop\nand hole cases are each within `1e-6` relative of the cap. Without\ntraversal walking, the outer loop read 38.17963975368821 against\n37.69911184307752.\n- The same test extends each curve past its vertices by 3e-7 or 9e-7\nnear the pole. Each is within `1e-4` relative. With a turn required\nwithin 1e-6 of a full turn, the loop at 3e-7 read 3.8044087155974573\nagainst 3.7699111843077553.\n- `latitude_loop_split_at_opposite_longitudes` checks a latitude circle\nsplit into two halves meeting at opposite longitudes and run either way.\nThe cap on the loop's left is within `1e-6` relative.\n- The workspace suite passes: 3103 tests run, 3103 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `face_area` for sphere patches around a pole, which previously\nmeasured wrong (34.738 against 22.761 for a patch kept by a box at\n`(-0.7, -1.1, 0.1)`).\n\nA face whose outer loop winds the axis has no `(u, v)` area, so\n`face_area` fell back to the zone from the loop's mean latitude to the\npole. The face is now measured as the region on its loop's left around\neither pole, `R² (2π − ∮ sin v du)` along the loop. The sine sweep\ncalculation shared by holes is refactored into `sphere_wire_sweeps`,\nwhich also returns the loop's turn in `u`.\n\n- Each edge is walked in traversal order, so a NURBS curve stored\nagainst its edge runs forward, and vertex gaps from curve ends no longer\nleave the turn short and send the face to the mean-latitude estimate; a\nturn past half a turn counts as a full one.\n- Adds `patch_around_the_pole` checks, a NURBS loop around the pole with\nits hole, and a latitude loop split at opposite longitudes, all within\n`1e-6` relative.\n\n<sup>Written for commit f53cd261c777761f7b3f1712450aff0f4ff3454e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1782?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T03:37:10Z",
+          "tree_id": "83174b02bc72ceacd2608cd79a5067e6ed99f8d8",
+          "url": "https://github.com/andymai/brepkit/commit/f76f731bc877a34fc989074d1e56a3da9b47198d"
+        },
+        "date": 1790394003830,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 978683,
+            "range": "± 2898",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1064015,
+            "range": "± 31515",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12142,
+            "range": "± 64",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 740182,
+            "range": "± 11397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43936186,
+            "range": "± 294801",
             "unit": "ns/iter"
           }
         ]
