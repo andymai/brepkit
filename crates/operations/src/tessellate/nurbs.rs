@@ -162,7 +162,11 @@ where
 {
     use brepkit_topology::edge::EdgeCurve;
     use std::f64::consts::{PI, TAU};
-    const INSET: f64 = 1e-6;
+    // Samples sit this fraction of a span inside its ends, which leaves
+    // slivers of `u` uncovered where edges meet; gaps narrower than
+    // `SLIVER` are covered.
+    const INSET: f64 = 1e-9;
+    const SLIVER: f64 = 1e-7;
 
     let Ok(wire) = topo.wire(face_data.outer_wire()) else {
         return (0.0, TAU);
@@ -219,7 +223,7 @@ where
             lo = lo.min(u);
             hi = hi.max(u);
         }
-        if hi - lo >= TAU - 1e-6 {
+        if hi - lo >= TAU - SLIVER {
             return (0.0, TAU);
         }
         let shift = lo.rem_euclid(TAU) - lo;
@@ -244,7 +248,7 @@ where
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for (a, b) in pieces {
         match merged.last_mut() {
-            Some(last) if a <= last.1 + 1e-9 => last.1 = last.1.max(b),
+            Some(last) if a <= last.1 + SLIVER => last.1 = last.1.max(b),
             _ => merged.push((a, b)),
         }
     }
@@ -259,7 +263,7 @@ where
             best = (next - b, b, next);
         }
     }
-    if best.0 <= 1e-9 {
+    if best.0 <= SLIVER {
         return (0.0, TAU);
     }
     let u_start = best.2.rem_euclid(TAU);
