@@ -584,3 +584,255 @@ fn a_patch_around_the_pole_takes_a_second_cut() {
         "volume {volume}, truth {truth}"
     );
 }
+
+/// The ball bored along `z` by a rod of radius 0.3 at `(x, y)`, with the box
+/// over `(-0.7, -1.1, 0.1)`, which holds the pole and the rod's mouth (at
+/// `(0.2, 0)` the bore holds the pole too, its rim a marched loop round it): the
+/// ball's face around the pole keeps its bore's rim as a hole through the
+/// box's section, so the box less the bored ball keeps the rod's piece as a
+/// post and the bored ball within the box keeps the bore. Each result is
+/// exact, valid and watertight, measures its truth (the ball's piece of the
+/// box by slices, the rod's piece of the ball by the lens its disc shares
+/// with each slice), and classifies a point in the post and one beside it.
+/// The first box mirrored through `z = 0` holds the south pole, and each is
+/// turned and mirrored with the ball too.
+#[test]
+fn a_bored_ball_keeps_its_bore_in_a_box_holding_the_pole() {
+    const ROD: f64 = 0.3;
+    let (a, b, c) = (-0.7, -1.1, 0.1);
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let piece = ball_in_box(a, b, c, c + 10.0);
+    // The rod's disc, `d` off the axis, within a slice of radius `rho`.
+    let lens = |rho: f64, d: f64| {
+        if rho <= 0.0 || d >= rho + ROD {
+            0.0
+        } else if d + ROD <= rho {
+            PI * ROD * ROD
+        } else if d + rho <= ROD {
+            PI * rho * rho
+        } else {
+            let (r2, p2) = (ROD * ROD, rho * rho);
+            let kite =
+                ((-d + ROD + rho) * (d + ROD - rho) * (d - ROD + rho) * (d + ROD + rho)).sqrt();
+            r2 * ((d * d + r2 - p2) / (2.0 * d * ROD)).acos()
+                + p2 * ((d * d + p2 - r2) / (2.0 * d * rho)).acos()
+                - 0.5 * kite
+        }
+    };
+    let rod_above = |d: f64, z0: f64| {
+        let n = 20_000_u32;
+        let step = (RADIUS - z0) / f64::from(n);
+        let slice = |z: f64| lens(RADIUS.mul_add(RADIUS, -(z * z)).max(0.0).sqrt(), d);
+        let mut sum = slice(z0) + slice(RADIUS);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * slice(step.mul_add(f64::from(k), z0));
+        }
+        sum * step / 3.0
+    };
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(0.3);
+    let at = Point3::new(0.3, 0.0, 0.0);
+    let normal = brepkit_math::vec::Vec3::new(1.0, 0.2, 0.1);
+    let unit = normal.normalize().unwrap();
+    for (x, y) in [(0.0, 0.0), (0.2, 0.0), (1.0, 0.0), (-0.3, 0.4)] {
+        let d = f64::hypot(x, y);
+        let post = rod_above(d, c);
+        let bored = ball - rod_above(d, -RADIUS);
+        for up in [1.0, -1.0] {
+            for pose in ["upright", "turned", "mirrored"] {
+                let place = |p: Point3| match pose {
+                    "turned" => turn.mul_point(p),
+                    "mirrored" => p - unit * (2.0 * (p - at).dot(unit)),
+                    _ => p,
+                };
+                let mut topo = Topology::new();
+                let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+                let rod = make_cylinder(&mut topo, ROD, 10.0).unwrap();
+                transform_solid(&mut topo, rod, &Mat4::translation(x, y, -5.0)).unwrap();
+                let mut ball_bored = boolean(&mut topo, BooleanOp::Cut, sphere, rod).unwrap();
+                let mut block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+                let z0 = if up > 0.0 { c } else { -c - 10.0 };
+                transform_solid(&mut topo, block, &Mat4::translation(a, b, z0)).unwrap();
+                match pose {
+                    "turned" => {
+                        transform_solid(&mut topo, ball_bored, &turn).unwrap();
+                        transform_solid(&mut topo, block, &turn).unwrap();
+                    }
+                    "mirrored" => {
+                        ball_bored = mirror(&mut topo, ball_bored, at, normal).unwrap();
+                        block = mirror(&mut topo, block, at, normal).unwrap();
+                    }
+                    _ => {}
+                }
+                for (name, truth, bound) in [
+                    ("box less bored", 1000.0 - piece + post, 1e-4),
+                    ("bored within box", piece - post, 1e-4),
+                    ("bored less box", bored - piece + post, 5e-3),
+                ] {
+                    let label = format!("rod ({x}, {y}) side {up} {pose}: {name}");
+                    let result = match name {
+                        "box less bored" => boolean(&mut topo, BooleanOp::Cut, block, ball_bored),
+                        "bored within box" => {
+                            boolean(&mut topo, BooleanOp::Intersect, ball_bored, block)
+                        }
+                        _ => boolean(&mut topo, BooleanOp::Cut, ball_bored, block),
+                    }
+                    .unwrap();
+                    assert!(exact(&topo, result), "{label}: fell back to a mesh");
+                    let report = validate_solid(&topo, result).unwrap();
+                    assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                    let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                    assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                    let volume = solid_volume(&topo, result, 0.01).unwrap();
+                    assert!(
+                        (volume - truth).abs() < bound * truth,
+                        "{label}: volume {volume}, truth {truth}"
+                    );
+                    let (in_post, beside) = match name {
+                        "box less bored" => {
+                            (PointClassification::Inside, PointClassification::Outside)
+                        }
+                        "bored within box" => {
+                            (PointClassification::Outside, PointClassification::Inside)
+                        }
+                        _ => (PointClassification::Outside, PointClassification::Outside),
+                    };
+                    let class = |p: Point3| {
+                        classify_point(&topo, result, place(p), &ClassifyOptions::default())
+                            .unwrap()
+                    };
+                    assert_eq!(
+                        class(Point3::new(x, y, 1.5 * up)),
+                        in_post,
+                        "{label}: in the post"
+                    );
+                    assert_eq!(
+                        class(Point3::new(x + 0.6, y, 1.5 * up)),
+                        beside,
+                        "{label}: beside the post"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The box over `(-0.7, -1.1, 0.1)` takes the ball's patch around the pole
+/// and leaves a band between the chordal equator and its loop, and a hole
+/// already in the band stays there: a bore at `(-1.5, 0)`, clear of the box,
+/// or a pocket the box over `x < -2.2`, `y > -0.5`, `z > 1` bit out. The band
+/// then has a hole winding the axis and another beside it. The ball less the
+/// box is exact, valid and watertight, and measures the ball less both
+/// pieces by slices, or less the box's piece and the bore's.
+#[test]
+fn a_band_keeps_its_other_holes() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let piece = ball_in_box(-0.7, -1.1, 0.1, 10.1);
+    // The rod's chord through the ball over its disc, by Simpson in polar
+    // coordinates about its axis at distance 1.5 from the ball's.
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let bore = simpson(200, 0.0, 0.3, &|r: f64| {
+        r * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
+            let (x, y) = (r.mul_add(th.cos(), -1.5), r * th.sin());
+            2.0 * RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
+        })
+    });
+    // Mirrored in `x`, the pocket is the ball over x > 2.2, y > -0.5, z > 1.
+    let pocket = ball_in_box(2.2, -0.5, 1.0, 11.0);
+    for (name, truth) in [
+        ("bore", ball - bore - piece),
+        ("pocket", ball - pocket - piece),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let tool = if name == "bore" {
+            let rod = make_cylinder(&mut topo, 0.3, 10.0).unwrap();
+            transform_solid(&mut topo, rod, &Mat4::translation(-1.5, 0.0, -5.0)).unwrap();
+            rod
+        } else {
+            let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            transform_solid(&mut topo, b, &Mat4::translation(-12.2, -0.5, 1.0)).unwrap();
+            b
+        };
+        let holed = boolean(&mut topo, BooleanOp::Cut, sphere, tool).unwrap();
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(-0.7, -1.1, 0.1)).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, holed, block).unwrap();
+        assert!(exact(&topo, result), "{name}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "{name}: volume {volume}, truth {truth}"
+        );
+    }
+}
+
+/// The ball within the square column `|x|, |y| < 2.5` through both poles, and
+/// the column less the ball, bored by a rod at `(0.5, 0.5)` or not: each
+/// hemisphere keeps the collar inside the column's four walls. Each is exact,
+/// valid and watertight, and measures the ball less its four caps
+/// `pi h² (3R - h) / 3`, `h = 0.5`, and the bore's chord, or the column less
+/// that.
+#[test]
+fn a_column_through_both_poles_keeps_its_collars() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let caps = 4.0 * PI * 0.25 * 0.5f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let bore = simpson(200, 0.0, 0.3, &|r: f64| {
+        r * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
+            let (x, y) = (r.mul_add(th.cos(), 0.5), r.mul_add(th.sin(), 0.5));
+            2.0 * RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
+        })
+    });
+    for bored in [false, true] {
+        let within = ball - caps - if bored { bore } else { 0.0 };
+        for (op, truth) in [
+            (BooleanOp::Intersect, within),
+            (BooleanOp::Cut, 250.0 - within),
+        ] {
+            let label = format!("bored {bored} {op:?}");
+            let mut topo = Topology::new();
+            let mut sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            if bored {
+                let rod = make_cylinder(&mut topo, 0.3, 10.0).unwrap();
+                transform_solid(&mut topo, rod, &Mat4::translation(0.5, 0.5, -5.0)).unwrap();
+                sphere = boolean(&mut topo, BooleanOp::Cut, sphere, rod).unwrap();
+            }
+            let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
+            transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
+            let result = if op == BooleanOp::Cut {
+                boolean(&mut topo, op, column, sphere)
+            } else {
+                boolean(&mut topo, op, sphere, column)
+            }
+            .unwrap();
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-3 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}

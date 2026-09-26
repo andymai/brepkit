@@ -1379,6 +1379,8 @@ fn split_periodic_face_by_winding_chain(
         bot,
         v_top,
         top,
+        q_bot,
+        q_top,
         lower_tan: ref_tan,
     } = special_cases::band_stack(surface, boundary_edges, close_tol)?;
     let wrap_pi = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
@@ -1519,13 +1521,13 @@ fn split_periodic_face_by_winding_chain(
     let mut bands = Vec::with_capacity(n + 1);
     for k in 0..=n {
         let (mut wire, v_low, q_low) = if k == 0 {
-            (bot.edges(), v_bot, v_bot)
+            (bot.edges(), v_bot, q_bot)
         } else {
             let below = &separators[k - 1];
             (below.lower.clone(), below.v_seam, below.v_opposite)
         };
         let (v_high, q_high) = if k == n {
-            (v_top, v_top)
+            (v_top, q_top)
         } else {
             (separators[k].v_seam, separators[k].v_opposite)
         };
@@ -5441,7 +5443,7 @@ fn split_face_2d_impl(
         && has_open_section
         && (u_periodic || v_periodic || matches!(surface, FaceSurface::Sphere(_)))
     {
-        return split_noseam_face_direct(
+        let mut pieces = split_noseam_face_direct(
             &surface,
             &boundary_edges,
             sections,
@@ -5451,6 +5453,12 @@ fn split_face_2d_impl(
             &wire_pts,
             tol.linear,
         );
+        if matches!(surface, FaceSurface::Sphere(_)) {
+            attach_sphere_holes(&mut pieces, &original_inner_wires);
+        } else {
+            attach_whole_holes(&mut pieces, &original_inner_wires);
+        }
+        return pieces;
     }
 
     if matches!(surface, FaceSurface::Torus(_))
@@ -8169,6 +8177,7 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
                     .map(|p| toward(p.y()))
                     .fold(f64::NEG_INFINITY, f64::max);
                 let mut far = std::f64::consts::FRAC_PI_2;
+                let mut islands: Vec<Vec<Point2>> = Vec::new();
                 for hole in &sub_face.inner_wires {
                     let hole_2d = sampling::sample_wire_loop_uv_on_surface(hole, &sub_face.surface);
                     if winds_the_axis(&hole_2d).is_some() {
@@ -8177,10 +8186,27 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
                             .map(|p| toward(p.y()))
                             .fold(f64::INFINITY, f64::min);
                         far = far.min(near);
+                    } else if hole_2d.len() >= 3 {
+                        islands.push(unwrapped_u(&hole_2d));
                     }
                 }
+                // A hole that does not wind the axis covers only part of any
+                // latitude, and can cover the loop's first longitude there.
                 if reach < far {
-                    interior_uv = Point2::new(outer[0].x(), toward(0.5 * (reach + far)));
+                    let v = toward(0.5 * (reach + far));
+                    let free =
+                        (0..16).map(|k| outer[0].x() + std::f64::consts::TAU * f64::from(k) / 16.0);
+                    for u in free {
+                        let covered = islands.iter().any(|hole| {
+                            let u_min = hole.iter().map(|q| q.x()).fold(f64::INFINITY, f64::min);
+                            let at = u_min + (u - u_min).rem_euclid(std::f64::consts::TAU);
+                            super::classify_2d::point_in_polygon_2d(Point2::new(at, v), hole)
+                        });
+                        if !covered && let Some(p) = sub_face.surface.evaluate(u, v) {
+                            return p;
+                        }
+                    }
+                    interior_uv = Point2::new(outer[0].x(), v);
                 }
             }
         }
@@ -8231,6 +8257,78 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
         });
     let n = sub_face.outer_wire.len() as f64;
     Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
+}
+
+/// Give each of a sphere face's holes, none of which a section touches, to the
+/// innermost piece whose region holds it. A piece's region is on its outer
+/// loop's left, and a loop that winds the axis bounds no `(u, v)` polygon of
+/// its own: its region is closed through the pole on its left.
+fn attach_sphere_holes(pieces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveEdge>]) {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let region = |pts: &[Point2]| -> Vec<Point2> {
+        let mut poly = unwrapped_u(pts);
+        if let Some(north) = winds_the_axis(pts) {
+            let pole = if north { FRAC_PI_2 } else { -FRAC_PI_2 };
+            let (first, last) = (pts[0], poly[poly.len() - 1]);
+            let turned = last.x() + wrap(first.x() - last.x());
+            poly.push(Point2::new(turned, first.y()));
+            poly.push(Point2::new(turned, pole));
+            poly.push(Point2::new(first.x(), pole));
+        }
+        poly
+    };
+    let holds = |poly: &[Point2], p: Point2| {
+        let u_min = poly.iter().map(|q| q.x()).fold(f64::INFINITY, f64::min);
+        let u = u_min + (p.x() - u_min).rem_euclid(TAU);
+        [u, u + TAU, u - TAU]
+            .into_iter()
+            .any(|u| super::classify_2d::point_in_polygon_2d(Point2::new(u, p.y()), poly))
+    };
+    let regions: Vec<Option<Vec<Point2>>> = pieces
+        .iter()
+        .map(|piece| {
+            let pts = sampling::sample_wire_loop_uv_on_surface(&piece.outer_wire, &piece.surface);
+            (pts.len() >= 3).then(|| region(&pts))
+        })
+        .collect();
+    let mut unplaced = Vec::new();
+    for hole in holes {
+        let probe = pieces.first().and_then(|piece| {
+            sampling::sample_wire_loop_uv_on_surface(hole, &piece.surface)
+                .first()
+                .copied()
+        });
+        let innermost = probe.and_then(|p| {
+            regions
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| r.as_ref().filter(|r| holds(r, p)).map(|r| (i, r)))
+                .min_by(|(_, a), (_, b)| {
+                    super::classify_2d::signed_area_2d(a)
+                        .abs()
+                        .total_cmp(&super::classify_2d::signed_area_2d(b).abs())
+                })
+                .map(|(i, _)| i)
+        });
+        match innermost {
+            Some(i) => pieces[i].inner_wires.push(hole.clone()),
+            None => unplaced.push(hole.clone()),
+        }
+    }
+    attach_whole_holes(pieces, &unplaced);
+}
+
+/// A loop's `(u, v)` samples with `u` carried continuously along it.
+fn unwrapped_u(pts: &[Point2]) -> Vec<Point2> {
+    use std::f64::consts::{PI, TAU};
+    let mut u = pts[0].x();
+    let mut out = vec![pts[0]];
+    for w in pts.windows(2) {
+        u += (w[1].x() - w[0].x() + PI).rem_euclid(TAU) - PI;
+        out.push(Point2::new(u, w[1].y()));
+    }
+    out
 }
 
 /// Whether a sphere loop sampled in `(u, v)` winds the axis, and which way:

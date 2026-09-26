@@ -3756,13 +3756,16 @@ fn nurbs_speeds(
     (speed_u > 0.0 && speed_v > 0.0).then_some((speed_u, speed_v))
 }
 
-/// A NURBS band bounded by two loops that each wind once around the periodic
-/// u direction (a sphere zone left by a coaxial bore) encloses nothing in the
-/// unwrapped `(u, v)` plane. The hole is joined to the outer loop along a
-/// virtual seam from the outer loop's first sample to the hole sample nearest
-/// it in u: the outer loop continues one winding on, climbs the seam, runs
-/// the hole the other way round, and descends the seam's copy one period
-/// back, whose samples it shares. Returns whether the loops were joined.
+/// A NURBS or sphere band bounded by two loops that each wind once around
+/// the periodic u direction (a sphere zone left by a coaxial bore, a ball's
+/// hemisphere less a box over its pole) encloses nothing in the unwrapped
+/// `(u, v)` plane. The hole is joined to the outer loop along a virtual seam
+/// from an outer sample to the hole sample nearest it in u: the outer loop
+/// continues one winding on, climbs the seam, runs the hole the other way
+/// round, and descends the seam's copy one period back, whose samples it
+/// shares. The face's other holes stay holes, so the seam starts at the first
+/// outer sample (of 32 tried around the loop) whose seam keeps clear of them.
+/// Returns whether the loops were joined.
 fn join_winding_hole(
     face_data: &brepkit_topology::face::Face,
     holes: &mut Vec<HoleLoop>,
@@ -3772,7 +3775,7 @@ fn join_winding_hole(
     point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> bool {
     let surface = face_data.surface();
-    if !matches!(surface, FaceSurface::Nurbs(_)) || holes.len() != 1 || boundary_uv.len() < 3 {
+    if !matches!(surface, FaceSurface::Nurbs(_) | FaceSurface::Sphere(_)) || boundary_uv.len() < 3 {
         return false;
     }
     let (Some((_, period)), _) = surface_periods(surface) else {
@@ -3782,30 +3785,79 @@ fn join_winding_hole(
         let (first, last) = (us[0], us[us.len() - 1]);
         last - first + (first - last + period / 2.0).rem_euclid(period) - period / 2.0
     };
-    let outer_us: Vec<f64> = boundary_uv.iter().map(|p| p.0).collect();
-    let hole_us: Vec<f64> = holes[0].iter().map(|p| p.0).collect();
-    let (w_outer, w_hole) = (winding(&outer_us), winding(&hole_us));
     let once = |w: f64| (w.abs() - period).abs() <= 1e-6 * period;
-    if !once(w_outer) || !once(w_hole) || holes[0].len() < 3 {
+    let hole_winding = |h: &HoleLoop| winding(&h.iter().map(|p| p.0).collect::<Vec<_>>());
+    let outer_us: Vec<f64> = boundary_uv.iter().map(|p| p.0).collect();
+    let w_outer = winding(&outer_us);
+    let winding_holes: Vec<usize> = (0..holes.len())
+        .filter(|&i| holes[i].len() >= 3 && once(hole_winding(&holes[i])))
+        .collect();
+    let [which] = winding_holes[..] else {
+        return false;
+    };
+    if !once(w_outer) {
         return false;
     }
     let Some(&(_, _, edge, _)) = boundary_3d.last() else {
         return false;
     };
 
-    // The hole runs against the outer loop, starting nearest its first
-    // sample, from one winding on back down to it.
-    let mut hole = holes.remove(0);
+    // The hole runs against the outer loop, starting nearest the seam's
+    // outer sample, from one winding on back down to it.
+    let w_hole = hole_winding(&holes[which]);
+    let mut hole = holes[which].clone();
     if w_hole.signum() == w_outer.signum() {
         hole.reverse();
     }
-    let (u0, v0) = boundary_uv[0];
-    let offset = |u: f64| (u - u0 + period / 2.0).rem_euclid(period) - period / 2.0;
-    let Some(start) = (0..hole.len())
-        .min_by(|&a, &b| offset(hole[a].0).abs().total_cmp(&offset(hole[b].0).abs()))
-    else {
+    let others: Vec<((f64, f64), (f64, f64))> = holes
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != which)
+        .flat_map(|(_, h)| {
+            h.iter()
+                .zip(h.iter().cycle().skip(1))
+                .map(|(a, b)| ((a.0, a.1), (b.0, b.1)))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let clear = |a: (f64, f64), b: (f64, f64)| {
+        others.iter().all(|&(p, q)| {
+            (-2..=2).all(|k| {
+                let shift = f64::from(k) * period;
+                !segments_cross(a, b, (p.0 + shift, p.1), (q.0 + shift, q.1))
+            })
+        })
+    };
+    let n = boundary_uv.len();
+    let mut found = None;
+    for rotate in (0..n).step_by((n / 32).max(1)) {
+        let (u0, v0) = boundary_uv[rotate];
+        let offset = |u: f64| (u - u0 + period / 2.0).rem_euclid(period) - period / 2.0;
+        let Some(start) = (0..hole.len())
+            .min_by(|&a, &b| offset(hole[a].0).abs().total_cmp(&offset(hole[b].0).abs()))
+        else {
+            return false;
+        };
+        let target = (u0 + w_outer + offset(hole[start].0), hole[start].1);
+        if clear((u0 + w_outer, v0), target) {
+            found = Some((rotate, start));
+            break;
+        }
+    }
+    let Some((rotate, start)) = found else {
         return false;
     };
+    holes.remove(which);
+    if rotate > 0 {
+        let head: Vec<(f64, f64)> = boundary_uv
+            .drain(..rotate)
+            .map(|(u, v)| (u + w_outer, v))
+            .collect();
+        boundary_uv.extend(head);
+        boundary_3d.rotate_left(rotate);
+    }
+    let (u0, v0) = boundary_uv[0];
+    let offset = |u: f64| (u - u0 + period / 2.0).rem_euclid(period) - period / 2.0;
     hole.rotate_left(start);
     let mut hole_uv: Vec<(f64, f64, u32)> = Vec::with_capacity(hole.len() + 1);
     let mut prev_u = u0 + w_outer + offset(hole[0].0);
@@ -3863,6 +3915,16 @@ fn join_winding_hole(
         push(u - w_outer, v, gid);
     }
     true
+}
+
+/// Whether the open segments `a b` and `c d` cross in the plane.
+fn segments_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) -> bool {
+    let side = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| {
+        (q.0 - p.0).mul_add(r.1 - p.1, -((q.1 - p.1) * (r.0 - p.0)))
+    };
+    let (d1, d2) = (side(a, b, c), side(a, b, d));
+    let (d3, d4) = (side(c, d, a), side(c, d, b));
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.

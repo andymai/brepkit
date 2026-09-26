@@ -402,7 +402,7 @@ fn split_noseam_by_arrangement(
         return Vec::new();
     };
     let mut region = loops[region_idx].clone();
-    if net_u(&region) * parent_net_u > 0.0 {
+    if net_u(&region) * parent_net_u < 0.0 {
         region = reverse_loop(&region);
     }
 
@@ -903,7 +903,8 @@ fn sphere_loop_interior(surface: &FaceSurface, edges: &[OrientedPCurveEdge]) -> 
 
 /// One end of a u-periodic lateral's band stack.
 pub(super) enum BandEnd<'a> {
-    /// A closed rim circle of the face.
+    /// A closed rim of the face: a circle, or a curve that winds the lateral
+    /// once (a bore's rim through a ball off its centre).
     Rim(&'a OrientedPCurveEdge),
     /// A pointed cone's apex: the band against it closes on its seam alone.
     Apex,
@@ -917,6 +918,10 @@ pub(super) struct BandStack<'a> {
     pub(super) bot: BandEnd<'a>,
     pub(super) v_top: f64,
     pub(super) top: BandEnd<'a>,
+    /// The ends' `v` on the meridian opposite the seam, where a rim that is
+    /// no circle need not share its `v` at the seam.
+    pub(super) q_bot: f64,
+    pub(super) q_top: f64,
     /// How a separator in the lower role (the bottom of the band above it)
     /// runs at the seam.
     pub(super) lower_tan: brepkit_math::vec::Vec3,
@@ -931,15 +936,30 @@ impl BandEnd<'_> {
     }
 }
 
-/// Read a lateral's boundary as a band stack: closed rim circles plus seam
-/// lines on one meridian, where a pointed cone's seam runs up to its apex in
-/// place of a second rim. Every rim must start on the seam.
+/// Read a lateral's boundary as a band stack: closed rims plus seam lines on
+/// one meridian, where a pointed cone's seam runs up to its apex in place of
+/// a second rim. A rim is a circle or a closed curve that winds the lateral
+/// once, and every rim must start on the seam.
+#[allow(clippy::too_many_lines)]
 pub(super) fn band_stack<'a>(
     surface: &FaceSurface,
     boundary_edges: &'a [OrientedPCurveEdge],
     close_tol: f64,
 ) -> Option<BandStack<'a>> {
     use std::f64::consts::{PI, TAU};
+    const RIM_SAMPLES: u32 = 64;
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    // A closed curve's `(u, v)` samples along its own domain, in its sense.
+    let rim_samples = |e: &OrientedPCurveEdge| -> Option<Vec<(f64, f64)>> {
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+        (0..=RIM_SAMPLES)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(RIM_SAMPLES), t0);
+                surface.project_point(e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d))
+            })
+            .collect()
+    };
+    let turn_of = |uv: &[(f64, f64)]| -> f64 { uv.windows(2).map(|w| wrap(w[1].0 - w[0].0)).sum() };
 
     if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
         return None;
@@ -957,6 +977,11 @@ pub(super) fn band_stack<'a>(
         let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
         match (&e.curve_3d, is_closed) {
             (EdgeCurve::Circle(_), true) => rims.push(e),
+            (EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_), true)
+                if turn_of(&rim_samples(e)?).abs() > PI =>
+            {
+                rims.push(e);
+            }
             (EdgeCurve::Line, false) => {
                 for p in [e.start_3d, e.end_3d] {
                     if at_apex(p) {
@@ -983,12 +1008,33 @@ pub(super) fn band_stack<'a>(
         let on_seam = surface.evaluate(seam_u, v)?;
         ((on_seam - e.start_3d).length() < close_tol).then_some(v)
     };
+    // At the seam a rim runs along the meridian's circle, one way or the
+    // other about the axis.
     let traversal_tangent = |e: &OrientedPCurveEdge| -> Option<brepkit_math::vec::Vec3> {
-        let EdgeCurve::Circle(c) = &e.curve_3d else {
-            return None;
+        let t = if let EdgeCurve::Circle(c) = &e.curve_3d {
+            c.tangent(c.project(e.start_3d))
+        } else {
+            let (_, v) = surface.project_point(e.start_3d)?;
+            let step = 1e-4;
+            let along = surface.evaluate(seam_u + step, v)? - surface.evaluate(seam_u - step, v)?;
+            along * turn_of(&rim_samples(e)?).signum()
         };
-        let t = c.tangent(c.project(e.start_3d));
         Some(if e.forward { t } else { -t })
+    };
+    let u_opposite = (seam_u + PI).rem_euclid(TAU);
+    // A rim's `v` on the meridian opposite the seam.
+    let rim_q = |e: &OrientedPCurveEdge, v: f64| -> Option<f64> {
+        if matches!(e.curve_3d, EdgeCurve::Circle(_)) {
+            return Some(v);
+        }
+        rim_samples(e)?
+            .into_iter()
+            .min_by(|a, b| {
+                wrap(a.0 - u_opposite)
+                    .abs()
+                    .total_cmp(&wrap(b.0 - u_opposite).abs())
+            })
+            .map(|(_, q)| q)
     };
 
     let stack = match (rims.as_slice(), reaches_apex) {
@@ -1005,12 +1051,15 @@ pub(super) fn band_stack<'a>(
                 bot: BandEnd::Rim(bot),
                 v_top,
                 top: BandEnd::Rim(top),
+                q_bot: rim_q(bot, v_bot)?,
+                q_top: rim_q(top, v_top)?,
                 lower_tan: traversal_tangent(bot)?,
             }
         }
         // A cone's apex sits at v = 0; its rim is on either side of it.
         ([rim], true) => {
             let v = rim_v(rim)?;
+            let q = rim_q(rim, v)?;
             let lower_tan = traversal_tangent(rim)?;
             if v > 0.0 {
                 BandStack {
@@ -1019,6 +1068,8 @@ pub(super) fn band_stack<'a>(
                     bot: BandEnd::Apex,
                     v_top: v,
                     top: BandEnd::Rim(rim),
+                    q_bot: 0.0,
+                    q_top: q,
                     lower_tan: -lower_tan,
                 }
             } else {
@@ -1028,6 +1079,8 @@ pub(super) fn band_stack<'a>(
                     bot: BandEnd::Rim(rim),
                     v_top: 0.0,
                     top: BandEnd::Apex,
+                    q_bot: q,
+                    q_top: 0.0,
                     lower_tan,
                 }
             }
@@ -1565,6 +1618,8 @@ pub(super) fn split_periodic_face_into_bands(
         bot,
         v_top,
         top,
+        q_bot,
+        q_top,
         lower_tan: ref_tan,
     } = band_stack(surface, boundary_edges, close_tol)?;
 
@@ -1661,25 +1716,27 @@ pub(super) fn split_periodic_face_into_bands(
     };
 
     // Assemble bands bottom-to-top. Levels: bot boundary, sections, top
-    // boundary. Each band: lower circle, seam up, upper circle, seam down.
-    // An apex level has no edge: the band against it closes on the seam.
-    let mut levels: Vec<(f64, Vec<OrientedPCurveEdge>, Vec<OrientedPCurveEdge>)> = Vec::new();
-    levels.push((v_bot, bot.edges(), bot.edges()));
+    // boundary, each with its `v` at the seam and opposite it. Each band:
+    // lower circle, seam up, upper circle, seam down. An apex level has no
+    // edge: the band against it closes on the seam.
+    type Level = (f64, f64, Vec<OrientedPCurveEdge>, Vec<OrientedPCurveEdge>);
+    let mut levels: Vec<Level> = Vec::new();
+    levels.push((v_bot, q_bot, bot.edges(), bot.edges()));
     for m in mids {
-        levels.push((m.v, vec![m.lower], vec![m.upper]));
+        levels.push((m.v, m.v, vec![m.lower], vec![m.upper]));
     }
-    levels.push((v_top, top.edges(), top.edges()));
+    levels.push((v_top, q_top, top.edges(), top.edges()));
 
     let mut bands = Vec::with_capacity(levels.len() - 1);
     for w in levels.windows(2) {
-        let (va, lower, _) = &w[0];
-        let (vb, _, upper) = &w[1];
+        let (va, qa, lower, _) = &w[0];
+        let (vb, qb, _, upper) = &w[1];
         let (va, vb) = (*va, *vb);
         let mut wire = lower.clone();
         wire.push(mk_seam(va, vb)?);
         wire.extend(upper.iter().cloned());
         wire.push(mk_seam(vb, va)?);
-        let interior = surface.evaluate((seam_u + PI).rem_euclid(TAU), f64::midpoint(va, vb))?;
+        let interior = surface.evaluate((seam_u + PI).rem_euclid(TAU), f64::midpoint(*qa, *qb))?;
         bands.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
