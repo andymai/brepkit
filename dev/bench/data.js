@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790402765647,
+  "lastUpdate": 1790403181168,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -41093,6 +41093,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36054902,
             "range": "± 140795",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37ac0ae5bf565201d490a47d46a665c743d8068c",
+          "message": "perf(math): project onto a NURBS curve without decomposing it (#1786)\n\nProjection onto NURBS curves now avoids repeated Bezier decomposition,\nreducing affected release-mode booleans from minutes to between 0.25 s\nand 16.16 s with unchanged results.\n\n## What was slow\n\n- Booleans between `make_sphere(3, 32)` and `make_cone(1.2, 0.4, 10)`\nplaced through it off its axis take minutes on main. Along `x` at `z =\n0.3`, Cut takes 262.5 s and Intersect 272.4 s. Tilted, Cut takes 316.1 s\nand Intersect 314.2 s. Upright at `(1, 0.5, -5)`, Cut takes 770.3 s and\nIntersect takes more than 730 s (stopped).\n\n- Debug-log timestamps show about 3 s in the pave filler, then about 237\ns splitting the cone wall's face over its 26 marched section pieces in\nthe along `x` case. Seven of eight stack samples are in\n`split_sections_at_t_junctions`, and all eight are in the face splitter.\n\n- The sampled work computes each piece's pcurve through\n`compute_pcurve_on_surface` and `sample_edge_to_uv`.\n`evaluate_edge_at_t` re-derives the edge span with\n`EdgeCurve::domain_with_endpoints` for every sample. For a NURBS edge\ncovering part of its curve, finding that span projects both end\nvertices. `project_point_to_curve` decomposes the whole marched curve\ninto Bezier segments by knot insertion on every call, only to sample\nthose segments.\n\n## What this does\n\n- `project_point_to_curve` now performs its coarse search by sampling\neach knot span of the curve itself at the same parameters, without\ndecomposition. Its `Result` remains in the public signature.\n\n- `edge_point_at` in `pcurve_compute.rs` reads an edge's span once for\nmany samples. `evaluate_edge_at_t` and both `(u, v)` samplers use it.\n\n## Verification\n\n| Placement | Operation | Main | This PR |\n|---|---:|---:|---:|\n| Along `x` | Cut | 262.5 s | 0.28 s |\n| Along `x` | Intersect | 272.4 s | 0.25 s |\n| Tilted | Cut | 316.1 s | 6.23 s |\n| Tilted | Intersect | 314.2 s | 6.12 s |\n| Upright off-axis | Cut | 770.3 s | 16.15 s |\n| Upright off-axis | Intersect | more than 730 s (stopped) | 16.16 s |\n\n- Completed results match main's fallback face counts (715, 61, 708, 67,\n696) and volumes (99.783030, 11.792308, 98.023493, 13.551845,\n100.639678). The upright Intersect produces 101 faces.\n\n- These booleans still fall back. Phase FF sections the cone wall and\neach hemisphere in 13 marched pieces, which split neither hemisphere,\nand the cone wall's splitter gives up on all 26. The roadmap records\nthem as safe fallbacks with these timings.\n\n- The math crate's 499 tests pass. The workspace suite reports 3106\ntests run, 3106 passed, 20 skipped.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up projection onto NURBS curves by sampling the curve's own knot\nspans instead of decomposing it into Bezier segments on every call, and\nreads each edge's span once for many pcurve samples instead of\nre-deriving it per sample. The coarse search now skips only zero-width\nrepeated-knot spans, so narrow spans are still sampled. Booleans between\n`make_sphere(3, 32)` and `make_cone(1.2, 0.4, 10)` that took 262 to 770\ns to reach their mesh fallback on main now take 0.25 to 16.16 s with\nidentical results; the math crate's 499 tests and the workspace's 3106\ntests pass. These booleans still fall back to a mesh, now recorded as\nsafe fallbacks in the roadmap.\n\n<sup>Written for commit efa04c648210f9a20a424c2fdf6600d5fa46e784.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1786?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T06:10:16Z",
+          "tree_id": "9a5202536adaa867cb3b9acc43c00132f1932015",
+          "url": "https://github.com/andymai/brepkit/commit/37ac0ae5bf565201d490a47d46a665c743d8068c"
+        },
+        "date": 1790403176495,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012692,
+            "range": "± 8752",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1093211,
+            "range": "± 12519",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13130,
+            "range": "± 762",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 753452,
+            "range": "± 1578",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42319354,
+            "range": "± 249717",
             "unit": "ns/iter"
           }
         ]
