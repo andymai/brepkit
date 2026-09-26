@@ -234,11 +234,7 @@ pub fn ders_basis_funs_into(
             }
 
             let j1 = if rk >= -1 { 1usize } else { (-rk) as usize };
-            let j2 = if (r as isize - 1) <= pk {
-                k - 1
-            } else {
-                (p as isize - rk) as usize
-            };
+            let j2 = if (r as isize - 1) <= pk { k - 1 } else { p - r };
 
             for j in j1..=j2 {
                 // a[s2][j] = (a[s1][j] - a[s1][j-1]) / ndu[pk+1][rk+j]
@@ -557,6 +553,41 @@ mod tests {
             let expected = find_span(6, 2, u, &knots);
             let got = find_span_uniform(6, 2, u, &knots, step);
             assert_eq!(got, expected, "mismatch at u={u}");
+        }
+    }
+
+    /// Every derivative of every basis function in its span matches the
+    /// central difference of the one below it, for degrees 2 to 4 over
+    /// uneven knots, just past each knot, just before it and mid-span.
+    #[test]
+    fn ders_basis_funs_match_finite_differences() {
+        let h = 1e-6;
+        for p in 2..=4_usize {
+            let mut knots = vec![0.0; p + 1];
+            knots.extend([0.3, 0.45, 0.8]);
+            knots.extend(vec![1.0; p + 1]);
+            let n = knots.len() - p - 1;
+            let mut params = Vec::new();
+            for w in knots.windows(2).filter(|w| w[1] > w[0]) {
+                params.extend([w[0] + 1e-4, 0.5 * (w[0] + w[1]), w[1] - 1e-4]);
+            }
+            for u in params {
+                let span = find_span(n, p, u, &knots);
+                let at = ders_basis_funs(span, u, p, p, &knots);
+                let lo = ders_basis_funs(span, u - h, p, p, &knots);
+                let hi = ders_basis_funs(span, u + h, p, p, &knots);
+                for k in 1..=p {
+                    for j in 0..=p {
+                        let fd = (hi[k - 1][j] - lo[k - 1][j]) / (2.0 * h);
+                        let scale = 1.0 + fd.abs();
+                        assert!(
+                            (at[k][j] - fd).abs() < 1e-4 * scale,
+                            "p={p} u={u} k={k} j={j}: {} vs {fd}",
+                            at[k][j]
+                        );
+                    }
+                }
+            }
         }
     }
 }

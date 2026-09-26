@@ -23,9 +23,10 @@
 //!
 //! # Curvature-adaptive sampling
 //!
-//! [`sample_curvature`] subdivides intervals where the product of curvature
-//! and interval arc-length exceeds a tolerance. Produces denser samples in
-//! high-curvature regions of a NURBS curve.
+//! [`sample_curvature`] splits a NURBS curve's range at its knots and
+//! subdivides intervals whose turning, read from their curvature and arc
+//! length and from the turn of their tangents, exceeds a tolerance.
+//! Produces denser samples where the curve bends.
 //!
 //! # Surface grid sampling
 //!
