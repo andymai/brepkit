@@ -10,6 +10,8 @@ crates/operations/src/tessellate/face.rs
 crates/operations/tests/rod_through_plate_edge.rs
   s_ba2f7b5c6902b6::t_70a613229656a0 1-69,77-153
   s_ba2f7b5c6902b6::t_ee3c7dc78f32ea 70-76
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_37a4a2b5bc8705 187,209
 ---
 {
   "schema_version": "authorship/3.0.0",
