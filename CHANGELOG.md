@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.42](https://github.com/andymai/brepkit/compare/v4.0.41...v4.0.42) (2026-09-26)
+
+
+### Bug Fixes
+
+* **check:** integrate a plane face along its edges' own curves ([#1799](https://github.com/andymai/brepkit/issues/1799)) ([5caf87e](https://github.com/andymai/brepkit/commit/5caf87e7c89cdde33eb5ecf06654ab1890fbc58d))
+
 ## [4.0.41](https://github.com/andymai/brepkit/compare/v4.0.40...v4.0.41) (2026-09-26)
 
 
