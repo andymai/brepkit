@@ -26,12 +26,12 @@ use brepkit_topology::solid::SolidId;
 const RADIUS: f64 = 3.0;
 
 /// Whether a result is exact rather than a mesh fallback, which is all planes
-/// and dozens of them: the results here keep a sphere face among a handful.
-/// (The fallback counter is process-wide, and other tests in this binary may
-/// fall back while one runs.)
+/// and hundreds of them: the results here keep a sphere face among a few
+/// dozen at most. (The fallback counter is process-wide, and other tests in
+/// this binary may fall back while one runs.)
 fn exact(topo: &Topology, solid: SolidId) -> bool {
     let faces = solid_faces(topo, solid).unwrap();
-    faces.len() <= 12
+    faces.len() <= 24
         && faces
             .iter()
             .any(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
@@ -777,12 +777,290 @@ fn a_band_keeps_its_other_holes() {
     }
 }
 
-/// The ball within the square column `|x|, |y| < 2.5` through both poles, and
-/// the column less the ball, bored by a rod at `(0.5, 0.5)` or not: each
-/// hemisphere keeps the collar inside the column's four walls. Each is exact,
-/// valid and watertight, and measures the ball less its four caps
-/// `pi h² (3R - h) / 3`, `h = 0.5`, and the bore's chord, or the column less
-/// that.
+/// The ball less a square column through both poles, wider than the ball at
+/// its corners, is four caps `pi h² (3R - h) / 3`, `h = R - a`, however the
+/// column turns about the poles and wherever the pair sits. Each cap is two
+/// lunes and a piece of wall, all cornered on the wall, and assembles as a
+/// solid piece rather than a cavity. Each result is exact, valid and
+/// watertight, measures the caps, and classifies a point in a cap inside and
+/// the centre and a pole outside.
+#[test]
+fn a_ball_less_a_turned_column_keeps_its_four_caps() {
+    for (a, turn, x) in [(2.5, 0.3, 0.0), (2.2, 0.3, 0.0), (2.2, 0.0, 10.0)] {
+        let label = format!("column {a} turned {turn} at x = {x}");
+        let h = RADIUS - a;
+        let caps = 4.0 * PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let column = make_box(&mut topo, 2.0 * a, 2.0 * a, 10.0).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(-a, -a, -5.0)).unwrap();
+        transform_solid(&mut topo, column, &Mat4::rotation_z(turn)).unwrap();
+        transform_solid(&mut topo, sphere, &Mat4::translation(x, 0.0, 0.0)).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(x, 0.0, 0.0)).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, sphere, column).unwrap();
+        assert!(exact(&topo, result), "{label}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - caps).abs() < 1e-3 * caps,
+            "{label}: volume {volume}, truth {caps}"
+        );
+        let in_cap = 0.5 * (a + RADIUS);
+        for (p, want) in [
+            (
+                Point3::new(in_cap.mul_add(turn.cos(), x), in_cap * turn.sin(), 0.1),
+                PointClassification::Inside,
+            ),
+            (Point3::new(x, 0.0, 0.0), PointClassification::Outside),
+            (
+                Point3::new(x + 0.1, 0.1, -2.9),
+                PointClassification::Outside,
+            ),
+        ] {
+            let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+            assert_eq!(got.unwrap(), want, "{label}: {p:?}");
+        }
+    }
+}
+
+/// The ball within the column over `-2.5 < x, y < 2`, whose corner at
+/// `(2, 2)` lies inside the ball, and the column less the ball, the column
+/// through the ball or ending in it at `z = 2.8`: the walls `x = 2` and
+/// `y = 2` meet on the sphere, the region past them owns a seam arc longer
+/// than half a turn and is bounded by two wall circles, and the column's top
+/// leaves a latitude hole in the collar. Each is exact, valid and watertight,
+/// and within `1e-3` of the ball's chords over the column (by Simpson over
+/// `x`, each chord's integral over `y` in closed form) less the polar cap.
+#[test]
+fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
+    let r2 = RADIUS * RADIUS;
+    let chords = |x: f64| {
+        let c2 = r2 - x * x;
+        if c2 <= 0.0 {
+            return 0.0;
+        }
+        let c = c2.sqrt();
+        let part = |y: f64| {
+            let y = y.clamp(-c, c);
+            y.mul_add((c2 - y * y).max(0.0).sqrt(), c2 * (y / c).asin())
+        };
+        part(2.0) - part(-2.5)
+    };
+    let n = 2000;
+    let step = 4.5 / f64::from(n);
+    let mut within = chords(-2.5) + chords(2.0);
+    for k in 1..n {
+        within += if k % 2 == 1 { 4.0 } else { 2.0 } * chords(step.mul_add(f64::from(k), -2.5));
+    }
+    within *= step / 3.0;
+    let polar = PI * 0.04 * 0.2f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    for (name, height, truth) in [
+        ("within", 10.0, within),
+        ("column less ball", 10.0, 202.5 - within),
+        ("within, ending at z = 2.8", 7.8, within - polar),
+        (
+            "column ending at z = 2.8 less ball",
+            7.8,
+            4.5f64.mul_add(4.5 * 7.8, -(within - polar)),
+        ),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let column = make_box(&mut topo, 4.5, 4.5, height).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
+        let result = if name.starts_with("within") {
+            boolean(&mut topo, BooleanOp::Intersect, sphere, column)
+        } else {
+            boolean(&mut topo, BooleanOp::Cut, column, sphere)
+        }
+        .unwrap();
+        assert!(exact(&topo, result), "{name}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "{name}: volume {volume}, truth {truth}"
+        );
+    }
+}
+
+/// The ball with a square column through both poles and a thin rod along
+/// `z` through one of its caps, fused into one tool: the ball less it, within
+/// it and the tool less the ball, the rod of radius 0.1 at `(2.75, 0)` or of
+/// radius 0.05 at `(2.872, 0)` (over the middle of the cap, where a sample
+/// taken without its holes would read the rod), and the first again with the
+/// ball turned 0.35 about x (the wall `x = 2.5` then crests on the ball's
+/// seam, where its two halves must meet in the trace). Each hemisphere's cap past
+/// the wall `x = 2.5` holds the rod's section as a hole, and the section
+/// bounds a patch of its own. Each is exact, valid and watertight and within
+/// `1e-3` of its closed form (the rod's chord by Simpson in polar
+/// coordinates), and the ball less the tool reads the rod outside and the cap
+/// beside it inside to both classifiers.
+#[test]
+fn a_rod_through_a_cap_leaves_its_hole_in_the_cap() {
+    for (at, radius, turn) in [(2.75, 0.1, 0.0), (2.872, 0.05, 0.0), (2.75, 0.1, 0.35)] {
+        rod_through_a_cap(at, radius, turn);
+    }
+}
+
+fn rod_through_a_cap(at: f64, radius: f64, turn: f64) {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let h: f64 = 0.5;
+    let caps = 4.0 * PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let bore = simpson(200, 0.0, radius, &|r: f64| {
+        r * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
+            let (x, y) = (r.mul_add(th.cos(), at), r * th.sin());
+            2.0 * RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt()
+        })
+    });
+    let within = ball - caps + bore;
+    let tool_volume = PI.mul_add(radius * radius * 10.0, 250.0);
+    for (name, truth) in [
+        ("ball less tool", caps - bore),
+        ("ball within tool", within),
+        ("tool less ball", tool_volume - within),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        transform_solid(&mut topo, sphere, &Mat4::rotation_x(turn)).unwrap();
+        let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
+        let rod = make_cylinder(&mut topo, radius, 10.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(at, 0.0, -5.0)).unwrap();
+        let tool = boolean(&mut topo, BooleanOp::Fuse, column, rod).unwrap();
+        let result = match name {
+            "ball less tool" => boolean(&mut topo, BooleanOp::Cut, sphere, tool),
+            "ball within tool" => boolean(&mut topo, BooleanOp::Intersect, sphere, tool),
+            _ => boolean(&mut topo, BooleanOp::Cut, tool, sphere),
+        }
+        .unwrap();
+        let name = format!("{name}, rod {radius} at {at}, ball turned {turn}");
+        assert!(exact(&topo, result), "{name}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "{name}: volume {volume}, truth {truth}"
+        );
+        if !name.starts_with("ball less tool") {
+            continue;
+        }
+        for (p, inside) in [
+            (Point3::new(at, 0.0, 0.5), false),
+            (Point3::new(at, 0.0, -0.5), false),
+            (Point3::new(2.7, 0.4, 0.5), true),
+            (Point3::new(2.7, -0.4, -0.5), true),
+        ] {
+            let (want_check, want_engine) = if inside {
+                (PointClassification::Inside, brepkit_algo::FaceClass::Inside)
+            } else {
+                (
+                    PointClassification::Outside,
+                    brepkit_algo::FaceClass::Outside,
+                )
+            };
+            let got = classify_point(&topo, result, p, &ClassifyOptions::default()).unwrap();
+            assert_eq!(got, want_check, "{name}: {p:?}");
+            let got = brepkit_algo::classifier::classify_ray_cast(&topo, result, p).unwrap();
+            assert_eq!(got, want_engine, "{name}, engine: {p:?}");
+        }
+    }
+}
+
+/// The ball and a square column wider than the ball at its corners that
+/// ends inside it at `z = 2.8` or `z = 2`: the column's top cuts the upper
+/// hemisphere in a latitude circle, a hole of the collar that winds the axis,
+/// and the polar cap over it `pi h² (3R - h) / 3`, `h = R - z`, is a patch of
+/// its own (at `z = 2` a sample nudged off the hole toward the equator would
+/// land past a wall).
+/// The ball less the column keeps the four caps past the walls and the polar
+/// cap, the ball within it and the column less the ball lose it; each is
+/// exact, valid, watertight and within `1e-3` of its closed form. Tilted 0.2
+/// or 0.35 about x, the column's top circle passes within 0.03 of the pole
+/// (the closed forms hold, the ball being unchanged by the tilt), and the
+/// ball turned 0.35 about x puts a wall's crest on the ball's seam; the ball
+/// less the column still meshes watertight there and the column ending at 2
+/// throughout, the others do not (a roadmap row).
+#[test]
+fn a_column_ending_in_the_ball_keeps_the_cap_over_it() {
+    for (top, tilt, turn) in [
+        (2.8, 0.0, 0.0),
+        (2.0, 0.0, 0.0),
+        (2.930_93, 0.2, 0.0),
+        (2.956_75, 0.2, 0.0),
+        (3.0 * 0.365_f64.cos(), 0.35, 0.0),
+        (2.8, 0.0, 0.35),
+        (2.0, 0.0, 0.35),
+    ] {
+        column_ending_in_the_ball(top, tilt, turn);
+    }
+}
+
+fn column_ending_in_the_ball(top: f64, tilt: f64, turn: f64) {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let side_caps = 4.0 * PI * 0.25 * 0.5f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let h = RADIUS - top;
+    let polar = PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let within = ball - side_caps - polar;
+    for (name, truth) in [
+        ("ball less column", side_caps + polar),
+        ("ball within column", within),
+        ("column less ball", 5.0 * 5.0 * (5.0 + top) - within),
+    ] {
+        let name = format!("{name} ending at {top}, tilted {tilt}, ball turned {turn}");
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        transform_solid(&mut topo, sphere, &Mat4::rotation_x(turn)).unwrap();
+        let column = make_box(&mut topo, 5.0, 5.0, 5.0 + top).unwrap();
+        let pose = Mat4::rotation_x(-tilt) * Mat4::translation(-2.5, -2.5, -5.0);
+        transform_solid(&mut topo, column, &pose).unwrap();
+        let result = if name.starts_with("ball less") {
+            boolean(&mut topo, BooleanOp::Cut, sphere, column)
+        } else if name.starts_with("ball within") {
+            boolean(&mut topo, BooleanOp::Intersect, sphere, column)
+        } else {
+            boolean(&mut topo, BooleanOp::Cut, column, sphere)
+        }
+        .unwrap();
+        assert!(exact(&topo, result), "{name}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        if (tilt == 0.0 && turn == 0.0) || top < 2.5 || name.starts_with("ball less") {
+            assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
+        }
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "{name}: volume {volume}, truth {truth}"
+        );
+    }
+}
+
+/// The ball within the square column `|x|, |y| < 2.5` through both poles, the
+/// column less the ball and the ball less the column, bored by a rod at
+/// `(0.5, 0.5)` or not: each hemisphere keeps the collar inside the column's
+/// four walls, or the four lunes past them. Each is exact, valid and
+/// watertight, and measures the ball less its four caps `pi h² (3R - h) / 3`,
+/// `h = 0.5`, and the bore's chord, the column less that, or the caps, which
+/// classify on the right side.
 #[test]
 fn a_column_through_both_poles_keeps_its_collars() {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
@@ -803,11 +1081,12 @@ fn a_column_through_both_poles_keeps_its_collars() {
     });
     for bored in [false, true] {
         let within = ball - caps - if bored { bore } else { 0.0 };
-        for (op, truth) in [
-            (BooleanOp::Intersect, within),
-            (BooleanOp::Cut, 250.0 - within),
+        for (name, op, truth) in [
+            ("within", BooleanOp::Intersect, within),
+            ("column less ball", BooleanOp::Cut, 250.0 - within),
+            ("ball less column", BooleanOp::Cut, caps),
         ] {
-            let label = format!("bored {bored} {op:?}");
+            let label = format!("bored {bored} {name}");
             let mut topo = Topology::new();
             let mut sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
             if bored {
@@ -817,7 +1096,7 @@ fn a_column_through_both_poles_keeps_its_collars() {
             }
             let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
             transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
-            let result = if op == BooleanOp::Cut {
+            let result = if name == "column less ball" {
                 boolean(&mut topo, op, column, sphere)
             } else {
                 boolean(&mut topo, op, sphere, column)
@@ -826,6 +1105,18 @@ fn a_column_through_both_poles_keeps_its_collars() {
             assert!(exact(&topo, result), "{label}: fell back to a mesh");
             let report = validate_solid(&topo, result).unwrap();
             assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            if name == "ball less column" {
+                for (p, want) in [
+                    (Point3::new(2.8, 0.0, 0.1), PointClassification::Inside),
+                    (Point3::new(-0.1, -2.8, -0.2), PointClassification::Inside),
+                    (Point3::new(0.0, 0.0, 0.0), PointClassification::Outside),
+                    (Point3::new(0.2, 0.0, 2.9), PointClassification::Outside),
+                    (Point3::new(2.2, 2.2, 0.0), PointClassification::Outside),
+                ] {
+                    let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+                    assert_eq!(got.unwrap(), want, "{label}: {p:?}");
+                }
+            }
             let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
             assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
             let volume = solid_volume(&topo, result, 0.01).unwrap();

@@ -596,6 +596,10 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
     let mut tot_mass = 0.0_f64;
     let mut any = false;
     let trace = std::env::var("BK_FLUX").is_ok();
+    // Positions are taken from the shell's own centre: a curved face
+    // integrates over its boundary's whole parameter box, not its trimmed
+    // patch, and that error scales with the distance to the origin used.
+    let origin = shell_corner_box(topo, faces).center();
     for &fid in faces {
         // Only meaningful under BK_FLUX; skip the bookkeeping otherwise.
         let flux_before = if trace { flux } else { 0.0 };
@@ -642,7 +646,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                 Point3::new(c.x() / n, c.y() / n, c.z() / n)
             };
             let n2 = newell_normal(&pts);
-            let c_wire = 0.5 * Vec3::new(centroid.x(), centroid.y(), centroid.z()).dot(n2);
+            let c_wire = 0.5 * (centroid - origin).dot(n2);
             let c_comp = if face.is_reversed() { -c_wire } else { c_wire };
             flux += c_comp;
             flux_wire += c_wire;
@@ -773,7 +777,7 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                         continue;
                     }
                     let n = surface.normal(u, v);
-                    raw_surf += da * Vec3::new(p.x(), p.y(), p.z()).dot(n);
+                    raw_surf += da * (p - origin).dot(n);
                 }
             }
             let r = if rev_flag { -1.0 } else { 1.0 };
@@ -893,9 +897,15 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
         // with no enclosing shell to be a cavity of — disambiguate with the
         // curvature-robust `shell_is_outward_oriented` (surface-normal divergence
         // flux): keep it as growth only when genuinely outward, so a Cut that
-        // leaves only an INWARD cavity component is still rejected. Multi-shell
-        // results keep the volume-sign split (a Cut can leave the tool's interior
-        // as a separate negative-volume cavity shell).
+        // leaves only an INWARD cavity component is still rejected. A shell
+        // whose corners all lie in one plane (a ball's cap cut off by a wall:
+        // two lunes and the wall, cornered on the wall) has no corner-fan
+        // volume, so a negative sign is rounding and the flux decides it too
+        // (a positive one stands: the flux reads a curved face over its
+        // boundary's parameter box, which a drilled ring's torus face does
+        // not span). Other shells of a multi-shell result keep the
+        // volume-sign split (a Cut can leave the tool's interior as a
+        // separate negative-volume cavity).
         let is_growth = if signed_vol >= 0.0 {
             // Positive corner-fan volume already reads outward — keep the
             // historical behaviour for every solid that integrates cleanly
@@ -903,7 +913,7 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
             // captures, e.g. the sphere − through-cylinder band). The robust
             // test is consulted ONLY below, never overriding a positive volume.
             true
-        } else if shells.len() == 1 {
+        } else if shells.len() == 1 || fan_is_flat(topo, shell, signed_vol) {
             // A LONE shell read NEGATIVE: either it is genuinely inward (a Cut
             // leaving only a cavity component — must be rejected) or its
             // corner-fan volume sign-flipped on a doubly-curved band whose
@@ -946,6 +956,29 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
     );
 
     (growth, holes)
+}
+
+/// The box of a shell's outer-wire corners.
+fn shell_corner_box(topo: &Topology, faces: &[FaceId]) -> brepkit_math::aabb::Aabb3 {
+    let corners = faces
+        .iter()
+        .filter_map(|&fid| topo.face(fid).ok())
+        .filter_map(|face| topo.wire(face.outer_wire()).ok())
+        .flat_map(|wire| wire.edges().to_vec())
+        .filter_map(|oe| topo.edge(oe.edge()).ok())
+        .filter_map(|edge| topo.vertex(edge.start()).ok())
+        .map(brepkit_topology::vertex::Vertex::point);
+    brepkit_math::aabb::Aabb3::from_points(corners)
+}
+
+/// Whether a shell's corner-fan volume is rounding next to its extent. The
+/// fan's tetrahedra reach the world origin, so its rounding grows with the
+/// shell's distance from it.
+fn fan_is_flat(topo: &Topology, faces: &[FaceId], signed_vol: f64) -> bool {
+    let bbox = shell_corner_box(topo, faces);
+    let extent = (bbox.max - bbox.min).length();
+    let reach = extent + (bbox.center() - Point3::new(0.0, 0.0, 0.0)).length();
+    signed_vol.abs() <= 1e-9 * extent * reach * reach
 }
 
 /// Whether a shell is closed: every quantized boundary edge is shared by an

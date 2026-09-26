@@ -158,8 +158,8 @@ impl BrepKernel {
     /// Operations like boolean, fillet, and shell produce geometrically
     /// correct shapes that may not have fully manifold topology (faces
     /// from different operations may not share edges). This validation
-    /// skips Euler characteristic, boundary edge, non-manifold edge, and
-    /// shell connectivity checks.
+    /// skips the Euler characteristic, piece, boundary edge and non-manifold
+    /// edge checks.
     ///
     /// Returns 0 if the solid passes all structural checks.
     ///

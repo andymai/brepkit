@@ -108,9 +108,6 @@ pub fn euler_characteristic(
     Ok(euler)
 }
 
-/// Validate a solid, returning a report of all issues found.
-///
-/// Checks performed:
 /// Returns `true` if every edge in the face is a straight line.
 fn face_all_edges_straight(
     topo: &Topology,
@@ -128,8 +125,166 @@ fn face_all_edges_straight(
     Ok(true)
 }
 
+/// Each face's piece: the connected groups of faces, joined across shared
+/// edges, labelled by a representative face's index in `faces`.
+fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
+    faces: &[brepkit_topology::face::FaceId],
+    edge_map: &std::collections::HashMap<usize, U>,
+) -> Vec<usize> {
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let index: std::collections::HashMap<usize, usize> = faces
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.index(), i))
+        .collect();
+    let mut parent: Vec<usize> = (0..faces.len()).collect();
+    for users in edge_map.values() {
+        let mut users = users
+            .as_ref()
+            .iter()
+            .filter_map(|f| index.get(&f.index()).copied());
+        let Some(first) = users.next() else { continue };
+        for other in users {
+            let (a, b) = (root(&mut parent, first), root(&mut parent, other));
+            parent[a] = b;
+        }
+    }
+    (0..faces.len()).map(|i| root(&mut parent, i)).collect()
+}
+
+/// Issues with how a solid's pieces sit: a vertex shared by two pieces (a
+/// pinch), or a piece inside another that faces the same way with no piece
+/// facing the other way between them (a lump inside a lump; an island in a
+/// cavity kept in the outer shell has the cavity between). A piece is inside
+/// another when most of three rays from one of its vertices cross the other
+/// an odd number of times (one ray can leave through an edge or a corner).
+/// Only pieces facing the same way are tested: a cavity kept in the outer
+/// shell faces inward, against the piece around it.
+fn piece_issues(
+    topo: &Topology,
+    faces: &[brepkit_topology::face::FaceId],
+    piece: &[usize],
+) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
+    use std::collections::HashMap;
+    let mut owner: HashMap<usize, usize> = HashMap::new();
+    let mut shared = 0_usize;
+    let mut corner: HashMap<usize, brepkit_math::vec::Point3> = HashMap::new();
+    let mut members: HashMap<usize, Vec<brepkit_topology::face::FaceId>> = HashMap::new();
+    for (i, &fid) in faces.iter().enumerate() {
+        members.entry(piece[i]).or_default().push(fid);
+        for vid in explorer::face_vertices(topo, fid)? {
+            corner.entry(piece[i]).or_insert(topo.vertex(vid)?.point());
+            match owner.get(&vid.index()) {
+                Some(&p) if p != piece[i] => shared += 1,
+                Some(_) => {}
+                None => {
+                    owner.insert(vid.index(), piece[i]);
+                }
+            }
+        }
+    }
+    let mut issues = Vec::new();
+    if shared > 0 {
+        issues.push(ValidationIssue {
+            severity: Severity::Error,
+            description: format!("{shared} vertex uses join separate pieces"),
+        });
+    }
+    let mut volume: HashMap<usize, f64> = HashMap::new();
+    let mut volume_of = |p: usize| -> Result<f64, crate::OperationsError> {
+        if let Some(&v) = volume.get(&p) {
+            return Ok(v);
+        }
+        let mut v = 0.0;
+        for &fid in &members[&p] {
+            v += brepkit_check::properties::face_integrator::integrate_face(topo, fid, 4)?.volume;
+        }
+        volume.insert(p, v);
+        Ok(v)
+    };
+    let rays = [
+        brepkit_math::vec::Vec3::new(
+            0.534_522_483_824_848_8,
+            0.801_783_725_737_273_2,
+            0.267_261_241_912_424_4,
+        ),
+        brepkit_math::vec::Vec3::new(
+            -0.447_213_595_499_957_9,
+            0.365_148_371_670_110_7,
+            0.816_496_580_927_726,
+        ),
+        brepkit_math::vec::Vec3::new(
+            0.620_173_672_946_042_4,
+            -0.248_069_469_178_417,
+            -0.744_208_407_535_250_9,
+        ),
+    ];
+    let pieces: Vec<usize> = {
+        let mut all: Vec<usize> = piece.to_vec();
+        all.sort_unstable();
+        all.dedup();
+        all
+    };
+    let mut inside_memo: HashMap<(usize, usize), bool> = HashMap::new();
+    let mut inside = |a: usize, b: usize| -> Result<bool, crate::OperationsError> {
+        if let Some(&known) = inside_memo.get(&(a, b)) {
+            return Ok(known);
+        }
+        let mut odd = 0;
+        for ray in rays {
+            let crossings =
+                crate::classify::count_ray_crossings(topo, &members[&b], corner[&a], ray, 0.01)?;
+            odd += crossings % 2;
+        }
+        inside_memo.insert((a, b), odd >= 2);
+        Ok(odd >= 2)
+    };
+    let mut nested = false;
+    'pairs: for &a in &pieces {
+        for &b in &pieces {
+            if a == b || (volume_of(a)? > 0.0) != (volume_of(b)? > 0.0) || !inside(a, b)? {
+                continue;
+            }
+            let mut between = false;
+            for &c in &pieces {
+                if c != a
+                    && c != b
+                    && (volume_of(c)? > 0.0) != (volume_of(a)? > 0.0)
+                    && inside(a, c)?
+                    && inside(c, b)?
+                {
+                    between = true;
+                    break;
+                }
+            }
+            if !between {
+                nested = true;
+                break 'pairs;
+            }
+        }
+    }
+    if nested {
+        issues.push(ValidationIssue {
+            severity: Severity::Error,
+            description: "a shell holds a piece inside another facing the same way".into(),
+        });
+    }
+    Ok(issues)
+}
+
+/// Validate a solid, returning a report of all issues found.
+///
+/// Checks performed:
 /// 1. **Euler-Poincaré**: V - E + F = 2(S - g) + L for a genus-g closed
-///    solid of S shells whose faces carry L inner loops
+///    solid of S pieces (connected groups of faces: the outer shell, each
+///    cavity, and each disjoint lump a boolean leaves in the outer shell)
+///    whose faces carry L inner loops
 /// 2. **Manifold edges**: each edge shared by exactly 2 faces
 /// 3. **Boundary edges**: no edge shared by only 1 face (open shell)
 /// 4. **Degenerate faces**: each face has at least 3 vertices
@@ -138,9 +293,8 @@ fn face_all_edges_straight(
 /// 7. **Degenerate face area**: near-zero polygon area warning for planar faces
 /// 8. **Zero-length edges**: edges with coincident start/end vertices
 /// 9. **Empty wires**: wires with no edges
-/// 10. **Shell connectivity**: all faces reachable from any face
-/// 11. **Redundant faces**: same face ID appearing twice in shell
-/// 12. **Edge vertex consistency**: edge vertices belong to the solid
+/// 10. **Redundant faces**: same face ID appearing twice in shell
+/// 11. **Edge vertex consistency**: edge vertices belong to the solid
 ///
 /// # Errors
 ///
@@ -177,9 +331,12 @@ pub fn validate_solid_with_options(
 
     // Euler-Poincaré formula for a cell complex with inner loops:
     //   V - E + F = 2(S - g) + L
-    // where S is the number of shells (the outer one plus each cavity), g is
-    // the total genus and L is the total number of inner wire loops across
-    // all faces. For a genus-0 solid with no cavities or holes: V-E+F = 2.
+    // where S is the number of connected pieces, g is the total genus and L
+    // is the total number of inner wire loops across all faces. For a
+    // genus-0 solid with no cavities or holes: V-E+F = 2. A cavity is a
+    // piece of its own (it shares no edge with the outer shell), and so is
+    // each disjoint lump a boolean keeps in the outer shell (a ball cut in
+    // two by a slab).
     let mut total_inner_loops: i64 = 0;
     let faces = explorer::solid_faces(topo, solid)?;
     for fid in &faces {
@@ -194,21 +351,24 @@ pub fn validate_solid_with_options(
     let euler = (v as i64) - (e as i64) + (f as i64);
     // Adjusted Euler: subtract inner loops to get the standard characteristic.
     let adjusted_euler = euler - total_inner_loops;
+    let edge_map = explorer::edge_to_face_map(topo, solid)?;
+    let piece = connected_pieces(&faces, &edge_map);
     #[allow(clippy::cast_possible_wrap)]
-    let shells = 1 + topo.solid(solid)?.inner_shells().len() as i64;
-    let genus_times_2 = 2 * shells - adjusted_euler;
+    let pieces = piece.iter().enumerate().filter(|&(i, &p)| i == p).count() as i64;
+    let genus_times_2 = 2 * pieces - adjusted_euler;
     if genus_times_2 < 0 || genus_times_2 % 2 != 0 {
         issues.push(ValidationIssue {
             severity: Severity::Error,
             description: format!(
                 "Euler characteristic V-E+F = {euler} is invalid \
-                 (expected V-E+F = 2(S-g)+L for a genus g >= 0, with S={shells} \
-                 shells and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
+                 (expected V-E+F = 2(S-g)+L for a genus g >= 0, with S={pieces} \
+                 pieces and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
             ),
         });
     }
-
-    let edge_map = explorer::edge_to_face_map(topo, solid)?;
+    if pieces > 1 {
+        issues.extend(piece_issues(topo, &faces, &piece)?);
+    }
     let mut boundary_edges = 0;
     let mut non_manifold_edges = 0;
 
@@ -409,53 +569,6 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // Shell connectivity: within each shell, every face must be reachable
-    // from any other across shared edges. A cavity is its own shell and
-    // shares no edge with the outer one. Solids of genus > 0 skip the check.
-    if genus_times_2 == 0 {
-        let solid_data = topo.solid(solid)?;
-        let shells: Vec<_> = std::iter::once(solid_data.outer_shell())
-            .chain(solid_data.inner_shells().iter().copied())
-            .collect();
-        for shell_id in shells {
-            let shell_faces = topo.shell(shell_id)?.faces();
-            let Some(first) = shell_faces.first() else {
-                continue;
-            };
-            let face_set: std::collections::HashSet<usize> =
-                shell_faces.iter().map(|f| f.index()).collect();
-            let mut visited = std::collections::HashSet::new();
-            let mut queue = std::collections::VecDeque::new();
-
-            visited.insert(first.index());
-            queue.push_back(*first);
-
-            while let Some(current) = queue.pop_front() {
-                for adj_faces in edge_map.values() {
-                    if adj_faces.iter().any(|f| f.index() == current.index()) {
-                        for neighbor in adj_faces {
-                            if face_set.contains(&neighbor.index())
-                                && visited.insert(neighbor.index())
-                            {
-                                queue.push_back(*neighbor);
-                            }
-                        }
-                    }
-                }
-            }
-
-            let unreachable = face_set.len() - visited.len();
-            if unreachable > 0 {
-                issues.push(ValidationIssue {
-                    severity: Severity::Error,
-                    description: format!(
-                        "shell is disconnected: {unreachable} face(s) not reachable from first face"
-                    ),
-                });
-            }
-        }
-    }
-
     {
         let mut face_counts = std::collections::HashMap::new();
         for fid in &faces {
@@ -543,10 +656,10 @@ pub fn validate_solid_with_options(
 /// - Edge vertex consistency
 ///
 /// Skipped in relaxed mode:
-/// - Euler-Poincaré characteristic (assembled shells may have multiple components)
+/// - Euler-Poincaré characteristic and how pieces sit (vertices shared by
+///   separate pieces, a piece nested in another)
 /// - Boundary edges (faces from different operations may not share edges)
 /// - Non-manifold edges (edge duplication is expected in assembled geometry)
-/// - Shell connectivity (multiple disconnected face groups are valid)
 ///
 /// # Errors
 ///

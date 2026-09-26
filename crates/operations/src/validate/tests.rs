@@ -144,6 +144,64 @@ fn solids_with_cavities_validate() {
     }
 }
 
+/// A block cut in two by a slab keeps both pieces in its outer shell (the
+/// two slabs' volume, a point in each inside and one in the gap outside);
+/// each is a closed piece of its own in the Euler term.
+#[test]
+fn a_solid_cut_in_two_validates() {
+    use brepkit_math::mat::Mat4;
+
+    use crate::boolean::{BooleanOp, boolean};
+
+    let mut topo = Topology::new();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let slab = crate::primitives::make_box(&mut topo, 20.0, 20.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(-5.0, -5.0, 4.0))
+        .unwrap();
+    let pieces = boolean(&mut topo, BooleanOp::Cut, block, slab).unwrap();
+    assert!(topo.solid(pieces).unwrap().inner_shells().is_empty());
+    let volume = crate::measure::solid_volume(&topo, pieces, 0.01).unwrap();
+    assert!((volume - 800.0).abs() < 1e-6, "volume {volume}");
+    for (z, want) in [
+        (2.0, crate::classify::PointClassification::Inside),
+        (5.0, crate::classify::PointClassification::Outside),
+        (8.0, crate::classify::PointClassification::Inside),
+    ] {
+        let p = brepkit_math::vec::Point3::new(5.0, 5.0, z);
+        let got = crate::classify::classify_point(&topo, pieces, p, 0.01, 1e-7).unwrap();
+        assert_eq!(got, want, "z = {z}");
+    }
+    let report = validate_solid(&topo, pieces).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}
+
+/// A block less a hollow box around a small block: the cavity and the island
+/// in it land in the outer shell as pieces, the cavity facing inward at depth
+/// one and the island outward at depth two.
+#[test]
+fn an_island_in_a_cavity_validates() {
+    use brepkit_math::mat::Mat4;
+
+    use crate::boolean::{BooleanOp, boolean};
+
+    let mut topo = Topology::new();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-5.0, -5.0, -5.0))
+        .unwrap();
+    let shell = crate::primitives::make_box(&mut topo, 6.0, 6.0, 6.0).unwrap();
+    crate::transform::transform_solid(&mut topo, shell, &Mat4::translation(-3.0, -3.0, -3.0))
+        .unwrap();
+    let core = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, core, &Mat4::translation(-1.0, -1.0, -1.0))
+        .unwrap();
+    let hollow = boolean(&mut topo, BooleanOp::Cut, shell, core).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Cut, block, hollow).unwrap();
+    let volume = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!((volume - 792.0).abs() < 1e-6, "volume {volume}");
+    let report = validate_solid(&topo, result).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}
+
 #[test]
 fn cylinder_solid_validates() {
     let mut topo = Topology::new();
@@ -486,21 +544,29 @@ fn validate_detects_zero_length_edge() {
     );
 }
 
+/// Pieces are separate only when they stay apart: two blocks fused along a
+/// shared edge join at its vertices, and a block merged inside another into
+/// one shell cannot be told from a cavity. Both are invalid.
 #[test]
-fn validate_connected_shell_passes() {
-    let mut topo = Topology::new();
-    let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+fn pinched_and_nested_pieces_are_invalid() {
+    use brepkit_math::mat::Mat4;
 
-    let report = validate_solid(&topo, solid).unwrap();
-    let has_disconnect = report
-        .issues
-        .iter()
-        .any(|i| i.description.contains("disconnected"));
-    assert!(
-        !has_disconnect,
-        "valid box should not be disconnected: {:?}",
-        report.issues
-    );
+    use crate::boolean::{BooleanOp, boolean};
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(1.0, 1.0, 0.0)).unwrap();
+    let pinched = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let report = validate_solid(&topo, pinched).unwrap();
+    assert!(!report.is_valid(), "pinched blocks read valid");
+
+    let outer = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let inner = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, inner, &Mat4::translation(4.0, 4.0, 4.0)).unwrap();
+    let nested = crate::compound_ops::merge_disjoint_solids(&mut topo, &[outer, inner]).unwrap();
+    let report = validate_solid(&topo, nested).unwrap();
+    assert!(!report.is_valid(), "a block inside a block reads valid");
 }
 
 #[test]
