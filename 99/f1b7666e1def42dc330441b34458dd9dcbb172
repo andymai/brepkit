@@ -1,0 +1,21 @@
+crates/check/src/properties/face_integrator.rs
+  s_462b10fa303f0c::t_5d28e8b3ff25f0 1356-1406,1411-1413
+  s_462b10fa303f0c::t_05ba1fe1966eba 1407-1410
+  s_462b10fa303f0c::t_3faf93ab7a9142 576-578
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "99f1b7666e1def42dc330441b34458dd9dcbb172",
+  "prompts": {},
+  "sessions": {
+    "s_462b10fa303f0c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "428b7e25-2cf8-4ce6-81b1-e6ffae6ea0ae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
