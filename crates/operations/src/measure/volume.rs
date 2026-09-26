@@ -545,7 +545,8 @@ fn analytic_revolution_solid_volume(topo: &Topology, solid: SolidId) -> Option<f
 /// Whether a cylinder or cone face is a rectangle in `(u, v)`: every line a
 /// ruling (along the axis, or through a cone's apex) running its full height,
 /// every other edge a rim arc at its bottom or top spanning at most a half
-/// turn (the angular-range reader takes an arc's shorter side).
+/// turn (the cone's angular-range reader takes an arc's shorter side, and a
+/// cylinder is held to the same bound).
 fn ruled_wall_is_rectangle(topo: &Topology, face_id: FaceId) -> Option<bool> {
     use brepkit_topology::edge::EdgeCurve;
     let face = topo.face(face_id).ok()?;

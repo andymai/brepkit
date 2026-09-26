@@ -7,7 +7,6 @@ use brepkit_topology::Topology;
 use super::edge_sampling::{
     measure_max_chord_deviation, sample_edge, sample_wire_positions, segments_for_chord_deviation_a,
 };
-use super::shorter_arc_range;
 use super::{AnalyticKind, MERGE_GRID, TriangleMesh, TriangleMeshUV, point_merge_key};
 
 /// Tessellate a cylindrical face using its actual boundary polygon (CDT-based).
@@ -317,7 +316,9 @@ pub(super) fn tessellate_planar(
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
-                    shorter_arc_range(circle, topo, edge)?
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    edge.curve().domain_with_endpoints(sp, ep)
                 };
                 let arc_range = (t_end - t_start).abs();
                 let n_samples = segments_for_chord_deviation_a(

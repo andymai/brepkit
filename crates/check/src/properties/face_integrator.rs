@@ -273,8 +273,9 @@ fn full_revolution_hole_vs<S: ParametricSurface>(
     out
 }
 
-/// Compute UV bounds for a parametric face by projecting boundary vertices
-/// onto the surface and taking the min/max of the resulting parameters.
+/// Compute UV bounds for a parametric face by projecting its outer wire's
+/// vertices, and points along each curved edge, onto the surface and taking
+/// the min/max of the resulting parameters.
 ///
 /// For surfaces with periodic u or v coordinates (cylinders, cones, spheres,
 /// tori), sequentially unwraps the angular coordinates so that faces straddling
@@ -341,15 +342,46 @@ fn face_uv_bounds<S: ParametricSurface>(
     }
 
     // Unwrap periodic coordinates sequentially so seam-straddling faces
-    // produce a contiguous range instead of the full [0, 2pi).
-    if periodic_u || periodic_v {
+    // produce a contiguous range instead of the full [0, 2pi). A point where
+    // the surface has no `u` of its own (a sphere's pole, a cone's apex)
+    // projects to an arbitrary `u`: it stays out of the range, and the next
+    // point is unwrapped toward the middle of the range so far, which picks
+    // its representative nearest that range.
+    if periodic_u {
+        let singular: Vec<bool> = uvs
+            .iter()
+            .map(|&(u, v)| {
+                surface.partial_u(u, v).length() <= 1e-6 * surface.partial_v(u, v).length()
+            })
+            .collect();
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        let mut prev: Option<f64> = None;
+        let mut after_singular = false;
+        for (uv, &at_singular) in uvs.iter_mut().zip(&singular) {
+            if at_singular {
+                after_singular = true;
+                continue;
+            }
+            let u = match prev {
+                None => uv.0,
+                Some(p) if !after_singular => unwrap_angle(p, uv.0),
+                Some(_) => unwrap_angle(f64::midpoint(lo, hi), uv.0),
+            };
+            uv.0 = u;
+            lo = lo.min(u);
+            hi = hi.max(u);
+            prev = Some(u);
+            after_singular = false;
+        }
+        if let Some(p) = prev {
+            for (uv, _) in uvs.iter_mut().zip(&singular).filter(|(_, s)| **s) {
+                uv.0 = p;
+            }
+        }
+    }
+    if periodic_v {
         for i in 1..uvs.len() {
-            if periodic_u {
-                uvs[i].0 = unwrap_angle(uvs[i - 1].0, uvs[i].0);
-            }
-            if periodic_v {
-                uvs[i].1 = unwrap_angle(uvs[i - 1].1, uvs[i].1);
-            }
+            uvs[i].1 = unwrap_angle(uvs[i - 1].1, uvs[i].1);
         }
     }
 

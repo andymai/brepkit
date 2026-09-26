@@ -3,8 +3,6 @@
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
-use super::shorter_arc_range;
-
 /// Combined linear+angular segment count for a circular arc.
 ///
 /// Delegates to [`brepkit_math::chord::segments_for_chord_deviation_with_angle`]
@@ -415,7 +413,9 @@ pub(super) fn sample_wire_positions(
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
-                    shorter_arc_range(circle, topo, edge)?
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    edge.curve().domain_with_endpoints(sp, ep)
                 };
                 let arc_range = (t_end - t_start).abs();
                 let n_samples = segments_for_chord_deviation_a(
