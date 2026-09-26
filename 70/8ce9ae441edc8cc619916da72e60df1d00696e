@@ -1,0 +1,30 @@
+crates/operations/src/measure/volume.rs
+  s_ba2f7b5c6902b6::t_713b1b2dee47f6 2254-2255,2257,2260-2264
+crates/check/src/properties/face_integrator.rs
+  s_ba2f7b5c6902b6::t_713b1b2dee47f6 303-305,313-326
+  s_ba2f7b5c6902b6::t_cbc5c19522aea1 312
+crates/operations/tests/extrude_major_arcs.rs
+  s_ba2f7b5c6902b6::t_cbc5c19522aea1 1-66,69-76,78-122
+  s_ba2f7b5c6902b6::t_d5a07155ee3d8a 67-68,77
+crates/operations/src/measure/helpers.rs
+  s_ba2f7b5c6902b6::t_cbc5c19522aea1 211
+  s_ba2f7b5c6902b6::t_713b1b2dee47f6 193-195,230,232-233
+crates/operations/src/extrude.rs
+  s_ba2f7b5c6902b6::t_b85604ac1d4cf2 451-453,460-467
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "708ce9ae441edc8cc619916da72e60df1d00696e",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
