@@ -30,11 +30,11 @@ enum FaceGeom {
         /// crossing while reading clean (the circleinsert pocket-mouth
         /// sample: a hit 0.03 inside the r=10 pocket rim, sagitta ~0.09).
         circle_holes: Vec<(Point3, f64)>,
-        /// The circular segments between the outer wire's in-plane arcs and
-        /// their chords (`verts` runs along the chords), and the same for
-        /// each of `holes`: a chord-sampled arc misses a hit by its sagitta.
-        arcs: Vec<ArcSegment>,
-        hole_arcs: Vec<Vec<ArcSegment>>,
+        /// The regions between the outer wire's curved edges and their chords
+        /// (`verts` runs along the chords), and the same for each of
+        /// `holes`: a chord-sampled edge misses a hit by its sagitta.
+        arcs: Vec<Segment>,
+        hole_arcs: Vec<Vec<Segment>>,
         normal: Vec3,
         d: f64,
     },
@@ -148,6 +148,169 @@ impl ArcSegment {
 
     fn grazes(&self, p: Point3, near: f64) -> bool {
         ((p - self.center).length() - self.radius).abs() <= near && self.beyond_chord(p) >= 0.0
+    }
+}
+
+/// A region a plane face's wire is read against beyond its chord polygon:
+/// a circular segment, or the region between another curved edge and its
+/// chord.
+#[derive(Debug, Clone)]
+enum Segment {
+    Arc(ArcSegment),
+    Curve(Box<CurvePiece>),
+}
+
+impl Segment {
+    fn contains(&self, p: Point3) -> bool {
+        match self {
+            Self::Arc(a) => a.contains(p),
+            Self::Curve(c) => c.contains(p),
+        }
+    }
+
+    fn grazes(&self, p: Point3, near: f64) -> bool {
+        match self {
+            Self::Arc(a) => a.grazes(p, near),
+            Self::Curve(c) => c.grazes(p, near),
+        }
+    }
+}
+
+/// The region between a plane face's curved edge that is not a circle (a
+/// conic section, a marched curve) and its chord, or the region a closed one
+/// bounds, read by the parity of an in-plane ray's crossings with the edge
+/// and its chord; each crossing with the edge is solved on its curve.
+#[derive(Debug, Clone)]
+struct CurvePiece {
+    curve: brepkit_topology::edge::EdgeCurve,
+    start: Point3,
+    end: Point3,
+    frame: brepkit_math::frame::Frame3,
+    /// `(t, x, y)` along the edge in the face's plane.
+    samples: Vec<(f64, f64, f64)>,
+    closed: bool,
+}
+
+impl CurvePiece {
+    fn new(
+        curve: &brepkit_topology::edge::EdgeCurve,
+        start: Point3,
+        end: Point3,
+        normal: Vec3,
+    ) -> Option<Self> {
+        let frame = brepkit_math::frame::Frame3::from_normal(start, normal).ok()?;
+        let closed = (start - end).length() < 1e-9;
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        let pieces: u32 = if closed { 64 } else { 32 };
+        let mut samples: Vec<(f64, f64, f64)> = (0..=pieces)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(pieces), t0);
+                let q = rim_flat(&frame, curve.evaluate_with_endpoints(t, start, end));
+                (t, q.x(), q.y())
+            })
+            .collect();
+        let last = samples.len() - 1;
+        if closed {
+            (samples[last].1, samples[last].2) = (samples[0].1, samples[0].2);
+        } else {
+            // The ends sit on the vertices, where the chord meets them; the
+            // curve's span may run from its end vertex back.
+            let first = curve.evaluate_with_endpoints(t0, start, end);
+            let (a, b) = if (first - start).length() <= (first - end).length() {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            let (qa, qb) = (rim_flat(&frame, a), rim_flat(&frame, b));
+            (samples[0].1, samples[0].2) = (qa.x(), qa.y());
+            (samples[last].1, samples[last].2) = (qb.x(), qb.y());
+        }
+        Some(Self {
+            curve: curve.clone(),
+            start,
+            end,
+            frame,
+            samples,
+            closed,
+        })
+    }
+
+    fn contains(&self, p: Point3) -> bool {
+        let q = rim_flat(&self.frame, p);
+        let crosses = |a: (f64, f64, f64), b: (f64, f64, f64)| (a.2 > q.y()) != (b.2 > q.y());
+        let mut odd = false;
+        for w in self.samples.windows(2) {
+            if crosses(w[0], w[1]) && self.x_at(w[0], w[1], q.y()) > q.x() {
+                odd = !odd;
+            }
+        }
+        if !self.closed
+            && let (Some(&a), Some(&b)) = (self.samples.last(), self.samples.first())
+            && crosses(a, b)
+        {
+            let x = (b.1 - a.1).mul_add((q.y() - a.2) / (b.2 - a.2), a.1);
+            if x > q.x() {
+                odd = !odd;
+            }
+        }
+        odd
+    }
+
+    fn grazes(&self, p: Point3, near: f64) -> bool {
+        let q = rim_flat(&self.frame, p);
+        self.samples.windows(2).any(|w| {
+            let (ax, ay, bx, by) = (w[0].1, w[0].2, w[1].1, w[1].2);
+            let (sx, sy, px, py) = (bx - ax, by - ay, q.x() - ax, q.y() - ay);
+            let len2 = sx.mul_add(sx, sy * sy);
+            let s = if len2 > 0.0 {
+                (px.mul_add(sx, py * sy) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            sx.mul_add(-s, px).hypot(sy.mul_add(-s, py)) <= near
+        })
+    }
+
+    /// The `x` where the edge between samples `a` and `b`, on either side of
+    /// `y`, reaches it, found on the curve by regula falsi with the Illinois
+    /// step.
+    fn x_at(&self, a: (f64, f64, f64), b: (f64, f64, f64), y: f64) -> f64 {
+        let (mut t_lo, mut g_lo, mut x_lo) = (a.0, a.2 - y, a.1);
+        let (mut t_hi, mut g_hi, mut x_hi) = (b.0, b.2 - y, b.1);
+        if g_lo == 0.0 {
+            return x_lo;
+        }
+        if g_hi == 0.0 {
+            return x_hi;
+        }
+        let mut side = 0_i8;
+        for _ in 0..64 {
+            let t = (t_lo * g_hi - t_hi * g_lo) / (g_hi - g_lo);
+            let q = rim_flat(
+                &self.frame,
+                self.curve.evaluate_with_endpoints(t, self.start, self.end),
+            );
+            let g = q.y() - y;
+            if g.abs() <= 1e-14 * (1.0 + y.abs())
+                || (t_hi - t_lo).abs() <= 1e-15 * t_lo.abs().max(1.0)
+            {
+                return q.x();
+            }
+            if (g < 0.0) == (g_lo < 0.0) {
+                (t_lo, g_lo, x_lo) = (t, g, q.x());
+                if side == -1 {
+                    g_hi *= 0.5;
+                }
+                side = -1;
+            } else {
+                (t_hi, g_hi, x_hi) = (t, g, q.x());
+                if side == 1 {
+                    g_lo *= 0.5;
+                }
+                side = 1;
+            }
+        }
+        (x_hi - x_lo).mul_add(g_lo / (g_lo - g_hi), x_lo)
     }
 }
 
@@ -531,14 +694,15 @@ fn wire_polygon(
     wire_polygon_arcs(topo, wire_id, None).map(|(verts, _)| verts)
 }
 
-/// [`wire_polygon`], with each arc of a circle whose normal is parallel to
-/// `plane` (the face's normal) kept as its chord, or no chord for a closed
-/// circle, and returned as an [`ArcSegment`].
+/// [`wire_polygon`], with each curved edge of a face in `plane` (the face's
+/// normal) kept as its chord, or no chord for a closed one, and returned as a
+/// [`Segment`]: an [`ArcSegment`] for an arc of a circle in the plane, a
+/// [`CurvePiece`] for any other.
 fn wire_polygon_arcs(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
     plane: Option<Vec3>,
-) -> Result<(Vec<Point3>, Vec<ArcSegment>), AlgoError> {
+) -> Result<(Vec<Point3>, Vec<Segment>), AlgoError> {
     let wire = topo.wire(wire_id)?;
 
     let mut polylines: Vec<Vec<Point3>> = Vec::with_capacity(wire.edges().len());
@@ -552,20 +716,25 @@ fn wire_polygon_arcs(
             && c.normal().cross(n).length() <= 1e-6
         {
             if (raw_start - raw_end).length() < 1e-9 {
-                arcs.push(ArcSegment::disc(c.center(), c.radius()));
+                arcs.push(Segment::Arc(ArcSegment::disc(c.center(), c.radius())));
             } else {
                 let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
                 let mid = edge
                     .curve()
                     .evaluate_with_endpoints(0.5 * (t0 + t1), raw_start, raw_end);
-                arcs.push(ArcSegment::new(
+                arcs.push(Segment::Arc(ArcSegment::new(
                     c.center(),
                     c.radius(),
                     raw_start,
                     raw_end,
                     mid,
-                ));
+                )));
             }
+        } else if let Some(n) = plane
+            && !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+            && let Some(piece) = CurvePiece::new(edge.curve(), raw_start, raw_end, n)
+        {
+            arcs.push(Segment::Curve(Box::new(piece)));
         } else if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
             let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
             let is_closed = (raw_start - raw_end).length() < 1e-9;
@@ -988,12 +1157,14 @@ struct UvTrim {
 
 /// One edge of a [`UvTrim`]: its curve and end points, and samples
 /// `(t, u, v)` in the curve's own order, none of them turning more than an
-/// eighth of a turn from the next.
+/// eighth of a turn from the next. A `flat` edge is a cone's apex read as a
+/// side of the face along its `v`.
 struct UvEdge {
     curve: brepkit_topology::edge::EdgeCurve,
     start: Point3,
     end: Point3,
     samples: Vec<(f64, f64, f64)>,
+    flat: bool,
 }
 
 impl UvTrim {
@@ -1012,10 +1183,18 @@ impl UvTrim {
         let max_turn = std::f64::consts::FRAC_PI_8;
         let mut edges = Vec::new();
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            // Each edge with whether its samples run in the wire's order, and
+            // the point the wire leaves it at.
+            let mut wire_edges: Vec<(UvEdge, bool, Point3)> = Vec::new();
             for oe in topo.wire(wid)?.edges() {
                 let edge = topo.edge(oe.edge())?;
                 let start = topo.vertex(edge.start())?.point();
                 let end = topo.vertex(edge.end())?.point();
+                let (leaves_from, leaves_at) = if oe.is_forward() {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
                 let curve = edge.curve().clone();
                 let is_line = matches!(curve, EdgeCurve::Line);
                 if is_line && (end - start).length() < 1e-12 {
@@ -1036,8 +1215,9 @@ impl UvTrim {
                 // back); a closed edge starts at its curve's own origin, which
                 // need not be its vertex, and closes on itself.
                 let last = samples.len() - 1;
-                if edge.start() == edge.end() {
+                let along = if edge.start() == edge.end() {
                     (samples[last].1, samples[last].2) = (samples[0].1, samples[0].2);
+                    oe.is_forward()
                 } else {
                     let first = curve.evaluate_with_endpoints(t0, start, end);
                     let (a, b) = if (first - start).length() <= (first - end).length() {
@@ -1047,7 +1227,8 @@ impl UvTrim {
                     };
                     (samples[0].1, samples[0].2) = project(a);
                     (samples[last].1, samples[last].2) = project(b);
-                }
+                    (a - leaves_from).length() <= (a - leaves_at).length()
+                };
                 // A sample on the axis (a cone's apex) has no `u` of its own:
                 // it takes its neighbour's, so the piece runs along `v`.
                 let scale = samples
@@ -1078,13 +1259,19 @@ impl UvTrim {
                         i += 1;
                     }
                 }
-                edges.push(UvEdge {
+                let edge = UvEdge {
                     curve,
                     start,
                     end,
                     samples,
-                });
+                    flat: false,
+                };
+                wire_edges.push((edge, along, leaves_at));
             }
+            if let Some(side) = apex_side(&wire_edges, project, radius) {
+                edges.push(side);
+            }
+            edges.extend(wire_edges.into_iter().map(|(e, _, _)| e));
         }
         Ok(if edges.is_empty() {
             None
@@ -1170,6 +1357,9 @@ impl UvEdge {
         u: f64,
         project: &dyn Fn(Point3) -> (f64, f64),
     ) -> f64 {
+        if self.flat {
+            return a.2;
+        }
         let (mut t_lo, mut g_lo, mut v_lo) = (a.0, ga, a.2);
         let (mut t_hi, mut g_hi, mut v_hi) = (b.0, gb, b.2);
         if g_lo == 0.0 {
@@ -1204,6 +1394,63 @@ impl UvEdge {
         }
         (v_hi - v_lo).mul_add(g_lo / (g_lo - g_hi), v_lo)
     }
+}
+
+/// The side a wire through a cone's apex runs along the apex's `v`. The wire
+/// meets the apex as a point, so in `(u, v)` it leaves the apex at another
+/// `u` than it reached it at; the side between them turns so that the whole
+/// wire turns no net amount about the axis (a face of the full cone about its
+/// apex has a side of a full turn there). `None` for a wire without exactly
+/// one pass through an apex.
+fn apex_side(
+    wire_edges: &[(UvEdge, bool, Point3)],
+    project: &dyn Fn(Point3) -> (f64, f64),
+    radius: &dyn Fn(f64) -> f64,
+) -> Option<UvEdge> {
+    let scale = wire_edges
+        .iter()
+        .flat_map(|(e, _, _)| e.samples.iter())
+        .fold(0.0_f64, |m, s| m.max(radius(s.2).abs()));
+    let mut apexes = wire_edges.iter().filter_map(|(e, along, leaves_at)| {
+        let (_, v) = project(*leaves_at);
+        (radius(v).abs() <= 1e-9 * scale.max(1.0)).then(|| {
+            let reached = if *along {
+                e.samples.last()
+            } else {
+                e.samples.first()
+            };
+            reached.map(|s| (s.1, v, *leaves_at))
+        })
+    });
+    let (u, v, at) = apexes.next()??;
+    if apexes.next().is_some() {
+        return None;
+    }
+    let turn: f64 = wire_edges
+        .iter()
+        .map(|(e, along, _)| {
+            let d: f64 = e.samples.windows(2).map(|w| wrap_pi(w[1].1 - w[0].1)).sum();
+            if *along { d } else { -d }
+        })
+        .sum();
+    if turn.abs() <= 1e-9 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pieces = (turn.abs() / std::f64::consts::FRAC_PI_8).ceil().max(1.0) as u32;
+    let samples = (0..=pieces)
+        .map(|k| {
+            let f = f64::from(k) / f64::from(pieces);
+            (f, (-turn).mul_add(f, u), v)
+        })
+        .collect();
+    Some(UvEdge {
+        curve: brepkit_topology::edge::EdgeCurve::Line,
+        start: at,
+        end: at,
+        samples,
+        flat: true,
+    })
 }
 
 /// Whether a cylinder or cone face is a band or a patch between two rulings,
@@ -1751,8 +1998,8 @@ fn sphere_rim(
 fn ray_face_crossing(
     origin: Point3,
     ray_dir: Vec3,
-    (verts, arcs): (&[Point3], &[ArcSegment]),
-    (holes, hole_arcs): (&[Vec<Point3>], &[Vec<ArcSegment>]),
+    (verts, arcs): (&[Point3], &[Segment]),
+    (holes, hole_arcs): (&[Vec<Point3>], &[Vec<Segment>]),
     circle_holes: &[(Point3, f64)],
     normal: Vec3,
     d: f64,
@@ -1790,7 +2037,7 @@ fn ray_face_crossing(
             .any(|a| a.grazes(hit, near));
     // With arcs, the chord polygon is read by crossing parity: a boundary can
     // cross an arc's chord, where the polygon winds twice.
-    let within = |poly: &[Point3], segments: &[ArcSegment]| {
+    let within = |poly: &[Point3], segments: &[Segment]| {
         if segments.is_empty() {
             return point_in_face_3d(hit, poly, &normal);
         }
@@ -2002,7 +2249,14 @@ fn ray_cone_crossings(
     } else {
         let disc = half_b.mul_add(half_b, -(a * c));
         if disc < 1e-12 * a.abs() * r_max * r_max {
-            return (0, false);
+            // A ray through the apex meets the cone in a double root there:
+            // it passes the solid's boundary at a point, which no crossing
+            // count reads reliably.
+            let t = -half_b / a;
+            let at = origin + ray_dir * t;
+            let through_apex =
+                t > tol.linear && (at - surface.apex()).length() <= near.max(1e-9 * r_max);
+            return (0, through_apex);
         }
         let sqrt_disc = disc.sqrt();
         roots[0] = Some((-half_b - sqrt_disc) / a);
