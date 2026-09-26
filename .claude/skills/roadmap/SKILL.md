@@ -223,7 +223,9 @@ One line each; the fixture/PR carries the story. Newest first.
   cavities; and `validate_solid` counted shells in the Euler term, so any
   result the engine keeps as pieces in one shell (a block cut by a slab,
   an N-way fuse with a disjoint operand) read invalid. It now counts
-  connected pieces.
+  connected pieces, and rejects pieces that share a vertex or nest facing
+  the same way. Holes go to the region holding them, seam arcs follow
+  their own span, and the shell flux measures from the shell's centre.
 - **The engine's ray cast read a ball's hole cut by a column by its flat polygon (CLOSED 2026-09-26; pin `the_engine_reads_a_hole_by_its_planes` in `crates/operations/tests/sphere_box_corner.rs`)**:
   the hole's four wall circles also run below the equator, where the
   hemisphere's outer loop already ends the face, so the exact arc check
