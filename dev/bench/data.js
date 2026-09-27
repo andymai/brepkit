@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790529073281,
+  "lastUpdate": 1790529349478,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44873,6 +44873,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 31822604,
             "range": "± 304820",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "610cd6650dcdd8e9e84d8b6c983ed98f60cc27d5",
+          "message": "test(operations): pin both classifiers at an off-axis bore's mouth (#1856)\n\nThe roadmap row is retired and recorded as closed because both\nclassifiers now agree at the off-axis bore’s mouth, with the behavior\npinned by a regression test.\n\n- The row reported that `brepkit_algo::classifier::classify_point`\nclassified `(1, 0, 2.9)` as `Inside`, above the mouth of\n`make_cylinder(0.3, 10)` at `(1, 0, -5)` bored through `make_sphere(3,\n32)`.\n- Re-measurement on main found that both classifiers read that point, a\npoint in the bore, and one below it as `Outside`, while reading a point\nin the ball beside the bore as `Inside`. The bore wall is read by its\nown wires using `UvTrim` when `is_uv_rectangle` fails.\n- `both_classifiers_read_the_bores_mouth` in\n`crates/operations/tests/ball_and_ring_drills.rs` asserts all four\npoints for both classifiers in upright, turned, and mirrored\nconfigurations.\n- No engine code changes are included.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a regression test pinning both classifiers to agree at an off-axis\nbore's mouth, and retires the roadmap row that tracked the mismatch. The\ntest asserts the engine and check crate read the point above the mouth,\nin the bore, and below it as `Outside`, and a point beside the bore as\n`Inside`, across upright, turned, and mirrored poses. No engine code\nchanges.\n\n<sup>Written for commit 2eff89122777d88507299e415830baeb18c41aaf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1856?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-27T17:13:00Z",
+          "tree_id": "577d6cdc1e754c507ae04f02de5223a01b228afb",
+          "url": "https://github.com/andymai/brepkit/commit/610cd6650dcdd8e9e84d8b6c983ed98f60cc27d5"
+        },
+        "date": 1790529344505,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1023126,
+            "range": "± 6372",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1111456,
+            "range": "± 2846",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13359,
+            "range": "± 123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 769143,
+            "range": "± 16924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42945096,
+            "range": "± 788226",
             "unit": "ns/iter"
           }
         ]
