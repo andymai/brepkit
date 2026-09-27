@@ -210,6 +210,30 @@ fn ball_column(a: f64, top: f64) -> [f64; 3] {
     [less, ball - less, 4.0 * a * a * (5.0 + top) - (ball - less)]
 }
 
+/// The ball of radius 3 less, within and outside the column `|x|, |y| < a`,
+/// `|z| < 5`, whose corners lie inside the ball: its chord `2 sqrt(9 - r^2)`
+/// integrated over the square (Simpson, 1000 panels a side).
+fn ball_narrow_column(a: f64) -> [f64; 3] {
+    let n = 1000_u32;
+    let step = 2.0 * a / f64::from(n);
+    let weight = |k: u32| match k {
+        0 => 1.0,
+        k if k == n => 1.0,
+        k if k % 2 == 1 => 4.0,
+        _ => 2.0,
+    };
+    let mut sum = 0.0;
+    for i in 0..=n {
+        let x = step.mul_add(f64::from(i), -a);
+        for j in 0..=n {
+            let y = step.mul_add(f64::from(j), -a);
+            sum += weight(i) * weight(j) * 2.0 * (9.0 - x * x - y * y).sqrt();
+        }
+    }
+    let within = sum * step * step / 9.0;
+    [36.0 * PI - within, within, 40.0 * a * a - within]
+}
+
 /// The ball of radius 3 and the column of half width 2.5 through it fused
 /// with a rod of radius `r` along `z` at `(at, 0)` past the wall.
 fn ball_column_rod(r: f64, at: f64) -> [f64; 3] {
@@ -289,6 +313,42 @@ fn cases() -> Vec<Case> {
             a: Operand(vec![part(ball)]),
             b: Operand(vec![part(column(2.5, 2.0))]),
             truth: Some(ball_column(2.5, 2.0)),
+        },
+        Case {
+            name: "ball | column 1.8",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(column(1.8, 5.0))]),
+            truth: Some(ball_narrow_column(1.8)),
+        },
+        Case {
+            name: "ball | column -2.5 to 2",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(Prim::Block {
+                lo: [-2.5, -2.5, -5.0],
+                hi: [2.0, 2.0, 5.0],
+            })]),
+            truth: None,
+        },
+        Case {
+            name: "ball | column -2.6,-2.2 rz0.2",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![posed(
+                Prim::Block {
+                    lo: [-2.6, -2.2, -5.0],
+                    hi: [1.9, 2.3, 5.0],
+                },
+                Mat4::rotation_z(0.2),
+            )]),
+            truth: None,
+        },
+        Case {
+            name: "ball | column 2.05 from -1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(Prim::Block {
+                lo: [-2.05, -2.05, -1.0],
+                hi: [2.05, 2.05, 9.0],
+            })]),
+            truth: None,
         },
         Case {
             name: "ball | column 2.5 + rod",

@@ -894,6 +894,82 @@ fn a_ball_less_a_turned_column_keeps_its_four_caps() {
     }
 }
 
+/// The ball and the column `|x|, |y| < 1.8`, `|z| < 5`, whose corners lie
+/// inside the ball, upright and turned: each wall's section circle crosses
+/// the wall's two vertical edges at four points 83 and 97 degrees apart,
+/// which are crossings, not an inscribed boundary. The ball within the
+/// column, the ball less it and the column less the ball are exact, valid
+/// and watertight, classify a point in each region right, and measure the
+/// ball's chords over the column (by Simpson over `x`, each chord's integral
+/// over `y` in closed form) within `2e-3` (the mesh under-counts the ball's
+/// zone by about `1e-3` at deflection 0.01).
+#[test]
+fn a_column_narrower_than_the_ball_stays_exact() {
+    let r2 = RADIUS * RADIUS;
+    let chords = |x: f64| {
+        let c2 = r2 - x * x;
+        let c = c2.sqrt();
+        let part = |y: f64| y.mul_add((c2 - y * y).sqrt(), c2 * (y / c).asin());
+        part(1.8) - part(-1.8)
+    };
+    let n = 2000;
+    let step = 3.6 / f64::from(n);
+    let mut within = chords(-1.8) + chords(1.8);
+    for k in 1..n {
+        within += if k % 2 == 1 { 4.0 } else { 2.0 } * chords(step.mul_add(f64::from(k), -1.8));
+    }
+    within *= step / 3.0;
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let turned = Mat4::rotation_z(1.0) * Mat4::rotation_y(0.3);
+    for (pose_name, pose) in [("upright", Mat4::identity()), ("turned", turned)] {
+        for (name, truth) in [
+            ("within", within),
+            ("ball less column", ball - within),
+            ("column less ball", 3.6f64.mul_add(36.0, -within)),
+        ] {
+            let label = format!("{name}, {pose_name}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let column = make_box(&mut topo, 3.6, 3.6, 10.0).unwrap();
+            transform_solid(&mut topo, column, &Mat4::translation(-1.8, -1.8, -5.0)).unwrap();
+            transform_solid(&mut topo, sphere, &pose).unwrap();
+            transform_solid(&mut topo, column, &pose).unwrap();
+            let result = match name {
+                "within" => boolean(&mut topo, BooleanOp::Intersect, sphere, column),
+                "ball less column" => boolean(&mut topo, BooleanOp::Cut, sphere, column),
+                _ => boolean(&mut topo, BooleanOp::Cut, column, sphere),
+            }
+            .unwrap();
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 2e-3 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+            let (inside, outside) = (PointClassification::Inside, PointClassification::Outside);
+            for (p, within_class, ball_class, column_class) in [
+                (Point3::new(0.2, 0.1, 0.3), inside, outside, outside),
+                (Point3::new(2.4, 0.3, 0.2), outside, inside, outside),
+                (Point3::new(1.7, 1.6, 2.9), outside, outside, inside),
+                (Point3::new(0.1, 0.2, 5.5), outside, outside, outside),
+            ] {
+                let want = match name {
+                    "within" => within_class,
+                    "ball less column" => ball_class,
+                    _ => column_class,
+                };
+                let p = pose.mul_point(p);
+                let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+                assert_eq!(got.unwrap(), want, "{label}: {p:?}");
+            }
+        }
+    }
+}
+
 /// The ball within the column over `-2.5 < x, y < 2`, whose corner at
 /// `(2, 2)` lies inside the ball, and the column less the ball, the column
 /// through the ball or ending in it at `z = 2.8`: the walls `x = 2` and

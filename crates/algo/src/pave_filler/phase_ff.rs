@@ -4978,8 +4978,19 @@ fn closed_circle_boundary_crossings(
         // distributed around the full turn. A bare `len > 4` count misses a
         // 4-segment inscribed polygon (square equator → exactly 4 hits), so
         // test even angular distribution instead of relying on the count.
+        // Evenly spread is not enough: a square column's walls cross a
+        // ball's section circle at four points 83 and 97 degrees apart.
+        // An inscribed polygon meets the circle only at its own vertices.
+        let at_vertices = fh.iter().all(|&(_, p, src)| {
+            src.and_then(|e| topo.edge(e).ok()).is_some_and(|edge| {
+                [edge.start(), edge.end()].into_iter().any(|v| {
+                    topo.vertex(v)
+                        .is_ok_and(|v| (v.point() - p).length() <= tol.linear * 100.0)
+                })
+            })
+        });
         let fh_plain: Vec<(f64, Point3)> = fh.iter().map(|&(t, p, _)| (t, p)).collect();
-        if hits_are_inscribed_polygon(&fh_plain) {
+        if at_vertices && hits_are_inscribed_polygon(&fh_plain) {
             log::debug!(
                 "closed_circle_boundary_crossings: {fid:?} has {} hits evenly distributed on \
                  the circle — boundary coincident with circle, excluding its hits",
