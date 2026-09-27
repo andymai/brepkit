@@ -293,11 +293,12 @@ fn split_noseam_by_arrangement(
     if open_sections.len() < 2 {
         return Vec::new();
     }
-    // The collar is the region inside every arc chain (a section split over
-    // its crest is one chain of two arcs), which the chains fence off from
-    // the seam only when at least three of them surround the pole: a single
-    // chain (a half-space) or two (a slab) leave regions on both sides of it,
-    // and the one this keeps would drop the rest.
+    // The collar is the region holding the pole, and each region past a
+    // chain of arcs (a section split over its crest is one chain of two
+    // arcs) is a lune kept beside it, so two chains are enough: a slab
+    // through the pole, or a column whose corners reach inside the ball
+    // joining three walls' arcs into one chain. A single chain is the cap
+    // path's.
     let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
     let Some((seam_n, seam_p)) = loop_plane(&verts) else {
         return Vec::new();
@@ -307,7 +308,7 @@ fn split_noseam_by_arrangement(
         .flat_map(|a| [a.start_3d, a.end_3d])
         .filter(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
         .count();
-    if seam_ends < 6 {
+    if seam_ends < 4 {
         return Vec::new();
     }
 

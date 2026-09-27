@@ -1059,6 +1059,93 @@ fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
     }
 }
 
+/// The ball and the column over `-2.6 < x < 1.9`, `-2.2 < y < 2.3`, turned
+/// 0.2 about `z`, upright and turned: two of its corners lie inside the
+/// ball, so on each hemisphere the three walls near them join into one chain
+/// of arcs from the seam to the seam, facing the far wall's arc. The ball
+/// within the column, the ball less it and the column less the ball are
+/// exact, valid and watertight, with 6, 8 and 9 faces, and measure the
+/// ball's chords over the column (by the midpoint rule over `x`, each
+/// chord's integral over `y` in closed form) within `1e-7`.
+#[test]
+fn an_offset_turned_column_splits_each_hemisphere_between_two_chains() {
+    let r2 = RADIUS * RADIUS;
+    let n = 40_000;
+    let step = 4.5 / f64::from(n);
+    let within: f64 = (0..n)
+        .map(|k| {
+            let x = step.mul_add(f64::from(k) + 0.5, -2.6);
+            let c2 = r2 - x * x;
+            let c = c2.sqrt();
+            let part = |y: f64| {
+                let y = y.clamp(-c, c);
+                y.mul_add((c2 - y * y).max(0.0).sqrt(), c2 * (y / c).asin())
+            };
+            part(2.3) - part(-2.2)
+        })
+        .sum::<f64>()
+        * step;
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let turned = Mat4::rotation_z(1.0) * Mat4::rotation_y(0.3);
+    for (pose_name, pose) in [("upright", Mat4::identity()), ("turned", turned)] {
+        for (name, truth, faces) in [
+            ("within", within, 6),
+            ("ball less column", ball - within, 8),
+            ("column less ball", 202.5 - within, 9),
+        ] {
+            let label = format!("{name}, {pose_name}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let column = make_box(&mut topo, 4.5, 4.5, 10.0).unwrap();
+            let place = pose * Mat4::rotation_z(0.2) * Mat4::translation(-2.6, -2.2, -5.0);
+            transform_solid(&mut topo, column, &place).unwrap();
+            transform_solid(&mut topo, sphere, &pose).unwrap();
+            let result = match name {
+                "within" => boolean(&mut topo, BooleanOp::Intersect, sphere, column),
+                "ball less column" => boolean(&mut topo, BooleanOp::Cut, sphere, column),
+                _ => boolean(&mut topo, BooleanOp::Cut, column, sphere),
+            }
+            .unwrap();
+            assert_eq!(
+                solid_faces(&topo, result).unwrap().len(),
+                faces,
+                "{label}: faces"
+            );
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-7 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+            // In the column's own frame: its middle, the cap past the far
+            // wall and the lunes past the three near walls, the column past
+            // the ball, and above both.
+            let (inside, outside) = (PointClassification::Inside, PointClassification::Outside);
+            for (p, want) in [
+                ((0.0, 0.0, 0.0), [inside, outside, outside]),
+                ((-2.8, 0.0, 0.0), [outside, inside, outside]),
+                ((2.5, 0.0, 0.0), [outside, inside, outside]),
+                ((0.0, 2.6, 0.0), [outside, inside, outside]),
+                ((0.0, -2.5, 0.3), [outside, inside, outside]),
+                ((1.8, 2.2, 2.0), [outside, outside, inside]),
+                ((0.0, 0.0, 6.0), [outside, outside, outside]),
+            ] {
+                let want = match name {
+                    "within" => want[0],
+                    "ball less column" => want[1],
+                    _ => want[2],
+                };
+                let p = (pose * Mat4::rotation_z(0.2)).mul_point(Point3::new(p.0, p.1, p.2));
+                let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+                assert_eq!(got.unwrap(), want, "{label}: {p:?}");
+            }
+        }
+    }
+}
+
 /// The ball with a square column through both poles and a thin rod along
 /// `z` through one of its caps, fused into one tool: the ball less it, within
 /// it and the tool less the ball, the rod of radius 0.1 at `(2.75, 0)` or of
