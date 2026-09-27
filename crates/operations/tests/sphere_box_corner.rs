@@ -1037,6 +1037,25 @@ fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
             (volume - truth).abs() < 1e-3 * truth,
             "{name}: volume {volume}, truth {truth}"
         );
+        if name == "ball less column" {
+            assert_eq!(
+                solid_faces(&topo, result).unwrap().len(),
+                10,
+                "{name}: faces"
+            );
+            for (p, want) in [
+                (Point3::new(2.6, 0.3, 0.1), PointClassification::Inside),
+                (Point3::new(0.3, 2.6, -0.1), PointClassification::Inside),
+                (Point3::new(-2.8, 0.1, 0.1), PointClassification::Inside),
+                (Point3::new(0.1, -2.8, -0.1), PointClassification::Inside),
+                (Point3::new(0.1, 0.2, 0.3), PointClassification::Outside),
+                (Point3::new(1.8, 1.9, 1.0), PointClassification::Outside),
+                (Point3::new(0.1, 0.2, 3.5), PointClassification::Outside),
+            ] {
+                let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+                assert_eq!(got.unwrap(), want, "{name}: {p:?}");
+            }
+        }
     }
 }
 
