@@ -1,0 +1,20 @@
+crates/operations/tests/heal_recognized_side.rs
+  s_ba2f7b5c6902b6::t_badd5025ba4d51 12,22,38,50-53
+  s_ba2f7b5c6902b6::t_08a40bcb9121a8 54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6c05b38bd584dde7c65849108b9bd86b29d6b64b",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
