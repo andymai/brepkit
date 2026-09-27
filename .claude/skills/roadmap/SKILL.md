@@ -195,12 +195,23 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Point classification reads plane discs and cylinder walls through chords** (grid probe `zz_mirrod` in the session scratchpad) | Both `classify_point`s test a ray's hit on a plane or cylinder face against its boundary sampled into chords (32 per closed circle), so a hit within a sagitta of a circular rim is misread: on the exact mirrored ball less the slab `1 < z < 2` (#1775), a point under the slab reads Outside because two of its rays cross the slab's discs within 0.006 of their rims. The operations classifier also votes with two rays and needs both for Inside, so one miss reads Outside, and it reads a point as on the boundary by its distance to a sphere face's whole sphere, trimmed or not. A sphere face bounded by one wire of two rims joined by a seam (a band, as a file may store a ball between two planes) is misread by both: neither planar nor a seam alone, it takes the polygon path along a Newell normal the two rims mostly cancel; a cap bounded by its rim and a seam takes the same path, with the rim's chords. Dropping the seam's out-and-back run from the loop would leave the rims to the side tests |
 | **A partial revolve of a profile with a half-circle side meshes open and measures wrong** (the rectangle over `1 < x < 2`, `0 < z < 1` in `y = 0` with its `x = 2` side a half circle bulging out, revolved about z) | Revolved 270 degrees it validates, but its mesh is open and it measures 3.326937 against 11.162384 by Pappus (mesh volume -7.023228); revolved a full turn it is right (14.883179). On main as well. Undug |
 | **A boolean through a wall whose rim arc runs past half a turn falls back** (the keyhole of `crates/operations/tests/extrude_major_arcs.rs` less the slab `z > 0.1`) | The cut falls back to the mesh boolean (30 plane faces) and measures 2.827083 against 2.820039. The engine still reads an open circle edge as its shorter arc in places (`shorter_arc_delta` in `crates/algo/src/builder/pcurve_compute.rs`, the face splitter), which is why `phase_ff` splits its own section arcs to half a turn; a solid made elsewhere (an extrude) can carry a longer one. Undug |
-| **A solid with a cavity intersected with a box ignores the cavity** (`make_box(20, 20, 20)` at `(-10, -10, -10)` less `make_sphere(3, 32)`, one inner shell, measuring 7886.9027) | Intersected with the box over its lower half, or with the same cube shifted 1 along x (the cavity wholly inside both), the result is a plain 6-face box measuring 4000 and 7600 against 3943.4513 and 7486.9027: valid and closed, silently wrong. The reviewer traced it to the box-pair shortcut (`crates/operations/src/boolean/mod.rs`), whose analytic classifier reads only the outer shell. Undug |
 | **An IGES round trip drops a cylinder wall** (`make_cylinder(1, 1)` less the box over `x > 0.5`) | The 240-degree wall comes back as three planes and the solid measures 0.166667 against 2.527408; a STEP round trip keeps the cylinder. On main as well. Undug |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A solid with a cavity against a box ignored or dropped the cavity (CLOSED 2026-09-27; pins in `crates/operations/tests/cavity_boolean.rs`)**:
+  three roots. The analytic classifiers read only the outer shell, so a
+  hollow cube classified as a box and every op against a box took the
+  box-pair shortcut (7600 for 7486.90); they now decline a solid with inner
+  shells. A cavity shell whose faces have no corner fan (a cap and its disc,
+  each bounded by one circle) or a flat one (a ball's two hemispheres,
+  cornered on their equator) read as a growth shell; the flux decides it
+  when no face has three corners, or when the fan is flat, another shell
+  holds it and the flux reads inward. And `remove_doubled_faces` dropped the
+  two hemispheres as a doubled pair; two faces of one surface that run every
+  shared edge the opposite way, flags alike, are its two halves and stay.
 
 - **A box face on the plane of the ball's chordal equator gave invalid or wrong exact results (CLOSED 2026-09-27; pin `a_box_on_the_equator_plane_keeps_a_hemisphere` in `crates/operations/tests/sphere_plane_cut.rs`)**:
   the plane met each hemisphere in the equator circle, which in `(u, v)` is

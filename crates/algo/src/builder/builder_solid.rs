@@ -937,13 +937,39 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
         // not span). Other shells of a multi-shell result keep the
         // volume-sign split (a Cut can leave the tool's interior as a
         // separate negative-volume cavity).
-        let is_growth = if signed_vol >= 0.0 {
+        // Whether another shell holds this one: most of three rays from a
+        // point on its edge cross that shell an odd number of times.
+        let held = || {
+            shell_edge_point(topo, shell).is_none_or(|p| {
+                shells.iter().any(|other| {
+                    !std::ptr::eq(other, shell)
+                        && crate::classifier::RayCastGeoms::of_faces(topo, other).is_ok_and(|g| {
+                            HOLD_RAYS
+                                .iter()
+                                .filter(|&&d| crate::classifier::ray_parity_cached(&g, p, d).0)
+                                .count()
+                                >= 2
+                        })
+                })
+            })
+        };
+        let is_growth = if !has_corner_fan(topo, shell) {
+            // No face has three corners (a cavity of a cap and its disc,
+            // each bounded by one circle), so the fan holds no volume and
+            // its sign says nothing: the surface-normal flux decides.
+            shell_is_outward_oriented(topo, shell).unwrap_or(true)
+        } else if signed_vol >= 0.0 {
             // Positive corner-fan volume already reads outward — keep the
             // historical behaviour for every solid that integrates cleanly
             // (planar, and curved shells whose constant-v boundaries the fan
-            // captures, e.g. the sphere − through-cylinder band). The robust
-            // test is consulted ONLY below, never overriding a positive volume.
-            true
+            // captures, e.g. the sphere − through-cylinder band). A flat fan's
+            // sign is rounding, though: a shell another shell holds whose flux
+            // reads inward is a cavity (a ball's two hemispheres, cornered
+            // only on their equator).
+            !(shells.len() > 1
+                && fan_is_flat(topo, shell, signed_vol)
+                && shell_is_outward_oriented(topo, shell) == Some(false)
+                && held())
         } else if shells.len() == 1 || fan_is_flat(topo, shell, signed_vol) {
             // A LONE shell read NEGATIVE: either it is genuinely inward (a Cut
             // leaving only a cavity component — must be rejected) or its
@@ -961,19 +987,7 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
             // flipped: the ball less a column with a corner inside it leaves
             // the wedge past the corner's two walls, curved faces cornered
             // only on its rims.
-            let held = shell_edge_point(topo, shell).is_none_or(|p| {
-                shells.iter().any(|other| {
-                    !std::ptr::eq(other, shell)
-                        && crate::classifier::RayCastGeoms::of_faces(topo, other).is_ok_and(|g| {
-                            HOLD_RAYS
-                                .iter()
-                                .filter(|&&d| crate::classifier::ray_parity_cached(&g, p, d).0)
-                                .count()
-                                >= 2
-                        })
-                })
-            });
-            !held && shell_is_outward_oriented(topo, shell) == Some(true)
+            !held() && shell_is_outward_oriented(topo, shell) == Some(true)
         };
         if std::env::var("BK_AREAS").is_ok() {
             let mut mix: HashMap<&str, usize> = HashMap::new();
@@ -1019,6 +1033,16 @@ fn shell_corner_box(topo: &Topology, faces: &[FaceId]) -> brepkit_math::aabb::Aa
         .filter_map(|edge| topo.vertex(edge.start()).ok())
         .map(brepkit_topology::vertex::Vertex::point);
     brepkit_math::aabb::Aabb3::from_points(corners)
+}
+
+/// Whether any face of a shell has three corners on its outer wire, so the
+/// corner fan of `signed_volume_of_shell` spans some volume.
+fn has_corner_fan(topo: &Topology, faces: &[FaceId]) -> bool {
+    faces.iter().any(|&fid| {
+        topo.face(fid)
+            .and_then(|face| topo.wire(face.outer_wire()))
+            .is_ok_and(|wire| wire.edges().len() >= 3)
+    })
 }
 
 /// Whether a shell's corner-fan volume is rounding next to its extent. The
@@ -3189,15 +3213,42 @@ fn remove_doubled_faces(
                 .get(e)
                 .is_some_and(|u| u.iter().all(|fi| members.contains(fi)))
         });
-        let surfaces = (topo.face(face_ids[*a]), topo.face(face_ids[*b]));
-        isolated
-            && matches!(surfaces, (Ok(fa), Ok(fb))
-                if super::same_domain::surfaces_same_domain(
-                    fa.surface(),
-                    fb.surface(),
-                    brepkit_math::tolerance::Tolerance::new(),
-                )
-                .is_none())
+        let (Ok(fa), Ok(fb)) = (topo.face(face_ids[*a]), topo.face(face_ids[*b])) else {
+            return false;
+        };
+        let other_surface = super::same_domain::surfaces_same_domain(
+            fa.surface(),
+            fb.surface(),
+            brepkit_math::tolerance::Tolerance::new(),
+        )
+        .is_none();
+        // Two faces of one surface that run every shared edge the opposite
+        // way, flags alike, lie on opposite sides of it: the two halves of a
+        // closed surface (a ball's hemispheres, a cavity's). A doubled copy
+        // keeps its wire and runs them the same way.
+        let halves = || {
+            let senses = |face: &brepkit_topology::face::Face| {
+                let mut out: HashMap<EdgeId, bool> = HashMap::new();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    let Ok(wire) = topo.wire(wid) else {
+                        return None;
+                    };
+                    for oe in wire.edges() {
+                        if out.insert(oe.edge(), oe.is_forward()).is_some() {
+                            return None;
+                        }
+                    }
+                }
+                Some(out)
+            };
+            fa.is_reversed() == fb.is_reversed()
+                && matches!((senses(fa), senses(fb)), (Some(sa), Some(sb))
+                    if sa.len() == sb.len()
+                        && sa.iter().all(|(e, &fwd)| sb.get(e).is_some_and(|&other| other != fwd)))
+        };
+        isolated && (other_surface || halves())
     };
 
     let mut drop_idx: HashSet<usize> = HashSet::new();
