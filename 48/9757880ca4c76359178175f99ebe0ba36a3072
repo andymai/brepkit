@@ -1,0 +1,21 @@
+crates/math/src/region2d.rs
+  s_ba2f7b5c6902b6::t_5ad64a2731a75c 122-125,380-394
+  s_ba2f7b5c6902b6::t_690f3d064d2137 126-130
+  s_ba2f7b5c6902b6::t_3705d154df4193 395
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "489757880ca4c76359178175f99ebe0ba36a3072",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
