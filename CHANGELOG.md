@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.48](https://github.com/andymai/brepkit/compare/v4.0.47...v4.0.48) (2026-09-27)
+
+
+### Bug Fixes
+
+* **check:** integrate cylinder, cone and sphere faces along their wires' own curves ([#1812](https://github.com/andymai/brepkit/issues/1812)) ([352aa3a](https://github.com/andymai/brepkit/commit/352aa3ab7e191afd4dc2e636a495e74e5df46d45))
+
 ## [4.0.47](https://github.com/andymai/brepkit/compare/v4.0.46...v4.0.47) (2026-09-27)
 
 
