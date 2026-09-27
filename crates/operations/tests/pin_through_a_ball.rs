@@ -13,6 +13,7 @@ use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_cone, make_sphere};
+use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -115,12 +116,22 @@ fn a_pin_through_a_ball_is_exact() {
                     _ => {}
                 }
                 let result = boolean(&mut topo, op, a, b).unwrap();
-                let faces = solid_faces(&topo, result).unwrap().len();
-                assert!(faces <= 6, "{label}: {faces} faces");
+                let faces = solid_faces(&topo, result).unwrap();
+                assert!(faces.len() <= 6, "{label}: {} faces", faces.len());
+                let tags: Vec<&str> = faces
+                    .iter()
+                    .map(|&f| topo.face(f).unwrap().surface().type_tag())
+                    .collect();
+                assert!(
+                    tags.contains(&"cone") && tags.contains(&"sphere"),
+                    "{label}: surfaces {tags:?}"
+                );
                 assert!(
                     validate_solid(&topo, result).unwrap().is_valid(),
                     "{label}: invalid"
                 );
+                let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
                 let volume = solid_volume(&topo, result, 0.01).unwrap();
                 assert!(
                     (volume - truth).abs() < 1e-4,
