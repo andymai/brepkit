@@ -1,10 +1,10 @@
 crates/operations/tests/sphere_box_corner.rs
   s_ba2f7b5c6902b6::t_07a29c835007d6 1543-1546,1592
 crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_d448874a66ccd7 3901-3908
   s_ba2f7b5c6902b6::t_0b4c4d3198c4c1 3843-3864,3867-3870,3872,3881,3883-3887
   s_ba2f7b5c6902b6::t_dec321127be35b 3865-3866
-  s_ba2f7b5c6902b6::t_d448874a66ccd7 3901-3908
-  s_ba2f7b5c6902b6::t_cad72aecd4f5c8 3890,3909-3911
+  s_ba2f7b5c6902b6::t_0cd94bc6976bb8 3909-3911
 ---
 {
   "schema_version": "authorship/3.0.0",
