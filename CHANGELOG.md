@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.64](https://github.com/andymai/brepkit/compare/v4.0.63...v4.0.64) (2026-09-27)
+
+
+### Bug Fixes
+
+* **offset:** build offsets and shells of analytic solids exact ([#1844](https://github.com/andymai/brepkit/issues/1844)) ([6f5d7bf](https://github.com/andymai/brepkit/commit/6f5d7bff777b9784c5056bd35c68a7fddc559424))
+
 ## [4.0.63](https://github.com/andymai/brepkit/compare/v4.0.62...v4.0.63) (2026-09-27)
 
 
