@@ -1,0 +1,24 @@
+crates/operations/examples/truth_audit.rs
+  s_ba2f7b5c6902b6::t_ac713900c75ea7 1-27,29-190,196-228,230-235
+  s_ba2f7b5c6902b6::t_3db80642493d63 28,191-195,229
+.claude/skills/pr-workflow/SKILL.md
+  s_ba2f7b5c6902b6::t_c891430902de99 17
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_87965b2fd1392e 171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4ba1f27b6a05ebbf55187e71e652483de87c1961",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
