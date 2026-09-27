@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790507908371,
+  "lastUpdate": 1790508272878,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43955,6 +43955,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43042738,
             "range": "± 101275",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fdddb4fcf09e3d975847edb282342f92d322ba25",
+          "message": "fix(operations): revolve a curved profile edge into curved rings (#1838)\n\nCurved profile edges now revolve into correctly oriented curved rings\nfor segmented and full turns, producing valid, watertight solids with\nthe expected Pappus volumes.\n\n## What was wrong\n\n- On main, a rectangle over `1 < x < 2`, `0 < z < 1` in `y = 0`, with\nits `x = 2` side replaced by an outward bulging half circle, validated\nafter partial revolutions but meshed open and measured incorrectly. The\nmeasured and expected volumes were 2.205602 versus 3.720795 at 90\ndegrees, 4.411203 versus 7.441589 at 180 degrees, 3.326937 versus\n11.162384 at 270 degrees, and 4.295364 versus 12.402649 at 300 degrees.\nA full turn measured the correct 14.883179.\n\n- The segmented revolve built every ring after the first from straight\nlines between rotated vertices. Copies of curved profile edges therefore\nbecame chords. The end cap lost the half disc because it was bounded by\na chord. Each torus band's far edge also cut through the tube's core\ncircle, causing the mesher to follow the tube's inner half.\n\n- Each torus band's `reversed` flag compared its normal with the NURBS\nband's normal at the band's centre projected onto the torus. For a half\ncircle, the chord centre lies on the tube's core circle, where every\ntube point is equally near. The selected orientation was therefore\narbitrary per segment. Correcting only the ring curves still left the\n90, 180, and 270 degree cases with incorrect volumes.\n\n- The analytic full revolution derived wall rim senses only from the\nface flag. With a profile wound clockwise in its radial and axial chart,\neach edge met its rims in the opposite direction. A full turn then\nfailed validation with `4 shared edges have inconsistent face\norientations`, whether the half circle bulged toward or away from the\naxis.\n\n## What this does\n\n- Every ring after the first now carries the profile's own curves\nrotated about the axis. This uses `transform::curve_image` with a new\n`rotation_about`, preserves the direction of each input edge, and\napplies the input edge orientation to ring edges used by both side faces\nand the end cap.\n\n- `revolution_band_surface` now accepts the profile edge direction. For\ntorus bands, it compares normals at the arc midpoint carried to the\nband's centre by `profile_arc_midpoint`, where the chord runs parallel\nto the arc. The sweep caller continues to pass an unchanged line.\n\n- `build_analytic_revolution` flips the wall rim senses once more when\nthe profile is clockwise, and a wall with its apex at the edge's start\nmeets its one rim with the end rim's sense, as a two-rim wall does.\n\n## Verification\n\n- Revolutions through 90, 180, 270, 300, and 360 degrees now validate,\nmesh watertight, and measure their Pappus volumes: 3.720795, 7.441589,\n11.162384, 12.402649, and 14.883179.\n\n- The new `a_half_circle_side_revolves_to_its_pappus_volume` test in\n`crates/operations/tests/revolve_arc_profile.rs` covers half circles\nbulging toward and away from the axis, both profile windings, and all\nfive angles. Every case is valid, watertight, and within `1e-9` of its\nPappus volume. The test fails on main at its first case.\n\n- The new `a_triangle_on_the_axis_revolves_to_a_pointed_cone` revolves a\ntriangle with a leg on the axis a full turn, apex above or below the rim\nand wound either way: each pointed cone is valid, watertight and within\n`1e-9` of `pi / 3`. On main the apex-below cones fail validation.\n\n- The workspace suite passes with 3185 tests run, 3185 passed, and 20\nskipped. Lint is clean.\n\n- The roadmap records this case as closed, and records the partial\nrevolve of a profile touching the axis (near-zero-length edges swept\nfrom its on-axis vertices, on main as well) as an open row.",
+          "timestamp": "2026-09-27T11:21:57Z",
+          "tree_id": "2edc8c7a4a0fb072a39f3440a294113f5f17d4be",
+          "url": "https://github.com/andymai/brepkit/commit/fdddb4fcf09e3d975847edb282342f92d322ba25"
+        },
+        "date": 1790508268276,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 830636,
+            "range": "± 5485",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 907018,
+            "range": "± 1404",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10318,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 621761,
+            "range": "± 18459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 37454610,
+            "range": "± 395177",
             "unit": "ns/iter"
           }
         ]
