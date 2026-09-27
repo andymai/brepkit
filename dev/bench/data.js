@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790529349478,
+  "lastUpdate": 1790532333749,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44927,6 +44927,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42945096,
             "range": "± 788226",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "55715748750614a12063a4395db5a5d2f12111eb",
+          "message": "fix(heal): turn a recognized face over when its NURBS normal opposes the new surface (#1854)\n\nRecognized analytic faces now preserve the side and edge senses of their\nsource NURBS patches.\n\n## What was wrong\n\n- On main, a mirrored `make_sphere(3, 32)` converted by\n`convert_to_bspline` and recognized by `convert_to_elementary`\nvalidates, and `solid_volume` reads 113.0973, but its mesh has signed\nvolume -112.9191 because its sphere faces point inward. A mirrored\n`make_cylinder(2, 5)` similarly reads -62.4289.\n- An upright cylinder returns with its top disc facing inward, producing\nsigned volume 20.8096 and an open mesh.\n- Recognition replaced the NURBS surface with an analytic surface while\nretaining the face flag and wire. It did not compare the NURBS normal,\n`Su x Sv`, with the analytic surface normal. A patch parameterized in\nthe opposite direction, including a mirrored patch or a disc whose\nrecognized plane normal points the other way, therefore faced the wrong\nway.\n\n## What this does\n\n- `normals_oppose` compares both normals at the parametric middle of the\nNURBS patch.\n- When they oppose, `turn_over` flips the face flag and reverses each\nwire, including its order and every edge sense. This preserves the face\nside and each edge's effective sense in the shell.\n- A recognized plane is instead taken along the patch's own normal and,\nwhen its face is flagged (a mirrored patch), turned over with the face,\nso every plane comes back storing its outward normal unflagged, as the\nfillet, chamfer and thicken code reads it.\n- The face's pcurves, which live in the NURBS parameter space, are\ndropped, as `convert_to_bspline` drops them.\n- The per-type recognition arms now feed one replacement step.\n\n## Verification\n\n- All four probe cases are valid and watertight on the branch. The\nmirrored sphere and cylinder meshes have signed volumes 112.9191 and\n62.4289.\n- `recognized_faces_keep_their_side` covers a ball, cylinder, frustum,\ntorus, bored plate and bored ball (faces with holes) converted to NURBS\nand recognized back, upright, turned, and mirrored. Every face is\nanalytic, every plane is unflagged, every solid is valid and watertight,\nmeasured volume is within `1e-6`, and mesh signed volume is within\n`1e-2` of the truth. The test fails on main.\n- The workspace suite passes: 3198 tests run, 3198 passed, 20 skipped,\nincluding 307 `brepkit-io` fixtures captured from the gridfinity tool.\nLint is clean.\n- The corresponding roadmap row is closed. It predicted the\nmirrored-sphere case from the code.",
+          "timestamp": "2026-09-27T18:02:35Z",
+          "tree_id": "b639063ba5d69d8e33cc6624509002b2cff6381a",
+          "url": "https://github.com/andymai/brepkit/commit/55715748750614a12063a4395db5a5d2f12111eb"
+        },
+        "date": 1790532328889,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1030265,
+            "range": "± 1414",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112127,
+            "range": "± 1557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13253,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 775074,
+            "range": "± 3561",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43111138,
+            "range": "± 158070",
             "unit": "ns/iter"
           }
         ]
