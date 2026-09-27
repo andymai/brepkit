@@ -134,14 +134,12 @@ pub(super) fn split_boundary_edges_at_3d_points(
         // The ring's own samples run the curve's sense in u (`end_uv`
         // follows the curve, not the traversal), which is opposite the
         // surface's u when the circle's normal opposes the axis (an
-        // apex-up cone's rims).
+        // apex-up cone's rims, a mirrored cylinder's).
         let closed_ring_dir = (matches!(edge.curve_3d, EdgeCurve::Circle(_))
             && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
             && (edge.start_3d - edge.end_3d).length() < tol)
             .then(|| {
-                let native = if matches!(surface, FaceSurface::Cone(_))
-                    && edge.end_uv.x() < edge.start_uv.x()
-                {
+                let native = if edge.end_uv.x() < edge.start_uv.x() {
                     -1.0_f64
                 } else {
                     1.0

@@ -7276,6 +7276,7 @@ fn split_face_2d_impl(
     // though no loop self-crosses. Detected separately from `greedy_broken`
     // so the cone arm below can gate on exactly this signature.
     let ring_duplicated = wire_loops_duplicate_cover(&loops, tol.linear);
+
     // Sector rescue for an UNDER-split u-periodic lateral: one full-height
     // ruling plus the glued seam should sector the strip, but to the glued
     // walker an annulus cut once is a single wrapped region (the mid-wall
@@ -7443,14 +7444,33 @@ fn split_face_2d_impl(
         // periodic-aware, so a valid winding band orbit revisiting the
         // quantized seam vertex would fail an absolute gate and the refined
         // partition (the separated strip) would be rejected.
-        if dcel.len() > loops.len()
+        let refines = dcel.len() > loops.len()
             && !wire_loops_have_degenerate_area(&dcel, tol.linear)
+            && (!greedy_outer_loops_nested(&dcel, cw_loops)
+                || greedy_outer_loops_nested(&loops, cw_loops));
+        if refines
             && (!wire_loops_self_cross(&dcel, tol.linear)
                 || wire_loops_self_cross(&loops, tol.linear))
-            && (!greedy_outer_loops_nested(&dcel, cw_loops)
-                || greedy_outer_loops_nested(&loops, cw_loops))
         {
             loops = dcel;
+        } else if refines
+            && let Some(result) = split_cylinder_band_by_arrangement(
+                &surface,
+                &all_edges,
+                n_boundary_edges,
+                rank,
+                reversed,
+                face_id,
+                tol.linear,
+            )
+        {
+            // The trace's band orbit revisits the glued seam (which the
+            // self-cross test reads as a crossing) where the greedy walk,
+            // clean but short, traced only the regions away from it: a
+            // cylinder whose rims run against its u (a mirrored one) lays
+            // its sections on the rims' own period copy. The arrangement
+            // partitions the band as it does the greedy's broken cases.
+            return result;
         }
     } else if !u_periodic && !v_periodic && !is_plane && !sections.is_empty() && greedy_broken {
         // Non-periodic band grand tour: sections meeting at T-junctions
