@@ -875,6 +875,27 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
     Some(outward)
 }
 
+/// A shell's box over its edges' ends and a few points along each.
+fn shell_box(topo: &Topology, faces: &[FaceId]) -> Option<brepkit_math::aabb::Aabb3> {
+    let mut points = Vec::new();
+    for &fid in faces {
+        let face = topo.face(fid).ok()?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let a = topo.vertex(edge.start()).ok()?.point();
+                let b = topo.vertex(edge.end()).ok()?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                points.extend((0..=8).map(|k| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                    edge.curve().evaluate_with_endpoints(t, a, b)
+                }));
+            }
+        }
+    }
+    (!points.is_empty()).then(|| brepkit_math::aabb::Aabb3::from_points(points))
+}
+
 /// Classify shells as Growth (outer) or Hole (inner).
 ///
 /// Uses signed volume: positive → outward normals (growth),
@@ -922,8 +943,22 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
             // fall back to the (negative) volume sign if it is inconclusive.
             shell_is_outward_oriented(topo, shell).unwrap_or(false)
         } else {
-            // Multi-shell: a negative shell is the tool's interior cavity (hole).
-            false
+            // Multi-shell: a negative shell is the tool's interior cavity
+            // (hole), unless it cannot be one. A cavity lies inside another
+            // shell, so a shell no other shell's box holds, whose flux reads
+            // outward, is a lump whose corner fan flipped: the ball less a
+            // column with a corner inside it leaves the wedge past the
+            // corner's two walls, curved faces cornered only on its rims.
+            let held = shell_box(topo, shell).is_none_or(|b| {
+                shells.iter().any(|other| {
+                    !std::ptr::eq(other, shell)
+                        && shell_box(topo, other).is_some_and(|o| {
+                            let o = o.expanded(1e-6);
+                            o.contains_point(b.min) && o.contains_point(b.max)
+                        })
+                })
+            });
+            !held && shell_is_outward_oriented(topo, shell) == Some(true)
         };
         if std::env::var("BK_AREAS").is_ok() {
             let mut mix: HashMap<&str, usize> = HashMap::new();

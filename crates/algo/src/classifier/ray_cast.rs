@@ -463,6 +463,23 @@ impl RayCastGeoms {
         })
     }
 
+    /// Collect the ray-cast geometry for a closed set of faces that need not
+    /// make a solid (one piece of a solid's shell), with no closed-form
+    /// classifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if a topology lookup fails.
+    pub fn of_faces(
+        topo: &Topology,
+        faces: &[brepkit_topology::face::FaceId],
+    ) -> Result<Self, AlgoError> {
+        Ok(Self {
+            faces: collect_geoms_of(topo, faces)?,
+            analytic: None,
+        })
+    }
+
     /// The solid's closed-form classifier, if it has one.
     #[must_use]
     pub const fn analytic(&self) -> Option<&super::analytic::AnalyticClassifier> {
@@ -839,11 +856,17 @@ fn wire_polygon_arcs(
 
 /// Collect per-face ray-cast geometry from a solid.
 fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, AlgoError> {
+    collect_geoms_of(topo, &brepkit_topology::explorer::solid_faces(topo, solid)?)
+}
+
+fn collect_geoms_of(
+    topo: &Topology,
+    faces: &[brepkit_topology::face::FaceId],
+) -> Result<Vec<FaceGeom>, AlgoError> {
     crate::perf::bump_ray_geom_build();
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     let mut result = Vec::with_capacity(faces.len());
 
-    for fid in faces {
+    for &fid in faces {
         let face = topo.face(fid)?;
 
         // Full-period cylindrical faces: the outer wire contains a closed

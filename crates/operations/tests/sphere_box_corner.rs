@@ -971,13 +971,15 @@ fn a_column_narrower_than_the_ball_stays_exact() {
 }
 
 /// The ball within the column over `-2.5 < x, y < 2`, whose corner at
-/// `(2, 2)` lies inside the ball, and the column less the ball, the column
-/// through the ball or ending in it at `z = 2.8`: the walls `x = 2` and
-/// `y = 2` meet on the sphere, the region past them owns a seam arc longer
-/// than half a turn and is bounded by two wall circles, and the column's top
-/// leaves a latitude hole in the collar. Each is exact, valid and watertight,
-/// and within `1e-3` of the ball's chords over the column (by Simpson over
-/// `x`, each chord's integral over `y` in closed form) less the polar cap.
+/// `(2, 2)` lies inside the ball, the ball less it and the column less the
+/// ball, the column through the ball or ending in it at `z = 2.8`: the walls
+/// `x = 2` and `y = 2` meet on the sphere, the region past them owns a seam
+/// arc longer than half a turn and is bounded by two wall circles, and the
+/// column's top leaves a latitude hole in the collar. The ball less the
+/// column is three pieces, the wedge past the corner's two walls among them.
+/// Each is exact, valid and watertight, and within `1e-3` of the ball's
+/// chords over the column (by Simpson over `x`, each chord's integral over
+/// `y` in closed form) less the polar cap.
 #[test]
 fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
     let r2 = RADIUS * RADIUS;
@@ -1001,8 +1003,10 @@ fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
     }
     within *= step / 3.0;
     let polar = PI * 0.04 * 0.2f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
     for (name, height, truth) in [
         ("within", 10.0, within),
+        ("ball less column", 10.0, ball - within),
         ("column less ball", 10.0, 202.5 - within),
         ("within, ending at z = 2.8", 7.8, within - polar),
         (
@@ -1017,6 +1021,8 @@ fn a_column_with_a_corner_in_the_ball_keeps_its_collars() {
         transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
         let result = if name.starts_with("within") {
             boolean(&mut topo, BooleanOp::Intersect, sphere, column)
+        } else if name.starts_with("ball less") {
+            boolean(&mut topo, BooleanOp::Cut, sphere, column)
         } else {
             boolean(&mut topo, BooleanOp::Cut, column, sphere)
         }
