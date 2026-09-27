@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790543606570,
+  "lastUpdate": 1790545996339,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45359,6 +45359,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35662052,
             "range": "± 99926",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38500fe88f3684ed427471c35ff6baa5a239e1cd",
+          "message": "fix(math): trace a rod through a ring's tube along the rod's rulings (#1865)\n\nBooleans between a ring and a rod crossing its tube on both sides of the\nhole are now exact, traced along the rod's rulings.\n\n## What was wrong\n\n- For `make_torus(4, 1.5, 32)` and `make_cylinder(0.6, 20)` laid along\n`y` through `(x0, ., z0)`, every operation fell back with\n`classification failed: whole ring lies on both sides of the other\nsolid`. No section was found, so the ring remained unsplit.\n- The general marcher sizes each surface using the distance between\nopposite parameter-range corners. Those corners coincide on a torus,\nproducing zero size and a rejection distance of about `0.009`, so the\npair is rejected as never crossing. A sample-box size finds curves, but\nthey jump between the ring’s two sides.\n\n## What this does\n\n- `ruling_torus_cylinder` in `crates/math/src/analytic_intersection.rs`\nruns when `parallel_axis_torus_cylinder` returns `None`. If all 128\nsampled cylinder rulings meet the torus the same even number of times,\neach root from `intersect_line_torus` sweeps a closed loop around the\ncylinder. The loops use the cylinder-cylinder path fitting. A rod\nthrough the tube produces four loops.\n- It defers to the marcher when intersection counts vary, when the axes\nare parallel, and for spindle tori whose minor radius is at least the\nmajor radius. A 2048-angle scan prevents stepping over a narrow interval\nof missing rulings.\n- A higher rod whose top rulings pass over the tube remains with the\nmarcher and still falls back. Tracing its turning points produced exact\nvolumes, but validation found 8 shared edges used in the same sense by\nboth faces. The torus zero-size behavior is unchanged because that size\nalso controls rejection for every cylinder pair. The roadmap records\nboth cases.\n\n## Verification\n\n- `a_rod_through_a_rings_tube_is_exact` covers `(0.5, 0.3)` and `(1.0,\n-0.4)` with Cut, Intersect, and Fuse, upright, turned, mirrored through\na slanted plane, and mirrored by `scale(-1, 1, 1)`. Results are valid,\nhave at most 8 faces, classify three probe points correctly, and match\nthe closed-form and Simpson-integrated truth within `1e-4`. Upright Cut\nmatches within `1e-9`. The test fails without this change.\n- A unit test checks four loops against both surfaces within `1e-4`,\nplus deferral for the higher rod, `z0 = 0.9001`, and a spindle torus.\nThe fine scan is required by the `0.9001` case.\n- Before the fine scan and spindle guard (which touch only this\nfunction), the workspace suite passed 3221 tests with 20 skipped, the\n300-line pose sweep and `approx_census` matched main, and the truth\naudit was unchanged: its ring rod is the higher one.",
+          "timestamp": "2026-09-27T21:50:32Z",
+          "tree_id": "df19e6c8e9bf6f25195193e1d4479b8492a927b3",
+          "url": "https://github.com/andymai/brepkit/commit/38500fe88f3684ed427471c35ff6baa5a239e1cd"
+        },
+        "date": 1790545991591,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1027171,
+            "range": "± 2063",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112791,
+            "range": "± 2592",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13007,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771840,
+            "range": "± 29860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43822715,
+            "range": "± 610085",
             "unit": "ns/iter"
           }
         ]
