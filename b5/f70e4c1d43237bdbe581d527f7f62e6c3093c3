@@ -1,0 +1,22 @@
+crates/operations/tests/sphere_plane_cut.rs
+  s_ba2f7b5c6902b6::t_646a1302501de7 140-149
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_2a506cdee619b4 5074,5082-5086,5088
+  s_ba2f7b5c6902b6::t_1a7d5529dc23f1 5075,5087
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b5f70e4c1d43237bdbe581d527f7f62e6c3093c3",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
