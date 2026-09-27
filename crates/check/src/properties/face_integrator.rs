@@ -1314,6 +1314,50 @@ mod tests {
         }
     }
 
+    /// A unit cylinder's whole wall between the rim `z = 0` and the slanted
+    /// rim `z = 3 + x / 2`, each one closed rational curve of three knot
+    /// spans, a third of a turn apiece: the wall reads its area `6π` and its
+    /// flux `2π` though no span turns less than a quarter turn.
+    #[test]
+    fn a_wall_between_rims_of_third_turn_spans_reads_exactly() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let rim = |z: &dyn Fn(f64) -> f64| {
+            let third = std::f64::consts::TAU / 3.0;
+            let points = (0..7)
+                .map(|i| {
+                    let a = f64::from(i) * third / 2.0;
+                    let r = if i % 2 == 0 { 1.0 } else { 2.0 };
+                    let (x, y) = (r * a.cos(), r * a.sin());
+                    Point3::new(x, y, z(x))
+                })
+                .collect();
+            let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 3.0];
+            let weights = vec![1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1.0];
+            NurbsCurve::new(2, knots, points, weights).unwrap()
+        };
+        let (floor, slant) = (rim(&|_| 0.0), rim(&|x| 0.5f64.mul_add(x, 3.0)));
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 3.5), 1e-7));
+        let e0 = topo.add_edge(Edge::new(v0, v0, EdgeCurve::NurbsCurve(floor)));
+        let e1 = topo.add_edge(Edge::new(v1, v1, EdgeCurve::NurbsCurve(slant)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(e0, true)], true).unwrap());
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(e1, false)], true).unwrap());
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let wall = CylindricalSurface::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let face = topo.add_face(Face::new(outer, vec![hole], FaceSurface::Cylinder(wall)));
+        let c = integrate_face(&topo, face, 5).unwrap();
+        let area = 6.0 * std::f64::consts::PI;
+        assert!((c.area - area).abs() < 1e-9, "area {}", c.area);
+        assert!((c.volume - area / 3.0).abs() < 1e-9, "volume {}", c.volume);
+    }
+
     /// A disc of radius 2 at `z = 3` with a hole of radius 1, bounded by
     /// closed circles: its area, flux and first moments come out exact, where
     /// 32 chords a circle hold 0.64% less.

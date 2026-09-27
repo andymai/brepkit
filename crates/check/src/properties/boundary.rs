@@ -195,8 +195,8 @@ fn edge_pieces(edge: &BoundaryEdge<'_>) -> Vec<(f64, f64)> {
 /// in traversal order: area and area moments unsigned, the volume terms
 /// times `sign` (the face's orientation against its surface's normal).
 /// `None` when the wires do not read: consecutive edges that do not meet, a
-/// piece that turns a quarter turn about the axis away from a pole (a wire
-/// too near one), a turn that is not whole, a wire of no area whose side the
+/// piece that turns a quarter turn about the axis however finely it is cut
+/// (a wire through a pole), a turn that is not whole, a wire of no area whose side the
 /// sum of turns cannot tell, a pole the surface does not have, or a region
 /// of no area.
 #[allow(clippy::too_many_lines)]
@@ -234,26 +234,43 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                 return None;
             }
             exit = leave;
-            for (ta, tb) in edge_pieces(edge) {
+            // A piece that turns a quarter turn about the axis is halved (a
+            // NURBS rim's knot span may be a third of a circle); one that
+            // still does at a thousandth of its edge runs past a pole.
+            let floor = 1e-3 * (edge.to - edge.from).abs();
+            let mut pending = edge_pieces(edge);
+            pending.reverse();
+            while let Some((ta, tb)) = pending.pop() {
                 let (ua, va) = at(ta);
                 let u_a = u + wrap_pi(ua - u);
+                let (ub, vb) = at(tb);
+                let u_b = u_a + wrap_pi(ub - u_a);
                 let (half, mid) = (0.5 * (tb - ta), 0.5 * (ta + tb));
+                let mut nodes = [(0.0, 0.0, 0.0, 0.0); 8];
+                for (node, gp) in nodes.iter_mut().zip(gauss) {
+                    let t = half.mul_add(gp.x, mid);
+                    let (un, vn) = at(t);
+                    *node = (t, u_a + wrap_pi(un - u_a), vn, half * gp.w);
+                }
+                let swings = !singular(ua, va)
+                    && (nodes.iter().any(|n| (n.1 - u_a).abs() > quarter)
+                        || (!singular(ub, vb) && (u_b - u_a).abs() > quarter));
+                if swings {
+                    if (tb - ta).abs() <= floor {
+                        return None;
+                    }
+                    pending.push((mid, tb));
+                    pending.push((ta, mid));
+                    continue;
+                }
                 // A five-point stencil wide enough that rounding in far-off
                 // coordinates stays small against it.
                 let h = 1e-3 * (tb - ta);
-                let a_singular = singular(ua, va);
-                for gp in gauss {
-                    let t = half.mul_add(gp.x, mid);
-                    let (un, vn) = at(t);
-                    let un = u_a + wrap_pi(un - u_a);
-                    if !a_singular && (un - u_a).abs() > quarter {
-                        return None;
-                    }
+                for (t, un, vn, w) in nodes {
                     let [(u1, v1), (u2, v2), (u3, v3), (u4, v4)] =
                         [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(at);
                     let du = 8.0f64.mul_add(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
                     let dv = 8.0f64.mul_add(v1 - v2, -(v3 - v4)) / (12.0 * h);
-                    let w = half * gp.w;
                     // A latitude (a rim circle about the axis) adds nothing.
                     if dv.abs() > 1e-12 * (1.0 + vn.abs()) {
                         add(
@@ -263,11 +280,6 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         );
                     }
                     twice_area += w * (un * dv - vn * du);
-                }
-                let (ub, vb) = at(tb);
-                let u_b = u_a + wrap_pi(ub - u_a);
-                if !a_singular && !singular(ub, vb) && (u_b - u_a).abs() > quarter {
-                    return None;
                 }
                 u = u_b;
             }
@@ -412,8 +424,7 @@ fn boundary_wires<'t>(
     Ok(Some(wires))
 }
 
-/// Points along every wire, sixty-four to an edge (close enough that a rim
-/// cannot pass a pole between two of them by more than a tenth of a degree).
+/// Points along every wire, sixty-five to an edge.
 fn wire_samples(wires: &[Vec<BoundaryEdge<'_>>]) -> Vec<Point3> {
     wires
         .iter()
