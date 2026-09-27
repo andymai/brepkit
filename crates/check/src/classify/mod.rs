@@ -11,7 +11,7 @@ pub(crate) mod winding;
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 
 use crate::CheckError;
@@ -140,10 +140,8 @@ pub fn classify_point(
     }
 }
 
-/// Checks if a point is within `tolerance` of any face boundary.
-///
-/// Uses analytic point-to-surface distance for all surface types, then
-/// verifies the projection falls within the face polygon.
+/// Whether `point` lies within `tolerance` of any face, measured to the
+/// face as trimmed.
 fn is_on_boundary(
     topo: &Topology,
     faces: &[FaceId],
@@ -151,112 +149,20 @@ fn is_on_boundary(
     tolerance: f64,
 ) -> Result<bool, CheckError> {
     for &fid in faces {
-        let face = topo.face(fid)?;
-        let dist = match face.surface() {
-            FaceSurface::Plane { normal, d } => {
-                let pv = Vec3::new(point.x(), point.y(), point.z());
-                (normal.dot(pv) - d).abs()
-            }
-            FaceSurface::Cylinder(cyl) => {
-                let (u, v) = cyl.project_point(point);
-                let on_surface = cyl.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Cone(cone) => {
-                let (u, v) = cone.project_point(point);
-                let on_surface = cone.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Sphere(sph) => {
-                let (u, v) = sph.project_point(point);
-                let on_surface = sph.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Torus(tor) => {
-                let (u, v) = tor.project_point(point);
-                let on_surface = tor.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Nurbs(nurbs) => {
-                match brepkit_math::nurbs::projection::project_point_to_surface(
-                    nurbs, point, tolerance,
-                ) {
-                    Ok(proj) => proj.distance,
-                    Err(_) => f64::INFINITY,
-                }
-            }
-        };
-        if dist < tolerance && matches!(face.surface(), FaceSurface::Sphere(_)) {
-            // Read as the ray count reads it (a tilted sphere face is no graph
-            // over the nearest axis plane), or within the tolerance of a rim.
-            // The tolerance is no slack across a rim's plane: a small rim's
-            // plane meets the sphere at a grazing angle, and a sliver of
-            // plane distance spans the whole mouth of its hole.
-            let on_face = match boundary::SphereRegion::of(topo, fid)? {
-                Some(region) => {
-                    region.contains(topo, fid, point)? || {
-                        let mut near_rim = false;
-                        for wid in std::iter::once(face.outer_wire())
-                            .chain(face.inner_wires().iter().copied())
-                        {
-                            let rim = crate::util::wire_polygon(topo, wid)?;
-                            near_rim |=
-                                rim.len() >= 2 && distance_to_loop(point, &rim) <= tolerance;
-                        }
-                        near_rim
-                    }
-                }
-                None => true,
-            };
-            if on_face {
-                return Ok(true);
-            }
+        // A face whose box is farther than the tolerance cannot hold the
+        // point; the trimmed distance below is costly.
+        if crate::util::face_aabb(topo, fid)?.distance_squared_to_point(point)
+            > tolerance * tolerance
+        {
             continue;
         }
-        if dist < tolerance {
-            let polygon = crate::util::face_polygon(topo, fid)?;
-            if polygon.len() >= 3 {
-                let normal = boundary::polygon_normal(&polygon);
-                if crate::util::point_in_polygon_3d(&point, &polygon, &normal) {
-                    // A point in one of the face's holes, clear of its rim,
-                    // is off the face.
-                    let mut in_hole = false;
-                    for &wid in face.inner_wires() {
-                        let hole = crate::util::wire_polygon(topo, wid)?;
-                        in_hole |= hole.len() >= 3
-                            && crate::util::point_in_polygon_3d(&point, &hole, &normal)
-                            && distance_to_loop(point, &hole) > tolerance;
-                    }
-                    if in_hole {
-                        continue;
-                    }
-                    return Ok(true);
-                }
-            } else {
-                // Full-surface face (like torus with seam edges only).
-                return Ok(true);
-            }
+        if let Some((dist, _)) = crate::distance::point_to_face(topo, point, fid)?
+            && dist < tolerance
+        {
+            return Ok(true);
         }
     }
     Ok(false)
-}
-
-/// The distance from `point` to the closed polygon through `loop_pts`.
-fn distance_to_loop(point: Point3, loop_pts: &[Point3]) -> f64 {
-    let n = loop_pts.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (loop_pts[i], loop_pts[(i + 1) % n]);
-            let ab = b - a;
-            let len2 = ab.dot(ab);
-            let t = if len2 > 0.0 {
-                ((point - a).dot(ab) / len2).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            (point - (a + ab * t)).length()
-        })
-        .fold(f64::INFINITY, f64::min)
 }
 
 /// Classify a point relative to a solid using generalized winding numbers.

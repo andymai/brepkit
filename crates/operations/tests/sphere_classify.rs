@@ -2,10 +2,11 @@
 //! every point of a grid through and around the ball classifies as its
 //! closed form says, with the ball upright, turned about an oblique axis or
 //! mirrored through a slanted plane, and so does the ball less a box corner,
-//! an off-axis rod or a coaxial bore. A sphere face bounded by a loop in one
-//! plane is the sphere's part on that plane's side (a polygon through the
-//! loop cuts the chords' sagitta off it), and a tilted face is no graph over
-//! the nearest axis plane, so a test projected onto one misreads its side.
+//! an off-axis rod, a coaxial bore or a column through it. A sphere face
+//! bounded by a loop in one plane is the sphere's part on that plane's side
+//! (a polygon through the loop cuts the chords' sagitta off it), and a
+//! tilted face is no graph over the nearest axis plane, so a test projected
+//! onto one misreads its side.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
@@ -102,13 +103,18 @@ fn a_ball_classifies_in_every_pose() {
 
 #[test]
 fn a_ball_less_a_tool_classifies() {
-    for tool in ["corner", "rod", "bore"] {
+    for tool in ["corner", "rod", "bore", "column"] {
         let mut topo = Topology::new();
         let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
         let block = match tool {
             "corner" => {
                 let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
                 transform_solid(&mut topo, b, &Mat4::translation(1.0, 1.2, 0.8)).unwrap();
+                b
+            }
+            "column" => {
+                let b = make_box(&mut topo, 4.5, 4.5, 10.0).unwrap();
+                transform_solid(&mut topo, b, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
                 b
             }
             "rod" => {
@@ -136,11 +142,17 @@ fn a_ball_less_a_tool_classifies() {
                 .abs()
                 .min((p.y() - 1.2).abs())
                 .min((p.z() - 0.8).abs()),
+            "column" => (p.x() - 2.0)
+                .abs()
+                .min((p.y() - 2.0).abs())
+                .min((p.x() + 2.5).abs())
+                .min((p.y() + 2.5).abs()),
             "rod" => ((p.x() - 0.5).hypot(p.z() - 1.0) - 0.6).abs(),
             _ => (p.x().hypot(p.y()) - 1.0).abs(),
         };
         let in_tool = |p: Point3| match tool {
             "corner" => p.x() > 1.0 && p.y() > 1.2 && p.z() > 0.8,
+            "column" => p.x() > -2.5 && p.x() < 2.0 && p.y() > -2.5 && p.y() < 2.0,
             "rod" => (p.x() - 0.5).hypot(p.z() - 1.0) < 0.6,
             _ => p.x().hypot(p.y()) < 1.0,
         };
