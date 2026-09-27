@@ -218,13 +218,21 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **`validate_solid` rejected a face whose hole touches its outer wire (CLOSED 2026-09-26; pin `tangent_wall_fuse_configurations_stay_analytic` in `crates/operations/src/boolean/tests.rs`)**:
+  a cylinder fused with a box one of whose walls is tangent to it leaves the
+  box's floor a hole whose rim shares the tangent vertex with the floor's
+  outer wire. The Euler check counted that hole as a loop of its own, so it
+  wanted `V-E+F = 2(S-g)+1`, odd, and found 2; it now counts each face's
+  boundary pieces, two wires joining when they share a vertex.
+
 - **A column narrower than the ball fell back to a mesh (CLOSED 2026-09-26; pin `a_column_narrower_than_the_ball_stays_exact` in `crates/operations/tests/sphere_box_corner.rs`, pose sweep case `ball | column 1.8`)**:
   each wall's section circle crosses the wall's two vertical edges at four
   points 83 and 97 degrees apart, which `closed_circle_boundary_crossings`
   took for a polygon inscribed in the circle (it tested only that the hits
   were spread within a quarter of an even gap) and dropped, so the arcs ran
   past the wall and every op fell back. An inscribed boundary now also has
-  every hit at one of its own vertices.
+  every hit at one of its own vertices and every edge's midpoint within the
+  circle (`boundary_is_inscribed`).
 
 - **The check crate read trimmed curved faces through a masked grid (CLOSED 2026-09-26; pins in `crates/operations/tests/check_curved_faces.rs`)**:
   `integrate_parametric_trimmed` kept or dropped Gauss points by the outer

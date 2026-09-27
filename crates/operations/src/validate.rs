@@ -306,6 +306,42 @@ pub fn validate_solid(
     validate_solid_with_options(topo, solid, &ValidationOptions::default())
 }
 
+/// How many connected pieces a face's wires form, two wires joining when
+/// they share a vertex.
+fn boundary_pieces(
+    topo: &Topology,
+    fid: brepkit_topology::face::FaceId,
+) -> Result<usize, crate::OperationsError> {
+    let face = topo.face(fid)?;
+    let mut vertex_sets = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let mut vertices = std::collections::HashSet::new();
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            vertices.insert(edge.start());
+            vertices.insert(edge.end());
+        }
+        vertex_sets.push(vertices);
+    }
+    let mut root: Vec<usize> = (0..vertex_sets.len()).collect();
+    let find = |root: &mut Vec<usize>, mut i: usize| {
+        while root[i] != i {
+            root[i] = root[root[i]];
+            i = root[i];
+        }
+        i
+    };
+    for i in 0..vertex_sets.len() {
+        for j in i + 1..vertex_sets.len() {
+            if !vertex_sets[i].is_disjoint(&vertex_sets[j]) {
+                let (a, b) = (find(&mut root, i), find(&mut root, j));
+                root[a] = b;
+            }
+        }
+    }
+    Ok((0..root.len()).filter(|&i| find(&mut root, i) == i).count())
+}
+
 /// Validate a solid with configurable tolerance options.
 ///
 /// Same checks as [`validate_solid`] but with tolerance scaling.
@@ -332,18 +368,20 @@ pub fn validate_solid_with_options(
     // Euler-Poincaré formula for a cell complex with inner loops:
     //   V - E + F = 2(S - g) + L
     // where S is the number of connected pieces, g is the total genus and L
-    // is the total number of inner wire loops across all faces. For a
-    // genus-0 solid with no cavities or holes: V-E+F = 2. A cavity is a
-    // piece of its own (it shares no edge with the outer shell), and so is
-    // each disjoint lump a boolean keeps in the outer shell (a ball cut in
-    // two by a slab).
+    // is the total number of inner loops across all faces. For a genus-0
+    // solid with no cavities or holes: V-E+F = 2. A cavity is a piece of its
+    // own (it shares no edge with the outer shell), and so is each disjoint
+    // lump a boolean keeps in the outer shell (a ball cut in two by a slab).
+    // A hole that shares a vertex with another of its face's wires (a
+    // cylinder's rim tangent to a box face's edge) does not disconnect the
+    // face's boundary, so L counts each face's boundary pieces, not its
+    // wires.
     let mut total_inner_loops: i64 = 0;
     let faces = explorer::solid_faces(topo, solid)?;
     for fid in &faces {
-        let face = topo.face(*fid)?;
         #[allow(clippy::cast_possible_wrap)]
         {
-            total_inner_loops += face.inner_wires().len() as i64;
+            total_inner_loops += boundary_pieces(topo, *fid)? as i64 - 1;
         }
     }
 
