@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790480540717,
+  "lastUpdate": 1790481278585,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42713,6 +42713,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42622574,
             "range": "± 189160",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f47ea914225894819443ce21f8522e64524e80ef",
+          "message": "fix(operations): count a face's boundary pieces, not its wires, in the Euler check (#1817)\n\n`validate_solid` now accepts a face whose hole shares a vertex with its\nouter wire, counting each face's boundary pieces instead of its wires in\nthe Euler check.\n\n## What was wrong\n\n- On main, `make_cylinder(4, 12)` fused with `make_box(13, 18, 8)` at\n`(-9, -9, 6)`, with the wall `x = 4` tangent to the cylinder, produced\nan exact, watertight solid with 9 faces. Its volume read exactly and no\ngrid point was misread, but `validate_solid` reported it invalid.\n\n- The box floor keeps the cylinder rim at `z = 6` as a hole. That rim\nshares the tangent vertex `(4, 0, 6)` with the floor's outer wire. The\nEuler check counted every inner wire as a loop, so `L = 1` required\n`V-E+F = 2(S-g)+1`, an odd value. The observed counts were `V = 13`, `E\n= 20`, and `F = 9`, giving `V-E+F = 2`. A hole sharing a vertex with its\nface's outer wire does not disconnect the face boundary.\n\n## What this does\n\n- For each face, `validate_solid` counts the connected pieces formed by\nits wires. Two wires are connected when they share a vertex. It computes\n`L` as the sum, over all faces, of the number of pieces minus one.\n\n- Faces whose holes are disjoint from the outer wire retain the previous\ncount.\n\n## Verification\n\n- `tangent_wall_fuse_configurations_stay_analytic` now requires\n`validate_solid` to pass for four, two, one, and zero tangent walls.\nMain's validator fails the one tangent wall case.\n\n- The pose sweep produced 210 results identical to main, with none\ninvalid.\n\n- The workspace suite ran 3164 tests: 3164 passed and 20 skipped. Lint\nis clean.\n\n- The roadmap closes this case and updates the narrow column entry from\n#1814 with that PR's midpoint condition.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`validate_solid` now counts each face's connected boundary pieces\ninstead of its wires in the Euler check, so a cylinder fused with a box\nwith a tangent wall validates correctly.\n\n**Changes**\n- A hole that shares a vertex with its face's outer wire does not\ndisconnect the boundary; counting wires as loops made the check demand\nan odd `V-E+F` and reject valid solids.\n- Adds a regression pin in\n`tangent_wall_fuse_configurations_stay_analytic` requiring\n`validate_solid` to pass for four, two, one, and zero tangent walls.\n- Updates the roadmap entry for this case.\n\n<sup>Written for commit 803b808a4773d77574f75b9e6ad59f1b914aeff5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1817?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-26T20:52:06-07:00",
+          "tree_id": "b6231a8ee70ac0cda0f8813970210892f64bb76e",
+          "url": "https://github.com/andymai/brepkit/commit/f47ea914225894819443ce21f8522e64524e80ef"
+        },
+        "date": 1790481273888,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 817641,
+            "range": "± 1551",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 893293,
+            "range": "± 1267",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10966,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 600083,
+            "range": "± 4521",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35828870,
+            "range": "± 598825",
             "unit": "ns/iter"
           }
         ]
