@@ -1592,7 +1592,11 @@ fn collect_var_v_ring(
         let Some(edge_gids) = edge_global_indices.get(&oe.edge().index()) else {
             return Ok(None);
         };
-        gids.extend_from_slice(edge_gids);
+        if oe.is_forward() {
+            gids.extend_from_slice(edge_gids);
+        } else {
+            gids.extend(edge_gids.iter().rev());
+        }
     }
     if gids.len() < 3 {
         return Ok(None);

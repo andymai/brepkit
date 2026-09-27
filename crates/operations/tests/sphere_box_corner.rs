@@ -171,8 +171,11 @@ fn ball_less_a_box_corner_over_its_pole_meshes_closed() {
         (0.0, 0.0, 0.6),
         (0.0, 0.0, 1.7),
         (-0.4, 0.0, 0.6),
+        (-0.4, 0.0, 1.7),
+        (-1.5, 0.0, 0.6),
         (-1.5, 0.0, 1.7),
         (0.0, -1.3, 0.6),
+        (0.0, -1.3, 1.7),
     ] {
         let label = format!("({a}, {b}, {c})");
         let truth = ball - ball_past(a, b, c);
@@ -1657,9 +1660,10 @@ fn column_ending_in_the_ball(top: f64, tilt: f64, turn: f64) {
 
 /// The ball turned 0.35 about x against the column ending at `3 cos(0.35)`,
 /// whose top's section circle runs through the turned ball's pole: exact,
-/// valid, within `1e-3` of the closed forms and watertight, and the ball
-/// within the column and the column less the ball mesh within `3e-3` of
-/// their volumes. The circle takes the pole as a sample and the sphere
+/// valid, within `1e-3` of the closed forms and watertight, the ball within
+/// the column and the column less the ball meshing within `3e-3` of their
+/// volumes and the small ball less the column within `1e-2` (its chordal
+/// error). The circle takes the pole as a sample and the sphere
 /// face's loop runs along the pole's row, where cutting across it meshed
 /// both open and 15% off.
 #[test]
@@ -1696,13 +1700,16 @@ fn a_column_whose_top_runs_through_the_pole_meshes_closed() {
         );
         let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
         assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
-        if name != "ball less column" {
-            let enclosed = enclosed_volume(&mesh);
-            assert!(
-                (enclosed - volume).abs() < 3e-3 * volume,
-                "{name}: mesh encloses {enclosed}, solid {volume}"
-            );
-        }
+        let enclosed = enclosed_volume(&mesh);
+        let slack = if name == "ball less column" {
+            1e-2
+        } else {
+            3e-3
+        };
+        assert!(
+            (enclosed - volume).abs() < slack * volume,
+            "{name}: mesh encloses {enclosed}, solid {volume}"
+        );
     }
 }
 
