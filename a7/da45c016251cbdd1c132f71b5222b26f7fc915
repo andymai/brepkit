@@ -1,0 +1,22 @@
+crates/operations/tests/sphere_box_corner.rs
+  s_ba2f7b5c6902b6::t_24e6415a4b6c24 1062-1126
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_69f0b0ec8121df 221-226
+  s_ba2f7b5c6902b6::t_1021c7343c197b 227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a7da45c016251cbdd1c132f71b5222b26f7fc915",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
