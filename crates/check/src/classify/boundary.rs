@@ -609,45 +609,65 @@ impl SphereRims {
                 }
             }
         }
+        let mut region = Self {
+            center,
+            radius,
+            rims,
+            inside: Vec::new(),
+        };
         // The wire runs about the sphere's outward normal, so the face lies
-        // to the left of each edge seen from outside.
+        // to the left of each edge seen from outside. A point that far left
+        // is inside only when the arc to it from as far right crosses the
+        // edge alone: on a face narrower than the step it crosses the far
+        // side too, and the step shrinks.
         outer_mids.sort_by(|x, y| y.0.total_cmp(&x.0));
-        let mut inside = Vec::new();
         for (len, mid, along) in outer_mids.into_iter().take(4) {
             let n = mid - center;
             let Ok(left) = n.cross(along).normalize() else {
                 continue;
             };
-            let step = 1e-3 * len.min(radius);
-            if let Some(q) = on_sphere(mid + left * step) {
-                inside.push(q);
+            let mut step = 1e-3 * len.min(radius);
+            for _ in 0..3 {
+                if let (Some(q), Some(out)) =
+                    (on_sphere(mid + left * step), on_sphere(mid - left * step))
+                    && region.crossings(out, q) == Some(1)
+                {
+                    region.inside.push(q);
+                    break;
+                }
+                step /= 16.0;
             }
         }
-        Ok(Some(Self {
-            center,
-            radius,
-            rims,
-            inside,
-        }))
+        Ok(Some(region))
     }
 
     /// Whether `p`, on the sphere, lies on the face: the great-circle arc
     /// from `p` to a point inside crosses the edges an even number of
-    /// times. Two such points must agree; `None` when they do not, or no
-    /// two arcs clear the vertices.
+    /// times. The points inside vote, and at least two must carry it;
+    /// `None` on a tie, or when fewer than two arcs clear the vertices.
     fn contains(&self, p: Point3) -> Option<bool> {
-        let mut first = None;
+        let (mut on, mut off) = (0_u32, 0_u32);
         for &q in &self.inside {
             let Some(crossings) = self.crossings(p, q) else {
                 continue;
             };
-            let inside = crossings % 2 == 0;
-            match first {
-                None => first = Some(inside),
-                Some(seen) => return (seen == inside).then_some(inside),
+            if crossings % 2 == 0 {
+                on += 1;
+            } else {
+                off += 1;
+            }
+            if on >= 2 && off == 0 {
+                return Some(true);
+            }
+            if off >= 2 && on == 0 {
+                return Some(false);
             }
         }
-        None
+        match on.cmp(&off) {
+            std::cmp::Ordering::Greater if on >= 2 => Some(true),
+            std::cmp::Ordering::Less if off >= 2 => Some(false),
+            _ => None,
+        }
     }
 
     /// Crossings of the minor great-circle arc from `p` to `q` with the

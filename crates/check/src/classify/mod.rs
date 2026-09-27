@@ -62,10 +62,7 @@ pub fn classify_point(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    // Every shell: a cavity's faces bound the solid too, and ray parity
-    // across them puts a point inside a cavity outside the solid.
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
-
+    let faces = FaceBvh::of(topo, solid)?;
     if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
@@ -144,16 +141,14 @@ pub fn classify_point(
 /// face as trimmed.
 fn is_on_boundary(
     topo: &Topology,
-    faces: &[FaceId],
+    faces: &FaceBvh,
     point: Point3,
     tolerance: f64,
 ) -> Result<bool, CheckError> {
-    for &fid in faces {
+    for (&fid, aabb) in faces.faces.iter().zip(&faces.aabbs) {
         // A face whose box is farther than the tolerance cannot hold the
         // point; the trimmed distance below is costly.
-        if crate::util::face_aabb(topo, fid)?.distance_squared_to_point(point)
-            > tolerance * tolerance
-        {
+        if aabb.distance_squared_to_point(point) > tolerance * tolerance {
             continue;
         }
         // Nor can a face whose untrimmed surface is that far.
@@ -192,7 +187,7 @@ pub fn classify_point_winding(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let faces = FaceBvh::of(topo, solid)?;
     if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
@@ -220,7 +215,7 @@ pub fn classify_point_robust(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let faces = FaceBvh::of(topo, solid)?;
     if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
@@ -235,32 +230,40 @@ pub fn classify_point_robust(
     classify_point(topo, solid, point, options)
 }
 
-/// Count total ray crossings across all faces of a shell.
-///
-/// Builds a BVH over face AABBs to skip faces whose bounding box
-/// the ray does not intersect.
+/// The solid's faces in a BVH over their bounding boxes, built once per
+/// point so each ray only tests the faces whose box it meets.
+struct FaceBvh {
+    faces: Vec<FaceId>,
+    aabbs: Vec<brepkit_math::aabb::Aabb3>,
+    bvh: brepkit_math::bvh::Bvh,
+}
+
+impl FaceBvh {
+    /// Every shell's faces: a cavity's faces bound the solid too, and ray
+    /// parity across them puts a point inside a cavity outside the solid.
+    fn of(topo: &Topology, solid: SolidId) -> Result<Self, CheckError> {
+        let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+        let aabbs = faces
+            .iter()
+            .map(|&fid| crate::util::face_aabb(topo, fid))
+            .collect::<Result<Vec<_>, _>>()?;
+        let indexed: Vec<_> = aabbs.iter().copied().enumerate().collect();
+        let bvh = brepkit_math::bvh::Bvh::build(&indexed);
+        Ok(Self { faces, aabbs, bvh })
+    }
+}
+
+/// Count a ray's crossings with the solid's faces.
 fn count_ray_crossings(
     topo: &Topology,
-    faces: &[FaceId],
+    faces: &FaceBvh,
     origin: Point3,
     direction: Vec3,
 ) -> Result<u32, CheckError> {
-    use brepkit_math::bvh::Bvh;
-
-    let face_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = faces
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
-        .collect();
-    let bvh = Bvh::build(&face_aabbs);
-
-    // query_ray returns the primitive IDs (the `i` values), which are
-    // indices into the original `faces` slice.
-    let candidates = bvh.query_ray(origin, direction);
-
     let mut crossings = 0u32;
-    for face_idx in candidates {
-        crossings += boundary::count_face_ray_crossings(topo, faces[face_idx], origin, direction)?;
+    for face_idx in faces.bvh.query_ray(origin, direction) {
+        crossings +=
+            boundary::count_face_ray_crossings(topo, faces.faces[face_idx], origin, direction)?;
     }
     Ok(crossings)
 }

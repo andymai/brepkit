@@ -196,7 +196,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **Two ray casts, both misreading sphere faces bounded in several planes (CLOSED 2026-09-27; pins `a_ball_less_a_tool_classifies` (column), `a_ball_windowed_by_a_box_classifies` and `a_seam_joined_band_classifies` in `crates/operations/tests/sphere_classify.rs`, `a_point_on_a_cap_just_inside_its_rim_is_on_the_boundary` in `classify_rims.rs`)**:
+- **Two ray casts, both misreading sphere faces bounded in several planes (CLOSED 2026-09-27; pins `a_ball_less_a_tool_classifies` (column), `a_ball_windowed_by_a_box_classifies`, `a_ball_within_a_thin_wedge_classifies` and `a_seam_joined_band_classifies` in `crates/operations/tests/sphere_classify.rs`, `a_point_on_a_cap_just_inside_its_rim_is_on_the_boundary` in `classify_rims.rs`)**:
   `operations::classify` read such a face as the intersection of its arcs'
   half-spaces and voted with two rays, needing both for Inside (1002 of
   2308 grid points of `make_sphere(3, 32)` less the column
