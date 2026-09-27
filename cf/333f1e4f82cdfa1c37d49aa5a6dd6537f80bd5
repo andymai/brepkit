@@ -1,0 +1,33 @@
+crates/algo/src/ds/arena.rs
+  s_ba2f7b5c6902b6::t_7ca11d12abf275 48-51,69
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_33e3d035d352bb 4883-4907,4909-4982,4999
+  s_ba2f7b5c6902b6::t_7ca11d12abf275 673,703-705,709-714,829-831,5250-5256,5262,5265-5272,5274,5292-5318,5320
+  s_ba2f7b5c6902b6::t_180b8eba9a3edb 706-708
+  s_ba2f7b5c6902b6::t_fe29db334d26ba 4908,5257-5261,5263-5264,5273,5275-5291,5319
+  s_ba2f7b5c6902b6::t_117f9f6e90f634 5321
+crates/algo/src/builder/mod.rs
+  s_ba2f7b5c6902b6::t_7fc97a6a09bf99 1416-1434
+crates/algo/src/builder/fill_images_faces.rs
+  s_ba2f7b5c6902b6::t_180b8eba9a3edb 1700-1705
+crates/operations/tests/sphere_plane_cut.rs
+  s_ba2f7b5c6902b6::t_ad0295ec0c9832 283-371
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_ba2f7b5c6902b6::t_180b8eba9a3edb 122-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cf333f1e4f82cdfa1c37d49aa5a6dd6537f80bd5",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
