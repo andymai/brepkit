@@ -298,9 +298,24 @@ pub fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
                 ),
             );
         }
-        // The surface lies in its control points' hull; samples of it can
-        // fall short of an extreme between them.
-        FaceSurface::Nurbs(nurbs) => *aabb = aabb.union(nurbs.aabb()),
+        // The surface lies in its control points' hull when every weight
+        // is positive; samples of it can fall short of an extreme between
+        // them, but are all there is to go on otherwise.
+        FaceSurface::Nurbs(nurbs) => {
+            *aabb = aabb.union(nurbs.aabb());
+            if nurbs.weights().iter().flatten().any(|&w| w <= 0.0) {
+                let (u_min, u_max) = nurbs.domain_u();
+                let (v_min, v_max) = nurbs.domain_v();
+                let n_samples = 8;
+                for iu in 0..=n_samples {
+                    let u = u_min + (u_max - u_min) * (iu as f64) / (n_samples as f64);
+                    for iv in 0..=n_samples {
+                        let v = v_min + (v_max - v_min) * (iv as f64) / (n_samples as f64);
+                        aabb_include(aabb, nurbs.evaluate(u, v));
+                    }
+                }
+            }
+        }
         FaceSurface::Plane { .. } | FaceSurface::Cone(_) => {}
     }
 }
