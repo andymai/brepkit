@@ -437,9 +437,10 @@ fn inverted_ball_piece_keeps_its_volume() {
 
 /// `make_sphere(3, 32)` less a slab, clear of the equator (`1 < z < 2`, and
 /// `0.2 < z < 0.7`) or across it (`-0.5 < z < 0.5`), upright, turned and
-/// mirrored: the two pieces share one shell and the solid is valid,
-/// meshes watertight, holds material on both sides of the slab and none in
-/// it, and measures the ball less the slab's disc stack within `1e-6`.
+/// mirrored: the two pieces share one shell and the solid is exact (a few
+/// sphere and plane faces), valid, meshes watertight, holds material on
+/// both sides of the slab and none in it, and measures the ball less the
+/// slab's disc stack within `1e-6`.
 #[test]
 fn a_ball_less_a_slab_keeps_both_pieces() {
     let r = 3.0_f64;
@@ -465,6 +466,22 @@ fn a_ball_less_a_slab_keeps_both_pieces() {
             assert!(report.is_valid(), "{label}: {:?}", report.issues);
             let mesh = tessellate_solid(&topo, cut, 0.01).unwrap();
             assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let faces = solid_faces(&topo, cut).unwrap();
+            let spheres = faces
+                .iter()
+                .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+                .count();
+            let exact = faces.iter().all(|&f| {
+                matches!(
+                    topo.face(f).unwrap().surface(),
+                    FaceSurface::Sphere(_) | FaceSurface::Plane { .. }
+                )
+            });
+            assert!(
+                exact && spheres >= 2 && faces.len() <= 8,
+                "{label}: {} faces, {spheres} spheres: not exact",
+                faces.len()
+            );
             let removed = PI * (r * r * (z1 - z0) - (z1.powi(3) - z0.powi(3)) / 3.0);
             let truth = 4.0 / 3.0 * PI * r.powi(3) - removed;
             let volume = solid_volume(&topo, cut, 0.01).unwrap();
