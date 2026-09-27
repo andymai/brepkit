@@ -1525,7 +1525,10 @@ fn seam_crossings_of_contractible_loop(
     let mut crossings = Vec::new();
     for k in 1..=SAMPLES {
         let (prev, d) = (samples[k as usize - 1], samples[k as usize]);
-        if prev * d >= 0.0 || (prev - d).abs() >= PI {
+        // A crossing exactly at a sample reads zero there: it belongs to the
+        // step that reaches it, not the one that leaves it.
+        let crosses = (prev < 0.0 && d >= 0.0) || (prev > 0.0 && d <= 0.0);
+        if !crosses || (prev - d).abs() >= PI {
             continue;
         }
         let (mut lo, mut hi) = (param(k - 1), param(k));

@@ -1734,12 +1734,14 @@ fn try_algebraic_intersection(
     v_range_b: Option<(f64, f64)>,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
     match (a, b) {
-        (AnalyticSurface::Cone(cone), AnalyticSurface::Cylinder(cyl)) => {
-            algebraic_parallel_cone_cylinder(cone, cyl, v_range_a, v_range_b)
-        }
-        (AnalyticSurface::Cylinder(cyl), AnalyticSurface::Cone(cone)) => {
-            algebraic_parallel_cone_cylinder(cone, cyl, v_range_b, v_range_a)
-        }
+        (AnalyticSurface::Cone(cone), AnalyticSurface::Cylinder(cyl)) => Ok(
+            algebraic_parallel_cone_cylinder(cone, cyl, v_range_a, v_range_b)?
+                .or_else(|| ruling_cone_cylinder(cone, cyl, true)),
+        ),
+        (AnalyticSurface::Cylinder(cyl), AnalyticSurface::Cone(cone)) => Ok(
+            algebraic_parallel_cone_cylinder(cone, cyl, v_range_b, v_range_a)?
+                .or_else(|| ruling_cone_cylinder(cone, cyl, false)),
+        ),
         (AnalyticSurface::Sphere(s1), AnalyticSurface::Sphere(s2)) => {
             algebraic_sphere_sphere(s1, s2).map(Some)
         }
@@ -2504,6 +2506,66 @@ fn algebraic_cylinder_cylinder(
     Ok(Some(fit_ruling_loops(&loops, |p| {
         (c1.project_point(p), c2.project_point(p))
     })))
+}
+
+/// A cone and a cylinder whose axes are not parallel, traced along the
+/// cylinder's rulings. A ruling `q + t w` meets the cone's double quadric
+/// `|p - apex|^2 = h^2 / sin^2(half_angle)`, with `h` the offset along the
+/// cone's axis, where a quadratic in `t` vanishes. `None` (the marcher's
+/// case) when a ruling meets the far nappe, where no cone face lies, when
+/// the rulings run along the cone's generators, or when no ruling meets it.
+fn ruling_cone_cylinder(
+    cone: &ConicalSurface,
+    cyl: &CylindricalSurface,
+    cone_first: bool,
+) -> Option<Vec<IntersectionCurve>> {
+    let (sin_t, cos_t) = cone.half_angle().sin_cos();
+    if sin_t < 1e-12 || cos_t < 1e-12 {
+        return None;
+    }
+    let (apex, d, w) = (cone.apex(), cone.axis(), cyl.axis());
+    let s = 1.0 / (sin_t * sin_t);
+    let alpha = w.dot(d);
+    let quad = 1.0 - s * alpha * alpha;
+    if quad.abs() < 1e-9 {
+        return None;
+    }
+    let roots = |u: f64| {
+        let delta = cyl.evaluate(u, 0.0) - apex;
+        let (dd, dw) = (delta.dot(d), delta.dot(w));
+        let b = 2.0 * (dw - s * dd * alpha);
+        let c = delta.dot(delta) - s * dd * dd;
+        ruling_quadratic(quad, b, c)
+    };
+    let lin_tol = Tolerance::new().linear;
+    let far_nappe = (0..RULING_SAMPLES).any(|i| {
+        let u = ruling_u(i);
+        let (disc, vp, vm) = roots(u);
+        disc >= -lin_tol
+            && [vp, vm]
+                .iter()
+                .any(|&t| (cyl.evaluate(u, t) - apex).dot(d) < -lin_tol)
+    });
+    if far_nappe {
+        return None;
+    }
+    let samples = ruling_samples(cyl, &roots);
+    let loops = if samples.iter().all(Option::is_some) {
+        closed_ruling_loops(&samples)
+    } else {
+        partial_ruling_loops(cyl, &roots, &samples)
+    };
+    if loops.is_empty() {
+        return None;
+    }
+    Some(fit_ruling_loops(&loops, |p| {
+        let (on_cone, on_cyl) = (cone.project_point(p), cyl.project_point(p));
+        if cone_first {
+            (on_cone, on_cyl)
+        } else {
+            (on_cyl, on_cone)
+        }
+    }))
 }
 
 /// Rulings sampled around a swept cylinder, half a step off u = 0 so the
