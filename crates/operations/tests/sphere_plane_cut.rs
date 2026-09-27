@@ -127,6 +127,121 @@ fn ball_cut_by_a_plane_clear_of_its_equator() {
     }
 }
 
+/// A ball cut by a plane across its equator (and not through its poles),
+/// keeping either side: on each hemisphere the section is one chain of arcs
+/// from the seam to the seam, and the hemisphere splits into the collar
+/// holding its pole and the lune past the chain. With `d` as above, each
+/// piece is valid, has one disc, matches the closed forms, classifies points
+/// just either side of the plane, and meshes closed.
+#[test]
+fn ball_cut_by_a_plane_across_its_equator() {
+    let r = 3.0_f64;
+    // The half-space x' > x0 of a frame tilted about y, then turned about z.
+    for (x0, tilt) in [(0.5, 0.0), (-1.2, 0.0), (2.5, 0.0), (0.0, 0.3)] {
+        for turn in [0.0_f64, 0.3, 1.0] {
+            for keep_past in [true, false] {
+                let label = format!(
+                    "x0 {x0}, tilt {tilt}, turned {turn}, keeping {}",
+                    if keep_past { "past" } else { "short of" }
+                );
+                let frame = Mat4::rotation_z(turn) * Mat4::rotation_y(tilt);
+                let mut topo = Topology::new();
+                let ball = make_sphere(&mut topo, r, 32).unwrap();
+                let slab = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+                let place = frame * Mat4::translation(x0, -10.0, -10.0);
+                transform_solid(&mut topo, slab, &place).unwrap();
+                let op = if keep_past {
+                    BooleanOp::Intersect
+                } else {
+                    BooleanOp::Cut
+                };
+                let piece = boolean(&mut topo, op, ball, slab).unwrap();
+
+                let report = validate_solid(&topo, piece).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let faces = solid_faces(&topo, piece).unwrap();
+                let (mut discs, mut disc_area, mut sphere_area) = (0, 0.0, 0.0);
+                for &f in &faces {
+                    let area = face_area(&topo, f, 0.01).unwrap();
+                    match topo.face(f).unwrap().surface() {
+                        FaceSurface::Plane { .. } => {
+                            discs += 1;
+                            disc_area += area;
+                        }
+                        FaceSurface::Sphere(_) => sphere_area += area,
+                        other => panic!("{label}: a {} face", other.type_tag()),
+                    }
+                }
+                assert_eq!(discs, 1, "{label}: plane faces");
+
+                let d = if keep_past { -x0 } else { x0 };
+                let truth = PI * (2.0 * r.powi(3) + 3.0 * r * r * d - d.powi(3)) / 3.0;
+                let volume = solid_volume(&topo, piece, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-9 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+                let disc_truth = PI * (r * r - d * d);
+                assert!(
+                    (disc_area - disc_truth).abs() < 1e-9 * disc_truth,
+                    "{label}: disc area {disc_area}, truth {disc_truth}"
+                );
+                let sphere_truth = 4.0 * PI * r * r - 2.0 * PI * r * (r - d);
+                assert!(
+                    (sphere_area - sphere_truth).abs() < 1e-9 * sphere_truth,
+                    "{label}: sphere area {sphere_area}, truth {sphere_truth}"
+                );
+
+                let (past, short) = if keep_past {
+                    (PointClassification::Inside, PointClassification::Outside)
+                } else {
+                    (PointClassification::Outside, PointClassification::Inside)
+                };
+                for (y, z) in [(0.0, 0.0), (0.4, 0.7), (-0.6, -0.3)] {
+                    for (dx, want) in [(0.05, past), (-0.05, short)] {
+                        let p = frame.mul_point(Point3::new(x0 + dx, y, z));
+                        let got =
+                            classify_point(&topo, piece, p, &ClassifyOptions::default()).unwrap();
+                        assert_eq!(got, want, "{label}: {p:?}");
+                    }
+                }
+
+                let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            }
+        }
+    }
+}
+
+/// A ball cut by a plane through its axis, keeping either half: the section
+/// runs through both poles, which leaves no region holding a pole on either
+/// hemisphere, so the result falls back to a mesh rather than reading a
+/// collar that is not there. Whatever path it takes, each half is valid and
+/// holds half the ball (within the mesh's `2e-2`).
+#[test]
+fn a_plane_through_the_axis_keeps_half_the_ball() {
+    let r = 3.0_f64;
+    let half = 2.0 * PI * r.powi(3) / 3.0;
+    for turn in [0.0_f64, 0.3, 1.0] {
+        for op in [BooleanOp::Intersect, BooleanOp::Cut] {
+            let label = format!("turned {turn}, {op:?}");
+            let mut topo = Topology::new();
+            let ball = make_sphere(&mut topo, r, 32).unwrap();
+            let slab = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            let place = Mat4::rotation_z(turn) * Mat4::translation(0.0, -10.0, -10.0);
+            transform_solid(&mut topo, slab, &place).unwrap();
+            let piece = boolean(&mut topo, op, ball, slab).unwrap();
+            let report = validate_solid(&topo, piece).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let volume = solid_volume(&topo, piece, 0.01).unwrap();
+            assert!(
+                (volume - half).abs() < 2e-2 * half,
+                "{label}: volume {volume}, truth {half}"
+            );
+        }
+    }
+}
+
 /// Two caps of one ball fused into one solid: every disc is still a full
 /// circle on the sphere, but the caps each removes overlap.
 #[test]

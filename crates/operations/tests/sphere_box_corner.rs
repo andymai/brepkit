@@ -1320,6 +1320,121 @@ fn a_column_entering_the_ball_from_below_keeps_its_corner_patches() {
     }
 }
 
+/// The ball and the column `-2.05 < x < 2.05`, `-2.05 < y < 4.05` from
+/// `z = -1` up, upright and turned: its `+y` walls pass the ball while its
+/// two `-y` corners pierce it, so each hemisphere holds one chain of arcs
+/// across its seam, and the lower one also two small loops at the corners,
+/// arcs closing on themselves clear of the seam. The ball within the column,
+/// the ball less it and the column less the ball are exact, valid and
+/// watertight, with 8, 6 and 16 faces, and within `1e-7` of the ball past
+/// the column's corner less the ball past its `+x` wall.
+#[test]
+fn a_column_crossing_one_side_of_the_ball_keeps_its_corner_loops() {
+    let within = ball_past(-2.05, -2.05, -1.0) - ball_past(2.05, -2.05, -1.0);
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let turned = Mat4::rotation_z(1.0) * Mat4::rotation_y(0.3);
+    for (pose_name, pose) in [("upright", Mat4::identity()), ("turned", turned)] {
+        for (name, truth, faces) in [
+            ("within", within, 8),
+            ("ball less column", ball - within, 6),
+            ("column less ball", 4.1f64.mul_add(61.0, -within), 16),
+        ] {
+            let label = format!("{name}, {pose_name}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let column = make_box(&mut topo, 4.1, 6.1, 10.0).unwrap();
+            let place = pose * Mat4::translation(-2.05, -2.05, -1.0);
+            transform_solid(&mut topo, column, &place).unwrap();
+            transform_solid(&mut topo, sphere, &pose).unwrap();
+            let result = match name {
+                "within" => boolean(&mut topo, BooleanOp::Intersect, sphere, column),
+                "ball less column" => boolean(&mut topo, BooleanOp::Cut, sphere, column),
+                _ => boolean(&mut topo, BooleanOp::Cut, column, sphere),
+            }
+            .unwrap();
+            assert_eq!(
+                solid_faces(&topo, result).unwrap().len(),
+                faces,
+                "{label}: faces"
+            );
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-7 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+            // A corner patch, under it past the floor, the column over the
+            // ball, and the ball past the +y wall's reach below the floor.
+            let (inside, outside) = (PointClassification::Inside, PointClassification::Outside);
+            for (p, want) in [
+                ((1.95, -1.95, -0.85), [inside, outside, outside]),
+                ((1.95, -1.95, -1.05), [outside, inside, outside]),
+                ((0.1, 3.5, 0.2), [outside, outside, inside]),
+                ((0.1, 0.2, -2.5), [outside, inside, outside]),
+            ] {
+                let want = match name {
+                    "within" => want[0],
+                    "ball less column" => want[1],
+                    _ => want[2],
+                };
+                let p = pose.mul_point(Point3::new(p.0, p.1, p.2));
+                let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+                assert_eq!(got.unwrap(), want, "{label}: {p:?}");
+            }
+        }
+    }
+}
+
+/// The ball and a box whose corner at `(1, 1, -1)` lies inside it below the
+/// equator, upright and turned: each hemisphere holds one chain of arcs
+/// across its seam. The ball within the box, the ball less it and the box
+/// less the ball are exact, valid and watertight, and within `1e-7` of the
+/// ball past the corner.
+#[test]
+fn a_box_corner_below_the_equator_splits_each_hemisphere_along_one_chain() {
+    let within = ball_past(1.0, 1.0, -1.0);
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let turned = Mat4::rotation_z(1.0) * Mat4::rotation_y(0.3);
+    for (pose_name, pose) in [("upright", Mat4::identity()), ("turned", turned)] {
+        for (name, truth) in [
+            ("within", within),
+            ("ball less box", ball - within),
+            ("box less ball", 1000.0 - within),
+        ] {
+            let label = format!("{name}, {pose_name}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+            transform_solid(
+                &mut topo,
+                block,
+                &(pose * Mat4::translation(1.0, 1.0, -1.0)),
+            )
+            .unwrap();
+            transform_solid(&mut topo, sphere, &pose).unwrap();
+            let result = match name {
+                "within" => boolean(&mut topo, BooleanOp::Intersect, sphere, block),
+                "ball less box" => boolean(&mut topo, BooleanOp::Cut, sphere, block),
+                _ => boolean(&mut topo, BooleanOp::Cut, block, sphere),
+            }
+            .unwrap();
+            assert!(exact(&topo, result), "{label}: fell back to a mesh");
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-7 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
+
 /// The ball with a square column through both poles and a thin rod along
 /// `z` through one of its caps, fused into one tool: the ball less it, within
 /// it and the tool less the ball, the rod of radius 0.1 at `(2.75, 0)` or of
