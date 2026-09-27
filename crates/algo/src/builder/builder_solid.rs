@@ -875,25 +875,35 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
     Some(outward)
 }
 
-/// A shell's box over its edges' ends and a few points along each.
-fn shell_box(topo: &Topology, faces: &[FaceId]) -> Option<brepkit_math::aabb::Aabb3> {
-    let mut points = Vec::new();
-    for &fid in faces {
-        let face = topo.face(fid).ok()?;
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            for oe in topo.wire(wid).ok()?.edges() {
-                let edge = topo.edge(oe.edge()).ok()?;
-                let a = topo.vertex(edge.start()).ok()?.point();
-                let b = topo.vertex(edge.end()).ok()?.point();
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                points.extend((0..=8).map(|k| {
-                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
-                    edge.curve().evaluate_with_endpoints(t, a, b)
-                }));
-            }
-        }
-    }
-    (!points.is_empty()).then(|| brepkit_math::aabb::Aabb3::from_points(points))
+/// Three directions in general position for a containment vote.
+const HOLD_RAYS: [Vec3; 3] = [
+    Vec3::new(
+        0.534_522_483_824_848_8,
+        0.801_783_725_737_273_2,
+        0.267_261_241_912_424_4,
+    ),
+    Vec3::new(
+        -0.447_213_595_499_957_9,
+        0.365_148_371_670_110_7,
+        0.816_496_580_927_726,
+    ),
+    Vec3::new(
+        0.620_173_672_946_042_4,
+        -0.248_069_469_178_417,
+        -0.744_208_407_535_250_9,
+    ),
+];
+
+/// The midpoint of a shell's first edge, a point on the shell away from its
+/// vertices.
+fn shell_edge_point(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
+    let face = topo.face(*faces.first()?).ok()?;
+    let oe = *topo.wire(face.outer_wire()).ok()?.edges().first()?;
+    let edge = topo.edge(oe.edge()).ok()?;
+    let a = topo.vertex(edge.start()).ok()?.point();
+    let b = topo.vertex(edge.end()).ok()?.point();
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    Some(edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b))
 }
 
 /// Classify shells as Growth (outer) or Hole (inner).
@@ -945,16 +955,21 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
         } else {
             // Multi-shell: a negative shell is the tool's interior cavity
             // (hole), unless it cannot be one. A cavity lies inside another
-            // shell, so a shell no other shell's box holds, whose flux reads
-            // outward, is a lump whose corner fan flipped: the ball less a
-            // column with a corner inside it leaves the wedge past the
-            // corner's two walls, curved faces cornered only on its rims.
-            let held = shell_box(topo, shell).is_none_or(|b| {
+            // shell, so a shell no other shell holds (most of three rays
+            // from a point on its edge crossing that shell an odd number of
+            // times), whose flux reads outward, is a lump whose corner fan
+            // flipped: the ball less a column with a corner inside it leaves
+            // the wedge past the corner's two walls, curved faces cornered
+            // only on its rims.
+            let held = shell_edge_point(topo, shell).is_none_or(|p| {
                 shells.iter().any(|other| {
                     !std::ptr::eq(other, shell)
-                        && shell_box(topo, other).is_some_and(|o| {
-                            let o = o.expanded(1e-6);
-                            o.contains_point(b.min) && o.contains_point(b.max)
+                        && crate::classifier::RayCastGeoms::of_faces(topo, other).is_ok_and(|g| {
+                            HOLD_RAYS
+                                .iter()
+                                .filter(|&&d| crate::classifier::ray_parity_cached(&g, p, d).0)
+                                .count()
+                                >= 2
                         })
                 })
             });
