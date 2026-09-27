@@ -423,12 +423,7 @@ fn is_point_in_face_boundary(
     face_id: FaceId,
     point: Point3,
 ) -> Result<bool, CheckError> {
-    let polygon = crate::util::face_polygon(topo, face_id)?;
-    if polygon.len() < 3 {
-        return Ok(true); // Full-surface face
-    }
-    let normal = crate::util::polygon_normal(&polygon);
-    Ok(crate::util::point_in_polygon_3d(&point, &polygon, &normal))
+    crate::classify::boundary::face_contains(topo, face_id, point)
 }
 
 /// Find the closest point on the wire edges of a face to a given point.
@@ -449,10 +444,7 @@ fn closest_point_on_wire_edges(
     for wid in wire_ids {
         let wire = topo.wire(wid)?;
         for oe in wire.edges() {
-            let edge_data = topo.edge(oe.edge())?;
-            let p0 = topo.vertex(edge_data.start())?.point();
-            let p1 = topo.vertex(edge_data.end())?.point();
-            let (dist, closest) = point_to_segment(point, p0, p1);
+            let (dist, closest) = point_to_edge(topo, oe.edge(), point)?;
             if dist < best_dist {
                 best_dist = dist;
                 best_pt = closest;
@@ -464,6 +456,32 @@ fn closest_point_on_wire_edges(
     } else {
         Ok(None)
     }
+}
+
+/// The distance from a point to an edge along its own curve, and the
+/// closest point.
+fn point_to_edge(
+    topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
+    point: Point3,
+) -> Result<(f64, Point3), CheckError> {
+    use brepkit_geometry::extrema::point_to_curve;
+    use brepkit_topology::edge::EdgeCurve;
+
+    let edge = topo.edge(edge_id)?;
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let (lo, hi) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+    let projection = match edge.curve() {
+        EdgeCurve::Line => return Ok(point_to_segment(point, a, b)),
+        EdgeCurve::Circle(c) => point_to_curve(point, c, lo, hi),
+        EdgeCurve::Ellipse(e) => point_to_curve(point, e, lo, hi),
+        EdgeCurve::NurbsCurve(n) => point_to_curve(point, n, lo, hi),
+    };
+    Ok((projection.distance, projection.point))
 }
 
 /// Point-to-polygon distance for planar faces.

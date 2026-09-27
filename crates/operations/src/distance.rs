@@ -19,19 +19,13 @@
     clippy::imprecise_flops
 )]
 
-use brepkit_geometry::extrema::{
-    point_to_cone as geo_point_to_cone, point_to_cylinder as geo_point_to_cylinder,
-    point_to_sphere as geo_point_to_sphere, point_to_torus as geo_point_to_torus,
-};
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
-
-use crate::boolean::face_polygon;
 
 /// Result of a distance computation.
 #[derive(Debug, Clone)]
@@ -59,39 +53,12 @@ pub fn point_to_solid_distance(
     point: Point3,
     solid: SolidId,
 ) -> Result<DistanceResult, crate::OperationsError> {
-    let tol = Tolerance::new();
-
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<FaceId> = shell.faces().to_vec();
-
-    let face_aabbs = build_face_aabbs(topo, &face_ids)?;
-    let bvh = Bvh::build(&face_aabbs);
-
-    let mut best_dist = f64::INFINITY;
-    let mut best_point = point;
-
-    let candidates = bvh_distance_candidates(&bvh, &face_aabbs, point);
-
-    for idx in candidates {
-        let fid = face_ids[idx];
-        let aabb_dist_sq = face_aabbs[idx].1.distance_squared_to_point(point);
-        if aabb_dist_sq > best_dist * best_dist {
-            continue;
-        }
-
-        if let Some((dist, closest)) = point_to_face_distance(topo, point, fid, tol)?
-            && dist < best_dist
-        {
-            best_dist = dist;
-            best_point = closest;
-        }
-    }
-
+    // Every shell, each face clipped to its trim.
+    let result = brepkit_check::distance::point_to_solid(topo, point, solid)?;
     Ok(DistanceResult {
-        distance: best_dist,
-        point_a: point,
-        point_b: best_point,
+        distance: result.distance,
+        point_a: result.point_a,
+        point_b: result.point_b,
     })
 }
 
@@ -347,61 +314,15 @@ pub(crate) fn point_to_face_distance(
     topo: &Topology,
     point: Point3,
     face_id: FaceId,
-    tol: Tolerance,
+    _tol: Tolerance,
 ) -> Result<Option<(f64, Point3)>, crate::OperationsError> {
-    let face = topo.face(face_id)?;
-    match face.surface() {
-        FaceSurface::Plane { normal, d } => {
-            let verts = face_polygon(topo, face_id)?;
-            Ok(point_to_polygon_distance(point, &verts, *normal, *d, tol))
-        }
-        FaceSurface::Nurbs(surface) => {
-            let proj = brepkit_math::nurbs::projection::project_point_to_surface(
-                surface, point, tol.linear,
-            );
-            match proj {
-                Ok(p) => Ok(Some((p.distance, p.point))),
-                Err(_) => Ok(None),
-            }
-        }
-        FaceSurface::Cylinder(cyl) => Ok(Some(point_to_cylinder(point, cyl))),
-        FaceSurface::Cone(cone) => Ok(Some(point_to_cone(point, cone))),
-        FaceSurface::Sphere(sph) => Ok(Some(point_to_sphere(point, sph))),
-        FaceSurface::Torus(tor) => Ok(Some(point_to_torus(point, tor))),
-    }
+    // The face as trimmed, not its whole surface.
+    Ok(brepkit_check::distance::point_to_face(
+        topo, point, face_id,
+    )?)
 }
 
 // -- Analytic point-to-surface distance (delegating to brepkit_geometry) ------
-
-/// Closest point on a cylinder to a given point.
-fn point_to_cylinder(
-    point: Point3,
-    cyl: &brepkit_math::surfaces::CylindricalSurface,
-) -> (f64, Point3) {
-    let proj = geo_point_to_cylinder(point, cyl);
-    (proj.distance, proj.point)
-}
-
-/// Closest point on a cone to a given point.
-fn point_to_cone(point: Point3, cone: &brepkit_math::surfaces::ConicalSurface) -> (f64, Point3) {
-    let proj = geo_point_to_cone(point, cone);
-    (proj.distance, proj.point)
-}
-
-/// Closest point on a sphere to a given point.
-fn point_to_sphere(
-    point: Point3,
-    sphere: &brepkit_math::surfaces::SphericalSurface,
-) -> (f64, Point3) {
-    let proj = geo_point_to_sphere(point, sphere);
-    (proj.distance, proj.point)
-}
-
-/// Closest point on a torus to a given point.
-fn point_to_torus(point: Point3, torus: &brepkit_math::surfaces::ToroidalSurface) -> (f64, Point3) {
-    let proj = geo_point_to_torus(point, torus);
-    (proj.distance, proj.point)
-}
 
 // -- BVH helpers --------------------------------------------------------------
 
@@ -494,47 +415,6 @@ fn collect_solid_edges(
 
 // -- Existing helpers (preserved) ---------------------------------------------
 
-/// Compute the distance from a point to a planar polygon.
-///
-/// Returns `(distance, closest_point)` or `None` if the polygon is degenerate.
-fn point_to_polygon_distance(
-    point: Point3,
-    verts: &[Point3],
-    normal: Vec3,
-    d: f64,
-    _tol: Tolerance,
-) -> Option<(f64, Point3)> {
-    if verts.len() < 3 {
-        return None;
-    }
-
-    let signed_dist = normal.dot(Vec3::new(point.x(), point.y(), point.z())) - d;
-    let projected = Point3::new(
-        (-normal.x()).mul_add(signed_dist, point.x()),
-        (-normal.y()).mul_add(signed_dist, point.y()),
-        (-normal.z()).mul_add(signed_dist, point.z()),
-    );
-
-    if point_in_polygon_3d(&projected, verts, &normal) {
-        return Some((signed_dist.abs(), projected));
-    }
-
-    let mut best_dist = f64::INFINITY;
-    let mut best_point = verts[0];
-    let n = verts.len();
-
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (dist, closest) = point_to_segment_distance(point, verts[i], verts[j]);
-        if dist < best_dist {
-            best_dist = dist;
-            best_point = closest;
-        }
-    }
-
-    Some((best_dist, best_point))
-}
-
 /// Point-in-polygon test for 3D (projecting to 2D).
 pub(crate) fn point_in_polygon_3d(point: &Point3, polygon: &[Point3], normal: &Vec3) -> bool {
     use brepkit_math::predicates::point_in_polygon;
@@ -562,25 +442,6 @@ pub(crate) fn point_in_polygon_3d(point: &Point3, polygon: &[Point3], normal: &V
     };
 
     point_in_polygon(proj_pt, &proj_poly)
-}
-
-/// Distance from a point to a line segment.
-fn point_to_segment_distance(point: Point3, a: Point3, b: Point3) -> (f64, Point3) {
-    let ab = b - a;
-    let ap = point - a;
-    let len_sq = ab.length_squared();
-
-    if len_sq < 1e-30 {
-        return ((point - a).length(), a);
-    }
-
-    let t = (ap.dot(ab) / len_sq).clamp(0.0, 1.0);
-    let closest = Point3::new(
-        ab.x().mul_add(t, a.x()),
-        ab.y().mul_add(t, a.y()),
-        ab.z().mul_add(t, a.z()),
-    );
-    ((point - closest).length(), closest)
 }
 
 /// Collect all unique vertex positions from a solid.
@@ -693,39 +554,6 @@ mod tests {
             tol.approx_eq(result.distance, 0.0),
             "distance to self should be 0, got {}",
             result.distance
-        );
-    }
-
-    #[test]
-    fn point_to_sphere_distance() {
-        let sphere =
-            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0).unwrap();
-        let (dist, closest) = point_to_sphere(Point3::new(10.0, 0.0, 0.0), &sphere);
-        let tol = Tolerance::loose();
-        assert!(
-            tol.approx_eq(dist, 5.0),
-            "distance to sphere should be ~5.0, got {dist}"
-        );
-        assert!(
-            tol.approx_eq(closest.x(), 5.0),
-            "closest x should be ~5.0, got {}",
-            closest.x()
-        );
-    }
-
-    #[test]
-    fn point_to_cylinder_distance() {
-        let cyl = brepkit_math::surfaces::CylindricalSurface::new(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            3.0,
-        )
-        .unwrap();
-        let (dist, _closest) = point_to_cylinder(Point3::new(5.0, 0.0, 1.0), &cyl);
-        let tol = Tolerance::loose();
-        assert!(
-            tol.approx_eq(dist, 2.0),
-            "distance to cylinder should be ~2.0, got {dist}"
         );
     }
 
