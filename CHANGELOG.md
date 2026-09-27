@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.71](https://github.com/andymai/brepkit/compare/v4.0.70...v4.0.71) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** split a mirrored cylinder wall whose rims run against its u ([#1861](https://github.com/andymai/brepkit/issues/1861)) ([a362670](https://github.com/andymai/brepkit/commit/a362670b645a2ee941ff2241e95f2dc712b0555c))
+
 ## [4.0.70](https://github.com/andymai/brepkit/compare/v4.0.69...v4.0.70) (2026-09-27)
 
 
