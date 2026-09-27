@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.51](https://github.com/andymai/brepkit/compare/v4.0.50...v4.0.51) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** keep the ball less a column whose corner lies inside it ([#1819](https://github.com/andymai/brepkit/issues/1819)) ([19e6b9d](https://github.com/andymai/brepkit/commit/19e6b9d1b5e1984a345ae17bdfed0d7368068fb1))
+
 ## [4.0.50](https://github.com/andymai/brepkit/compare/v4.0.49...v4.0.50) (2026-09-27)
 
 
