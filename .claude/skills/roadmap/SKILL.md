@@ -215,8 +215,9 @@ One line each; the fixture/PR carries the story. Newest first.
   back exact and invalid (7 shared edges misoriented, 201.10 against 213.05):
   its wall split into two pieces where three belong, and `BuilderSolid`
   dropped one, alone in its own open shell, as a fragmentation sliver. An
-  open shell of one to three faces spanning more than 5% of the result's
-  extent now aborts the assembly instead, and the fuse falls back. A gate on
+  open shell of one to three faces spanning more than 5% of the outer
+  growth shell's extent now aborts the assembly instead, and the fuse falls
+  back. A gate on
   misoriented shared edges is not viable: operands and accepted results
   from the tool carry them (15 io fixtures, relative to the operands).
 
