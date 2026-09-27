@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790518279353,
+  "lastUpdate": 1790519167129,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44279,6 +44279,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42735393,
             "range": "± 155982",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6f5d7bff777b9784c5056bd35c68a7fddc559424",
+          "message": "fix(offset): build offsets and shells of analytic solids exact (#1844)\n\nOffsets and shells of supported analytic solids now preserve exact\ntopology and geometry, producing valid, watertight results without\npolygonal walls or NURBS refits.\n\n## What was wrong\n\n- On main, `offset_solid_v2` of `make_box(10, 10, 10)` by -1 has the\ncorrect volume, 512, but fails `validate_solid` with 24 free edges.\nCylinder offsets by 1 in either direction have one misoriented shared\nedge, and sphere offsets have 32.\n- `shell` with thickness 1 and the top open leaves 32 shared edges\nrunning one way for both `make_cylinder(5, 10)` and `make_cone(5, 2,\n10)`. The cylinder cup measures 344.45 instead of 333.01. Hollowing\n`make_torus(6, 2)` fails with `solid assembly produced no faces`.\n- The offset loop builder trims each face independently, so adjacent\nfaces do not share edges. A cap also reuses a circle edge forward\nregardless of orientation. `shell` constructs walls from sampled\nboundary polygons, which chord curved faces.\n\n## What this does\n\n- Adds `brepkit_offset::image`. When no face collapses and no edge turns\nround, it copies the input topology while moving analytic faces to their\nexact offset surfaces.\n- Vertices move to the nearest intersection of their offset faces using\nleast-length Gauss-Newton steps, with tangent faces sharing one row.\nLine and circle edges are rebuilt through moved vertices. Faces retain\ntheir wires and orientations.\n- `offset_solid` tries the image first for default sharp joints. A solid\nwith cavities is declined, since a cavity's image can pass the outer\nwall's without either turning round.\n- `thick_solid` tries a shell made from two images. The outer image\ncopies the faces. The inner image holds open faces in place, turns\ninside out, and is closed by a rim containing the open face loop outside\nand the reversed inner loop inside. With no open faces, the inner image\nforms a cavity shell, and `thick_solid` returns an error when the image\ndoes not apply rather than a plain offset. It takes the image only with\nsharp joints. The new public `thick_solid_by_image` returns this shell\nalone and rejects a zero or non-finite distance.\n- `shell` uses the exact shell for solids with curved faces when it\napplies and validates. Planar solids and other cases retain the existing\npolygon-wall route.\n- Both paths now use `offset_surface`, which preserves each surface\nreference frame, including the torus axis.\n\n## Scope\n\n- The image returns `None` for NURBS faces, cone-apex vertices, faces\nthat do not meet at a vertex, lines that turn round or collapse, circles\nwhose start crosses the axis, ellipse or NURBS edges, rebuilt curves\nthat leave their offset faces, and planar faces whose loops meet each\nother or themselves (chords padded by their arcs' sagitta), which\ncatches walls passing each other wherever a planar face lies between\nthem. Each reason is logged at debug level.\n- Topology-changing offsets use the phased pipeline. A 10-cube offset by\n-6 still has 24 free edges, and pointed `make_cone(5, 0, 10)` has one\nmisoriented edge.\n- Curved shells retain polygon walls when an open face has a hole, is\nsplit into coplanar pieces, or meets an ellipse or NURBS edge. These\ncases remain recorded in the open roadmap row.\n\n## Verification\n\n- Branch probes cover the box, cylinder, frustum, sphere, and torus,\neach offset by -1 and 1 and shelled 1 thick, upright and turned. All 30\nresults are valid, watertight, and within 5e-16 of closed-form volumes.\nThe roadmap cup row is closed.\n- `crates/operations/tests/offset_exact.rs` adds\n`primitives_offset_exactly`, `concave_and_holed_solids_offset_exactly`,\nand `curved_solids_shell_exactly`. They cover upright, turned, and\nmirrored inputs, asserting validity, watertight meshes, no NURBS refit,\nvolume within 1e-9, and, for the L, the bored plate, the cups and the\nhollows, ray-cast probes of where material is and is not. All three fail\non main.\n- Unit tests in `crates/offset/src/image.rs` pin the declines: a prism's\nneck offset past its width, a turned bore offset until it crosses the\nplate's sides by less than a chord's sag, and a hollow ball. Each\nreturns a solid on the first version of this branch.\n- The workspace suite passes: 3192 tests run, 3192 passed, 20 skipped,\nincluding 307 `brepkit-io` fixtures captured from the gridfinity tool.\nLint is clean.",
+          "timestamp": "2026-09-27T14:23:26Z",
+          "tree_id": "a3612b772ab0883e52cfc170720210de70b3783a",
+          "url": "https://github.com/andymai/brepkit/commit/6f5d7bff777b9784c5056bd35c68a7fddc559424"
+        },
+        "date": 1790519163260,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1013019,
+            "range": "± 1755",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1101797,
+            "range": "± 64221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13051,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 756608,
+            "range": "± 1714",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42652320,
+            "range": "± 111578",
             "unit": "ns/iter"
           }
         ]
