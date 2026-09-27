@@ -1413,8 +1413,25 @@ fn sample_face_interior(
         #[allow(clippy::cast_precision_loss)]
         Point3::new(sum.x() / n as f64, sum.y() / n as f64, sum.z() / n as f64)
     };
-    if offset.dot(centroid - mid_pt) < 0.0 {
-        offset = offset * -1.0;
+    let toward = centroid - mid_pt;
+    let lean = offset.dot(toward);
+    if lean.abs() > 0.1 * offset.length() * toward.length() {
+        if lean < 0.0 {
+            offset = offset * -1.0;
+        }
+    } else if inward_len > 1e-12 {
+        // The centroid sits level with the edge (a hemisphere on its
+        // equator: every boundary vertex on the rim, the centroid at the
+        // ball's centre), so it cannot pick a side. The outer wire runs
+        // counterclockwise about the surface normal, so the face lies to
+        // the left of the edge as the wire traverses it.
+        let along = if first_oe.is_forward() {
+            tangent
+        } else {
+            tangent * -1.0
+        };
+        let left = face_normal.cross(along);
+        offset = left * (offset_scale / left.length().max(1e-300));
     }
 
     let interior_pt = mid_pt + offset;

@@ -1697,12 +1697,12 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
             }
         } else {
             // Feed the complete curve — critical for closed curves (circles).
-            map.entry(curve.face_a)
-                .or_default()
-                .push(SectionSource::Curve(idx));
-            map.entry(curve.face_b)
-                .or_default()
-                .push(SectionSource::Curve(idx));
+            let skipped = arena.curve_skip_faces.get(&idx);
+            for face in [curve.face_a, curve.face_b] {
+                if !skipped.is_some_and(|faces| faces.contains(&face)) {
+                    map.entry(face).or_default().push(SectionSource::Curve(idx));
+                }
+            }
             for &face in arena.curve_extra_faces.get(&idx).into_iter().flatten() {
                 map.entry(face).or_default().push(SectionSource::Curve(idx));
             }
