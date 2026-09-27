@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790537162512,
+  "lastUpdate": 1790538734359,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45143,6 +45143,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43197532,
             "range": "± 777829",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a362670b645a2ee941ff2241e95f2dc712b0555c",
+          "message": "fix(algo): split a mirrored cylinder wall whose rims run against its u (#1861)\n\nThe mirrored cylinder corner Cut and Intersect now remain exact for both\nmirror constructions, with the wall splitting into 4 pieces as it does\nupright.\n\n## What was wrong\n\n- The case places `make_cylinder(2, 6)` at `z = -3` and `make_box(10,\n10, 10)` at `(1, 1.2, 0.8)` over one top corner. Upright and turned\noperations were exact. Mirroring through a slanted plane or with\n`scale(-1, 1, 1)` sent both operations to the mesh boolean. The fallback\nCut measured 74.42406 instead of 74.99922.\n- The mirrored cylinder retains a right-handed frame (`axis x x_axis =\ny_axis`) and its wall is not reversed, but its closed rims turn against\n`u`. The top rim samples run from 0 to `-2π`.\n- `split_boundary_edges_at_3d_points` derived closed-rim sense from\nsamples only for cones. On the mirrored wall, section ends at `u` 0.9273\nand 0.5236 were placed at 2.2143 and 2.618. Each pair sums to `π`,\nreflecting the points about the seam, and the wall split into no pieces.\n- After correcting the rim sense, the greedy walk still traced only the\ncorner loop. The DCEL trace found two loops, but its band loop revisits\nthe glued seam, which the self-crossing test interprets as a crossing.\n\n## What this does\n\n- `closed_ring_dir` now reads stored samples to determine a closed rim's\nsense on cylinders, as it does on cones.\n- The under-split rescue now sends cylinder walls to\n`split_cylinder_band_by_arrangement` when the full trace strictly\nrefines the greedy loops but self-crossing prevents adoption.\n- This entry is limited to walls without holes because the arrangement\nsees the outer boundary and sections, but not holes. The sector rescue\nand other periodic-band shortcuts use the same gate.\n- Both changes are required. The rescue change alone leaves the mirrored\ncases on fallback.\n\n## Verification\n\n- `a_rim_turning_against_u_splits_where_its_points_project` covers\nforward and reversed closed rims and verifies that every joint’s stored\n`u` matches its projected point modulo whole periods. It fails with the\ncone-only rule.\n- `mirrored_cylinder_corner.rs` checks Cut and Intersect in four poses.\nResults have at most 8 faces, include a cylinder, are valid, and match\nthe closed-form volume within `1e-6`. It fails on main.\n- The algo and operations suites pass: 1563 tests, 13 skipped. Earlier\nalgo, operations, and io runs passed 1867 tests with 17 skipped.\n- The 300-line pose sweep is identical to main. The pose audit changes\nonly this case’s mirrored Cut and Intersect from fallback to exact.\n- The roadmap records the case as Closed and lists one remaining\nmirrored-only fallback, the cone’s rod Cut.",
+          "timestamp": "2026-09-27T19:49:23Z",
+          "tree_id": "6eb9903c27d42ed462ce46aea1be8e71e84e5c43",
+          "url": "https://github.com/andymai/brepkit/commit/a362670b645a2ee941ff2241e95f2dc712b0555c"
+        },
+        "date": 1790538729642,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 990722,
+            "range": "± 1416",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1081676,
+            "range": "± 1351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13148,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 730794,
+            "range": "± 866",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41869861,
+            "range": "± 117160",
             "unit": "ns/iter"
           }
         ]
