@@ -2540,8 +2540,9 @@ fn ruling_cone_cylinder(
         ruling_quadratic(quad, b, c)
     };
     let lin_tol = Tolerance::new().linear;
-    let far_nappe = (0..RULING_SAMPLES).any(|i| {
-        let u = ruling_u(i);
+    let far_nappe = (0..WINDOW_SCAN * RULING_SAMPLES).any(|k| {
+        #[allow(clippy::cast_precision_loss)]
+        let u = TAU * (k as f64 + 0.5) / (WINDOW_SCAN * RULING_SAMPLES) as f64;
         let (disc, vp, vm) = roots(u);
         disc >= -lin_tol
             && [vp, vm]

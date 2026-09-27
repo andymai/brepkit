@@ -1526,8 +1526,14 @@ fn seam_crossings_of_contractible_loop(
     for k in 1..=SAMPLES {
         let (prev, d) = (samples[k as usize - 1], samples[k as usize]);
         // A crossing exactly at a sample reads zero there: it belongs to the
-        // step that reaches it, not the one that leaves it.
-        let crosses = (prev < 0.0 && d >= 0.0) || (prev > 0.0 && d <= 0.0);
+        // step that reaches it, when the loop goes on to the other side (the
+        // next sample; the loop's last sample is its first).
+        let crosses = if d == 0.0 {
+            let next = samples[if k == SAMPLES { 1 } else { k as usize + 1 }];
+            prev * next < 0.0
+        } else {
+            prev * d < 0.0
+        };
         if !crosses || (prev - d).abs() >= PI {
             continue;
         }
