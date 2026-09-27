@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.72](https://github.com/andymai/brepkit/compare/v4.0.71...v4.0.72) (2026-09-27)
+
+
+### Bug Fixes
+
+* **math:** trace an oblique cone and cylinder along the cylinder's rulings ([#1863](https://github.com/andymai/brepkit/issues/1863)) ([6ce871b](https://github.com/andymai/brepkit/commit/6ce871b4b0dca228064e0a99164f31e5bdea8c12))
+
 ## [4.0.71](https://github.com/andymai/brepkit/compare/v4.0.70...v4.0.71) (2026-09-27)
 
 
