@@ -1219,6 +1219,24 @@ fn a_column_entering_the_ball_from_below_keeps_its_corner_patches() {
                 (volume - truth).abs() < 1e-7 * truth,
                 "{label}: volume {volume}, truth {truth}"
             );
+            // In a corner patch, just under it past the floor, in the
+            // column over the ball, and in the ball under the floor.
+            let (inside, outside) = (PointClassification::Inside, PointClassification::Outside);
+            for (p, want) in [
+                ((1.95, 1.95, -0.85), [inside, outside, outside]),
+                ((1.95, 1.95, -1.05), [outside, inside, outside]),
+                ((2.0, 2.0, 2.5), [outside, outside, inside]),
+                ((0.1, 0.2, -2.5), [outside, inside, outside]),
+            ] {
+                let want = match name {
+                    "within" => want[0],
+                    "ball less column" => want[1],
+                    _ => want[2],
+                };
+                let p = pose.mul_point(Point3::new(p.0, p.1, p.2));
+                let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+                assert_eq!(got.unwrap(), want, "{label}: {p:?}");
+            }
         }
     }
 }
