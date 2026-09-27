@@ -1726,6 +1726,8 @@ pub fn intersect_analytic_analytic_bounded(
 /// - **Sphere-sphere**: intersection is a circle (plane through the two centers)
 /// - **Coaxial cylinders**: same axis → circle(s) or empty
 /// - **Sphere-cylinder**: reduce to quadratic in one parameter
+/// - **Cone-cylinder**: parallel axes in the cone's own `v`, other axes
+///   along the cylinder's rulings
 #[allow(clippy::too_many_lines)]
 fn try_algebraic_intersection(
     a: &AnalyticSurface<'_>,
@@ -2550,6 +2552,34 @@ fn ruling_cone_cylinder(
         return None;
     }
     let samples = ruling_samples(cyl, &roots);
+    // A window of meeting rulings narrower than the sampling would vanish
+    // (a cone's tip just through the wall) while the others still made
+    // loops; a finer scan finds every window, and any that the sampling
+    // covers thinly goes to the marcher.
+    let scan = WINDOW_SCAN * RULING_SAMPLES;
+    // Ruling sample `i` lies midway between scan points
+    // `WINDOW_SCAN i + 7` and `WINDOW_SCAN i + 8`.
+    #[allow(clippy::cast_precision_loss)]
+    let meets = |k: usize| roots(TAU * ((k % scan) as f64 + 0.5) / scan as f64).0 >= -lin_tol;
+    if let Some(start) = (0..scan).find(|&k| !meets(k)) {
+        let mut k = start;
+        while k < start + scan {
+            if !meets(k) {
+                k += 1;
+                continue;
+            }
+            let first = k;
+            while k < start + scan && meets(k) {
+                k += 1;
+            }
+            let covered = (first..k)
+                .filter(|&j| j % WINDOW_SCAN == WINDOW_SCAN / 2 - 1 && meets(j + 1))
+                .count();
+            if covered < WINDOW_MIN_SAMPLES {
+                return None;
+            }
+        }
+    }
     let loops = if samples.iter().all(Option::is_some) {
         closed_ruling_loops(&samples)
     } else {
@@ -2559,14 +2589,14 @@ fn ruling_cone_cylinder(
         return None;
     }
     Some(fit_ruling_loops(&loops, |p| {
-        let (on_cone, on_cyl) = (cone.project_point(p), cyl.project_point(p));
-        if cone_first {
-            (on_cone, on_cyl)
-        } else {
-            (on_cyl, on_cone)
-        }
+        in_order(cone.project_point(p), cyl.project_point(p), cone_first)
     }))
 }
+
+/// Scan points per ruling sample when looking for windows of meeting
+/// rulings, and the fewest samples a window needs to be fit.
+const WINDOW_SCAN: usize = 16;
+const WINDOW_MIN_SAMPLES: usize = 8;
 
 /// Rulings sampled around a swept cylinder, half a step off u = 0 so the
 /// branches of a self-touching curve (equal crossing cylinders) do not share
@@ -2735,7 +2765,7 @@ fn algebraic_parallel_cone_cylinder(
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
     let axis = cone.axis();
     if axis.dot(cyl.axis()).abs() < 1.0 - 1e-10 {
-        return Ok(None); // Skew/oblique — general marcher.
+        return Ok(None); // Skew or oblique: `ruling_cone_cylinder` traces it.
     }
 
     let apex = cone.apex();
@@ -3588,6 +3618,84 @@ mod tests {
     /// parallel-axis boss cylinder. The general marcher returned ~49 overlapping
     /// partial traces of one curve here; the algebraic path must return exactly
     /// the two branches, each ON both surfaces and inside the cone's v-hint.
+    #[test]
+    fn oblique_cone_cylinder_traces_curves_on_both() {
+        use crate::traits::ParametricCurve;
+        // A pointed cone opening down from (0, 0, 3), radius half the depth,
+        // and a rod along y through (x0, ., 1): one loop through the wall
+        // when the rod pokes out, two when every ruling meets the cone.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 3.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            2.0_f64.atan(),
+        )
+        .unwrap();
+        for (x0, loops) in [(0.5, 1), (0.0, 2)] {
+            let cyl =
+                CylindricalSurface::new(Point3::new(x0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0), 0.6)
+                    .unwrap();
+            for cone_first in [true, false] {
+                let (a, b) = if cone_first {
+                    (
+                        AnalyticSurface::Cone(&cone),
+                        AnalyticSurface::Cylinder(&cyl),
+                    )
+                } else {
+                    (
+                        AnalyticSurface::Cylinder(&cyl),
+                        AnalyticSurface::Cone(&cone),
+                    )
+                };
+                let curves = intersect_analytic_analytic(a, b, 32).unwrap();
+                assert_eq!(curves.len(), loops, "x0 {x0}: loops");
+                for c in &curves {
+                    let (t0, t1) = c.curve.domain();
+                    for k in 0..=64 {
+                        let t = (t1 - t0).mul_add(f64::from(k) / 64.0, t0);
+                        let p = ParametricCurve::evaluate(&c.curve, t);
+                        // A cubic through the ruling samples, bent most at the
+                        // loop's branch points.
+                        let rod = (p.x() - x0).hypot(p.z() - 1.0);
+                        assert!(
+                            (rod - 0.6).abs() < 1e-4,
+                            "x0 {x0}: off the rod by {}",
+                            rod - 0.6
+                        );
+                        let cone_r = p.x().hypot(p.y());
+                        assert!(
+                            (cone_r - 0.5 * (3.0 - p.z())).abs() < 1e-4,
+                            "x0 {x0}: off the cone at {p:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn oblique_cone_cylinder_defers_where_rulings_cannot_trace_it() {
+        let t = 2.0_f64.atan();
+        let cone =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 3.0), Vec3::new(0.0, 0.0, -1.0), t).unwrap();
+        // A rod through the apex meets the far nappe.
+        let through_apex =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 3.0), Vec3::new(0.0, 1.0, 0.0), 0.6)
+                .unwrap();
+        assert!(ruling_cone_cylinder(&cone, &through_apex, true).is_none());
+        // A rod along a generator meets each ruling once.
+        let generator = Vec3::new(t.cos(), 0.0, -t.sin());
+        let along = CylindricalSurface::new(Point3::new(0.0, 0.3, 0.0), generator, 0.2).unwrap();
+        assert!(ruling_cone_cylinder(&cone, &along, true).is_none());
+        // A pin's tip just through a tube's wall: the tube's rulings that
+        // meet it span a window narrower than the sampling.
+        let pin =
+            ConicalSurface::new(Point3::new(20.5, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), t).unwrap();
+        let tube =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, -10.0), Vec3::new(0.0, 0.0, 1.0), 20.0)
+                .unwrap();
+        assert!(ruling_cone_cylinder(&pin, &tube, true).is_none());
+    }
+
     #[test]
     fn parallel_cone_cylinder_gives_two_exact_branches() {
         use crate::traits::ParametricCurve;

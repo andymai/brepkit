@@ -1,7 +1,8 @@
-//! A rod across a pointed cone or a cylinder, poking out through its wall,
-//! on the side of the wall's seam and on the far side, upright, turned,
-//! mirrored through a slanted plane and mirrored by a transform: the Cut
-//! and the Intersect are exact and remove what the rod takes.
+//! A rod across a pointed cone, a frustum or a cylinder, poking out through
+//! its wall on the side of the wall's seam and on the far side, or passing
+//! through it, upright, turned, mirrored through a slanted plane and
+//! mirrored by a transform: the Cut and the Intersect are exact and remove
+//! what the rod takes.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -65,10 +66,18 @@ fn a_rod_through_a_wall_is_exact_on_either_side_of_its_seam() {
     let turn = Mat4::translation(0.4, -0.3, 0.2) * Mat4::rotation_x(0.7) * Mat4::rotation_z(0.3);
     let (at, normal) = (Point3::new(0.3, 0.0, 0.0), Vec3::new(1.0, 0.2, 0.1));
     let cone_radius = |z: f64| 0.5 * (3.0 - z);
+    let frustum_radius = |z: f64| 0.25f64.mul_add(-(z + 3.0), 3.0);
     let cylinder_radius = |_: f64| 2.0;
-    let cases: [Case<'_>; 4] = [
+    let cases: [Case<'_>; 6] = [
         ("cone", 0.5, PI * 9.0 * 6.0 / 3.0, &cone_radius),
         ("cone", -0.5, PI * 9.0 * 6.0 / 3.0, &cone_radius),
+        ("cone", 0.0, PI * 9.0 * 6.0 / 3.0, &cone_radius),
+        (
+            "frustum",
+            0.5,
+            PI * 6.0 * (9.0 + 4.5 + 2.25) / 3.0,
+            &frustum_radius,
+        ),
         ("cylinder", 1.7, PI * 4.0 * 6.0, &cylinder_radius),
         ("cylinder", -1.7, PI * 4.0 * 6.0, &cylinder_radius),
     ];
@@ -81,10 +90,10 @@ fn a_rod_through_a_wall_is_exact_on_either_side_of_its_seam() {
             ] {
                 let label = format!("{solid} x0 {x0} {pose} {op:?}");
                 let mut topo = Topology::new();
-                let mut a = if solid == "cone" {
-                    make_cone(&mut topo, 3.0, 0.0, 6.0).unwrap()
-                } else {
-                    make_cylinder(&mut topo, 2.0, 6.0).unwrap()
+                let mut a = match solid {
+                    "cone" => make_cone(&mut topo, 3.0, 0.0, 6.0).unwrap(),
+                    "frustum" => make_cone(&mut topo, 3.0, 1.5, 6.0).unwrap(),
+                    _ => make_cylinder(&mut topo, 2.0, 6.0).unwrap(),
                 };
                 transform_solid(&mut topo, a, &Mat4::translation(0.0, 0.0, -3.0)).unwrap();
                 let mut b = make_cylinder(&mut topo, ROD, 20.0).unwrap();
