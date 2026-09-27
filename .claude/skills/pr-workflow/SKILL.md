@@ -14,6 +14,7 @@ End-to-end change flow for this repo: branch, commit, push, PR, AI review gate, 
 | Branch | `git checkout -b <type>/<kebab-description>` (e.g. `feat/render-lod`, `fix/ci-crates-io-flake`) |
 | Local gate before push | `cargo nextest run -p <touched-crate>` and, if any `Cargo.toml` changed, `./scripts/check-boundaries.sh` |
 | Pose sweep (booleans, classification, measurement, tessellation) | `cargo run --release --example pose_sweep -p brepkit-operations > out.txt` on `main` and on the branch, then `diff` the two |
+| Truth audit (booleans against closed-form volumes) | `cargo run --release --example truth_audit -p brepkit-operations`: a `!` marks a result off its truth, which a pose sweep cannot see when every pose is wrong alike |
 | Compliance grep | See "Banned-name compliance" below |
 | Push (sandbox) | `git push "https://x-access-token:$(gh auth token)@github.com/andymai/brepkit.git" <branch>` |
 | Verify remote head | `gh pr view <N> --json headRefOid` (never `git rev-parse origin/<branch>`) |
