@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790502936260,
+  "lastUpdate": 1790505470079,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43739,6 +43739,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28442135,
             "range": "± 185263",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e5cfbb7e95c863fdd93e487e00f8b951287036d2",
+          "message": "fix(algo): keep a solid's cavity through booleans with a box (#1836)\n\nBoolean operations with boxes now preserve a solid's cavity and produce\nexact, valid results with the expected volume.\n\n## What was wrong\n\n- On main, `make_box(20, 20, 20)` at `(-10, -10, -10)` less\n`make_sphere(3, 32)` produces a cube with a ball-shaped cavity, one\ninner shell, and volume 7886.9027. Intersecting it with the same cube\nshifted 1 along x returns a plain 6-face box measuring 7600 instead of\n7486.9027. Subtracting the box over `z < -4` returns 5600 instead of\n5486.9027. Both results are valid and closed, but silently wrong.\n\n- `try_build_analytic_classifier` reads only the outer shell. It\ntherefore classified the hollow cube as a `Box`, causing every operation\nagainst a box to take the box-pair shortcut.\n\n- Once the general engine ran, `BuilderSolid` classified a shell as\ngrowth or hole using the sign of a volume fanned over its faces' corner\nvertices. A cavity made from a cap and its disc has no corner fan\nbecause each face is bounded by one circle edge. A cavity made from the\nball's two hemispheres has a flat fan because its only corners lie on\nthe equator. Rounding filed both as growth shells, producing two solids.\nThe hollow cube fused with the box over `z < 1` then fell back to a mesh\nmeasuring 7971.1406 instead of 7970.6785.\n\n- `remove_doubled_faces` dropped the two hemispheres of an untouched\ncavity as a doubled pair because they share every edge. Consequently,\nfusing the hollow cube with a box clear of the cavity measured 8000\ninstead of 7886.9027.\n\n- `detect_trivial_relation` read a box swallowing the whole cavity\n(`-3.5 < x < 9.9`, `|y|, |z| < 3.5`) as held by the cube, since its\nvertices, probes and centre all lie in material: the Fuse returned the\nhollow cube (7886.90 against 8000) and the Intersect the box (656.60\nagainst 543.50).\n\n## What this does\n\n- `try_build_analytic_classifier` now returns `None` for a solid with\ninner shells. Its callers already fall back when it returns `None`.\n\n- `BuilderSolid` uses surface-normal flux through\n`shell_is_outward_oriented` when no face in a shell has three corners. A\nflat fan's positive sign yields to an inward flux when another shell\nholds the shell, using the ray-parity test already used by the negative\nbranch and now shared. Every other shell is decided as before.\n\n- `remove_doubled_faces` now keeps two faces of one identically oriented\nsurface with the same orientation flag when they traverse every shared\nedge in opposite directions. These are the two halves of a closed\nsurface. A doubled copy retains its wire and traverses the shared edges\nin the same direction.\n\n- `detect_trivial_relation` no longer lets a container with inner shells\nhold the other solid trivially; the engine decides those.\n\n## Verification\n\n- Added `a_cavity_survives_booleans_with_a_box_below_a_plane`. It covers\nthe box over `z < z0` at seven heights, from below the cavity to past\nit, including the equator plane, across all four operations. All 27\nresults are exact, valid, and within `1e-6` of the expected volume.\n\n- Added `a_cavity_survives_booleans_with_a_box_holding_it`. It covers\nthe shifted cube across all four operations and classifies a point by\nthe cavity's centre. Every result is exact, valid, and within `1e-6` of\nits expected volume.\n\n- Added `a_box_swallowing_the_cavity_is_not_held_by_the_cube` for the\nIntersect, Fuse and Cut against the swallowing box (543.50, 8000,\n7343.40). Added\n`a_cap_cavity_keeps_its_side_with_its_disc_through_the_origin`: the\nscene moved down 1, so the kept disc's plane passes through the world\norigin, in all four operations. The first two tests fail on main.\n\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, reports 487 exact results out of 540 with nothing\nflagged, matching #1832. The pose sweep's 300 lines are unchanged.\n\n- The workspace suite passes: 3182 tests run, 3182 passed, 20 skipped.\nLint is clean.\n\n- The roadmap records the case as closed.",
+          "timestamp": "2026-09-27T10:35:39Z",
+          "tree_id": "08828a0c2f70116164dd77045fabc0dca32f0048",
+          "url": "https://github.com/andymai/brepkit/commit/e5cfbb7e95c863fdd93e487e00f8b951287036d2"
+        },
+        "date": 1790505464390,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 573293,
+            "range": "± 3606",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 603650,
+            "range": "± 3925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7911,
+            "range": "± 81",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 408866,
+            "range": "± 7747",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26744935,
+            "range": "± 524391",
             "unit": "ns/iter"
           }
         ]
