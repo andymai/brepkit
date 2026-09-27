@@ -1187,12 +1187,13 @@ fn wrap_pi(x: f64) -> f64 {
     (x + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI
 }
 
-/// A cylinder or cone face's wires in its `(u, v)` parameters. A hit at
-/// `(u, v)` is on the face when a ray from it along `v` crosses the wires an
-/// odd number of times, and each crossing is solved on the edge's own curve,
-/// so the hit is read exactly however an edge bows between its samples. On
-/// a cone the ray runs away from the apex, where a wire through it closes
-/// through a point that has no `u` of its own.
+/// A cylinder, cone or sphere face's wires in its `(u, v)` parameters. A hit
+/// at `(u, v)` is on the face when a ray from it along `v` crosses the wires
+/// an odd number of times, and each crossing is solved on the edge's own
+/// curve, so the hit is read exactly however an edge bows between its
+/// samples. On a cone the ray runs away from the apex, where a wire through
+/// it closes through a point that has no `u` of its own, and on a sphere
+/// away from the pole the face holds.
 struct UvTrim {
     edges: Vec<UvEdge>,
 }
@@ -1649,7 +1650,6 @@ fn ray_sphere_trim_crossings(
     tol: Tolerance,
 ) -> (i32, bool) {
     let near = 10.0 * tol.linear;
-    let r = surface.radius();
     let project = |p: Point3| frame.project(p);
     let mut crossings = 0;
     let mut suspicious = false;
@@ -1658,23 +1658,26 @@ fn ray_sphere_trim_crossings(
         .flatten()
     {
         let (u, v) = frame.project(hit);
-        let (on, close) = trim.contains(u, v, away, r * v.cos(), near, &project);
+        let (on, close) = trim.contains(u, v, away, frame.radius_at(v), near, &project);
         suspicious |= close;
         crossings += i32::from(on != beyond);
     }
     (crossings, suspicious)
 }
 
-/// Longitude `u` and latitude `v` on a sphere about an axis of its own.
+/// Longitude `u` and, as `v`, the length along the meridian from the equator
+/// (a length, as on a cone or cylinder), on a sphere about an axis of its
+/// own.
 struct SphereFrame {
     center: Point3,
+    radius: f64,
     axis: Vec3,
     x: Vec3,
     y: Vec3,
 }
 
 impl SphereFrame {
-    fn new(center: Point3, axis: Vec3) -> Option<Self> {
+    fn new(center: Point3, radius: f64, axis: Vec3) -> Option<Self> {
         let helper = if axis.x().abs() < 0.9 {
             Vec3::new(1.0, 0.0, 0.0)
         } else {
@@ -1682,7 +1685,13 @@ impl SphereFrame {
         };
         let x = axis.cross(helper).normalize().ok()?;
         let y = axis.cross(x);
-        Some(Self { center, axis, x, y })
+        Some(Self {
+            center,
+            radius,
+            axis,
+            x,
+            y,
+        })
     }
 
     /// A point's `(u, v)`, by its direction from the centre (so a chord
@@ -1695,18 +1704,72 @@ impl SphereFrame {
         }
         (
             w.dot(self.y).atan2(w.dot(self.x)).rem_euclid(TAU),
-            (w.dot(self.axis) / len).clamp(-1.0, 1.0).asin(),
+            self.radius * (w.dot(self.axis) / len).clamp(-1.0, 1.0).asin(),
         )
+    }
+
+    /// The radius of the latitude circle at `v`.
+    fn radius_at(&self, v: f64) -> f64 {
+        self.radius * (v / self.radius).cos()
     }
 }
 
+/// Which way a sphere face's ray runs along `v` (`true` toward the north
+/// pole) and whether it also crosses the face at the pole it runs toward,
+/// from each wire's turns about the axis and its twice-signed area in
+/// `(u, v)`, the face on the wire's left. A total of one turn holds the
+/// north pole, minus one the south; with none, a wire that winds makes a
+/// band and a counter-clockwise wire a patch, holding neither pole, and a
+/// face whose every wire is a clockwise hole holds both. A wire of no more
+/// than `area_tol` (a seam run there and back) says nothing. `None` for more
+/// than a turn.
+fn sphere_pole_side(wires: &[(i64, f64)], area_tol: f64) -> Option<(bool, bool)> {
+    let total: i64 = wires.iter().map(|w| w.0).sum();
+    let winds = wires.iter().any(|w| w.0 != 0);
+    let patch = wires.iter().any(|w| w.0 == 0 && w.1 > area_tol);
+    match total {
+        1 => Some((false, false)),
+        -1 => Some((true, false)),
+        0 if winds || patch => Some((true, false)),
+        0 => Some((false, true)),
+        _ => None,
+    }
+}
+
+/// Each wire's whole turns about `frame`'s axis and its twice-signed area in
+/// `(u, v)`. `None` when two samples lie more than an eighth of a turn apart
+/// in `u` (the wire runs too near a pole to read) or a turn is not whole.
+fn sphere_wire_turns(wires: &[Vec<Point3>], frame: &SphereFrame) -> Option<Vec<(i64, f64)>> {
+    wires
+        .iter()
+        .map(|pts| {
+            let uv: Vec<(f64, f64)> = pts.iter().map(|p| frame.project(*p)).collect();
+            let (mut turn, mut twice_area, mut u) = (0.0, 0.0, uv[0].0);
+            for i in 0..uv.len() {
+                let (a, b) = (uv[i], uv[(i + 1) % uv.len()]);
+                let du = wrap_pi(b.0 - a.0);
+                if du.abs() > std::f64::consts::FRAC_PI_4 {
+                    return None;
+                }
+                twice_area += u.mul_add(b.1, -(u + du) * a.1);
+                u += du;
+                turn += du;
+            }
+            let turns = (turn / TAU).round();
+            if (turn - turns * TAU).abs() > 1e-6 {
+                return None;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            Some((turns as i64, twice_area))
+        })
+        .collect()
+}
+
 /// A spherical face as a [`FaceGeom::SphereTrim`]: its wires in `(u, v)`
-/// about the candidate axis whose poles lie farthest from them, the ray run
-/// away from the pole the face holds. Each wire's turn about the axis (the
-/// face on its left) says which: a total of one turn holds the north pole,
-/// minus one the south; with none, a wire that winds makes a band, a patch
-/// holds neither pole, and a face whose every wire is a hole holds both.
-/// `None` when no candidate keeps the poles clear of the wires.
+/// about a candidate axis whose poles lie clear of them (the clearest that
+/// reads), the ray run away from the pole the face holds
+/// ([`sphere_pole_side`]). `None` when no candidate keeps the poles a few
+/// degrees from the wires and reads them.
 fn sphere_trim(
     topo: &Topology,
     face: &brepkit_topology::face::Face,
@@ -1714,6 +1777,7 @@ fn sphere_trim(
 ) -> Result<Option<FaceGeom>, AlgoError> {
     const SAMPLES: u32 = 32;
     let center = surface.center();
+    let r = surface.radius();
     // Each wire's samples in traversal order.
     let mut wires: Vec<Vec<Point3>> = Vec::new();
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
@@ -1749,7 +1813,13 @@ fn sphere_trim(
         }
         wires.push(pts);
     }
-    let candidates = [
+    let reach = |axis: Vec3| {
+        wires.iter().flatten().fold(0.0_f64, |m, p| {
+            let w = *p - center;
+            m.max((w.dot(axis) / w.length().max(1e-300)).abs())
+        })
+    };
+    let mut candidates: Vec<(f64, Vec3)> = [
         surface.z_axis(),
         surface.x_axis(),
         surface.y_axis(),
@@ -1764,66 +1834,34 @@ fn sphere_trim(
             -0.377_964_473_009_227_2,
             std::f64::consts::FRAC_1_SQRT_2,
         ),
-    ];
-    let reach = |axis: Vec3| {
-        wires.iter().flatten().fold(0.0_f64, |m, p| {
-            let w = *p - center;
-            m.max((w.dot(axis) / w.length().max(1e-300)).abs())
-        })
-    };
-    let Some(axis) = candidates
-        .into_iter()
-        .min_by(|a, b| reach(*a).total_cmp(&reach(*b)))
-        .filter(|a| reach(*a) <= 3.0_f64.to_radians().cos())
-    else {
-        return Ok(None);
-    };
-    let Some(frame) = SphereFrame::new(center, axis) else {
-        return Ok(None);
-    };
-    let (mut total, mut winds, mut patch) = (0_i64, false, false);
-    for pts in &wires {
-        let uv: Vec<(f64, f64)> = pts.iter().map(|p| frame.project(*p)).collect();
-        let (mut turn, mut twice_area, mut u) = (0.0, 0.0, uv[0].0);
-        for i in 0..uv.len() {
-            let (a, b) = (uv[i], uv[(i + 1) % uv.len()]);
-            let du = wrap_pi(b.0 - a.0);
-            if du.abs() > std::f64::consts::FRAC_PI_4 {
-                return Ok(None);
-            }
-            twice_area += u.mul_add(b.1, -(u + du) * a.1);
-            u += du;
-            turn += du;
-        }
-        let turns = (turn / TAU).round();
-        if (turn - turns * TAU).abs() > 1e-6 {
+    ]
+    .into_iter()
+    .map(|axis| (reach(axis), axis))
+    .filter(|(m, _)| *m <= 3.0_f64.to_radians().cos())
+    .collect();
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, axis) in candidates {
+        let Some(frame) = SphereFrame::new(center, r, axis) else {
+            continue;
+        };
+        let Some((north, beyond)) =
+            sphere_wire_turns(&wires, &frame).and_then(|w| sphere_pole_side(&w, 1e-9 * r))
+        else {
+            continue;
+        };
+        let project = |p: Point3| frame.project(p);
+        let Some(trim) = UvTrim::new(topo, face, &project, &|v| frame.radius_at(v))? else {
             return Ok(None);
-        }
-        #[allow(clippy::cast_possible_truncation)]
-        let turns = turns as i64;
-        total += turns;
-        winds |= turns != 0;
-        patch |= turns == 0 && twice_area > 0.0;
+        };
+        return Ok(Some(FaceGeom::SphereTrim {
+            surface: surface.clone(),
+            frame,
+            trim,
+            away: if north { 1.0 } else { -1.0 },
+            beyond,
+        }));
     }
-    let (away, beyond) = match total {
-        1 => (-1.0, false),
-        -1 => (1.0, false),
-        0 if winds || patch => (1.0, false),
-        0 => (-1.0, true),
-        _ => return Ok(None),
-    };
-    let r = surface.radius();
-    let project = |p: Point3| frame.project(p);
-    let Some(trim) = UvTrim::new(topo, face, &project, &|v| r * v.cos())? else {
-        return Ok(None);
-    };
-    Ok(Some(FaceGeom::SphereTrim {
-        surface: surface.clone(),
-        frame,
-        trim,
-        away,
-        beyond,
-    }))
+    Ok(None)
 }
 
 /// A spherical face's loops as [`SphereLoop`]s, each wire walked in its
@@ -2892,6 +2930,32 @@ mod tests {
         // Above the tube.
         let above = classify_ray_cast(&topo, solid, Point3::new(3.0, 0.0, 2.0)).unwrap();
         assert_eq!(above, crate::builder::face_class::FaceClass::Outside);
+    }
+
+    /// A sphere face's ray runs away from the pole it holds, and on through
+    /// the far pole for a face that holds both; a wire of no area (a seam
+    /// there and back) says nothing.
+    #[test]
+    fn a_sphere_face_runs_its_ray_away_from_the_pole_it_holds() {
+        let tol = 1e-9;
+        let north_cap = [(1, 0.0)];
+        let north_cap_with_hole = [(1, 0.0), (0, -0.5)];
+        let south_cap = [(-1, 0.0)];
+        let band = [(1, 0.0), (-1, 0.0)];
+        let patch_with_hole = [(0, 0.8), (0, -0.2)];
+        let holes = [(0, -0.2), (0, -0.3)];
+        let seam_and_hole = [(0, 1e-17), (0, -0.3)];
+        assert_eq!(sphere_pole_side(&north_cap, tol), Some((false, false)));
+        assert_eq!(
+            sphere_pole_side(&north_cap_with_hole, tol),
+            Some((false, false))
+        );
+        assert_eq!(sphere_pole_side(&south_cap, tol), Some((true, false)));
+        assert_eq!(sphere_pole_side(&band, tol), Some((true, false)));
+        assert_eq!(sphere_pole_side(&patch_with_hole, tol), Some((true, false)));
+        assert_eq!(sphere_pole_side(&holes, tol), Some((false, true)));
+        assert_eq!(sphere_pole_side(&seam_and_hole, tol), Some((false, true)));
+        assert_eq!(sphere_pole_side(&[(1, 0.0), (1, 0.0)], tol), None);
     }
 
     #[test]
