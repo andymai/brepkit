@@ -1,0 +1,21 @@
+crates/algo/src/pave_filler/mod.rs
+  s_ba2f7b5c6902b6::t_9289aa7fa44679 125-198
+crates/algo/src/builder/fill_images_faces.rs
+  s_ba2f7b5c6902b6::t_25ffd4c83d1e9b 879,921-929,963
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "52c9f63aadb26aced9bab5f2d4c6ba6ddf37e1ae",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
