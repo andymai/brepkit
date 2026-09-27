@@ -1,0 +1,27 @@
+crates/operations/src/revolve.rs
+  s_ba2f7b5c6902b6::t_89ac2e2cf254ca 262-265
+  s_ba2f7b5c6902b6::t_5525f5f7f11ca3 443-445,1406-1412,1421-1429,1435-1436,1441-1447,1451,1455,1482-1486,1571-1574,1598-1609,1611-1616,1618-1622,1647-1663
+crates/operations/tests/revolve_arc_profile.rs
+  s_ba2f7b5c6902b6::t_5955ec10bb5c84 194-204,207-208,210-213,215-218,220-284
+  s_ba2f7b5c6902b6::t_e435a15e85552f 205-206,209,214,219
+  s_ba2f7b5c6902b6::t_6347c3675bac8f 285-287
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_624c731b6d119f 203-211
+  s_ba2f7b5c6902b6::t_e3f53029443f26 212
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4aa343422f42537117dcc4a5208a992d631659e5",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
