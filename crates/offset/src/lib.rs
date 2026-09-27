@@ -126,7 +126,8 @@ pub fn thick_solid(
 ///
 /// # Errors
 ///
-/// Returns [`OffsetError`] if a topology lookup fails.
+/// Returns [`OffsetError`] if `distance` is zero or not finite, or a
+/// topology lookup fails.
 pub fn thick_solid_by_image(
     topo: &mut Topology,
     solid: SolidId,
@@ -134,6 +135,11 @@ pub fn thick_solid_by_image(
     exclude: &[FaceId],
     tolerance: f64,
 ) -> Result<Option<SolidId>, OffsetError> {
+    if !distance.is_finite() || distance.abs() < tolerance {
+        return Err(OffsetError::InvalidInput {
+            reason: "offset distance must be non-zero and finite".into(),
+        });
+    }
     image::thick_solid(topo, solid, distance, exclude, tolerance)
 }
 
