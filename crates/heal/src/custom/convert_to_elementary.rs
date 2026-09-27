@@ -85,9 +85,29 @@ pub fn convert_to_elementary(
             continue;
         };
         let opposed = normals_oppose(nurbs, &replacement);
-        topo.face_mut(*fid)?.set_surface(replacement);
-        if opposed {
-            turn_over(topo, *fid)?;
+        // The face's pcurves live in the NURBS parameter space.
+        super::convert_to_bspline::drop_face_pcurves(topo, *fid)?;
+        match replacement {
+            // A plane stores its outward normal and is left unflagged: taken
+            // along the patch's own normal, and turned over with the face
+            // when the face is flagged.
+            FaceSurface::Plane { normal, d } => {
+                let flagged = topo.face(*fid)?.is_reversed();
+                let sign = if opposed == flagged { 1.0 } else { -1.0 };
+                topo.face_mut(*fid)?.set_surface(FaceSurface::Plane {
+                    normal: normal * sign,
+                    d: d * sign,
+                });
+                if flagged {
+                    turn_over(topo, *fid)?;
+                }
+            }
+            other => {
+                topo.face_mut(*fid)?.set_surface(other);
+                if opposed {
+                    turn_over(topo, *fid)?;
+                }
+            }
         }
         converted += 1;
     }
