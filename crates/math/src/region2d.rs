@@ -129,7 +129,7 @@ fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
                 return Crossing::Count(0);
             }
             let half = disc.sqrt() / (2.0 * qa);
-            if half <= tol / size {
+            if half <= tol {
                 return Crossing::Grazes;
             }
             let mut n = 0;
@@ -269,5 +269,105 @@ mod tests {
         assert_eq!(point_in_region(&ellipse, at(2.999, 0.0), 1e-9), Some(true));
         assert_eq!(point_in_region(&ellipse, at(3.001, 0.0), 1e-9), Some(false));
         assert_eq!(point_in_region(&ellipse, at(0.0, 0.999), 1e-9), Some(true));
+    }
+
+    /// The first trial ray from a point passes through a triangle's vertex:
+    /// it grazes, the next ray decides, inside and outside alike.
+    #[test]
+    fn a_ray_through_a_vertex_tries_another() {
+        let d = Vec2::new(DIRECTIONS[0].cos(), DIRECTIONS[0].sin());
+        let apex = Point2::new(0.0, 0.0) + d * 2.0;
+        let (b, c) = (Point2::new(-2.0, 0.5), Point2::new(0.5, -2.0));
+        let triangle = [
+            Boundary2::Segment(apex, b),
+            Boundary2::Segment(b, c),
+            Boundary2::Segment(c, apex),
+        ];
+        assert_eq!(
+            point_in_region(&triangle, Point2::new(0.0, 0.0), 1e-9),
+            Some(true)
+        );
+        let behind = Point2::new(0.0, 0.0) + d * -3.0;
+        assert_eq!(point_in_region(&triangle, behind, 1e-9), Some(false));
+    }
+
+    /// A side lying along the first trial ray: the ray grazes it, and the
+    /// next ray reads the point outside.
+    #[test]
+    fn a_side_along_the_ray_tries_another() {
+        let d = Vec2::new(DIRECTIONS[0].cos(), DIRECTIONS[0].sin());
+        let n = Vec2::new(-d.y(), d.x());
+        let p = Point2::new(0.0, 0.0);
+        let (q1, q2) = (p + d, p + d * 2.0);
+        let q3 = p + d * 1.5 + n;
+        let triangle = [
+            Boundary2::Segment(q1, q2),
+            Boundary2::Segment(q2, q3),
+            Boundary2::Segment(q3, q1),
+        ];
+        assert_eq!(point_in_region(&triangle, p, 1e-9), Some(false));
+    }
+
+    /// The segment of a unit circle between angles 2.5 and 4.0, across the
+    /// angle's wrap at pi, closed by its chord.
+    #[test]
+    fn an_arc_across_the_wrap() {
+        let (t0, t1) = (2.5_f64, 4.0_f64);
+        let segment = [
+            circle((0.0, 0.0), 1.0, t0, t1),
+            Boundary2::Segment(
+                Point2::new(t1.cos(), t1.sin()),
+                Point2::new(t0.cos(), t0.sin()),
+            ),
+        ];
+        assert_eq!(
+            point_in_region(&segment, Point2::new(-0.9, 0.0), 1e-9),
+            Some(true)
+        );
+        assert_eq!(
+            point_in_region(&segment, Point2::new(-0.7, 0.0), 1e-9),
+            Some(false)
+        );
+        assert_eq!(
+            point_in_region(&segment, Point2::new(-1.01, 0.0), 1e-9),
+            Some(false)
+        );
+    }
+
+    /// The upper half of an ellipse 3 by 1, closed by its major axis.
+    #[test]
+    fn half_an_ellipse() {
+        let half = [
+            Boundary2::Arc {
+                center: Point2::new(0.0, 0.0),
+                u: Vec2::new(1.0, 0.0),
+                v: Vec2::new(0.0, 1.0),
+                a: 3.0,
+                b: 1.0,
+                t0: 0.0,
+                t1: PI,
+            },
+            Boundary2::Segment(Point2::new(-3.0, 0.0), Point2::new(3.0, 0.0)),
+        ];
+        assert_eq!(
+            point_in_region(&half, Point2::new(0.0, 0.99), 1e-9),
+            Some(true)
+        );
+        assert_eq!(
+            point_in_region(&half, Point2::new(0.0, 1.01), 1e-9),
+            Some(false)
+        );
+        assert_eq!(
+            point_in_region(&half, Point2::new(2.9, 0.1), 1e-9),
+            Some(true)
+        );
+        assert_eq!(
+            point_in_region(&half, Point2::new(2.9, 0.3), 1e-9),
+            Some(false)
+        );
+        assert_eq!(
+            point_in_region(&half, Point2::new(0.0, -0.1), 1e-9),
+            Some(false)
+        );
     }
 }

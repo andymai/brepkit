@@ -25,7 +25,7 @@ fn poses() -> [(&'static str, Mat4); 3] {
     ]
 }
 
-/// Both public classifiers agree on `want` for `p`.
+/// Both public classifiers read `p` inside when `inside`, outside when not.
 fn assert_reads(
     topo: &Topology,
     solid: brepkit_topology::SolidId,
