@@ -1,0 +1,20 @@
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_273e2c1c75d827 3753-3763
+  s_ba2f7b5c6902b6::t_8025882e33bf43 2600-2602,2604-2607,2613-2615,2618-2619,2621-2626
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "40657f26b617883f788c92ef85e1f5884bcf6f7c",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
