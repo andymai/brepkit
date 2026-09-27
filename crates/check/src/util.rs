@@ -328,7 +328,7 @@ const SEAM_COINCIDENT_SQ: f64 = 1e-14;
 /// Closed NURBS edges normally place their seam vertex at the curve's domain
 /// start; when they do not, sampling from the domain origin breaks phase
 /// coherence with adjacent edges, so the vertex is projected onto the curve.
-fn nurbs_seam_parameter(
+pub(crate) fn nurbs_seam_parameter(
     nc: &brepkit_math::nurbs::curve::NurbsCurve,
     seam_pt: Point3,
     u0: f64,

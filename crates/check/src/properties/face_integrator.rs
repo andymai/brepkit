@@ -71,6 +71,10 @@ pub(crate) fn integrate_face_about(
     let reversed = face.is_reversed();
     let sign = if reversed { -1.0 } else { 1.0 };
 
+    if let Some(exact) = super::boundary::curved_face_by_boundary(topo, face, sign, about)? {
+        return Ok(exact);
+    }
+
     match face.surface() {
         FaceSurface::Plane { normal, .. } => {
             let effective_normal = if reversed { -*normal } else { *normal };
@@ -1196,9 +1200,10 @@ mod tests {
 
     /// The part of a unit ball's upper hemisphere 270 degrees wide, its wire
     /// (up a meridian to the pole, down another, along the equator) started
-    /// at each of its edges and run either way, its pole vertex on the axis
-    /// or 1e-7 off it: the pole's `u` is arbitrary, and the face reads its
-    /// area `3π/2` however its wire runs.
+    /// at each of its edges, its pole vertex on the axis or 1e-7 off it: the
+    /// pole's `u` is arbitrary, and the face reads its area `3π/2` wherever
+    /// its wire starts. The face lies on its wire's left, so the wire run
+    /// the other way bounds the rest of the ball, `5π/2`.
     #[test]
     fn a_wedge_through_a_pole_reads_its_area_from_any_start() {
         use brepkit_math::curves::Circle3D;
@@ -1247,9 +1252,14 @@ mod tests {
             let ball = SphericalSurface::new(origin, 1.0).unwrap();
             let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
             let c = integrate_face(&topo, face, 5).unwrap();
+            let truth = if reversed {
+                4.0 * std::f64::consts::PI - turn
+            } else {
+                turn
+            };
             assert!(
-                (c.area - turn).abs() < 1e-6,
-                "wire started at edge {first}, reversed {reversed}, pole {off} off: area {}, truth {turn}",
+                (c.area - truth).abs() < 1e-6,
+                "wire started at edge {first}, reversed {reversed}, pole {off} off: area {}, truth {truth}",
                 c.area
             );
         }
