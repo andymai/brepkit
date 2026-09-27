@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790545996339,
+  "lastUpdate": 1790546189340,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45413,6 +45413,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43822715,
             "range": "± 610085",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "97db3eb2f0fd5e175f6f144af8a73aa647fedc7b",
+          "message": "test(operations): audit primitive booleans against closed-form volumes (#1866)\n\nThe new truth audit catches pose consistent boolean errors that the pose\nsweep can classify as exact.\n\n## What this adds\n\n- `crates/operations/examples/truth_audit.rs`, run with `cargo run\n--release --example truth_audit -p brepkit-operations`.\n- It tests five solids of revolution about `z`: a cylinder, pointed\ncone, frustum, ball, and ring. Four tools are applied with Cut and\nIntersect in upright, turned, and slanted-plane-mirrored poses: the\nhalf-space `x > 0.5`, the corner `x > 1, y > 1.2, z > 0.8`, a radius 0.6\nrod along `y` through `(0.5, ., 1)`, and the slab `1 < z < 2`.\n- Truth volumes come from closed-form cuts of each height section, a\ndisc or annulus, integrated across the tool’s height span by Simpson’s\nrule.\n- Each line prints the truth and relative error per pose. `x` identifies\nan exact result, `F` a mesh boolean result, `~` a `validate_solid`\nrejection, and `!` an error greater than `1e-4` of the truth.\n- Pose comparison alone cannot expose a result that is wrong identically\nin every pose. Before #1863, the rod left the pointed cone uncut in\nevery pose, so the pose audit read it as exact. This audit reports `x!`\nwith error `3e-2`.\n- The PR workflow quick reference lists this beside the pose sweep. The\nroadmap now records the documented IGES round-trip behavior: export\nskips analytic surfaces, and import rebuilds each plane as a unit\nsquare.\n\n## Verification\n\n- On main with #1863, only the ring’s rod Cut and Intersect are marked.\nBoth fall back in every pose, with errors `1e-2` and `4e-2`. #1865 does\nnot cover this rod, whose top rulings pass over the tube.\n- The pointed cone’s corner Intersect is empty and reads `F(0e0)`.\n- Every exact result is within `1e-4` of its truth. Clippy is clean on\nthe example.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds a truth audit that measures boolean results against closed-form\nvolumes, catching errors a pose sweep can't see when every pose is wrong\nalike.\n\n- Runs with `cargo run --release --example truth_audit -p\nbrepkit-operations` across five solids of revolution, four tools, two\noperations, and three poses, marking exact, fallback, rejected, empty,\nand over-error results per line.\n- Before #1863 the rod left the pointed cone uncut in every pose and the\npose audit read it as exact; this audit reports `x!` with error `3e-2`.\n- Records the IGES round-trip limitation in the roadmap: export skips\nanalytic surfaces and import rebuilds each plane as a unit square.\n\n<sup>Written for commit c1822a3ec93fe9165ad164c43d0e0571823fe6c5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1866?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-27T21:53:46Z",
+          "tree_id": "73b4f48a9a8aeb876c769733ef1c25879d69ccfe",
+          "url": "https://github.com/andymai/brepkit/commit/97db3eb2f0fd5e175f6f144af8a73aa647fedc7b"
+        },
+        "date": 1790546184600,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1024299,
+            "range": "± 1557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1109921,
+            "range": "± 3848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13076,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 775537,
+            "range": "± 2079",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42846400,
+            "range": "± 116816",
             "unit": "ns/iter"
           }
         ]
