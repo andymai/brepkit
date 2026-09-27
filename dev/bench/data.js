@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790523529330,
+  "lastUpdate": 1790525534470,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44549,6 +44549,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30922760,
             "range": "± 164684",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "85228bd25d664e4c096c7e2b31e3284b0a287c3b",
+          "message": "fix(algo): keep a solid's co-endpoint edges apart (#1849)\n\nCo-endpoint curved edges that follow different paths now remain distinct\nthrough Boolean operations, preserving exact solids for major-arc\nregions and holes.\n\n## What was wrong\n\n- On `main`, faces from `crates/operations/tests/extrude_major_arcs.rs`,\nextruded 0.2 and cut by or intersected with the slab `z > 0.1`, produced\nwrong solids upright and turned.\n- A 10 x 10 plate whose hole is the major segment, a chord and its 323\ndegree arc, cut turned to a valid solid measuring 7.853558 instead of\n9.220039. Upright, the cut validated but its bottom face lost the hole.\nIts mesh read 9.688700 and the check crate read 9.116414.\n`measure::solid_volume` read 9.220039 because that face lies at z = 0.\n- The major segment itself and the disc bounded by arcs of 300 and 60\ndegrees returned open meshes or mesh fallbacks with wrong volumes.\n- The chord and arc share both endpoint vertices.\n`merge_duplicate_edges`, keyed by endpoint pair, welded them into one\nedge and collapsed the region between them. The roadmap records that\nmerge key as terminal. The sanctioned fix is to keep pairs that follow\ndifferent paths from sharing both endpoints.\n- A midpoint pave alone did not reach faces no section crosses.\n`rebuild_face_with_edge_images` expanded only line edges into split\npieces, leaving such a face with the whole arc while its neighbour took\nthe halves.\n\n## What this does\n\n- After the intersection phases, the pave filler groups each solid's\nedges by endpoint pair.\n- When edges in a group take different paths, determined by their\nmiddles being apart, `pave_co_endpoint_curves` paves the middle of each\ncurved edge that nothing else splits.\n- Faces no section crosses now use the split pieces of any open edge,\ncurved or not, chained from the edge's start by their endpoints (a curve\nstored against its edge sorts its pieces by its own parameter). Closed\ncurves, whose pieces wrap the seam, remain whole there.\n- The N-way fuse's pave filler runs the same pass.\n\n## Verification\n\n- The plate with the hole, its wire run either way round, was cut and\nintersected, upright and turned. All 8 results are exact, have 8 faces,\nare valid and watertight, read 9.220039 through `solid_volume` and the\ncheck crate, and read 9.220185 through the mesh.\n- The major segment and two-arc disc slice to exact 4-face solids\nreading their truth.\n- `a_slab_through_a_notched_wall_keeps_it_exact` becomes\n`a_slab_through_a_major_arc_wall_keeps_it_exact`. It covers six faces,\narcs stored three ways, cut and intersect, upright and turned, for 72\ncases. Each result must be valid and watertight, have the expected face\nand cylinder count, contain material only in the kept half by ray-cast\nprobes, and measure area times 0.1 within 1e-6 through both\n`solid_volume` and the check crate. It fails on `main` in dozens of\ncases.\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, reports 487 exact results of 540, matching\n`main`.\n- The pose sweep's 300 lines are unchanged, with no open result. All 307\n`brepkit-io` fixtures captured from the gridfinity tool pass.\n- The workspace suite passes: 3196 tests run, 3196 passed, 20 skipped.\nLint is clean.\n- The roadmap closes the major-arc slab row and records a separate safe\nfallback, the same on main: the past-its-vertices NURBS arc stored\nagainst its edge, sliced, aborts the analytic assembly and returns a\nmesh.",
+          "timestamp": "2026-09-27T16:09:31Z",
+          "tree_id": "092f2f4f572574ad74103c2c0dc2f9e5520a6e01",
+          "url": "https://github.com/andymai/brepkit/commit/85228bd25d664e4c096c7e2b31e3284b0a287c3b"
+        },
+        "date": 1790525529798,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1022417,
+            "range": "± 1572",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1104934,
+            "range": "± 13186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13251,
+            "range": "± 432",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 769992,
+            "range": "± 1454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42349250,
+            "range": "± 67269",
             "unit": "ns/iter"
           }
         ]
