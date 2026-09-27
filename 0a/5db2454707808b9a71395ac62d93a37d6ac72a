@@ -1,0 +1,25 @@
+crates/math/src/region2d.rs
+  s_ba2f7b5c6902b6::t_efa22ef4b71f1f 132
+  s_ba2f7b5c6902b6::t_f43fef56aa3784 273-372
+crates/operations/tests/classify_rims.rs
+  s_ba2f7b5c6902b6::t_efa22ef4b71f1f 28
+crates/topology/src/planar.rs
+  s_ba2f7b5c6902b6::t_efa22ef4b71f1f 33-45,47-48,54-80
+  s_ba2f7b5c6902b6::t_f43fef56aa3784 86-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0a5db2454707808b9a71395ac62d93a37d6ac72a",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
