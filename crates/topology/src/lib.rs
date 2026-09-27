@@ -127,6 +127,7 @@ pub mod face;
 pub mod orientation;
 
 pub mod pcurve;
+pub mod planar;
 pub mod shell;
 pub mod solid;
 #[cfg(feature = "test-utils")]

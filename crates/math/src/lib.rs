@@ -224,6 +224,7 @@ pub mod polygon_offset;
 pub mod predicates;
 pub mod quadrature;
 pub mod ray_triangle;
+pub mod region2d;
 pub mod surfaces;
 pub mod tolerance;
 pub mod traits;
