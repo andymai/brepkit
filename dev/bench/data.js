@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790481278585,
+  "lastUpdate": 1790483340498,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42767,6 +42767,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35828870,
             "range": "± 598825",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "782864093ad55c32e413c29e14aff93208306774",
+          "message": "fix(operations): measure a solid of planes and quadrics along its faces' boundaries (#1815)\n\n`solid_volume` now reads a solid of planes, cylinders, cones and spheres\nexactly along its faces' boundaries: its worst pose sweep error is\n7.2e-10, and the ball within a column measures in 1.02 ms per call\nagainst 482 ms on main.\n\n## What was wrong\n\n- After trying closed forms and special cases for primitives, all planar\nsolids with straight edges, the Steinmetz lens fuse, latitude bored\nspheres, and solids of revolution, `operations::measure::solid_volume`\nfell back to meshing.\n- In the pose sweep at `crates/operations/examples/pose_sweep.rs`, the\nresult on main differed from the volume truth by more than 1e-6 in 110\nof 165 cases and by more than 1e-3 in 2 cases. The worst error was\n9.6e-3 for a column tilted by `rotation_x(-0.2)`, ending under the\nball's pole, then turned.\n- The radius 3 ball within the column `|x|, |y| < 2.5` took 482 ms per\ncall and read 104.192320325, against a truth of 104.19616.\n\n## What this does\n\n- Adds `brepkit_check::properties::exact_solid_volume(topo, solid) ->\nResult<Option<f64>, CheckError>`. It integrates every plane face along\nits edges and every cylinder, cone, and sphere face along its wires,\nusing the boundary integration merged in #1812.\n- Returns `None` for solids containing a torus or NURBS face, or a face\nthat neither integration path reads.\n- Calls this path after existing closed forms and before meshing. Solids\nreturning `None` continue through the mesh path.\n- The ball within the column now takes 1.02 ms per call and reads\n104.196156344.\n- The comments in `measure/volume.rs` describe what each path does, and\nthe doc block that belongs to `analytic_faces_solid_volume` sits on it\nagain.\n\n## Verification\n\n- All 165 pose sweep results with a volume truth are within 7.2e-10. The\nworst case, the ball less the column fused with a rod, uses a Simpson\ntruth accurate to about 1e-9.\n- Face counts, validity, watertightness, and grid misreads match main\nacross all 270 pose sweep results.\n- Adds `solid_volume_reads_sphere_booleans_exactly`: the ball within a\ntilted column and the column less the ball (against closed forms), and\nthe ball less three boxes holding its pole (against the Simpson integral\n`corner_piece`), each within 1e-9. The test fails with main's\n`measure/volume.rs`.\n- The workspace suite passes: 3167 passed, 20 skipped. Lint is clean.\n- The roadmap rewrites five sphere rows: four now say `solid_volume`\nreads them exactly while their meshes stay open, and the chordal-equator\nrow notes that its torus case's torus faces still take the mesh. The\ncheck crate's closed entry notes that `solid_volume` takes this path.",
+          "timestamp": "2026-09-27T04:26:12Z",
+          "tree_id": "4e90887eb33127ef56169b07f0999f6b2bcf8238",
+          "url": "https://github.com/andymai/brepkit/commit/782864093ad55c32e413c29e14aff93208306774"
+        },
+        "date": 1790483335460,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1013054,
+            "range": "± 6668",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1094520,
+            "range": "± 1149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12956,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 757727,
+            "range": "± 1485",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42950266,
+            "range": "± 2781285",
             "unit": "ns/iter"
           }
         ]
