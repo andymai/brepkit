@@ -3619,36 +3619,67 @@ fn whole_ring_rectangle(
     Ok(Some((uvs, samples)))
 }
 
-/// Rotate a loop that winds u once to start at the sample farthest in u from
-/// every hole span: the pole closure runs a virtual seam up that sample's
-/// meridian, which must not cross a hole. The samples after the old start
-/// shift by the loop's winding so u stays continuous.
+/// Rotate a loop that winds u once to start at the sample whose meridian
+/// toward the pole the face holds stays farthest in u from every hole span
+/// and from every boundary sample on the way: the pole closure runs a
+/// virtual seam up that meridian, which must not cross a hole, nor run along
+/// or beside a boundary edge heading for the pole (a wall through the axis,
+/// or a steep wall arc beside the start), where its samples would interleave
+/// with the edge's. The samples after the old start shift by the loop's
+/// winding so u stays continuous.
 fn start_loop_clear_of_holes(
     boundary_uv: &mut [(f64, f64)],
     boundary_3d: &mut [(Point3, u32, brepkit_topology::edge::EdgeId, bool)],
     spans: &[(f64, f64)],
 ) {
     let wrap = |d: f64| (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
-    if spans.is_empty() || boundary_uv.len() < 2 {
+    let n = boundary_uv.len();
+    if n < 2 {
         return;
     }
-    let clearance = |u: f64| {
-        spans
-            .iter()
-            .map(|&(middle, half)| wrap(u - middle).abs() - half)
-            .fold(f64::INFINITY, f64::min)
-    };
-    let Some(best) = (0..boundary_uv.len())
-        .max_by(|&a, &b| clearance(boundary_uv[a].0).total_cmp(&clearance(boundary_uv[b].0)))
-    else {
-        return;
-    };
-    if best == 0 {
-        return;
-    }
-    let (first_u, last_u) = (boundary_uv[0].0, boundary_uv[boundary_uv.len() - 1].0);
+    let (first_u, last_u) = (boundary_uv[0].0, boundary_uv[n - 1].0);
     let closing = wrap(first_u - last_u);
     let winding = last_u - first_u + closing;
+    // Toward the pole the face holds: higher v for a loop run toward +u.
+    let toward = if winding > 0.0 { 1.0 } else { -1.0 };
+    // Each sample's clearance, visiting samples from the pole down: the
+    // set holds the u of every sample strictly nearer the pole, so the
+    // nearest in u (around the turn) is a lookup, not a scan.
+    let key = |u: f64| u.rem_euclid(TAU).to_bits();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| (boundary_uv[b].1 * toward).total_cmp(&(boundary_uv[a].1 * toward)));
+    let mut beyond = std::collections::BTreeSet::new();
+    let mut clearance = vec![0.0; n];
+    let mut next = 0;
+    for &i in &order {
+        let (u, v) = boundary_uv[i];
+        while next < n && boundary_uv[order[next]].1 * toward > v.mul_add(toward, 1e-12) {
+            beyond.insert(key(boundary_uv[order[next]].0));
+            next += 1;
+        }
+        let at = key(u);
+        let nearest = [
+            beyond.range(..=at).next_back(),
+            beyond.range(at..).next(),
+            beyond.first(),
+            beyond.last(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|&b| wrap(f64::from_bits(b) - u).abs())
+        .fold(f64::INFINITY, f64::min);
+        clearance[i] = spans
+            .iter()
+            .map(|&(middle, half)| wrap(u - middle).abs() - half)
+            .fold(nearest, f64::min);
+    }
+    let Some(best) = (0..n).max_by(|&a, &b| clearance[a].total_cmp(&clearance[b])) else {
+        return;
+    };
+    // Without holes a start already as clear stays put.
+    if best == 0 || (spans.is_empty() && clearance[best] <= clearance[0]) {
+        return;
+    }
     for point in &mut boundary_uv[..best] {
         point.0 += winding;
     }
