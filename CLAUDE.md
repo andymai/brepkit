@@ -102,6 +102,7 @@ Quick reference — find the right file for any task:
 | Oriented bounding box (PCA + SAT) | `obb.rs` |
 | Chord deviation arc discretization | `chord.rs` |
 | Gauss-Legendre quadrature | `quadrature.rs` |
+| Point in a region of segments and conic arcs | `region2d.rs` |
 
 ### L1: geometry (`crates/geometry/src/`)
 | Task | File(s) |
@@ -133,6 +134,7 @@ Quick reference — find the right file for any task:
 | Builder helpers | `builder.rs` |
 | Shape explorer (iterate children) | `explorer.rs` |
 | PCurve registry | `pcurve.rs` |
+| Planar face boundary in its plane (segments, arcs) | `planar.rs` |
 | Topology validation | `validation.rs` |
 | Test utilities (`test-utils` feature) | `test_utils.rs` |
 

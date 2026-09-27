@@ -343,6 +343,9 @@ fn ray_plane_crossings(
     }
 
     let hit = origin + direction * t;
+    if let Some(inside) = brepkit_check::classify::plane_hit_inside(topo, face_id, hit, normal)? {
+        return Ok(u32::from(inside));
+    }
     // The check-crate polygon samples OPEN curved edges too (the boolean-side
     // `face_polygon` chords them for its calibrated fragment-sharing
     // consumers): a plane face bitten by a marched conic arch would otherwise

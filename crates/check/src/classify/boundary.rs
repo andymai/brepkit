@@ -629,6 +629,9 @@ fn ray_plane_crossings(
     };
 
     let hit = origin + direction * t;
+    if let Some(inside) = plane_hit_inside(topo, face_id, hit, normal)? {
+        return Ok(u32::from(inside));
+    }
     let verts = face_polygon(topo, face_id)?;
     if verts.len() < 3 {
         return Ok(0);
@@ -641,6 +644,34 @@ fn ray_plane_crossings(
     } else {
         Ok(0)
     }
+}
+
+/// Whether a plane hit lies inside its face, read on the face's own lines
+/// and arcs rather than on chords of them. `None` when an edge is a NURBS
+/// curve or the hit lies on the boundary.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails.
+pub fn plane_hit_inside(
+    topo: &Topology,
+    face_id: FaceId,
+    hit: Point3,
+    normal: Vec3,
+) -> Result<Option<bool>, CheckError> {
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(hit, normal) else {
+        return Ok(None);
+    };
+    let Some(pieces) =
+        brepkit_topology::planar::face_boundary_2d(topo, face_id, hit, frame.x, frame.y)?
+    else {
+        return Ok(None);
+    };
+    Ok(brepkit_math::region2d::point_in_region(
+        &pieces,
+        brepkit_math::vec::Point2::new(0.0, 0.0),
+        brepkit_math::tolerance::Tolerance::new().linear,
+    ))
 }
 
 /// Count ray crossings for a NURBS face using ray-surface intersection.
