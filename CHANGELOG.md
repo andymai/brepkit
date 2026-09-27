@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.74](https://github.com/andymai/brepkit/compare/v4.0.73...v4.0.74) (2026-09-27)
+
+
+### Bug Fixes
+
+* **math:** trace a tapered pin through a ball along the pin's generators ([#1868](https://github.com/andymai/brepkit/issues/1868)) ([65fc4d0](https://github.com/andymai/brepkit/commit/65fc4d0d50884a0c9f775e479f260ea4b127118a))
+
 ## [4.0.73](https://github.com/andymai/brepkit/compare/v4.0.72...v4.0.73) (2026-09-27)
 
 
