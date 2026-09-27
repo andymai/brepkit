@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.61](https://github.com/andymai/brepkit/compare/v4.0.60...v4.0.61) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** revolve a curved profile edge into curved rings ([#1838](https://github.com/andymai/brepkit/issues/1838)) ([fdddb4f](https://github.com/andymai/brepkit/commit/fdddb4fcf09e3d975847edb282342f92d322ba25))
+
 ## [4.0.60](https://github.com/andymai/brepkit/compare/v4.0.59...v4.0.60) (2026-09-27)
 
 
