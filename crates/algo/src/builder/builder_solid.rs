@@ -1017,8 +1017,9 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
     (growth, holes)
 }
 
-/// The diagonal of the box around a shell's boundary: every edge's ends and
-/// midpoint, so a curved face bounded by few edges counts its full span.
+/// The diagonal of the box around a shell's boundary: every edge sampled at
+/// its quarter points, so a closed circle or an arc bounding a curved face
+/// counts its full span.
 fn shell_extent(topo: &Topology, faces: &[FaceId]) -> f64 {
     let points = faces
         .iter()
@@ -1037,11 +1038,11 @@ fn shell_extent(topo: &Topology, faces: &[FaceId]) -> f64 {
                 .map(|(a, b)| (a.point(), b.point()));
             ends.map(|(a, b)| {
                 let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                [
-                    a,
-                    b,
-                    edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b),
-                ]
+                let at = |f: f64| {
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+                };
+                [a, b, at(0.25), at(0.5), at(0.75)]
             })
         })
         .flatten();
