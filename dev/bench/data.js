@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790528133285,
+  "lastUpdate": 1790528311341,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44765,6 +44765,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43787350,
             "range": "± 526796",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3efdb90d4e7dfbfe6945470ac40fb3c798a36fc4",
+          "message": "fix(check): read a plane hit against its face's own lines and arcs (#1851)\n\nPlane face hits are now classified against segment and arc boundaries,\nfixing false `Outside` results near round rims in both public point\nclassifiers.\n\n## What was wrong\n\n- Both classifiers tested a ray's hit on a plane face against the face\nboundary sampled into chords, with 32 chords per closed circle. A hit\nbetween a round rim and its chords was therefore misread.\n\n- On main, `brepkit_operations::classify::classify_point` reads 9 of 320\npoints just inside the rim of `make_cylinder(1, 1)` as `Outside`. These\npoints use radii 0.998 and 0.9995, lie midway between where 32 chords'\nends would fall, and span five heights. It also reads 13 of 1280 grid\npoints inside the mirrored `make_sphere(3, 32)` less the slab `1 < z <\n2` as `Outside`.\n\n## What this does\n\n- Adds `brepkit_math::region2d::point_in_region`, which determines\nmembership in a plane region bounded by segments and circle or ellipse\narcs. It counts ray crossings on the curves themselves, tries another\ndirection when the ray passes a piece's end or touches an arc, and\nreturns `None` on the boundary.\n\n- Adds `brepkit_topology::planar::face_boundary_2d`, which flattens a\nplanar face's wires, including holes, into those pieces. It returns\n`None` for a NURBS edge, checked before any curve's span is computed, so\na face with one pays for no extra projections.\n\n- Adds `brepkit_check::classify::plane_hit_inside` to join these\noperations. Both classifiers call it first for plane hits, then fall\nback to the polygon for a NURBS edge or a boundary hit.\n\n- Lists both new files in the `CLAUDE.md` module map.\n\n## Verification\n\n- `region2d` unit tests cover a disc read up to 0.9999 of its radius, a\nhalf disc, a square with a round hole, a turned ellipse, a ray through a\nvertex, a side along the ray, an arc across the angle's wrap at pi, half\nan ellipse, and a long ellipse's end read by distance along the ray from\nits center. `planar` tests flatten a half disc and decline a NURBS edge.\n\n- `classify_rims.rs` covers cylinder radii 0.998 and 0.9995 as inside\nand 1.0005 as outside, plus a ball less a slab up to its discs. Each\ncase is upright, turned, and mirrored, and asserted for both\nclassifiers. Both tests fail on main.\n\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, produces 487 exact results of 540, as on main.\nThe pose sweep's 300 lines are unchanged, with no open result.\n\n- The workspace suite passes: 3210 tests run, 3210 passed, 20 skipped.\nLint is clean.\n\n- The roadmap closes the plane-disc part of the classification row. The\nrow retains the cylinder wall's chords, the operations classifier's\ntwo-ray vote, and the seamed sphere band.",
+          "timestamp": "2026-09-27T16:55:48Z",
+          "tree_id": "e48c277b410896a2d5015d06547916751243614c",
+          "url": "https://github.com/andymai/brepkit/commit/3efdb90d4e7dfbfe6945470ac40fb3c798a36fc4"
+        },
+        "date": 1790528306602,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1031683,
+            "range": "± 2920",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1113040,
+            "range": "± 4495",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13154,
+            "range": "± 211",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 777272,
+            "range": "± 5856",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42524487,
+            "range": "± 136841",
             "unit": "ns/iter"
           }
         ]
