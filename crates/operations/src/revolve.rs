@@ -222,6 +222,17 @@ pub(crate) fn revolution_band_surface(
             axis,
             seg_angle,
         );
+        if let Some(result) = revolution_sphere_band(
+            center,
+            radius,
+            (p0_start, p1_start),
+            axis_origin,
+            axis,
+            seg_angle,
+            arc_mid,
+        )? {
+            return Ok(result);
+        }
         if let Some(result) =
             revolution_torus_band(center, radius, axis_origin, axis, &nurbs, arc_mid)?
         {
@@ -427,6 +438,42 @@ fn revolution_torus_band(
     )))
 }
 
+/// Build the `Sphere` band swept by a circular-arc profile edge centred on
+/// the revolution axis, its poles on the axis. Returns `Ok(None)` when the
+/// arc's centre is off the axis.
+///
+/// The band winds like the NURBS band (the chord swept about the axis, normal
+/// chord × sweep), read at the arc's midpoint half way through the sweep: the
+/// chord runs parallel to the arc there, and the sweep direction is defined
+/// there even when the chord lies on the axis (a half circle ending on it),
+/// where the NURBS band has no normal.
+fn revolution_sphere_band(
+    arc_center: Point3,
+    arc_radius: f64,
+    (chord_from, chord_to): (Point3, Point3),
+    axis_origin: Point3,
+    axis: Vec3,
+    seg_angle: f64,
+    arc_mid: Point3,
+) -> Result<Option<(FaceSurface, bool)>, brepkit_math::MathError> {
+    let to_center = arc_center - axis_origin;
+    if (to_center - axis * to_center.dot(axis)).length() > 1e-9 {
+        return Ok(None);
+    }
+    let surface =
+        brepkit_math::surfaces::SphericalSurface::with_axis(arc_center, arc_radius, axis)?;
+    let half = seg_angle / 2.0;
+    let chord = rotate_point(chord_to, axis_origin, axis, half)
+        - rotate_point(chord_from, axis_origin, axis, half);
+    let to_mid = arc_mid - axis_origin;
+    let sweep = axis.cross(to_mid - axis * to_mid.dot(axis));
+    let band_normal = chord.cross(sweep);
+    Ok(Some((
+        FaceSurface::Sphere(surface),
+        (arc_mid - arc_center).dot(band_normal) < 0.0,
+    )))
+}
+
 /// Index of the next ring for a given segment, wrapping to 0 for the last
 /// segment of a full revolution.
 const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
@@ -444,6 +491,9 @@ struct WireRevolveData {
     /// on the axis, which stays put.
     arc_edges: Vec<Vec<Option<brepkit_topology::edge::EdgeId>>>,
     ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    /// A profile edge lying along the axis (a line with both ends on it),
+    /// which sweeps nothing.
+    along_axis: Vec<bool>,
     input_oriented: Vec<OrientedEdge>,
     n: usize,
 }
@@ -1473,6 +1523,11 @@ pub fn revolve(
             .iter()
             .map(|oe| topo.edge(oe.edge()).map(|e| e.curve().clone()))
             .collect::<Result<_, _>>()?;
+        let along_axis: Vec<bool> = (0..n)
+            .map(|i| {
+                on_axis[i] && on_axis[(i + 1) % n] && matches!(input_curves[i], EdgeCurve::Line)
+            })
+            .collect();
         for (k, ring) in ring_verts.iter().enumerate().skip(1) {
             #[allow(clippy::cast_precision_loss)]
             let turn = rotation_about(axis_origin, axis, seg_angle * (k as f64));
@@ -1480,7 +1535,7 @@ pub fn revolve(
             for i in 0..n {
                 let next_i = (i + 1) % n;
                 // An edge along the axis is the same edge at every angle.
-                if on_axis[i] && on_axis[next_i] {
+                if along_axis[i] {
                     edges.push(input_oriented[i].edge());
                     continue;
                 }
@@ -1499,6 +1554,7 @@ pub fn revolve(
             ring_verts,
             arc_edges,
             ring_edges,
+            along_axis,
             input_oriented,
             n,
         })
@@ -1569,7 +1625,7 @@ pub fn revolve(
             let fwd_seg = outer.input_oriented[i].is_forward();
             let fwd_next = fwd_seg;
             // An edge along the axis sweeps nothing.
-            if outer.arc_edges[seg][i].is_none() && outer.arc_edges[seg][next_i].is_none() {
+            if outer.along_axis[i] {
                 continue;
             }
 
@@ -1643,10 +1699,10 @@ pub fn revolve(
                 let fwd_seg = iwd.input_oriented[i].is_forward();
                 let fwd_next = fwd_seg;
 
-                // Reversed winding: swap the order so normals point inward.
-                if iwd.arc_edges[seg][i].is_none() && iwd.arc_edges[seg][next_i].is_none() {
+                if iwd.along_axis[i] {
                     continue;
                 }
+                // Reversed winding: swap the order so normals point inward.
                 let arc = |k: usize, forward: bool| {
                     iwd.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
                 };

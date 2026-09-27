@@ -285,3 +285,92 @@ fn a_profile_touching_the_axis_revolves_part_way() {
         }
     }
 }
+
+/// The half disc of radius 1 in `y = 0` bounded by the half circle through
+/// `(1, 0, 0)` and its diameter on the z axis, and the quarter disc bounded by
+/// the arc from `(1, 0, 0)` to `(0, 0, 1)` and two radii, one on the axis, each
+/// wound either way and revolved a quarter, half, three quarters or a full
+/// turn about z: each solid is valid, meshes watertight and measures its
+/// Pappus volume within `1e-9`. An arc centred on the axis sweeps a sphere
+/// band, though the half circle ends on the axis at both ends (only a line
+/// there lies along the axis) and its chord sweeps nothing. The full turn
+/// takes the segmented revolve too.
+#[test]
+fn a_disc_sector_revolves_to_a_ball_part_way() {
+    for half in [true, false] {
+        for backward in [false, true] {
+            for degrees in [90.0_f64, 180.0, 270.0, 360.0] {
+                let label = format!(
+                    "{} disc, {}, {degrees} degrees",
+                    if half { "half" } else { "quarter" },
+                    if backward {
+                        "wound backward"
+                    } else {
+                        "wound forward"
+                    }
+                );
+                let mut topo = Topology::new();
+                let mut v =
+                    |x: f64, z: f64| topo.add_vertex(Vertex::new(Point3::new(x, 0.0, z), 1e-7));
+                let (from, top, center) = (
+                    v(if half { 0.0 } else { 1.0 }, if half { -1.0 } else { 0.0 }),
+                    v(0.0, 1.0),
+                    v(0.0, 0.0),
+                );
+                // Counterclockwise about -y, through +x.
+                let circle =
+                    Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 1.0)
+                        .unwrap();
+                let mut edges = vec![
+                    topo.add_edge(Edge::new(from, top, EdgeCurve::Circle(circle))),
+                    topo.add_edge(Edge::new(
+                        top,
+                        if half { from } else { center },
+                        EdgeCurve::Line,
+                    )),
+                ];
+                if !half {
+                    edges.push(topo.add_edge(Edge::new(center, from, EdgeCurve::Line)));
+                }
+                let oriented: Vec<OrientedEdge> = if backward {
+                    edges
+                        .iter()
+                        .rev()
+                        .map(|&e| OrientedEdge::new(e, false))
+                        .collect()
+                } else {
+                    edges.iter().map(|&e| OrientedEdge::new(e, true)).collect()
+                };
+                let wire = topo.add_wire(Wire::new(oriented, true).unwrap());
+                let normal = if backward { 1.0 } else { -1.0 };
+                let face = topo.add_face(Face::new(
+                    wire,
+                    vec![],
+                    FaceSurface::Plane {
+                        normal: Vec3::new(0.0, normal, 0.0),
+                        d: 0.0,
+                    },
+                ));
+                let solid = revolve(
+                    &mut topo,
+                    face,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    degrees.to_radians(),
+                )
+                .unwrap();
+                let report = validate_solid(&topo, solid).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                let per_radian = if half { 2.0 / 3.0 } else { 1.0 / 3.0 };
+                let truth = per_radian * degrees.to_radians();
+                let volume = solid_volume(&topo, solid, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-9 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+            }
+        }
+    }
+}

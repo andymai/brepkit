@@ -2458,9 +2458,8 @@ fn cdt_covers_steiner_vertices_from_constraint_recovery() {
 }
 
 /// A right triangle with a vertex on the axis, revolved a quarter turn: the
-/// revolve leaves an edge collapsed onto the cone's apex, and the cone face
-/// meshed on its own covers its quarter (`π √5 / 4`) however the solid is
-/// turned or mirrored.
+/// cone face meshed on its own covers its quarter (`π √5 / 4`) however the
+/// solid is turned or mirrored.
 #[test]
 fn a_revolved_cone_quarter_meshes_its_own_span() {
     use brepkit_math::mat::Mat4;

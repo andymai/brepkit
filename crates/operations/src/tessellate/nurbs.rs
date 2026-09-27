@@ -216,8 +216,7 @@ where
                 curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
             })
             .collect();
-        // An edge collapsed to one point (a revolve's edge at a cone's apex)
-        // has no `u` of its own.
+        // An edge collapsed to one point has no `u` of its own.
         let reach = points
             .iter()
             .fold(0.0_f64, |m, p| m.max((*p - points[0]).length()));
