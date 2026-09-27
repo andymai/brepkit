@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790521696329,
+  "lastUpdate": 1790523529330,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44495,6 +44495,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42876558,
             "range": "± 1305932",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "50c7832d85095bd14882d86c9fc1ab7d091741ab",
+          "message": "test(operations): pin a ball less a slab (#1850)\n\nThe roadmap row “The upright slab Cut of a ball” is retired because\ncurrent behavior is valid and pinned by regression coverage.\n\n- The row describes the cut as exact but invalid because its two pieces\nshare one shell.\n- Re-measured on main, `make_sphere(3, 32)` less the slabs `1 < z < 2`,\n`0.2 < z < 0.7`, and `-0.5 < z < 0.5`, upright, turned, and mirrored, is\nexact (only sphere and plane faces, at most 8), valid, and meshes\nwatertight.\n- All nine cases measure the ball less the slab’s volume within `1e-6`.\nRay-cast probes read material above and below the slab and none inside\nit.\n- The validator reads a shell’s separate pieces one by one.\n- `a_ball_less_a_slab_keeps_both_pieces` in\n`crates/operations/tests/sphere_plane_cut.rs` covers the nine cases.\n- The roadmap records the row as closed. No engine code changes.",
+          "timestamp": "2026-09-27T15:36:22Z",
+          "tree_id": "c1a3ff2ef0b86b223071e6283c41da1c7a020e4f",
+          "url": "https://github.com/andymai/brepkit/commit/50c7832d85095bd14882d86c9fc1ab7d091741ab"
+        },
+        "date": 1790523524642,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 682506,
+            "range": "± 13348",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 750821,
+            "range": "± 18696",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8752,
+            "range": "± 118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 509221,
+            "range": "± 4824",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30922760,
+            "range": "± 164684",
             "unit": "ns/iter"
           }
         ]
