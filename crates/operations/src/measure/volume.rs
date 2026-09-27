@@ -12,20 +12,6 @@ use super::helpers::{
     planar_wire_signed_area2, torus_band_v_range, torus_sector_u_range, traversal_spans,
 };
 
-/// Volume of a solid that contains a bored quadric — a sphere (or torus) face
-/// carrying a full-revolution latitude-circle hole (a drilled tunnel rim) — via
-/// exact per-face Gauss quadrature on the analytic surfaces.
-///
-/// The tessellation paths below cannot bound such an annular band: both of its
-/// boundary loops are constant-v latitude circles, so the band's UV outline is
-/// degenerate and the mesh fills the removed polar cap, over-counting. The
-/// per-face analytic integrator (orientation-aware, hole-clipped) is exact.
-///
-/// Scope is deliberately narrow — only solids whose tessellated volume is known
-/// to be wrong — so every other analytic solid keeps its existing
-/// tessellation-based volume. Returns `None` (defer to tessellation) when no
-/// bored quadric is present, when any face is NURBS, or when a face fails to
-/// integrate.
 /// Whether a sphere face's outer wire lies on a single constant-`v` latitude
 /// (the simple bored-quadric band) rather than a scalloped, varying-`v` collar
 /// floor. Projects the outer wire's vertices to `(u, v)` and tests the `v`
@@ -299,6 +285,17 @@ fn all_planar_line_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> 
     Some((vol6 / 6.0).abs())
 }
 
+/// Volume of the Steinmetz lens fuse in closed form, or of a solid with a
+/// bored sphere (a sphere face whose wires are all latitudes, such as a drilled
+/// tunnel's rims) through the check crate's per-face integrator.
+///
+/// That integrator reads a sphere face along its wires, and a face its wire
+/// path declines falls back to a band between latitudes, which is exact only
+/// for latitude wires. So any other holed sphere, cylinder, cone or torus face
+/// returns `None` here and is left to
+/// [`brepkit_check::properties::exact_solid_volume`], which declines rather
+/// than approximating. `None` too for a NURBS face or a solid with no bored
+/// sphere.
 fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     use brepkit_topology::explorer::solid_faces;
 
@@ -307,11 +304,8 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         return None;
     }
 
-    // The Steinmetz lens fuse — two mutually-trimmed equal cylinders, whose
-    // walls keep the lens ellipses as holes — has an EXACT closed-form volume
-    // (computed directly below). The hole-unaware tessellation paths over-count
-    // the lens, and a general holed-cylinder integrator was too broad to be
-    // correct; the closed form is exact and needs no special integration.
+    // Two mutually trimmed equal cylinders whose walls keep the lens ellipses
+    // as holes, which the tessellation paths over-count.
     if solid_is_steinmetz_lens_fuse(topo, &faces) {
         return steinmetz_lens_fuse_volume(topo, &faces);
     }
@@ -321,18 +315,10 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         let face = topo.face(fid).ok()?;
         match face.surface() {
             FaceSurface::Nurbs(_) => return None,
-            // Sphere only: the per-face integrator's hole-clipping is wired up
-            // for spheres. A bored torus would pass `hole_vs = []` and
-            // over-integrate, so defer it to tessellation until torus
-            // hole-clipping lands (with the torus−box analytic split).
             FaceSurface::Sphere(s) if !face.inner_wires().is_empty() => {
-                // The integrator's hole-clipping models a band between two
-                // constant-v latitudes. A collar whose OUTER wire varies in v
-                // (great-circle/seam arcs, e.g. a box ∩ sphere patch) is not
-                // that shape — its scalloped floor and lune bites would be
-                // mis-integrated, so defer the whole solid to tessellation.
-                // Its holes are clipped as latitudes too; a drill's entry loop
-                // is not one, and the per-face flux subtracts it instead.
+                // A collar whose outer wire varies in v (a box ∩ sphere
+                // patch) or a hole that is not a latitude (a drill's entry
+                // loop) would be mis-read by the latitude-band fallback.
                 if !sphere_outer_wire_constant_v(topo, fid, s)
                     || !face
                         .inner_wires()
@@ -343,10 +329,8 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                 }
                 has_bored_quadric = true;
             }
-            // A holed cylinder/cone wall that is NOT the Steinmetz lens fuse
-            // (handled above) cannot be integrated correctly here — the
-            // integrator does not subtract its holes — so defer the whole solid
-            // to tessellation.
+            // The fallback for a holed cylinder, cone or torus face does not
+            // subtract its holes.
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_) if !face.inner_wires().is_empty() => {
                 return None;
             }
@@ -373,8 +357,9 @@ fn analytic_faces_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
 /// signature, so this does NOT fire for boolean results that merely have an
 /// arc-bounded planar face (a rounded-rect cap, an arc-frame lip):
 ///   * no NURBS face; inner wires only on PLANAR caps (an annulus cap
-///     subtracts its holes; a bored-quadric solid is handled by
-///     [`analytic_faces_solid_volume`] instead);
+///     subtracts its holes; a bored solid is left to
+///     [`analytic_faces_solid_volume`] or
+///     [`brepkit_check::properties::exact_solid_volume`]);
 ///   * at least one quadric wall (cylinder/cone/torus) — it is a revolution;
 ///   * every cylinder/cone/torus shares ONE axis line;
 ///   * every planar face is a circular disc/annulus/sector whose bounding
@@ -1081,9 +1066,8 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         let face = topo.face(fid).ok()?;
         // A holed analytic face means the solid is bored/pocketed; the closed-form
         // primitive volumes below integrate the surface as if the hole were filled.
-        // Defer the whole solid to the hole-aware tessellation path. (The validated
-        // Steinmetz lens fuse is handled by `analytic_faces_solid_volume`, which the
-        // caller tries after this returns `None`.)
+        // Defer the whole solid to the hole-aware paths the caller tries after this
+        // returns `None`.
         if !face.inner_wires().is_empty() {
             return None;
         }
@@ -1553,12 +1537,8 @@ pub fn solid_volume(
         return Ok(v);
     }
 
-    // Fast path: a solid whose faces are ALL analytic (planes + quadrics,
-    // no NURBS) integrates exactly via per-face Gauss quadrature on the
-    // analytic surfaces — orientation-aware and immune to the inscribed-mesh
-    // undercount and the degenerate-UV annular-band over-count that the
-    // tessellation paths below suffer on bored quadrics (e.g. a cylinder
-    // drilled through a sphere).
+    // The Steinmetz lens fuse and bored spheres (a cylinder drilled through a
+    // ball), where the tessellation paths below fill a removed polar cap.
     if let Some(v) = analytic_faces_solid_volume(topo, solid) {
         if vol_trace_enabled() {
             log::debug!("VOL_TRACE analytic_faces -> {v}");
@@ -1577,6 +1557,16 @@ pub fn solid_volume(
             log::debug!("VOL_TRACE revolution -> {v}");
         }
         return Ok(v);
+    }
+
+    // A solid of planes, cylinders, cones and spheres integrates exactly
+    // along its faces' own boundaries, with no mesh to under-count its
+    // curved faces or to mis-trim a face whose rim winds its pole.
+    if let Some(v) = brepkit_check::properties::exact_solid_volume(topo, solid)? {
+        if vol_trace_enabled() {
+            log::debug!("VOL_TRACE exact boundary -> {v}");
+        }
+        return Ok(v.abs());
     }
 
     // Volume integrates the boundary, so curved faces must be tessellated
