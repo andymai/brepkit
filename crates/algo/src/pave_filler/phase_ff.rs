@@ -4972,14 +4972,7 @@ fn closed_circle_boundary_crossings(
             }
         }
         let fh = face_hits(fid);
-        // The boundary is coincident with the section circle when its
-        // segments are chords of an *inscribed* polygon: every vertex lands
-        // on the circle, so the hits are the polygon's vertices, evenly
-        // distributed around the full turn. A bare `len > 4` count misses a
-        // 4-segment inscribed polygon (square equator → exactly 4 hits), so
-        // test even angular distribution instead of relying on the count.
-        let fh_plain: Vec<(f64, Point3)> = fh.iter().map(|&(t, p, _)| (t, p)).collect();
-        if hits_are_inscribed_polygon(&fh_plain) {
+        if boundary_is_inscribed(topo, fid, &fh, circle, tol) {
             log::debug!(
                 "closed_circle_boundary_crossings: {fid:?} has {} hits evenly distributed on \
                  the circle — boundary coincident with circle, excluding its hits",
@@ -5153,6 +5146,51 @@ fn sphere_seam_plane_crossings(
         }
     }
     out
+}
+
+/// Whether a face's boundary is a polygon inscribed in a section circle,
+/// so its hits on the circle are the polygon's corners rather than
+/// crossings. A bare `len > 4` count misses a 4-segment inscribed polygon
+/// (a square equator gives exactly 4 hits), so the hits must be evenly
+/// spread; but a square column's walls cross a ball's section circle at
+/// four points 83 and 97 degrees apart, so each hit must also be a vertex of
+/// the boundary, and a boundary that bulges past the circle between its
+/// vertices crosses it there, so every edge's midpoint must lie within it.
+fn boundary_is_inscribed(
+    topo: &Topology,
+    fid: FaceId,
+    hits: &[(f64, Point3, Option<brepkit_topology::edge::EdgeId>)],
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> bool {
+    let slack = tol.linear * 100.0;
+    let at_vertices = hits.iter().all(|&(_, p, src)| {
+        src.and_then(|e| topo.edge(e).ok()).is_some_and(|edge| {
+            [edge.start(), edge.end()].into_iter().any(|v| {
+                topo.vertex(v)
+                    .is_ok_and(|v| (v.point() - p).length() <= slack)
+            })
+        })
+    });
+    let within = || {
+        let Ok(wire) = topo.face(fid).and_then(|face| topo.wire(face.outer_wire())) else {
+            return false;
+        };
+        wire.edges().iter().all(|oe| {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return false;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return false;
+            };
+            let (a, b) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let mid = edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+            (mid - circle.center()).length() <= circle.radius() + slack
+        })
+    };
+    let plain: Vec<(f64, Point3)> = hits.iter().map(|&(t, p, _)| (t, p)).collect();
+    at_vertices && hits_are_inscribed_polygon(&plain) && within()
 }
 
 /// Whether boundary/circle hits describe an inscribed polygon (the boundary
@@ -6317,6 +6355,40 @@ mod tests {
 
         // A line entirely outside returns None.
         assert!(clip_line_to_polygon_general((-5.0, 3.0), (5.0, 3.0), &poly).is_none());
+    }
+
+    /// A unit circle in the plane of a square inscribed in it meets the
+    /// square only at its corners, which are not crossings. A hexagon through
+    /// the same four points whose other two corners lie outside the circle
+    /// crosses it at each of them, and keeps them.
+    #[test]
+    fn corners_on_the_circle_are_crossings_unless_the_boundary_stays_inside() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::builder::make_planar_face;
+
+        let pt = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let circle = Circle3D::new(pt(0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let far = [pt(5.0, 5.0), pt(6.0, 5.0), pt(6.0, 6.0), pt(5.0, 6.0)];
+        let corners = [pt(1.0, 0.0), pt(0.0, 1.0), pt(-1.0, 0.0), pt(0.0, -1.0)];
+        let lobed = [
+            pt(1.0, 0.0),
+            pt(1.06, 1.06),
+            pt(0.0, 1.0),
+            pt(-1.0, 0.0),
+            pt(-1.06, -1.06),
+            pt(0.0, -1.0),
+        ];
+        for (boundary, crosses) in [(&corners[..], false), (&lobed[..], true)] {
+            let mut topo = Topology::new();
+            let face = make_planar_face(&mut topo, boundary, 1e-7).unwrap();
+            let other = make_planar_face(&mut topo, &far, 1e-7).unwrap();
+            let hits =
+                closed_circle_boundary_crossings(&topo, face, other, &circle, Tolerance::default());
+            for c in corners {
+                let kept = hits.iter().any(|&(_, p)| (p - c).length() < 1e-6);
+                assert_eq!(kept, crosses, "{} corners: {c:?}", boundary.len());
+            }
+        }
     }
 
     fn hit_at(angle: f64) -> (f64, Point3) {
