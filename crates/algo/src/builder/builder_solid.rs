@@ -921,22 +921,17 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
 
         let signed_vol = signed_volume_of_shell(topo, shell);
 
-        // `signed_volume_of_shell` integrates over the outer-wire CORNER vertices
-        // only, so it can sign-flip a doubly-curved band whose corners barely
-        // bound the wrapped surface (the torus−box notch band reads negative
-        // despite being outward). For a LONE shell — the result's outer boundary,
-        // with no enclosing shell to be a cavity of — disambiguate with the
-        // curvature-robust `shell_is_outward_oriented` (surface-normal divergence
-        // flux): keep it as growth only when genuinely outward, so a Cut that
-        // leaves only an INWARD cavity component is still rejected. A shell
-        // whose corners all lie in one plane (a ball's cap cut off by a wall:
-        // two lunes and the wall, cornered on the wall) has no corner-fan
-        // volume, so a negative sign is rounding and the flux decides it too
-        // (a positive one stands: the flux reads a curved face over its
+        // `signed_volume_of_shell` fans each face over its outer-wire CORNER
+        // vertices, so its sign can mislead: a doubly-curved band whose
+        // corners barely bound the wrapped surface (the torus−box notch band)
+        // reads negative despite being outward, and a shell cornered in one
+        // plane, or not at all, holds no fan volume. The curvature-robust
+        // surface-normal flux (`shell_is_outward_oriented`) settles those,
+        // with one reserve: a positive flat fan stands unless another shell
+        // holds the shell, since the flux reads a curved face over its
         // boundary's parameter box, which a drilled ring's torus face does
-        // not span). Other shells of a multi-shell result keep the
-        // volume-sign split (a Cut can leave the tool's interior as a
-        // separate negative-volume cavity).
+        // not span.
+        //
         // Whether another shell holds this one: most of three rays from a
         // point on its edge cross that shell an odd number of times.
         let held = || {
@@ -3216,12 +3211,12 @@ fn remove_doubled_faces(
         let (Ok(fa), Ok(fb)) = (topo.face(face_ids[*a]), topo.face(face_ids[*b])) else {
             return false;
         };
-        let other_surface = super::same_domain::surfaces_same_domain(
+        let same = super::same_domain::surfaces_same_domain(
             fa.surface(),
             fb.surface(),
             brepkit_math::tolerance::Tolerance::new(),
-        )
-        .is_none();
+        );
+        let other_surface = same.is_none();
         // Two faces of one surface that run every shared edge the opposite
         // way, flags alike, lie on opposite sides of it: the two halves of a
         // closed surface (a ball's hemispheres, a cavity's). A doubled copy
@@ -3243,7 +3238,8 @@ fn remove_doubled_faces(
                 }
                 Some(out)
             };
-            fa.is_reversed() == fb.is_reversed()
+            same == Some(true)
+                && fa.is_reversed() == fb.is_reversed()
                 && matches!((senses(fa), senses(fb)), (Some(sa), Some(sb))
                     if sa.len() == sb.len()
                         && sa.iter().all(|(e, &fwd)| sb.get(e).is_some_and(|&other| other != fwd)))

@@ -132,3 +132,28 @@ fn a_cavity_survives_booleans_with_a_box_holding_it() {
         assert_eq!(got, centre, "{label}: beside the cavity's centre");
     }
 }
+
+/// The hollow cube against the box over `-3.5 < x < 9.9`, `|y|, |z| < 3.5`,
+/// which swallows the whole cavity with its centre, corners and faces all in
+/// material: the box less nothing but the cavity (the Intersect), the cube
+/// with the cavity filled (the Fuse), and the cube less the box (the Cut),
+/// each exact, valid and within `1e-6` of its volume. A container with a
+/// cavity holds nothing trivially.
+#[test]
+fn a_box_swallowing_the_cavity_is_not_held_by_the_cube() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let block = 13.4 * 7.0 * 7.0;
+    for (op, truth) in [
+        (BooleanOp::Intersect, block - ball),
+        (BooleanOp::Fuse, 8000.0),
+        (BooleanOp::Cut, 8000.0 - block),
+    ] {
+        let label = format!("{op:?}");
+        let mut topo = Topology::new();
+        let hollow = hollow_cube(&mut topo);
+        let other = make_box(&mut topo, 13.4, 7.0, 7.0).unwrap();
+        transform_solid(&mut topo, other, &Mat4::translation(-3.5, -3.5, -3.5)).unwrap();
+        let result = boolean(&mut topo, op, hollow, other).unwrap();
+        check(&topo, result, truth, &label);
+    }
+}
