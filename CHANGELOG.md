@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.53](https://github.com/andymai/brepkit/compare/v4.0.52...v4.0.53) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** keep the corner patches a column entering the ball from below leaves ([#1823](https://github.com/andymai/brepkit/issues/1823)) ([0c91bc6](https://github.com/andymai/brepkit/commit/0c91bc6989b3f3c8db2b5e4667a4f454ac57281e))
+
 ## [4.0.52](https://github.com/andymai/brepkit/compare/v4.0.51...v4.0.52) (2026-09-27)
 
 
