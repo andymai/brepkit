@@ -1,0 +1,25 @@
+crates/operations/src/boolean/tests.rs
+  s_ba2f7b5c6902b6::t_94c40cffb0d3ab 7347-7350
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_844ed3b23b4d90 221-227
+  s_ba2f7b5c6902b6::t_de39f1658860f4 234-235
+crates/operations/src/validate.rs
+  s_ba2f7b5c6902b6::t_e8409b913b6185 309-310,315-326,328-332,334-344,371-378,384
+  s_ba2f7b5c6902b6::t_1e0b19904bffee 311-314,327,333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "803b808a4773d77574f75b9e6ad59f1b914aeff5",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
