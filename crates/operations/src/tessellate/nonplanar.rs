@@ -3939,8 +3939,10 @@ fn nurbs_speeds(
 /// from an outer sample to the hole sample nearest it in u: the outer loop
 /// continues one winding on, climbs the seam, runs the hole the other way
 /// round, and descends the seam's copy one period back, whose samples it
-/// shares. The face's other holes stay holes, so the seam starts at the first
-/// outer sample (of 32 tried around the loop) whose seam keeps clear of them.
+/// shares. The face's other holes stay holes: of the outer samples tried
+/// (about 32 around the loop) whose seam crosses none of them, the seam
+/// starts at the one keeping farthest from every boundary sample, and the
+/// other holes move by whole periods into the rotated loop's span.
 /// Returns whether the loops were joined.
 fn join_winding_hole(
     face_data: &brepkit_topology::face::Face,
