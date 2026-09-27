@@ -259,7 +259,10 @@ pub(crate) fn revolution_band_surface(
     // The radial-outward direction at the band's mid-arc. Both the cylinder and
     // cone faces have a natural radially-outward normal, so they are reversed
     // exactly when this outward direction opposes the consistent band normal.
-    let mid = rotate_point(p0_start, axis_origin, axis, seg_angle / 2.0);
+    // Read the radial direction at the edge's end off the axis: an apex has
+    // none.
+    let off_axis = if r0 >= r1 { p0_start } else { p1_start };
+    let mid = rotate_point(off_axis, axis_origin, axis, seg_angle / 2.0);
     let mid_radial = mid - (axis_origin + axis * (mid - axis_origin).dot(axis));
     let natural_outward = mid_radial.normalize().unwrap_or(axis);
     let outward_reversed = natural_outward.dot(band_normal) < 0.0;
@@ -437,7 +440,9 @@ const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
 /// Data produced by revolving a single wire (outer or inner).
 struct WireRevolveData {
     ring_verts: Vec<Vec<VertexId>>,
-    arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    /// The circle each profile vertex sweeps per segment; none for a vertex
+    /// on the axis, which stays put.
+    arc_edges: Vec<Vec<Option<brepkit_topology::edge::EdgeId>>>,
     ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
     input_oriented: Vec<OrientedEdge>,
     n: usize,
@@ -1398,6 +1403,13 @@ pub fn revolve(
             })
             .collect::<Result<_, _>>()?;
 
+        // A vertex on the axis stays put: one vertex for every ring, and no
+        // circle swept from it.
+        let on_axis: Vec<bool> = input_positions
+            .iter()
+            .map(|&p| radial_axial(p, axis_origin, axis).0 <= tol.linear)
+            .collect();
+
         let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_boundaries);
         ring_verts.push(input_verts.clone());
 
@@ -1406,28 +1418,41 @@ pub fn revolve(
             let theta = seg_angle * (k as f64);
             let ring: Vec<VertexId> = input_positions
                 .iter()
-                .map(|&pos| {
-                    let rotated = rotate_point(pos, axis_origin, axis, theta);
-                    topo.add_vertex(Vertex::new(rotated, tol.linear))
+                .zip(&input_verts)
+                .zip(&on_axis)
+                .map(|((&pos, &vid), &fixed)| {
+                    if fixed {
+                        vid
+                    } else {
+                        let rotated = rotate_point(pos, axis_origin, axis, theta);
+                        topo.add_vertex(Vertex::new(rotated, tol.linear))
+                    }
                 })
                 .collect();
             ring_verts.push(ring);
         }
 
-        let mut arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segs);
+        let mut arc_edges: Vec<Vec<Option<brepkit_topology::edge::EdgeId>>> =
+            Vec::with_capacity(num_segs);
 
         for seg in 0..num_segs {
             let next = next_ring_index(seg, num_segs, is_full);
             let mut seg_edges = Vec::with_capacity(n);
-            for (&start_vid, &end_vid) in ring_verts[seg].iter().zip(&ring_verts[next]) {
+            for (i, (&start_vid, &end_vid)) in
+                ring_verts[seg].iter().zip(&ring_verts[next]).enumerate()
+            {
+                if on_axis[i] {
+                    seg_edges.push(None);
+                    continue;
+                }
                 let start_pos = topo.vertex(start_vid)?.point();
                 let end_pos = topo.vertex(end_vid)?.point();
                 let curve = make_arc_curve(start_pos, end_pos, axis_origin, axis, seg_angle)?;
-                seg_edges.push(topo.add_edge(Edge::new(
+                seg_edges.push(Some(topo.add_edge(Edge::new(
                     start_vid,
                     end_vid,
                     EdgeCurve::NurbsCurve(curve),
-                )));
+                ))));
             }
             arc_edges.push(seg_edges);
         }
@@ -1454,6 +1479,11 @@ pub fn revolve(
             let mut edges = Vec::with_capacity(n);
             for i in 0..n {
                 let next_i = (i + 1) % n;
+                // An edge along the axis is the same edge at every angle.
+                if on_axis[i] && on_axis[next_i] {
+                    edges.push(input_oriented[i].edge());
+                    continue;
+                }
                 let (curve, _) = crate::transform::curve_image(&input_curves[i], &turn)?;
                 let (start, end) = if input_oriented[i].is_forward() {
                     (ring[i], ring[next_i])
@@ -1538,6 +1568,10 @@ pub fn revolve(
 
             let fwd_seg = outer.input_oriented[i].is_forward();
             let fwd_next = fwd_seg;
+            // An edge along the axis sweeps nothing.
+            if outer.arc_edges[seg][i].is_none() && outer.arc_edges[seg][next_i].is_none() {
+                continue;
+            }
 
             let p0_start = topo.vertex(outer.ring_verts[seg][i])?.point();
             let p0_end = topo.vertex(outer.ring_verts[next][i])?.point();
@@ -1561,28 +1595,31 @@ pub fn revolve(
             // wire must be built reversed too (same idiom as the inner side
             // faces below) or the face traverses its shared edges in the same
             // effective sense as its neighbours.
-            let side_wire = if reversed {
-                Wire::new(
-                    vec![
-                        OrientedEdge::new(outer.arc_edges[seg][i], true),
-                        OrientedEdge::new(outer.ring_edges[next][i], fwd_next),
-                        OrientedEdge::new(outer.arc_edges[seg][next_i], false),
-                        OrientedEdge::new(outer.ring_edges[seg][i], !fwd_seg),
-                    ],
-                    true,
-                )
+            // A vertex on the axis sweeps no circle, so the band closes at
+            // it: a wedge of three edges.
+            let arc = |k: usize, forward: bool| {
+                outer.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
+            };
+            let loop_edges: Vec<OrientedEdge> = if reversed {
+                [
+                    arc(i, true),
+                    Some(OrientedEdge::new(outer.ring_edges[next][i], fwd_next)),
+                    arc(next_i, false),
+                    Some(OrientedEdge::new(outer.ring_edges[seg][i], !fwd_seg)),
+                ]
             } else {
-                Wire::new(
-                    vec![
-                        OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg),
-                        OrientedEdge::new(outer.arc_edges[seg][next_i], true),
-                        OrientedEdge::new(outer.ring_edges[next][i], !fwd_next),
-                        OrientedEdge::new(outer.arc_edges[seg][i], false),
-                    ],
-                    true,
-                )
+                [
+                    Some(OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg)),
+                    arc(next_i, true),
+                    Some(OrientedEdge::new(outer.ring_edges[next][i], !fwd_next)),
+                    arc(i, false),
+                ]
             }
-            .map_err(crate::OperationsError::Topology)?;
+            .into_iter()
+            .flatten()
+            .collect();
+            let side_wire =
+                Wire::new(loop_edges, true).map_err(crate::OperationsError::Topology)?;
 
             let side_wire_id = topo.add_wire(side_wire);
 
@@ -1607,16 +1644,23 @@ pub fn revolve(
                 let fwd_next = fwd_seg;
 
                 // Reversed winding: swap the order so normals point inward.
-                let side_wire = Wire::new(
-                    vec![
-                        OrientedEdge::new(iwd.arc_edges[seg][i], true),
-                        OrientedEdge::new(iwd.ring_edges[next][i], fwd_next),
-                        OrientedEdge::new(iwd.arc_edges[seg][next_i], false),
-                        OrientedEdge::new(iwd.ring_edges[seg][i], !fwd_seg),
-                    ],
-                    true,
-                )
-                .map_err(crate::OperationsError::Topology)?;
+                if iwd.arc_edges[seg][i].is_none() && iwd.arc_edges[seg][next_i].is_none() {
+                    continue;
+                }
+                let arc = |k: usize, forward: bool| {
+                    iwd.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
+                };
+                let loop_edges: Vec<OrientedEdge> = [
+                    arc(i, true),
+                    Some(OrientedEdge::new(iwd.ring_edges[next][i], fwd_next)),
+                    arc(next_i, false),
+                    Some(OrientedEdge::new(iwd.ring_edges[seg][i], !fwd_seg)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                let side_wire =
+                    Wire::new(loop_edges, true).map_err(crate::OperationsError::Topology)?;
 
                 let side_wire_id = topo.add_wire(side_wire);
 
