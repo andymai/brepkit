@@ -1,7 +1,7 @@
 crates/operations/tests/extrude_major_arcs.rs
   s_ba2f7b5c6902b6::t_5a98be7293bd0d 193-206,352-363,365,367-371,379-389,397-448,458,462,464-472,495,497-500,508,510-512,521,523-534
 .claude/skills/roadmap/SKILL.md
-  s_ba2f7b5c6902b6::t_9756caf2a758d2 202-212
+  s_ba2f7b5c6902b6::t_9a71596570af1d 202-212
 ---
 {
   "schema_version": "authorship/3.0.0",
