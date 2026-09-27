@@ -200,15 +200,17 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **A partial revolve of a profile touching the axis was invalid (CLOSED 2026-09-27; pin `a_profile_touching_the_axis_revolves_part_way` in `crates/operations/tests/revolve_arc_profile.rs`)**:
+- **A partial revolve of a profile touching the axis was invalid (CLOSED 2026-09-27; pins `a_profile_touching_the_axis_revolves_part_way` and `a_disc_sector_revolves_to_a_ball_part_way` in `crates/operations/tests/revolve_arc_profile.rs`)**:
   the segmented revolve copied every profile vertex at every ring and swept
   a circle from each, the ones on the axis included, so a half-turn cone
   carried zero-length edges; and a band's orientation read the radial
   direction at the band's first end, which at an apex has none, so a cone
   standing on its tip came out reversed. A vertex on the axis now stays one
-  vertex and sweeps nothing, the bands beside it close as wedges, an edge
+  vertex and sweeps nothing, the bands beside it close as wedges, a line
   along the axis sweeps no face, and the radial direction is read at the
-  band's end off the axis.
+  band's end off the axis. A half disc (its arc ending on the axis at both
+  ends) measured 0 at every angle: an arc centred on the axis now sweeps a
+  sphere band, wound by chord x sweep at the arc's midpoint.
 
 - **A revolve of a profile with a half-circle side measured wrong (CLOSED 2026-09-27; pin `a_half_circle_side_revolves_to_its_pappus_volume` in `crates/operations/tests/revolve_arc_profile.rs`)**:
   a partial revolve built every ring after the first from lines between the
