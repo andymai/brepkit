@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.63](https://github.com/andymai/brepkit/compare/v4.0.62...v4.0.63) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** revolve a profile touching the axis part way ([#1842](https://github.com/andymai/brepkit/issues/1842)) ([634a8ab](https://github.com/andymai/brepkit/commit/634a8ab0dd9f6b17526fff387ef667168aa5c083))
+
 ## [4.0.62](https://github.com/andymai/brepkit/compare/v4.0.61...v4.0.62) (2026-09-27)
 
 
