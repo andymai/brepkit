@@ -1017,6 +1017,38 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
     (growth, holes)
 }
 
+/// The diagonal of the box around a shell's boundary: every edge sampled at
+/// its quarter points, so a closed circle or an arc bounding a curved face
+/// counts its full span.
+fn shell_extent(topo: &Topology, faces: &[FaceId]) -> f64 {
+    let points = faces
+        .iter()
+        .filter_map(|&fid| topo.face(fid).ok())
+        .flat_map(|face| {
+            std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+        })
+        .filter_map(|wid| topo.wire(wid).ok())
+        .flat_map(|wire| wire.edges().to_vec())
+        .filter_map(|oe| topo.edge(oe.edge()).ok())
+        .filter_map(|edge| {
+            let ends = topo
+                .vertex(edge.start())
+                .ok()
+                .zip(topo.vertex(edge.end()).ok())
+                .map(|(a, b)| (a.point(), b.point()));
+            ends.map(|(a, b)| {
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                let at = |f: f64| {
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+                };
+                [a, b, at(0.25), at(0.5), at(0.75)]
+            })
+        })
+        .flatten();
+    brepkit_math::aabb::Aabb3::try_from_points(points).map_or(0.0, |b| (b.max - b.min).length())
+}
+
 /// The box of a shell's outer-wire corners.
 fn shell_corner_box(topo: &Topology, faces: &[FaceId]) -> brepkit_math::aabb::Aabb3 {
     let corners = faces
@@ -1831,6 +1863,7 @@ fn assemble(
     // dropped rather than polluting the assembled volume.
     // TODO: use a `Compound` for true multi-region results.
     let mut outer_faces = growth_shells[outer_idx].clone();
+    let mut outer_extent: Option<f64> = None;
     for (i, gs) in growth_shells.iter().enumerate() {
         if i == outer_idx {
             continue;
@@ -1850,6 +1883,19 @@ fn assemble(
             log_open_growth_shell(topo, gs, &all_faces, face_source);
             return Err(AlgoError::AssemblyFailed(format!(
                 "open growth shell with {} faces would be dropped; aborting analytic assembly",
+                gs.len()
+            )));
+        } else if shell_extent(topo, gs)
+            > 0.05
+                * *outer_extent.get_or_insert_with(|| shell_extent(topo, &growth_shells[outer_idx]))
+        {
+            // A sliver is small; an open piece spanning a real share of the
+            // result is part of its boundary that lost its neighbours (a
+            // cone's wall split wrong across its seam), and dropping it
+            // would leave the rest stitched to each other the wrong way.
+            log_open_growth_shell(topo, gs, &all_faces, face_source);
+            return Err(AlgoError::AssemblyFailed(format!(
+                "open {}-face growth shell spans the result; aborting analytic assembly",
                 gs.len()
             )));
         } else {
