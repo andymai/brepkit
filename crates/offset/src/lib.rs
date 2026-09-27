@@ -79,13 +79,15 @@ pub fn offset_solid(
 /// (hollowed) solid.
 ///
 /// Excluded faces are left at their original positions, and side walls
-/// connect them to the offset faces.
+/// connect them to the offset faces. With no excluded face the wall closes
+/// round a cavity, which only the exact path ([`thick_solid_by_image`])
+/// builds.
 ///
 /// # Errors
 ///
 /// Returns [`OffsetError`] if the offset collapses the solid, any
-/// intersection fails, or the result cannot be assembled into a valid solid.
-#[allow(clippy::too_many_lines)]
+/// intersection fails, the result cannot be assembled into a valid solid, or
+/// no face is excluded and the exact path does not apply.
 pub fn thick_solid(
     topo: &mut Topology,
     solid: SolidId,
@@ -98,16 +100,24 @@ pub fn thick_solid(
             reason: "offset distance must be non-zero and finite".into(),
         });
     }
-    if let Some(result) =
-        image::thick_solid(topo, solid, distance, exclude, options.tolerance.linear)?
+    if options.joint == JointType::Intersection
+        && let Some(result) =
+            image::thick_solid(topo, solid, distance, exclude, options.tolerance.linear)?
     {
         return Ok(result);
+    }
+    if exclude.is_empty() {
+        return Err(OffsetError::InvalidInput {
+            reason: "a wall with no opening is built only where it keeps the solid's topology"
+                .into(),
+        });
     }
     offset_by_intersection(topo, solid, distance, exclude, options)
 }
 
 /// The thick solid of [`thick_solid`] built exact, as images of the input's
-/// faces, or `None` when that does not apply.
+/// faces with sharp joints, or `None` when that does not apply. With no
+/// excluded face the wall closes round a cavity.
 ///
 /// It does not apply when the wall would not keep the input's topology (a
 /// face collapses, an edge turns round, loops meet), or to NURBS faces,

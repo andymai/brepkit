@@ -25,7 +25,9 @@ use crate::error::OffsetError;
 use crate::offset::offset_surface;
 
 /// The offset of every face of `solid` by `distance`, built as the image of
-/// the solid's own topology, or `None` when that image is not the offset.
+/// the solid's own topology, or `None` when that image is not the offset. A
+/// solid with cavities is declined: a cavity's image can pass its outer
+/// wall's without either turning round.
 ///
 /// # Errors
 ///
@@ -37,11 +39,11 @@ pub fn offset_solid(
     tol: f64,
 ) -> Result<Option<SolidId>, OffsetError> {
     let solid_data = topo.solid(solid)?;
-    let shells: Vec<Vec<FaceId>> = std::iter::once(solid_data.outer_shell())
-        .chain(solid_data.inner_shells().iter().copied())
-        .map(|sid| topo.shell(sid).map(|s| s.faces().to_vec()))
-        .collect::<Result<_, _>>()?;
-    let faces: Vec<FaceId> = shells.iter().flatten().copied().collect();
+    if !solid_data.inner_shells().is_empty() {
+        log::debug!("offset image: the solid has cavities");
+        return Ok(None);
+    }
+    let faces = topo.shell(solid_data.outer_shell())?.faces().to_vec();
     let keep: BTreeSet<usize> = faces.iter().map(|f| f.index()).collect();
     let Some(image) = build_image(topo, &faces, &|_| distance, &keep, false, tol)? else {
         return Ok(None);
@@ -54,13 +56,9 @@ pub fn offset_solid(
         log::debug!("offset image: a face's loops meet");
         return Ok(None);
     }
-    let mut shell_ids = Vec::with_capacity(shells.len());
-    for shell in &shells {
-        let mapped = shell.iter().map(|f| image.faces[&f.index()]).collect();
-        shell_ids.push(topo.add_shell(Shell::new(mapped)?));
-    }
-    let outer = shell_ids.remove(0);
-    Ok(Some(topo.add_solid(Solid::new(outer, shell_ids))))
+    let mapped = faces.iter().map(|f| image.faces[&f.index()]).collect();
+    let shell = topo.add_shell(Shell::new(mapped)?);
+    Ok(Some(topo.add_solid(Solid::new(shell, vec![]))))
 }
 
 /// `solid` hollowed to a wall of thickness `|distance|`, inside its faces
@@ -147,6 +145,7 @@ pub fn thick_solid(
     for image in [&outer, &inner] {
         for &f in image.faces.values() {
             if !loops_stay_apart(topo, f, tol) {
+                log::debug!("offset image: a face's loops meet");
                 return Ok(None);
             }
             shell_faces.push(f);
@@ -174,6 +173,7 @@ pub fn thick_solid(
         };
         let rim = topo.add_face(rim);
         if !loops_stay_apart(topo, rim, tol) {
+            log::debug!("offset image: a rim's loops meet");
             return Ok(None);
         }
         shell_faces.push(rim);
@@ -473,18 +473,17 @@ fn image_circle(c: &Circle3D, p0: Point3, q0: Point3, q1: Point3, tol: f64) -> O
     Circle3D::with_axes(center, n, radius, c.u_axis(), c.v_axis()).ok()
 }
 
-/// Whether a face's loops keep clear of one another, each hole inside its
-/// outer loop and outside the other holes. Only a planar face is read; a
-/// curved face with holes is declined.
+/// Whether a planar face's loops keep clear of one another and of
+/// themselves, each hole inside its outer loop and outside the other holes.
+/// A curved face is taken as it is when it has no holes and declined when it
+/// has. Walls passing through each other far apart cross on the planar faces
+/// between them, as a prism's neck does on its caps.
 fn loops_stay_apart(topo: &Topology, face_id: FaceId, tol: f64) -> bool {
     let Ok(face) = topo.face(face_id) else {
         return false;
     };
-    if face.inner_wires().is_empty() {
-        return true;
-    }
     let FaceSurface::Plane { normal, .. } = face.surface() else {
-        return false;
+        return face.inner_wires().is_empty();
     };
     let Ok(frame) = Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), *normal) else {
         return false;
@@ -493,35 +492,63 @@ fn loops_stay_apart(topo: &Topology, face_id: FaceId, tol: f64) -> bool {
         let v = p - Point3::new(0.0, 0.0, 0.0);
         (v.dot(frame.x), v.dot(frame.y))
     };
-    let mut loops: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut loops: Vec<Vec<Segment>> = Vec::new();
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         let Some(points) = wire_points(topo, wid) else {
             return false;
         };
-        loops.push(points.into_iter().map(flat).collect());
+        let n = points.len();
+        loops.push(
+            (0..n)
+                .map(|i| Segment {
+                    a: flat(points[i].0),
+                    b: flat(points[(i + 1) % n].0),
+                    sag: points[i].1,
+                })
+                .collect(),
+        );
     }
-    for i in 0..loops.len() {
-        for j in (i + 1)..loops.len() {
-            if polylines_cross(&loops[i], &loops[j], tol) {
+    let near =
+        |s: &Segment, t: &Segment| segment_distance(s.a, s.b, t.a, t.b) <= tol + s.sag + t.sag;
+    for (i, lp) in loops.iter().enumerate() {
+        let n = lp.len();
+        for a in 0..n {
+            for b in (a + 2)..n {
+                if !(a == 0 && b == n - 1) && near(&lp[a], &lp[b]) {
+                    return false;
+                }
+            }
+        }
+        for other in &loops[i + 1..] {
+            if lp.iter().any(|s| other.iter().any(|t| near(s, t))) {
                 return false;
             }
         }
     }
-    let outer = &loops[0];
-    loops.iter().enumerate().skip(1).all(|(i, hole)| {
-        inside(hole[0], outer)
+    let polygon = |lp: &[Segment]| lp.iter().map(|s| s.a).collect::<Vec<_>>();
+    let outer = polygon(&loops[0]);
+    let holes: Vec<Vec<(f64, f64)>> = loops[1..].iter().map(|lp| polygon(lp)).collect();
+    holes.iter().enumerate().all(|(i, hole)| {
+        inside(hole[0], &outer)
             && !inside(outer[0], hole)
-            && loops
+            && holes
                 .iter()
                 .enumerate()
-                .skip(1)
                 .all(|(j, other)| j == i || !inside(hole[0], other))
     })
 }
 
-/// A wire's points in traversal order: each edge's start, and 32 steps a
-/// turn along a circle.
-fn wire_points(topo: &Topology, wire: WireId) -> Option<Vec<Point3>> {
+/// A chord of a flattened loop, and how far the curve it stands for may bow
+/// away from it.
+struct Segment {
+    a: (f64, f64),
+    b: (f64, f64),
+    sag: f64,
+}
+
+/// A wire's points in traversal order, each with the sagitta of the chord
+/// to the next: each edge's start, and 128 steps a turn along a circle.
+fn wire_points(topo: &Topology, wire: WireId) -> Option<Vec<(Point3, f64)>> {
     let mut points = Vec::new();
     for oe in topo.wire(wire).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
@@ -532,30 +559,26 @@ fn wire_points(topo: &Topology, wire: WireId) -> Option<Vec<Point3>> {
         let curve = edge.curve();
         let (t0, t1) = curve.domain_with_endpoints(a, b);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let steps = match curve {
-            EdgeCurve::Line => 1,
-            _ => ((t1 - t0).abs() / TAU * 32.0).ceil().max(1.0) as usize,
+        let (steps, sag) = match curve {
+            EdgeCurve::Circle(c) => {
+                let steps = ((t1 - t0).abs() / TAU * 128.0).ceil().max(1.0) as usize;
+                #[allow(clippy::cast_precision_loss)]
+                let half = (t1 - t0).abs() / (2.0 * steps as f64);
+                (steps, c.radius() * (1.0 - half.cos()))
+            }
+            _ => (1, 0.0),
         };
         for k in 0..steps {
             #[allow(clippy::cast_precision_loss)]
             let f = k as f64 / steps as f64;
             let f = if oe.is_forward() { f } else { 1.0 - f };
-            points.push(curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b));
+            points.push((
+                curve.evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b),
+                sag,
+            ));
         }
     }
     Some(points)
-}
-
-/// Whether two closed polylines touch or cross.
-fn polylines_cross(a: &[(f64, f64)], b: &[(f64, f64)], tol: f64) -> bool {
-    let segments = |p: &[(f64, f64)]| {
-        (0..p.len())
-            .map(|i| (p[i], p[(i + 1) % p.len()]))
-            .collect::<Vec<_>>()
-    };
-    let (sa, sb) = (segments(a), segments(b));
-    sa.iter()
-        .any(|&(p, q)| sb.iter().any(|&(r, s)| segment_distance(p, q, r, s) <= tol))
 }
 
 /// The distance between two 2D segments.
@@ -597,4 +620,115 @@ fn inside(x: (f64, f64), poly: &[(f64, f64)]) -> bool {
         }
     }
     odd
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::extrude::extrude;
+    use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
+    use brepkit_operations::transform::transform_solid;
+
+    /// Two 4 x 4 blocks joined by a neck 1 wide, 2 tall.
+    fn necked_prism(topo: &mut Topology) -> SolidId {
+        let corners = [
+            (0.0, 0.0),
+            (4.0, 0.0),
+            (4.0, 1.5),
+            (6.0, 1.5),
+            (6.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 4.0),
+            (6.0, 4.0),
+            (6.0, 2.5),
+            (4.0, 2.5),
+            (4.0, 4.0),
+            (0.0, 4.0),
+        ];
+        let ids: Vec<VertexId> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let n = ids.len();
+        let edges = (0..n)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(ids[i], ids[(i + 1) % n], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap()
+    }
+
+    /// Offset in by 0.75 the neck's walls pass each other, though no edge
+    /// turns round: the image is declined. By 0.2 it is taken.
+    #[test]
+    fn a_neck_offset_past_its_width_is_declined() {
+        let mut topo = Topology::new();
+        let solid = necked_prism(&mut topo);
+        assert!(
+            offset_solid(&mut topo, solid, -0.75, 1e-7)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            offset_solid(&mut topo, solid, -0.2, 1e-7)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// A 10 x 10 x 4 plate bored by a radius-2 hole turned a 64th of a turn
+    /// about its axis, offset in by 1.505: the hole's image reaches past the
+    /// plate's sides by 0.01, less than a 32-chord polygon of it bows, and is
+    /// declined. By 1.49 it stays 0.02 clear and is taken.
+    #[test]
+    fn a_hole_reaching_a_side_by_less_than_a_chord_is_declined() {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 10.0, 10.0, 4.0).unwrap();
+        let rod = make_cylinder(&mut topo, 2.0, 10.0).unwrap();
+        let place =
+            Mat4::translation(5.0, 5.0, -3.0) * Mat4::rotation_z(std::f64::consts::PI / 32.0);
+        transform_solid(&mut topo, rod, &place).unwrap();
+        let bored = boolean(&mut topo, BooleanOp::Cut, plate, rod).unwrap();
+        assert!(
+            offset_solid(&mut topo, bored, -1.505, 1e-7)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            offset_solid(&mut topo, bored, -1.49, 1e-7)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// A ball hollowed to a wall 1 thick offset in by 0.6 would put its
+    /// cavity's image outside its outer wall's: a solid with a cavity is
+    /// declined.
+    #[test]
+    fn a_solid_with_a_cavity_is_declined() {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, 5.0, 32).unwrap();
+        let hollow = thick_solid(&mut topo, ball, -1.0, &[], 1e-7)
+            .unwrap()
+            .unwrap();
+        assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+        assert!(
+            offset_solid(&mut topo, hollow, -0.6, 1e-7)
+                .unwrap()
+                .is_none()
+        );
+    }
 }

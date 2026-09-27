@@ -182,9 +182,7 @@ fn concave_and_holed_solids_offset_exactly() {
 /// A cylinder and a frustum shelled one unit thick with their tops open,
 /// and a sphere and a torus hollowed one unit thick, upright, turned and
 /// mirrored: each wall stays on the input's analytic surfaces and their
-/// offsets, and the solid is exact. The cups used to come back with their
-/// inner walls' shared edges running one way (a cylinder cup read 344.45
-/// against 333.01).
+/// offsets, and the solid is exact.
 #[test]
 fn curved_solids_shell_exactly() {
     let k = cone_shift();
