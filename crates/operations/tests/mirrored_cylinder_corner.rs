@@ -7,6 +7,7 @@
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_box, make_cylinder};
@@ -70,6 +71,28 @@ fn a_cylinders_box_corner_is_exact_in_every_pose() {
                 validate_solid(&topo, result).unwrap().is_valid(),
                 "{pose} {op:?}: invalid"
             );
+            // A point in the corner the box takes, and one in the body it
+            // leaves, placed like the operands.
+            let place = |p: Point3| match pose {
+                "turned" => turn.mul_point(p),
+                "mirrored" => {
+                    let unit = normal.normalize().unwrap();
+                    p - unit * (2.0 * (p - at).dot(unit))
+                }
+                "scaled" => Point3::new(-p.x(), p.y(), p.z()),
+                _ => p,
+            };
+            let (in_corner, in_body) = match op {
+                BooleanOp::Cut => (PointClassification::Outside, PointClassification::Inside),
+                _ => (PointClassification::Inside, PointClassification::Outside),
+            };
+            for (p, want) in [
+                (Point3::new(1.2, 1.4, 2.0), in_corner),
+                (Point3::new(-1.0, -0.5, 0.0), in_body),
+            ] {
+                let got = classify_point(&topo, result, place(p), 0.01, 1e-7).unwrap();
+                assert_eq!(got, want, "{pose} {op:?}: {p:?} reads {got:?}");
+            }
             let volume = solid_volume(&topo, result, 0.01).unwrap();
             assert!(
                 (volume - truth).abs() < 1e-6 * truth.max(1.0),
