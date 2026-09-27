@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790489459331,
+  "lastUpdate": 1790491980917,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43199,6 +43199,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42724280,
             "range": "± 765347",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8811475424f6e585e99b0d1787fe1ffaa15304dd",
+          "message": "fix(operations): start a sphere face's pole closure clear of its boundary (#1825)\n\nSphere pole closures now start clear of adjacent boundaries, closing\nfour previously open meshes without changing the pose sweep results.\n\n## What was wrong\n\n- `close_loop_at_pole` closes a sphere face whose loop holds a pole with\na virtual meridian from the loop's first sample to the pole, sampled on\nits own latitude grid.\n- Tessellation traces with `BK_CDT_TRACE` showed that when the first\nsample sat beside a steep wall arc heading for the pole, or on a\nboundary edge that is itself a meridian, the meridian samples\ninterleaved with the edge samples and opened the solid mesh along it.\n- `make_sphere(3, 32)` within `make_box(10, 10, 10)`, with the box\ncorner at `(-0.4, -1.3, -1.5)`, produced an exact and valid result whose\nmesh was open.\n\n## What this does\n\n- `start_loop_clear_of_holes` rotates the loop to the sample whose\nmeridian toward the pole runs farthest in `u` from the hole spans and\nevery boundary sample between it and the pole.\n- A face without holes moves its start only when another sample is\nstrictly clearer. A face with holes keeps its existing tie-breaking.\n- The clearances come from one sweep from the pole down, each the\nnearest `u` among the samples nearer the pole in an ordered set: `O(n\nlog n)` for a boundary of `n` samples. The battery below gives identical\nresults with this and with a pairwise scan.\n\n## Verification\n\n- A battery of 180 box and sphere placements, with three operations\neach, flagged every exact result that was invalid or meshed open. All\nfour previously open Intersects now close: corners `(-0.4, -1.3, -1.5)`,\n`(-1.5, -1.3, -0.4)`, `(-1.5, -1.3, -1.5)`, and `(-0.4, 0, 1.7)`. No\nresult is newly flagged.\n- New test `a_ball_within_a_box_corner_meshes_its_pole_closed` covers\nthose four Intersects. Each is exact, valid, watertight, and within\n`1e-7` of the ball past the corner. The `ball_past` helper integrates\neach vertical chord over `y` in closed form and over `x` by the midpoint\nrule. On main, the test fails with `(-0.4, -1.3, -1.5): open or\nnon-manifold mesh`.\n- The pose sweep's 270 results are identical to main's.\n- The workspace suite passes: 3171 tests run, 3171 passed, 20 skipped.\nLint is clean.\n- The roadmap records the case as closed.",
+          "timestamp": "2026-09-27T06:50:14Z",
+          "tree_id": "e03cadeaf18197c843da38f3a9f16a3d767d4de2",
+          "url": "https://github.com/andymai/brepkit/commit/8811475424f6e585e99b0d1787fe1ffaa15304dd"
+        },
+        "date": 1790491976014,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1022888,
+            "range": "± 2663",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1106674,
+            "range": "± 1682",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13107,
+            "range": "± 56",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 767365,
+            "range": "± 3490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42786041,
+            "range": "± 91365",
             "unit": "ns/iter"
           }
         ]
