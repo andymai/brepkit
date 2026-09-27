@@ -1,0 +1,25 @@
+crates/operations/tests/ball_on_a_cone_axis.rs
+  s_ba2f7b5c6902b6::t_1f294e99c0335d 58
+  s_ba2f7b5c6902b6::t_507463545d70f2 1-57,59-104
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_88ac32bbdfd637 2334-2384
+  s_ba2f7b5c6902b6::t_507463545d70f2 4189-4225
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_e19ccc88bbbc86 3907-3940
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e9d3265b909597336acc0f06c8541c5dcc721feb",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
