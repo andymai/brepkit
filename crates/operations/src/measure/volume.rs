@@ -1562,10 +1562,7 @@ pub fn solid_volume(
     // A solid of planes, cylinders, cones and spheres integrates exactly
     // along its faces' own boundaries, with no mesh to under-count its
     // curved faces or to mis-trim a face whose rim winds its pole.
-    if let Some(v) = brepkit_check::properties::exact_solid_volume(topo, solid)
-        .ok()
-        .flatten()
-    {
+    if let Some(v) = brepkit_check::properties::exact_solid_volume(topo, solid)? {
         if vol_trace_enabled() {
             log::debug!("VOL_TRACE exact boundary -> {v}");
         }
