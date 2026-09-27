@@ -163,7 +163,9 @@ fn connected_pieces<U: AsRef<[brepkit_topology::face::FaceId]>>(
 /// facing the other way between them (a lump inside a lump; an island in a
 /// cavity kept in the outer shell has the cavity between). A piece is inside
 /// another when most of three rays from one of its vertices cross the other
-/// an odd number of times (one ray can leave through an edge or a corner).
+/// an odd number of times (one ray can leave through an edge or a corner),
+/// by the engine's ray cast, which reads a sphere face that is no
+/// intersection of half-spaces (a ball less a column's corner) by its wires.
 /// Only pieces facing the same way are tested: a cavity kept in the outer
 /// shell faces inward, against the piece around it.
 fn piece_issues(
@@ -232,16 +234,21 @@ fn piece_issues(
         all
     };
     let mut inside_memo: HashMap<(usize, usize), bool> = HashMap::new();
+    let mut geoms: HashMap<usize, brepkit_algo::classifier::RayCastGeoms> = HashMap::new();
     let mut inside = |a: usize, b: usize| -> Result<bool, crate::OperationsError> {
         if let Some(&known) = inside_memo.get(&(a, b)) {
             return Ok(known);
         }
-        let mut odd = 0;
-        for ray in rays {
-            let crossings =
-                crate::classify::count_ray_crossings(topo, &members[&b], corner[&a], ray, 0.01)?;
-            odd += crossings % 2;
-        }
+        let g = match geoms.entry(b) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(
+                brepkit_algo::classifier::RayCastGeoms::of_faces(topo, &members[&b])?,
+            ),
+        };
+        let odd = rays
+            .iter()
+            .filter(|&&ray| brepkit_algo::classifier::ray_parity_cached(g, corner[&a], ray).0)
+            .count();
         inside_memo.insert((a, b), odd >= 2);
         Ok(odd >= 2)
     };

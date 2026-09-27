@@ -2835,10 +2835,12 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
 /// the pieces. A piece ringing the tool (a box's corners around a cone) has
 /// its centre in its own hole, inside the tool, so a centre the result does
 /// not hold passes when one of the piece's plane faces lies outside the tool
-/// (its centroid, taken inside the face): a stray piece of the tool's
-/// interior has every face inside the tool or on it, whatever its shape or
-/// its faces' orientation. A centre held by another piece rejects too,
-/// conservatively.
+/// (its centroid, taken inside the face) or a point along one of its edges
+/// lies clearly outside it (a ball less a column with a corner inside it
+/// leaves a wedge whose plane faces lie on the tool's walls): a stray piece
+/// of the tool's interior has every face and edge inside the tool or on it,
+/// whatever its shape or its faces' orientation. A centre held by another piece rejects
+/// too, conservatively.
 fn all_component_centers_outside(
     topo: &Topology,
     result: SolidId,
@@ -2852,6 +2854,7 @@ fn all_component_centers_outside(
     for comp in components {
         let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
         let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        let mut corners = Vec::new();
         for &fid in comp {
             let Ok(face) = topo.face(fid) else { continue };
             for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
@@ -2861,9 +2864,18 @@ fn all_component_centers_outside(
                     let Ok(edge) = topo.edge(oe.edge()) else {
                         continue;
                     };
+                    if let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let (a, b) = (a.point(), b.point());
+                        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                        corners.extend([0.25, 0.5, 0.75].map(|f| {
+                            edge.curve()
+                                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+                        }));
+                    }
                     for vid in [edge.start(), edge.end()] {
                         if let Ok(v) = topo.vertex(vid) {
                             let p = v.point();
+                            corners.push(p);
                             min = Point3::new(
                                 min.x().min(p.x()),
                                 min.y().min(p.y()),
@@ -2893,13 +2905,21 @@ fn all_component_centers_outside(
         let held = !geoms
             .as_ref()
             .is_some_and(|g| matches!(classify_ray_cast_cached(g, centre), Ok(FaceClass::Outside)));
-        if held
-            || !comp.iter().any(|&fid| {
+        // A point on an edge counts only when clearly outside: a stray
+        // piece's edges lie on the tool, off it by the sections' own error.
+        let clear = brepkit_math::tolerance::Tolerance {
+            linear: 1e-4f64.mul_add((max - min).length(), 100.0 * tol.linear),
+            ..tol
+        };
+        let outside = corners
+            .iter()
+            .any(|&p| matches!(classifier.classify(p, clear), Some(FaceClass::Outside)))
+            || comp.iter().any(|&fid| {
                 planar_face_centroid(topo, fid).is_some_and(|c| {
                     matches!(classifier.classify(c, tol), Some(FaceClass::Outside))
                 })
-            })
-        {
+            });
+        if held || !outside {
             return false;
         }
     }
