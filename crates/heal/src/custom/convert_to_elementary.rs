@@ -42,69 +42,138 @@ pub fn convert_to_elementary(
         .collect::<Result<Vec<_>, _>>()?;
 
     for (fid, surface) in &surfaces {
-        if let FaceSurface::Nurbs(nurbs) = surface {
-            match recognize_surface(nurbs, tolerance.linear) {
-                RecognizedSurface::Plane { normal, d } => {
-                    let face = topo.face_mut(*fid)?;
-                    face.set_surface(FaceSurface::Plane { normal, d });
-                    converted += 1;
+        let FaceSurface::Nurbs(nurbs) = surface else {
+            continue;
+        };
+        let replacement = match recognize_surface(nurbs, tolerance.linear) {
+            RecognizedSurface::Plane { normal, d } => Some(FaceSurface::Plane { normal, d }),
+            RecognizedSurface::Cylinder {
+                origin,
+                axis,
+                radius,
+            } => brepkit_math::surfaces::CylindricalSurface::new(origin, axis, radius)
+                .ok()
+                .map(FaceSurface::Cylinder),
+            RecognizedSurface::Sphere { center, radius } => {
+                brepkit_math::surfaces::SphericalSurface::new(center, radius)
+                    .ok()
+                    .map(FaceSurface::Sphere)
+            }
+            RecognizedSurface::Cone {
+                apex,
+                axis,
+                half_angle,
+            } => brepkit_math::surfaces::ConicalSurface::new(apex, axis, half_angle)
+                .ok()
+                .map(FaceSurface::Cone),
+            RecognizedSurface::Torus {
+                center,
+                axis,
+                major_radius,
+                minor_radius,
+            } => brepkit_math::surfaces::ToroidalSurface::with_axis(
+                center,
+                major_radius,
+                minor_radius,
+                axis,
+            )
+            .ok()
+            .map(FaceSurface::Torus),
+            RecognizedSurface::NotRecognized => None,
+        };
+        let Some(replacement) = replacement else {
+            continue;
+        };
+        let opposed = normals_oppose(nurbs, &replacement);
+        // The face's pcurves live in the NURBS parameter space.
+        super::convert_to_bspline::drop_face_pcurves(topo, *fid)?;
+        match replacement {
+            // A plane stores its outward normal and is left unflagged: taken
+            // along the patch's own normal, and turned over with the face
+            // when the face is flagged.
+            FaceSurface::Plane { normal, d } => {
+                let flagged = topo.face(*fid)?.is_reversed();
+                let sign = if opposed == flagged { 1.0 } else { -1.0 };
+                topo.face_mut(*fid)?.set_surface(FaceSurface::Plane {
+                    normal: normal * sign,
+                    d: d * sign,
+                });
+                if flagged {
+                    turn_over(topo, *fid)?;
                 }
-                RecognizedSurface::Cylinder {
-                    origin,
-                    axis,
-                    radius,
-                } => {
-                    if let Ok(cyl) =
-                        brepkit_math::surfaces::CylindricalSurface::new(origin, axis, radius)
-                    {
-                        let face = topo.face_mut(*fid)?;
-                        face.set_surface(FaceSurface::Cylinder(cyl));
-                        converted += 1;
-                    }
+            }
+            other => {
+                topo.face_mut(*fid)?.set_surface(other);
+                if opposed {
+                    turn_over(topo, *fid)?;
                 }
-                RecognizedSurface::Sphere { center, radius } => {
-                    if let Ok(sph) = brepkit_math::surfaces::SphericalSurface::new(center, radius) {
-                        let face = topo.face_mut(*fid)?;
-                        face.set_surface(FaceSurface::Sphere(sph));
-                        converted += 1;
-                    }
-                }
-                RecognizedSurface::Cone {
-                    apex,
-                    axis,
-                    half_angle,
-                } => {
-                    if let Ok(cone) =
-                        brepkit_math::surfaces::ConicalSurface::new(apex, axis, half_angle)
-                    {
-                        let face = topo.face_mut(*fid)?;
-                        face.set_surface(FaceSurface::Cone(cone));
-                        converted += 1;
-                    }
-                }
-                RecognizedSurface::Torus {
-                    center,
-                    axis,
-                    major_radius,
-                    minor_radius,
-                } => {
-                    if let Ok(torus) = brepkit_math::surfaces::ToroidalSurface::with_axis(
-                        center,
-                        major_radius,
-                        minor_radius,
-                        axis,
-                    ) {
-                        let face = topo.face_mut(*fid)?;
-                        face.set_surface(FaceSurface::Torus(torus));
-                        converted += 1;
-                    }
-                }
-                RecognizedSurface::NotRecognized => {}
             }
         }
+        converted += 1;
     }
 
     Ok(converted)
+}
+
+/// Whether a NURBS patch's normal (`Su x Sv`) and the recognized surface's
+/// own normal point opposite ways, read at the patch's middle. A patch
+/// parameterized inward (a mirrored one, whose transform flips its flag and
+/// keeps its wire) faces the other way to the analytic surface.
+fn normals_oppose(
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    replacement: &FaceSurface,
+) -> bool {
+    let ((u0, u1), (v0, v1)) = (nurbs.domain_u(), nurbs.domain_v());
+    let (u, v) = (0.5 * (u0 + u1), 0.5 * (v0 + v1));
+    let Ok(n) = nurbs.normal(u, v) else {
+        return false;
+    };
+    let p = brepkit_math::traits::ParametricSurface::evaluate(nurbs, u, v);
+    let m = match replacement {
+        FaceSurface::Plane { normal, .. } => *normal,
+        other => match other.project_point(p) {
+            Some((pu, pv)) => other.normal(pu, pv),
+            None => return false,
+        },
+    };
+    n.dot(m) < 0.0
+}
+
+/// Turn a face over against its new surface: its flag flips, and each of its
+/// wires runs the other way, so every edge keeps the sense it had in the
+/// shell.
+fn turn_over(topo: &mut Topology, face_id: FaceId) -> Result<(), HealError> {
+    use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
+
+    let (outer, inner, reversed) = {
+        let face = topo.face(face_id)?;
+        (
+            face.outer_wire(),
+            face.inner_wires().to_vec(),
+            face.is_reversed(),
+        )
+    };
+    let mut flip = |w: WireId| -> Result<WireId, HealError> {
+        let wire = topo.wire(w)?;
+        let closed = wire.is_closed();
+        let edges: Vec<OrientedEdge> = wire
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        Ok(topo.add_wire(Wire::new(edges, closed)?))
+    };
+    let new_outer = flip(outer)?;
+    let new_inner = inner
+        .into_iter()
+        .map(&mut flip)
+        .collect::<Result<Vec<_>, _>>()?;
+    let face = topo.face_mut(face_id)?;
+    face.set_outer_wire(new_outer);
+    *face.inner_wires_mut() = new_inner;
+    face.set_reversed(!reversed);
+    Ok(())
 }
 
 /// Try to recognize and replace NURBS edges with analytic curves.
