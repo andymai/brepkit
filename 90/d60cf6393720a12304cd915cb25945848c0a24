@@ -1,6 +1,7 @@
 .claude/skills/roadmap/SKILL.md
   s_ba2f7b5c6902b6::t_62ea9bd8dfae7f 202-210
   s_ba2f7b5c6902b6::t_38df16aaaae727 211
+  s_ba2f7b5c6902b6::t_e29dbf25a65988 194
 crates/check/src/classify/boundary.rs
   s_ba2f7b5c6902b6::t_be2ede9c2b1feb 632-634,649-674
   s_ba2f7b5c6902b6::t_322248d90589f1 675-676
