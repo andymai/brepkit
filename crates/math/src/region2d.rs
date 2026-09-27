@@ -119,8 +119,15 @@ fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
             let qc = x0.mul_add(x0, y0 * y0) - 1.0;
             let size = a.max(b);
             let on_arc = |t: f64| t0 + (t - t0).rem_euclid(TAU) <= t1;
-            // On the ellipse (within tol) and on the arc: on the boundary.
-            let radial = (x0.hypot(y0) - 1.0).abs() * a.min(b);
+            // On the ellipse (within tol) and on the arc: on the boundary. The
+            // offset is read along the ray from the center, where the ellipse
+            // lies at `1 / rho` of the point's distance.
+            let rho = x0.hypot(y0);
+            let radial = if rho > 0.0 {
+                q.length() * (rho - 1.0).abs() / rho
+            } else {
+                a.min(b)
+            };
             if radial <= tol && on_arc(y0.atan2(x0)) {
                 return Crossing::OnBoundary;
             }
@@ -369,5 +376,21 @@ mod tests {
             point_in_region(&half, Point2::new(0.0, -0.1), 1e-9),
             Some(false)
         );
+    }
+
+    /// A long ellipse's end: a point 5e-7 past it is off the boundary.
+    #[test]
+    fn a_long_ellipse_reads_its_end_by_distance() {
+        let ellipse = [Boundary2::Arc {
+            center: Point2::new(0.0, 0.0),
+            u: Vec2::new(1.0, 0.0),
+            v: Vec2::new(0.0, 1.0),
+            a: 100.0,
+            b: 1.0,
+            t0: 0.0,
+            t1: TAU,
+        }];
+        let past = Point2::new(100.000_000_5, 0.0);
+        assert_eq!(point_in_region(&ellipse, past, 1e-7), Some(false));
     }
 }
