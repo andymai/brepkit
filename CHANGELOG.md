@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.73](https://github.com/andymai/brepkit/compare/v4.0.72...v4.0.73) (2026-09-27)
+
+
+### Bug Fixes
+
+* **math:** trace a rod through a ring's tube along the rod's rulings ([#1865](https://github.com/andymai/brepkit/issues/1865)) ([38500fe](https://github.com/andymai/brepkit/commit/38500fe88f3684ed427471c35ff6baa5a239e1cd))
+
 ## [4.0.72](https://github.com/andymai/brepkit/compare/v4.0.71...v4.0.72) (2026-09-27)
 
 
