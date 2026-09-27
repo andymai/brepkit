@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790506212190,
+  "lastUpdate": 1790507064539,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43847,6 +43847,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45867426,
             "range": "± 78009",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c3894e8457ff8ba71334f87bfce9e7d3dbb4f3bb",
+          "message": "fix(operations): join a hole round the pole along its clearest seam (#1834)\n\nSphere holes winding the axis now join along the clearest valid virtual\nseam, producing watertight meshes for columns ending just under the\npole.\n\n## What was wrong\n\n- On main, `make_sphere(3, 32)` within `make_box(5, 5, 5 + top)` at\n`(-2.5, -2.5, -5)`, and that column less the ball, are exact and valid\nbut mesh open when the column top ends just under the pole. This occurs\nfor tilted `rotation_x(-0.2)` with `top = 2.93093`, tilted\n`rotation_x(-0.35)` with `top = 3 cos(0.365)`, and upright with `top =\n2.8` against the ball turned `rotation_x(0.35)`.\n\n- In the first case's Intersect, the sphere face has 13 open edges and\nthe wall plane `x = 2.5` has 4. All lie along the wall arc from `(2.5,\n-1.66, 0)` up to `(2.5, -1.17, 1.17)`.\n\n- The sphere face's hole, the top circle around the pole, is joined to\nits outer loop along a virtual seam. `join_winding_hole` selected the\nfirst of 32 candidate outer samples whose seam crossed none of the\nface's other holes. Here, that candidate was the foot of the wall arc,\nwhich climbs toward the pole. The seam ran beside the arc and their\nsamples interleaved.\n\n## What this does\n\n- Scores every clear candidate seam by its clearance. Clearance is the\nsmallest `(u, v)` distance from the seam segment to any boundary sample\nfrom the outer loop, joined hole, or other holes, each at its nearest\nperiod image. The seam's own endpoints are excluded. The candidate with\nthe greatest clearance wins.\n\n- Moves other holes by whole periods into the rotated outer loop's span.\nRotating the outer loop to begin at the chosen seam can move its `u`\nspan by up to a period, while other holes are placed into the span\nbefore the join. Without this adjustment, a pocket hole beside the band\nfell one period outside the rotated span and went unmeshed, causing\n`a_band_keeps_its_other_holes` to fail when the seam moved.\n\n## Verification\n\n- All three column cases mesh watertight in every operation.\n\n- The pose sweep's 16 open results now mesh closed. These cover `ball |\ncolumn rx-0.2 to 2.93093` and `ball rx0.35 | column 2.5 to 2.8`, for\nIntersect and the column less the ball in every pose. Every other line\nis unchanged, and no open result remains.\n\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, produces results identical to main.\n\n- `a_column_ending_in_the_ball_keeps_the_cap_over_it` now checks every\ncase for watertightness, including the tilted and turned cases. It fails\non main.\n\n- The workspace suite passes: 3178 tests run, 3178 passed, 20 skipped.\nLint is clean.\n\n- The roadmap records this case as closed and retains the column fused\nwith a thin rod, less a turned ball, as a separate open row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes open meshes for sphere holes winding the axis: columns ending just\nunder the pole now join the hole round the pole along the clearest valid\nvirtual seam and mesh watertight.\n\n**Bug Fixes**\n- The old seam started at the first outer sample clear of the face's\nother holes; beside a wall arc climbing from the equator, its samples\ninterleaved with the arc's and left the mesh open.\n- Clearance is the smallest `(u, v)` distance from the seam to any\nboundary sample from the outer loop, joined hole, or other holes at its\nnearest period image; the candidate with the greatest clearance wins.\n- Other holes now shift by whole periods into the rotated outer loop's\nspan, so a pocket hole beside the band no longer lands a period outside\nit and goes unmeshed.\n- All column cases, the pose sweep's 16 open results, and the\nwatertightness assertion in\n`a_column_ending_in_the_ball_keeps_the_cap_over_it` pass now; a 180-case\nbox battery stays identical to main.\n\n<sup>Written for commit 695c3067c9ba2fb23d7a8fd6e4673b3f977b6117.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1834?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-27T11:01:40Z",
+          "tree_id": "16a3207bfcf50e933c9e0faa9d009ef9d605b8fb",
+          "url": "https://github.com/andymai/brepkit/commit/c3894e8457ff8ba71334f87bfce9e7d3dbb4f3bb"
+        },
+        "date": 1790507059521,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1021654,
+            "range": "± 2584",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1104403,
+            "range": "± 2149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13404,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 766492,
+            "range": "± 8678",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42471107,
+            "range": "± 114617",
             "unit": "ns/iter"
           }
         ]
