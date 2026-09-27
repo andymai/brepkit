@@ -1,0 +1,20 @@
+crates/operations/tests/extrude_major_arcs.rs
+  s_ba2f7b5c6902b6::t_790f548eb2efd7 8,347-349,416-422,424,428-445
+  s_ba2f7b5c6902b6::t_0f4f6c8b3862cf 446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "70324ae859ad06c67fec53df86d8dad29d4489a2",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
