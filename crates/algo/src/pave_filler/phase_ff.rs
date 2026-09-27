@@ -4914,7 +4914,7 @@ fn circle_face_hits(
             }
             // Arc boundary edges (a plane face rimmed by a cone/cylinder
             // corner): a section circle crossing them was invisible to the
-            // Line-only scan, leaving an ODD crossing set — the arcs then
+            // Line-only scan, leaving an ODD crossing set: the arcs then
             // desynchronize `emit_split_circle_arcs`' cyclic pairing and
             // whole in-face spans vanish (the lite magnet-pad fuse).
             EdgeCurve::Circle(bc) => {
@@ -5251,8 +5251,8 @@ fn sphere_seam_plane_crossings(
 /// neither face runs along, the other face being a plane: a polygon
 /// inscribed in the circle with every edge in its plane (a ball's chordal
 /// equator in a plane through it). The circle does not section that face:
-/// in `(u, v)` it is the face's boundary, and as a section it split the face
-/// into nothing or into the region across it.
+/// in `(u, v)` it is the face's boundary, so as a section it would split the
+/// face into nothing or into the region across it.
 fn inscribed_boundary_traced_by(
     topo: &Topology,
     fa: FaceId,

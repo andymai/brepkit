@@ -287,10 +287,8 @@ fn a_wall_holding_the_axis_keeps_its_piece() {
 /// ball keeps the lower one's dent, each exact, valid, watertight, within
 /// `1e-9` of `18 pi` or the box less it, and with points either side of the
 /// equator on the right side. The plane's section circle is the hemispheres'
-/// boundary in `(u, v)`, so it sections only the plane (as a section of a
-/// hemisphere it kept the upper one in the Intersect, and the box less the
-/// ball read as the whole box), and an unsplit hemisphere's sample sits on
-/// its own side of the equator.
+/// boundary in `(u, v)`, so it sections only the plane, and an unsplit
+/// hemisphere's sample sits on its own side of the equator.
 #[test]
 fn a_box_on_the_equator_plane_keeps_a_hemisphere() {
     let half = 18.0 * PI;
