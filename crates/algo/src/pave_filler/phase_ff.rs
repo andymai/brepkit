@@ -1300,6 +1300,46 @@ fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool 
     true
 }
 
+/// Whether `p` lies within `near` of one of a face's edges, each read as
+/// 256 chords widened by their own sagitta (a closed rim's chords run up to
+/// `7.5e-5 R` inside it).
+fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> bool {
+    let Ok(f) = topo.face(face) else {
+        return false;
+    };
+    std::iter::once(f.outer_wire())
+        .chain(f.inner_wires().iter().copied())
+        .filter_map(|wid| topo.wire(wid).ok())
+        .flat_map(|w| w.edges().to_vec())
+        .any(|oe| {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return false;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return false;
+            };
+            let (a, b) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let at = |k: f64| {
+                let t = (t1 - t0).mul_add(k / 256.0, t0);
+                edge.curve().evaluate_with_endpoints(t, a, b)
+            };
+            (0..256).any(|k| {
+                let k = f64::from(k);
+                let (q0, q1) = (at(k), at(k + 1.0));
+                let sag = (at(k + 0.5) - (q0 + (q1 - q0) * 0.5)).length();
+                let d = q1 - q0;
+                let l2 = d.dot(d);
+                let f = if l2 > 0.0 {
+                    ((p - q0).dot(d) / l2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (p - (q0 + d * f)).length() <= near + sag
+            })
+        })
+}
+
 /// Restrict surface-surface intersection curves to the region inside BOTH
 /// faces. `compute_raw_curves` works on the unbounded surfaces, so a
 /// plane-analytic or algebraic curve (e.g. a cylinder/tilted-plane ellipse)
@@ -1439,6 +1479,40 @@ fn restrict_curves_to_faces(
         // SMALLER face extent. A true point tangency stays sub-segment at any
         // resolution and is still dropped.
         if b1 - b0 < 2 {
+            // A circle's in-both arcs can be far shorter than any sample
+            // spacing (a floor's circle inside a column only near its
+            // corners, a few degrees each). Its exact crossings with the
+            // faces' boundaries cut it into arcs, and one whose midpoint lies
+            // on both faces sends it on whole to the circle split. A circle
+            // of an unbounded surface past its face (a cone's circle in a
+            // box's end plane) crosses one boundary but lies on one face.
+            if closed && let EdgeCurve::Circle(circle) = &raw.curve {
+                let mut ts: Vec<f64> = closed_circle_boundary_crossings(topo, fa, fb, circle, tol)
+                    .into_iter()
+                    .map(|(t, _)| t)
+                    .collect();
+                ts.sort_by(f64::total_cmp);
+                // An arc along a face's own edge (a strut's floor meeting a
+                // coaxial strut's cylinder, already one of its boundary
+                // arcs) splits nothing.
+                let near = 1e-5 * (1.0 + circle.radius());
+                let on_both = ts.len() >= 2
+                    && (0..ts.len()).any(|i| {
+                        let next = ts
+                            .get(i + 1)
+                            .copied()
+                            .unwrap_or(ts[0] + std::f64::consts::TAU);
+                        let p = circle.evaluate(0.5 * (ts[i] + next));
+                        ext_a.contains(p)
+                            && ext_b.contains(p)
+                            && !point_on_face_edges(topo, fa, p, near)
+                            && !point_on_face_edges(topo, fb, p, near)
+                    });
+                if on_both {
+                    out.push(raw);
+                    continue;
+                }
+            }
             let approx_len: f64 = (0..N).map(|i| (pt(i + 1) - pt(i)).length()).sum();
             let min_dim = ext_a
                 .min_dimension()
@@ -6389,6 +6463,38 @@ mod tests {
                 assert_eq!(kept, crosses, "{} corners: {c:?}", boundary.len());
             }
         }
+    }
+
+    /// A disc bounded by one closed rim of radius 3: every point on the rim
+    /// reads on the face's edge, between the rim's chords too, and a point
+    /// a hundredth inside does not.
+    #[test]
+    fn a_point_on_a_closed_rim_reads_on_the_face_edge_between_chords() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve as EC};
+        use brepkit_topology::face::{Face, FaceSurface as FS};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let rim = Circle3D::new(Point3::new(0.0, 0.0, 0.0), up, 3.0).unwrap();
+        let mut topo = Topology::new();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EC::Circle(rim.clone())));
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(w, vec![], FS::Plane { normal: up, d: 0.0 }));
+        let near = 1e-5 * 4.0;
+        for k in 0..64 {
+            let t = (f64::from(k) + 0.37) * std::f64::consts::TAU / 64.0;
+            let p = rim.evaluate(t);
+            assert!(point_on_face_edges(&topo, face, p, near), "t {t}: {p:?}");
+        }
+        assert!(!point_on_face_edges(
+            &topo,
+            face,
+            Point3::new(2.99, 0.0, 0.0),
+            near
+        ));
     }
 
     fn hit_at(angle: f64) -> (f64, Point3) {

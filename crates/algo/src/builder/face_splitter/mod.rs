@@ -5461,9 +5461,20 @@ fn split_face_2d_impl(
     // bilinear quad crossed by two wedge planes) is topologically a plane
     // face in UV, and the generic arrangement below splits it — the
     // shortcut's disjoint-section fallback would return it unsplit.
+    // Open sections that chain into loops inside a sphere face, winding no
+    // pole (a column's bottom corners dipping into a hemisphere), are holes
+    // of the face and discs of their own, which the internal-loops path
+    // below carves; the shortcut only places chains that reach the seam.
+    let inside_loops = matches!(surface, FaceSurface::Sphere(_))
+        && sections.iter().all(|s| {
+            !is_point_on_boundary_uv(s.start, &surface, &boundary_edges, 0.01)
+                && !is_point_on_boundary_uv(s.end, &surface, &boundary_edges, 0.01)
+        })
+        && !sections_form_winding_chain(sections, &surface, tol.linear);
     if all_boundary_line
         && !is_plane
         && has_open_section
+        && !inside_loops
         && (u_periodic || v_periodic || matches!(surface, FaceSurface::Sphere(_)))
     {
         let mut pieces = split_noseam_face_direct(
