@@ -289,26 +289,44 @@ fn split_noseam_by_arrangement(
     // the face fails (an empty split) instead of being kept whole: one
     // sample would then classify the whole hemisphere, which can close a
     // wrong solid the result gates accept.
-    // Need at least two arcs to interleave; one arc is handled by the cap path.
-    if open_sections.len() < 2 {
+    if open_sections.is_empty() {
         return Vec::new();
     }
     // The collar is the region holding the pole, and each region past a
     // chain of arcs (a section split over its crest is one chain of two
-    // arcs) is a lune kept beside it, so two chains are enough: a slab
-    // through the pole, or a column whose corners reach inside the ball
-    // joining three walls' arcs into one chain. A single chain is the cap
-    // path's.
+    // arcs) is a lune kept beside it, so one chain is enough: a half-space
+    // across the seam, or a column whose corners reach inside the ball
+    // joining three walls' arcs into one chain.
     let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
     let Some((seam_n, seam_p)) = loop_plane(&verts) else {
         return Vec::new();
     };
+    // Arcs that close into a loop of their own clear of the seam (a
+    // column's corner dipping into the hemisphere beside a chain across
+    // it) bound a hole and a patch, as a closed section does.
+    let clear_of_seam = |p: Point3| (p - seam_p).dot(seam_n).abs() > tol * 1e3;
+    let (inner_loops, open_sections) =
+        split_off_closed_chains(open_sections, tol * 100.0, &clear_of_seam);
+    let open_sections = open_sections.as_slice();
+    // A chain through the pole (a half-space whose plane holds the axis)
+    // leaves no region holding the pole, so no collar to keep.
+    if let FaceSurface::Sphere(sphere) = surface {
+        let reach = 1e-3 * sphere.radius();
+        let poles = [1.0, -1.0].map(|s| sphere.center() + seam_n * (s * sphere.radius()));
+        if open_sections
+            .iter()
+            .flat_map(|a| edge_samples(a, 64))
+            .any(|p| poles.iter().any(|&pole| (p - pole).length() < reach))
+        {
+            return Vec::new();
+        }
+    }
     let seam_ends = open_sections
         .iter()
         .flat_map(|a| [a.start_3d, a.end_3d])
         .filter(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
         .count();
-    if seam_ends < 4 {
+    if seam_ends < 2 {
         return Vec::new();
     }
 
@@ -348,8 +366,11 @@ fn split_noseam_by_arrangement(
     // direction from its pcurve.
     let loops = trace_region_loops(&soup, tol * 10.0);
 
-    let hole_loops: Vec<Vec<OrientedPCurveEdge>> =
-        closed_sections.iter().map(|c| vec![c.clone()]).collect();
+    let hole_loops: Vec<Vec<OrientedPCurveEdge>> = closed_sections
+        .iter()
+        .map(|c| vec![c.clone()])
+        .chain(inner_loops)
+        .collect();
 
     // Net longitude wound by a loop (≈ ±2π for a chain that encircles the
     // sphere once, ~0 for a lune or a back-and-forth chain). Robust where signed
@@ -1073,6 +1094,58 @@ fn reverse_loop(loop_edges: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
             pave_block_id: e.pave_block_id,
         })
         .collect()
+}
+
+/// The arcs of `pool` that chain, end to start (reversing arcs as needed),
+/// back to their first arc with every point `clear`, each as a closed loop,
+/// and the arcs left over.
+fn split_off_closed_chains(
+    pool: &[OrientedPCurveEdge],
+    close_tol: f64,
+    clear: &dyn Fn(Point3) -> bool,
+) -> (Vec<Vec<OrientedPCurveEdge>>, Vec<OrientedPCurveEdge>) {
+    let mut left: Vec<OrientedPCurveEdge> = pool.to_vec();
+    let mut loops = Vec::new();
+    let mut i = 0;
+    while i < left.len() {
+        let mut chain = vec![left[i].clone()];
+        let mut used = vec![i];
+        let closed = loop {
+            let (start, end) = (chain[0].start_3d, chain[chain.len() - 1].end_3d);
+            if chain.len() > 1 && (end - start).length() < close_tol {
+                break true;
+            }
+            let next = (0..left.len()).filter(|j| !used.contains(j)).find_map(|j| {
+                if (left[j].start_3d - end).length() < close_tol {
+                    Some((j, false))
+                } else if (left[j].end_3d - end).length() < close_tol {
+                    Some((j, true))
+                } else {
+                    None
+                }
+            });
+            let Some((j, flip)) = next else {
+                break false;
+            };
+            used.push(j);
+            chain.push(if flip {
+                reverse_loop(std::slice::from_ref(&left[j])).remove(0)
+            } else {
+                left[j].clone()
+            });
+        };
+        let clear_all = chain.iter().all(|e| clear(e.start_3d) && clear(e.end_3d));
+        if closed && clear_all {
+            used.sort_unstable_by(|a, b| b.cmp(a));
+            for j in used {
+                left.remove(j);
+            }
+            loops.push(chain);
+        } else {
+            i += 1;
+        }
+    }
+    (loops, left)
 }
 
 /// Greedily chain edges into one closed loop by matching 3D endpoints,
