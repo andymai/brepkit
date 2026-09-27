@@ -6,7 +6,7 @@ use brepkit_math::surfaces::{
 };
 use brepkit_math::traits::ParametricSurface;
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceSurface;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use crate::data::{OffsetData, OffsetFace, OffsetStatus};
@@ -24,7 +24,6 @@ const NURBS_DEGREE: usize = 3;
 ///
 /// Returns [`OffsetError`] if a surface cannot be offset (e.g. collapsed
 /// cylinder radius or degenerate cone).
-#[allow(clippy::too_many_lines)]
 pub fn build_offset_faces(
     topo: &Topology,
     solid: SolidId,
@@ -56,112 +55,7 @@ pub fn build_offset_faces(
             data.distance
         };
 
-        let offset_surface = match face.surface() {
-            FaceSurface::Plane { normal, d } => FaceSurface::Plane {
-                normal: *normal,
-                d: d + effective_distance,
-            },
-
-            FaceSurface::Cylinder(cyl) => {
-                let new_radius = cyl.radius() + effective_distance;
-                if new_radius <= 0.0 {
-                    return Err(OffsetError::InvalidInput {
-                        reason: format!(
-                            "cylinder offset collapses: radius {:.6} + offset {effective_distance:.6} <= 0",
-                            cyl.radius()
-                        ),
-                    });
-                }
-                FaceSurface::Cylinder(CylindricalSurface::new(
-                    cyl.origin(),
-                    cyl.axis(),
-                    new_radius,
-                )?)
-            }
-
-            FaceSurface::Cone(cone) => {
-                let half_angle = cone.half_angle();
-                let cos_ha = half_angle.cos();
-                if cos_ha.abs() < 1e-15 {
-                    return Err(OffsetError::InvalidInput {
-                        reason: "cone has degenerate half-angle (cos ≈ 0)".to_string(),
-                    });
-                }
-                // Offset cone: the apex shifts along the axis so that the
-                // surface at every v-parameter moves by `effective_distance`
-                // along its outward normal. The normal makes angle (π/2 - a)
-                // with the axis, so the axial component of the offset is
-                // d / cos(a). The sign is negative because offsetting outward
-                // moves the apex in the opposite direction of the axis.
-                let apex_shift = -effective_distance / cos_ha;
-                let new_apex = brepkit_math::vec::Point3::new(
-                    cone.apex().x() + apex_shift * cone.axis().x(),
-                    cone.apex().y() + apex_shift * cone.axis().y(),
-                    cone.apex().z() + apex_shift * cone.axis().z(),
-                );
-                FaceSurface::Cone(ConicalSurface::new(new_apex, cone.axis(), half_angle)?)
-            }
-
-            FaceSurface::Sphere(sph) => {
-                let new_radius = sph.radius() + effective_distance;
-                if new_radius <= 0.0 {
-                    return Err(OffsetError::InvalidInput {
-                        reason: format!(
-                            "sphere offset collapses: radius {:.6} + offset {effective_distance:.6} <= 0",
-                            sph.radius()
-                        ),
-                    });
-                }
-                FaceSurface::Sphere(SphericalSurface::new(sph.center(), new_radius)?)
-            }
-
-            FaceSurface::Torus(tor) => {
-                let new_minor = tor.minor_radius() + effective_distance;
-                if new_minor <= 0.0 {
-                    return Err(OffsetError::InvalidInput {
-                        reason: format!(
-                            "torus offset collapses: minor_radius {:.6} + offset {effective_distance:.6} <= 0",
-                            tor.minor_radius()
-                        ),
-                    });
-                }
-                FaceSurface::Torus(ToroidalSurface::new(
-                    tor.center(),
-                    tor.major_radius(),
-                    new_minor,
-                )?)
-            }
-
-            FaceSurface::Nurbs(nurbs) => {
-                log::debug!(
-                    target: "brepkit_approx",
-                    "offset: NURBS face {face_id:?} offset via {NURBS_GRID_SIZE}x{NURBS_GRID_SIZE} sampled-NURBS refit (degree {NURBS_DEGREE}) — not an exact analytic offset"
-                );
-                let (u_min, u_max) = nurbs.domain_u();
-                let (v_min, v_max) = nurbs.domain_v();
-
-                let mut grid = Vec::with_capacity(NURBS_GRID_SIZE);
-                for i in 0..NURBS_GRID_SIZE {
-                    let u = u_min + (u_max - u_min) * (i as f64) / (NURBS_GRID_SIZE - 1) as f64;
-                    let mut row = Vec::with_capacity(NURBS_GRID_SIZE);
-                    for j in 0..NURBS_GRID_SIZE {
-                        let v = v_min + (v_max - v_min) * (j as f64) / (NURBS_GRID_SIZE - 1) as f64;
-                        let pt = ParametricSurface::evaluate(nurbs, u, v);
-                        let n = nurbs.normal(u, v).map_err(|_| OffsetError::InvalidInput {
-                            reason: format!("NURBS normal evaluation failed at ({u:.6}, {v:.6})"),
-                        })?;
-                        row.push(brepkit_math::vec::Point3::new(
-                            pt.x() + effective_distance * n.x(),
-                            pt.y() + effective_distance * n.y(),
-                            pt.z() + effective_distance * n.z(),
-                        ));
-                    }
-                    grid.push(row);
-                }
-
-                FaceSurface::Nurbs(interpolate_surface(&grid, NURBS_DEGREE, NURBS_DEGREE)?)
-            }
-        };
+        let offset_surface = offset_surface(face_id, face.surface(), effective_distance)?;
 
         data.offset_faces.insert(
             face_id,
@@ -175,6 +69,142 @@ pub fn build_offset_faces(
     }
 
     Ok(())
+}
+
+/// The surface of `surface` offset by `distance` along its natural normal
+/// (an exact analytic offset for every analytic type, a sampled refit for
+/// NURBS).
+///
+/// # Errors
+///
+/// Returns [`OffsetError`] if the offset collapses the surface (a radius
+/// reaching zero) or a cone is degenerate.
+#[allow(clippy::too_many_lines)]
+pub fn offset_surface(
+    face_id: FaceId,
+    surface: &FaceSurface,
+    distance: f64,
+) -> Result<FaceSurface, OffsetError> {
+    let surface = match surface {
+        FaceSurface::Plane { normal, d } => FaceSurface::Plane {
+            normal: *normal,
+            d: d + distance,
+        },
+
+        FaceSurface::Cylinder(cyl) => {
+            let new_radius = cyl.radius() + distance;
+            if new_radius <= 0.0 {
+                return Err(OffsetError::InvalidInput {
+                    reason: format!(
+                        "cylinder offset collapses: radius {:.6} + offset {distance:.6} <= 0",
+                        cyl.radius()
+                    ),
+                });
+            }
+            FaceSurface::Cylinder(CylindricalSurface::with_ref_dir(
+                cyl.origin(),
+                cyl.axis(),
+                new_radius,
+                cyl.x_axis(),
+            )?)
+        }
+
+        FaceSurface::Cone(cone) => {
+            let half_angle = cone.half_angle();
+            let cos_ha = half_angle.cos();
+            if cos_ha.abs() < 1e-15 {
+                return Err(OffsetError::InvalidInput {
+                    reason: "cone has degenerate half-angle (cos ≈ 0)".to_string(),
+                });
+            }
+            // Offset cone: the apex shifts along the axis so that the
+            // surface at every v-parameter moves by `distance`
+            // along its outward normal. The normal makes angle (π/2 - a)
+            // with the axis, so the axial component of the offset is
+            // d / cos(a). The sign is negative because offsetting outward
+            // moves the apex in the opposite direction of the axis.
+            let apex_shift = -distance / cos_ha;
+            let new_apex = brepkit_math::vec::Point3::new(
+                cone.apex().x() + apex_shift * cone.axis().x(),
+                cone.apex().y() + apex_shift * cone.axis().y(),
+                cone.apex().z() + apex_shift * cone.axis().z(),
+            );
+            FaceSurface::Cone(ConicalSurface::with_ref_dir(
+                new_apex,
+                cone.axis(),
+                half_angle,
+                cone.x_axis(),
+            )?)
+        }
+
+        FaceSurface::Sphere(sph) => {
+            let new_radius = sph.radius() + distance;
+            if new_radius <= 0.0 {
+                return Err(OffsetError::InvalidInput {
+                    reason: format!(
+                        "sphere offset collapses: radius {:.6} + offset {distance:.6} <= 0",
+                        sph.radius()
+                    ),
+                });
+            }
+            FaceSurface::Sphere(SphericalSurface::with_axis_and_ref_dir(
+                sph.center(),
+                new_radius,
+                sph.z_axis(),
+                sph.x_axis(),
+            )?)
+        }
+
+        FaceSurface::Torus(tor) => {
+            let new_minor = tor.minor_radius() + distance;
+            if new_minor <= 0.0 {
+                return Err(OffsetError::InvalidInput {
+                    reason: format!(
+                        "torus offset collapses: minor_radius {:.6} + offset {distance:.6} <= 0",
+                        tor.minor_radius()
+                    ),
+                });
+            }
+            FaceSurface::Torus(ToroidalSurface::with_axis_and_ref_dir(
+                tor.center(),
+                tor.major_radius(),
+                new_minor,
+                tor.z_axis(),
+                tor.x_axis(),
+            )?)
+        }
+
+        FaceSurface::Nurbs(nurbs) => {
+            log::debug!(
+                target: "brepkit_approx",
+                "offset: NURBS face {face_id:?} offset via {NURBS_GRID_SIZE}x{NURBS_GRID_SIZE} sampled-NURBS refit (degree {NURBS_DEGREE}) — not an exact analytic offset"
+            );
+            let (u_min, u_max) = nurbs.domain_u();
+            let (v_min, v_max) = nurbs.domain_v();
+
+            let mut grid = Vec::with_capacity(NURBS_GRID_SIZE);
+            for i in 0..NURBS_GRID_SIZE {
+                let u = u_min + (u_max - u_min) * (i as f64) / (NURBS_GRID_SIZE - 1) as f64;
+                let mut row = Vec::with_capacity(NURBS_GRID_SIZE);
+                for j in 0..NURBS_GRID_SIZE {
+                    let v = v_min + (v_max - v_min) * (j as f64) / (NURBS_GRID_SIZE - 1) as f64;
+                    let pt = ParametricSurface::evaluate(nurbs, u, v);
+                    let n = nurbs.normal(u, v).map_err(|_| OffsetError::InvalidInput {
+                        reason: format!("NURBS normal evaluation failed at ({u:.6}, {v:.6})"),
+                    })?;
+                    row.push(brepkit_math::vec::Point3::new(
+                        pt.x() + distance * n.x(),
+                        pt.y() + distance * n.y(),
+                        pt.z() + distance * n.z(),
+                    ));
+                }
+                grid.push(row);
+            }
+
+            FaceSurface::Nurbs(interpolate_surface(&grid, NURBS_DEGREE, NURBS_DEGREE)?)
+        }
+    };
+    Ok(surface)
 }
 
 #[cfg(test)]

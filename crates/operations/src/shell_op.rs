@@ -159,6 +159,22 @@ pub fn shell(
         }
     }
 
+    // The polygon walls below chord a curved face; the image of the solid's
+    // own faces keeps it exact wherever the wall keeps their topology.
+    let curved = all_face_ids.iter().any(|&f| {
+        topo.face(f)
+            .is_ok_and(|f| !matches!(f.surface(), FaceSurface::Plane { .. }))
+    });
+    if curved
+        && let Some(hollow) =
+            crate::offset_v2::shell_by_image(topo, solid, -thickness, open_faces, tol.linear)?
+    {
+        if crate::validate::validate_solid(topo, hollow)?.is_valid() {
+            return Ok(hollow);
+        }
+        log::debug!("shell: the exact wall is invalid, building polygon walls");
+    }
+
     // Collect face vertex data (samples curved edges for proper polygons).
     let mut face_verts: Vec<(FaceId, Vec<Point3>)> = Vec::new();
     for &fid in &all_face_ids {

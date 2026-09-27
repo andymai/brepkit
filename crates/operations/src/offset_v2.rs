@@ -49,6 +49,23 @@ pub fn shell_v2(
         .map_err(map_offset_error)
 }
 
+/// The shell of [`shell_v2`] built exact as images of the solid's faces,
+/// or `None` when that does not apply.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails.
+pub(crate) fn shell_by_image(
+    topo: &mut Topology,
+    solid: SolidId,
+    thickness: f64,
+    exclude: &[FaceId],
+    tolerance: f64,
+) -> Result<Option<SolidId>, OperationsError> {
+    brepkit_offset::thick_solid_by_image(topo, solid, thickness, exclude, tolerance)
+        .map_err(map_offset_error)
+}
+
 /// Offset with arc joints (V2 pipeline).
 ///
 /// # Errors
