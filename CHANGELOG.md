@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.49](https://github.com/andymai/brepkit/compare/v4.0.48...v4.0.49) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** keep a section circle's crossings with a boundary that is not inscribed in it ([#1814](https://github.com/andymai/brepkit/issues/1814)) ([518ff46](https://github.com/andymai/brepkit/commit/518ff461e1afabc2c23eee809014eaaca32fc4e0))
+
 ## [4.0.48](https://github.com/andymai/brepkit/compare/v4.0.47...v4.0.48) (2026-09-27)
 
 
