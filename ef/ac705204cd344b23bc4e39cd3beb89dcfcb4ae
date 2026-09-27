@@ -1,16 +1,16 @@
 crates/operations/src/revolve.rs
   s_ba2f7b5c6902b6::t_3839b664926f46 46-62,1606-1607,1651-1652,1664-1665
   s_ba2f7b5c6902b6::t_df908802852b51 189,211-224,226,353-380,395,412-417,419,1550
-  s_ba2f7b5c6902b6::t_efc60e216deec4 821-823
   s_ba2f7b5c6902b6::t_b53b09e9a1d6e6 1444-1464,1539-1540
+  s_ba2f7b5c6902b6::t_efc60e216deec4 821-823
 crates/operations/tests/revolve_arc_profile.rs
+  s_ba2f7b5c6902b6::t_14274b4601ed55 35-38,40,45,52-56,72-76,95-99
   s_ba2f7b5c6902b6::t_88ea329444b1fe 91,112
   s_ba2f7b5c6902b6::t_56239fe9f79824 1-34,39,41-44,46-51,57-71,77-90,92-94,100-111,113-124
-  s_ba2f7b5c6902b6::t_14274b4601ed55 35-38,40,45,52-56,72-76,95-99
 crates/operations/src/sweep/spine.rs
   s_ba2f7b5c6902b6::t_df908802852b51 427
 .claude/skills/roadmap/SKILL.md
-  s_ba2f7b5c6902b6::t_fc995eb2ea41d0 204-213
+  s_ba2f7b5c6902b6::t_d4176f945c0dd6 204-213
 ---
 {
   "schema_version": "authorship/3.0.0",
