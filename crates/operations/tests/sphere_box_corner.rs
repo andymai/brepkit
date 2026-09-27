@@ -93,7 +93,7 @@ fn ball_past(a: f64, b: f64, c: f64) -> f64 {
         // Where the sphere's height reaches the floor's depth, `|y| <= e`.
         let e = (c2 - c * c).max(0.0).sqrt();
         total += if c >= 0.0 {
-            let hi = top.min(e);
+            let (lo, hi) = (lo.max(-e), top.min(e));
             if hi > lo {
                 heights(lo, hi) - c * (hi - lo)
             } else {
@@ -139,6 +139,62 @@ fn a_ball_within_a_box_corner_meshes_its_pole_closed() {
         assert!(
             (volume - truth).abs() < 1e-7 * truth,
             "{label}: volume {volume}, truth {truth}"
+        );
+    }
+}
+
+/// The volume a triangle mesh encloses.
+fn enclosed_volume(mesh: &brepkit_operations::tessellate::TriangleMesh) -> f64 {
+    mesh.indices
+        .chunks(3)
+        .map(|t| {
+            let [a, b, c] =
+                [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize] - Point3::new(0.0, 0.0, 0.0));
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum()
+}
+
+/// The ball less a box corner whose walls pass through the ball's axis, so
+/// the patch the Cut removes runs over the pole, at the corner itself or
+/// along a wall's arc: exact, valid, within `1e-7` of the ball less its part
+/// past the corner, and meshed watertight, the mesh enclosing the solid's
+/// volume within `3e-3`. The sphere face's loop runs along the pole's row in
+/// `(u, v)`, where cutting straight across it meshed a sliver of the removed
+/// patch (a corner on the axis) or took the hole for a collar winding the
+/// axis (a wall arc over the pole).
+#[test]
+fn ball_less_a_box_corner_over_its_pole_meshes_closed() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    for (a, b, c) in [
+        (0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.6),
+        (0.0, 0.0, 1.7),
+        (-0.4, 0.0, 0.6),
+        (-1.5, 0.0, 1.7),
+        (0.0, -1.3, 0.6),
+    ] {
+        let label = format!("({a}, {b}, {c})");
+        let truth = ball - ball_past(a, b, c);
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(a, b, c)).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, sphere, block).unwrap();
+        assert!(exact(&topo, result), "{label}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-7 * truth,
+            "{label}: volume {volume}, truth {truth}"
+        );
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+        let enclosed = enclosed_volume(&mesh);
+        assert!(
+            (enclosed - volume).abs() < 3e-3 * volume,
+            "{label}: mesh encloses {enclosed}, solid {volume}"
         );
     }
 }
@@ -1596,6 +1652,57 @@ fn column_ending_in_the_ball(top: f64, tilt: f64, turn: f64) {
             (volume - truth).abs() < 1e-3 * truth,
             "{name}: volume {volume}, truth {truth}"
         );
+    }
+}
+
+/// The ball turned 0.35 about x against the column ending at `3 cos(0.35)`,
+/// whose top's section circle runs through the turned ball's pole: exact,
+/// valid, within `1e-3` of the closed forms and watertight, and the ball
+/// within the column and the column less the ball mesh within `3e-3` of
+/// their volumes. The circle takes the pole as a sample and the sphere
+/// face's loop runs along the pole's row, where cutting across it meshed
+/// both open and 15% off.
+#[test]
+fn a_column_whose_top_runs_through_the_pole_meshes_closed() {
+    let turn: f64 = 0.35;
+    let top = RADIUS * turn.cos();
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let side_caps = 4.0 * PI * 0.25 * 0.5f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let h = RADIUS - top;
+    let within = ball - side_caps - PI * h * h * h.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    for (name, truth) in [
+        ("ball less column", ball - within),
+        ("ball within column", within),
+        ("column less ball", 5.0 * 5.0 * (5.0 + top) - within),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        transform_solid(&mut topo, sphere, &Mat4::rotation_x(turn)).unwrap();
+        let column = make_box(&mut topo, 5.0, 5.0, 5.0 + top).unwrap();
+        transform_solid(&mut topo, column, &Mat4::translation(-2.5, -2.5, -5.0)).unwrap();
+        let result = match name {
+            "ball less column" => boolean(&mut topo, BooleanOp::Cut, sphere, column),
+            "ball within column" => boolean(&mut topo, BooleanOp::Intersect, sphere, column),
+            _ => boolean(&mut topo, BooleanOp::Cut, column, sphere),
+        }
+        .unwrap();
+        assert!(exact(&topo, result), "{name}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-3 * truth,
+            "{name}: volume {volume}, truth {truth}"
+        );
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
+        if name != "ball less column" {
+            let enclosed = enclosed_volume(&mesh);
+            assert!(
+                (enclosed - volume).abs() < 3e-3 * volume,
+                "{name}: mesh encloses {enclosed}, solid {volume}"
+            );
+        }
     }
 }
 
