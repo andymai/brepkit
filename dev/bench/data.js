@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790496906235,
+  "lastUpdate": 1790499942386,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43523,6 +43523,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43431935,
             "range": "± 1029517",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "893520bc69a076a2bcf814ce6a282375c12584d5",
+          "message": "fix(operations): mesh a sphere face's loop through a pole along the pole's row (#1831)\n\nSphere faces whose loops pass through a pole now tessellate along the\npole’s row, producing welded, watertight meshes for the affected sphere\nand box operations.\n\n## What was wrong\n\n- On main, `make_sphere(3, 32)` less `make_box(10, 10, 10)` meshes open\nat nine corner placements whose walls pass through the ball’s axis: `(0,\n0, 0)`, `(0, 0, 0.6)`, `(0, 0, 1.7)`, `(-0.4, 0, 0.6)`, `(-0.4, 0,\n1.7)`, `(-1.5, 0, 0.6)`, `(-1.5, 0, 1.7)`, `(0, -1.3, 0.6)`, and `(0,\n-1.3, 1.7)`. The exact results are valid. A corner on the axis leaves\ntwo faces with open edges. A wall over the pole leaves five, and at\n`(-0.4, 0, 0.6)` the mesh encloses about half the solid, `42.95` against\n`101.05`.\n\n- The ball turned `0.35` about x within `make_box(5, 5, 5 + 3 cos 0.35)`\nat `(-2.5, -2.5, -5)`, and that column less the ball, also mesh open on\nmain. Their mesh volumes are off by `-15.4%` and `+17.5%`. The column’s\ntop circle runs through the turned ball’s pole.\n\n- A loop through a sphere’s pole assigned the pole whatever `u` its\nprojection returned. In `(u, v)`, the loop therefore cut straight across\nthe pole’s row. With a corner on the axis, this meshed a sliver of the\nremoved patch.\n\n- A wall arc over the pole was sampled without the pole. Its `u` jumps\nby half a turn there, making the hole cover exactly half a turn. The\ncollar path in `tessellate_latitude_band_shared`, whose floor test\naccepts a largest `u` gap of at most `pi`, then treated the hole as a\nfloor winding the axis.\n\n## What this does\n\n- In `solid.rs`, a circle edge on a sphere face that runs over the\nsphere’s pole takes the pole as a shared sample through\n`circle_pole_params`. Both faces on the edge weld to that sample.\n\n- In `nonplanar.rs`, `unwrap_loop_u` unwraps loops with pole samples\ncarrying no `u`. The loop starts just past a pole, making the step\nacross the pole the closing step. `route_through_poles` expands each\npole sample into a run along the pole’s row, from the arriving `u` to\nthe departing `u`, at the same sampling density as the pole closure row.\nThis applies to outer loops and holes, and `hole_u_spans` uses the same\nunwrap. `collect_var_v_ring` now requires a floor to wind the axis once\nin wire order.\n\n## Verification\n\n- All nine placements mesh watertight. Their mesh volumes differ from\nthe solids' by `-1.58e-3` to `-1.65e-3` (relative), matching the\n`-1.57e-3` chordal error for placements clear of the axis.\n\n- A battery of 180 box placements, with three operations each, checks\nevery exact result for validity, watertightness, and consistent volumes.\nThe nine open mesh flags are gone, nothing is newly flagged, and exact\nresults remain `483` of `540`.\n\n- In the pose sweep, seven exact `ball 1 | octant` results now mesh\nclosed. Every other line is unchanged.\n\n- New tests in `crates/operations/tests/sphere_box_corner.rs` cover all\nnine placements in `ball_less_a_box_corner_over_its_pole_meshes_closed`,\nand the three operations of the turned ball and column in\n`a_column_whose_top_runs_through_the_pole_meshes_closed`. They check\nexactness, validity, closed form volumes, watertightness, and mesh\nvolumes (within `3e-3`, or `1e-2` for the small ball less the column,\nits chordal error). Both tests fail on main’s mesher.\n\n- The `ball_past` test helper now integrates a floor above the equator\nfrom the section circle instead of `y = b`, avoiding negative heights\nwhen `b` lies past that circle.\n\n- The operations suite passes: `1310` passed, `13` skipped. Lint is\nclean.\n\n- The roadmap records both cases as closed. It identifies columns ending\njust under the pole as still open, and records exact results from a\nplane on the chordal equator that fail validation.",
+          "timestamp": "2026-09-27T09:03:24Z",
+          "tree_id": "c6b8184314b77b8898c7ee15874c9601a98c7e7b",
+          "url": "https://github.com/andymai/brepkit/commit/893520bc69a076a2bcf814ce6a282375c12584d5"
+        },
+        "date": 1790499937949,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 580149,
+            "range": "± 5711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 631825,
+            "range": "± 30525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8202,
+            "range": "± 184",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 429520,
+            "range": "± 4476",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27857538,
+            "range": "± 489399",
             "unit": "ns/iter"
           }
         ]
