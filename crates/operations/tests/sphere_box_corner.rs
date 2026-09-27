@@ -1120,6 +1120,28 @@ fn an_offset_turned_column_splits_each_hemisphere_between_two_chains() {
                 (volume - truth).abs() < 1e-7 * truth,
                 "{label}: volume {volume}, truth {truth}"
             );
+            // In the column's own frame: its middle, the cap past the far
+            // wall and the lunes past the three near walls, the column past
+            // the ball, and above both.
+            let (inside, outside) = (PointClassification::Inside, PointClassification::Outside);
+            for (p, want) in [
+                ((0.0, 0.0, 0.0), [inside, outside, outside]),
+                ((-2.8, 0.0, 0.0), [outside, inside, outside]),
+                ((2.5, 0.0, 0.0), [outside, inside, outside]),
+                ((0.0, 2.6, 0.0), [outside, inside, outside]),
+                ((0.0, -2.5, 0.3), [outside, inside, outside]),
+                ((1.8, 2.2, 2.0), [outside, outside, inside]),
+                ((0.0, 0.0, 6.0), [outside, outside, outside]),
+            ] {
+                let want = match name {
+                    "within" => want[0],
+                    "ball less column" => want[1],
+                    _ => want[2],
+                };
+                let p = (pose * Mat4::rotation_z(0.2)).mul_point(Point3::new(p.0, p.1, p.2));
+                let got = classify_point(&topo, result, p, &ClassifyOptions::default());
+                assert_eq!(got.unwrap(), want, "{label}: {p:?}");
+            }
         }
     }
 }
