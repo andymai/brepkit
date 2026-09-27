@@ -308,16 +308,23 @@ fn split_noseam_by_arrangement(
     let (inner_loops, open_sections) =
         split_off_closed_chains(open_sections, tol * 100.0, &clear_of_seam);
     let open_sections = open_sections.as_slice();
-    // A chain through the pole (a half-space whose plane holds the axis)
-    // leaves no region holding the pole, so no collar to keep.
+    // A chain through or near the pole (a wall holding the axis) leaves no
+    // region holding the pole, or one the region polygons' chords misread,
+    // so no collar to keep. Each arc is read at a spacing under half the
+    // reach, so one crossing the pole between its ends is caught.
     if let FaceSurface::Sphere(sphere) = surface {
-        let reach = 1e-3 * sphere.radius();
+        let reach = 5e-3 * sphere.radius();
         let poles = [1.0, -1.0].map(|s| sphere.center() + seam_n * (s * sphere.radius()));
-        if open_sections
-            .iter()
-            .flat_map(|a| edge_samples(a, 64))
-            .any(|p| poles.iter().any(|&pole| (p - pole).length() < reach))
-        {
+        let near_pole = |a: &OrientedPCurveEdge| {
+            let coarse = edge_samples(a, 64);
+            let length: f64 = coarse.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let n = ((2.0 * length / reach).ceil() as usize).clamp(64, 1 << 14);
+            edge_samples(a, n)
+                .iter()
+                .any(|&p| poles.iter().any(|&pole| (p - pole).length() < reach))
+        };
+        if open_sections.iter().any(near_pole) {
             return Vec::new();
         }
     }
@@ -1097,8 +1104,8 @@ fn reverse_loop(loop_edges: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
 }
 
 /// The arcs of `pool` that chain, end to start (reversing arcs as needed),
-/// back to their first arc with every point `clear`, each as a closed loop,
-/// and the arcs left over.
+/// back to their first arc with every point sampled along them `clear`,
+/// each as a closed loop, and the arcs left over.
 fn split_off_closed_chains(
     pool: &[OrientedPCurveEdge],
     close_tol: f64,
@@ -1134,7 +1141,11 @@ fn split_off_closed_chains(
                 left[j].clone()
             });
         };
-        let clear_all = chain.iter().all(|e| clear(e.start_3d) && clear(e.end_3d));
+        // Along each arc, not only at its ends: one touching the seam
+        // between them still meets the seam there.
+        let clear_all = chain
+            .iter()
+            .all(|e| edge_samples(e, 16).into_iter().all(clear));
         if closed && clear_all {
             used.sort_unstable_by(|a, b| b.cmp(a));
             for j in used {

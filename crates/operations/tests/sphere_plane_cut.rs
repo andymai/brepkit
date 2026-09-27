@@ -242,6 +242,35 @@ fn a_plane_through_the_axis_keeps_half_the_ball() {
     }
 }
 
+/// The ball within and less the box over `x > 0`, `y > -1`: its wall
+/// `x = 0` holds the axis, so on the upper hemisphere that wall's arc runs
+/// through the pole between its ends (the wall `y = -1` cuts it off centre).
+/// No region there holds the pole, and the result falls back rather than
+/// read one; each piece is valid and within `2e-2` of `40π/3` and the rest.
+#[test]
+fn a_wall_holding_the_axis_keeps_its_piece() {
+    let within = 40.0 * PI / 3.0;
+    let ball = 36.0 * PI;
+    for (op, truth) in [
+        (BooleanOp::Intersect, within),
+        (BooleanOp::Cut, ball - within),
+    ] {
+        let label = format!("{op:?}");
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, 3.0, 32).unwrap();
+        let block = make_box(&mut topo, 10.0, 11.0, 20.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(0.0, -1.0, -10.0)).unwrap();
+        let piece = boolean(&mut topo, op, sphere, block).unwrap();
+        let report = validate_solid(&topo, piece).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+        let volume = solid_volume(&topo, piece, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 2e-2 * truth,
+            "{label}: volume {volume}, truth {truth}"
+        );
+    }
+}
+
 /// Two caps of one ball fused into one solid: every disc is still a full
 /// circle on the sphere, but the caps each removes overlap.
 #[test]
