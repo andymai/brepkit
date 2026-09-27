@@ -119,7 +119,27 @@ fn fill_section_sc(arena: &mut GfaArena) {
     let mut curve_data: Vec<_> = arena
         .curves
         .iter()
-        .map(|c| (c.face_a, c.face_b, c.pave_blocks.clone()))
+        .enumerate()
+        .map(|(idx, c)| {
+            // A face the curve does not section takes the other's place.
+            let skipped = |f| {
+                arena
+                    .curve_skip_faces
+                    .get(&idx)
+                    .is_some_and(|faces| faces.contains(&f))
+            };
+            let face_a = if skipped(c.face_a) {
+                c.face_b
+            } else {
+                c.face_a
+            };
+            let face_b = if skipped(c.face_b) {
+                c.face_a
+            } else {
+                c.face_b
+            };
+            (face_a, face_b, c.pave_blocks.clone())
+        })
         .collect();
     // A face a curve also sections takes its blocks as a section too (listed
     // as its own pair; the face sets absorb the repeat).

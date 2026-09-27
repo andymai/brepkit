@@ -280,6 +280,95 @@ fn a_wall_holding_the_axis_keeps_its_piece() {
     }
 }
 
+/// The ball against a box whose top face is the plane of its chordal
+/// equator (built on `z = 0`, or tipped there by a quarter turn about y,
+/// which leaves it 1e-16 off), turned about z: the ball within it is the
+/// lower hemisphere, the ball less it the upper one, and the box less the
+/// ball keeps the lower one's dent, each exact, valid, watertight, within
+/// `1e-9` of `18 pi` or the box less it, and with points either side of the
+/// equator on the right side. The plane's section circle is the hemispheres'
+/// boundary in `(u, v)`, so it sections only the plane (as a section of a
+/// hemisphere it kept the upper one in the Intersect, and the box less the
+/// ball read as the whole box), and an unsplit hemisphere's sample sits on
+/// its own side of the equator.
+#[test]
+fn a_box_on_the_equator_plane_keeps_a_hemisphere() {
+    let half = 18.0 * PI;
+    for (build, tipped) in [("on z = 0", false), ("tipped", true)] {
+        for turn in [0.0_f64, 0.3, 1.0] {
+            let place = if tipped {
+                Mat4::rotation_z(turn)
+                    * Mat4::rotation_y(std::f64::consts::FRAC_PI_2)
+                    * Mat4::translation(0.0, -5.0, -5.0)
+            } else {
+                Mat4::rotation_z(turn) * Mat4::translation(-5.0, -5.0, -10.0)
+            };
+            for (name, truth, low, high) in [
+                (
+                    "ball within box",
+                    half,
+                    PointClassification::Inside,
+                    PointClassification::Outside,
+                ),
+                (
+                    "ball less box",
+                    half,
+                    PointClassification::Outside,
+                    PointClassification::Inside,
+                ),
+                (
+                    "box less ball",
+                    1000.0 - half,
+                    PointClassification::Outside,
+                    PointClassification::Outside,
+                ),
+            ] {
+                let label = format!("{name}, {build}, turned {turn}");
+                let mut topo = Topology::new();
+                let ball = make_sphere(&mut topo, 3.0, 32).unwrap();
+                let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+                transform_solid(&mut topo, block, &place).unwrap();
+                let piece = match name {
+                    "ball within box" => boolean(&mut topo, BooleanOp::Intersect, ball, block),
+                    "ball less box" => boolean(&mut topo, BooleanOp::Cut, ball, block),
+                    _ => boolean(&mut topo, BooleanOp::Cut, block, ball),
+                }
+                .unwrap();
+                let faces = solid_faces(&topo, piece).unwrap();
+                assert!(
+                    faces.len() <= 8
+                        && faces.iter().any(|&f| matches!(
+                            topo.face(f).unwrap().surface(),
+                            FaceSurface::Sphere(_)
+                        )),
+                    "{label}: fell back to a mesh ({} faces)",
+                    faces.len()
+                );
+                let report = validate_solid(&topo, piece).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                let volume = solid_volume(&topo, piece, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-9 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+                let at = |z: f64| {
+                    classify_point(
+                        &topo,
+                        piece,
+                        Point3::new(0.3, 0.2, z),
+                        &ClassifyOptions::default(),
+                    )
+                    .unwrap()
+                };
+                assert_eq!(at(-1.0), low, "{label}: below the equator");
+                assert_eq!(at(1.0), high, "{label}: above the equator");
+            }
+        }
+    }
+}
+
 /// Two caps of one ball fused into one solid: every disc is still a full
 /// circle on the sphere, but the caps each removes overlap.
 #[test]

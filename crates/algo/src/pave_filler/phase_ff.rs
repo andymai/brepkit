@@ -670,6 +670,7 @@ pub fn perform(
 
             for raw in raw_curves {
                 let mut raw = raw;
+                let mut skip_face = None;
                 // Closed Circle3D sections — produced by plane-sphere
                 // intersections — get split at face-boundary crossings so
                 // downstream face splitters see open arcs they can match
@@ -698,6 +699,18 @@ pub fn perform(
                                 topo, arena, fa, fb, &raw, circle, &crossings, tol,
                             );
                             continue;
+                        }
+                        // A circle running along one face's inscribed boundary
+                        // sections only the plane it lies in, and only once:
+                        // both hemispheres of a faceted sphere yield it.
+                        if let Some(traced) =
+                            inscribed_boundary_traced_by(topo, fa, fb, circle, tol)
+                        {
+                            let plane = if traced == fa { fb } else { fa };
+                            if closed_circle_sections(arena, plane, circle, tol) {
+                                continue;
+                            }
+                            skip_face = Some(traced);
                         }
                     }
                 }
@@ -813,6 +826,9 @@ pub fn perform(
                     f2: fb,
                     curve_index,
                 });
+                if let Some(face) = skip_face {
+                    arena.curve_skip_faces.insert(curve_index, vec![face]);
+                }
 
                 log::debug!(
                     "FF: faces {fa:?} and {fb:?} intersect (curve_index={curve_index}, \
@@ -4864,6 +4880,106 @@ fn circle_exits_plane_boundary(
     false
 }
 
+/// Where a closed section circle meets a face's outer boundary: each hit's
+/// circle parameter, point, and the boundary edge it lies on.
+fn circle_face_hits(
+    topo: &Topology,
+    fid: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> {
+    let mut hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
+    let Ok(face) = topo.face(fid) else {
+        return hits;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return hits;
+    };
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let Ok(sv) = topo.vertex(edge.start()) else {
+            continue;
+        };
+        let Ok(ev) = topo.vertex(edge.end()) else {
+            continue;
+        };
+        let mut edge_hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
+        match edge.curve() {
+            EdgeCurve::Line => {
+                for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
+                    edge_hits.push((t, p, Some(oe.edge())));
+                }
+            }
+            // Arc boundary edges (a plane face rimmed by a cone/cylinder
+            // corner): a section circle crossing them was invisible to the
+            // Line-only scan, leaving an ODD crossing set — the arcs then
+            // desynchronize `emit_split_circle_arcs`' cyclic pairing and
+            // whole in-face spans vanish (the lite magnet-pad fuse).
+            EdgeCurve::Circle(bc) => {
+                const NS: usize = 128;
+                let full = (sv.point() - ev.point()).length() < tol.linear;
+                let cand = circle.intersect_circle(bc, tol.linear);
+                if cand.is_empty() {
+                    continue;
+                }
+                // Filter to the edge's actual arc by proximity to its
+                // sampled polyline (skipped for a full-circle edge). The
+                // band covers the sampling sagitta plus the fit weld.
+                let mut samples: Vec<Point3> = Vec::new();
+                if !full {
+                    let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
+                    for i in 0..=NS {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = t0 + (t1 - t0) * (i as f64) / (NS as f64);
+                        samples.push(edge.curve().evaluate_with_endpoints(
+                            t,
+                            sv.point(),
+                            ev.point(),
+                        ));
+                    }
+                }
+                let band = {
+                    let step = if samples.len() > 1 {
+                        (samples[1] - samples[0]).length()
+                    } else {
+                        0.0
+                    };
+                    (step * step / (8.0 * bc.radius().max(tol.linear)))
+                        .mul_add(2.0, tol.linear * 100.0)
+                };
+                for (p, t) in cand {
+                    let on_arc = full
+                        || samples.windows(2).any(|w| {
+                            let d = w[1] - w[0];
+                            let l2 = d.length_squared();
+                            let f = if l2 > 1e-20 {
+                                ((p - w[0]).dot(d) / l2).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            };
+                            (p - (w[0] + d * f)).length() <= band
+                        });
+                    if on_arc {
+                        edge_hits.push((t, p, Some(oe.edge())));
+                    }
+                }
+            }
+            _ => continue,
+        }
+        for (t, p, src) in edge_hits {
+            let dup = hits
+                .iter()
+                .any(|(_, q, _)| (*q - p).length() < tol.linear * 10.0);
+            if !dup {
+                hits.push((t, p, src));
+            }
+        }
+    }
+    hits
+}
+
 fn closed_circle_boundary_crossings(
     topo: &Topology,
     face_a: FaceId,
@@ -4880,99 +4996,7 @@ fn closed_circle_boundary_crossings(
     // edge, collapsing the lens region to a zero-area slit. The midpoint split
     // is the sanctioned splitter-side resolution (never make the shared merge
     // smarter).
-    let face_hits = |fid: FaceId| -> Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> {
-        let mut hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> = Vec::new();
-        let Ok(face) = topo.face(fid) else {
-            return hits;
-        };
-        let Ok(wire) = topo.wire(face.outer_wire()) else {
-            return hits;
-        };
-        for oe in wire.edges() {
-            let Ok(edge) = topo.edge(oe.edge()) else {
-                continue;
-            };
-            let Ok(sv) = topo.vertex(edge.start()) else {
-                continue;
-            };
-            let Ok(ev) = topo.vertex(edge.end()) else {
-                continue;
-            };
-            let mut edge_hits: Vec<(f64, Point3, Option<brepkit_topology::edge::EdgeId>)> =
-                Vec::new();
-            match edge.curve() {
-                EdgeCurve::Line => {
-                    for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
-                        edge_hits.push((t, p, Some(oe.edge())));
-                    }
-                }
-                // Arc boundary edges (a plane face rimmed by a cone/cylinder
-                // corner): a section circle crossing them was invisible to the
-                // Line-only scan, leaving an ODD crossing set — the arcs then
-                // desynchronize `emit_split_circle_arcs`' cyclic pairing and
-                // whole in-face spans vanish (the lite magnet-pad fuse).
-                EdgeCurve::Circle(bc) => {
-                    const NS: usize = 128;
-                    let full = (sv.point() - ev.point()).length() < tol.linear;
-                    let cand = circle.intersect_circle(bc, tol.linear);
-                    if cand.is_empty() {
-                        continue;
-                    }
-                    // Filter to the edge's actual arc by proximity to its
-                    // sampled polyline (skipped for a full-circle edge). The
-                    // band covers the sampling sagitta plus the fit weld.
-                    let mut samples: Vec<Point3> = Vec::new();
-                    if !full {
-                        let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
-                        for i in 0..=NS {
-                            #[allow(clippy::cast_precision_loss)]
-                            let t = t0 + (t1 - t0) * (i as f64) / (NS as f64);
-                            samples.push(edge.curve().evaluate_with_endpoints(
-                                t,
-                                sv.point(),
-                                ev.point(),
-                            ));
-                        }
-                    }
-                    let band = {
-                        let step = if samples.len() > 1 {
-                            (samples[1] - samples[0]).length()
-                        } else {
-                            0.0
-                        };
-                        (step * step / (8.0 * bc.radius().max(tol.linear)))
-                            .mul_add(2.0, tol.linear * 100.0)
-                    };
-                    for (p, t) in cand {
-                        let on_arc = full
-                            || samples.windows(2).any(|w| {
-                                let d = w[1] - w[0];
-                                let l2 = d.length_squared();
-                                let f = if l2 > 1e-20 {
-                                    ((p - w[0]).dot(d) / l2).clamp(0.0, 1.0)
-                                } else {
-                                    0.0
-                                };
-                                (p - (w[0] + d * f)).length() <= band
-                            });
-                        if on_arc {
-                            edge_hits.push((t, p, Some(oe.edge())));
-                        }
-                    }
-                }
-                _ => continue,
-            }
-            for (t, p, src) in edge_hits {
-                let dup = hits
-                    .iter()
-                    .any(|(_, q, _)| (*q - p).length() < tol.linear * 10.0);
-                if !dup {
-                    hits.push((t, p, src));
-                }
-            }
-        }
-        hits
-    };
+    let face_hits = |fid: FaceId| circle_face_hits(topo, fid, circle, tol);
 
     let surface_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
     let surf_a = surface_of(face_a);
@@ -5221,6 +5245,78 @@ fn sphere_seam_plane_crossings(
         }
     }
     out
+}
+
+/// The face of a pair whose own boundary a closed section circle crossing
+/// neither face runs along, the other face being a plane: a polygon
+/// inscribed in the circle with every edge in its plane (a ball's chordal
+/// equator in a plane through it). The circle does not section that face:
+/// in `(u, v)` it is the face's boundary, and as a section it split the face
+/// into nothing or into the region across it.
+fn inscribed_boundary_traced_by(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> Option<FaceId> {
+    let slack = tol.linear * 100.0;
+    let in_plane = |p: Point3| (p - circle.center()).dot(circle.normal()).abs() <= slack;
+    let is_plane = |fid: FaceId| {
+        topo.face(fid)
+            .is_ok_and(|face| matches!(face.surface(), FaceSurface::Plane { .. }))
+    };
+    [(fa, fb), (fb, fa)].into_iter().find_map(|(fid, other)| {
+        if !is_plane(other) {
+            return None;
+        }
+        let hits = circle_face_hits(topo, fid, circle, tol);
+        let traced = boundary_is_inscribed(topo, fid, &hits, circle, tol)
+            && topo
+                .face(fid)
+                .and_then(|face| topo.wire(face.outer_wire()))
+                .is_ok_and(|wire| {
+                    wire.edges().iter().all(|oe| {
+                        let Ok(edge) = topo.edge(oe.edge()) else {
+                            return false;
+                        };
+                        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                        else {
+                            return false;
+                        };
+                        let (a, b) = (sv.point(), ev.point());
+                        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                        let mid = edge.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+                        in_plane(a) && in_plane(b) && in_plane(mid)
+                    })
+                });
+        traced.then_some(fid)
+    })
+}
+
+/// Whether a closed circle coincident with `circle` already sections `face`.
+fn closed_circle_sections(
+    arena: &GfaArena,
+    face: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> bool {
+    let near = tol.linear * 10.0;
+    arena.curves.iter().enumerate().any(|(idx, c)| {
+        let EdgeCurve::Circle(existing) = &c.curve else {
+            return false;
+        };
+        let skipped = arena
+            .curve_skip_faces
+            .get(&idx)
+            .is_some_and(|faces| faces.contains(&face));
+        (c.face_a == face || c.face_b == face)
+            && !skipped
+            && (c.t_range.1 - c.t_range.0 - std::f64::consts::TAU).abs() < 1e-9
+            && (existing.center() - circle.center()).length() <= near
+            && (existing.radius() - circle.radius()).abs() <= near
+            && existing.normal().cross(circle.normal()).length() <= 1e-9
+    })
 }
 
 /// Whether a face's boundary is a polygon inscribed in a section circle,
