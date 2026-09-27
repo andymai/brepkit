@@ -178,11 +178,12 @@ fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
 /// The returned `reversed` flag orients the analytic surface to agree with the
 /// correctly-wound NURBS band normal.
 ///
+/// - circular-arc edge centred on the axis → `Sphere` band
+///
 /// A general spline profile edge, a spindle/self-intersecting torus arc (arc
 /// radius ≥ its centre's axis distance), and degenerate on-axis bands keep the
-/// NURBS band. (A circular arc whose centre is ON the axis sweeps a sphere; that
-/// case also falls back to NURBS here — recognising it as a `Sphere` band is a
-/// follow-up.)
+/// NURBS band. `seg_start` is the angle this segment's ring is turned from
+/// the profile.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn revolution_band_surface(
     profile_curve: &EdgeCurve,
@@ -194,6 +195,7 @@ pub(crate) fn revolution_band_surface(
     axis_origin: Point3,
     axis: Vec3,
     seg_angle: f64,
+    seg_start: f64,
 ) -> Result<(FaceSurface, bool), brepkit_math::MathError> {
     let nurbs = make_revolution_surface(
         p0_start,
@@ -215,13 +217,24 @@ pub(crate) fn revolution_band_surface(
         };
         let arc_mid = profile_arc_midpoint(
             profile_curve,
-            center,
             from,
             to,
             axis_origin,
             axis,
+            seg_start,
             seg_angle,
         );
+        if let Some(result) = revolution_sphere_band(
+            center,
+            radius,
+            (p0_start, p1_start),
+            axis_origin,
+            axis,
+            seg_angle,
+            arc_mid,
+        )? {
+            return Ok(result);
+        }
         if let Some(result) =
             revolution_torus_band(center, radius, axis_origin, axis, &nurbs, arc_mid)?
         {
@@ -259,7 +272,10 @@ pub(crate) fn revolution_band_surface(
     // The radial-outward direction at the band's mid-arc. Both the cylinder and
     // cone faces have a natural radially-outward normal, so they are reversed
     // exactly when this outward direction opposes the consistent band normal.
-    let mid = rotate_point(p0_start, axis_origin, axis, seg_angle / 2.0);
+    // Read the radial direction at the edge's end off the axis: an apex has
+    // none.
+    let off_axis = if r0 >= r1 { p0_start } else { p1_start };
+    let mid = rotate_point(off_axis, axis_origin, axis, seg_angle / 2.0);
     let mid_radial = mid - (axis_origin + axis * (mid - axis_origin).dot(axis));
     let natural_outward = mid_radial.normalize().unwrap_or(axis);
     let outward_reversed = natural_outward.dot(band_normal) < 0.0;
@@ -352,23 +368,17 @@ fn profile_arc_center_radius(
 
 /// The profile arc's midpoint carried to the centre of the band it sweeps on
 /// this segment. The profile curve lies where the profile was drawn, so the
-/// arc's ends on this segment's ring (`from`, `to`, in the edge's own order)
-/// are turned back to it first.
+/// arc's ends on this segment's ring (`from`, `to`, in the edge's own order),
+/// turned `turn` from it, are turned back to it first.
 fn profile_arc_midpoint(
     curve: &EdgeCurve,
-    center: Point3,
     from: Point3,
     to: Point3,
     axis_origin: Point3,
     axis: Vec3,
+    turn: f64,
     seg_angle: f64,
 ) -> Point3 {
-    let radial = |p: Point3| {
-        let d = p - axis_origin;
-        d - axis * d.dot(axis)
-    };
-    let (rc, rp) = (radial(center), radial(from));
-    let turn = rc.cross(rp).dot(axis).atan2(rc.dot(rp));
     let (a, b) = (
         rotate_point(from, axis_origin, axis, -turn),
         rotate_point(to, axis_origin, axis, -turn),
@@ -385,7 +395,7 @@ fn profile_arc_midpoint(
 /// is the arc centre's perpendicular distance to the axis; the minor radius is
 /// the arc radius. Returns `Ok(None)` (caller keeps the NURBS band) when the arc
 /// does not clear the axis (`major ≤ minor`, a spindle/degenerate torus that
-/// would self-intersect) or the arc centre lies on the axis (a sphere band).
+/// would self-intersect; a centre on the axis sweeps a sphere band instead).
 fn revolution_torus_band(
     arc_center: Point3,
     arc_radius: f64,
@@ -400,8 +410,8 @@ fn revolution_torus_band(
     let axial = axis * to_center.dot(axis);
     let radial = to_center - axial;
     let major = radial.length();
-    // Centre on the axis → sphere band (a different surface type); spindle /
-    // horn torus (major ≤ minor) self-intersects. Both keep the NURBS band.
+    // A spindle or horn torus (major ≤ minor) self-intersects: keep the NURBS
+    // band.
     if major <= arc_radius + tol {
         return Ok(None);
     }
@@ -424,6 +434,42 @@ fn revolution_torus_band(
     )))
 }
 
+/// Build the `Sphere` band swept by a circular-arc profile edge centred on
+/// the revolution axis, its poles on the axis. Returns `Ok(None)` when the
+/// arc's centre is off the axis.
+///
+/// The band winds like the NURBS band (the chord swept about the axis, normal
+/// chord × sweep), read at the arc's midpoint half way through the sweep: the
+/// chord runs parallel to the arc there, and the sweep direction is defined
+/// there even when the chord lies on the axis (a half circle ending on it),
+/// where the NURBS band has no normal.
+fn revolution_sphere_band(
+    arc_center: Point3,
+    arc_radius: f64,
+    (chord_from, chord_to): (Point3, Point3),
+    axis_origin: Point3,
+    axis: Vec3,
+    seg_angle: f64,
+    arc_mid: Point3,
+) -> Result<Option<(FaceSurface, bool)>, brepkit_math::MathError> {
+    let to_center = arc_center - axis_origin;
+    if (to_center - axis * to_center.dot(axis)).length() > 1e-9 {
+        return Ok(None);
+    }
+    let surface =
+        brepkit_math::surfaces::SphericalSurface::with_axis(arc_center, arc_radius, axis)?;
+    let half = seg_angle / 2.0;
+    let chord = rotate_point(chord_to, axis_origin, axis, half)
+        - rotate_point(chord_from, axis_origin, axis, half);
+    let to_mid = arc_mid - axis_origin;
+    let sweep = axis.cross(to_mid - axis * to_mid.dot(axis));
+    let band_normal = chord.cross(sweep);
+    Ok(Some((
+        FaceSurface::Sphere(surface),
+        (arc_mid - arc_center).dot(band_normal) < 0.0,
+    )))
+}
+
 /// Index of the next ring for a given segment, wrapping to 0 for the last
 /// segment of a full revolution.
 const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
@@ -437,8 +483,13 @@ const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
 /// Data produced by revolving a single wire (outer or inner).
 struct WireRevolveData {
     ring_verts: Vec<Vec<VertexId>>,
-    arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    /// The circle each profile vertex sweeps per segment; none for a vertex
+    /// on the axis, which stays put.
+    arc_edges: Vec<Vec<Option<brepkit_topology::edge::EdgeId>>>,
     ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    /// A profile edge lying along the axis (both ends and its middle on it),
+    /// which sweeps nothing.
+    along_axis: Vec<bool>,
     input_oriented: Vec<OrientedEdge>,
     n: usize,
 }
@@ -1398,6 +1449,13 @@ pub fn revolve(
             })
             .collect::<Result<_, _>>()?;
 
+        // A vertex on the axis stays put: one vertex for every ring, and no
+        // circle swept from it.
+        let on_axis: Vec<bool> = input_positions
+            .iter()
+            .map(|&p| radial_axial(p, axis_origin, axis).0 <= tol.linear)
+            .collect();
+
         let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_boundaries);
         ring_verts.push(input_verts.clone());
 
@@ -1406,28 +1464,41 @@ pub fn revolve(
             let theta = seg_angle * (k as f64);
             let ring: Vec<VertexId> = input_positions
                 .iter()
-                .map(|&pos| {
-                    let rotated = rotate_point(pos, axis_origin, axis, theta);
-                    topo.add_vertex(Vertex::new(rotated, tol.linear))
+                .zip(&input_verts)
+                .zip(&on_axis)
+                .map(|((&pos, &vid), &fixed)| {
+                    if fixed {
+                        vid
+                    } else {
+                        let rotated = rotate_point(pos, axis_origin, axis, theta);
+                        topo.add_vertex(Vertex::new(rotated, tol.linear))
+                    }
                 })
                 .collect();
             ring_verts.push(ring);
         }
 
-        let mut arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segs);
+        let mut arc_edges: Vec<Vec<Option<brepkit_topology::edge::EdgeId>>> =
+            Vec::with_capacity(num_segs);
 
         for seg in 0..num_segs {
             let next = next_ring_index(seg, num_segs, is_full);
             let mut seg_edges = Vec::with_capacity(n);
-            for (&start_vid, &end_vid) in ring_verts[seg].iter().zip(&ring_verts[next]) {
+            for (i, (&start_vid, &end_vid)) in
+                ring_verts[seg].iter().zip(&ring_verts[next]).enumerate()
+            {
+                if on_axis[i] {
+                    seg_edges.push(None);
+                    continue;
+                }
                 let start_pos = topo.vertex(start_vid)?.point();
                 let end_pos = topo.vertex(end_vid)?.point();
                 let curve = make_arc_curve(start_pos, end_pos, axis_origin, axis, seg_angle)?;
-                seg_edges.push(topo.add_edge(Edge::new(
+                seg_edges.push(Some(topo.add_edge(Edge::new(
                     start_vid,
                     end_vid,
                     EdgeCurve::NurbsCurve(curve),
-                )));
+                ))));
             }
             arc_edges.push(seg_edges);
         }
@@ -1448,12 +1519,33 @@ pub fn revolve(
             .iter()
             .map(|oe| topo.edge(oe.edge()).map(|e| e.curve().clone()))
             .collect::<Result<_, _>>()?;
+        let along_axis: Vec<bool> = (0..n)
+            .map(|i| {
+                let next = (i + 1) % n;
+                if !(on_axis[i] && on_axis[next]) {
+                    return false;
+                }
+                let (a, b) = if input_oriented[i].is_forward() {
+                    (input_positions[i], input_positions[next])
+                } else {
+                    (input_positions[next], input_positions[i])
+                };
+                let (t0, t1) = input_curves[i].domain_with_endpoints(a, b);
+                let mid = input_curves[i].evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+                radial_axial(mid, axis_origin, axis).0 <= tol.linear
+            })
+            .collect();
         for (k, ring) in ring_verts.iter().enumerate().skip(1) {
             #[allow(clippy::cast_precision_loss)]
             let turn = rotation_about(axis_origin, axis, seg_angle * (k as f64));
             let mut edges = Vec::with_capacity(n);
             for i in 0..n {
                 let next_i = (i + 1) % n;
+                // An edge along the axis is the same edge at every angle.
+                if along_axis[i] {
+                    edges.push(input_oriented[i].edge());
+                    continue;
+                }
                 let (curve, _) = crate::transform::curve_image(&input_curves[i], &turn)?;
                 let (start, end) = if input_oriented[i].is_forward() {
                     (ring[i], ring[next_i])
@@ -1469,6 +1561,7 @@ pub fn revolve(
             ring_verts,
             arc_edges,
             ring_edges,
+            along_axis,
             input_oriented,
             n,
         })
@@ -1538,6 +1631,10 @@ pub fn revolve(
 
             let fwd_seg = outer.input_oriented[i].is_forward();
             let fwd_next = fwd_seg;
+            // An edge along the axis sweeps nothing.
+            if outer.along_axis[i] {
+                continue;
+            }
 
             let p0_start = topo.vertex(outer.ring_verts[seg][i])?.point();
             let p0_end = topo.vertex(outer.ring_verts[next][i])?.point();
@@ -1545,6 +1642,8 @@ pub fn revolve(
             let p1_end = topo.vertex(outer.ring_verts[next][next_i])?.point();
 
             let profile_curve = topo.edge(outer.input_oriented[i].edge())?.curve().clone();
+            #[allow(clippy::cast_precision_loss)]
+            let seg_start = seg_angle * seg as f64;
             let (surface, reversed) = revolution_band_surface(
                 &profile_curve,
                 outer.input_oriented[i].is_forward(),
@@ -1555,34 +1654,38 @@ pub fn revolve(
                 axis_origin,
                 axis,
                 seg_angle,
+                seg_start,
             )?;
 
             // A reversed face flips every edge's effective traversal, so the
             // wire must be built reversed too (same idiom as the inner side
             // faces below) or the face traverses its shared edges in the same
             // effective sense as its neighbours.
-            let side_wire = if reversed {
-                Wire::new(
-                    vec![
-                        OrientedEdge::new(outer.arc_edges[seg][i], true),
-                        OrientedEdge::new(outer.ring_edges[next][i], fwd_next),
-                        OrientedEdge::new(outer.arc_edges[seg][next_i], false),
-                        OrientedEdge::new(outer.ring_edges[seg][i], !fwd_seg),
-                    ],
-                    true,
-                )
+            // A vertex on the axis sweeps no circle, so the band closes at
+            // it: a wedge of three edges.
+            let arc = |k: usize, forward: bool| {
+                outer.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
+            };
+            let loop_edges: Vec<OrientedEdge> = if reversed {
+                [
+                    arc(i, true),
+                    Some(OrientedEdge::new(outer.ring_edges[next][i], fwd_next)),
+                    arc(next_i, false),
+                    Some(OrientedEdge::new(outer.ring_edges[seg][i], !fwd_seg)),
+                ]
             } else {
-                Wire::new(
-                    vec![
-                        OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg),
-                        OrientedEdge::new(outer.arc_edges[seg][next_i], true),
-                        OrientedEdge::new(outer.ring_edges[next][i], !fwd_next),
-                        OrientedEdge::new(outer.arc_edges[seg][i], false),
-                    ],
-                    true,
-                )
+                [
+                    Some(OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg)),
+                    arc(next_i, true),
+                    Some(OrientedEdge::new(outer.ring_edges[next][i], !fwd_next)),
+                    arc(i, false),
+                ]
             }
-            .map_err(crate::OperationsError::Topology)?;
+            .into_iter()
+            .flatten()
+            .collect();
+            let side_wire =
+                Wire::new(loop_edges, true).map_err(crate::OperationsError::Topology)?;
 
             let side_wire_id = topo.add_wire(side_wire);
 
@@ -1606,17 +1709,24 @@ pub fn revolve(
                 let fwd_seg = iwd.input_oriented[i].is_forward();
                 let fwd_next = fwd_seg;
 
+                if iwd.along_axis[i] {
+                    continue;
+                }
                 // Reversed winding: swap the order so normals point inward.
-                let side_wire = Wire::new(
-                    vec![
-                        OrientedEdge::new(iwd.arc_edges[seg][i], true),
-                        OrientedEdge::new(iwd.ring_edges[next][i], fwd_next),
-                        OrientedEdge::new(iwd.arc_edges[seg][next_i], false),
-                        OrientedEdge::new(iwd.ring_edges[seg][i], !fwd_seg),
-                    ],
-                    true,
-                )
-                .map_err(crate::OperationsError::Topology)?;
+                let arc = |k: usize, forward: bool| {
+                    iwd.arc_edges[seg][k].map(|e| OrientedEdge::new(e, forward))
+                };
+                let loop_edges: Vec<OrientedEdge> = [
+                    arc(i, true),
+                    Some(OrientedEdge::new(iwd.ring_edges[next][i], fwd_next)),
+                    arc(next_i, false),
+                    Some(OrientedEdge::new(iwd.ring_edges[seg][i], !fwd_seg)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                let side_wire =
+                    Wire::new(loop_edges, true).map_err(crate::OperationsError::Topology)?;
 
                 let side_wire_id = topo.add_wire(side_wire);
 
@@ -2542,11 +2652,12 @@ mod tests {
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
-        // 180° = 2 segments × 4 profile edges + 2 planar end caps = 10 faces.
-        // The unit square revolved about the Y axis has: an axis-parallel edge
-        // (x=1 wall → Cylinder), two perpendicular edges (the z-faces → annular
-        // Plane discs), and an on-axis edge (x=0 → degenerate NURBS).
-        assert_eq!(shell.faces().len(), 10);
+        // 180° = 2 segments × 3 swept profile edges + 2 planar end caps = 8
+        // faces. The unit square revolved about the Y axis has an
+        // axis-parallel edge (x=1 wall → Cylinder), two perpendicular edges
+        // (Plane wedges closing at the axis), and an on-axis edge (x=0) that
+        // sweeps nothing.
+        assert_eq!(shell.faces().len(), 8);
 
         let mut plane_count = 0;
         let mut cyl_count = 0;
@@ -2559,16 +2670,13 @@ mod tests {
                 _ => {}
             }
         }
-        // 4 perpendicular-edge disc bands + 2 end caps.
-        assert_eq!(plane_count, 6, "perpendicular bands + end caps are planar");
+        // 4 perpendicular-edge wedges + 2 end caps.
+        assert_eq!(plane_count, 6, "perpendicular wedges + end caps are planar");
         assert_eq!(
             cyl_count, 2,
             "the axis-parallel wall's 2 bands are cylinders"
         );
-        assert_eq!(
-            nurbs_count, 2,
-            "only the degenerate on-axis bands stay NURBS"
-        );
+        assert_eq!(nurbs_count, 0, "the on-axis edge sweeps no band");
 
         // Half revolution of a rectangle → genus-0 solid (χ=2).
         assert_euler_genus0(&topo, solid);

@@ -191,3 +191,267 @@ fn a_triangle_on_the_axis_revolves_to_a_pointed_cone() {
         }
     }
 }
+
+/// A named profile: its corners in the `(x, z)` half-plane and its Pappus
+/// volume per radian.
+type Profile<'a> = (&'a str, &'a [(f64, f64)], f64);
+
+/// Profiles touching the axis in `y = 0`, their corners listed counterclockwise
+/// about `-y`: a triangle with a leg on the axis (a pointed cone), a square
+/// with a side on it (a cylinder), and a triangle touching it at one corner
+/// (a cone whose apex is the corner), each wound either way and revolved a
+/// quarter, half, three quarters or a full turn about z. Each solid is valid,
+/// meshes watertight and measures its Pappus volume within `1e-9`. A vertex
+/// on the axis stays one vertex and sweeps no circle, so the bands beside it
+/// close as wedges and an edge along the axis sweeps nothing.
+#[test]
+fn a_profile_touching_the_axis_revolves_part_way() {
+    let profiles: [Profile<'_>; 3] = [
+        (
+            "pointed cone",
+            &[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],
+            1.0 / 6.0,
+        ),
+        (
+            "cylinder",
+            &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            0.5,
+        ),
+        (
+            "cone on its tip",
+            &[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+            1.0 / 3.0,
+        ),
+    ];
+    for (name, corners, per_radian) in &profiles {
+        for backward in [false, true] {
+            for degrees in [90.0_f64, 180.0, 270.0, 360.0] {
+                let label = format!(
+                    "{name}, {}, {degrees} degrees",
+                    if backward {
+                        "wound backward"
+                    } else {
+                        "wound forward"
+                    }
+                );
+                let mut topo = Topology::new();
+                let mut points: Vec<Point3> = corners
+                    .iter()
+                    .map(|&(x, z)| Point3::new(x, 0.0, z))
+                    .collect();
+                if backward {
+                    points.reverse();
+                }
+                let ids: Vec<_> = points
+                    .iter()
+                    .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+                    .collect();
+                let n = ids.len();
+                let edges: Vec<OrientedEdge> = (0..n)
+                    .map(|k| {
+                        let e = Edge::new(ids[k], ids[(k + 1) % n], EdgeCurve::Line);
+                        OrientedEdge::new(topo.add_edge(e), true)
+                    })
+                    .collect();
+                let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+                let normal = if backward { 1.0 } else { -1.0 };
+                let face = topo.add_face(Face::new(
+                    wire,
+                    vec![],
+                    FaceSurface::Plane {
+                        normal: Vec3::new(0.0, normal, 0.0),
+                        d: 0.0,
+                    },
+                ));
+                let solid = revolve(
+                    &mut topo,
+                    face,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    degrees.to_radians(),
+                )
+                .unwrap();
+                let report = validate_solid(&topo, solid).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                let truth = per_radian * degrees.to_radians();
+                let volume = solid_volume(&topo, solid, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-9 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+            }
+        }
+    }
+}
+
+/// The half disc of radius 1 in `y = 0` bounded by the half circle through
+/// `(1, 0, 0)` and its diameter on the z axis, and the quarter disc bounded by
+/// the arc from `(1, 0, 0)` to `(0, 0, 1)` and two radii, one on the axis, each
+/// wound either way and revolved a quarter, half, three quarters or a full
+/// turn about z: each solid is valid, meshes watertight and measures its
+/// Pappus volume within `1e-9`. An arc centred on the axis sweeps a sphere
+/// band, though the half circle ends on the axis at both ends (only a line
+/// there lies along the axis) and its chord sweeps nothing. The full turn
+/// takes the segmented revolve too.
+#[test]
+fn a_disc_sector_revolves_to_a_ball_part_way() {
+    for half in [true, false] {
+        for backward in [false, true] {
+            for degrees in [90.0_f64, 180.0, 270.0, 360.0] {
+                let label = format!(
+                    "{} disc, {}, {degrees} degrees",
+                    if half { "half" } else { "quarter" },
+                    if backward {
+                        "wound backward"
+                    } else {
+                        "wound forward"
+                    }
+                );
+                let mut topo = Topology::new();
+                let mut v =
+                    |x: f64, z: f64| topo.add_vertex(Vertex::new(Point3::new(x, 0.0, z), 1e-7));
+                let (from, top, center) = (
+                    v(if half { 0.0 } else { 1.0 }, if half { -1.0 } else { 0.0 }),
+                    v(0.0, 1.0),
+                    v(0.0, 0.0),
+                );
+                // Counterclockwise about -y, through +x.
+                let circle =
+                    Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 1.0)
+                        .unwrap();
+                let mut edges = vec![
+                    topo.add_edge(Edge::new(from, top, EdgeCurve::Circle(circle))),
+                    topo.add_edge(Edge::new(
+                        top,
+                        if half { from } else { center },
+                        EdgeCurve::Line,
+                    )),
+                ];
+                if !half {
+                    edges.push(topo.add_edge(Edge::new(center, from, EdgeCurve::Line)));
+                }
+                let oriented: Vec<OrientedEdge> = if backward {
+                    edges
+                        .iter()
+                        .rev()
+                        .map(|&e| OrientedEdge::new(e, false))
+                        .collect()
+                } else {
+                    edges.iter().map(|&e| OrientedEdge::new(e, true)).collect()
+                };
+                let wire = topo.add_wire(Wire::new(oriented, true).unwrap());
+                let normal = if backward { 1.0 } else { -1.0 };
+                let face = topo.add_face(Face::new(
+                    wire,
+                    vec![],
+                    FaceSurface::Plane {
+                        normal: Vec3::new(0.0, normal, 0.0),
+                        d: 0.0,
+                    },
+                ));
+                let solid = revolve(
+                    &mut topo,
+                    face,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    degrees.to_radians(),
+                )
+                .unwrap();
+                let report = validate_solid(&topo, solid).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                let per_radian = if half { 2.0 / 3.0 } else { 1.0 / 3.0 };
+                let truth = per_radian * degrees.to_radians();
+                let volume = solid_volume(&topo, solid, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-9 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+            }
+        }
+    }
+}
+
+/// The part of the spherical shell `1 < r < 2` about the origin between 10
+/// and 40 degrees from +z, in `y = 0`, its inner arc stored from 10 to 40
+/// degrees and run back, wound either way and revolved a quarter, half,
+/// three quarters or a full turn about z: each solid is valid, meshes
+/// watertight and measures its volume, `(2^3 - 1) (cos 10° - cos 40°) / 3`
+/// per radian, within `1e-8`. Both arcs sweep sphere bands clear of the
+/// axis; each later segment reads its band's side from the arc turned back
+/// to the profile by the segment's own angle, since a centre on the axis
+/// has no direction to measure it by.
+#[test]
+fn a_spherical_shell_sector_revolves_part_way() {
+    let (lo, hi) = (10.0_f64.to_radians(), 40.0_f64.to_radians());
+    let at = |r: f64, polar: f64| Point3::new(r * polar.sin(), 0.0, r * polar.cos());
+    for backward in [false, true] {
+        for degrees in [90.0_f64, 180.0, 270.0, 360.0] {
+            let label = format!(
+                "{}, {degrees} degrees",
+                if backward {
+                    "wound backward"
+                } else {
+                    "wound forward"
+                }
+            );
+            let mut topo = Topology::new();
+            let [a, b, c, d] = [at(2.0, lo), at(2.0, hi), at(1.0, hi), at(1.0, lo)]
+                .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            // Counterclockwise about +y runs from +z toward +x.
+            let circle = |r: f64| {
+                EdgeCurve::Circle(
+                    Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), r).unwrap(),
+                )
+            };
+            let outer = topo.add_edge(Edge::new(a, b, circle(2.0)));
+            let down = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+            let inner = topo.add_edge(Edge::new(d, c, circle(1.0)));
+            let up = topo.add_edge(Edge::new(d, a, EdgeCurve::Line));
+            let mut oriented = vec![
+                OrientedEdge::new(outer, true),
+                OrientedEdge::new(down, true),
+                OrientedEdge::new(inner, false),
+                OrientedEdge::new(up, true),
+            ];
+            if backward {
+                oriented = oriented
+                    .into_iter()
+                    .rev()
+                    .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                    .collect();
+            }
+            let wire = topo.add_wire(Wire::new(oriented, true).unwrap());
+            let normal = if backward { -1.0 } else { 1.0 };
+            let face = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, normal, 0.0),
+                    d: 0.0,
+                },
+            ));
+            let solid = revolve(
+                &mut topo,
+                face,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                degrees.to_radians(),
+            )
+            .unwrap();
+            let report = validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let truth = 7.0 / 3.0 * (lo.cos() - hi.cos()) * degrees.to_radians();
+            let volume = solid_volume(&topo, solid, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-8 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
