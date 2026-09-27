@@ -844,7 +844,7 @@ fn build_analytic_revolution(
                     ),
                     (None, Some(rim_e)) => Wire::new(
                         vec![
-                            OrientedEdge::new(rim_e, rim_fwd),
+                            OrientedEdge::new(rim_e, !rim_fwd),
                             OrientedEdge::new(pe.edge, !pe.forward),
                             OrientedEdge::new(pe.edge, pe.forward),
                         ],

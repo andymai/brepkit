@@ -122,3 +122,72 @@ fn a_half_circle_side_revolves_to_its_pappus_volume() {
         }
     }
 }
+
+/// The triangle with a leg on the axis, its apex above the rim (corners
+/// `(0, 0, 0)`, `(1, 0, 0)`, `(0, 0, 1)`) or below it (`(0, 0, 0)`,
+/// `(1, 0, 1)`, `(0, 0, 1)`), wound either way, revolved a full turn about
+/// z: each pointed cone is valid, meshes watertight and measures its Pappus
+/// volume within `1e-9`. The wall meets its one rim at the slanted edge's
+/// start or its end, the way the profile winds.
+#[test]
+fn a_triangle_on_the_axis_revolves_to_a_pointed_cone() {
+    for apex_above in [true, false] {
+        for backward in [false, true] {
+            let label = format!(
+                "apex {}, {}",
+                if apex_above { "above" } else { "below" },
+                if backward {
+                    "wound backward"
+                } else {
+                    "wound forward"
+                }
+            );
+            let mut topo = Topology::new();
+            let rim_z = if apex_above { 0.0 } else { 1.0 };
+            let mut corners = [
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, rim_z),
+                Point3::new(0.0, 0.0, 1.0),
+            ];
+            if backward {
+                corners.reverse();
+            }
+            let ids = corners.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let edges: Vec<OrientedEdge> = (0..3)
+                .map(|k| {
+                    let e = Edge::new(ids[k], ids[(k + 1) % 3], EdgeCurve::Line);
+                    OrientedEdge::new(topo.add_edge(e), true)
+                })
+                .collect();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            // Counterclockwise about -y when wound forward.
+            let normal = if backward == apex_above { -1.0 } else { 1.0 };
+            let face = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, normal, 0.0),
+                    d: 0.0,
+                },
+            ));
+            let solid = revolve(
+                &mut topo,
+                face,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                2.0 * PI,
+            )
+            .unwrap();
+            let report = validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let truth = PI / 3.0;
+            let volume = solid_volume(&topo, solid, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-9 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
