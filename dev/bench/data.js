@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790467162168,
+  "lastUpdate": 1790468856132,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42281,6 +42281,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42702422,
             "range": "± 273107",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7d45168ddd4af5852d3824df2eb4b66d0b367b9",
+          "message": "fix(algo): read a sphere face that planes do not bound by its own wires (#1807)\n\nSphere faces that planes cannot bound are now classified from their own\nwires in `(u, v)`, eliminating all 682 pose sweep misreads without\nchanging the resulting solids.\n\n## What was wrong\n\n- On main, a ball less a box whose corner sits at the ball's centre\nmisreads under the ray cast. All 682 misread grid points in\n`crates/operations/examples/pose_sweep.rs` belong to the unit ball less\nits octant box.\n\n- The result's upper sphere face, an upper hemisphere less a quarter, is\nbounded by 12 of `make_sphere`'s equator chords and two quarter arcs. It\nis neither an intersection nor a union of half-spaces, so\n`sphere_face_loops` returns `None` and the face was read as the flat 20\nvertex polygon through its boundary. That polygon reported crossings for\nrays missing the ball entirely. From `(-0.92, -0.92, -0.74)`, both\nhorizontal rays counted one crossing.\n\n## What this does\n\n- When `sphere_face_loops` cannot bound a sphere face, `sphere_trim`\nreads its wires in `(u, v)` with `UvTrim`. It tries an axis selected\nfrom the sphere's three axes and three fixed generic directions, ordered\nfrom clearest, whose poles remain at least 3 degrees from the wires.\n\n- `sphere_pole_side` determines which poles the face holds from each\nwire's turn about the axis, with the face on its left. One turn holds\nnorth and minus one holds south. With zero total turn, a winding wire\nforms a band and a counter-clockwise wire forms a patch, neither holding\na pole. A face containing only clockwise holes holds both poles. A\nzero-area wire, such as a seam run there and back, contributes nothing.\n\n- The `(u, v)` ray runs away from a held pole. A face holding both runs\nsouth and counts the south pole's side as one additional crossing. `v`\nis meridian length from the equator, preserving the length-based\ndistance checks used by `UvTrim` for cone and cylinder faces.\n\n- Coordinates come from each point's direction from the sphere centre,\nso `make_sphere` equator chords read as their projected great-circle\narcs. The resulting geometry is `FaceGeom::SphereTrim`, with sphere ray\nroots shared through `sphere_hits`.\n\n## Verification\n\n- `crates/operations/tests/sphere_ray_cast.rs` covers `make_sphere(3,\n32)` less and within `make_box(10, 10, 10)` at corners `(0, 0, 0)`, `(1,\n1, 1)`, and `(-1, -1, 0.5)`, upright, turned by `rotation_z(1) *\nrotation_y(0.3)`, and mirrored. Each result retains a sphere face. Every\npoint more than `0.02` from both surfaces in a 17 by 17 by 17 grid over\n`[-3.5, 3.5]^3` classifies correctly, as does each axis ray not\ndiscounted by the vote. Main's ray cast misreads 1172 points in the\nfirst case.\n\n- `a_sphere_face_runs_its_ray_away_from_the_pole_it_holds` checks\n`sphere_pole_side` for a north cap with and without a hole, south cap,\nband, patch with a hole, sphere less holes, seam with a hole, and two\nturns with no face.\n\n- The integration test skips axis rays crossing the ball's equator plane\nbetween the chords and circle. The plane face ends at the chords while\nsphere faces read the arc, so such a ray can lose a crossing. The\nroadmap records this `make_sphere` quirk.\n\n- Across all 210 pose sweep results, face counts, validity, mesh\nclosure, and volumes match main. Misreads fall from 682 to 0.\n\n- `cargo nextest run --workspace`: 3157 passed, 20 skipped. `cargo\nclippy` is clean.\n\n- The roadmap records this closed case and one adjacent finding: a ball\nless a box corner below the equator, or off the axis on it, falls back\nto a mesh, on main as well. The test's corners leave out a mirrored ball\nless a box corner, which came back as a wrong solid and is fixed in\n#1809.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the ray cast misreading sphere faces that planes don't bound (a\nhemisphere less a quarter), which misread 682 grid points in the pose\nsweep. The face was read by the flat polygon through its boundary; it\nnow reads in `(u, v)` against its own wires, so `make_sphere` equator\nchords read as the great-circle arcs they project to.\n\n- Adds `sphere_ray_cast.rs` covering ball less and within a box in\nupright, turned, and mirrored poses: 1172 misreads on main for the first\ncase, 0 here. `v` is a length along the meridian matching `UvTrim`'s\ndistance checks, seam wires of no area say nothing, and candidate axes\nare tried by clearance until one reads.\n- Roadmap records the chordal-equator quirk that skips rays crossing\nthat plane and two undug wrong-solid cases found while writing the test.\n\n<sup>Written for commit 722e2200a8c8412a73367ac7868f56612e377181.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1807?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-27T00:24:54Z",
+          "tree_id": "4c8bce5f4f92f9b1abc5b07f431efb81357bb944",
+          "url": "https://github.com/andymai/brepkit/commit/d7d45168ddd4af5852d3824df2eb4b66d0b367b9"
+        },
+        "date": 1790468851863,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1011648,
+            "range": "± 36189",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1095765,
+            "range": "± 8254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13176,
+            "range": "± 192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 759756,
+            "range": "± 24219",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41914781,
+            "range": "± 80517",
             "unit": "ns/iter"
           }
         ]
