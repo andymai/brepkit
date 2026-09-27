@@ -2705,8 +2705,9 @@ fn ruling_torus_cylinder(
 /// generator of the cone crosses the sphere twice on the cone's nappe (a pin
 /// through a ball): along a generator `apex + v g` the sphere is a quadratic
 /// in `v`, and each of its two roots, taken in order, sweeps one closed loop
-/// around the cone. `None` (the marcher's case) when the centre lies on the
-/// axis, when a generator misses the sphere or meets it behind the apex.
+/// around the cone. `None` when the centre lies on the axis (phase FF takes
+/// [`exact_cone_sphere`]'s circles there), and when a generator misses the
+/// sphere or meets it behind the apex (the marcher's cases).
 fn ruling_cone_sphere(
     cone: &ConicalSurface,
     sphere: &SphericalSurface,
