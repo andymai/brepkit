@@ -3645,7 +3645,9 @@ fn arrangement_regions_from_inputs(
 }
 
 /// Rectilinear-arrangement rescue for a u-periodic cylinder band whose greedy
-/// wire trace self-crosses (a box cut notching the wall at partial overlap).
+/// wire trace self-crosses (a box cut notching the wall at partial overlap),
+/// or traces cleanly but only part of the band, which the full face trace
+/// refines (a mirrored cylinder, whose rims run against its u).
 ///
 /// On a cylinder every edge is axis-aligned in UV: cross-section rings
 /// (`EdgeCurve::Circle`) are horizontal (`v` const, `u` varies) and the seam and
@@ -3667,8 +3669,10 @@ fn arrangement_regions_from_inputs(
 /// rectilinear box notch: a non-axis-aligned line or circle, an ellipse/NURBS
 /// section, a closed full-ring section, a missing seam, an odd number of side
 /// generators, a generator pair that does not bound a rectangle, or a trace that
-/// fails to yield a simple partition. The gate above ensures this fires only when
-/// the greedy trace is already broken, so faces the greedy handles are untouched.
+/// fails to yield a simple partition. The gates ensure this fires only when the
+/// greedy trace is broken or under-split, so faces the greedy handles are
+/// untouched. The face's holes do not enter it: callers gate on a hole-free
+/// face.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn split_cylinder_band_by_arrangement(
     surface: &FaceSurface,
@@ -7264,7 +7268,8 @@ fn split_face_2d_impl(
     // wire trace broke (self-crossing, overlapping, or degenerate loops) -- a box
     // cut notching the wall at partial overlap figure-eights the angular builder.
     // Gated exactly like the plane arrangement rescue: fires only when the greedy
-    // loops are already broken, so it never changes a face the greedy handles.
+    // loops are already broken (or, below, under-split), so it never changes a
+    // face the greedy handles.
     // (A face is either a plane disc or a cylinder band, so this never overlaps
     // the disc-chord / plane-arrangement paths above.)
     let greedy_broken = wire_loops_self_cross(&loops, tol.linear)
@@ -7454,6 +7459,7 @@ fn split_face_2d_impl(
         {
             loops = dcel;
         } else if refines
+            && original_inner_wires.is_empty()
             && let Some(result) = split_cylinder_band_by_arrangement(
                 &surface,
                 &all_edges,

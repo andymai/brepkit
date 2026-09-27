@@ -945,6 +945,80 @@ mod tests {
         }
     }
 
+    /// A closed rim whose circle turns against the cylinder's u (its normal
+    /// opposes the axis, as on a mirrored cylinder), seamed at its own
+    /// parameter 3pi/2: its samples run from `u_seam` down to `u_seam - 2pi`.
+    fn closed_rim_edge_against_u(forward: bool) -> (FaceSurface, OrientedPCurveEdge, Vec<Point3>) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use std::f64::consts::TAU;
+
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 5.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            5.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let seam_angle = 1.5 * std::f64::consts::PI;
+        let seam = circle.evaluate(seam_angle);
+        let (u_seam, _) = surface.project_point(seam).unwrap();
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle.clone()),
+            pcurve: Curve2D::Line(
+                Line2D::new(Point2::new(u_seam, 0.0), Vec2::new(-1.0, 0.0)).unwrap(),
+            ),
+            start_uv: Point2::new(u_seam, 0.0),
+            end_uv: Point2::new(u_seam - TAU, 0.0),
+            start_3d: seam,
+            end_3d: seam,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let splits = vec![
+            circle.evaluate(seam_angle - 0.3),
+            circle.evaluate(seam_angle + 0.3),
+            circle.evaluate(seam_angle + std::f64::consts::PI),
+        ];
+        (surface, edge, splits)
+    }
+
+    #[test]
+    fn a_rim_turning_against_u_splits_where_its_points_project() {
+        use std::f64::consts::TAU;
+        for forward in [true, false] {
+            let (surface, edge, splits) = closed_rim_edge_against_u(forward);
+            let start_u = edge.start_uv.x();
+            let pieces =
+                split_boundary_edges_at_3d_points(vec![edge], &splits, None, &surface, 1e-7);
+            assert_eq!(pieces.len(), 4, "3 splits must yield 4 rim pieces");
+            // Forward, the rim runs down u; reversed, up.
+            let sign: f64 = if forward { -1.0 } else { 1.0 };
+            assert!(
+                (pieces[3].end_uv.x() - sign.mul_add(TAU, start_u)).abs() < 1e-9,
+                "forward {forward}: the rim closes at {}",
+                pieces[3].end_uv.x()
+            );
+            for piece in &pieces {
+                // Each joint's stored u is where its point projects, a whole
+                // number of periods away.
+                let (u, _) = surface.project_point(piece.end_3d).unwrap();
+                let turns = (piece.end_uv.x() - u) / TAU;
+                assert!(
+                    (turns - turns.round()).abs() < 1e-9,
+                    "forward {forward}: a joint at u {} projects to {u}",
+                    piece.end_uv.x()
+                );
+            }
+        }
+    }
+
     #[test]
     fn nurbs_section_splits_ordered_along_reversed_twin() {
         // The reverse twin stores the SAME curve but swapped endpoints, so
