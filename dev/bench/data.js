@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790547147161,
+  "lastUpdate": 1790552603370,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45521,6 +45521,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43606915,
             "range": "± 190778",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "65fc4d0d50884a0c9f775e479f260ea4b127118a",
+          "message": "fix(math): trace a tapered pin through a ball along the pin's generators (#1868)\n\nA tapered pin through a ball off its axis is now traced along the pin's\ngenerators: the upright and tilted Cut and Intersect come out exact and\nvalid in 0.01 s.\n\n## What was wrong\n\n- A `make_sphere(3, 32)` Cut or Intersect with `make_cone(1.2, 0.4,\n10)`, upright at `(1, 0.5, -5)` or tilted through the ball, went to the\ngeneral marcher on main. It cut the cone wall and each hemisphere into\n13 pieces that split neither hemisphere, then fell back to a mesh after\nup to 16 s.\n- The roadmap also records a rod whose outer ruling touches a cylinder\nwall: it returns exact but with two shared edges used in the same sense,\nwhich `validate_solid` rejects.\n\n## What this does\n\n- `ruling_cone_sphere` in `crates/math/src/analytic_intersection.rs` is\nreached from `try_algebraic_intersection` for a cone and sphere in\neither argument order.\n- Along each cone generator `apex + v g`, with unit direction `g`, the\nsphere is a quadratic in `v`. When every generator crosses the sphere\ntwice ahead of the apex, each root, taken in order, sweeps one closed\nloop, fitted like the other ruling traces.\n- The roots depend only on `h = g·offset` (`offset` from the sphere's\ncentre to the apex), which runs between two closed-form bounds around\nthe cone. Where both roots lie ahead of the apex, raising `h` shrinks\nthe discriminant and moves the nearer root out, so the two extreme\ngenerators decide every generator exactly, without sampling.\n- It defers when the sphere's centre lies on the cone's axis, when a\ngenerator misses the sphere, or when it meets the sphere behind the\napex.\n- A pin along `x` at `z = 0.3` still falls back (in 0.1 s) because its\nloops cross the ball's chordal equator, the split the hemispheres cannot\nmake.\n\n## Verification\n\n- `crates/operations/tests/pin_through_a_ball.rs`: the upright and\ntilted pins, each posed upright, turned, mirrored through a slanted\nplane and mirrored by `scale(-1, 1, 1)`, Cut and Intersect, have at most\n6 faces including a cone and a sphere, validate, tessellate watertight,\nclassify the pin's axis point nearest the ball's centre and a point on\nthe ball's far side as expected, and match the lens-area truth\nintegrated along the pin's axis within `1e-4`. It fails on main (after\n775 s).\n- `a_pin_across_the_equator_keeps_its_piece` pins the along-`x` pin\nvalid and within `3e-2` of the truth (the mesh reads 1.3% off for the\nCut and 2.0% for the Intersect), so a later change cannot turn it into a\nvalid but wrong exact solid unnoticed.\n- A unit test checks both loops lie within `1e-4` of both surfaces in\neither argument order, and that coaxial, partly-through, apex-inside,\nopening-away and grazing pins defer. The grazing pin's missing\ngenerators span about 0.002 of a turn, which a 2048-angle scan stepped\nover.\n- The workspace suite passes (3224 tests, 20 skipped). Before the\nextreme-generator check replaced a 2048-angle scan in this function, the\n300-line pose sweep, `approx_census` and `truth_audit` matched main.",
+          "timestamp": "2026-09-27T23:40:31Z",
+          "tree_id": "ac10588641b7c55e90102141f1a5e1ab3f5a39cf",
+          "url": "https://github.com/andymai/brepkit/commit/65fc4d0d50884a0c9f775e479f260ea4b127118a"
+        },
+        "date": 1790552598647,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1023138,
+            "range": "± 26758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1111206,
+            "range": "± 36271",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13426,
+            "range": "± 103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 768465,
+            "range": "± 1376",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42831994,
+            "range": "± 47711",
             "unit": "ns/iter"
           }
         ]
