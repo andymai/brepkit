@@ -189,13 +189,11 @@ fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
     );
 }
 
-/// A named outline: its corners, its arc sides, whether it is a hole in a
-/// 10 x 10 square, and the face's area.
+/// A named outline: its corners, its arc sides, and the face's area.
 type Outline = (
     &'static str,
     Vec<(f64, f64)>,
     Vec<(usize, (f64, f64), f64)>,
-    bool,
     f64,
 );
 
@@ -347,10 +345,9 @@ fn a_nurbs_arc_past_its_vertices_extrudes_to_its_area() {
 /// and intersected with it, each arc stored three ways, upright and turned:
 /// both halves stay exact (a cylinder wall among their faces), valid and
 /// watertight, and measure the face's area times 0.1. The slab's face
-/// inside the notched outline is enclosed by a loop that is not convex, and
-/// the piece's sample came from the loop's centroid, which the keyhole's
-/// chamber puts outside the loop: the piece was dropped and the boolean fell
-/// back to a mesh.
+/// inside the notched outline is enclosed by a loop that is not convex,
+/// whose centroid the keyhole's chamber puts outside it, so the piece is
+/// sampled at a point of the loop's own polygon.
 #[test]
 fn a_slab_through_a_notched_wall_keeps_it_exact() {
     let (_, chamber) = chamber();
@@ -366,7 +363,6 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
                 (-3.0, 3.0),
             ],
             vec![(3, (0.0, 1.5), -1.0)],
-            false,
             36.0 - chamber,
         ),
         (
@@ -380,7 +376,6 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
                 (-2.0, 2.0),
             ],
             vec![(3, (0.0, 2.0), -1.0)],
-            false,
             16.0 - PI / 2.0,
         ),
     ];
@@ -392,21 +387,14 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
         ),
     ];
     let mut failures: Vec<String> = Vec::new();
-    for (name, corners, arcs, hole, area) in &outlines {
+    for (name, corners, arcs, area) in &outlines {
         for (arc, kind) in ARCS {
             for (op, op_name) in [(BooleanOp::Cut, "cut"), (BooleanOp::Intersect, "intersect")] {
                 for (pose, place) in &poses {
                     let label = format!("{kind} {name} {op_name} {pose}");
                     let mut topo = Topology::new();
-                    let profile = if *hole {
-                        let square = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
-                        let outer = wire(&mut topo, &square, &[], arc);
-                        let inner = wire(&mut topo, corners, arcs, arc);
-                        face(&mut topo, outer, vec![inner])
-                    } else {
-                        let outer = wire(&mut topo, corners, arcs, arc);
-                        face(&mut topo, outer, vec![])
-                    };
+                    let outer = wire(&mut topo, corners, arcs, arc);
+                    let profile = face(&mut topo, outer, vec![]);
                     let solid = extrude(&mut topo, profile, Vec3::new(0.0, 0.0, 1.0), 0.2).unwrap();
                     let slab = make_box(&mut topo, 20.0, 20.0, 1.0).unwrap();
                     let at = Mat4::translation(-10.0, -10.0, 0.1);

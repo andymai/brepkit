@@ -206,8 +206,10 @@ One line each; the fixture/PR carries the story. Newest first.
   outline is enclosed by a loop that is not convex, and the internal-loops
   splitter sampled that piece at its loop's centroid, which the keyhole's
   chamber puts outside the loop, so the piece read Outside and was dropped.
-  On a plane the sample is now a point of the loop's own polygon whenever
-  the centroid falls outside it.
+  On a plane the sample is now taken from the loop's own polygon: its
+  centroid when that lies inside, clear of the edges, else a point walked
+  in from an edge.
+
 - **Offsets and shells of analytic solids were invalid (CLOSED 2026-09-27; pins in `crates/operations/tests/offset_exact.rs`)**:
   the offset engine trimmed each face's edges on its own, so a box's
   offset faces shared no edge (24 free), and a shelled cylinder or cone

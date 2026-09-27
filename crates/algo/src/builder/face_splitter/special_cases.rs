@@ -3238,13 +3238,8 @@ pub(super) fn split_face_with_internal_loops(
                 FaceSurface::Plane { normal, .. } => {
                     let frame = PlaneFrame::from_normal_and_point(*normal, centroid);
                     let flat: Vec<Point2> = ring.iter().map(|&p| frame.project(p)).collect();
-                    if super::super::classify_2d::point_in_polygon_2d(Point2::new(0.0, 0.0), &flat)
-                    {
-                        centroid
-                    } else {
-                        let inner = super::super::classify_2d::sample_interior_point(&flat);
-                        frame.evaluate(inner.x(), inner.y())
-                    }
+                    let inner = super::super::classify_2d::sample_interior_point(&flat);
+                    frame.evaluate(inner.x(), inner.y())
                 }
                 _ => centroid,
             };
