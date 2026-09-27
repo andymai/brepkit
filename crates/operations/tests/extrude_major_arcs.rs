@@ -190,13 +190,20 @@ fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
     );
 }
 
-/// A named outline: its corners, its arc sides, and the face's area.
-type Outline = (
-    &'static str,
-    Vec<(f64, f64)>,
-    Vec<(usize, (f64, f64), f64)>,
-    f64,
-);
+/// A face to extrude and slice: its corners and arc sides (a hole in the
+/// 10 x 10 square when `hole`), its area, the faces and cylinder walls each
+/// half keeps, and a point of the face and one outside it.
+struct Slice {
+    name: &'static str,
+    corners: Vec<(f64, f64)>,
+    arcs: Vec<(usize, (f64, f64), f64)>,
+    hole: bool,
+    area: f64,
+    faces: usize,
+    walls: usize,
+    inside: (f64, f64),
+    outside: (f64, f64),
+}
 
 const ARCS: [(Arc, &str); 3] = [
     (Arc::Circle, "circle"),
@@ -342,21 +349,26 @@ fn a_nurbs_arc_past_its_vertices_extrudes_to_its_area() {
     );
 }
 
-/// A keyhole and a half-turn notch, extruded 0.2, cut by the slab `z > 0.1`
-/// and intersected with it, each arc stored three ways, upright and turned:
-/// both halves stay exact (seven planes and the cylinder wall), valid and
-/// watertight, hold material in the kept half only, and measure the face's
-/// area times 0.1. The slab's face
-/// inside the notched outline is enclosed by a loop that is not convex,
-/// whose centroid the keyhole's chamber puts outside it, so the piece is
-/// sampled at a point of the loop's own polygon.
+/// A keyhole, a half-turn notch, the major segment (a chord and its 323
+/// degree arc), a plate with that segment as a hole run either way round,
+/// and a disc bounded by arcs of 300 and 60 degrees, extruded 0.2, cut by
+/// the slab `z > 0.1` and intersected with it, each arc stored three ways,
+/// upright and turned: both halves stay exact (the face count and cylinder
+/// walls each keeps), valid and watertight, hold material in the kept half
+/// only, and measure the face's area times 0.1. The slab's face inside a
+/// notched outline is enclosed by a loop that is not convex, whose centroid
+/// the keyhole's chamber puts outside it, so the piece is sampled at a
+/// point of the loop's own polygon; and a chord and its arc, or two arcs,
+/// sharing both endpoints are split apart where no section crosses them,
+/// since the assembler keys duplicate edges on their endpoints.
 #[test]
-fn a_slab_through_a_notched_wall_keeps_it_exact() {
+fn a_slab_through_a_major_arc_wall_keeps_it_exact() {
     let (_, chamber) = chamber();
-    let outlines: Vec<Outline> = vec![
-        (
-            "keyhole",
-            vec![
+    let segment = vec![(1, (0.0, 1.5), 1.0)];
+    let slices = [
+        Slice {
+            name: "keyhole",
+            corners: vec![
                 (-3.0, -3.0),
                 (3.0, -3.0),
                 (3.0, 3.0),
@@ -364,12 +376,17 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
                 (-0.5, 3.0),
                 (-3.0, 3.0),
             ],
-            vec![(3, (0.0, 1.5), -1.0)],
-            36.0 - chamber,
-        ),
-        (
-            "half-turn notch",
-            vec![
+            arcs: vec![(3, (0.0, 1.5), -1.0)],
+            hole: false,
+            area: 36.0 - chamber,
+            faces: 8,
+            walls: 1,
+            inside: (-1.5, -1.5),
+            outside: (0.0, 1.5),
+        },
+        Slice {
+            name: "half-turn notch",
+            corners: vec![
                 (-2.0, -2.0),
                 (2.0, -2.0),
                 (2.0, 2.0),
@@ -377,9 +394,58 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
                 (-1.0, 2.0),
                 (-2.0, 2.0),
             ],
-            vec![(3, (0.0, 2.0), -1.0)],
-            16.0 - PI / 2.0,
-        ),
+            arcs: vec![(3, (0.0, 2.0), -1.0)],
+            hole: false,
+            area: 16.0 - PI / 2.0,
+            faces: 8,
+            walls: 1,
+            inside: (-1.5, -1.5),
+            outside: (0.0, 1.5),
+        },
+        Slice {
+            name: "major segment",
+            corners: vec![(0.5, 3.0), (-0.5, 3.0)],
+            arcs: segment.clone(),
+            hole: false,
+            area: chamber,
+            faces: 4,
+            walls: 1,
+            inside: (0.0, 1.5),
+            outside: (0.0, 3.5),
+        },
+        Slice {
+            name: "counter-clockwise major segment hole",
+            corners: vec![(0.5, 3.0), (-0.5, 3.0)],
+            arcs: segment,
+            hole: true,
+            area: 100.0 - chamber,
+            faces: 8,
+            walls: 1,
+            inside: (-3.0, -3.0),
+            outside: (0.0, 1.5),
+        },
+        Slice {
+            name: "clockwise major segment hole",
+            corners: vec![(-0.5, 3.0), (0.5, 3.0)],
+            arcs: vec![(1, (0.0, 1.5), -1.0)],
+            hole: true,
+            area: 100.0 - chamber,
+            faces: 8,
+            walls: 1,
+            inside: (-3.0, -3.0),
+            outside: (0.0, 1.5),
+        },
+        Slice {
+            name: "two-arc disc",
+            corners: vec![(1.0, 0.0), (0.5, -(0.75_f64.sqrt()))],
+            arcs: vec![(0, (0.0, 0.0), 1.0), (1, (0.0, 0.0), 1.0)],
+            hole: false,
+            area: PI,
+            faces: 4,
+            walls: 2,
+            inside: (0.0, 0.0),
+            outside: (0.0, 1.5),
+        },
     ];
     let poses = [
         ("upright", Mat4::identity()),
@@ -389,14 +455,21 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
         ),
     ];
     let mut failures: Vec<String> = Vec::new();
-    for (name, corners, arcs, area) in &outlines {
+    for slice in &slices {
         for (arc, kind) in ARCS {
             for (op, op_name) in [(BooleanOp::Cut, "cut"), (BooleanOp::Intersect, "intersect")] {
                 for (pose, place) in &poses {
-                    let label = format!("{kind} {name} {op_name} {pose}");
+                    let label = format!("{kind} {} {op_name} {pose}", slice.name);
                     let mut topo = Topology::new();
-                    let outer = wire(&mut topo, corners, arcs, arc);
-                    let profile = face(&mut topo, outer, vec![]);
+                    let profile = if slice.hole {
+                        let square = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
+                        let outer = wire(&mut topo, &square, &[], arc);
+                        let inner = wire(&mut topo, &slice.corners, &slice.arcs, arc);
+                        face(&mut topo, outer, vec![inner])
+                    } else {
+                        let outer = wire(&mut topo, &slice.corners, &slice.arcs, arc);
+                        face(&mut topo, outer, vec![])
+                    };
                     let solid = extrude(&mut topo, profile, Vec3::new(0.0, 0.0, 1.0), 0.2).unwrap();
                     let slab = make_box(&mut topo, 20.0, 20.0, 1.0).unwrap();
                     let at = Mat4::translation(-10.0, -10.0, 0.1);
@@ -419,23 +492,24 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
                             matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_))
                         })
                         .count();
-                    if (faces.len(), walls) != (8, 1) {
+                    if (faces.len(), walls) != (slice.faces, slice.walls) {
                         failures.push(format!(
-                            "{label}: {} faces, {walls} cylinders, not the 7 planes and 1 cylinder",
-                            faces.len()
+                            "{label}: {} faces and {walls} cylinders, not {} and {}",
+                            faces.len(),
+                            slice.faces,
+                            slice.walls
                         ));
                     }
-                    // The kept half holds a corner of the outline, the other
-                    // half and the notch hold nothing.
                     let (kept, gone) = if matches!(op, BooleanOp::Cut) {
                         (0.05, 0.15)
                     } else {
                         (0.15, 0.05)
                     };
+                    let ((ix, iy), (ox, oy)) = (slice.inside, slice.outside);
                     for (x, y, z, want) in [
-                        (-1.5, -1.5, kept, PointClassification::Inside),
-                        (-1.5, -1.5, gone, PointClassification::Outside),
-                        (0.0, 1.5, kept, PointClassification::Outside),
+                        (ix, iy, kept, PointClassification::Inside),
+                        (ix, iy, gone, PointClassification::Outside),
+                        (ox, oy, kept, PointClassification::Outside),
                     ] {
                         let p = place.mul_point(Point3::new(x, y, z));
                         let got =
@@ -444,10 +518,20 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
                             failures.push(format!("{label}: ({x}, {y}, {z}) reads {got:?}"));
                         }
                     }
-                    let truth = area * 0.1;
+                    let truth = slice.area * 0.1;
                     let volume = solid_volume(&topo, half, 0.01).unwrap();
-                    if (volume - truth).abs() >= 1e-6 * truth {
-                        failures.push(format!("{label}: volume {volume}, truth {truth}"));
+                    let checked = brepkit_check::properties::solid_volume(
+                        &topo,
+                        half,
+                        &PropertiesOptions::default(),
+                    )
+                    .unwrap();
+                    if (volume - truth).abs() >= 1e-6 * truth
+                        || (checked - truth).abs() >= 1e-6 * truth
+                    {
+                        failures.push(format!(
+                            "{label}: volume {volume}, checked {checked}, truth {truth}"
+                        ));
                     }
                 }
             }
