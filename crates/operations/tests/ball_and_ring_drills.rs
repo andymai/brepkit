@@ -182,3 +182,51 @@ fn ring_drilled_clear_of_its_seam() {
 fn ring_drilled_near_its_inner_equator() {
     drill_ring(4.35, 0.0);
 }
+
+/// `make_sphere(3, 32)` bored through by `make_cylinder(0.3, 10)` at
+/// `(1, 0, -5)`, upright, turned and mirrored: the engine's ray cast and the
+/// check crate's classifier both read a point above the bore's mouth, in the
+/// bore, and below it outside, and a point in the ball beside the bore
+/// inside. The bore's wall, bounded by curves on the sphere, is read by its
+/// own wires, not by the band between its rims' lowest and highest points.
+#[test]
+fn both_classifiers_read_the_bores_mouth() {
+    let poses = [
+        ("upright", Mat4::identity()),
+        (
+            "turned",
+            Mat4::translation(0.4, -0.3, 0.2) * Mat4::rotation_x(0.7) * Mat4::rotation_z(0.3),
+        ),
+        ("mirrored", Mat4::scale(-1.0, 1.0, 1.0)),
+    ];
+    for (pose, place) in poses {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, 3.0, 32).unwrap();
+        let rod = make_cylinder(&mut topo, 0.3, 10.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(1.0, 0.0, -5.0)).unwrap();
+        let bored = boolean(&mut topo, BooleanOp::Cut, ball, rod).unwrap();
+        transform_solid(&mut topo, bored, &place).unwrap();
+        for ((x, y, z), inside) in [
+            ((1.0, 0.0, 2.9), false),
+            ((1.0, 0.0, 0.0), false),
+            ((1.0, 0.0, -2.9), false),
+            ((1.5, 0.0, 2.0), true),
+        ] {
+            let p = place.mul_point(Point3::new(x, y, z));
+            let engine = brepkit_algo::classifier::classify_point(&topo, bored, p).unwrap();
+            let want = if inside {
+                brepkit_algo::FaceClass::Inside
+            } else {
+                brepkit_algo::FaceClass::Outside
+            };
+            assert_eq!(engine, want, "{pose}: engine at ({x}, {y}, {z})");
+            let check = classify_point(&topo, bored, p, &ClassifyOptions::default()).unwrap();
+            let want = if inside {
+                PointClassification::Inside
+            } else {
+                PointClassification::Outside
+            };
+            assert_eq!(check, want, "{pose}: check at ({x}, {y}, {z})");
+        }
+    }
+}
