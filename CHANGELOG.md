@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.57](https://github.com/andymai/brepkit/compare/v4.0.56...v4.0.57) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** mesh a sphere face's loop through a pole along the pole's row ([#1831](https://github.com/andymai/brepkit/issues/1831)) ([893520b](https://github.com/andymai/brepkit/commit/893520bc69a076a2bcf814ce6a282375c12584d5))
+
 ## [4.0.56](https://github.com/andymai/brepkit/compare/v4.0.55...v4.0.56) (2026-09-27)
 
 
