@@ -1,0 +1,26 @@
+crates/algo/src/classifier/analytic.rs
+  s_ba2f7b5c6902b6::t_1c47f4bc8ae773 380-384
+crates/operations/tests/cavity_boolean.rs
+  s_ba2f7b5c6902b6::t_efbef6c26afb7f 1-17,21-26,30-32,34-35,60-65,72,79-90,92-115
+  s_ba2f7b5c6902b6::t_e8ce21f231905a 18-20,27-29,33,39,45,49-54,57,69,76
+  s_ba2f7b5c6902b6::t_3559ed61d8c889 36-38,40-44,46-48,55-56,58-59,66-68,70-71,73-75,77-78,91
+crates/algo/src/builder/builder_solid.rs
+  s_ba2f7b5c6902b6::t_3a9f865407a616 3207-3242
+  s_ba2f7b5c6902b6::t_4edd5848ac77fe 940-945,1029-1038
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "92e2ba0b26952aef25b217f74e5f43c27e1f5b1c",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
