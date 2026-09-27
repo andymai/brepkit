@@ -2339,6 +2339,57 @@ pub fn exact_sphere_cylinder(
     Ok(Some(circles))
 }
 
+/// Exact coaxial cone-sphere intersection: the shared circles.
+///
+/// When the cone's axis runs through the sphere's centre `C`, every generator
+/// `apex + v g` (`g` a unit direction, `v` the distance from the apex) has
+/// the same `h = g·(apex − C)`, so all of them meet the sphere at the same
+/// roots of `v² + 2hv + |apex − C|² − R² = 0`. Each root ahead of the apex is
+/// a circle of radius `v cos a` at `v sin a` along the axis: two for a pin
+/// through a ball, one for a ball that swallows the apex or touches the
+/// cone, none for a ball the cone misses.
+///
+/// Returns `Some(vec![..])` for a coaxial pair and `None` (the ruling trace
+/// or the marcher) otherwise.
+///
+/// # Errors
+///
+/// Returns [`MathError`] if a shared `Circle3D` cannot be constructed.
+pub fn exact_cone_sphere(
+    cone: &ConicalSurface,
+    sphere: &SphericalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let offset = cone.apex() - sphere.center();
+    let along = offset.dot(cone.axis());
+    if (offset - cone.axis() * along).length() > 1e-7 {
+        return Ok(None);
+    }
+    let lin_tol = Tolerance::new().linear;
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    let (disc, far, near) = ruling_quadratic(
+        1.0,
+        2.0 * sin_a * along,
+        offset.dot(offset) - sphere.radius() * sphere.radius(),
+    );
+    if disc < 0.0 {
+        return Ok(Some(vec![]));
+    }
+    let roots: &[f64] = if far - near < lin_tol {
+        &[far]
+    } else {
+        &[near, far]
+    };
+    let mut circles = Vec::new();
+    for &v in roots {
+        if v * cos_a > lin_tol {
+            let centre = cone.apex() + cone.axis() * (v * sin_a);
+            let circle = Circle3D::new(centre, cone.axis(), v * cos_a)?;
+            circles.push(ExactIntersectionCurve::Circle(circle));
+        }
+    }
+    Ok(Some(circles))
+}
+
 /// Algebraic sphere-cylinder intersection (NURBS form for the general bounded
 /// path). A coaxial pair delegates to [`exact_sphere_cylinder`] and samples
 /// each exact circle into an interpolated NURBS `IntersectionCurve`. phase FF
@@ -4266,6 +4317,43 @@ mod tests {
             exact_sphere_cylinder(&sphere, &cyl).unwrap().is_none(),
             "non-coaxial sphere/cylinder defers to the marcher"
         );
+    }
+
+    #[test]
+    fn a_ball_on_a_cones_axis_meets_it_in_circles() {
+        // Apex 3 up, opening downward, the radius half the depth below it.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 3.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            2.0_f64.atan(),
+        )
+        .unwrap();
+        for (height, radius, count) in [
+            (0.0, 2.0, 2), // through the cone's middle
+            (2.5, 1.3, 1), // swallowing the apex
+            (2.5, 0.5, 1), // through the apex: the apex root is no circle
+            (0.0, 1.0, 0), // inside, clear of the wall
+            (5.0, 1.0, 0), // on the other nappe's side
+        ] {
+            let centre = Point3::new(0.0, 0.0, height);
+            let ball = SphericalSurface::new(centre, radius).unwrap();
+            let curves = exact_cone_sphere(&cone, &ball).unwrap().unwrap();
+            let circles = circles_of(&curves);
+            assert_eq!(circles.len(), count, "ball at {height}, radius {radius}");
+            for circle in circles {
+                for k in 0..16 {
+                    let p = circle.evaluate(TAU * f64::from(k) / 16.0);
+                    let on_ball = (p - centre).length() - radius;
+                    let on_cone = p.x().hypot(p.y()) - (3.0 - p.z()) / 2.0;
+                    assert!(
+                        on_ball.abs() < 1e-9 && on_cone.abs() < 1e-9,
+                        "ball at {height}: off by {on_ball}, {on_cone}"
+                    );
+                }
+            }
+        }
+        let aside = SphericalSurface::new(Point3::new(0.5, 0.0, 0.0), 2.0).unwrap();
+        assert!(exact_cone_sphere(&cone, &aside).unwrap().is_none());
     }
 
     /// The circles among exact section curves.
