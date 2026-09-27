@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790471115749,
+  "lastUpdate": 1790476454767,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42497,6 +42497,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35444260,
             "range": "± 26391",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "352aa3ab7e191afd4dc2e636a495e74e5df46d45",
+          "message": "fix(check): integrate cylinder, cone and sphere faces along their wires' own curves (#1812)\n\nThe check crate now integrates cylinder, cone, and sphere faces along\ntheir wires' own curves, bringing all 210 pose sweep volumes within\n9.6e-10 of the truth.\n\n## What was wrong\n\n- The check crate classified Gauss points against a sampled outer-wire\n`(u, v)` polygon inside a box derived from edge endpoints. Inner wires\ncounted only as full-revolution sphere holes. In the pose sweep,\n`solid_volume` was wrong by more than `1e-3` in 170 of 210 results, with\na worst error of 110% for the ball turned 0.35 about x less a column\nending at 2.8.\n\n- `make_cylinder(5, 10)` less a slab tilted 0.4 about x through `(0, 0,\n7)` read 514.16 instead of `7 * 25π = 549.78`. The box stopped at the\nseam height and cut off the wall above `z = 7`. A radius 3 ball inside\n`|x|, |y| < 2.5` read 91.31 instead of 104.20 because its axis-winding\nrim was treated as a band between its lowest and highest latitude.\n\n## What this does\n\n- Cylinder, cone, and sphere faces are integrated along their wires\nusing Green's theorem in `(u, v)`: `∫∫ g du dv = ∮ F dv`, where `F`\nintegrates the integrand along `u`. A wire winding the axis `k` times\nadds `-2πk H(v₀)`, where `H` integrates the integrand's mean over a turn\nalong `v`, and `v₀` is the wire's starting point. A face containing a\npole adds `2π H` there.\n\n- Sphere integration selects an axis from the sphere's three axes and\nthree fixed directions. Its poles must remain at least 3 degrees from\nthe wires, checked at 65 points per edge. A cone's `H` begins at its\napex, so a wire through the apex adds nothing.\n\n- Closed circles, ellipses, and NURBS rims start at their vertex. Open\nedges are chained by position, and NURBS edges are integrated span by\nspan between knots. Pieces turning more than a quarter turn are halved\ndown to a thousandth of the edge.\n\n- Existing integration remains for unreadable cases: cones crossing\ntheir apex, spheres whose wires approach every candidate axis's poles,\nclosed lines, disconnected consecutive edges, unresolved pole crossings,\nwires that neither wind nor enclose area, ambiguous mixed-direction\nnon-winding wires, and results with no area. A cone apex is exempt from\nthe turn limit because its `u` is arbitrary. Tori and NURBS surfaces are\nunchanged.\n\n- A face lies to the wire's left about the surface normal. Accordingly,\n`a_wedge_through_a_pole_reads_its_area_from_any_start` expects a\nreversed wire to describe the rest of the ball, `5π/2`.\n\n- Edge derivatives use a five-point stencil one thousandth of a piece\nwide. `bored_sphere_far_away_keeps_its_volume` therefore matches the\norigin case within `1e-6`.\n\n- `solid_volume` for `make_cylinder(5, 10)` takes 0.120 to 0.127 ms,\ncompared with 0.27 ms on main. The ball less the column takes 0.82 to\n0.93 ms, compared with 0.157 ms on main, where it read 3.7% off.\nMeasurements used three runs of 20 calls.\n`operations::measure::solid_volume` reaches this integrator only through\nits bored-quadric path.\n\n## Verification\n\n- New upright, turned, and mirrored tests cover the slanted cylinder,\nwith volume and area within `1e-9`; the ball within the column, with\nvolume and center of mass within `1e-9`; the pointed `make_cone(5, 0,\n10)` less `x > 1`, with NURBS hyperbola edges within `1e-9`; and the\nball less the column fused with a radius 0.1 rod, with a closed NURBS\ncap bore within `1e-8` of a Simpson reference good to about `1e-9`. All\nfour fail on main.\n\n- `a_sphere_face_bounded_by_one_circle_reads_either_side` verifies the\ncap `2π(1 - cos 0.5)` and its clockwise complement within `1e-9`.\n`a_wall_between_rims_of_third_turn_spans_reads_exactly` verifies a\nunit-cylinder wall bounded by three-span rational rims within `1e-9`.\n\n- All 210 pose-sweep volumes are within `9.6e-10` of truth, and every\nother column matches main. The workspace suite passes: 3164 passed, 20\nskipped. Lint is clean.\n\n- The roadmap closes this case, removes the stale check-crate note from\nsphere meshing, and folds the ball less a box corner below the equator\ninto the existing TERMINAL chordal-equator entry.",
+          "timestamp": "2026-09-27T02:31:24Z",
+          "tree_id": "4fa00079a2e830aab65c38c699de7ac5a0ac0675",
+          "url": "https://github.com/andymai/brepkit/commit/352aa3ab7e191afd4dc2e636a495e74e5df46d45"
+        },
+        "date": 1790476450188,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1007094,
+            "range": "± 1893",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1094679,
+            "range": "± 1253",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13135,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 764798,
+            "range": "± 2412",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42110586,
+            "range": "± 161470",
             "unit": "ns/iter"
           }
         ]
