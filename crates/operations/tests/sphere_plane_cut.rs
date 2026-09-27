@@ -283,9 +283,10 @@ fn a_wall_holding_the_axis_keeps_its_piece() {
 /// The ball against a box whose top face is the plane of its chordal
 /// equator (built on `z = 0`, or tipped there by a quarter turn about y,
 /// which leaves it 1e-16 off), turned about z: the ball within it is the
-/// lower hemisphere, the ball less it the upper one, and the box less the
-/// ball keeps the lower one's dent, each exact, valid, watertight, within
-/// `1e-9` of `18 pi` or the box less it, and with points either side of the
+/// lower hemisphere, the ball less it the upper one, the box less the ball
+/// keeps the lower one's dent and the two fused keep the upper one's dome,
+/// each exact, valid, watertight, within `1e-9` of `18 pi` or the box less
+/// or with it, and with points either side of the
 /// equator on the right side. The plane's section circle is the hemispheres'
 /// boundary in `(u, v)`, so it sections only the plane, and an unsplit
 /// hemisphere's sample sits on its own side of the equator.
@@ -320,6 +321,12 @@ fn a_box_on_the_equator_plane_keeps_a_hemisphere() {
                     PointClassification::Outside,
                     PointClassification::Outside,
                 ),
+                (
+                    "ball and box fused",
+                    1000.0 + half,
+                    PointClassification::Inside,
+                    PointClassification::Inside,
+                ),
             ] {
                 let label = format!("{name}, {build}, turned {turn}");
                 let mut topo = Topology::new();
@@ -329,6 +336,7 @@ fn a_box_on_the_equator_plane_keeps_a_hemisphere() {
                 let piece = match name {
                     "ball within box" => boolean(&mut topo, BooleanOp::Intersect, ball, block),
                     "ball less box" => boolean(&mut topo, BooleanOp::Cut, ball, block),
+                    "ball and box fused" => boolean(&mut topo, BooleanOp::Fuse, ball, block),
                     _ => boolean(&mut topo, BooleanOp::Cut, block, ball),
                 }
                 .unwrap();
