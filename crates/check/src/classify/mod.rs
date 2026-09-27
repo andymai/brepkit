@@ -5,16 +5,16 @@
 //! lies inside, outside, or on the boundary of a B-Rep solid.
 
 pub(crate) mod boundary;
-pub use boundary::plane_hit_inside;
 pub(crate) mod ray_surface;
 pub(crate) mod winding;
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceId;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use crate::CheckError;
+use crate::distance::analytic;
 
 /// Result of classifying a point relative to a solid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +154,18 @@ fn is_on_boundary(
         if crate::util::face_aabb(topo, fid)?.distance_squared_to_point(point)
             > tolerance * tolerance
         {
+            continue;
+        }
+        // Nor can a face whose untrimmed surface is that far.
+        let to_surface = match topo.face(fid)?.surface() {
+            FaceSurface::Plane { normal, d } => analytic::point_to_plane(point, *normal, *d).0,
+            FaceSurface::Cylinder(cyl) => analytic::point_to_cylinder(point, cyl).0,
+            FaceSurface::Cone(cone) => analytic::point_to_cone(point, cone).0,
+            FaceSurface::Sphere(sph) => analytic::point_to_sphere(point, sph).0,
+            FaceSurface::Torus(tor) => analytic::point_to_torus(point, tor).0,
+            FaceSurface::Nurbs(_) => 0.0,
+        };
+        if to_surface >= tolerance {
             continue;
         }
         if let Some((dist, _)) = crate::distance::point_to_face(topo, point, fid)?

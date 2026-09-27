@@ -162,6 +162,75 @@ fn a_ball_less_a_tool_classifies() {
     }
 }
 
+/// The ball within the box `[0.5, 2] x [0.5, 1.5] x [0.3, 10]`: its sphere
+/// face is bounded by four arcs whose corners lie at four heights, in no
+/// one plane. Every point of a lattice about its lowest corner, where the
+/// sphere meets the box's edge at `(2, 1.5)`, clear of the sphere and the
+/// box by 0.02, reads as the closed form says, upright, turned and
+/// mirrored.
+#[test]
+fn a_ball_windowed_by_a_box_classifies() {
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(0.3);
+    let at = Point3::new(0.3, 0.0, 0.0);
+    let normal = Vec3::new(1.0, 0.2, 0.1);
+    let unit = normal.normalize().unwrap();
+    for pose in ["upright", "turned", "mirrored"] {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let block = make_box(&mut topo, 1.5, 1.0, 9.7).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(0.5, 0.5, 0.3)).unwrap();
+        let mut window = boolean(&mut topo, BooleanOp::Intersect, ball, block).unwrap();
+        match pose {
+            "turned" => transform_solid(&mut topo, window, &turn).unwrap(),
+            "mirrored" => window = mirror(&mut topo, window, at, normal).unwrap(),
+            _ => {}
+        }
+        let place = |p: Point3| match pose {
+            "turned" => turn.mul_point(p),
+            "mirrored" => p - unit * (2.0 * (p - at).dot(unit)),
+            _ => p,
+        };
+        let mut wrong = Vec::new();
+        for i in 0..=12 {
+            for j in 0..=11 {
+                for k in 0..=18 {
+                    let p = Point3::new(
+                        1.42 + f64::from(i) * 0.05,
+                        1.02 + f64::from(j) * 0.05,
+                        1.31 + f64::from(k) * 0.05,
+                    );
+                    let r = (p - Point3::new(0.0, 0.0, 0.0)).length();
+                    let to_box = (p.x() - 0.5)
+                        .abs()
+                        .min((p.x() - 2.0).abs())
+                        .min((p.y() - 0.5).abs())
+                        .min((p.y() - 1.5).abs())
+                        .min((p.z() - 0.3).abs());
+                    if (r - RADIUS).abs() < 0.02 || to_box < 0.02 {
+                        continue;
+                    }
+                    let inside = r < RADIUS
+                        && (0.5..2.0).contains(&p.x())
+                        && (0.5..1.5).contains(&p.y())
+                        && p.z() > 0.3;
+                    let q = place(p);
+                    let by_check = classify_point(&topo, window, q, &ClassifyOptions::default())
+                        .unwrap()
+                        == PointClassification::Inside;
+                    let by_ops =
+                        brepkit_operations::classify::classify_point(&topo, window, q, 0.01, 1e-7)
+                            .unwrap()
+                            == brepkit_operations::classify::PointClassification::Inside;
+                    if by_check != inside || by_ops != inside {
+                        wrong.push(p);
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{pose}: misreads {wrong:?}");
+    }
+}
+
 /// A ball whose one face is bounded by a seam, a meridian run out and back
 /// (as a ball is imported), encloses no area: the face is the whole sphere.
 #[test]
@@ -209,6 +278,77 @@ fn a_seam_bounded_ball_classifies() {
             "{seam_normal:?}: operations misreads {ops:?}"
         );
     }
+}
+
+/// The ball between `z = -1` and `z = 2` stored as a file may store it: its
+/// sphere face is one wire of both rims joined by a seam run out and back,
+/// in no one plane. Every point of a grid reads as the closed form says.
+#[test]
+fn a_seam_joined_band_classifies() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    let mut topo = Topology::new();
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    let (low, high) = (-1.0_f64, 2.0_f64);
+    let (r_low, r_high) = (
+        (RADIUS * RADIUS - low * low).sqrt(),
+        (RADIUS * RADIUS - high * high).sqrt(),
+    );
+    let b = topo.add_vertex(Vertex::new(Point3::new(r_low, 0.0, low), 1e-7));
+    let t = topo.add_vertex(Vertex::new(Point3::new(r_high, 0.0, high), 1e-7));
+    let bottom = Circle3D::new(Point3::new(0.0, 0.0, low), up, r_low).unwrap();
+    let top = Circle3D::new(Point3::new(0.0, 0.0, high), up, r_high).unwrap();
+    // The meridian in `y = 0`, turning from +x toward +z.
+    let meridian = Circle3D::new(origin, Vec3::new(0.0, -1.0, 0.0), RADIUS).unwrap();
+    let bottom = topo.add_edge(Edge::new(b, b, EdgeCurve::Circle(bottom)));
+    let top = topo.add_edge(Edge::new(t, t, EdgeCurve::Circle(top)));
+    let seam = topo.add_edge(Edge::new(b, t, EdgeCurve::Circle(meridian)));
+    let band_wire = Wire::new(
+        vec![
+            OrientedEdge::new(bottom, true),
+            OrientedEdge::new(seam, true),
+            OrientedEdge::new(top, false),
+            OrientedEdge::new(seam, false),
+        ],
+        true,
+    )
+    .unwrap();
+    let band_wire = topo.add_wire(band_wire);
+    let surface = FaceSurface::Sphere(SphericalSurface::new(origin, RADIUS).unwrap());
+    let band = topo.add_face(Face::new(band_wire, vec![], surface));
+    let top_wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(top, true)], true).unwrap());
+    let top_disc = topo.add_face(Face::new(
+        top_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: up,
+            d: high,
+        },
+    ));
+    let bottom_wire =
+        topo.add_wire(Wire::new(vec![OrientedEdge::new(bottom, false)], true).unwrap());
+    let bottom_disc = topo.add_face(Face::new(
+        bottom_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: -up,
+            d: -low,
+        },
+    ));
+    let shell = topo.add_shell(Shell::new(vec![band, top_disc, bottom_disc]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let near = |p: Point3| (p.z() - low).abs().min((p.z() - high).abs());
+    let inside = |p: Point3| in_ball(p) && p.z() > low && p.z() < high;
+    let (check, ops) = misreads(&topo, solid, &|p| p, &near, &inside);
+    assert!(check.is_empty(), "check misreads {check:?}");
+    assert!(ops.is_empty(), "operations misreads {ops:?}");
 }
 
 /// Points on the ball's surface read as on its boundary in every pose: the
