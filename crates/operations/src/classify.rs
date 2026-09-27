@@ -180,9 +180,15 @@ fn is_on_boundary(
     point: Point3,
     tolerance: f64,
 ) -> Result<bool, OperationsError> {
-    let tol = Tolerance::new();
     for &fid in faces {
-        if let Some((dist, _)) = point_to_face_distance(topo, point, fid, tol)?
+        // A face whose box is farther than the tolerance cannot hold the
+        // point; the trimmed distance below is costly.
+        if brepkit_check::util::face_aabb(topo, fid)?.distance_squared_to_point(point)
+            > tolerance * tolerance
+        {
+            continue;
+        }
+        if let Some((dist, _)) = point_to_face_distance(topo, point, fid)?
             && dist < tolerance
         {
             return Ok(true);

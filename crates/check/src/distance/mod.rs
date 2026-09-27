@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
@@ -115,8 +115,12 @@ pub fn point_to_face(
     let face = topo.face(face_id)?;
     match face.surface() {
         FaceSurface::Plane { normal, d } => {
-            let polygon = crate::util::face_polygon(topo, face_id)?;
-            Ok(point_to_polygon_distance(point, &polygon, *normal, *d))
+            let (dist, foot) = analytic::point_to_plane(point, *normal, *d);
+            if is_point_in_face_boundary(topo, face_id, foot)? {
+                Ok(Some((dist, foot)))
+            } else {
+                Ok(closest_point_on_wire_edges(topo, face_id, point)?)
+            }
         }
         FaceSurface::Cylinder(cyl) => {
             let (dist, closest) = analytic::point_to_cylinder(point, cyl);
@@ -423,12 +427,7 @@ fn is_point_in_face_boundary(
     face_id: FaceId,
     point: Point3,
 ) -> Result<bool, CheckError> {
-    let polygon = crate::util::face_polygon(topo, face_id)?;
-    if polygon.len() < 3 {
-        return Ok(true); // Full-surface face
-    }
-    let normal = crate::util::polygon_normal(&polygon);
-    Ok(crate::util::point_in_polygon_3d(&point, &polygon, &normal))
+    crate::classify::boundary::face_contains(topo, face_id, point)
 }
 
 /// Find the closest point on the wire edges of a face to a given point.
@@ -449,10 +448,7 @@ fn closest_point_on_wire_edges(
     for wid in wire_ids {
         let wire = topo.wire(wid)?;
         for oe in wire.edges() {
-            let edge_data = topo.edge(oe.edge())?;
-            let p0 = topo.vertex(edge_data.start())?.point();
-            let p1 = topo.vertex(edge_data.end())?.point();
-            let (dist, closest) = point_to_segment(point, p0, p1);
+            let (dist, closest) = point_to_edge(topo, oe.edge(), point)?;
             if dist < best_dist {
                 best_dist = dist;
                 best_pt = closest;
@@ -466,39 +462,40 @@ fn closest_point_on_wire_edges(
     }
 }
 
-/// Point-to-polygon distance for planar faces.
-///
-/// Projects the point onto the plane, checks if inside polygon, otherwise
-/// finds the closest point on polygon edges.
-fn point_to_polygon_distance(
+/// The distance from a point to an edge along its own curve, and the
+/// closest point.
+fn point_to_edge(
+    topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
     point: Point3,
-    polygon: &[Point3],
-    normal: Vec3,
-    d: f64,
-) -> Option<(f64, Point3)> {
-    if polygon.len() < 3 {
-        return None;
-    }
+) -> Result<(f64, Point3), CheckError> {
+    use brepkit_geometry::extrema::point_to_curve;
+    use brepkit_topology::edge::EdgeCurve;
 
-    let (_, projected) = analytic::point_to_plane(point, normal, d);
-
-    if crate::util::point_in_polygon_3d(&projected, polygon, &normal) {
-        let dist = (point - projected).length();
-        return Some((dist, projected));
-    }
-
-    let mut best_dist = f64::INFINITY;
-    let mut best_pt = polygon[0];
-    let n = polygon.len();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (dist, closest) = point_to_segment(point, polygon[i], polygon[j]);
-        if dist < best_dist {
-            best_dist = dist;
-            best_pt = closest;
+    let edge = topo.edge(edge_id)?;
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let (lo, hi) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+    let projection = match edge.curve() {
+        EdgeCurve::Line => return Ok(point_to_segment(point, a, b)),
+        EdgeCurve::Circle(c) => {
+            // The circle's nearest point, when the arc holds it, else the
+            // nearer end: exact, where a sampled search is not.
+            let nearest = brepkit_geometry::extrema::point_to_circle(point, c);
+            let t = lo + (nearest.parameter - lo).rem_euclid(std::f64::consts::TAU);
+            if t <= hi {
+                return Ok((nearest.distance, nearest.point));
+            }
+            let (da, db) = ((point - a).length(), (point - b).length());
+            return Ok(if da <= db { (da, a) } else { (db, b) });
         }
-    }
-    Some((best_dist, best_pt))
+        EdgeCurve::Ellipse(e) => point_to_curve(point, e, lo, hi),
+        EdgeCurve::NurbsCurve(n) => point_to_curve(point, n, lo, hi),
+    };
+    Ok((projection.distance, projection.point))
 }
 
 /// Distance from point to line segment.
@@ -532,6 +529,7 @@ mod tests {
 
     use super::*;
     use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface, ToroidalSurface};
+    use brepkit_math::vec::Vec3;
 
     #[test]
     fn point_to_sphere_outside() {

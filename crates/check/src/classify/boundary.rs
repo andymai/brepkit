@@ -289,11 +289,43 @@ where
     if roots.is_empty() {
         return Ok(0);
     }
+    let region = uv_region(topo, face_id, &project, v_periodic, apex)?;
+    let mut crossings = 0u32;
+    for &t in roots {
+        if t <= RAY_T_MIN {
+            continue;
+        }
+        let (hit_u, hit_v) = project(origin + direction * t);
+        if uv_region_contains(&region, topo, face_id, (hit_u, hit_v), &project, v_periodic)? {
+            crossings += 1;
+        }
+    }
+    Ok(crossings)
+}
 
+/// A curved face's outer region in its `(u, v)`.
+enum UvRegion {
+    /// The whole surface: a wire of fewer than three distinct points.
+    Whole,
+    /// The outer loop's samples.
+    Bounded(Vec<(f64, f64)>),
+}
+
+/// The outer region of a cylinder, cone or torus face in its `(u, v)`.
+fn uv_region<F>(
+    topo: &Topology,
+    face_id: FaceId,
+    project: &F,
+    v_periodic: bool,
+    apex: Option<Point3>,
+) -> Result<UvRegion, CheckError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
     let verts = face_polygon(topo, face_id)?;
 
     // Detect degenerate boundary: a "full-surface" face whose wire has fewer
-    // than 3 distinct vertices. Every positive-t root is a crossing.
+    // than 3 distinct vertices.
     let is_full_surface = verts.len() < 3 || {
         let ref_pt = verts[0];
         verts
@@ -301,17 +333,10 @@ where
             .all(|v| (*v - ref_pt).length_squared() < COINCIDENT_SQ)
     };
     if is_full_surface {
-        let mut crossings = 0u32;
-        for &t in roots.iter().filter(|&&t| t > RAY_T_MIN) {
-            let (hit_u, hit_v) = project(origin + direction * t);
-            if !hit_in_inner_wire_uv(topo, face_id, hit_u, hit_v, &project, v_periodic)? {
-                crossings += 1;
-            }
-        }
-        return Ok(crossings);
+        return Ok(UvRegion::Whole);
     }
 
-    let mut uv_boundary = build_uv_boundary(&verts, &project, v_periodic);
+    let mut uv_boundary = build_uv_boundary(&verts, project, v_periodic);
     // A pointed cone's wire runs up its seam to the apex and straight back,
     // which bounds nothing in (u, v): its region is the rim's run closed
     // along the apex row, as a pole closes a sphere cap.
@@ -326,30 +351,110 @@ where
         let mut rim = verts.clone();
         rim.rotate_left(turn + 1);
         rim.pop();
-        uv_boundary = build_uv_boundary(&rim, &project, v_periodic);
+        uv_boundary = build_uv_boundary(&rim, project, v_periodic);
         let (_, v_apex) = project(apex);
         let first_u = uv_boundary[0].0;
         let last_u = uv_boundary[uv_boundary.len() - 1].0;
         uv_boundary.push((last_u, v_apex));
         uv_boundary.push((first_u, v_apex));
     }
+    Ok(UvRegion::Bounded(uv_boundary))
+}
 
-    let mut crossings = 0u32;
-    for &t in roots {
-        if t <= RAY_T_MIN {
-            continue;
+/// Whether a point at `(u, v)` lies in the region and outside the face's
+/// holes.
+fn uv_region_contains<F>(
+    region: &UvRegion,
+    topo: &Topology,
+    face_id: FaceId,
+    (u, v): (f64, f64),
+    project: &F,
+    v_periodic: bool,
+) -> Result<bool, CheckError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    let in_outer = match region {
+        UvRegion::Whole => true,
+        UvRegion::Bounded(boundary) => point_in_uv_boundary(u, v, boundary, v_periodic),
+    };
+    Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, project, v_periodic)?)
+}
+
+/// A `(u, v)` loop's enclosed area, by the shoelace sum.
+fn uv_area(loop_uv: &[(f64, f64)]) -> f64 {
+    let n = loop_uv.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (loop_uv[i], loop_uv[(i + 1) % n]);
+            a.0.mul_add(b.1, -(b.0 * a.1))
+        })
+        .sum::<f64>()
+        .abs()
+        / 2.0
+}
+
+/// The area of a `(u, v)` loop's bounding box.
+fn uv_extent(loop_uv: &[(f64, f64)]) -> f64 {
+    let (mut lo, mut hi) = (
+        (f64::INFINITY, f64::INFINITY),
+        (f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for &(u, v) in loop_uv {
+        lo = (lo.0.min(u), lo.1.min(v));
+        hi = (hi.0.max(u), hi.1.max(v));
+    }
+    (hi.0 - lo.0).max(0.0) * (hi.1 - lo.1).max(0.0)
+}
+
+/// Whether `p`, a point on a face's surface, lies on the face: inside its
+/// outer loop and outside its holes, read as the ray-cast classifier reads a
+/// hit.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool, CheckError> {
+    let face = topo.face(face_id)?;
+    match face.surface() {
+        FaceSurface::Plane { normal, .. } => {
+            let verts = face_polygon(topo, face_id)?;
+            Ok(verts.len() >= 3
+                && point_in_polygon_3d(&p, &verts, normal)
+                && !hit_in_inner_wire_3d(topo, face_id, p, normal)?)
         }
-        let hit = origin + direction * t;
-        let (hit_u, hit_v) = project(hit);
-
-        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, v_periodic)
-            && !hit_in_inner_wire_uv(topo, face_id, hit_u, hit_v, &project, v_periodic)?
-        {
-            crossings += 1;
+        FaceSurface::Cylinder(cyl) => {
+            let project = |q: Point3| cyl.project_point(q);
+            let region = uv_region(topo, face_id, &project, false, None)?;
+            uv_region_contains(&region, topo, face_id, project(p), &project, false)
+        }
+        FaceSurface::Cone(cone) => {
+            let project = |q: Point3| cone.project_point(q);
+            let region = uv_region(topo, face_id, &project, false, Some(cone.apex()))?;
+            uv_region_contains(&region, topo, face_id, project(p), &project, false)
+        }
+        FaceSurface::Torus(tor) => {
+            let project = |q: Point3| tor.project_point(q);
+            let region = uv_region(topo, face_id, &project, true, None)?;
+            uv_region_contains(&region, topo, face_id, project(p), &project, true)
+        }
+        FaceSurface::Sphere(_) => match SphereRegion::of(topo, face_id)? {
+            Some(region) => region.contains(topo, face_id, p),
+            None => Ok(true),
+        },
+        FaceSurface::Nurbs(surface) => {
+            let project = |q: Point3| -> (f64, f64) { surface.project_point(q) };
+            let verts = face_polygon(topo, face_id)?;
+            let (u, v) = project(p);
+            let boundary = build_uv_boundary(&verts, &project, false);
+            // A closed surface's seam copies project to one `u`, folding its
+            // loop flat: such a face is the whole surface.
+            let in_outer = verts.len() < 3
+                || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary)
+                || point_in_uv_boundary(u, v, &boundary, false);
+            Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, &project, false)?)
         }
     }
-
-    Ok(crossings)
 }
 
 /// A sphere face's region, read in 3D from its outer loop (a sphere's
