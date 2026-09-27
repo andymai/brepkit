@@ -1776,10 +1776,12 @@ fn try_algebraic_intersection(
         }
         (AnalyticSurface::Cone(c1), AnalyticSurface::Cone(c2)) => algebraic_cone_cone(c1, c2),
         (AnalyticSurface::Torus(t), AnalyticSurface::Cylinder(c)) => {
-            Ok(parallel_axis_torus_cylinder(t, c, true))
+            Ok(parallel_axis_torus_cylinder(t, c, true)
+                .or_else(|| ruling_torus_cylinder(t, c, true)))
         }
         (AnalyticSurface::Cylinder(c), AnalyticSurface::Torus(t)) => {
-            Ok(parallel_axis_torus_cylinder(t, c, false))
+            Ok(parallel_axis_torus_cylinder(t, c, false)
+                .or_else(|| ruling_torus_cylinder(t, c, false)))
         }
         _ => Ok(None),
     }
@@ -2591,6 +2593,43 @@ fn ruling_cone_cylinder(
     }
     Some(fit_ruling_loops(&loops, |p| {
         in_order(cone.project_point(p), cyl.project_point(p), cone_first)
+    }))
+}
+
+/// A torus and a cylinder whose axes are not parallel, where every ruling
+/// of the cylinder meets the torus the same even number of times (a rod
+/// through the ring's tube): a ruling meets the torus where a quartic in its
+/// parameter vanishes, and each of its roots, taken in order, sweeps one
+/// closed loop around the cylinder. `None` (the marcher's case) when the
+/// count varies between rulings, where the curve turns back between them.
+fn ruling_torus_cylinder(
+    torus: &ToroidalSurface,
+    cyl: &CylindricalSurface,
+    torus_first: bool,
+) -> Option<Vec<IntersectionCurve>> {
+    if cyl.axis().dot(torus.z_axis()).abs() > 1.0 - 1e-9 {
+        return None;
+    }
+    let rows: Vec<Vec<f64>> = (0..RULING_SAMPLES)
+        .map(|i| intersect_line_torus(torus, cyl.evaluate(ruling_u(i), 0.0), cyl.axis()))
+        .collect();
+    let count = rows[0].len();
+    if count == 0 || count % 2 == 1 || rows.iter().any(|r| r.len() != count) {
+        return None;
+    }
+    let loops: Vec<Vec<Point3>> = (0..count)
+        .map(|j| {
+            let mut pts: Vec<Point3> = rows
+                .iter()
+                .enumerate()
+                .map(|(i, r)| cyl.evaluate(ruling_u(i), r[j]))
+                .collect();
+            pts.push(pts[0]);
+            pts
+        })
+        .collect();
+    Some(fit_ruling_loops(&loops, |p| {
+        in_order(torus.project_point(p), cyl.project_point(p), torus_first)
     }))
 }
 
@@ -3671,6 +3710,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_rod_through_a_rings_tube_traces_four_loops() {
+        use crate::traits::ParametricCurve;
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        // Along y through (0.5, ., 0.3): every ruling enters and leaves the
+        // tube on either side of the hole, four roots, four loops.
+        let rod =
+            CylindricalSurface::new(Point3::new(0.5, 0.0, 0.3), Vec3::new(0.0, 1.0, 0.0), 0.6)
+                .unwrap();
+        let curves = ruling_torus_cylinder(&ring, &rod, true).unwrap();
+        assert_eq!(curves.len(), 4);
+        for c in &curves {
+            let (t0, t1) = c.curve.domain();
+            for k in 0..=64 {
+                let p =
+                    ParametricCurve::evaluate(&c.curve, (t1 - t0).mul_add(f64::from(k) / 64.0, t0));
+                let on_rod = (p.x() - 0.5).hypot(p.z() - 0.3) - 0.6;
+                let on_ring = (p.x().hypot(p.y()) - 4.0).hypot(p.z()) - 1.5;
+                assert!(
+                    on_rod.abs() < 1e-4 && on_ring.abs() < 1e-4,
+                    "off by {on_rod}, {on_ring}"
+                );
+            }
+        }
+        // Higher, the rod's top rulings pass over the tube: the count varies.
+        let high =
+            CylindricalSurface::new(Point3::new(0.5, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0), 0.6)
+                .unwrap();
+        assert!(ruling_torus_cylinder(&ring, &high, true).is_none());
     }
 
     #[test]
