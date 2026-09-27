@@ -3219,20 +3219,30 @@ pub(super) fn split_face_with_internal_loops(
             // centroid (the circle center for single-circle loops, the
             // polygon centroid for multi-Line footprint loops).
             let n_samples = 16;
-            let mut sum = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-            let mut count = 0_usize;
-            for edge in loop_edges {
-                for pt in edge_samples(edge, n_samples).into_iter().take(n_samples) {
-                    sum += brepkit_math::vec::Vec3::new(pt.x(), pt.y(), pt.z());
-                    count += 1;
-                }
-            }
+            let ring: Vec<Point3> = loop_edges
+                .iter()
+                .flat_map(|edge| edge_samples(edge, n_samples).into_iter().take(n_samples))
+                .collect();
+            let sum = ring
+                .iter()
+                .fold(brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0), |s, p| {
+                    s + brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())
+                });
             #[allow(clippy::cast_precision_loss)]
-            let centroid = Point3::new(
-                sum.x() / count as f64,
-                sum.y() / count as f64,
-                sum.z() / count as f64,
-            );
+            let count = ring.len().max(1) as f64;
+            let centroid = Point3::new(sum.x() / count, sum.y() / count, sum.z() / count);
+            // A loop that is not convex (a keyhole's outline, its chamber
+            // bulging in) can put its centroid outside itself: take a point
+            // of the loop's own polygon instead.
+            let centroid = match &surface {
+                FaceSurface::Plane { normal, .. } => {
+                    let frame = PlaneFrame::from_normal_and_point(*normal, centroid);
+                    let flat: Vec<Point2> = ring.iter().map(|&p| frame.project(p)).collect();
+                    let inner = super::super::classify_2d::sample_interior_point(&flat);
+                    frame.evaluate(inner.x(), inner.y())
+                }
+                _ => centroid,
+            };
             // Offset along the face normal by a small amount to ensure
             // the point is clearly inside the opposing solid (not on the
             // coplanar boundary). Use the surface normal direction.
