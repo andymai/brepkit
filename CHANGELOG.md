@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.70](https://github.com/andymai/brepkit/compare/v4.0.69...v4.0.70) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** classify points with the check crate's ray cast ([#1858](https://github.com/andymai/brepkit/issues/1858)) ([7727d46](https://github.com/andymai/brepkit/commit/7727d460f0b935ab26ba4bdb7ab7ab55277894d3))
+
 ## [4.0.69](https://github.com/andymai/brepkit/compare/v4.0.68...v4.0.69) (2026-09-27)
 
 
