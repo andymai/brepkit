@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790533197991,
+  "lastUpdate": 1790536125268,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45035,6 +45035,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42918865,
             "range": "± 80398",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7727d460f0b935ab26ba4bdb7ab7ab55277894d3",
+          "message": "fix(operations): classify points with the check crate's ray cast (#1858)\n\nPoint classification now uses one three-ray implementation, correctly\nhandles trimmed spherical regions and planar caps, and reduces\nclassification time on the measured grids.\n\n## What was wrong\n\n- `brepkit_operations::classify` maintained a separate ray-cast\nclassifier. It treated sphere faces bounded by arcs in several planes as\nintersections of arc half-spaces, then returned Inside only when two\nrays agreed.\n- `brepkit_check::classify::classify_point` read a sphere face whose\nloop lies in no one plane by the half-space through the loop's first\npoint and a polygon of chords projected along its Newell normal. It also\nmisread a seam-joined spherical band.\n- Both classifiers' boundary tests read a plane face against its chord\npolygon. A point on `make_cylinder(1, 1)`'s cap at radius 0.999, midway\nbetween where 32 chords of the rim would fall, was therefore not on the\nboundary at tolerance `1e-7`.\n- The operations winding and robust variants used single-ray parity\nthrough the same code. Their winding number was only ever 0 or 1.\n\n## What this does\n\n- `classify_point`, `classify_point_winding`, and\n`classify_point_robust` in operations now call the check classifier,\nwhich casts up to three rays and takes the majority. The approximately\n900-line operations ray cast is removed. `deflection` remains in the\nsignatures and remains unused.\n- The winding and robust entry points share this ray cast rather than\nthe check crate's winding number, because that winding number fans each\nface's boundary polygon and does not follow a curved face.\n- `SphereRims` determines parity along minor great-circle arcs to\nvalidated reference points on the longest outer edges. Circle\nintersections are closed form, lines represent their projected\ngreat-circle arcs, and seam edges are omitted because their crossings\ncancel. References at one quarter, one half, and three quarters vote,\nwith at least two required. The previous test handles cases without a\ndecision.\n- Boundary classification rejects faces using bounding boxes and\nuntrimmed-surface distance, then measures trimmed distance with\n`point_to_face`. Plane faces use their own lines and arcs.\n- Positive-weight NURBS faces are boxed by control points. A 9 by 9\nsample grid is added when a weight is not positive. Face boxes, their\nBVH, and sphere regions are reused across rays.\n- Boolean acceptance of multi-piece Intersect results now classifies\ncomponent centres with the three-ray cast. Check utilities exposed only\nfor removed operations code are crate-private. The roadmap records the\nclosed operations case and updates the remaining chord cases.\n\n## Verification\n\n- Across approximately 60,000 points per grid, excluding points within\n0.02 of a surface, on this branch both classifiers read every point for\nthe column and window shapes in all three poses. On main, operations\nmissed 26,419 column points in every pose, while check missed 3, 0, and\n8. For the window, operations missed none and check missed 7, 5, and 3.\n- New regression pins cover the column, window, seam-joined band, a 0.05\ndegree wedge, the near-rim cap point, and the seam-capped half-ball rim.\n`torus_coaxial_tools.rs` also checks `(2.8, 0, 0)`, which already passes\non main.\n- Release timings per pose, this branch against main's operations\nclassifier: the column 1.57 to 1.63 s against 1.91 to 2.07 s, the window\n0.30 to 0.32 s against 0.52 to 0.57 s, and the cylinder less a tilted\nslab 0.18 to 0.23 s against 0.34 to 0.38 s.\n- Check, operations, io, and wasm pass with 1932 tests and 20 skipped.\nThe full workspace suite passed earlier in the branch with 3211 tests\nand 20 skipped. Clippy is clean. `pose_sweep` is identical to main, and\nevery `approx_census` row has the same exact or fallback result.",
+          "timestamp": "2026-09-27T19:05:46Z",
+          "tree_id": "0ffaaa95969751663baef0e352014d4015e02f54",
+          "url": "https://github.com/andymai/brepkit/commit/7727d460f0b935ab26ba4bdb7ab7ab55277894d3"
+        },
+        "date": 1790536119691,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 971933,
+            "range": "± 2456",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1066743,
+            "range": "± 3012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11973,
+            "range": "± 138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 729189,
+            "range": "± 2052",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43519519,
+            "range": "± 61648",
             "unit": "ns/iter"
           }
         ]
