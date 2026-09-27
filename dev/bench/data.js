@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790488585876,
+  "lastUpdate": 1790489459331,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43145,6 +43145,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42869464,
             "range": "± 160532",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "61f0552c897c31086102977e34b83a5ccf3852d9",
+          "message": "chore(main): release 4.0.53 (#1824)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.53](https://github.com/andymai/brepkit/compare/v4.0.52...v4.0.53)\n(2026-09-27)\n\n\n### Bug Fixes\n\n* **algo:** keep the corner patches a column entering the ball from\nbelow leaves ([#1823](https://github.com/andymai/brepkit/issues/1823))\n([0c91bc6](https://github.com/andymai/brepkit/commit/0c91bc6989b3f3c8db2b5e4667a4f454ac57281e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.53 with a fix in `brepkit-algo` that keeps the\ncorner patches a column entering the ball from below leaves behind.\n\n<sup>Written for commit 0cf60023ee99260b909bf403212f7124c5631c4f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1824?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T06:08:17Z",
+          "tree_id": "fcf853d8c60b82f13baf87454de12bcc65baf199",
+          "url": "https://github.com/andymai/brepkit/commit/61f0552c897c31086102977e34b83a5ccf3852d9"
+        },
+        "date": 1790489454593,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1017668,
+            "range": "± 1772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1101666,
+            "range": "± 6192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13230,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 762224,
+            "range": "± 1587",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42724280,
+            "range": "± 765347",
             "unit": "ns/iter"
           }
         ]
