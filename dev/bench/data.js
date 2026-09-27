@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790485495342,
+  "lastUpdate": 1790486378606,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42983,6 +42983,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42317334,
             "range": "± 173794",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "db74093bf63e75d6eb032801fc0c60e137bfecef",
+          "message": "fix(algo): split a hemisphere between two chains of arcs (#1821)\n\nThe ball and a column offset and turned with two corners inside it now\ncome out exact in all three ops: a hemisphere now splits between two\nequator-to-equator chains of arcs.\n\n## What was wrong\n\n- `make_sphere(3, 32)` combined with `make_box(4.5, 4.5, 10)` over `-2.6\n< x < 1.9`, `-2.2 < y < 2.3`, turned 0.2 about `z`, fell back to a mesh\nin all three operations. Intersect produced 494 faces, the ball less the\ncolumn produced 342, and the column less the ball produced 497. Two\ncolumn corners lie inside the ball.\n- On each hemisphere, the three walls near those corners produce arcs\nthat join at the corners into one chain from the equator to the equator.\nThe far wall, `x = -2.6`, produces a second chain from its circle's two\nquarter-arcs.\n- These chains do not close into one loop, so the face reaches\n`split_noseam_by_arrangement`. That path returned an empty split when\nfewer than six arc ends lay on the equator, meaning fewer than three\nchains. The hemisphere was cut by sections but split into nothing.\n\n## What this does\n\n- The arrangement keeps the collar holding the pole and a lune past each\nchain. Two chains therefore split the hemisphere into all its regions.\n- `split_noseam_by_arrangement` now requires four arc ends on the\nequator, representing two chains. A single chain remains with the cap\npath.\n\n## Verification\n\n- All three operations are exact, valid, and watertight in all five\nposes of the pose sweep. Their face counts are 6, 8, and 9.\n- Their volumes are 91.8986, 21.1988, and 110.6014. These match\nnumerical integration of the ball's chords over the column: 91.89858,\n21.19876, and 110.60142.\n- No grid point is misread. The fallbacks misread 2 in some poses. Only\nthese 15 of the pose sweep's 270 results changed.\n- New test\n`an_offset_turned_column_splits_each_hemisphere_between_two_chains`\ncovers all three operations, upright and turned, checking face counts,\nvalidity, watertightness, volume within `1e-7` of the truth, and the\nclass of a point in the column's middle, the cap, each lune, the column\npast the ball, and above both. It fails with the three-chain rule.\n- The workspace suite passes: 3168 tests run, 3168 passed, 20 skipped.\nLint is clean.\n- The roadmap closes the offset-and-turned corner-column row.",
+          "timestamp": "2026-09-27T05:17:17Z",
+          "tree_id": "c88928eb495161f6573fba367e1cb0a2eb89ea86",
+          "url": "https://github.com/andymai/brepkit/commit/db74093bf63e75d6eb032801fc0c60e137bfecef"
+        },
+        "date": 1790486374214,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 822319,
+            "range": "± 1139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 893563,
+            "range": "± 2763",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11258,
+            "range": "± 497",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 607682,
+            "range": "± 1236",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35461325,
+            "range": "± 570007",
             "unit": "ns/iter"
           }
         ]
