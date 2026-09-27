@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790500810188,
+  "lastUpdate": 1790502256197,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43631,6 +43631,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46155218,
             "range": "± 491343",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d04550db0ca87acabc60fe10cd1dd8e4ce67e23",
+          "message": "fix(algo): keep a ball's equator circle off the hemispheres a coplanar box face meets (#1832)\n\nCoplanar box faces now cut a ball at its chordal equator without\nsectioning either hemisphere, producing exact, valid, watertight results\nfor all three Boolean operations.\n\n## What was wrong\n\n- On main, `make_sphere(3, 32)` against `make_box(10, 10, 10)` at `(-5,\n-5, -10)`, with the box top face on `z = 0`, failed for turns of 0, 0.3,\nand 1 about z. Intersect produced two exact faces but failed validation\nwith 32 shared edges having inconsistent face orientations. It retained\nthe upper hemisphere, with `z = 1` Inside and `z = -1` Outside, although\nsymmetry hid the error in its volume.\n\n- Box less ball was exact but invalid and contained no sphere face. Its\nsix planes read 1000, the volume of the whole box. Ball less box fell\nback to a 350 face mesh reading 55.78782 instead of 56.54867.\n\n- Tipping the same box onto `z = 0` by a quarter turn about y, 1e-16\noff, produced the same behavior, except the unturned Intersect fell\nback. This was case #767's known remaining half-embedded sphere case,\nwhere the section circle is fully interior to a coplanar face.\n\n- The plane meets each hemisphere at the equator circle. In `(u, v)`,\nthat circle is the hemisphere's own boundary because its chords project\nto `v = 0`, while in 3D it lies a sagitta outside those chords.\n`closed_circle_boundary_crossings` recognized the boundary as inscribed\nand discarded its hits. The complete circle was then emitted once per\nhemisphere and sectioned both the plane and hemisphere. One hemisphere\nsplit into nothing, while the other split into the region across the\ncircle.\n\n- A second fault was in classification. `sample_face_interior` sampled\nan unsplit curved face from the midpoint of its longest boundary edge,\noffset toward the centroid of its boundary vertices. A hemisphere's\ncentroid is the ball center, level with that edge, so noise selected the\nside. Both hemispheres were sampled at the same point just below the\nequator.\n\n## What this does\n\n- In `phase_ff.rs`, a closed section circle with no crossings sections\nonly the plane when it follows one face's inscribed boundary, every\nboundary edge lies in the circle's plane, and the other face is planar.\nThe identical circle encountered for the second hemisphere is skipped.\n\n- A new `curve_skip_faces` map beside `curve_extra_faces` records that\ndecision. `fill_section_sc` and the builder's section map honor it. The\nper-face hit scan moves from `closed_circle_boundary_crossings` into\n`circle_face_hits`, allowing the new check to reuse it.\n\n- `sample_face_interior` now detects when the centroid is level with the\nedge, defined as a lean below one tenth of the product of the two\nlengths. It offsets toward the side on which the wire runs, using the\nsurface normal crossed with the wire-oriented tangent. Classification\nremains unchanged where the centroid is decisive.\n\n## Verification\n\n- All 18 combinations of two builds, three turns, and three operations\nare exact, valid, and watertight. Either hemisphere reads 56.54867, or\n18 pi, and box less ball reads 943.45133. Points on either side of the\nequator classify on the correct side.\n\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, found that this placement's three flags are gone\nand no new flags appear. Exact results increased from 483 to 487 of 540.\nThe pose sweep's 300 lines are unchanged.\n\n- `a_box_on_the_equator_plane_keeps_a_hemisphere` covers both builds,\nthree turns, and four operations (the three above and the Fuse, `1000 +\n18 pi`), checking exactness, validity, watertightness, volume within\n`1e-9`, and point classification. It fails on main.\n\n- The workspace suite passes: 3177 tests run, 3177 passed, 20 skipped.\nLint is clean.\n\n- The roadmap records the case as closed.",
+          "timestamp": "2026-09-27T09:41:28Z",
+          "tree_id": "e5af934eb8e5e51b27bbc50a301aa2830aed6206",
+          "url": "https://github.com/andymai/brepkit/commit/3d04550db0ca87acabc60fe10cd1dd8e4ce67e23"
+        },
+        "date": 1790502250929,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1018006,
+            "range": "± 2023",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1102633,
+            "range": "± 1401",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13165,
+            "range": "± 200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 762594,
+            "range": "± 3144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42759698,
+            "range": "± 92879",
             "unit": "ns/iter"
           }
         ]
