@@ -64,6 +64,85 @@ fn corner_piece(a: f64, b: f64, c: f64) -> f64 {
     sum * step / 3.0
 }
 
+/// The ball's part past `x = a`, `y = b` and `z = c`, for a floor `c` above
+/// or below the equator: each vertical chord from `max(c, -s)` up to `s`,
+/// `s` the sphere's height, integrated over `y` in closed form and over `x`
+/// by the midpoint rule.
+fn ball_past(a: f64, b: f64, c: f64) -> f64 {
+    let n = 40_000;
+    let step = (RADIUS - a) / f64::from(n);
+    let mut total = 0.0;
+    for k in 0..n {
+        let x = step.mul_add(f64::from(k) + 0.5, a);
+        let c2 = RADIUS.mul_add(RADIUS, -(x * x));
+        if c2 <= 0.0 {
+            continue;
+        }
+        let cc = c2.sqrt();
+        let g = |y: f64| {
+            y.mul_add(
+                (c2 - y * y).max(0.0).sqrt(),
+                c2 * (y / cc).clamp(-1.0, 1.0).asin(),
+            )
+        };
+        let heights = |lo: f64, hi: f64| if hi > lo { 0.5 * (g(hi) - g(lo)) } else { 0.0 };
+        let (lo, top) = (b.max(-cc), cc);
+        if top <= lo {
+            continue;
+        }
+        // Where the sphere's height reaches the floor's depth, `|y| <= e`.
+        let e = (c2 - c * c).max(0.0).sqrt();
+        total += if c >= 0.0 {
+            let hi = top.min(e);
+            if hi > lo {
+                heights(lo, hi) - c * (hi - lo)
+            } else {
+                0.0
+            }
+        } else {
+            let flat = (top.min(e) - lo.max(-e)).max(0.0);
+            heights(lo, top)
+                + (-c).mul_add(flat, heights(lo, top.min(-e)) + heights(lo.max(e), top))
+        };
+    }
+    total * step
+}
+
+/// The ball within a box whose corner at `(a, b, c)` lies inside it, for
+/// corners whose piece holds a pole beside a steep wall arc (a wall's circle
+/// running from the seam toward the pole): exact, valid, watertight, and
+/// within `1e-7` of the ball past the corner. The pole closure starts where
+/// its meridian runs clear of the boundary, not beside the wall arc, where
+/// the two sampled apart would leave the mesh open.
+#[test]
+fn a_ball_within_a_box_corner_meshes_its_pole_closed() {
+    for corner in [
+        (-0.4, -1.3, -1.5),
+        (-1.5, -1.3, -0.4),
+        (-1.5, -1.3, -1.5),
+        (-0.4, 0.0, 1.7),
+    ] {
+        let (a, b, c) = corner;
+        let label = format!("{corner:?}");
+        let truth = ball_past(a, b, c);
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(a, b, c)).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Intersect, sphere, block).unwrap();
+        assert!(exact(&topo, result), "{label}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-7 * truth,
+            "{label}: volume {volume}, truth {truth}"
+        );
+    }
+}
+
 #[test]
 fn ball_less_a_box_corner() {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);

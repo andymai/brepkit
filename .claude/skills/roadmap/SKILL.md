@@ -217,6 +217,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A ball within a box corner holding a pole meshed open (CLOSED 2026-09-26; pin `a_ball_within_a_box_corner_meshes_its_pole_closed` in `crates/operations/tests/sphere_box_corner.rs`)**:
+  the mesher closes a sphere face holding a pole with a virtual meridian
+  from its loop's first sample to the pole, and that sample could sit beside
+  a steep wall arc heading for the pole (or on a wall through the axis), so
+  the meridian's samples interleaved with the arc's and left the mesh open.
+  The loop now starts where its meridian runs farthest in `u` from the holes
+  and from every boundary sample between it and the pole.
+
 - **A column entering the ball from below fell back (CLOSED 2026-09-26; pin `a_column_entering_the_ball_from_below_keeps_its_corner_patches` in `crates/operations/tests/sphere_box_corner.rs`, pose sweep case `ball | column 2.05 from -1`)**:
   near each corner the lower hemisphere holds a small patch inside the
   column, bounded by two wall arcs and an arc of the floor's circle a few
