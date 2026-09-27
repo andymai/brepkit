@@ -381,6 +381,32 @@ where
     Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, project, v_periodic)?)
 }
 
+/// A `(u, v)` loop's enclosed area, by the shoelace sum.
+fn uv_area(loop_uv: &[(f64, f64)]) -> f64 {
+    let n = loop_uv.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (loop_uv[i], loop_uv[(i + 1) % n]);
+            a.0.mul_add(b.1, -(b.0 * a.1))
+        })
+        .sum::<f64>()
+        .abs()
+        / 2.0
+}
+
+/// The area of a `(u, v)` loop's bounding box.
+fn uv_extent(loop_uv: &[(f64, f64)]) -> f64 {
+    let (mut lo, mut hi) = (
+        (f64::INFINITY, f64::INFINITY),
+        (f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for &(u, v) in loop_uv {
+        lo = (lo.0.min(u), lo.1.min(v));
+        hi = (hi.0.max(u), hi.1.max(v));
+    }
+    (hi.0 - lo.0).max(0.0) * (hi.1 - lo.1).max(0.0)
+}
+
 /// Whether `p`, a point on a face's surface, lies on the face: inside its
 /// outer loop and outside its holes, read as the ray-cast classifier reads a
 /// hit.
@@ -416,13 +442,17 @@ pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool
             Some(region) => region.contains(topo, face_id, p),
             None => Ok(true),
         },
-        FaceSurface::Nurbs(_) => {
+        FaceSurface::Nurbs(surface) => {
+            let project = |q: Point3| -> (f64, f64) { surface.project_point(q) };
             let verts = face_polygon(topo, face_id)?;
-            if verts.len() < 3 {
-                return Ok(true);
-            }
-            let normal = polygon_normal(&verts);
-            Ok(point_in_polygon_3d(&p, &verts, &normal))
+            let (u, v) = project(p);
+            let boundary = build_uv_boundary(&verts, &project, false);
+            // A closed surface's seam copies project to one `u`, folding its
+            // loop flat: such a face is the whole surface.
+            let in_outer = verts.len() < 3
+                || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary)
+                || point_in_uv_boundary(u, v, &boundary, false);
+            Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, &project, false)?)
         }
     }
 }

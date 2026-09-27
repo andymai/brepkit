@@ -130,3 +130,70 @@ fn a_point_on_a_removed_surface_is_not_on_the_boundary() {
         assert_eq!(class, PointClassification::Outside, "{pose}");
     }
 }
+
+/// A 10-cube bored through by a radius-3 hole along z.
+fn bored_cube(topo: &mut Topology) -> SolidId {
+    let cube = make_box(topo, 10.0, 10.0, 10.0).unwrap();
+    let rod = make_cylinder(topo, 3.0, 20.0).unwrap();
+    transform_solid(topo, rod, &Mat4::translation(5.0, 5.0, -5.0)).unwrap();
+    boolean(topo, BooleanOp::Cut, cube, rod).unwrap()
+}
+
+/// A point over a bored cube's hole lies `sqrt(34)` from its top rim, not 5
+/// from the top face's plane, and a point in the hole on that plane reads
+/// outside, not on the boundary; a point 1 outside a cylinder whose faces are
+/// NURBS reads 1.
+#[test]
+fn distance_reads_holes_and_nurbs_faces_as_trimmed() {
+    for (pose, place) in poses() {
+        let mut topo = Topology::new();
+        let cube = bored_cube(&mut topo);
+        transform_solid(&mut topo, cube, &place).unwrap();
+        let over = place.mul_point(Point3::new(5.0, 5.0, 15.0));
+        let got = point_to_solid_distance(&topo, over, cube).unwrap().distance;
+        assert!(
+            (got - 34.0_f64.sqrt()).abs() < 1e-6,
+            "{pose}: over the hole reads {got}"
+        );
+        let in_hole = place.mul_point(Point3::new(5.0, 5.0, 10.0));
+        let class = classify_point(&topo, cube, in_hole, 0.01, 1e-7).unwrap();
+        assert_eq!(class, PointClassification::Outside, "{pose}: in the hole");
+
+        let mut topo = Topology::new();
+        let cylinder = make_cylinder(&mut topo, 5.0, 10.0).unwrap();
+        brepkit_operations::heal::convert_to_bspline(&mut topo, cylinder).unwrap();
+        transform_solid(&mut topo, cylinder, &place).unwrap();
+        let beside = place.mul_point(Point3::new(-6.0, 0.0, 5.0));
+        let got = point_to_solid_distance(&topo, beside, cylinder)
+            .unwrap()
+            .distance;
+        assert!(
+            (got - 1.0).abs() < 1e-4,
+            "{pose}: beside the NURBS wall reads {got}"
+        );
+    }
+}
+
+/// A unit cube at the middle of the cavity of `make_cylinder(5, 10)`
+/// hollowed 1 thick lies `4 - sqrt(1/2)` from the cavity's wall, its corner
+/// nearest: solid-to-solid distance walks every shell.
+#[test]
+fn solid_distance_reaches_a_cavity() {
+    for (pose, place) in poses() {
+        let mut topo = Topology::new();
+        let cylinder = make_cylinder(&mut topo, 5.0, 10.0).unwrap();
+        let hollow = shell(&mut topo, cylinder, 1.0, &[]).unwrap();
+        let cube = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        transform_solid(&mut topo, cube, &Mat4::translation(-0.5, -0.5, 4.5)).unwrap();
+        transform_solid(&mut topo, hollow, &place).unwrap();
+        transform_solid(&mut topo, cube, &place).unwrap();
+        let got = brepkit_operations::distance::solid_to_solid_distance(&topo, hollow, cube)
+            .unwrap()
+            .distance;
+        let truth = 4.0 - 0.5_f64.sqrt();
+        assert!(
+            (got - truth).abs() < 1e-6,
+            "{pose}: reads {got}, truth {truth}"
+        );
+    }
+}

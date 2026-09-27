@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
@@ -115,8 +115,12 @@ pub fn point_to_face(
     let face = topo.face(face_id)?;
     match face.surface() {
         FaceSurface::Plane { normal, d } => {
-            let polygon = crate::util::face_polygon(topo, face_id)?;
-            Ok(point_to_polygon_distance(point, &polygon, *normal, *d))
+            let (dist, foot) = analytic::point_to_plane(point, *normal, *d);
+            if is_point_in_face_boundary(topo, face_id, foot)? {
+                Ok(Some((dist, foot)))
+            } else {
+                Ok(closest_point_on_wire_edges(topo, face_id, point)?)
+            }
         }
         FaceSurface::Cylinder(cyl) => {
             let (dist, closest) = analytic::point_to_cylinder(point, cyl);
@@ -477,46 +481,21 @@ fn point_to_edge(
     let (lo, hi) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
     let projection = match edge.curve() {
         EdgeCurve::Line => return Ok(point_to_segment(point, a, b)),
-        EdgeCurve::Circle(c) => point_to_curve(point, c, lo, hi),
+        EdgeCurve::Circle(c) => {
+            // The circle's nearest point, when the arc holds it, else the
+            // nearer end: exact, where a sampled search is not.
+            let nearest = brepkit_geometry::extrema::point_to_circle(point, c);
+            let t = lo + (nearest.parameter - lo).rem_euclid(std::f64::consts::TAU);
+            if t <= hi {
+                return Ok((nearest.distance, nearest.point));
+            }
+            let (da, db) = ((point - a).length(), (point - b).length());
+            return Ok(if da <= db { (da, a) } else { (db, b) });
+        }
         EdgeCurve::Ellipse(e) => point_to_curve(point, e, lo, hi),
         EdgeCurve::NurbsCurve(n) => point_to_curve(point, n, lo, hi),
     };
     Ok((projection.distance, projection.point))
-}
-
-/// Point-to-polygon distance for planar faces.
-///
-/// Projects the point onto the plane, checks if inside polygon, otherwise
-/// finds the closest point on polygon edges.
-fn point_to_polygon_distance(
-    point: Point3,
-    polygon: &[Point3],
-    normal: Vec3,
-    d: f64,
-) -> Option<(f64, Point3)> {
-    if polygon.len() < 3 {
-        return None;
-    }
-
-    let (_, projected) = analytic::point_to_plane(point, normal, d);
-
-    if crate::util::point_in_polygon_3d(&projected, polygon, &normal) {
-        let dist = (point - projected).length();
-        return Some((dist, projected));
-    }
-
-    let mut best_dist = f64::INFINITY;
-    let mut best_pt = polygon[0];
-    let n = polygon.len();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let (dist, closest) = point_to_segment(point, polygon[i], polygon[j]);
-        if dist < best_dist {
-            best_dist = dist;
-            best_pt = closest;
-        }
-    }
-    Some((best_dist, best_pt))
 }
 
 /// Distance from point to line segment.
@@ -550,6 +529,7 @@ mod tests {
 
     use super::*;
     use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface, ToroidalSurface};
+    use brepkit_math::vec::Vec3;
 
     #[test]
     fn point_to_sphere_outside() {
