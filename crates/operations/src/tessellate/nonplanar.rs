@@ -3642,22 +3642,42 @@ fn start_loop_clear_of_holes(
     let winding = last_u - first_u + closing;
     // Toward the pole the face holds: higher v for a loop run toward +u.
     let toward = if winding > 0.0 { 1.0 } else { -1.0 };
-    let clearance = |i: usize| {
+    // Each sample's clearance, visiting samples from the pole down: the
+    // set holds the u of every sample strictly nearer the pole, so the
+    // nearest in u (around the turn) is a lookup, not a scan.
+    let key = |u: f64| u.rem_euclid(TAU).to_bits();
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| (boundary_uv[b].1 * toward).total_cmp(&(boundary_uv[a].1 * toward)));
+    let mut beyond = std::collections::BTreeSet::new();
+    let mut clearance = vec![0.0; n];
+    let mut next = 0;
+    for &i in &order {
         let (u, v) = boundary_uv[i];
-        let holes = spans
+        while next < n && boundary_uv[order[next]].1 * toward > v.mul_add(toward, 1e-12) {
+            beyond.insert(key(boundary_uv[order[next]].0));
+            next += 1;
+        }
+        let at = key(u);
+        let nearest = [
+            beyond.range(..=at).next_back(),
+            beyond.range(at..).next(),
+            beyond.first(),
+            beyond.last(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|&b| wrap(f64::from_bits(b) - u).abs())
+        .fold(f64::INFINITY, f64::min);
+        clearance[i] = spans
             .iter()
             .map(|&(middle, half)| wrap(u - middle).abs() - half)
-            .fold(f64::INFINITY, f64::min);
-        (0..n)
-            .filter(|&k| k != i && (boundary_uv[k].1 - v) * toward > 1e-12)
-            .map(|k| wrap(boundary_uv[k].0 - u).abs())
-            .fold(holes, f64::min)
-    };
-    let Some(best) = (0..n).max_by(|&a, &b| clearance(a).total_cmp(&clearance(b))) else {
+            .fold(nearest, f64::min);
+    }
+    let Some(best) = (0..n).max_by(|&a, &b| clearance[a].total_cmp(&clearance[b])) else {
         return;
     };
     // Without holes a start already as clear stays put.
-    if best == 0 || (spans.is_empty() && clearance(best) <= clearance(0)) {
+    if best == 0 || (spans.is_empty() && clearance[best] <= clearance[0]) {
         return;
     }
     for point in &mut boundary_uv[..best] {
