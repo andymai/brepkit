@@ -298,15 +298,21 @@ pub fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
                 ),
             );
         }
+        // The surface lies in its control points' hull when every weight
+        // is positive; samples of it can fall short of an extreme between
+        // them, but are all there is to go on otherwise.
         FaceSurface::Nurbs(nurbs) => {
-            let (u_min, u_max) = nurbs.domain_u();
-            let (v_min, v_max) = nurbs.domain_v();
-            let n_samples = 8;
-            for iu in 0..=n_samples {
-                let u = u_min + (u_max - u_min) * (iu as f64) / (n_samples as f64);
-                for iv in 0..=n_samples {
-                    let v = v_min + (v_max - v_min) * (iv as f64) / (n_samples as f64);
-                    aabb_include(aabb, nurbs.evaluate(u, v));
+            *aabb = aabb.union(nurbs.aabb());
+            if nurbs.weights().iter().flatten().any(|&w| w <= 0.0) {
+                let (u_min, u_max) = nurbs.domain_u();
+                let (v_min, v_max) = nurbs.domain_v();
+                let n_samples = 8;
+                for iu in 0..=n_samples {
+                    let u = u_min + (u_max - u_min) * (iu as f64) / (n_samples as f64);
+                    for iv in 0..=n_samples {
+                        let v = v_min + (v_max - v_min) * (iv as f64) / (n_samples as f64);
+                        aabb_include(aabb, nurbs.evaluate(u, v));
+                    }
                 }
             }
         }
@@ -328,7 +334,7 @@ const SEAM_COINCIDENT_SQ: f64 = 1e-14;
 /// Closed NURBS edges normally place their seam vertex at the curve's domain
 /// start; when they do not, sampling from the domain origin breaks phase
 /// coherence with adjacent edges, so the vertex is projected onto the curve.
-pub(crate) fn nurbs_seam_parameter(
+pub fn nurbs_seam_parameter(
     nc: &brepkit_math::nurbs::curve::NurbsCurve,
     seam_pt: Point3,
     u0: f64,

@@ -5,7 +5,6 @@
 //! lies inside, outside, or on the boundary of a B-Rep solid.
 
 pub(crate) mod boundary;
-pub use boundary::plane_hit_inside;
 pub(crate) mod ray_surface;
 pub(crate) mod winding;
 
@@ -15,6 +14,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use crate::CheckError;
+use crate::distance::analytic;
 
 /// Result of classifying a point relative to a solid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,10 +62,7 @@ pub fn classify_point(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    // Every shell: a cavity's faces bound the solid too, and ray parity
-    // across them puts a point inside a cavity outside the solid.
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
-
+    let faces = FaceBvh::of(topo, solid)?;
     if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
@@ -140,123 +137,39 @@ pub fn classify_point(
     }
 }
 
-/// Checks if a point is within `tolerance` of any face boundary.
-///
-/// Uses analytic point-to-surface distance for all surface types, then
-/// verifies the projection falls within the face polygon.
+/// Whether `point` lies within `tolerance` of any face, measured to the
+/// face as trimmed.
 fn is_on_boundary(
     topo: &Topology,
-    faces: &[FaceId],
+    faces: &FaceBvh,
     point: Point3,
     tolerance: f64,
 ) -> Result<bool, CheckError> {
-    for &fid in faces {
-        let face = topo.face(fid)?;
-        let dist = match face.surface() {
-            FaceSurface::Plane { normal, d } => {
-                let pv = Vec3::new(point.x(), point.y(), point.z());
-                (normal.dot(pv) - d).abs()
-            }
-            FaceSurface::Cylinder(cyl) => {
-                let (u, v) = cyl.project_point(point);
-                let on_surface = cyl.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Cone(cone) => {
-                let (u, v) = cone.project_point(point);
-                let on_surface = cone.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Sphere(sph) => {
-                let (u, v) = sph.project_point(point);
-                let on_surface = sph.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Torus(tor) => {
-                let (u, v) = tor.project_point(point);
-                let on_surface = tor.evaluate(u, v);
-                (point - on_surface).length()
-            }
-            FaceSurface::Nurbs(nurbs) => {
-                match brepkit_math::nurbs::projection::project_point_to_surface(
-                    nurbs, point, tolerance,
-                ) {
-                    Ok(proj) => proj.distance,
-                    Err(_) => f64::INFINITY,
-                }
-            }
-        };
-        if dist < tolerance && matches!(face.surface(), FaceSurface::Sphere(_)) {
-            // Read as the ray count reads it (a tilted sphere face is no graph
-            // over the nearest axis plane), or within the tolerance of a rim.
-            // The tolerance is no slack across a rim's plane: a small rim's
-            // plane meets the sphere at a grazing angle, and a sliver of
-            // plane distance spans the whole mouth of its hole.
-            let on_face = match boundary::SphereRegion::of(topo, fid)? {
-                Some(region) => {
-                    region.contains(topo, fid, point)? || {
-                        let mut near_rim = false;
-                        for wid in std::iter::once(face.outer_wire())
-                            .chain(face.inner_wires().iter().copied())
-                        {
-                            let rim = crate::util::wire_polygon(topo, wid)?;
-                            near_rim |=
-                                rim.len() >= 2 && distance_to_loop(point, &rim) <= tolerance;
-                        }
-                        near_rim
-                    }
-                }
-                None => true,
-            };
-            if on_face {
-                return Ok(true);
-            }
+    for (&fid, aabb) in faces.faces.iter().zip(&faces.aabbs) {
+        // A face whose box is farther than the tolerance cannot hold the
+        // point; the trimmed distance below is costly.
+        if aabb.distance_squared_to_point(point) > tolerance * tolerance {
             continue;
         }
-        if dist < tolerance {
-            let polygon = crate::util::face_polygon(topo, fid)?;
-            if polygon.len() >= 3 {
-                let normal = boundary::polygon_normal(&polygon);
-                if crate::util::point_in_polygon_3d(&point, &polygon, &normal) {
-                    // A point in one of the face's holes, clear of its rim,
-                    // is off the face.
-                    let mut in_hole = false;
-                    for &wid in face.inner_wires() {
-                        let hole = crate::util::wire_polygon(topo, wid)?;
-                        in_hole |= hole.len() >= 3
-                            && crate::util::point_in_polygon_3d(&point, &hole, &normal)
-                            && distance_to_loop(point, &hole) > tolerance;
-                    }
-                    if in_hole {
-                        continue;
-                    }
-                    return Ok(true);
-                }
-            } else {
-                // Full-surface face (like torus with seam edges only).
-                return Ok(true);
-            }
+        // Nor can a face whose untrimmed surface is that far.
+        let to_surface = match topo.face(fid)?.surface() {
+            FaceSurface::Plane { normal, d } => analytic::point_to_plane(point, *normal, *d).0,
+            FaceSurface::Cylinder(cyl) => analytic::point_to_cylinder(point, cyl).0,
+            FaceSurface::Cone(cone) => analytic::point_to_cone(point, cone).0,
+            FaceSurface::Sphere(sph) => analytic::point_to_sphere(point, sph).0,
+            FaceSurface::Torus(tor) => analytic::point_to_torus(point, tor).0,
+            FaceSurface::Nurbs(_) => 0.0,
+        };
+        if to_surface >= tolerance {
+            continue;
+        }
+        if let Some((dist, _)) = crate::distance::point_to_face(topo, point, fid)?
+            && dist < tolerance
+        {
+            return Ok(true);
         }
     }
     Ok(false)
-}
-
-/// The distance from `point` to the closed polygon through `loop_pts`.
-fn distance_to_loop(point: Point3, loop_pts: &[Point3]) -> f64 {
-    let n = loop_pts.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (loop_pts[i], loop_pts[(i + 1) % n]);
-            let ab = b - a;
-            let len2 = ab.dot(ab);
-            let t = if len2 > 0.0 {
-                ((point - a).dot(ab) / len2).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            (point - (a + ab * t)).length()
-        })
-        .fold(f64::INFINITY, f64::min)
 }
 
 /// Classify a point relative to a solid using generalized winding numbers.
@@ -274,7 +187,7 @@ pub fn classify_point_winding(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let faces = FaceBvh::of(topo, solid)?;
     if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
@@ -302,7 +215,7 @@ pub fn classify_point_robust(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let faces = FaceBvh::of(topo, solid)?;
     if is_on_boundary(topo, &faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
@@ -317,32 +230,53 @@ pub fn classify_point_robust(
     classify_point(topo, solid, point, options)
 }
 
-/// Count total ray crossings across all faces of a shell.
-///
-/// Builds a BVH over face AABBs to skip faces whose bounding box
-/// the ray does not intersect.
+/// The solid's faces in a BVH over their bounding boxes, built once per
+/// point so each ray only tests the faces whose box it meets, with each
+/// sphere face's region kept once built.
+struct FaceBvh {
+    faces: Vec<FaceId>,
+    aabbs: Vec<brepkit_math::aabb::Aabb3>,
+    bvh: brepkit_math::bvh::Bvh,
+    spheres: Vec<std::cell::OnceCell<Option<boundary::SphereRegion>>>,
+}
+
+impl FaceBvh {
+    /// Every shell's faces: a cavity's faces bound the solid too, and ray
+    /// parity across them puts a point inside a cavity outside the solid.
+    fn of(topo: &Topology, solid: SolidId) -> Result<Self, CheckError> {
+        let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+        let aabbs = faces
+            .iter()
+            .map(|&fid| crate::util::face_aabb(topo, fid))
+            .collect::<Result<Vec<_>, _>>()?;
+        let indexed: Vec<_> = aabbs.iter().copied().enumerate().collect();
+        let bvh = brepkit_math::bvh::Bvh::build(&indexed);
+        let spheres = faces.iter().map(|_| std::cell::OnceCell::new()).collect();
+        Ok(Self {
+            faces,
+            aabbs,
+            bvh,
+            spheres,
+        })
+    }
+}
+
+/// Count a ray's crossings with the solid's faces.
 fn count_ray_crossings(
     topo: &Topology,
-    faces: &[FaceId],
+    faces: &FaceBvh,
     origin: Point3,
     direction: Vec3,
 ) -> Result<u32, CheckError> {
-    use brepkit_math::bvh::Bvh;
-
-    let face_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = faces
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
-        .collect();
-    let bvh = Bvh::build(&face_aabbs);
-
-    // query_ray returns the primitive IDs (the `i` values), which are
-    // indices into the original `faces` slice.
-    let candidates = bvh.query_ray(origin, direction);
-
     let mut crossings = 0u32;
-    for face_idx in candidates {
-        crossings += boundary::count_face_ray_crossings(topo, faces[face_idx], origin, direction)?;
+    for face_idx in faces.bvh.query_ray(origin, direction) {
+        crossings += boundary::count_face_ray_crossings(
+            topo,
+            faces.faces[face_idx],
+            origin,
+            direction,
+            &faces.spheres[face_idx],
+        )?;
     }
     Ok(crossings)
 }

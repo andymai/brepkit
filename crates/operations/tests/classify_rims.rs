@@ -111,3 +111,42 @@ fn a_ball_less_a_slab_reads_inside_up_to_its_discs() {
         }
     }
 }
+
+/// A point on a cylinder's cap just inside its rim, midway between where
+/// 32 chords of the rim would fall, lies on the cap: both classifiers read
+/// it on the boundary, upright, turned and mirrored.
+#[test]
+fn a_point_on_a_cap_just_inside_its_rim_is_on_the_boundary() {
+    for (pose, place) in poses() {
+        let mut topo = Topology::new();
+        let cylinder = make_cylinder(&mut topo, 1.0, 1.0).unwrap();
+        transform_solid(&mut topo, cylinder, &place).unwrap();
+        for k in 0..32 {
+            let t = (f64::from(k) + 0.5) * TAU / 32.0;
+            for z in [0.0, 1.0] {
+                let p = place.mul_point(Point3::new(0.999 * t.cos(), 0.999 * t.sin(), z));
+                let ops = classify_point(&topo, cylinder, p, 0.01, 1e-7).unwrap();
+                assert_eq!(
+                    ops,
+                    PointClassification::OnBoundary,
+                    "{pose} t {t} z {z}: operations reads {ops:?}"
+                );
+                let check = brepkit_check::classify::classify_point(
+                    &topo,
+                    cylinder,
+                    p,
+                    &brepkit_check::classify::ClassifyOptions {
+                        tolerance: 1e-7,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(
+                    check,
+                    brepkit_check::classify::PointClassification::OnBoundary,
+                    "{pose} t {t} z {z}: check reads {check:?}"
+                );
+            }
+        }
+    }
+}

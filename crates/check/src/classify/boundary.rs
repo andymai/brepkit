@@ -418,6 +418,9 @@ pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool
     let face = topo.face(face_id)?;
     match face.surface() {
         FaceSurface::Plane { normal, .. } => {
+            if let Some(inside) = plane_hit_inside(topo, face_id, p, *normal)? {
+                return Ok(inside);
+            }
             let verts = face_polygon(topo, face_id)?;
             Ok(verts.len() >= 3
                 && point_in_polygon_3d(&p, &verts, normal)
@@ -461,15 +464,19 @@ pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool
 /// `(u, v)` is singular at its poles).
 ///
 /// The outer loop's Newell normal points to the face's side of the loop. A
-/// loop in one plane bounds exactly the sphere's part on that side, and any
-/// other loop the points that project inside it along that normal; a wire
-/// that only runs a seam out and back bounds nothing, and the face is the
-/// whole sphere. Holes come off by [`hit_in_sphere_hole`].
+/// loop in one plane bounds exactly the sphere's part on that side; any
+/// other loop of lines and circles is read by the parity of great-circle
+/// arcs ([`SphereRims`]), and one with other curves bounds the points that
+/// project inside it along that normal. A wire that only runs a seam out
+/// and back bounds nothing, and the face is the whole sphere. Holes come
+/// off by [`hit_in_sphere_hole`] where the parity does not count them.
 pub struct SphereRegion {
     outer: Vec<Point3>,
     normal: Vec3,
     whole: bool,
     planar: bool,
+    /// Set for a loop in no one plane whose edges are all lines and circles.
+    rims: Option<SphereRims>,
 }
 
 impl SphereRegion {
@@ -487,11 +494,17 @@ impl SphereRegion {
         // at any size; a polygon test would only add the chords' sagitta and
         // miss a cap larger than a hemisphere.
         let planar = loop_is_planar(&outer, normal);
+        let rims = if whole || planar {
+            None
+        } else {
+            SphereRims::of(topo, face_id)?
+        };
         Ok(Some(Self {
             outer,
             normal,
             whole,
             planar,
+            rims,
         }))
     }
 
@@ -502,6 +515,9 @@ impl SphereRegion {
         face_id: FaceId,
         p: Point3,
     ) -> Result<bool, CheckError> {
+        if let Some(inside) = self.rims.as_ref().and_then(|rims| rims.contains(p)) {
+            return Ok(inside);
+        }
         // Projected along the loop's own normal, not the nearest world axis:
         // a tilted face is not a graph over an axis plane, and the part of it
         // past the axis's silhouette projects outside its own boundary.
@@ -509,6 +525,274 @@ impl SphereRegion {
             || ((p - self.outer[0]).dot(self.normal) >= -HALF_SPACE_EPS
                 && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
         Ok(in_outer && !hit_in_sphere_hole(topo, face_id, p, &self.outer, self.normal)?)
+    }
+}
+
+/// Angular band, in radians, within which a crossing touches a vertex, an
+/// end of the test arc or a rim tangentially, leaving its parity unread.
+const SPHERE_GRAZE: f64 = 1e-9;
+
+/// A sphere face's edges read on the sphere, holes included, and points
+/// just inside its outer wire. A circle is an arc of itself; a line is a
+/// chord standing for the great-circle arc it projects to from the centre.
+struct SphereRims {
+    center: Point3,
+    radius: f64,
+    rims: Vec<SphereRim>,
+    inside: Vec<Point3>,
+}
+
+enum SphereRim {
+    /// Centre, in-plane axes and radius of the circle, and its span.
+    Arc {
+        center: Vec3,
+        u: Vec3,
+        v: Vec3,
+        radius: f64,
+        t0: f64,
+        span: f64,
+    },
+    /// Ends, from the sphere's centre.
+    Chord(Vec3, Vec3),
+}
+
+impl SphereRims {
+    /// `None` when an edge is an ellipse or NURBS curve.
+    fn of(topo: &Topology, face_id: FaceId) -> Result<Option<Self>, CheckError> {
+        use brepkit_topology::edge::EdgeCurve;
+        let face = topo.face(face_id)?;
+        let FaceSurface::Sphere(sphere) = face.surface() else {
+            return Ok(None);
+        };
+        let (center, radius) = (sphere.center(), sphere.radius());
+        let on_sphere = |q: Point3| {
+            let d = q - center;
+            let len = d.length();
+            (len > 0.0).then(|| center + d * (radius / len))
+        };
+        let mut rims = Vec::new();
+        // (length, point on the sphere, direction of travel) at a quarter,
+        // a half and three quarters along each outer edge.
+        let mut marks: Vec<(f64, Point3, Vec3)> = Vec::new();
+        let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+        for (w, wid) in wires.enumerate() {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                // A wire that runs an edge out and back (a seam) has the
+                // face on both sides of it: the edge crosses any arc as
+                // often each way and drops out of the parity.
+                if wire
+                    .edges()
+                    .iter()
+                    .filter(|o| o.edge() == oe.edge())
+                    .count()
+                    > 1
+                {
+                    continue;
+                }
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let sign = if oe.is_forward() { 1.0 } else { -1.0 };
+                match edge.curve() {
+                    EdgeCurve::Line => {
+                        rims.push(SphereRim::Chord(a - center, b - center));
+                        if w == 0 {
+                            for f in [0.25, 0.5, 0.75] {
+                                if let Some(q) = on_sphere(a + (b - a) * f) {
+                                    marks.push(((b - a).length(), q, (b - a) * sign));
+                                }
+                            }
+                        }
+                    }
+                    EdgeCurve::Circle(c) => {
+                        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                        rims.push(SphereRim::Arc {
+                            center: c.center() - center,
+                            u: c.u_axis(),
+                            v: c.v_axis(),
+                            radius: c.radius(),
+                            t0,
+                            span: t1 - t0,
+                        });
+                        if w == 0 {
+                            // A closed rim's domain starts at its circle's
+                            // own origin, which may be its vertex.
+                            let from = if (a - b).length() < 1e-9 {
+                                c.project(a)
+                            } else {
+                                t0
+                            };
+                            for f in [0.25, 0.5, 0.75] {
+                                let t = (t1 - t0).mul_add(f, from);
+                                marks.push((
+                                    c.radius() * (t1 - t0),
+                                    c.evaluate(t),
+                                    c.tangent(t) * sign,
+                                ));
+                            }
+                        }
+                    }
+                    EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
+                }
+            }
+        }
+        let mut region = Self {
+            center,
+            radius,
+            rims,
+            inside: Vec::new(),
+        };
+        // The wire runs about the sphere's outward normal, so the face lies
+        // to the left of each edge seen from outside. A point that far left
+        // is inside only when the arc to it from as far right crosses the
+        // edge alone: on a face narrower than the step it crosses the far
+        // side too, and the step shrinks.
+        marks.sort_by(|x, y| y.0.total_cmp(&x.0));
+        for (len, mid, along) in marks.into_iter().take(6) {
+            let n = mid - center;
+            let Ok(left) = n.cross(along).normalize() else {
+                continue;
+            };
+            let mut step = 1e-3 * len.min(radius);
+            for _ in 0..3 {
+                if let (Some(q), Some(out)) =
+                    (on_sphere(mid + left * step), on_sphere(mid - left * step))
+                    && region.crossings(out, q) == Some(1)
+                {
+                    region.inside.push(q);
+                    break;
+                }
+                step /= 16.0;
+            }
+        }
+        Ok(Some(region))
+    }
+
+    /// Whether `p`, on the sphere, lies on the face: the great-circle arc
+    /// from `p` to a point inside crosses the edges an even number of
+    /// times. The points inside vote, and at least two must carry it;
+    /// `None` on a tie, or when fewer than two arcs clear the vertices.
+    fn contains(&self, p: Point3) -> Option<bool> {
+        let (mut on, mut off) = (0_u32, 0_u32);
+        for &q in &self.inside {
+            let Some(crossings) = self.crossings(p, q) else {
+                continue;
+            };
+            if crossings % 2 == 0 {
+                on += 1;
+            } else {
+                off += 1;
+            }
+            if on >= 2 && off == 0 {
+                return Some(true);
+            }
+            if off >= 2 && on == 0 {
+                return Some(false);
+            }
+        }
+        match on.cmp(&off) {
+            std::cmp::Ordering::Greater if on >= 2 => Some(true),
+            std::cmp::Ordering::Less if off >= 2 => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Crossings of the minor great-circle arc from `p` to `q` with the
+    /// edges; `None` when it touches a vertex or an edge tangentially,
+    /// or when `p` lies on an edge.
+    fn crossings(&self, p: Point3, q: Point3) -> Option<u32> {
+        let (pv, qv) = (p - self.center, q - self.center);
+        let rr = self.radius * self.radius;
+        let g = pv.cross(qv);
+        if g.length() < SPHERE_GRAZE * rr {
+            return None;
+        }
+        let g = g.normalize().ok()?;
+        // Whether `x`, on the sphere and in the test arc's plane, lies on
+        // the arc between `p` and `q`.
+        let on_path = |x: Vec3| -> Option<bool> {
+            let (s0, s1) = (pv.cross(x).dot(g) / rr, x.cross(qv).dot(g) / rr);
+            if (s0.abs() < SPHERE_GRAZE && pv.dot(x) > 0.0)
+                || (s1.abs() < SPHERE_GRAZE && qv.dot(x) > 0.0)
+            {
+                return None;
+            }
+            Some(s0 > 0.0 && s1 > 0.0)
+        };
+        let mut count = 0;
+        for rim in &self.rims {
+            match *rim {
+                SphereRim::Arc {
+                    center,
+                    u,
+                    v,
+                    radius,
+                    t0,
+                    span,
+                } => {
+                    // g . x(t) = 0 along the circle x(t) = center + radius
+                    // (cos t u + sin t v).
+                    let (a, b, d) = (radius * g.dot(u), radius * g.dot(v), g.dot(center));
+                    let m = a.hypot(b);
+                    if m < SPHERE_GRAZE * self.radius {
+                        if d.abs() < SPHERE_GRAZE * self.radius {
+                            return None;
+                        }
+                        continue;
+                    }
+                    let c = -d / m;
+                    if (c.abs() - 1.0).abs() <= SPHERE_GRAZE {
+                        return None;
+                    }
+                    if c.abs() > 1.0 {
+                        continue;
+                    }
+                    let (phi, w) = (b.atan2(a), c.acos());
+                    let closed = span >= std::f64::consts::TAU - 1e-12;
+                    for t in [phi + w, phi - w] {
+                        let rel = (t - t0).rem_euclid(std::f64::consts::TAU);
+                        if !closed
+                            && (rel < SPHERE_GRAZE
+                                || std::f64::consts::TAU - rel < SPHERE_GRAZE
+                                || (rel - span).abs() < SPHERE_GRAZE)
+                        {
+                            return None;
+                        }
+                        if rel <= span && on_path(center + (u * t.cos() + v * t.sin()) * radius)? {
+                            count += 1;
+                        }
+                    }
+                }
+                SphereRim::Chord(a, b) => {
+                    let h = a.cross(b);
+                    let Ok(h) = h.normalize() else {
+                        continue;
+                    };
+                    let Ok(dir) = g.cross(h).normalize() else {
+                        return None;
+                    };
+                    let x0 = dir * self.radius;
+                    for x in [x0, -x0] {
+                        let (s0, s1) = (
+                            a.cross(x).dot(h) / (a.length() * self.radius),
+                            x.cross(b).dot(h) / (b.length() * self.radius),
+                        );
+                        if (s0.abs() < SPHERE_GRAZE && a.dot(x) > 0.0)
+                            || (s1.abs() < SPHERE_GRAZE && b.dot(x) > 0.0)
+                        {
+                            return None;
+                        }
+                        if s0 > 0.0 && s1 > 0.0 && on_path(x)? {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Some(count)
     }
 }
 
@@ -523,11 +807,18 @@ fn count_3d_polygon_crossings(
     origin: Point3,
     direction: Vec3,
     roots: &SmallVec<[f64; 4]>,
+    region: &std::cell::OnceCell<Option<SphereRegion>>,
 ) -> Result<u32, CheckError> {
     if roots.is_empty() {
         return Ok(0);
     }
-    let Some(region) = SphereRegion::of(topo, face_id)? else {
+    let region = if let Some(region) = region.get() {
+        region
+    } else {
+        let built = SphereRegion::of(topo, face_id)?;
+        region.get_or_init(|| built)
+    };
+    let Some(region) = region else {
         return Ok(0);
     };
     let mut crossings = 0u32;
@@ -544,7 +835,8 @@ fn count_3d_polygon_crossings(
 /// For plane faces, uses direct ray-plane + 3D polygon containment.
 /// For analytic curved faces, uses ray-surface intersection + UV containment.
 /// For sphere faces, uses 3D polygon containment (avoids UV pole singularity).
-/// For NURBS faces, uses line-surface intersection.
+/// For NURBS faces, uses line-surface intersection. `sphere` keeps a sphere
+/// face's region from one ray to the next.
 ///
 /// # Errors
 ///
@@ -555,6 +847,7 @@ pub fn count_face_ray_crossings(
     face_id: FaceId,
     origin: Point3,
     direction: Vec3,
+    sphere: &std::cell::OnceCell<Option<SphereRegion>>,
 ) -> Result<u32, CheckError> {
     let face = topo.face(face_id)?;
     match face.surface() {
@@ -592,7 +885,7 @@ pub fn count_face_ray_crossings(
         FaceSurface::Sphere(sph) => {
             let sph = sph.clone();
             let roots = ray_surface::ray_sphere(origin, direction, &sph);
-            count_3d_polygon_crossings(topo, face_id, origin, direction, &roots)
+            count_3d_polygon_crossings(topo, face_id, origin, direction, &roots, sphere)
         }
         FaceSurface::Torus(tor) => {
             let tor = tor.clone();

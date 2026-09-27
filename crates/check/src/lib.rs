@@ -15,7 +15,7 @@ pub mod classify;
 pub mod distance;
 pub mod error;
 pub mod properties;
-pub mod util;
+pub(crate) mod util;
 pub mod validate;
 
 pub use error::CheckError;

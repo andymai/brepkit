@@ -727,9 +727,9 @@ fn boolean_inner(
                 // Intersect's mirror hazard: GFA could emit a piece that is not
                 // part of A∩B at all. Reject when any component's AABB-centre
                 // sample classifies OUTSIDE either operand — an intersection
-                // piece must lie inside both. The winding-number classifier
-                // (unlike the analytic one) handles multi-piece operands, the
-                // very case this acceptance exists for; a classification error
+                // piece must lie inside both. The ray-cast classifier (unlike
+                // the analytic one) handles multi-piece operands, the very
+                // case this acceptance exists for; a classification error
                 // rejects (this acceptance is purely an optimization, so
                 // unclassifiable geometry keeps the old fallback behaviour).
                 // `OnBoundary` passes — thin clip pieces legitimately touch

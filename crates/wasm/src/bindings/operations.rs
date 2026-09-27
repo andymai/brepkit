@@ -1277,7 +1277,8 @@ impl BrepKernel {
 
     // ── Point Classification ──────────────────────────────────────
 
-    /// Classify a point relative to a solid using generalized winding numbers.
+    /// Classify a point relative to a solid by the same ray cast as
+    /// `classifyPoint`.
     ///
     /// Returns "inside", "outside", or "boundary".
     #[wasm_bindgen(js_name = "classifyPointWinding")]
@@ -1297,7 +1298,8 @@ impl BrepKernel {
         Ok(classify_to_string(result))
     }
 
-    /// Classify a point using robust dual-method (winding + ray casting).
+    /// Classify a point relative to a solid by the same ray cast as
+    /// `classifyPoint`.
     ///
     /// Returns "inside", "outside", or "boundary".
     #[wasm_bindgen(js_name = "classifyPointRobust")]

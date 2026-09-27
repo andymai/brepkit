@@ -121,16 +121,19 @@ fn ball_in_a_rings_hole() {
         };
         assert_eq!(at(&topo, piece, 5.0, 0.0), far, "{label}: far side");
         assert_eq!(at(&topo, piece, 0.0, 0.0), middle, "{label}: middle");
-        // Off the ball's equator plane, where its hemispheres meet on chords.
-        assert_eq!(
-            at(&topo, piece, 2.8, 0.3),
-            if op == BooleanOp::Cut {
-                PointClassification::Outside
-            } else {
-                PointClassification::Inside
-            },
-            "{label}: tube inside the ball"
-        );
+        // In the tube inside the ball, on the ball's equator plane, where its
+        // hemispheres meet on chords, and off it.
+        for z in [0.0, 0.3] {
+            assert_eq!(
+                at(&topo, piece, 2.8, z),
+                if op == BooleanOp::Cut {
+                    PointClassification::Outside
+                } else {
+                    PointClassification::Inside
+                },
+                "{label}: tube inside the ball at z {z}"
+            );
+        }
     }
 }
 
