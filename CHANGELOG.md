@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.66](https://github.com/andymai/brepkit/compare/v4.0.65...v4.0.66) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** keep a solid's co-endpoint edges apart ([#1849](https://github.com/andymai/brepkit/issues/1849)) ([85228bd](https://github.com/andymai/brepkit/commit/85228bd25d664e4c096c7e2b31e3284b0a287c3b))
+
 ## [4.0.65](https://github.com/andymai/brepkit/compare/v4.0.64...v4.0.65) (2026-09-27)
 
 
