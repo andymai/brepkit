@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790487250111,
+  "lastUpdate": 1790488585876,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43091,6 +43091,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42768840,
             "range": "± 114563",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c91bc6989b3f3c8db2b5e4667a4f454ac57281e",
+          "message": "fix(algo): keep the corner patches a column entering the ball from below leaves (#1823)\n\nThe ball and a column entering it from below now come out exact in all\nthree ops, keeping the small patches the column's corners leave on the\nlower hemisphere.\n\n## What was wrong\n\n- `make_sphere(3, 32)` and a `make_box(4.1, 4.1, 10)` column at `(-2.05,\n-2.05, -1)` fell back to a mesh for all three operations. Although the\ncolumn’s bottom corners lie outside the ball, its corner edges pierce\nthe sphere at `z = -0.77`. Each corner therefore contains a small lower\nhemisphere patch bounded by two wall arcs and a few degrees of the floor\ncircle, whose radius is `sqrt(8)` at `z = -1`.\n\n- `restrict_curves_to_faces` samples a closed section circle 24 times,\nthen refines using a density scaled to the smaller face. It treated the\nfloor circle as a graze because no two consecutive samples lay on both\nfaces. The four valid arcs are only about 2.8 degrees each. Dropping the\ncircle left the corner loops without floor arcs, so the lower hemisphere\nwas cut by sections but split into nothing (`restrict 1 -> 0`).\n\n- With those floor arcs present, the sections form closed loops of open\narcs that do not reach the equator. The no-seam shortcuts,\n`split_noseam_face_direct` and then `split_noseam_by_arrangement`, only\nplace chains that reach it.\n\n## What this does\n\n- A closed circle that fails the sampled test now proceeds whole to\ncircle splitting when `closed_circle_boundary_crossings` finds two or\nmore exact boundary crossings and the midpoint of an arc between two of\nthem lies on both face extents. A circle of an unbounded surface past\nits face (in the pose sweep's frustum case, a cone's circle in a box's\nend plane) lies on only one face, so this test keeps it out; that case\nis identical to main face by face.\n\n- `point_on_face_edges` also excludes an arc when its midpoint is within\n`1e-5 * (1 + radius)` of either face’s edges, read as 256 chords each\nwidened by its own sagitta (a closed rim's chords run up to `7.5e-5 R`\ninside it). Where two coaxial annular wedges cross, one wedge's floor\nand ceiling meet the shared cylinder along arcs that are already its\nboundary edges. Retaining those arcs made\n`kumiko_wedge_strut_pair_fuse_is_exact` produce 10 cylinder faces\ninstead of the pinned 6.\n\n- A sphere face whose sections all end away from its boundary and form\nno chain winding around the pole now uses\n`split_face_with_internal_loops`. Each loop is carved as both a hole in\nthe face and a disc of its own.\n\n## Verification\n\n- Intersect, ball less column, and column less ball are exact with 10,\n7, and 22 faces. All are valid and watertight in all five pose-sweep\nposes, with no misread grid point. Volumes are 58.1579, 54.9395, and\n109.9421, matching numerical integrations of 58.15786, 54.93947, and\n109.94214. Only these 15 of the sweep’s 270 results changed.\n\n- `a_column_entering_the_ball_from_below_keeps_its_corner_patches`\ncovers all three operations upright and turned, checking face counts,\nvalidity, watertightness, volume within `1e-7` of the truth, and the\nclass of a point in a corner patch, just under it past the floor, in the\ncolumn over the ball, and in the ball under the floor. It fails if\neither fix is reverted. The unit test\n`a_point_on_a_closed_rim_reads_on_the_face_edge_between_chords` reads 64\npoints on a closed rim of radius 3 as on the face's edge and a point\n0.01 inside as off it; without the sagitta widening it fails.\n\n- The workspace suite passes: 3170 passed, 20 skipped. Lint is clean.\nThe roadmap’s column-from-below row is closed.",
+          "timestamp": "2026-09-27T05:53:35Z",
+          "tree_id": "9e957cf76428b790d240fa7825fa8a8efb92bf8a",
+          "url": "https://github.com/andymai/brepkit/commit/0c91bc6989b3f3c8db2b5e4667a4f454ac57281e"
+        },
+        "date": 1790488581327,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1012130,
+            "range": "± 2646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1095269,
+            "range": "± 7479",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13327,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 753287,
+            "range": "± 878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42869464,
+            "range": "± 160532",
             "unit": "ns/iter"
           }
         ]
