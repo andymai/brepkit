@@ -424,6 +424,7 @@ pub fn try_analytic_spine_sweep(
                     angle,
                 } => revolution_band_surface(
                     &EdgeCurve::Line,
+                    true,
                     p0_start,
                     p0_end,
                     p1_start,
