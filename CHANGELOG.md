@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.54](https://github.com/andymai/brepkit/compare/v4.0.53...v4.0.54) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** start a sphere face's pole closure clear of its boundary ([#1825](https://github.com/andymai/brepkit/issues/1825)) ([8811475](https://github.com/andymai/brepkit/commit/8811475424f6e585e99b0d1787fe1ffaa15304dd))
+
 ## [4.0.53](https://github.com/andymai/brepkit/compare/v4.0.52...v4.0.53) (2026-09-27)
 
 
