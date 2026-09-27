@@ -137,7 +137,16 @@ fn ball_cut_by_a_plane_clear_of_its_equator() {
 fn ball_cut_by_a_plane_across_its_equator() {
     let r = 3.0_f64;
     // The half-space x' > x0 of a frame tilted about y, then turned about z.
-    for (x0, tilt) in [(0.5, 0.0), (-1.2, 0.0), (2.5, 0.0), (0.0, 0.3)] {
+    for (x0, tilt) in [
+        (0.5, 0.0),
+        (-1.2, 0.0),
+        (2.5, 0.0),
+        (0.0, 0.3),
+        (0.5, 0.3),
+        (-1.2, 0.6),
+        (1.2, 0.2),
+        (-0.3, 1.2),
+    ] {
         for turn in [0.0_f64, 0.3, 1.0] {
             for keep_past in [true, false] {
                 let label = format!(
