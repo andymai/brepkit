@@ -5071,8 +5071,8 @@ fn closed_circle_boundary_crossings(
     // piece (a co-endpoint lens) and `merge_duplicate_edges` would fold the
     // pair, collapsing the lens region into a zero-area slit face. Inserting
     // the angular midpoint keeps the section as two sub-arcs, with no shared
-    // endpoint pair. So for a span between two seam crossings, which shares
-    // its ends with the seam arc under it.
+    // endpoint pair. A span between two seam crossings is split the same
+    // way: it shares both ends with the seam arc under it.
     let n = hits.len();
     if n >= 2 {
         let mut mids: Vec<(f64, Point3)> = Vec::new();
