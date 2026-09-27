@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790477425705,
+  "lastUpdate": 1790479516878,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42605,6 +42605,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30897976,
             "range": "± 862651",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "518ff461e1afabc2c23eee809014eaaca32fc4e0",
+          "message": "fix(algo): keep a section circle's crossings with a boundary that is not inscribed in it (#1814)\n\nSection circle crossings are now preserved unless the boundary is an\ninscribed polygon, keeping the narrow column and ball booleans exact,\nvalid, and watertight.\n\n## What was wrong\n\n- On main, `make_sphere(3, 32)` and `make_box(3.6, 3.6, 10)` at `(-1.8,\n-1.8, -5)`, whose corners lie inside the ball, fell back to planar\nmeshes in every operation. Intersect produced 352 faces, ball less\ncolumn produced 460, and Fuse produced 466.\n\n- `closed_circle_boundary_crossings` treated a face boundary as\ncoincident with a section circle when `hits_are_inscribed_polygon` found\nits hits evenly spread, with each gap within a quarter of an even gap.\nEach wall's section circle crosses its two vertical edges at four points\nseparated by 83 and 97 degrees, so the crossings were dropped. Emitted\narcs then extended past the wall. For example, an arc on `y = -1.8` ran\nfrom `(2.4, -1.8, 0)` to `(0, -1.8, 2.4)`, while the wall edges are at\n`x = ±1.8`. The result was rejected with 12 non-manifold edges.\n\n## What this does\n\n- The new `boundary_is_inscribed` helper requires evenly spread hits,\nevery hit at one of the boundary's own vertices within 100 times the\nlinear tolerance, and every edge midpoint within the circle.\n\n- Crossings through the middle of an edge are retained. Vertex hits are\nalso retained when the boundary bulges outside the circle between those\nvertices.\n\n## Verification\n\n- The original three operations now produce 6, 6, and 12 faces. Each\nresult is exact, valid, and watertight.\n\n- The pose sweep adds `ball | column 1.8`. Its volume truth integrates\nthe ball's chord over the square using Simpson integration with 1000\npanels per side, converged to about 3e-11. All 15 results across five\nposes and three operations change from mesh fallbacks to exact, valid,\nwatertight results with no misread grid point. Mesh volume is within\n9.9e-4 of truth, compared with errors up to 2.6e-2.\n\n- Only those 15 results changed among the sweep's 270 results. Three\nneighboring column cases, offset, offset and turned, and entering from\nbelow, remain fallback roadmap rows without volume truth.\n\n- With the branch rebased onto main, the check crate measures all 15\nresults within 2.0e-12 of the Simpson truth. The workspace suite passes\nwith 3166 tests run, 3166 passed, and 20 skipped. Lint is clean.\n\n- `a_column_narrower_than_the_ball_stays_exact` covers ball within\ncolumn, ball less column, and column less ball, upright and turned.\nEvery result is exact, valid, and watertight, classifies a point in each\nregion correctly, and measures within 2e-3 of the ball's chords over the\ncolumn. On main it fails with `within, upright: fell back to a mesh`.\n\n- `corners_on_the_circle_are_crossings_unless_the_boundary_stays_inside`\ndrops unit-circle hits for an inscribed square and retains them for a\nhexagon through the same four corners whose other two corners lie\noutside the circle. The hexagon fails without the midpoint condition.\n\n- The roadmap closes the narrow-column row and links the two neighboring\nrows to their pose sweep cases. The entering-from-below row now records\nfallback in all three operations.",
+          "timestamp": "2026-09-27T03:22:59Z",
+          "tree_id": "beb10f345941d680587f3aae49438038dca7dc17",
+          "url": "https://github.com/andymai/brepkit/commit/518ff461e1afabc2c23eee809014eaaca32fc4e0"
+        },
+        "date": 1790479511887,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 545529,
+            "range": "± 9451",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 597137,
+            "range": "± 2196",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7678,
+            "range": "± 56",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 405629,
+            "range": "± 2109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26530184,
+            "range": "± 98956",
             "unit": "ns/iter"
           }
         ]
