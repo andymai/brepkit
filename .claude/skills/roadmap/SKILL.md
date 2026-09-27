@@ -192,19 +192,30 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Heal's sphere recognition keeps an inward NURBS face's side** (`crates/heal/src/custom/convert_to_elementary.rs` near line 65; found by reading, not yet reproduced) | The NURBS face's surface is swapped for the recognized sphere with its flag and wire kept, without comparing the NURBS normal (`Su x Sv`) with the sphere's outward normal: a patch whose parameterization faces inward (a mirrored NURBS sphere patch, whose transform flips the flag and keeps the wire) would come out wound against its new surface. Next: pin it with a mirrored NURBS patch, and turn the flag and the wires over when the normals oppose |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere. A plane face ending at the equator chords reads its region by them while the ray cast reads the sphere faces by the arc, so a ray through the equator plane between chords and circle loses a crossing (`sphere_ray_cast.rs` skips those rays) |
 | **Point classification reads plane discs and cylinder walls through chords** (grid probe `zz_mirrod` in the session scratchpad) | Both `classify_point`s test a ray's hit on a plane or cylinder face against its boundary sampled into chords (32 per closed circle), so a hit within a sagitta of a circular rim is misread: on the exact mirrored ball less the slab `1 < z < 2` (#1775), a point under the slab reads Outside because two of its rays cross the slab's discs within 0.006 of their rims. The operations classifier also votes with two rays and needs both for Inside, so one miss reads Outside, and it reads a point as on the boundary by its distance to a sphere face's whole sphere, trimmed or not. A sphere face bounded by one wire of two rims joined by a seam (a band, as a file may store a ball between two planes) is misread by both: neither planar nor a seam alone, it takes the polygon path along a Newell normal the two rims mostly cancel; a cap bounded by its rim and a seam takes the same path, with the rim's chords. Dropping the seam's out-and-back run from the loop would leave the rims to the side tests |
-| **Stable row defect: a slab through a major-arc face's wall returns wrong solids** (harness: `a_slab_through_a_notched_wall_keeps_it_exact` in `crates/operations/tests/extrude_major_arcs.rs`, whose outline list the failing faces of that file extend) | Each face extruded 0.2, cut by the slab `z > 0.1` or intersected with it, arcs stored three ways, upright and turned, the same on main: the major segment (a chord and its 323 degree arc) cuts to a mesh (26 faces, 0.77292 against 0.77996) and intersects to an open mesh measuring 0.15998 upright and 1.53183 turned; the plate with that segment as a hole cuts, turned, to a VALID solid measuring 7.85356 against 9.22004 (silently wrong), and intersects to a mesh (30 faces); the unit disc bounded by arcs of 300 and 60 degrees cuts and intersects to open meshes (0.34907 and 0.91021 cut, 0.27925 and 0.28189 intersect, against 0.31416). The silently wrong plate comes first. The engine still reads an open circle edge as its shorter arc in places (`shorter_arc_delta` in `crates/algo/src/builder/pcurve_compute.rs`, the face splitter); undug beyond the notch |
+| **A NURBS arc past its vertices, stored against its edge, falls back when sliced** (the major segment of `a_nurbs_arc_past_its_vertices_extrudes_to_its_area` with its arc built from `vb` to `va` and used reversed, so its domain runs 0.9906 to 0.0094) | Safe fallback, the same on main: the extrusion is valid, but its cut by the slab `z > 0.1` aborts the analytic assembly ("open 1-face growth shell spans the result") and returns a 70-face mesh measuring 0.776323 against 0.779961. Stored with the edge, the same arc slices exactly. Undug |
 | **An IGES round trip drops a cylinder wall** (`make_cylinder(1, 1)` less the box over `x > 0.5`) | The 240-degree wall comes back as three planes and the solid measures 0.166667 against 2.527408; a STEP round trip keeps the cylinder. On main as well. Undug |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
 
+- **A slab through a major-arc face's wall returned wrong solids (CLOSED 2026-09-27; pin `a_slab_through_a_major_arc_wall_keeps_it_exact` in `crates/operations/tests/extrude_major_arcs.rs`)**:
+  a face whose chord and arc (or two arcs) share both endpoints, extruded
+  and sliced, lost the region between them: the assembler keys duplicate
+  edges on their endpoints and welded the pair (the TERMINAL merge-key row
+  above), so a plate with a major-segment hole came back valid at 7.85356
+  against 9.22004 and the two-arc disc meshed open. The pave filler now
+  paves at its middle each curved edge of a solid that shares both
+  endpoints with another of its edges along a different path, and faces
+  no section crosses take the split pieces of open curved edges as they
+  take a line's.
+
 - **The upright slab Cut of a ball read invalid (CLOSED 2026-09-27, re-measured; pin `a_ball_less_a_slab_keeps_both_pieces` in `crates/operations/tests/sphere_plane_cut.rs`)**:
   its two pieces share one shell, which the validator now reads piece by
   piece; the cut is valid, watertight and exact upright, turned and
   mirrored, clear of the equator or across it.
 
-- **A slab through a notched wall fell back to a mesh (CLOSED 2026-09-27; pin `a_slab_through_a_notched_wall_keeps_it_exact` in `crates/operations/tests/extrude_major_arcs.rs`)**:
+- **A slab through a notched wall fell back to a mesh (CLOSED 2026-09-27; pin `a_slab_through_a_major_arc_wall_keeps_it_exact` in `crates/operations/tests/extrude_major_arcs.rs`)**:
   the keyhole extruded 0.2 less the slab `z > 0.1` came back as 30 planes
   measuring 2.827083 against 2.820039. The slab's face inside the keyhole
   outline is enclosed by a loop that is not convex, and the internal-loops
