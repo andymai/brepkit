@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.47](https://github.com/andymai/brepkit/compare/v4.0.46...v4.0.47) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** sample a sphere piece's interior in one u window ([#1809](https://github.com/andymai/brepkit/issues/1809)) ([77bb3f7](https://github.com/andymai/brepkit/commit/77bb3f7c7c4e14fd419ac7e847d608bd3fa233fb))
+
 ## [4.0.46](https://github.com/andymai/brepkit/compare/v4.0.45...v4.0.46) (2026-09-27)
 
 
