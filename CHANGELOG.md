@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.65](https://github.com/andymai/brepkit/compare/v4.0.64...v4.0.65) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** sample a notched loop's piece inside the loop ([#1846](https://github.com/andymai/brepkit/issues/1846)) ([e0102bb](https://github.com/andymai/brepkit/commit/e0102bb885ec2a25383fe53a61637c4f9d7567b4))
+
 ## [4.0.64](https://github.com/andymai/brepkit/compare/v4.0.63...v4.0.64) (2026-09-27)
 
 
