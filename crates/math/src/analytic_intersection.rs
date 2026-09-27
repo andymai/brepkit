@@ -2597,24 +2597,33 @@ fn ruling_cone_cylinder(
 }
 
 /// A torus and a cylinder whose axes are not parallel, where every ruling
-/// of the cylinder meets the torus the same even number of times (a rod
-/// through the ring's tube): a ruling meets the torus where a quartic in its
-/// parameter vanishes, and each of its roots, taken in order, sweeps one
+/// of the cylinder meets the torus the same nonzero even number of times (a
+/// rod through the ring's tube): a ruling meets the torus where a quartic in
+/// its parameter vanishes, and each of its roots, taken in order, sweeps one
 /// closed loop around the cylinder. `None` (the marcher's case) when the
-/// count varies between rulings, where the curve turns back between them.
+/// count varies between rulings, where the curve turns back between them,
+/// checked on a scan finer than the sampling so a narrow window of missing
+/// rulings is not stepped over, and for a spindle torus, whose quartic also
+/// holds its inner lemon.
 fn ruling_torus_cylinder(
     torus: &ToroidalSurface,
     cyl: &CylindricalSurface,
     torus_first: bool,
 ) -> Option<Vec<IntersectionCurve>> {
-    if cyl.axis().dot(torus.z_axis()).abs() > 1.0 - 1e-9 {
+    if cyl.axis().dot(torus.z_axis()).abs() > 1.0 - 1e-9
+        || torus.minor_radius() >= torus.major_radius()
+    {
         return None;
     }
-    let rows: Vec<Vec<f64>> = (0..RULING_SAMPLES)
-        .map(|i| intersect_line_torus(torus, cyl.evaluate(ruling_u(i), 0.0), cyl.axis()))
-        .collect();
+    let roots = |u: f64| intersect_line_torus(torus, cyl.evaluate(u, 0.0), cyl.axis());
+    let rows: Vec<Vec<f64>> = (0..RULING_SAMPLES).map(|i| roots(ruling_u(i))).collect();
     let count = rows[0].len();
-    if count == 0 || count % 2 == 1 || rows.iter().any(|r| r.len() != count) {
+    let scan = WINDOW_SCAN * RULING_SAMPLES;
+    #[allow(clippy::cast_precision_loss)]
+    if count == 0
+        || count % 2 == 1
+        || (0..scan).any(|k| roots(TAU * (k as f64 + 0.5) / scan as f64).len() != count)
+    {
         return None;
     }
     let loops: Vec<Vec<Point3>> = (0..count)
@@ -3741,6 +3750,17 @@ mod tests {
             CylindricalSurface::new(Point3::new(0.5, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0), 0.6)
                 .unwrap();
         assert!(ruling_torus_cylinder(&ring, &high, true).is_none());
+        // Its top clears the tube only between two sampled rulings.
+        let grazing =
+            CylindricalSurface::new(Point3::new(0.5, 0.0, 0.9001), Vec3::new(0.0, 1.0, 0.0), 0.6)
+                .unwrap();
+        assert!(ruling_torus_cylinder(&ring, &grazing, true).is_none());
+        // A spindle torus's quartic also holds its inner lemon.
+        let spindle = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0, 2.0).unwrap();
+        let thin =
+            CylindricalSurface::new(Point3::new(0.3, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 0.2)
+                .unwrap();
+        assert!(ruling_torus_cylinder(&spindle, &thin, true).is_none());
     }
 
     #[test]
