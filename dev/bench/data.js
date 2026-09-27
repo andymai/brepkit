@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790494379389,
+  "lastUpdate": 1790496050936,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43415,6 +43415,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42549641,
             "range": "± 568773",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f08838897fb0f24bf1951e0db20597c27a8a5959",
+          "message": "fix(algo): split a section arc between two seam crossings at its midpoint (#1829)\n\nSection arcs between two seam crossings are now split at their angular\nmidpoint, so a ball cut by a plane tilted off its centre stays exact at\nevery turn, and the battery's exact results rise from 375 to 483 of 540.\n\n## What was wrong\n\n- On main, `make_sphere(3, 32)` cut by a plane tilted off its centre\nfell back to a mesh at most turns about `z`. For the half-space `x >\n0.5` in a frame tilted 0.3 about `y`, turns 0 and 0.3 were exact, while\n0.6, 1, 1.4, 2 and 3 fell back. The plane at `x = 1.2` tilted 0.2\nbehaved the same way.\n\n- On a hemisphere, the section is one arc from seam to seam, sharing\nboth endpoints with the seam arc beneath it. This produced two-edge lens\nregions, which were rejected as slivers. When retained,\n`merge_duplicate_edges` folded the section arc into the seam arc and\n`remove_doubled_faces` dropped both faces. The face-face phase split the\nsection arc only when it spanned more than half a turn, explaining why\nvertical planes and some turns passed.\n\n## What this does\n\n- `closed_circle_boundary_crossings` now inserts the angular midpoint in\nevery span between two seam crossings, matching the existing handling\nfor a span between two hits of one boundary edge.\n\n## Verification\n\n- A battery of 180 placements of `make_box(10, 10, 10)` against\n`make_sphere(3, 32)` covered half-spaces at 7 offsets, 5 tilts and 3\nturns, plus 75 box corners, with three operations each. Exact results\nincreased from 375 to 483 of 540. No results became newly invalid, open\nor volume-inconsistent.\n\n- In the pose sweep, three ball-less-column results gained two faces in\nall five poses: `ball rx0.35 | column 2.5` increased from 10 to 12,\nwhile `ball rx0.35 | column 2.5 to 2.8` and `ball | column rx-0.2 to\n2.93093` increased from 12 to 14. A cap past a column wall remains two\nfaces along the ball's equator. These results remain exact, valid and\nwatertight with unchanged volumes, with errors at most 8.9e-12. Every\nother result is unchanged, and the worst sweep volume error remains\n7.2e-10.\n\n- `ball_cut_by_a_plane_across_its_equator` adds four tilted planes off\nthe centre: `x = 0.5` tilted 0.3, `-1.2` tilted 0.6, `1.2` tilted 0.2,\nand `-0.3` tilted 1.2. Each is tested at turns 0, 0.3 and 1.0 while\nkeeping either side. Without the fix, `x0 0.5, tilt 0.3, turned 1,\nkeeping past: plane faces` fails.\n\n- The workspace suite passes: 3176 tests run, 3176 passed, 20 skipped.\nLint is clean.\n\n- The roadmap closes this case and narrows the chordal-equator row to\nthe remaining fallbacks: a plane through the axis, and corners at `(0,\n0, -1)` and `(-0.5, 0.5, 0)`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a bug where a ball cut by a plane tilted off its centre fell back\nto a mesh at most turns about z. The section arc between two seam\ncrossings is now split at its angular midpoint, matching how a span\nbetween two hits of one boundary edge is already split.\n\n- The shared endpoints let `merge_duplicate_edges` fold the section arc\ninto the seam arc, and `remove_doubled_faces` dropped both faces.\n- Exact results in the sphere-box battery rise from 375 to 483 of 540,\nwith no newly invalid, open, or volume-inconsistent results.\n- `ball_cut_by_a_plane_across_its_equator` now covers four tilted planes\noff the centre, each tested at three turns while keeping either side.\n\n<sup>Written for commit 84966309b5e2172c234262fec75345f361b5d603.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1829?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-27T07:58:08Z",
+          "tree_id": "c75e3da3de1b83213a206b31ae736d0e16c7ad7f",
+          "url": "https://github.com/andymai/brepkit/commit/f08838897fb0f24bf1951e0db20597c27a8a5959"
+        },
+        "date": 1790496046477,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1024725,
+            "range": "± 1980",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1108281,
+            "range": "± 1765",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13178,
+            "range": "± 710",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 766334,
+            "range": "± 2896",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42889657,
+            "range": "± 339143",
             "unit": "ns/iter"
           }
         ]
