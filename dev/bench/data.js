@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790483340498,
+  "lastUpdate": 1790484330706,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42821,6 +42821,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42950266,
             "range": "± 2781285",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "653f79cee6d091393708dd672c60422e536d92f8",
+          "message": "chore(main): release 4.0.50 (#1818)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.50](https://github.com/andymai/brepkit/compare/v4.0.49...v4.0.50)\n(2026-09-27)\n\n\n### Bug Fixes\n\n* **operations:** count a face's boundary pieces, not its wires, in the\nEuler check ([#1817](https://github.com/andymai/brepkit/issues/1817))\n([f47ea91](https://github.com/andymai/brepkit/commit/f47ea914225894819443ce21f8522e64524e80ef))\n* **operations:** measure a solid of planes and quadrics along its\nfaces' boundaries\n([#1815](https://github.com/andymai/brepkit/issues/1815))\n([7828640](https://github.com/andymai/brepkit/commit/782864093ad55c32e413c29e14aff93208306774))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T04:43:01Z",
+          "tree_id": "7a7490052fba720114e4a73d734343c28e6ab4f6",
+          "url": "https://github.com/andymai/brepkit/commit/653f79cee6d091393708dd672c60422e536d92f8"
+        },
+        "date": 1790484326514,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 821679,
+            "range": "± 11006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 891893,
+            "range": "± 8570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11106,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 600403,
+            "range": "± 1237",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35567674,
+            "range": "± 485988",
             "unit": "ns/iter"
           }
         ]
