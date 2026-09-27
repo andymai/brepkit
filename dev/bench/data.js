@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790539594776,
+  "lastUpdate": 1790542719261,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45251,6 +45251,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43032246,
             "range": "± 242672",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6ce871b4b0dca228064e0a99164f31e5bdea8c12",
+          "message": "fix(math): trace an oblique cone and cylinder along the cylinder's rulings (#1863)\n\nOblique cone and cylinder intersections now use an analytic ruling\ntrace, while seam handling fixes previously whole or mesh fallback\nboolean results.\n\n## What was wrong\n\n- On main, cutting `make_cone(3, 0, 6)` with the rod at `x0 = 0.5`\nreturned the cone whole, with 2 faces and its full volume of 56.548668,\nreported exact. The mirrored cut fell back to the mesh boolean.\n\n- Cutting `make_cylinder(2, 6)` with the rod at `x0 = 1.7`, through the\nwall's seam side, returned the cylinder whole, with 3 faces and its full\nvolume of 75.398224, plus only an Euler warning.\n\n- The general marcher handled the oblique cone and cylinder intersection\nin 3 s. It produced seven fragments with ends about 0.03 apart, so they\nnever chained.\n\n- A symmetric closed loop crossed the face seam exactly on samples. The\nsign test skipped a sample reading exactly zero and found only one\ncrossing.\n\n- The face splitter sampled a section piece's NURBS pcurve on the period\ncopy where it was fit, rather than the copy containing its moved end\nUVs. A small loop beside the cone seam then spanned the whole period,\nand the full face trace was refused as nested.\n\n## What this does\n\n- `ruling_cone_cylinder` traces an oblique cone and cylinder along the\ncylinder's rulings. On each ruling, the cone's double quadric `|p -\napex|^2 = h^2 / sin^2(half_angle)` is quadratic in the ruling parameter.\nThe intersection takes about 3 ms.\n\n- The analytic path defers to the marcher when a ruling reaches the\ncone's far nappe, or when rulings follow cone generators. The far-nappe\ncheck scans 2048 ruling angles. A finer scan also defers when a window\nis covered by fewer than eight of the 128 sampled rulings.\n\n- `seam_crossings_of_contractible_loop` counts an exactly zero sample as\nthe crossing for the step reaching it when the next sample has the\nopposite sign. A touch remains non-crossing.\n\n- `sampling.rs` shifts samples by the whole number of periods placing\nthe pcurve start on the edge's start UV. The shift applies only when it\nalso places the pcurve end on the edge's end UV.\n\n## Verification\n\n- `rod_through_a_wall.rs` covers cone offsets `0.5`, `-0.5`, and `0`,\ncylinder offsets `1.7` and `-1.7`, and a `make_cone(3, 1.5, 6)` frustum\nat `0.5`. It exercises Cut and Intersect upright, turned, mirrored\nthrough a slanted plane, and mirrored by `scale(-1, 1, 1)`, and fails on\nmain.\n\n- Every result has at most 6 faces, is valid, classifies the rod axis\nand a point below it as expected, and matches the closed-form and\nSimpson-integrated truth within `1e-4`. Cone results match to about\n`1e-8` at 54.816979. The cylinder removes 2.040167 against 2.040104 in\nevery placement, as on main for the far-side rod: the cylinder-cylinder\npath's existing accuracy.\n\n- Analytic unit tests verify both argument orders within `1e-4` of both\nsurfaces, plus deferral for an apex rod, generator rod, and thin window.\n\n- The math, algo, and operations suites pass with 2083 tests and 13\nskipped. The earlier workspace run passed 3215 tests with 20 skipped.\nThe 300-line pose sweep and `approx_census` match main. The case is\nrecorded as Closed.",
+          "timestamp": "2026-09-27T20:56:15Z",
+          "tree_id": "aef8cfd8183157b984766aa08497dcde8fccdc93",
+          "url": "https://github.com/andymai/brepkit/commit/6ce871b4b0dca228064e0a99164f31e5bdea8c12"
+        },
+        "date": 1790542714389,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 588404,
+            "range": "± 11646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 616558,
+            "range": "± 4002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7971,
+            "range": "± 121",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 423806,
+            "range": "± 10379",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27931788,
+            "range": "± 195503",
             "unit": "ns/iter"
           }
         ]
