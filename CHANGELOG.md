@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.58](https://github.com/andymai/brepkit/compare/v4.0.57...v4.0.58) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** keep a ball's equator circle off the hemispheres a coplanar box face meets ([#1832](https://github.com/andymai/brepkit/issues/1832)) ([3d04550](https://github.com/andymai/brepkit/commit/3d04550db0ca87acabc60fe10cd1dd8e4ce67e23))
+
 ## [4.0.57](https://github.com/andymai/brepkit/compare/v4.0.56...v4.0.57) (2026-09-27)
 
 
