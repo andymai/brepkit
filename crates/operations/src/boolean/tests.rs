@@ -7344,6 +7344,10 @@ fn tangent_wall_fuse_configurations_stay_analytic() {
         assert_eq!(n, expect_f, "{label}: analytic face count");
         super::assembly::validate_boolean_result(&topo, r)
             .unwrap_or_else(|e| panic!("{label}: result must validate: {e}"));
+        // One tangent wall leaves the box's floor a hole whose rim touches
+        // the floor's edge at the tangent point: one boundary piece, not two.
+        let report = crate::validate::validate_solid(&topo, r).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
     }
 }
 
