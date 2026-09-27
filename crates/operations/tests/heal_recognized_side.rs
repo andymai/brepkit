@@ -9,7 +9,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::heal::{convert_to_bspline, convert_to_elementary};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
-use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere};
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere, make_torus};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
@@ -19,7 +19,7 @@ use brepkit_topology::{SolidId, Topology};
 
 type Make = fn(&mut Topology) -> SolidId;
 
-/// A ball, a cylinder, a frustum, a plate bored through and a ball bored
+/// A ball, a cylinder, a frustum, a torus, a plate bored through and a ball bored
 /// through (faces with holes) converted to NURBS and recognized back,
 /// upright, turned and mirrored (the mirror flips each patch's flag and keeps
 /// its wire): every face comes back analytic, each plane stores its outward
@@ -35,7 +35,7 @@ fn recognized_faces_keep_their_side() {
     let half = r.mul_add(r, -(a * a)).sqrt();
     let cap = (r - half).powi(2) * PI * (3.0 * r - (r - half)) / 3.0;
     let bored_ball = 4.0 / 3.0 * PI * r.powi(3) - PI * a * a * 2.0 * half - 2.0 * cap;
-    let cases: [(&str, Make, f64); 5] = [
+    let cases: [(&str, Make, f64); 6] = [
         ("ball", |t| make_sphere(t, 3.0, 32).unwrap(), 36.0 * PI),
         (
             "cylinder",
@@ -46,6 +46,11 @@ fn recognized_faces_keep_their_side() {
             "frustum",
             |t| make_cone(t, 5.0, 2.0, 10.0).unwrap(),
             frustum,
+        ),
+        (
+            "torus",
+            |t| make_torus(t, 6.0, 2.0, 32).unwrap(),
+            48.0 * PI * PI,
         ),
         (
             "bored plate",
