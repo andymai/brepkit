@@ -1,0 +1,31 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_e74eb9b36f7573 5464-5473,5477
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_e6e2c90f038d44 1479-1481,1512
+  s_ba2f7b5c6902b6::t_c23ce7a2c081c9 1303-1339
+  s_ba2f7b5c6902b6::t_e38806743608a9 1482-1491,1496-1502,1507-1511
+  s_ba2f7b5c6902b6::t_4985b315d0bd37 1492-1495,1503-1506
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_e74b16ab9a851f 220-227
+  s_ba2f7b5c6902b6::t_41fc9ab8fe1151 228
+crates/operations/tests/sphere_box_corner.rs
+  s_ba2f7b5c6902b6::t_68318f0bfe44e2 1124-1126
+  s_ba2f7b5c6902b6::t_9295ff8286e756 1127-1183
+  s_ba2f7b5c6902b6::t_4e10bf4087f774 1107-1123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "dc32075dbfe8e17626829b67661b9c49f4ec88f3",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
