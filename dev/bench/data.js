@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790470144422,
+  "lastUpdate": 1790471115749,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42443,6 +42443,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41972888,
             "range": "± 489608",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d6502c0563d50ace1103685ca48f42e142490bf2",
+          "message": "chore(main): release 4.0.47 (#1811)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.47](https://github.com/andymai/brepkit/compare/v4.0.46...v4.0.47)\n(2026-09-27)\n\n\n### Bug Fixes\n\n* **algo:** sample a sphere piece's interior in one u window\n([#1809](https://github.com/andymai/brepkit/issues/1809))\n([77bb3f7](https://github.com/andymai/brepkit/commit/77bb3f7c7c4e14fd419ac7e847d608bd3fa233fb))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 4.0.47, bumping all workspace crate versions and shipping a fix\nfor sphere piece sampling.\n\n- **Bug Fixes**: sphere piece interiors are now sampled within a single\nu window, resolving the previous sampling behavior.\n\n<sup>Written for commit 2eeea2e45864700f99bb034251a01314296cb756.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1811?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T01:02:56Z",
+          "tree_id": "d2d8c3bdba5461591c76791890df1aa26da9af3d",
+          "url": "https://github.com/andymai/brepkit/commit/d6502c0563d50ace1103685ca48f42e142490bf2"
+        },
+        "date": 1790471111397,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 819372,
+            "range": "± 2872",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 889106,
+            "range": "± 1061",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11576,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 596148,
+            "range": "± 850",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35444260,
+            "range": "± 26391",
             "unit": "ns/iter"
           }
         ]
