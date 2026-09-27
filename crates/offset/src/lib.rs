@@ -32,6 +32,7 @@ pub(crate) mod arc_joint;
 pub(crate) mod assemble;
 pub(crate) mod data;
 pub mod error;
+pub(crate) mod image;
 pub(crate) mod inter2d;
 pub(crate) mod inter3d;
 pub(crate) mod loops;
@@ -61,20 +62,32 @@ pub fn offset_solid(
     distance: f64,
     options: OffsetOptions,
 ) -> Result<SolidId, OffsetError> {
-    thick_solid(topo, solid, distance, &[], options)
+    if !distance.is_finite() || distance.abs() < options.tolerance.linear {
+        return Err(OffsetError::InvalidInput {
+            reason: "offset distance must be non-zero and finite".into(),
+        });
+    }
+    if options.joint == JointType::Intersection
+        && let Some(result) = image::offset_solid(topo, solid, distance, options.tolerance.linear)?
+    {
+        return Ok(result);
+    }
+    offset_by_intersection(topo, solid, distance, &[], options)
 }
 
 /// Offset a solid while excluding specific faces, producing a thick
 /// (hollowed) solid.
 ///
 /// Excluded faces are left at their original positions, and side walls
-/// connect them to the offset faces.
+/// connect them to the offset faces. With no excluded face the wall closes
+/// round a cavity, which only the exact path ([`thick_solid_by_image`])
+/// builds.
 ///
 /// # Errors
 ///
 /// Returns [`OffsetError`] if the offset collapses the solid, any
-/// intersection fails, or the result cannot be assembled into a valid solid.
-#[allow(clippy::too_many_lines)]
+/// intersection fails, the result cannot be assembled into a valid solid, or
+/// no face is excluded and the exact path does not apply.
 pub fn thick_solid(
     topo: &mut Topology,
     solid: SolidId,
@@ -87,7 +100,58 @@ pub fn thick_solid(
             reason: "offset distance must be non-zero and finite".into(),
         });
     }
+    if options.joint == JointType::Intersection
+        && let Some(result) =
+            image::thick_solid(topo, solid, distance, exclude, options.tolerance.linear)?
+    {
+        return Ok(result);
+    }
+    if exclude.is_empty() {
+        return Err(OffsetError::InvalidInput {
+            reason: "a wall with no opening is built only where it keeps the solid's topology"
+                .into(),
+        });
+    }
+    offset_by_intersection(topo, solid, distance, exclude, options)
+}
 
+/// The thick solid of [`thick_solid`] built exact, as images of the input's
+/// faces with sharp joints, or `None` when that does not apply. With no
+/// excluded face the wall closes round a cavity.
+///
+/// It does not apply when the wall would not keep the input's topology (a
+/// face collapses, an edge turns round, loops meet), or to NURBS faces,
+/// edges other than lines and circles, open faces that are curved, holed,
+/// or touch each other, and solids with cavities.
+///
+/// # Errors
+///
+/// Returns [`OffsetError`] if `distance` is zero or not finite, or a
+/// topology lookup fails.
+pub fn thick_solid_by_image(
+    topo: &mut Topology,
+    solid: SolidId,
+    distance: f64,
+    exclude: &[FaceId],
+    tolerance: f64,
+) -> Result<Option<SolidId>, OffsetError> {
+    if !distance.is_finite() || distance.abs() < tolerance {
+        return Err(OffsetError::InvalidInput {
+            reason: "offset distance must be non-zero and finite".into(),
+        });
+    }
+    image::thick_solid(topo, solid, distance, exclude, tolerance)
+}
+
+/// The phased pipeline: offset faces intersected pairwise and rebuilt into
+/// loops.
+fn offset_by_intersection(
+    topo: &mut Topology,
+    solid: SolidId,
+    distance: f64,
+    exclude: &[FaceId],
+    options: OffsetOptions,
+) -> Result<SolidId, OffsetError> {
     let mut data = OffsetData::new(distance, options, exclude.to_vec());
 
     analyse::analyse_edges(topo, solid, &mut data)?;
