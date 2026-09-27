@@ -154,3 +154,128 @@ fn a_rod_through_a_wall_is_exact_on_either_side_of_its_seam() {
         }
     }
 }
+
+/// The part of `make_torus(4, 1.5)` inside the rod along `y` through
+/// `(x0, ., z0)`: at each height the ring's section is an annulus, whose
+/// chord strips are the outer disc's less the inner's.
+fn rod_in_ring(x0: f64, z0: f64) -> f64 {
+    let strip = |r: f64, a: f64, b: f64| {
+        let f = |x: f64| {
+            let x = x.clamp(-r, r);
+            x.mul_add((r * r - x * x).max(0.0).sqrt(), r * r * (x / r).asin())
+        };
+        let (a, b) = (a.max(-r), b.min(r));
+        if b > a { f(b) - f(a) } else { 0.0 }
+    };
+    let n = 4000;
+    let h = PI / f64::from(n);
+    let mut total = 0.0;
+    for i in 0..=n {
+        let phi = f64::from(i).mul_add(h, -PI / 2.0);
+        let (z, half) = (ROD.mul_add(phi.sin(), z0), ROD * phi.cos());
+        let s = z.mul_add(-z, 2.25).max(0.0).sqrt();
+        let (a, b) = (x0 - half, x0 + half);
+        let f = (strip(4.0 + s, a, b) - strip(4.0 - s, a, b)) * half;
+        let w = if i == 0 || i == n {
+            1.0
+        } else if i % 2 == 1 {
+            4.0
+        } else {
+            2.0
+        };
+        total += w * f;
+    }
+    total * h / 3.0
+}
+
+/// A rod through a ring's tube on both sides of its hole, low enough that
+/// every ruling of the rod meets the tube: each op is exact.
+#[test]
+fn a_rod_through_a_rings_tube_is_exact() {
+    use brepkit_operations::primitives::make_torus;
+    let turn = Mat4::translation(0.4, -0.3, 0.2) * Mat4::rotation_x(0.7) * Mat4::rotation_z(0.3);
+    let (at, normal) = (Point3::new(0.3, 0.0, 0.0), Vec3::new(1.0, 0.2, 0.1));
+    let (ring, rod) = (18.0 * PI * PI, PI * ROD * ROD * 20.0);
+    for (x0, z0) in [(0.5, 0.3), (1.0, -0.4)] {
+        let taken = rod_in_ring(x0, z0);
+        for pose in ["upright", "turned", "mirrored", "scaled"] {
+            for (op, truth) in [
+                (BooleanOp::Cut, ring - taken),
+                (BooleanOp::Intersect, taken),
+                (BooleanOp::Fuse, ring + rod - taken),
+            ] {
+                let label = format!("x0 {x0} z0 {z0} {pose} {op:?}");
+                let mut topo = Topology::new();
+                let mut a = make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+                let mut b = make_cylinder(&mut topo, ROD, 20.0).unwrap();
+                let place =
+                    Mat4::translation(x0, 10.0, z0) * Mat4::rotation_x(std::f64::consts::FRAC_PI_2);
+                transform_solid(&mut topo, b, &place).unwrap();
+                match pose {
+                    "turned" => {
+                        transform_solid(&mut topo, a, &turn).unwrap();
+                        transform_solid(&mut topo, b, &turn).unwrap();
+                    }
+                    "mirrored" => {
+                        a = mirror(&mut topo, a, at, normal).unwrap();
+                        b = mirror(&mut topo, b, at, normal).unwrap();
+                    }
+                    "scaled" => {
+                        let flip = Mat4::scale(-1.0, 1.0, 1.0);
+                        transform_solid(&mut topo, a, &flip).unwrap();
+                        transform_solid(&mut topo, b, &flip).unwrap();
+                    }
+                    _ => {}
+                }
+                let result = boolean(&mut topo, op, a, b).unwrap();
+                let faces = solid_faces(&topo, result).unwrap().len();
+                assert!(faces <= 8, "{label}: {faces} faces");
+                assert!(
+                    validate_solid(&topo, result).unwrap().is_valid(),
+                    "{label}: invalid"
+                );
+                let volume = solid_volume(&topo, result, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-4,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+                let placed = |p: Point3| match pose {
+                    "turned" => turn.mul_point(p),
+                    "mirrored" => {
+                        let unit = normal.normalize().unwrap();
+                        p - unit * (2.0 * (p - at).dot(unit))
+                    }
+                    "scaled" => Point3::new(-p.x(), p.y(), p.z()),
+                    _ => p,
+                };
+                // In the tube and the rod; in the tube away from the rod; in
+                // the rod within the ring's hole.
+                let (both, ring_only, rod_only) = match op {
+                    BooleanOp::Cut => (
+                        PointClassification::Outside,
+                        PointClassification::Inside,
+                        PointClassification::Outside,
+                    ),
+                    BooleanOp::Intersect => (
+                        PointClassification::Inside,
+                        PointClassification::Outside,
+                        PointClassification::Outside,
+                    ),
+                    BooleanOp::Fuse => (
+                        PointClassification::Inside,
+                        PointClassification::Inside,
+                        PointClassification::Inside,
+                    ),
+                };
+                for (p, want) in [
+                    (Point3::new(x0, -4.0, z0), both),
+                    (Point3::new(-4.0, 0.0, 0.0), ring_only),
+                    (Point3::new(x0, 0.0, z0), rod_only),
+                ] {
+                    let got = classify_point(&topo, result, placed(p), 0.01, 1e-7).unwrap();
+                    assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
+                }
+            }
+        }
+    }
+}
