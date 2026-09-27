@@ -8344,10 +8344,11 @@ fn attach_sphere_holes(pieces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurveE
     attach_whole_holes(pieces, &unplaced);
 }
 
-/// A loop's `(u, v)` samples with `u` carried continuously along it.
 /// A sphere piece's outer loop in `(u, v)`, sampled on its edges' own curves
-/// and read in one continuous `u` window, when it closes there (it neither
-/// winds the axis nor runs through a pole). Pcurves computed on demand (a
+/// and read in one continuous `u` window, when its steps in `u` sum to none:
+/// it does not wind the axis, and a pole it runs through is crossed the way
+/// that bounds the piece. A loop through both poles is left out (its two
+/// crossings can cancel the wrong way). Pcurves computed on demand (a
 /// mirrored ball's) can hand consecutive edges windows a turn apart, which
 /// folds the polygon and puts its interior on the far side of the sphere.
 fn sphere_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
@@ -8358,11 +8359,21 @@ fn sphere_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
     if pts.len() < 3 {
         return None;
     }
+    let at_pole = |north: bool| {
+        pts.iter().any(|p| {
+            let v = if north { p.y() } else { -p.y() };
+            v >= std::f64::consts::FRAC_PI_2 - 1e-6
+        })
+    };
+    if at_pole(true) && at_pole(false) {
+        return None;
+    }
     let pts = unwrapped_u(&pts);
     let closes = (pts[pts.len() - 1].x() - pts[0].x()).abs() < std::f64::consts::PI;
     closes.then_some(pts)
 }
 
+/// A loop's `(u, v)` samples with `u` carried continuously along it.
 fn unwrapped_u(pts: &[Point2]) -> Vec<Point2> {
     use std::f64::consts::{PI, TAU};
     let mut u = pts[0].x();
