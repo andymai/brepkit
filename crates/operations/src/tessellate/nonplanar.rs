@@ -3939,8 +3939,10 @@ fn nurbs_speeds(
 /// from an outer sample to the hole sample nearest it in u: the outer loop
 /// continues one winding on, climbs the seam, runs the hole the other way
 /// round, and descends the seam's copy one period back, whose samples it
-/// shares. The face's other holes stay holes, so the seam starts at the first
-/// outer sample (of 32 tried around the loop) whose seam keeps clear of them.
+/// shares. The face's other holes stay holes: of the outer samples tried
+/// (about 32 around the loop) whose seam crosses none of them, the seam
+/// starts at the one keeping farthest from every boundary sample, and the
+/// other holes move by whole periods into the rotated loop's span.
 /// Returns whether the loops were joined.
 fn join_winding_hole(
     face_data: &brepkit_topology::face::Face,
@@ -4004,8 +4006,36 @@ fn join_winding_hole(
             })
         })
     };
+    // How far a seam keeps from every boundary sample but its own ends: a
+    // seam leaving a corner beside a steep wall arc interleaves its samples
+    // with the arc's and leaves the mesh open.
+    let clearance = |a: (f64, f64), b: (f64, f64), rotate: usize, start: usize| {
+        let mid = f64::midpoint(a.0, b.0);
+        let (du, dv) = (b.0 - a.0, b.1 - a.1);
+        let len2 = du.mul_add(du, dv * dv).max(1e-300);
+        let away = |(u, v): (f64, f64)| {
+            let u = u + ((mid - u) / period).round() * period;
+            let f = ((u - a.0).mul_add(du, (v - a.1) * dv) / len2).clamp(0.0, 1.0);
+            (u - f.mul_add(du, a.0)).hypot(v - f.mul_add(dv, a.1))
+        };
+        let outer = boundary_uv
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != rotate)
+            .map(|(_, &p)| away(p));
+        let inner = hole
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != start)
+            .map(|(_, &(u, v, _))| away((u, v)));
+        let beside = others.iter().map(|&(p, _)| away(p));
+        outer
+            .chain(inner)
+            .chain(beside)
+            .fold(f64::INFINITY, f64::min)
+    };
     let n = boundary_uv.len();
-    let mut found = None;
+    let mut found: Option<(f64, usize, usize)> = None;
     for rotate in (0..n).step_by((n / 32).max(1)) {
         let (u0, v0) = boundary_uv[rotate];
         let offset = |u: f64| (u - u0 + period / 2.0).rem_euclid(period) - period / 2.0;
@@ -4014,13 +4044,16 @@ fn join_winding_hole(
         else {
             return false;
         };
+        let from = (u0 + w_outer, v0);
         let target = (u0 + w_outer + offset(hole[start].0), hole[start].1);
-        if clear((u0 + w_outer, v0), target) {
-            found = Some((rotate, start));
-            break;
+        if clear(from, target) {
+            let score = clearance(from, target, rotate, start);
+            if found.is_none_or(|(best, _, _)| score > best) {
+                found = Some((score, rotate, start));
+            }
         }
     }
-    let Some((rotate, start)) = found else {
+    let Some((_, rotate, start)) = found else {
         return false;
     };
     holes.remove(which);
@@ -4031,6 +4064,17 @@ fn join_winding_hole(
             .collect();
         boundary_uv.extend(head);
         boundary_3d.rotate_left(rotate);
+        // The loop now spans a turn from its new start, so the other holes
+        // move by whole periods to lie within it (the seam crosses none).
+        let lo = boundary_uv[0].0.min(boundary_uv[0].0 + w_outer);
+        for other in holes.iter_mut() {
+            #[allow(clippy::cast_precision_loss)]
+            let centre = other.iter().map(|p| p.0).sum::<f64>() / other.len().max(1) as f64;
+            let shift = ((centre - lo) / period).floor() * period;
+            for p in other.iter_mut() {
+                p.0 -= shift;
+            }
+        }
     }
     let (u0, v0) = boundary_uv[0];
     let offset = |u: f64| (u - u0 + period / 2.0).rem_euclid(period) - period / 2.0;

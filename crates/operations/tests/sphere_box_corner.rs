@@ -1599,9 +1599,10 @@ fn rod_through_a_cap(at: f64, radius: f64, turn: f64) {
 /// exact, valid, watertight and within `1e-3` of its closed form. Tilted 0.2
 /// or 0.35 about x, the column's top circle passes within 0.03 of the pole
 /// (the closed forms hold, the ball being unchanged by the tilt), and the
-/// ball turned 0.35 about x puts a wall's crest on the ball's seam; the ball
-/// less the column still meshes watertight there and the column ending at 2
-/// throughout, the others do not (a roadmap row).
+/// ball turned 0.35 about x puts a wall's crest on the ball's seam. Each
+/// meshes watertight: the hole round the pole joins the outer loop along the
+/// seam that keeps farthest from the boundary, not beside a wall arc that
+/// climbs from the equator.
 #[test]
 fn a_column_ending_in_the_ball_keeps_the_cap_over_it() {
     for (top, tilt, turn) in [
@@ -1647,9 +1648,7 @@ fn column_ending_in_the_ball(top: f64, tilt: f64, turn: f64) {
         let report = validate_solid(&topo, result).unwrap();
         assert!(report.is_valid(), "{name}: {:?}", report.issues);
         let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
-        if (tilt == 0.0 && turn == 0.0) || top < 2.5 || name.starts_with("ball less") {
-            assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
-        }
+        assert!(is_watertight(&mesh), "{name}: open or non-manifold mesh");
         let volume = solid_volume(&topo, result, 0.01).unwrap();
         assert!(
             (volume - truth).abs() < 1e-3 * truth,
