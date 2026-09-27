@@ -1316,6 +1316,7 @@ pub(super) fn tessellate_latitude_band_shared(
     let Some(floor) = collect_var_v_ring(
         topo,
         floor_wid,
+        face_data.surface(),
         project.as_ref(),
         edge_global_indices,
         merged,
@@ -1570,10 +1571,12 @@ type VarRing = Vec<(f64, f64, u32)>;
 /// Collect a wire's shared boundary vertices as a longitude-sorted [`VarRing`],
 /// or `None` if the wire is not a closed full-revolution loop (built only from
 /// `Line`/`Circle` edges). Unlike [`collect_constant_v_ring`], the latitude may
-/// vary with longitude.
+/// vary with longitude. A loop through a sphere's pole winds nothing, however
+/// much of the turn its samples cover.
 fn collect_var_v_ring(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
+    surface: &FaceSurface,
     project: &dyn Fn(Point3) -> (f64, f64),
     edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &TriangleMesh,
@@ -1589,9 +1592,26 @@ fn collect_var_v_ring(
         let Some(edge_gids) = edge_global_indices.get(&oe.edge().index()) else {
             return Ok(None);
         };
-        gids.extend_from_slice(edge_gids);
+        if oe.is_forward() {
+            gids.extend_from_slice(edge_gids);
+        } else {
+            gids.extend(edge_gids.iter().rev());
+        }
     }
     if gids.len() < 3 {
+        return Ok(None);
+    }
+    let us: Vec<Option<f64>> = gids
+        .iter()
+        .map(|&g| {
+            let point = merged.positions[g as usize];
+            sphere_pole_v(surface, point)
+                .is_none()
+                .then(|| project(point).0)
+        })
+        .collect();
+    let (_, winding) = unwrap_loop_u(&us, TAU);
+    if (winding.abs() - TAU).abs() > 1e-6 {
         return Ok(None);
     }
     let mut seen: DetHashSet<u32> = DetHashSet::default();
@@ -1983,6 +2003,16 @@ pub(super) fn tessellate_nonplanar_cdt(
                 let shifts = (diff / u_period + 0.5).floor();
                 u -= shifts * u_period;
                 boundary_uv[i].0 = u;
+            }
+            // A sphere's pole has no u of its own: a loop through it runs
+            // along the pole's row, which also keeps a loop that opens a
+            // wedge at the pole from reading as a cap over it.
+            let points: Vec<Point3> = boundary_3d.iter().map(|b| b.0).collect();
+            if let Some(routed) =
+                route_through_poles(face_data.surface(), &boundary_uv, &points, u_period)
+            {
+                boundary_3d = routed.iter().map(|&(i, _, _)| boundary_3d[i]).collect();
+                boundary_uv = routed.into_iter().map(|(_, u, v)| (u, v)).collect();
             }
             let first_u = boundary_uv[0].0;
             let last_u = boundary_uv.last().map_or(first_u, |p| p.0);
@@ -3295,6 +3325,19 @@ fn inner_wire_uv_loops(
             }
             loop_uv.push((u, v, gid));
         }
+        if let Some((_, period)) = u_period {
+            let uv: Vec<(f64, f64)> = loop_uv.iter().map(|&(u, v, _)| (u, v)).collect();
+            let points: Vec<Point3> = loop_uv
+                .iter()
+                .map(|&(_, _, gid)| merged.positions[gid as usize])
+                .collect();
+            if let Some(routed) = route_through_poles(face_data.surface(), &uv, &points, period) {
+                loop_uv = routed
+                    .into_iter()
+                    .map(|(i, u, v)| (u, v, loop_uv[i].2))
+                    .collect();
+            }
+        }
         #[allow(clippy::cast_precision_loss)]
         let count = loop_uv.len() as f64;
         let centre_u = loop_uv.iter().map(|p| p.0).sum::<f64>() / count;
@@ -3695,10 +3738,10 @@ fn hole_u_spans(
     sphere: &brepkit_math::surfaces::SphericalSurface,
 ) -> Result<Option<Vec<(f64, f64)>>, crate::OperationsError> {
     const SAMPLES: u32 = 16;
-    let wrap = |d: f64| (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+    let surface = face_data.surface();
     let mut spans = Vec::new();
     for &wire_id in face_data.inner_wires() {
-        let mut unwrapped: Vec<f64> = Vec::new();
+        let mut us: Vec<Option<f64>> = Vec::new();
         for oe in topo.wire(wire_id)?.edges() {
             let edge = topo.edge(oe.edge())?;
             let (start, end) = (
@@ -3706,33 +3749,154 @@ fn hole_u_spans(
                 topo.vertex(edge.end())?.point(),
             );
             let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-            for k in 0..=SAMPLES {
-                let f = f64::from(k) / f64::from(SAMPLES);
+            let mut fractions: Vec<f64> = (0..=SAMPLES)
+                .map(|k| f64::from(k) / f64::from(SAMPLES))
+                .collect();
+            if let EdgeCurve::Circle(circle) = edge.curve() {
+                fractions.extend(
+                    circle_pole_params(circle, (t0, t1), sphere)
+                        .into_iter()
+                        .map(|t| (t - t0) / (t1 - t0)),
+                );
+                fractions.sort_by(f64::total_cmp);
+            }
+            for f in fractions {
                 let f = if oe.is_forward() { f } else { 1.0 - f };
                 let point = edge
                     .curve()
                     .evaluate_with_endpoints(t0 + (t1 - t0) * f, start, end);
-                let (u, _) = sphere.project_point(point);
-                let u = unwrapped
-                    .last()
-                    .map_or(u, |&before| before + wrap(u - before));
-                unwrapped.push(u);
+                us.push(
+                    sphere_pole_v(surface, point)
+                        .is_none()
+                        .then(|| sphere.project_point(point).0),
+                );
             }
         }
-        let (Some(&first), Some(&last)) = (unwrapped.first(), unwrapped.last()) else {
+        if us.iter().all(Option::is_none) {
             continue;
-        };
-        if (last - first).abs() > std::f64::consts::PI {
+        }
+        let (unwrapped, winding) = unwrap_loop_u(&us, TAU);
+        if winding.abs() > std::f64::consts::PI {
             return Ok(None);
         }
         let (lo, hi) = unwrapped
             .iter()
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &u| {
+            .flat_map(|&(u_in, u_out)| [u_in, u_out])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
                 (lo.min(u), hi.max(u))
             });
         spans.push((f64::midpoint(lo, hi), 0.5 * (hi - lo)));
     }
     Ok(Some(spans))
+}
+
+/// The v of the sphere pole `point` lies on, if it lies on one.
+fn sphere_pole_v(surface: &FaceSurface, point: Point3) -> Option<f64> {
+    let FaceSurface::Sphere(sphere) = surface else {
+        return None;
+    };
+    let tol = MERGE_GRID.max(1e-9 * sphere.radius());
+    [std::f64::consts::FRAC_PI_2, -std::f64::consts::FRAC_PI_2]
+        .into_iter()
+        .find(|&v| (sphere.evaluate(0.0, v) - point).length() <= tol)
+}
+
+/// The parameters strictly inside a circle edge's domain `(t0, t1)` at which
+/// it runs over one of a sphere's poles (a wall through the sphere's axis).
+pub(super) fn circle_pole_params(
+    circle: &brepkit_math::curves::Circle3D,
+    (t0, t1): (f64, f64),
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> Vec<f64> {
+    let tol = MERGE_GRID.max(1e-9 * sphere.radius());
+    [std::f64::consts::FRAC_PI_2, -std::f64::consts::FRAC_PI_2]
+        .into_iter()
+        .filter_map(|v| {
+            let pole = sphere.evaluate(0.0, v);
+            let t = t0 + (circle.project(pole) - t0).rem_euclid(TAU);
+            ((circle.evaluate(t) - pole).length() <= tol && t > t0 + 1e-9 && t < t1 - 1e-9)
+                .then_some(t)
+        })
+        .collect()
+}
+
+/// A closed loop's u unwrapped sample to sample, and its net winding. A
+/// `None` sample lies on a pole, where u is undefined: the loop runs along
+/// the pole's row there, from the u it arrives at to the u it leaves at,
+/// and that step can be any width (the wedge the loop opens at the pole),
+/// so the loop starts just past a pole and the step across it is the one
+/// that closes the loop. Each sample gets the u it is reached at and the u
+/// it is left at, the two equal away from a pole.
+fn unwrap_loop_u(us: &[Option<f64>], period: f64) -> (Vec<(f64, f64)>, f64) {
+    let n = us.len();
+    let wrap = |d: f64| d - (d / period).round() * period;
+    let past_pole = (0..n).find(|&i| us[i].is_some() && us[(i + n - 1) % n].is_none());
+    let Some(start) = past_pole.or_else(|| us.iter().position(Option::is_some)) else {
+        return (vec![(0.0, 0.0); n], 0.0);
+    };
+    let mut out = vec![(0.0, 0.0); n];
+    let mut prev: Option<f64> = None;
+    for k in 0..n {
+        let i = (start + k) % n;
+        if let Some(u) = us[i] {
+            let u = prev.map_or(u, |p| p + wrap(u - p));
+            out[i] = (u, u);
+            prev = Some(u);
+        }
+    }
+    for k in 1..n {
+        let i = (start + k) % n;
+        if us[i].is_none() {
+            let before = out[(i + n - 1) % n].1;
+            let after = (k + 1..=n)
+                .map(|j| (start + j) % n)
+                .find(|&j| us[j].is_some())
+                .map_or(before, |j| out[j].0);
+            out[i] = (before, after);
+        }
+    }
+    let (first, last) = (out[start].0, out[(start + n - 1) % n].1);
+    (out, last - first + wrap(first - last))
+}
+
+/// A sphere loop through a pole, unwrapped by `unwrap_loop_u` with each
+/// pole sample opened into the stretch of the pole's row the loop runs
+/// along, sampled as densely as the pole closure's row: `(source sample, u,
+/// v)` per routed sample. `None` when no sample, or every sample, lies on a
+/// pole.
+fn route_through_poles(
+    surface: &FaceSurface,
+    uv: &[(f64, f64)],
+    points: &[Point3],
+    period: f64,
+) -> Option<Vec<(usize, f64, f64)>> {
+    let pole_v: Vec<Option<f64>> = points.iter().map(|&p| sphere_pole_v(surface, p)).collect();
+    if pole_v.iter().all(Option::is_none) || pole_v.iter().all(Option::is_some) {
+        return None;
+    }
+    let us: Vec<Option<f64>> = uv
+        .iter()
+        .zip(&pole_v)
+        .map(|(&(u, _), pole)| pole.is_none().then_some(u))
+        .collect();
+    let (unwrapped, _) = unwrap_loop_u(&us, period);
+    #[allow(clippy::cast_precision_loss)]
+    let steps = uv.len().max(8) as f64;
+    let mut routed = Vec::with_capacity(uv.len() + 16);
+    for (i, (&(u_in, u_out), pole)) in unwrapped.iter().zip(&pole_v).enumerate() {
+        let Some(v) = *pole else {
+            routed.push((i, u_in, uv[i].1));
+            continue;
+        };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = ((u_out - u_in).abs() / period * steps).ceil() as usize;
+        routed.extend((0..=n).map(|k| {
+            #[allow(clippy::cast_precision_loss)]
+            let f = if n == 0 { 0.0 } else { k as f64 / n as f64 };
+            (i, u_in + (u_out - u_in) * f, v)
+        }));
+    }
+    Some(routed)
 }
 
 /// A NURBS face's average speeds along u and v over its parameter box. Its

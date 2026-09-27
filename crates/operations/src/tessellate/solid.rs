@@ -11,8 +11,9 @@ use super::TriangleMesh;
 use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_deviation_a};
 use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
 use super::nonplanar::{
-    tessellate_latitude_band_shared, tessellate_nonplanar_cdt, tessellate_nonplanar_snap,
-    tessellate_revolution_band_shared, tessellate_torus_notch_band, tessellate_torus_two_rim_band,
+    circle_pole_params, tessellate_latitude_band_shared, tessellate_nonplanar_cdt,
+    tessellate_nonplanar_snap, tessellate_revolution_band_shared, tessellate_torus_notch_band,
+    tessellate_torus_two_rim_band,
 };
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
@@ -302,6 +303,44 @@ fn tessellate_solid_core(
                         );
                         edge_points.insert(edge_idx, new_pts);
                     }
+                }
+            }
+        }
+    }
+
+    // A sphere face's circle edge running over the sphere's pole (a wall
+    // through its axis) takes the pole as a sample: the face's u turns over
+    // there, and its mesher runs the loop along the pole's row from it. Both
+    // faces on the edge weld to the one sample.
+    for &face_id in &all_faces {
+        let face_data = topo.face(face_id)?;
+        let FaceSurface::Sphere(sphere) = face_data.surface() else {
+            continue;
+        };
+        for &wire_id in std::iter::once(&face_data.outer_wire()).chain(face_data.inner_wires()) {
+            for oe in topo.wire(wire_id)?.edges() {
+                let edge_data = topo.edge(oe.edge())?;
+                let EdgeCurve::Circle(circle) = edge_data.curve() else {
+                    continue;
+                };
+                let Some(points) = edge_points.get_mut(&oe.edge().index()) else {
+                    continue;
+                };
+                let (t0, t1) = circle_param_range(topo, edge_data, circle)?;
+                let along = |p: Point3| {
+                    t0 + (circle.project(p) - t0 + 1e-9).rem_euclid(std::f64::consts::TAU) - 1e-9
+                };
+                for t in circle_pole_params(circle, (t0, t1), sphere) {
+                    let pole = circle.evaluate(t);
+                    if points.iter().any(|&p| {
+                        point_merge_key(p, MERGE_GRID) == point_merge_key(pole, MERGE_GRID)
+                    }) {
+                        continue;
+                    }
+                    let at = (1..points.len())
+                        .find(|&i| i + 1 == points.len() || along(points[i]) > t)
+                        .unwrap_or(points.len());
+                    points.insert(at, pole);
                 }
             }
         }
