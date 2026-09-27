@@ -71,6 +71,10 @@ pub(crate) fn integrate_face_about(
     let reversed = face.is_reversed();
     let sign = if reversed { -1.0 } else { 1.0 };
 
+    if let Some(exact) = super::boundary::curved_face_by_boundary(topo, face, sign, about)? {
+        return Ok(exact);
+    }
+
     match face.surface() {
         FaceSurface::Plane { normal, .. } => {
             let effective_normal = if reversed { -*normal } else { *normal };
@@ -1196,9 +1200,10 @@ mod tests {
 
     /// The part of a unit ball's upper hemisphere 270 degrees wide, its wire
     /// (up a meridian to the pole, down another, along the equator) started
-    /// at each of its edges and run either way, its pole vertex on the axis
-    /// or 1e-7 off it: the pole's `u` is arbitrary, and the face reads its
-    /// area `3π/2` however its wire runs.
+    /// at each of its edges, its pole vertex on the axis or 1e-7 off it: the
+    /// pole's `u` is arbitrary, and the face reads its area `3π/2` wherever
+    /// its wire starts. The face lies on its wire's left, so the wire run
+    /// the other way bounds the rest of the ball, `5π/2`.
     #[test]
     fn a_wedge_through_a_pole_reads_its_area_from_any_start() {
         use brepkit_math::curves::Circle3D;
@@ -1247,12 +1252,110 @@ mod tests {
             let ball = SphericalSurface::new(origin, 1.0).unwrap();
             let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
             let c = integrate_face(&topo, face, 5).unwrap();
+            let truth = if reversed {
+                4.0 * std::f64::consts::PI - turn
+            } else {
+                turn
+            };
             assert!(
-                (c.area - turn).abs() < 1e-6,
-                "wire started at edge {first}, reversed {reversed}, pole {off} off: area {}, truth {turn}",
+                (c.area - truth).abs() < 1e-6,
+                "wire started at edge {first}, reversed {reversed}, pole {off} off: area {}, truth {truth}",
                 c.area
             );
         }
+    }
+
+    /// A unit ball's face bounded by one closed circle 0.5 about the axis
+    /// `(1, 1, 1)`, clear of the sphere's poles: run counter-clockwise about
+    /// the outward normal it bounds the cap, `2π(1 - cos 0.5)`, and run
+    /// clockwise the rest of the ball, both poles held.
+    #[test]
+    fn a_sphere_face_bounded_by_one_circle_reads_either_side() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let tilt = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        let half = 0.5_f64;
+        let rim = Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0) + tilt * half.cos(),
+            tilt,
+            half.sin(),
+        )
+        .unwrap();
+        let cap = 2.0 * std::f64::consts::PI * (1.0 - half.cos());
+        for forward in [true, false] {
+            let mut topo = Topology::new();
+            let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim.clone())));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap());
+            let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
+            let c = integrate_face(&topo, face, 5).unwrap();
+            let truth = if forward {
+                cap
+            } else {
+                4.0 * std::f64::consts::PI - cap
+            };
+            assert!(
+                (c.area - truth).abs() < 1e-9,
+                "forward {forward}: area {}, truth {truth}",
+                c.area
+            );
+            assert!(
+                (c.volume - truth / 3.0).abs() < 1e-9,
+                "forward {forward}: volume {}, truth {}",
+                c.volume,
+                truth / 3.0
+            );
+        }
+    }
+
+    /// A unit cylinder's whole wall between the rim `z = 0` and the slanted
+    /// rim `z = 3 + x / 2`, each one closed rational curve of three knot
+    /// spans, a third of a turn apiece: the wall reads its area `6π` and its
+    /// flux `2π` though no span turns less than a quarter turn.
+    #[test]
+    fn a_wall_between_rims_of_third_turn_spans_reads_exactly() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let rim = |z: &dyn Fn(f64) -> f64| {
+            let third = std::f64::consts::TAU / 3.0;
+            let points = (0..7)
+                .map(|i| {
+                    let a = f64::from(i) * third / 2.0;
+                    let r = if i % 2 == 0 { 1.0 } else { 2.0 };
+                    let (x, y) = (r * a.cos(), r * a.sin());
+                    Point3::new(x, y, z(x))
+                })
+                .collect();
+            let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 3.0];
+            let weights = vec![1.0, 0.5, 1.0, 0.5, 1.0, 0.5, 1.0];
+            NurbsCurve::new(2, knots, points, weights).unwrap()
+        };
+        let (floor, slant) = (rim(&|_| 0.0), rim(&|x| 0.5f64.mul_add(x, 3.0)));
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 3.5), 1e-7));
+        let e0 = topo.add_edge(Edge::new(v0, v0, EdgeCurve::NurbsCurve(floor)));
+        let e1 = topo.add_edge(Edge::new(v1, v1, EdgeCurve::NurbsCurve(slant)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(e0, true)], true).unwrap());
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(e1, false)], true).unwrap());
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let wall = CylindricalSurface::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let face = topo.add_face(Face::new(outer, vec![hole], FaceSurface::Cylinder(wall)));
+        let c = integrate_face(&topo, face, 5).unwrap();
+        let area = 6.0 * std::f64::consts::PI;
+        assert!((c.area - area).abs() < 1e-9, "area {}", c.area);
+        assert!((c.volume - area / 3.0).abs() < 1e-9, "volume {}", c.volume);
     }
 
     /// A disc of radius 2 at `z = 3` with a hole of radius 1, bounded by
