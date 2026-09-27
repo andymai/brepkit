@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.68](https://github.com/andymai/brepkit/compare/v4.0.67...v4.0.68) (2026-09-27)
+
+
+### Bug Fixes
+
+* **check:** read a plane hit against its face's own lines and arcs ([#1851](https://github.com/andymai/brepkit/issues/1851)) ([3efdb90](https://github.com/andymai/brepkit/commit/3efdb90d4e7dfbfe6945470ac40fb3c798a36fc4))
+
 ## [4.0.67](https://github.com/andymai/brepkit/compare/v4.0.66...v4.0.67) (2026-09-27)
 
 
