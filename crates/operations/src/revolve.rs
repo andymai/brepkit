@@ -2586,11 +2586,12 @@ mod tests {
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
-        // 180° = 2 segments × 4 profile edges + 2 planar end caps = 10 faces.
-        // The unit square revolved about the Y axis has: an axis-parallel edge
-        // (x=1 wall → Cylinder), two perpendicular edges (the z-faces → annular
-        // Plane discs), and an on-axis edge (x=0 → degenerate NURBS).
-        assert_eq!(shell.faces().len(), 10);
+        // 180° = 2 segments × 3 swept profile edges + 2 planar end caps = 8
+        // faces. The unit square revolved about the Y axis has an
+        // axis-parallel edge (x=1 wall → Cylinder), two perpendicular edges
+        // (Plane wedges closing at the axis), and an on-axis edge (x=0) that
+        // sweeps nothing.
+        assert_eq!(shell.faces().len(), 8);
 
         let mut plane_count = 0;
         let mut cyl_count = 0;
@@ -2603,16 +2604,13 @@ mod tests {
                 _ => {}
             }
         }
-        // 4 perpendicular-edge disc bands + 2 end caps.
-        assert_eq!(plane_count, 6, "perpendicular bands + end caps are planar");
+        // 4 perpendicular-edge wedges + 2 end caps.
+        assert_eq!(plane_count, 6, "perpendicular wedges + end caps are planar");
         assert_eq!(
             cyl_count, 2,
             "the axis-parallel wall's 2 bands are cylinders"
         );
-        assert_eq!(
-            nurbs_count, 2,
-            "only the degenerate on-axis bands stay NURBS"
-        );
+        assert_eq!(nurbs_count, 0, "the on-axis edge sweeps no band");
 
         // Half revolution of a rectangle → genus-0 solid (χ=2).
         assert_euler_genus0(&topo, solid);
