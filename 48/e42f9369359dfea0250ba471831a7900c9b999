@@ -1,0 +1,26 @@
+crates/operations/src/sweep/spine.rs
+  s_ba2f7b5c6902b6::t_6b54963d070bd5 435
+crates/operations/tests/revolve_arc_profile.rs
+  s_ba2f7b5c6902b6::t_31259f79853f8b 377-382,384-451,453-457
+  s_ba2f7b5c6902b6::t_aa97c5bddb4981 383,452
+crates/operations/src/revolve.rs
+  s_ba2f7b5c6902b6::t_a64802b13088da 490
+  s_ba2f7b5c6902b6::t_143a126cbb43ad 181-182,185-186,198,371-372,379,398,413-414,1524-1535
+  s_ba2f7b5c6902b6::t_6b54963d070bd5 224,1645-1646,1657
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "48e42f9369359dfea0250ba471831a7900c9b999",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
