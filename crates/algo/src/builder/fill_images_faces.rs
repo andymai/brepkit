@@ -872,17 +872,11 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
         (surface, is_reversed, outer_edges, inner_edges_list)
     };
 
-    // Only expand LINE edges with multi-split images. Curved edges
-    // (Circle, Ellipse, NURBS) need special angular-range handling
-    // that this simple expand_edge doesn't support.
     let has_multi_split = outer_edges
         .iter()
         .chain(inner_edges_list.iter().flatten())
         .any(|(eid, _)| {
-            non_degenerate_image_count(topo, *eid, edge_images) > 1
-                && topo
-                    .edge(*eid)
-                    .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
+            non_degenerate_image_count(topo, *eid, edge_images) > 1 && expands(topo, *eid)
         });
 
     if !has_multi_split {
@@ -924,6 +918,15 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
     Some(new_fid)
 }
 
+/// Whether an edge is replaced by its split images in a face no section
+/// crosses: an open edge's images run from its start to its end whatever
+/// its curve, while a closed curve's wrap its seam and stay whole here.
+fn expands(topo: &Topology, eid: EdgeId) -> bool {
+    topo.edge(eid).is_ok_and(|e| {
+        matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line) || e.start() != e.end()
+    })
+}
+
 /// True when an image edge collapses to a point (shared start/end vertex).
 ///
 /// Phase EF intersects each edge against the INFINITE plane of every face,
@@ -957,11 +960,7 @@ fn expand_edge<S: BuildHasher>(
     fwd: bool,
     edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
 ) -> Vec<OrientedEdge> {
-    // Only expand Line edges
-    if !topo
-        .edge(eid)
-        .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
-    {
+    if !expands(topo, eid) {
         return vec![OrientedEdge::new(eid, fwd)];
     }
     let real_imgs: Vec<EdgeId> = match edge_images.get(&eid) {
