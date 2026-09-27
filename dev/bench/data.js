@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790536125268,
+  "lastUpdate": 1790537162512,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45089,6 +45089,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43519519,
             "range": "± 61648",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "79a96acb7f29bdcd94cf7d20c6ddf2ac87b24313",
+          "message": "chore(main): release 4.0.70 (#1860)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.70](https://github.com/andymai/brepkit/compare/v4.0.69...v4.0.70)\n(2026-09-27)\n\n\n### Bug Fixes\n\n* **operations:** classify points with the check crate's ray cast\n([#1858](https://github.com/andymai/brepkit/issues/1858))\n([7727d46](https://github.com/andymai/brepkit/commit/7727d460f0b935ab26ba4bdb7ab7ab55277894d3))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases v4.0.70 with a bug fix: point classification in the operations\ncrate now uses the check crate's ray cast. The workspace and all crate\nversions bump from 4.0.69 to 4.0.70.\n\n<sup>Written for commit c97b16f39b9097919fb201df0cc8c03527b78ec5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1860?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T19:22:34Z",
+          "tree_id": "7e72d3a7956897f91d67149efc79ba9c7ccfa416",
+          "url": "https://github.com/andymai/brepkit/commit/79a96acb7f29bdcd94cf7d20c6ddf2ac87b24313"
+        },
+        "date": 1790537157253,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1029547,
+            "range": "± 1390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1115372,
+            "range": "± 920",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13055,
+            "range": "± 487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 779692,
+            "range": "± 6840",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43197532,
+            "range": "± 777829",
             "unit": "ns/iter"
           }
         ]
