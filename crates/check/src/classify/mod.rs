@@ -231,11 +231,13 @@ pub fn classify_point_robust(
 }
 
 /// The solid's faces in a BVH over their bounding boxes, built once per
-/// point so each ray only tests the faces whose box it meets.
+/// point so each ray only tests the faces whose box it meets, with each
+/// sphere face's region kept once built.
 struct FaceBvh {
     faces: Vec<FaceId>,
     aabbs: Vec<brepkit_math::aabb::Aabb3>,
     bvh: brepkit_math::bvh::Bvh,
+    spheres: Vec<std::cell::OnceCell<Option<boundary::SphereRegion>>>,
 }
 
 impl FaceBvh {
@@ -249,7 +251,13 @@ impl FaceBvh {
             .collect::<Result<Vec<_>, _>>()?;
         let indexed: Vec<_> = aabbs.iter().copied().enumerate().collect();
         let bvh = brepkit_math::bvh::Bvh::build(&indexed);
-        Ok(Self { faces, aabbs, bvh })
+        let spheres = faces.iter().map(|_| std::cell::OnceCell::new()).collect();
+        Ok(Self {
+            faces,
+            aabbs,
+            bvh,
+            spheres,
+        })
     }
 }
 
@@ -262,8 +270,13 @@ fn count_ray_crossings(
 ) -> Result<u32, CheckError> {
     let mut crossings = 0u32;
     for face_idx in faces.bvh.query_ray(origin, direction) {
-        crossings +=
-            boundary::count_face_ray_crossings(topo, faces.faces[face_idx], origin, direction)?;
+        crossings += boundary::count_face_ray_crossings(
+            topo,
+            faces.faces[face_idx],
+            origin,
+            direction,
+            &faces.spheres[face_idx],
+        )?;
     }
     Ok(crossings)
 }

@@ -563,9 +563,12 @@ fn a_seam_capped_half_ball_keeps_its_rim() {
     let disc = topo.add_face(Face::new(disc_wire, vec![], floor));
     let shell = topo.add_shell(Shell::new(vec![cap, disc]).unwrap());
     let half = topo.add_solid(Solid::new(shell, vec![]));
+    let (sin, cos) = 16.875_f64.to_radians().sin_cos();
     for (p, inside) in [
         (Point3::new(0.3, 0.2, 1.5), true),
         (Point3::new(-1.0, 0.5, 1.0), true),
+        // Low by the rim, midway between where 32 chords of it would fall.
+        (Point3::new(2.9 * cos, 2.9 * sin, 0.05), true),
         (Point3::new(-3.21, -1.25, -1.84), false),
         (Point3::new(-2.59, -1.87, -1.22), false),
         (Point3::new(-1.97, -0.02, -1.84), false),

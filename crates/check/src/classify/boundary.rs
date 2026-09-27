@@ -571,20 +571,41 @@ impl SphereRims {
             (len > 0.0).then(|| center + d * (radius / len))
         };
         let mut rims = Vec::new();
-        // (length, midpoint on the sphere, direction of travel) per outer edge.
-        let mut outer_mids: Vec<(f64, Point3, Vec3)> = Vec::new();
+        // (length, point on the sphere, direction of travel) at a quarter,
+        // a half and three quarters along each outer edge.
+        let mut marks: Vec<(f64, Point3, Vec3)> = Vec::new();
         let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
         for (w, wid) in wires.enumerate() {
-            for oe in topo.wire(wid)?.edges() {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                // A wire that runs an edge out and back (a seam) has the
+                // face on both sides of it: the edge crosses any arc as
+                // often each way and drops out of the parity.
+                if wire
+                    .edges()
+                    .iter()
+                    .filter(|o| o.edge() == oe.edge())
+                    .count()
+                    > 1
+                {
+                    continue;
+                }
                 let edge = topo.edge(oe.edge())?;
                 let (a, b) = (
                     topo.vertex(edge.start())?.point(),
                     topo.vertex(edge.end())?.point(),
                 );
-                let (mid, along, len) = match edge.curve() {
+                let sign = if oe.is_forward() { 1.0 } else { -1.0 };
+                match edge.curve() {
                     EdgeCurve::Line => {
                         rims.push(SphereRim::Chord(a - center, b - center));
-                        (on_sphere(a + (b - a) * 0.5), b - a, (b - a).length())
+                        if w == 0 {
+                            for f in [0.25, 0.5, 0.75] {
+                                if let Some(q) = on_sphere(a + (b - a) * f) {
+                                    marks.push(((b - a).length(), q, (b - a) * sign));
+                                }
+                            }
+                        }
                     }
                     EdgeCurve::Circle(c) => {
                         let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
@@ -596,16 +617,25 @@ impl SphereRims {
                             t0,
                             span: t1 - t0,
                         });
-                        let tm = 0.5 * (t0 + t1);
-                        (Some(c.evaluate(tm)), c.tangent(tm), c.radius() * (t1 - t0))
+                        if w == 0 {
+                            // A closed rim's domain starts at its circle's
+                            // own origin, which may be its vertex.
+                            let from = if (a - b).length() < 1e-9 {
+                                c.project(a)
+                            } else {
+                                t0
+                            };
+                            for f in [0.25, 0.5, 0.75] {
+                                let t = (t1 - t0).mul_add(f, from);
+                                marks.push((
+                                    c.radius() * (t1 - t0),
+                                    c.evaluate(t),
+                                    c.tangent(t) * sign,
+                                ));
+                            }
+                        }
                     }
                     EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
-                };
-                if w == 0
-                    && let Some(mid) = mid
-                {
-                    let along = if oe.is_forward() { along } else { -along };
-                    outer_mids.push((len, mid, along));
                 }
             }
         }
@@ -620,8 +650,8 @@ impl SphereRims {
         // is inside only when the arc to it from as far right crosses the
         // edge alone: on a face narrower than the step it crosses the far
         // side too, and the step shrinks.
-        outer_mids.sort_by(|x, y| y.0.total_cmp(&x.0));
-        for (len, mid, along) in outer_mids.into_iter().take(4) {
+        marks.sort_by(|x, y| y.0.total_cmp(&x.0));
+        for (len, mid, along) in marks.into_iter().take(6) {
             let n = mid - center;
             let Ok(left) = n.cross(along).normalize() else {
                 continue;
@@ -777,11 +807,18 @@ fn count_3d_polygon_crossings(
     origin: Point3,
     direction: Vec3,
     roots: &SmallVec<[f64; 4]>,
+    region: &std::cell::OnceCell<Option<SphereRegion>>,
 ) -> Result<u32, CheckError> {
     if roots.is_empty() {
         return Ok(0);
     }
-    let Some(region) = SphereRegion::of(topo, face_id)? else {
+    let region = if let Some(region) = region.get() {
+        region
+    } else {
+        let built = SphereRegion::of(topo, face_id)?;
+        region.get_or_init(|| built)
+    };
+    let Some(region) = region else {
         return Ok(0);
     };
     let mut crossings = 0u32;
@@ -798,7 +835,8 @@ fn count_3d_polygon_crossings(
 /// For plane faces, uses direct ray-plane + 3D polygon containment.
 /// For analytic curved faces, uses ray-surface intersection + UV containment.
 /// For sphere faces, uses 3D polygon containment (avoids UV pole singularity).
-/// For NURBS faces, uses line-surface intersection.
+/// For NURBS faces, uses line-surface intersection. `sphere` keeps a sphere
+/// face's region from one ray to the next.
 ///
 /// # Errors
 ///
@@ -809,6 +847,7 @@ pub fn count_face_ray_crossings(
     face_id: FaceId,
     origin: Point3,
     direction: Vec3,
+    sphere: &std::cell::OnceCell<Option<SphereRegion>>,
 ) -> Result<u32, CheckError> {
     let face = topo.face(face_id)?;
     match face.surface() {
@@ -846,7 +885,7 @@ pub fn count_face_ray_crossings(
         FaceSurface::Sphere(sph) => {
             let sph = sph.clone();
             let roots = ray_surface::ray_sphere(origin, direction, &sph);
-            count_3d_polygon_crossings(topo, face_id, origin, direction, &roots)
+            count_3d_polygon_crossings(topo, face_id, origin, direction, &roots, sphere)
         }
         FaceSurface::Torus(tor) => {
             let tor = tor.clone();
