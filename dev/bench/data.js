@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790502256197,
+  "lastUpdate": 1790502936260,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43685,6 +43685,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42759698,
             "range": "± 92879",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "80826b1bec74c37884baf6cefe3b1de790550376",
+          "message": "chore(main): release 4.0.58 (#1835)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.58](https://github.com/andymai/brepkit/compare/v4.0.57...v4.0.58)\n(2026-09-27)\n\n\n### Bug Fixes\n\n* **algo:** keep a ball's equator circle off the hemispheres a coplanar\nbox face meets ([#1832](https://github.com/andymai/brepkit/issues/1832))\n([3d04550](https://github.com/andymai/brepkit/commit/3d04550db0ca87acabc60fe10cd1dd8e4ce67e23))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `4.0.58`, bumping workspace crate versions from `4.0.57`.\n\nIncludes the algorithmic fix that keeps a ball's equator circle off the\nhemispheres where a coplanar box face meets, available in\n`brepkit-algo`.\n\n<sup>Written for commit 647c818c3d6ef703869b65a5462d0320724d2645.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1835?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T09:53:22Z",
+          "tree_id": "a1d7fe885d6c3b18c06c0026c86e462160846b7c",
+          "url": "https://github.com/andymai/brepkit/commit/80826b1bec74c37884baf6cefe3b1de790550376"
+        },
+        "date": 1790502932830,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 589469,
+            "range": "± 16051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 644662,
+            "range": "± 34401",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8421,
+            "range": "± 231",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 427509,
+            "range": "± 3039",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28442135,
+            "range": "± 185263",
             "unit": "ns/iter"
           }
         ]
