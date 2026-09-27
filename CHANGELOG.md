@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.0.50](https://github.com/andymai/brepkit/compare/v4.0.49...v4.0.50) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** count a face's boundary pieces, not its wires, in the Euler check ([#1817](https://github.com/andymai/brepkit/issues/1817)) ([f47ea91](https://github.com/andymai/brepkit/commit/f47ea914225894819443ce21f8522e64524e80ef))
+* **operations:** measure a solid of planes and quadrics along its faces' boundaries ([#1815](https://github.com/andymai/brepkit/issues/1815)) ([7828640](https://github.com/andymai/brepkit/commit/782864093ad55c32e413c29e14aff93208306774))
+
 ## [4.0.49](https://github.com/andymai/brepkit/compare/v4.0.48...v4.0.49) (2026-09-27)
 
 
