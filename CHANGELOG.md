@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.55](https://github.com/andymai/brepkit/compare/v4.0.54...v4.0.55) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** split a hemisphere along one chain of arcs across its seam ([#1826](https://github.com/andymai/brepkit/issues/1826)) ([00fb62b](https://github.com/andymai/brepkit/commit/00fb62b1b4d1b94d5b3e90d3da1cc11debbd4010))
+
 ## [4.0.54](https://github.com/andymai/brepkit/compare/v4.0.53...v4.0.54) (2026-09-27)
 
 
