@@ -919,7 +919,7 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
 }
 
 /// Whether an edge is replaced by its split images in a face no section
-/// crosses: an open edge's images run from its start to its end whatever
+/// crosses: an open edge's images chain from its start to its end whatever
 /// its curve, while a closed curve's wrap its seam and stay whole here.
 fn expands(topo: &Topology, eid: EdgeId) -> bool {
     topo.edge(eid).is_ok_and(|e| {
@@ -950,10 +950,10 @@ fn non_degenerate_image_count<S: BuildHasher>(
     })
 }
 
-/// Expand a single edge into its multi-split image edges.
-/// Only expands Line edges with 2+ non-degenerate children; keeps
-/// everything else (including edges whose only extra images are
-/// zero-length stubs) as-is.
+/// Expand a single edge into its multi-split image edges, chained from the
+/// edge's start: only edges [`expands`] takes, with 2+ non-degenerate
+/// children; everything else (including edges whose only extra images are
+/// zero-length stubs) stays as-is.
 fn expand_edge<S: BuildHasher>(
     topo: &Topology,
     eid: EdgeId,
@@ -995,15 +995,34 @@ fn expand_edge<S: BuildHasher>(
     } else {
         real_imgs.into_iter().rev().collect()
     };
-    let mut out = Vec::with_capacity(ordered.len());
-    for img in ordered {
-        let Some((s, e)) = ends(img) else {
-            out.push(OrientedEdge::new(img, fwd));
-            continue;
+    // The images need not come in walk order (a curve stored against its
+    // edge sorts its pieces by its own parameter): take next the one that
+    // touches the cursor.
+    let mut left = ordered;
+    let mut out = Vec::with_capacity(left.len());
+    while !left.is_empty() {
+        let mut best: Option<(f64, usize, bool, Point3)> = None;
+        for (k, &img) in left.iter().enumerate() {
+            let Some((s, e)) = ends(img) else { continue };
+            for (gap, img_fwd, next) in [
+                ((s - cursor).length_squared(), true, e),
+                ((e - cursor).length_squared(), false, s),
+            ] {
+                if best.is_none_or(|b| gap < b.0) {
+                    best = Some((gap, k, img_fwd, next));
+                }
+            }
+        }
+        let Some((_, k, img_fwd, next)) = best else {
+            out.extend(
+                std::mem::take(&mut left)
+                    .into_iter()
+                    .map(|img| OrientedEdge::new(img, fwd)),
+            );
+            break;
         };
-        let img_fwd = (s - cursor).length_squared() <= (e - cursor).length_squared();
-        cursor = if img_fwd { e } else { s };
-        out.push(OrientedEdge::new(img, img_fwd));
+        out.push(OrientedEdge::new(left.remove(k), img_fwd));
+        cursor = next;
     }
     out
 }
