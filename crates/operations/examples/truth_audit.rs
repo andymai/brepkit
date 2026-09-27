@@ -14,9 +14,10 @@
 //! `x > 1, y > 1.2, z > 0.8`, a rod of radius 0.6 along `y` through
 //! `(0.5, ., 1)`, and the slab `1 < z < 2`. Each line reads the case, the
 //! truth, and per pose (upright, turned, mirrored through a slanted plane)
-//! `x` for an exact result or `F` for the mesh boolean's, `~` when
-//! `validate_solid` rejects it, `!` when its volume misses the truth by more
-//! than 1e-4 of it, and that relative error.
+//! `x` for a result the analytic path made or `F` for the mesh boolean's,
+//! `~` when `validate_solid` rejects it, `!` when its volume misses the
+//! truth by more than 1e-4 of it, and that relative error; `empty` when the
+//! truth and the result are both empty, `error` for any other failure.
 #![allow(
     clippy::unwrap_used,
     clippy::print_stdout,
@@ -29,6 +30,7 @@ use std::fmt::Write as _;
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
+use brepkit_operations::OperationsError;
 use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::mirror::mirror;
@@ -211,7 +213,9 @@ fn main() {
                     }
                     let before = mesh_fallback_count();
                     let tag = match boolean(&mut topo, op, a, b) {
-                        Err(_) if truth.abs() < 1e-9 => "empty".to_string(),
+                        Err(OperationsError::EmptyResult { .. }) if truth.abs() < 1e-9 => {
+                            "empty".to_string()
+                        }
                         Err(_) => "error".to_string(),
                         Ok(s) => {
                             let fallback = mesh_fallback_count() != before;
