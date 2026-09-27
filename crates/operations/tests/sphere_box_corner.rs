@@ -1146,6 +1146,83 @@ fn an_offset_turned_column_splits_each_hemisphere_between_two_chains() {
     }
 }
 
+/// The ball and the column `|x|, |y| < 2.05` from `z = -1` up, upright and
+/// turned: the column's corners at `z = -1` lie outside the ball, but its
+/// corner edges pierce the sphere at `z = -0.77`, so near each corner the
+/// lower hemisphere holds a small patch inside the column, bounded by two
+/// wall arcs and an arc of the floor's circle a few degrees long. The ball
+/// within the column, the ball less it and the column less the ball are
+/// exact, valid and watertight, with 10, 7 and 22 faces, and measure the
+/// ball's chords over the column above the floor (by the midpoint rule over
+/// `x`, each chord's integral over `y` in closed form) within `1e-7`.
+#[test]
+fn a_column_entering_the_ball_from_below_keeps_its_corner_patches() {
+    let (a, n) = (2.05_f64, 40_000);
+    let step = 2.0 * a / f64::from(n);
+    let within: f64 = (0..n)
+        .map(|k| {
+            let x = step.mul_add(f64::from(k) + 0.5, -a);
+            let c2 = 9.0 - x * x;
+            let c = c2.sqrt();
+            let g = |y: f64| {
+                y.mul_add(
+                    (c2 - y * y).max(0.0).sqrt(),
+                    c2 * (y / c).clamp(-1.0, 1.0).asin(),
+                )
+            };
+            let top = a.min(c);
+            // Above the equator the chord runs to the sphere; below it, to
+            // the floor where the sphere lies under it and to the sphere
+            // past the floor's circle.
+            let floor = (8.0 - x * x).max(0.0).sqrt().min(a);
+            let below = if floor < top {
+                2.0f64.mul_add(floor, g(top) - g(floor))
+            } else {
+                2.0 * top
+            };
+            0.5 * (g(top) - g(-top)) + below
+        })
+        .sum::<f64>()
+        * step;
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let turned = Mat4::rotation_z(1.0) * Mat4::rotation_y(0.3);
+    for (pose_name, pose) in [("upright", Mat4::identity()), ("turned", turned)] {
+        for (name, truth, faces) in [
+            ("within", within, 10),
+            ("ball less column", ball - within, 7),
+            ("column less ball", 4.1f64.mul_add(41.0, -within), 22),
+        ] {
+            let label = format!("{name}, {pose_name}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let column = make_box(&mut topo, 4.1, 4.1, 10.0).unwrap();
+            let place = pose * Mat4::translation(-2.05, -2.05, -1.0);
+            transform_solid(&mut topo, column, &place).unwrap();
+            transform_solid(&mut topo, sphere, &pose).unwrap();
+            let result = match name {
+                "within" => boolean(&mut topo, BooleanOp::Intersect, sphere, column),
+                "ball less column" => boolean(&mut topo, BooleanOp::Cut, sphere, column),
+                _ => boolean(&mut topo, BooleanOp::Cut, column, sphere),
+            }
+            .unwrap();
+            assert_eq!(
+                solid_faces(&topo, result).unwrap().len(),
+                faces,
+                "{label}: faces"
+            );
+            let report = validate_solid(&topo, result).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, result, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-7 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
+
 /// The ball with a square column through both poles and a thin rod along
 /// `z` through one of its caps, fused into one tool: the ball less it, within
 /// it and the tool less the ball, the rod of radius 0.1 at `(2.75, 0)` or of
