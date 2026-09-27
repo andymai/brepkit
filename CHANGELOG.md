@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.67](https://github.com/andymai/brepkit/compare/v4.0.66...v4.0.67) (2026-09-27)
+
+
+### Bug Fixes
+
+* **check:** measure point-to-solid distance to faces as trimmed ([#1852](https://github.com/andymai/brepkit/issues/1852)) ([f43a020](https://github.com/andymai/brepkit/commit/f43a020fcc161a5d7253b08781872ca030e0591c))
+
 ## [4.0.66](https://github.com/andymai/brepkit/compare/v4.0.65...v4.0.66) (2026-09-27)
 
 
