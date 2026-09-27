@@ -5,6 +5,7 @@
 
 use std::f64::consts::{PI, TAU};
 
+use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_check::properties::PropertiesOptions;
 use brepkit_check::properties::face_integrator::integrate_face;
 use brepkit_geometry::convert::circle_to_nurbs;
@@ -343,8 +344,9 @@ fn a_nurbs_arc_past_its_vertices_extrudes_to_its_area() {
 
 /// A keyhole and a half-turn notch, extruded 0.2, cut by the slab `z > 0.1`
 /// and intersected with it, each arc stored three ways, upright and turned:
-/// both halves stay exact (a cylinder wall among their faces), valid and
-/// watertight, and measure the face's area times 0.1. The slab's face
+/// both halves stay exact (seven planes and the cylinder wall), valid and
+/// watertight, hold material in the kept half only, and measure the face's
+/// area times 0.1. The slab's face
 /// inside the notched outline is enclosed by a loop that is not convex,
 /// whose centroid the keyhole's chamber puts outside it, so the piece is
 /// sampled at a point of the loop's own polygon.
@@ -411,13 +413,36 @@ fn a_slab_through_a_notched_wall_keeps_it_exact() {
                         failures.push(format!("{label}: open or non-manifold mesh"));
                     }
                     let faces = brepkit_topology::explorer::solid_faces(&topo, half).unwrap();
-                    if !faces.iter().any(|&f| {
-                        matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_))
-                    }) {
+                    let walls = faces
+                        .iter()
+                        .filter(|&&f| {
+                            matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_))
+                        })
+                        .count();
+                    if (faces.len(), walls) != (8, 1) {
                         failures.push(format!(
-                            "{label}: fell back to a mesh ({} faces)",
+                            "{label}: {} faces, {walls} cylinders, not the 7 planes and 1 cylinder",
                             faces.len()
                         ));
+                    }
+                    // The kept half holds a corner of the outline, the other
+                    // half and the notch hold nothing.
+                    let (kept, gone) = if matches!(op, BooleanOp::Cut) {
+                        (0.05, 0.15)
+                    } else {
+                        (0.15, 0.05)
+                    };
+                    for (x, y, z, want) in [
+                        (-1.5, -1.5, kept, PointClassification::Inside),
+                        (-1.5, -1.5, gone, PointClassification::Outside),
+                        (0.0, 1.5, kept, PointClassification::Outside),
+                    ] {
+                        let p = place.mul_point(Point3::new(x, y, z));
+                        let got =
+                            classify_point(&topo, half, p, &ClassifyOptions::default()).unwrap();
+                        if got != want {
+                            failures.push(format!("{label}: ({x}, {y}, {z}) reads {got:?}"));
+                        }
                     }
                     let truth = area * 0.1;
                     let volume = solid_volume(&topo, half, 0.01).unwrap();
