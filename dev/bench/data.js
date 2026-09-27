@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790526296017,
+  "lastUpdate": 1790527238321,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44657,6 +44657,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35801707,
             "range": "± 104495",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f43a020fcc161a5d7253b08781872ca030e0591c",
+          "message": "fix(check): measure point-to-solid distance to faces as trimmed (#1852)\n\nPoint to solid and point to face distance now measure faces as trimmed,\nincluding curved boundaries, holes, and every shell.\n\n## What was wrong\n\n- On main, `brepkit_operations::distance::point_to_solid_distance`\nreturned 5 for a point 1 below the top of `make_cylinder(5, 10)`,\n0.30275 for a point 3 above the small end of `make_cone(5, 2, 10)`, and\n4 for a point in the cavity of `make_sphere(5, 32)` hollowed 1 thick.\nThe correct distances are 1, 3, and 3.\n`brepkit_check::distance::point_to_solid` returned these three\ncorrectly.\n- Both distances returned 3 for a point behind the flat of a half\ncylinder at distance 8. Both also returned 0 for a point on a removed\nportion of `make_sphere(3, 32)` after a slab at `1 < z < 2` took it. The\ncorrect distance is 0.5.\n- The operations implementation measured cylinder, cone, sphere, and\ntorus faces against their whole untrimmed surfaces and walked only the\nouter shell.\n- The check implementation projected curved face boundary polygons along\na Newell normal. Its fallback treated every edge as a straight chord.\n\n## What this does\n\n- Extracts the classifier's per-face containment into `face_contains`.\nCylinders, cones, tori and NURBS faces use their `(u, v)` regions (a\nNURBS loop folded flat by a closed surface's seam reads as the whole\nsurface), spheres use `SphereRegion`, planes use their polygons, and\nholes are excluded.\n- Routes every face's distance through `face_contains`, planes included,\nso a point over a hole measures to the hole's rim. Fallback edges are\nmeasured on their own curves through `point_to_edge`: lines as segments,\ncircles exactly (the circle's nearest point when the arc holds it, else\nthe nearer end), ellipses and NURBS through `point_to_curve` over their\nspans.\n- Makes operations `point_to_solid_distance`, `solid_to_solid_distance`\nand `point_to_face_distance` delegate to the check crate, so every shell\nis visited. The operations boundary test skips faces whose box lies\nfarther than its tolerance.\n- Makes the operations classifier boundary test, which uses\n`point_to_face_distance`, measure faces as trimmed.\n- Removes the dead surface and segment wrappers and their four unit\ntests.\n\n## Verification\n\n- All seven probe cases read their expected distances through both APIs.\n- `distance_reads_faces_as_trimmed` covers all seven cases in upright,\nturned, and mirrored poses, with both distances within `1e-6`.\n- `distance_reads_holes_and_nurbs_faces_as_trimmed` reads a point over a\n10-cube's radius-3 bore at `sqrt(34)`, a point in the bore on the top\nface's plane as `Outside`, and a point 1 outside a cylinder converted to\nNURBS at 1; `solid_distance_reaches_a_cavity` reads a unit cube in a\nhollowed cylinder's cavity at `4 - sqrt(1/2)`. Both run upright, turned\nand mirrored.\n- `a_point_on_a_removed_surface_is_not_on_the_boundary` verifies that\nthe removed-sphere point classifies `Outside`, rather than on the\nboundary, in all three poses.\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, retains 487 exact results out of 540, matching\nmain. The 300-line pose sweep is unchanged and has no open result.\n- The workspace suite passes with 3197 tests run, 3197 passed, and 20\nskipped. Lint is clean.\n- The roadmap records the case as closed and removes the boundary-test\nclause from the classification row.",
+          "timestamp": "2026-09-27T16:37:45Z",
+          "tree_id": "73ac7f06a9f4614de4d5849b303dbc9bcd17a9fe",
+          "url": "https://github.com/andymai/brepkit/commit/f43a020fcc161a5d7253b08781872ca030e0591c"
+        },
+        "date": 1790527233389,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1024934,
+            "range": "± 54128",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1111161,
+            "range": "± 19218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13140,
+            "range": "± 487",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 772074,
+            "range": "± 2014",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43263247,
+            "range": "± 138492",
             "unit": "ns/iter"
           }
         ]
