@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790528311341,
+  "lastUpdate": 1790529073281,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44819,6 +44819,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42524487,
             "range": "± 136841",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e398e0216bc9e73d14041f90beb9c84389edc896",
+          "message": "chore(main): release 4.0.68 (#1857)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.68](https://github.com/andymai/brepkit/compare/v4.0.67...v4.0.68)\n(2026-09-27)\n\n\n### Bug Fixes\n\n* **check:** read a plane hit against its face's own lines and arcs\n([#1851](https://github.com/andymai/brepkit/issues/1851))\n([3efdb90](https://github.com/andymai/brepkit/commit/3efdb90d4e7dfbfe6945470ac40fb3c798a36fc4))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.68, which bumps all workspace crate versions in\nlockstep and updates the changelog.\n\nThis release includes one fix: plane hit checks now read against the\nface's own lines and arcs.\n\n<sup>Written for commit f29bebd422523f7e4f1b5d2d004e08308a11173f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1857?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T17:08:50Z",
+          "tree_id": "589bc218283d1fd83eba7a32bb4609ed29197512",
+          "url": "https://github.com/andymai/brepkit/commit/e398e0216bc9e73d14041f90beb9c84389edc896"
+        },
+        "date": 1790529068609,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 693416,
+            "range": "± 17960",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 757248,
+            "range": "± 13193",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8965,
+            "range": "± 425",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 509366,
+            "range": "± 18535",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 31822604,
+            "range": "± 304820",
             "unit": "ns/iter"
           }
         ]
