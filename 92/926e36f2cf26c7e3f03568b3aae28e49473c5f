@@ -1,0 +1,19 @@
+crates/operations/tests/pin_through_a_ball.rs
+  s_ba2f7b5c6902b6::t_ef9aa35ead81e9 16,119-128,133-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "92926e36f2cf26c7e3f03568b3aae28e49473c5f",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
