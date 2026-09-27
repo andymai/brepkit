@@ -1728,6 +1728,8 @@ pub fn intersect_analytic_analytic_bounded(
 /// - **Sphere-cylinder**: reduce to quadratic in one parameter
 /// - **Cone-cylinder**: parallel axes in the cone's own `v`, other axes
 ///   along the cylinder's rulings
+/// - **Cone-sphere**: off the cone's axis, along the cone's generators
+/// - **Torus-cylinder**: along the cylinder's rulings
 #[allow(clippy::too_many_lines)]
 fn try_algebraic_intersection(
     a: &AnalyticSurface<'_>,
@@ -2652,9 +2654,8 @@ fn ruling_torus_cylinder(
 /// generator of the cone crosses the sphere twice on the cone's nappe (a pin
 /// through a ball): along a generator `apex + v g` the sphere is a quadratic
 /// in `v`, and each of its two roots, taken in order, sweeps one closed loop
-/// around the cone. `None` (the other paths' case) when the centre lies on
-/// the axis (the loops are circles), when a generator misses the sphere or
-/// meets it behind the apex.
+/// around the cone. `None` (the marcher's case) when the centre lies on the
+/// axis, when a generator misses the sphere or meets it behind the apex.
 fn ruling_cone_sphere(
     cone: &ConicalSurface,
     sphere: &SphericalSurface,
@@ -2663,30 +2664,30 @@ fn ruling_cone_sphere(
     let (apex, centre, radius) = (cone.apex(), sphere.center(), sphere.radius());
     let offset = apex - centre;
     let lin_tol = Tolerance::new().linear;
-    if (offset - cone.axis() * offset.dot(cone.axis())).length() < lin_tol {
+    let along = offset.dot(cone.axis());
+    let across = (offset - cone.axis() * along).length();
+    if across < lin_tol {
         return None;
     }
-    // Both roots of the generator at `u`, nearer first, when it crosses the
-    // sphere ahead of the apex. A unit direction: `v` is the distance along
-    // the generator.
-    let crossing = |u: f64| {
-        let g = cone.evaluate(u, 1.0) - apex;
-        let (disc, vp, vm) = ruling_quadratic(
-            1.0,
-            2.0 * g.dot(offset),
-            offset.dot(offset) - radius * radius,
-        );
+    // Both roots along a generator of unit direction `g` (`v` the distance
+    // from the apex), nearer first, from `h = g·offset`, when it crosses the
+    // sphere twice ahead of the apex.
+    let crossing = |h: f64| {
+        let (disc, vp, vm) = ruling_quadratic(1.0, 2.0 * h, offset.dot(offset) - radius * radius);
         (disc > lin_tol && vm >= lin_tol).then_some((vm, vp))
     };
-    // Checked on a scan finer than the sampling, so a narrow window of
-    // generators that miss is not stepped over.
-    let scan = WINDOW_SCAN * RULING_SAMPLES;
-    #[allow(clippy::cast_precision_loss)]
-    if (0..scan).any(|k| crossing(TAU * (k as f64 + 0.5) / scan as f64).is_none()) {
+    // Around the cone `h` runs between these bounds. Where both roots lie
+    // ahead of the apex, raising `h` shrinks the discriminant and moves the
+    // nearer root out, so every generator crosses when the two extreme ones
+    // do.
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    if crossing(sin_a.mul_add(along, cos_a * across)).is_none()
+        || crossing(sin_a.mul_add(along, -cos_a * across)).is_none()
+    {
         return None;
     }
     let rows: Vec<(f64, f64)> = (0..RULING_SAMPLES)
-        .map(|i| crossing(ruling_u(i)))
+        .map(|i| crossing((cone.evaluate(ruling_u(i), 1.0) - apex).dot(offset)))
         .collect::<Option<_>>()?;
     let loops: Vec<Vec<Point3>> = [0, 1]
         .iter()
@@ -3862,8 +3863,10 @@ mod tests {
                 }
             }
         }
-        // On the ball's axis the loops are circles, and a pin only partly
-        // through the ball has generators that miss it.
+        // On the ball's axis the loops are circles, a pin only partly
+        // through the ball has generators that miss it, and a pin whose apex
+        // is inside the ball or that opens away from it meets the ball
+        // behind the apex.
         let coaxial =
             ConicalSurface::new(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0), 1.4)
                 .unwrap();
@@ -3875,6 +3878,22 @@ mod tests {
         )
         .unwrap();
         assert!(ruling_cone_sphere(&aside, &ball, true).is_none());
+        for (tip, axis) in [
+            (Point3::new(1.0, 0.5, 1.0), Vec3::new(0.0, 0.0, -1.0)),
+            (Point3::new(1.0, 0.5, 10.0), Vec3::new(0.0, 0.0, 1.0)),
+        ] {
+            let behind = ConicalSurface::new(tip, axis, FRAC_PI_2 - half).unwrap();
+            assert!(ruling_cone_sphere(&behind, &ball, true).is_none());
+        }
+        // Grazing: the generators that miss span about 0.002 of a turn,
+        // narrower than a 2048-angle scan's step.
+        let step = TAU / 2048.0;
+        let grazed =
+            SphericalSurface::new(Point3::new(step.cos(), step.sin(), 10.0), 9.255_250_971_8)
+                .unwrap();
+        let wide =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5).unwrap();
+        assert!(ruling_cone_sphere(&wide, &grazed, true).is_none());
     }
 
     #[test]
