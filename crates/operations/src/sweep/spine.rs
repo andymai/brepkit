@@ -432,6 +432,7 @@ pub fn try_analytic_spine_sweep(
                     *center,
                     *axis,
                     *angle,
+                    0.0,
                 )
                 .map_err(crate::OperationsError::Math)?,
             };

@@ -178,11 +178,12 @@ fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
 /// The returned `reversed` flag orients the analytic surface to agree with the
 /// correctly-wound NURBS band normal.
 ///
+/// - circular-arc edge centred on the axis → `Sphere` band
+///
 /// A general spline profile edge, a spindle/self-intersecting torus arc (arc
 /// radius ≥ its centre's axis distance), and degenerate on-axis bands keep the
-/// NURBS band. (A circular arc whose centre is ON the axis sweeps a sphere; that
-/// case also falls back to NURBS here — recognising it as a `Sphere` band is a
-/// follow-up.)
+/// NURBS band. `seg_start` is the angle this segment's ring is turned from
+/// the profile.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn revolution_band_surface(
     profile_curve: &EdgeCurve,
@@ -194,6 +195,7 @@ pub(crate) fn revolution_band_surface(
     axis_origin: Point3,
     axis: Vec3,
     seg_angle: f64,
+    seg_start: f64,
 ) -> Result<(FaceSurface, bool), brepkit_math::MathError> {
     let nurbs = make_revolution_surface(
         p0_start,
@@ -215,11 +217,11 @@ pub(crate) fn revolution_band_surface(
         };
         let arc_mid = profile_arc_midpoint(
             profile_curve,
-            center,
             from,
             to,
             axis_origin,
             axis,
+            seg_start,
             seg_angle,
         );
         if let Some(result) = revolution_sphere_band(
@@ -366,23 +368,17 @@ fn profile_arc_center_radius(
 
 /// The profile arc's midpoint carried to the centre of the band it sweeps on
 /// this segment. The profile curve lies where the profile was drawn, so the
-/// arc's ends on this segment's ring (`from`, `to`, in the edge's own order)
-/// are turned back to it first.
+/// arc's ends on this segment's ring (`from`, `to`, in the edge's own order),
+/// turned `turn` from it, are turned back to it first.
 fn profile_arc_midpoint(
     curve: &EdgeCurve,
-    center: Point3,
     from: Point3,
     to: Point3,
     axis_origin: Point3,
     axis: Vec3,
+    turn: f64,
     seg_angle: f64,
 ) -> Point3 {
-    let radial = |p: Point3| {
-        let d = p - axis_origin;
-        d - axis * d.dot(axis)
-    };
-    let (rc, rp) = (radial(center), radial(from));
-    let turn = rc.cross(rp).dot(axis).atan2(rc.dot(rp));
     let (a, b) = (
         rotate_point(from, axis_origin, axis, -turn),
         rotate_point(to, axis_origin, axis, -turn),
@@ -399,7 +395,7 @@ fn profile_arc_midpoint(
 /// is the arc centre's perpendicular distance to the axis; the minor radius is
 /// the arc radius. Returns `Ok(None)` (caller keeps the NURBS band) when the arc
 /// does not clear the axis (`major ≤ minor`, a spindle/degenerate torus that
-/// would self-intersect) or the arc centre lies on the axis (a sphere band).
+/// would self-intersect; a centre on the axis sweeps a sphere band instead).
 fn revolution_torus_band(
     arc_center: Point3,
     arc_radius: f64,
@@ -414,8 +410,8 @@ fn revolution_torus_band(
     let axial = axis * to_center.dot(axis);
     let radial = to_center - axial;
     let major = radial.length();
-    // Centre on the axis → sphere band (a different surface type); spindle /
-    // horn torus (major ≤ minor) self-intersects. Both keep the NURBS band.
+    // A spindle or horn torus (major ≤ minor) self-intersects: keep the NURBS
+    // band.
     if major <= arc_radius + tol {
         return Ok(None);
     }
@@ -491,7 +487,7 @@ struct WireRevolveData {
     /// on the axis, which stays put.
     arc_edges: Vec<Vec<Option<brepkit_topology::edge::EdgeId>>>,
     ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
-    /// A profile edge lying along the axis (a line with both ends on it),
+    /// A profile edge lying along the axis (both ends and its middle on it),
     /// which sweeps nothing.
     along_axis: Vec<bool>,
     input_oriented: Vec<OrientedEdge>,
@@ -1525,7 +1521,18 @@ pub fn revolve(
             .collect::<Result<_, _>>()?;
         let along_axis: Vec<bool> = (0..n)
             .map(|i| {
-                on_axis[i] && on_axis[(i + 1) % n] && matches!(input_curves[i], EdgeCurve::Line)
+                let next = (i + 1) % n;
+                if !(on_axis[i] && on_axis[next]) {
+                    return false;
+                }
+                let (a, b) = if input_oriented[i].is_forward() {
+                    (input_positions[i], input_positions[next])
+                } else {
+                    (input_positions[next], input_positions[i])
+                };
+                let (t0, t1) = input_curves[i].domain_with_endpoints(a, b);
+                let mid = input_curves[i].evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+                radial_axial(mid, axis_origin, axis).0 <= tol.linear
             })
             .collect();
         for (k, ring) in ring_verts.iter().enumerate().skip(1) {
@@ -1635,6 +1642,8 @@ pub fn revolve(
             let p1_end = topo.vertex(outer.ring_verts[next][next_i])?.point();
 
             let profile_curve = topo.edge(outer.input_oriented[i].edge())?.curve().clone();
+            #[allow(clippy::cast_precision_loss)]
+            let seg_start = seg_angle * seg as f64;
             let (surface, reversed) = revolution_band_surface(
                 &profile_curve,
                 outer.input_oriented[i].is_forward(),
@@ -1645,6 +1654,7 @@ pub fn revolve(
                 axis_origin,
                 axis,
                 seg_angle,
+                seg_start,
             )?;
 
             // A reversed face flips every edge's effective traversal, so the
