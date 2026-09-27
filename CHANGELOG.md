@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.46](https://github.com/andymai/brepkit/compare/v4.0.45...v4.0.46) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** read a sphere face that planes do not bound by its own wires ([#1807](https://github.com/andymai/brepkit/issues/1807)) ([d7d4516](https://github.com/andymai/brepkit/commit/d7d45168ddd4af5852d3824df2eb4b66d0b367b9))
+
 ## [4.0.45](https://github.com/andymai/brepkit/compare/v4.0.44...v4.0.45) (2026-09-26)
 
 
