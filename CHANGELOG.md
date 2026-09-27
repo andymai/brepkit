@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.62](https://github.com/andymai/brepkit/compare/v4.0.61...v4.0.62) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** fail the assembly instead of dropping a real piece of a face as a sliver ([#1841](https://github.com/andymai/brepkit/issues/1841)) ([bdb474b](https://github.com/andymai/brepkit/commit/bdb474b903c7ba16e40ade17d537206e8582765d))
+
 ## [4.0.61](https://github.com/andymai/brepkit/compare/v4.0.60...v4.0.61) (2026-09-27)
 
 
