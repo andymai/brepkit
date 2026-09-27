@@ -9,10 +9,14 @@ use brepkit_check::properties::PropertiesOptions;
 use brepkit_check::properties::face_integrator::integrate_face;
 use brepkit_geometry::convert::circle_to_nurbs;
 use brepkit_math::curves::Circle3D;
+use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
+use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::{face_area, oriented_solid_volume, solid_volume};
+use brepkit_operations::primitives::make_box;
 use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -185,6 +189,16 @@ fn check(topo: &Topology, area: f64, wall: f64, solid: SolidId, name: &str) {
     );
 }
 
+/// A named outline: its corners, its arc sides, whether it is a hole in a
+/// 10 x 10 square, and the face's area.
+type Outline = (
+    &'static str,
+    Vec<(f64, f64)>,
+    Vec<(usize, (f64, f64), f64)>,
+    bool,
+    f64,
+);
+
 const ARCS: [(Arc, &str); 3] = [
     (Arc::Circle, "circle"),
     (Arc::Nurbs, "NURBS"),
@@ -327,4 +341,104 @@ fn a_nurbs_arc_past_its_vertices_extrudes_to_its_area() {
         solid,
         "NURBS arc past its vertices",
     );
+}
+
+/// A keyhole and a half-turn notch, extruded 0.2, cut by the slab `z > 0.1`
+/// and intersected with it, each arc stored three ways, upright and turned:
+/// both halves stay exact (a cylinder wall among their faces), valid and
+/// watertight, and measure the face's area times 0.1. The slab's face
+/// inside the notched outline is enclosed by a loop that is not convex, and
+/// the piece's sample came from the loop's centroid, which the keyhole's
+/// chamber puts outside the loop: the piece was dropped and the boolean fell
+/// back to a mesh.
+#[test]
+fn a_slab_through_a_notched_wall_keeps_it_exact() {
+    let (_, chamber) = chamber();
+    let outlines: Vec<Outline> = vec![
+        (
+            "keyhole",
+            vec![
+                (-3.0, -3.0),
+                (3.0, -3.0),
+                (3.0, 3.0),
+                (0.5, 3.0),
+                (-0.5, 3.0),
+                (-3.0, 3.0),
+            ],
+            vec![(3, (0.0, 1.5), -1.0)],
+            false,
+            36.0 - chamber,
+        ),
+        (
+            "half-turn notch",
+            vec![
+                (-2.0, -2.0),
+                (2.0, -2.0),
+                (2.0, 2.0),
+                (1.0, 2.0),
+                (-1.0, 2.0),
+                (-2.0, 2.0),
+            ],
+            vec![(3, (0.0, 2.0), -1.0)],
+            false,
+            16.0 - PI / 2.0,
+        ),
+    ];
+    let poses = [
+        ("upright", Mat4::identity()),
+        (
+            "turned",
+            Mat4::translation(0.3, -0.2, 0.5) * Mat4::rotation_x(0.6) * Mat4::rotation_z(0.9),
+        ),
+    ];
+    let mut failures: Vec<String> = Vec::new();
+    for (name, corners, arcs, hole, area) in &outlines {
+        for (arc, kind) in ARCS {
+            for (op, op_name) in [(BooleanOp::Cut, "cut"), (BooleanOp::Intersect, "intersect")] {
+                for (pose, place) in &poses {
+                    let label = format!("{kind} {name} {op_name} {pose}");
+                    let mut topo = Topology::new();
+                    let profile = if *hole {
+                        let square = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)];
+                        let outer = wire(&mut topo, &square, &[], arc);
+                        let inner = wire(&mut topo, corners, arcs, arc);
+                        face(&mut topo, outer, vec![inner])
+                    } else {
+                        let outer = wire(&mut topo, corners, arcs, arc);
+                        face(&mut topo, outer, vec![])
+                    };
+                    let solid = extrude(&mut topo, profile, Vec3::new(0.0, 0.0, 1.0), 0.2).unwrap();
+                    let slab = make_box(&mut topo, 20.0, 20.0, 1.0).unwrap();
+                    let at = Mat4::translation(-10.0, -10.0, 0.1);
+                    transform_solid(&mut topo, slab, &at).unwrap();
+                    transform_solid(&mut topo, solid, place).unwrap();
+                    transform_solid(&mut topo, slab, place).unwrap();
+                    let half = boolean(&mut topo, op, solid, slab).unwrap();
+                    let report = validate_solid(&topo, half).unwrap();
+                    if !report.is_valid() {
+                        failures.push(format!("{label}: {:?}", report.issues));
+                    }
+                    let mesh = tessellate_solid(&topo, half, 0.01).unwrap();
+                    if !is_watertight(&mesh) {
+                        failures.push(format!("{label}: open or non-manifold mesh"));
+                    }
+                    let faces = brepkit_topology::explorer::solid_faces(&topo, half).unwrap();
+                    if !faces.iter().any(|&f| {
+                        matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_))
+                    }) {
+                        failures.push(format!(
+                            "{label}: fell back to a mesh ({} faces)",
+                            faces.len()
+                        ));
+                    }
+                    let truth = area * 0.1;
+                    let volume = solid_volume(&topo, half, 0.01).unwrap();
+                    if (volume - truth).abs() >= 1e-6 * truth {
+                        failures.push(format!("{label}: volume {volume}, truth {truth}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
