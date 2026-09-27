@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.69](https://github.com/andymai/brepkit/compare/v4.0.68...v4.0.69) (2026-09-27)
+
+
+### Bug Fixes
+
+* **heal:** turn a recognized face over when its NURBS normal opposes the new surface ([#1854](https://github.com/andymai/brepkit/issues/1854)) ([5571574](https://github.com/andymai/brepkit/commit/55715748750614a12063a4395db5a5d2f12111eb))
+
 ## [4.0.68](https://github.com/andymai/brepkit/compare/v4.0.67...v4.0.68) (2026-09-27)
 
 
