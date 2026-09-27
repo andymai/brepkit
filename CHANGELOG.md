@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.59](https://github.com/andymai/brepkit/compare/v4.0.58...v4.0.59) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** keep a solid's cavity through booleans with a box ([#1836](https://github.com/andymai/brepkit/issues/1836)) ([e5cfbb7](https://github.com/andymai/brepkit/commit/e5cfbb7e95c863fdd93e487e00f8b951287036d2))
+
 ## [4.0.58](https://github.com/andymai/brepkit/compare/v4.0.57...v4.0.58) (2026-09-27)
 
 
