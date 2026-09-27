@@ -157,3 +157,39 @@ fn a_box_swallowing_the_cavity_is_not_held_by_the_cube() {
         check(&topo, result, truth, &label);
     }
 }
+
+/// The hollow cube and the box over `z < 1` moved down 1, so the plane of the
+/// disc the cavity keeps passes through the world origin, where that disc's
+/// flux reads nothing: the cap and its disc still read as a cavity, and every
+/// op is exact, valid and within `1e-6` of its volume.
+#[test]
+fn a_cap_cavity_keeps_its_side_with_its_disc_through_the_origin() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let (above, slab) = (ball_above(1.0), 400.0 * 11.0);
+    let down = Mat4::translation(0.0, 0.0, -1.0);
+    for (op, swapped, truth) in [
+        (BooleanOp::Intersect, false, slab - (ball - above)),
+        (BooleanOp::Cut, false, 8000.0 - slab - above),
+        (BooleanOp::Cut, true, ball - above),
+        (BooleanOp::Fuse, false, 8000.0 - above),
+    ] {
+        let label = format!("{op:?}{}", if swapped { " swapped" } else { "" });
+        let mut topo = Topology::new();
+        let hollow = hollow_cube(&mut topo);
+        transform_solid(&mut topo, hollow, &down).unwrap();
+        let other = make_box(&mut topo, 20.0, 20.0, 11.0).unwrap();
+        transform_solid(
+            &mut topo,
+            other,
+            &(down * Mat4::translation(-10.0, -10.0, -10.0)),
+        )
+        .unwrap();
+        let result = if swapped {
+            boolean(&mut topo, op, other, hollow)
+        } else {
+            boolean(&mut topo, op, hollow, other)
+        }
+        .unwrap();
+        check(&topo, result, truth, &label);
+    }
+}
