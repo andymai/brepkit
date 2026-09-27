@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790520240215,
+  "lastUpdate": 1790520847088,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44387,6 +44387,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42730265,
             "range": "± 102045",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e0102bb885ec2a25383fe53a61637c4f9d7567b4",
+          "message": "fix(algo): sample a notched loop's piece inside the loop (#1846)\n\nThe internal-loops face splitter now samples a notched loop's enclosed\npiece from inside the loop, keeping keyhole slab operations exact.\n\n## What was wrong\n\n- On main, cutting the keyhole in\n`crates/operations/tests/extrude_major_arcs.rs` by the slab `z > 0.1`\nfalls back to the mesh boolean. The 6 x 6 square opens into a circular\nchamber with a 323 degree arc. After extrusion by 0.2, the result has 30\nplanes and measures 2.827083 against 2.820039. Raw GFA output has 7\nfaces and 7 free edges.\n- `split_face_with_internal_loops` splits the slab face at `z = 0.1`\nalong five line sections and the 323 degree section split in two. It\nsamples the enclosed piece at the centroid of points along its loop.\nBecause the loop is not convex, its centroid `(0, 0.807)` lies inside\nthe chamber but outside the loop. The piece classifies Outside and is\ndropped.\n\n## What this does\n\n- For planar surfaces, the piece's sample comes from\n`sample_interior_point` on the loop's own polygon: the centroid when it\nlies inside, clear of the edges, otherwise a point walked in from an\nedge. The existing small normal offset follows. Other surfaces are\nunchanged.\n\n## Verification\n\n- The keyhole cut, intersect, and cut at `z > 0.05` are exact, valid,\nand watertight, with one cylinder and seven planes. They measure their\ntruth: 2.820039, 2.820039, and 1.410020.\n- New test `a_slab_through_a_notched_wall_keeps_it_exact` covers the\nkeyhole and half-turn notch, with each arc stored as a circle, a NURBS,\nand a NURBS run end to start. It checks slab cuts and intersections,\nupright and turned. Every result is valid and watertight, has seven\nplanes and one cylinder, holds material only in the kept half (ray-cast\nprobes, the notch empty), and measures area times 0.1 within `1e-6`. The\nkeyhole fails on main.\n- The same harness finds identical branch and main failures for the\nmajor segment, the plate using it as a hole, and the two-arc disc. The\nroadmap records the open Stable-row defect and closes the keyhole case.\n- The 180-placement sphere battery remains at 487 exact results from\n540. All 300 pose-sweep lines are unchanged, with no open result.\n- The workspace suite passes: 3190 passed, 20 skipped, including 307\n`brepkit-io` gridfinity fixtures. Lint is clean.",
+          "timestamp": "2026-09-27T14:51:18Z",
+          "tree_id": "d88bf0f2239a7106ebaed98b16f8fdbbfdc83027",
+          "url": "https://github.com/andymai/brepkit/commit/e0102bb885ec2a25383fe53a61637c4f9d7567b4"
+        },
+        "date": 1790520842927,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1024293,
+            "range": "± 2013",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1107471,
+            "range": "± 11372",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13017,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 766337,
+            "range": "± 1427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42748664,
+            "range": "± 113563",
             "unit": "ns/iter"
           }
         ]
