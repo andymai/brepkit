@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.56](https://github.com/andymai/brepkit/compare/v4.0.55...v4.0.56) (2026-09-27)
+
+
+### Bug Fixes
+
+* **algo:** split a section arc between two seam crossings at its midpoint ([#1829](https://github.com/andymai/brepkit/issues/1829)) ([f088388](https://github.com/andymai/brepkit/commit/f08838897fb0f24bf1951e0db20597c27a8a5959))
+
 ## [4.0.55](https://github.com/andymai/brepkit/compare/v4.0.54...v4.0.55) (2026-09-27)
 
 
