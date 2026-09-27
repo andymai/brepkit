@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.60](https://github.com/andymai/brepkit/compare/v4.0.59...v4.0.60) (2026-09-27)
+
+
+### Bug Fixes
+
+* **operations:** join a hole round the pole along its clearest seam ([#1834](https://github.com/andymai/brepkit/issues/1834)) ([c3894e8](https://github.com/andymai/brepkit/commit/c3894e8457ff8ba71334f87bfce9e7d3dbb4f3bb))
+
 ## [4.0.59](https://github.com/andymai/brepkit/compare/v4.0.58...v4.0.59) (2026-09-27)
 
 
