@@ -196,6 +196,11 @@ struct Case {
 /// (Simpson over each stretch, 20000 panels).
 const FRUSTUM_IN_BOX_3: f64 = 296.604_274_040_955_94;
 
+/// The cap of a ball of radius 3 of height `h`.
+fn cap(h: f64) -> f64 {
+    PI * h * h * (9.0 - h) / 3.0
+}
+
 /// The four caps of a ball of radius 3 past the walls `|x|, |y| = 3 - h`.
 fn caps(h: f64) -> f64 {
     4.0 * PI * h * h * (9.0 - h) / 3.0
@@ -347,6 +352,24 @@ fn cases() -> Vec<Case> {
             b: Operand(vec![part(Prim::Block {
                 lo: [-2.05, -2.05, -1.0],
                 hi: [2.05, 2.05, 9.0],
+            })]),
+            truth: None,
+        },
+        Case {
+            name: "ball | x > 0.5",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(Prim::Block {
+                lo: [0.5, -5.0, -5.0],
+                hi: [10.5, 5.0, 5.0],
+            })]),
+            truth: Some([36.0 * PI - cap(2.5), cap(2.5), 1000.0 - cap(2.5)]),
+        },
+        Case {
+            name: "ball | column 4.1x6.1 from -1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(Prim::Block {
+                lo: [-2.05, -2.05, -1.0],
+                hi: [2.05, 4.05, 9.0],
             })]),
             truth: None,
         },

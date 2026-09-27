@@ -114,22 +114,6 @@ that does not exist yet; without it, stop.
   plus exact closed-form volume) STANDS. Needs a face-split-at-pinch primitive on a
   periodic wall, or a periodic-aware crossing-holes mesher. There is no
   `exact_cylinder_cylinder` symbol; do not go looking for one.
-- **Plane-by-sphere splitting across the chord-discretized equator.** The general
-  capability behind box-sphere; a section circle's crossings miss a polygon-approximated
-  equator by the sagitta. Box-sphere was closed (#1006) with a case-specific seam-plane
-  fit (`rg -n 'seam_plane' crates/`). The general fix is a UV-space arrangement
-  splitter, a dedicated multi-day component not yet built. The boundary-plane
-  crossing technique is proven and reusable. Measured 2026-09-24 against
-  `make_sphere(3, 32)`: every box face crossing the equator falls back (a half
-  at any turn or tilt, a wedge, a slab at x > 0.5, a corner reaching below
-  z = 0), though a half or wedge crosses it at chord vertices: its first
-  failure is `split_noseam_face_direct`, which cannot chain two arcs meeting at
-  the pole, handing them to `split_noseam_by_arrangement`, which keeps only a
-  collar. REFUTED: an exact-circle equator in `make_sphere` as a drop-in (half
-  cuts turned 5, 11.25 or 30 degrees come back uncut, 2 faces, silently wrong).
-  The ball less a box corner at (0, 0, -1), (1, 1, -1) or (-0.5, 0.5, 0) falls
-  back in every pose (`split_face_2d` returns nothing for either hemisphere),
-  and the Intersects of those corners and of (0, 0, 1) when turned.
 - **Gridfinity scoop fuse (3x3 scoop+label+lip).** Root: a lip-foot cone must be split
   with a coordinated staircase cone-split plus bracket-cap re-trim sharing the new edge;
   every one-sided attempt regresses. Many sequential autonomous passes exhausted.
@@ -200,9 +184,10 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **A sphere face whose hole winds the axis close to the pole meshes off the sphere** (probe `zz_ringmesh` in the session scratchpad) | The ball less a box whose wall passes near the pole keeps a ring face with that hole, right by topology, point classification and `solid_volume`, but its mesh cuts through the ball: with the corner at `(-0.0001, -1.1, 0.1)` the ring meshes to area 37.52 (37.81 exact) with a flux of 29.8 where a mesh on the sphere gives the radius times its area (112.6) |
 | **A sphere face whose arcs chain into one loop around a closed section falls back** | `split_noseam_face_direct` pairs the open arcs into a cap and its remainder and cannot place a closed section in either, so a box whose top cuts a full circle inside the patch around the pole (the box over `(-0.7, -1.1, 0.1)` to `z = 2.95`) fails the face and falls back. Nesting the circle as a hole of the piece that holds it, with its disc as its own face, needs a point-in-region test on the sphere for a loop that winds the axis |
 | **`operations::classify` counts a sphere face bounded by arcs in several planes as the intersection of their half-spaces** (`nonplanar_sphere_arc_halfspaces` in `crates/operations/src/classify.rs`; the wedge of `make_sphere(3, 32)` less `make_box(4.5, 4.5, 10)` at `(-2.5, -2.5, -5)`) | The wedge past the column's corner is the union of `x > 2` and `y > 2`, so a ray from the cap past `x = -2.5` that crosses its sphere face at `(0.35, 2.62, 1.43)` counts no crossing there. `validate_solid`'s nesting test now casts with the engine's ray cast, which reads such a face by its wires; `classify_point`'s ray count still takes the shortcut. Undug beyond that |
-| **Sphere booleans that fall back clear of the equator** (probes in the session scratchpad) | Safe fallbacks. `make_sphere(3, 32)` within the box over y > 0, z > 1 (the y = 0 arc runs over the pole), and a rod through a trimmed patch: the box-corner piece (x > 1, y > 1.2, z > 0.8) less a vertical r = 0.2 rod at (1.8, 1.8), or the octant less one at (1, 1). A section through the pole is the same splitter gap as the half cuts in the chordal-equator TERMINAL entry |
+| **Sphere booleans across the chordal equator that still fall back** (`make_sphere(3, 32)`; `split_noseam_by_arrangement` in `crates/algo/src/builder/face_splitter/special_cases.rs`) | A section across the seam splits each hemisphere through the arrangement, which rebuilds the seam as its exact circle and keeps the collar holding the pole and a lune past each chain, one chain or more (`ball_cut_by_a_plane_across_its_equator`). Still falling back, safely: a plane tilted off the axis and clear of the centre (tilted 0.3 about `y` at `x = 0.5`), a plane through the axis (its chain runs through both poles, so no region holds one; `a_plane_through_the_axis_keeps_half_the_ball`), and the ball with a box corner at `(0, 0, -1)` or `(-0.5, 0.5, 0)`. REFUTED: an exact-circle equator in `make_sphere` as a drop-in (half cuts turned 5, 11.25 or 30 degrees come back uncut, 2 faces, silently wrong) |
+| **Sphere booleans that fall back clear of the equator** (probes in the session scratchpad) | Safe fallbacks. `make_sphere(3, 32)` within the box over y > 0, z > 1 (the y = 0 arc runs over the pole), and a rod through a trimmed patch: the box-corner piece (x > 1, y > 1.2, z > 0.8) less a vertical r = 0.2 rod at (1.8, 1.8), or the octant less one at (1, 1). A section through the pole leaves no region holding it, as for the plane through the axis in the row above |
 | **A cone through a ball off its axis falls back** (probe `zz_conetime` in the session scratchpad) | Safe fallbacks. `make_sphere(3, 32)` less or within `make_cone(1.2, 0.4, 10)` laid along `x` at `z = 0.3`, tilted, or upright at `(1, 0.5, -5)` falls back to a mesh. Phase FF sections the cone wall and each hemisphere in 13 marched pieces, which split neither hemisphere, and the cone wall's splitter gives up on all 26. Each reaches its fallback in 0.3 s along `x`, 6.2 s tilted and 16 s upright (release) |
-| **Balls against a half-space; the upright slab Cut** (audit probe `zz_pose_audit` in the session scratchpad) | A ball against the half-space `x > 0.5` falls back in every pose (the chordal-equator TERMINAL entry). The slab Cut upright is exact but invalid: its two pieces share one shell, the representation the cylinder and cone slab Cuts share |
+| **The upright slab Cut of a ball** (audit probe `zz_pose_audit` in the session scratchpad) | Exact but invalid: its two pieces share one shell, the representation the cylinder and cone slab Cuts share |
 | **Pose audit: other primitives** (probe `zz_pose_audit`, 5 primitives x 4 tools x Cut/Intersect x upright/turned/mirrored) | Exact results whose volume moves with the pose: a turned cylinder's box-corner Cut (2e-6). Fallbacks only when mirrored: a cylinder's box corner, a cone's rod Cut. Fallbacks in every pose: a pointed cone's box-corner and rod Intersects, a frustum's rod, a torus's rod. The slab Cut that leaves two pieces is exact but invalid for the cylinder, cone and frustum in every pose |
 | **The cross one-row fillet's solid mesh is open** (fixture `crates/io/tests/cross_one_row_fillet_inmem.rs`) | The fillet result is closed by topology (every edge used twice), but `tessellate_solid` leaves about 1,700 mesh edges not shared by two triangles, so its volume depends on the anchor (65,090 about the origin, 29,224 about (80, 5, 10)); `solid_volume` reads 68,449 against the 64,968 oracle. The fixture's volume criterion compared the origin-anchored number and was dropped. Its r = 0.5 reversed sphere corner patches meshed their complements (about 3.03 mm² each against 1.02) until the reversed-cap fix |
 | **Shelled cylinder and cone cups are invalid** | `shell(make_cylinder(5, 10), 1, [top])` and `shell(make_cone(5, 2, 10), 1, [top])` each leave 32 shared edges with one sense (the cup measures 344.45 against 333.01), and a hollowed `make_torus(6, 2)` fails with "solid assembly produced no faces". Their inner walls (closed-seam cylinder, cone, NURBS and torus) reach `assemble_solid_mixed`'s generic arm with the reversed vertex list and the flag; the sphere arm keeps the outer face's winding instead. Giving them the same un-reversal makes the senses consistent but not the cup (Euler V-E+F = -1 with V=128, E=134, F=5, volume 451.86), so a second fault sits in the closed-seam wall or its rim. Until they match, a shelled solid where a sphere wall meets one of them would cross the seam in one sense (no brepkit operation builds that seam today: a capsule's fuse falls back to a mesh) |
@@ -216,6 +201,15 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A ball against a half-space across its equator fell back (CLOSED 2026-09-26; pins `ball_cut_by_a_plane_across_its_equator` in `crates/operations/tests/sphere_plane_cut.rs`, `a_box_corner_below_the_equator_splits_each_hemisphere_along_one_chain` and `a_column_crossing_one_side_of_the_ball_keeps_its_corner_loops` in `crates/operations/tests/sphere_box_corner.rs`, pose sweep cases `ball | x > 0.5` and `ball | column 4.1x6.1 from -1`)**:
+  a single chain of arcs from the seam to the seam left
+  `split_noseam_by_arrangement` wanting a second one, though it keeps the
+  collar holding the pole and a lune past each chain, so every face crossing
+  the chordal equator fell back. One chain now splits it; arcs closing into a
+  loop of their own clear of the seam become a hole and a patch, and a chain
+  through a pole falls back. A battery of 180 box placements against the
+  ball turned 126 of its 540 results exact with none newly invalid or open.
 
 - **A ball within a box corner holding a pole meshed open (CLOSED 2026-09-26; pin `a_ball_within_a_box_corner_meshes_its_pole_closed` in `crates/operations/tests/sphere_box_corner.rs`)**:
   the mesher closes a sphere face holding a pole with a virtual meridian
