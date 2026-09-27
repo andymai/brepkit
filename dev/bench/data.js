@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790492785132,
+  "lastUpdate": 1790493455876,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -43307,6 +43307,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 31828252,
             "range": "± 1036416",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "00fb62b1b4d1b94d5b3e90d3da1cc11debbd4010",
+          "message": "fix(algo): split a hemisphere along one chain of arcs across its seam (#1826)\n\nSphere booleans now split a hemisphere along a single seam to seam chain\nof arcs, producing exact, valid, watertight results for the covered\nhalf-space and box cases.\n\n## What was wrong\n\n- On main, a `make_sphere(3, 32)` boolean whose section crosses the\nhemispheres' chordal equator as a single chain of arcs from seam to seam\nfalls back to a mesh. Against the half-space `x > 0.5`, all three\noperations fell back, producing 293, 475, and 298 faces. For `x > 1.5`,\nIntersect read 17.216954 against the cap's 17.671459, 2.6% short.\n\n- `split_noseam_face_direct` cannot close a chain ending on the seam.\n`split_noseam_by_arrangement` returned an empty split with fewer than\ntwo arcs or fewer than four arc ends on the seam, leaving the hemisphere\ncut by sections but split into nothing.\n\n## What this does\n\n- The arrangement retains the collar holding the pole and a lune past\neach chain. One chain therefore splits the hemisphere into all its\nregions. The arrangement now requires one arc and two ends on the seam.\n\n- `split_off_closed_chains` moves self-closing loops clear of the seam\n(at every point sampled along their arcs) into the hole loops. Each\nbecomes a hole in its containing region and a patch of its own, matching\nclosed-section behavior. This handles a column whose corners dip into\nthe lower hemisphere beside a chain across it. Without this handling,\nthe column less the ball assembled 8 valid, watertight faces but read\n185.5453 against 185.54598.\n\n- A chain passing within `5e-3` times the radius of a pole (a wall\nholding the axis) leaves no region holding the pole, or one the region\npolygons' chords misread. The arrangement now returns an empty split so\nthe boolean falls back. Each arc is read at a spacing under half that\nreach, so an arc crossing the pole between its ends is caught. Without\nthis guard, the ball against `x > 0` produced 3-face pieces that failed\n`validate_solid`, with volumes summing to twice the ball.\n\n## Verification\n\n- A battery of 180 box and sphere placements exercised 540 operations:\n105 half-spaces at 7 offsets, 5 tilts, and 3 turns, plus 75 box corners.\nEvery exact result was checked for validity, watertightness, and\nconsistent Intersect and Cut volumes. Exact results increased from 253\nto 375, with no newly invalid, open, or inconsistent result.\n\n- The pose sweep adds `ball | x > 0.5`, using cap-formula volume truths,\nand `ball | column 4.1x6.1 from -1`. All 30 new results are exact,\nvalid, watertight, and have no misread grid point. Half-space volumes\nare within `1.1e-12` of the cap formula. The 270 existing results are\nunchanged.\n\n- `ball_cut_by_a_plane_across_its_equator` covers vertical planes at `x\n= 0.5`, `-1.2`, and `2.5`, plus a center plane tilted 0.3, each at turns\n0, 0.3, and 1.0 while keeping either side. Volume, disc area, and sphere\narea are within `1e-9` of closed forms, classifications cover both\nsides, and results are watertight.\n\n- `a_plane_through_the_axis_keeps_half_the_ball` verifies both halves\nare valid and within `2e-2` of half the ball.\n`a_wall_holding_the_axis_keeps_its_piece` does the same for the box over\n`x > 0`, `y > -1`, whose `x = 0` arc crosses the pole between its ends\n(within `2e-2` of `40π/3`). Box tests cover the corner `(1, 1, -1)` and\nthe crossing column, across three operations upright and turned. The\ncolumn results have 8, 6, and 16 faces with checked classifications.\nVolumes are within `1e-7` of `ball_past`. The corner, column and plane\ntests fail without the arrangement change; the through-axis test fails\nwithout the pole guard.\n\n- The workspace suite passes: 3176 tests run, 3176 passed, 20 skipped.\nLint is clean.\n\n- The roadmap replaces the TERMINAL chordal-equator entry with an open\nrow listing what still falls back (a plane tilted off the axis clear of\nthe centre, a plane through the axis, the corners at `(0, 0, -1)` and\n`(-0.5, 0.5, 0)`), narrows the half-space row to its remaining slab Cut,\nand records this case as closed.\n\nThe new box-corner results mesh closed through #1825's pole closure\nstart.",
+          "timestamp": "2026-09-27T07:15:18Z",
+          "tree_id": "2fb3f1457ee9e02fac9e1bc916dece153eff804a",
+          "url": "https://github.com/andymai/brepkit/commit/00fb62b1b4d1b94d5b3e90d3da1cc11debbd4010"
+        },
+        "date": 1790493450818,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 587807,
+            "range": "± 4124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 644580,
+            "range": "± 4524",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8256,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 438284,
+            "range": "± 2114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28736587,
+            "range": "± 264072",
             "unit": "ns/iter"
           }
         ]
