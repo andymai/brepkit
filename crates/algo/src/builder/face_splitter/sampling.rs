@@ -166,6 +166,32 @@ pub(super) fn sample_wire_loop_uv_periodic(
                 if knots.len() >= 2 {
                     let t0 = knots[0];
                     let tn = knots[knots.len() - 1];
+                    // A pcurve fit on one period copy can reach a wire whose
+                    // end UVs were moved to another (a section starting on a
+                    // seam): sample it on the copy its start sits at.
+                    // Both ends must land on the edge's end UVs under the one
+                    // shift.
+                    let (first, last) = if edge.forward {
+                        (nurbs.evaluate(t0), nurbs.evaluate(tn))
+                    } else {
+                        (nurbs.evaluate(tn), nurbs.evaluate(t0))
+                    };
+                    let whole_periods = |at_start: f64, at_end: f64| {
+                        let turns = (at_start / std::f64::consts::TAU).round();
+                        let shift = turns * std::f64::consts::TAU;
+                        if turns != 0.0
+                            && (at_start - shift).abs() < 1e-6
+                            && (at_end - shift).abs() < 1e-6
+                        {
+                            shift
+                        } else {
+                            0.0
+                        }
+                    };
+                    let (du, dv) = (
+                        whole_periods(edge.start_uv.x() - first.x(), edge.end_uv.x() - last.x()),
+                        whole_periods(edge.start_uv.y() - first.y(), edge.end_uv.y() - last.y()),
+                    );
                     // For reverse edges, the pcurve was computed for the forward
                     // direction. Evaluate from tn->t0 to trace the reverse path.
                     #[allow(clippy::cast_precision_loss)]
@@ -176,7 +202,8 @@ pub(super) fn sample_wire_loop_uv_periodic(
                         } else {
                             tn - (tn - t0) * frac
                         };
-                        pts.push(nurbs.evaluate(t));
+                        let p = nurbs.evaluate(t);
+                        pts.push(Point2::new(p.x() + du, p.y() + dv));
                     }
                 } else {
                     pts.push(edge.start_uv);

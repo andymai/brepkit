@@ -3831,8 +3831,9 @@ fn compute_raw_curves(
             // cylinder, concentric, matching at Z_PEAK). Emit it as an exact
             // Circle so seam adoption links it to the shared cap rim, instead
             // of letting the marcher fragment the near-tangent contact into
-            // degenerate micro-arcs (the 98-free-edge corruption). Non-coaxial
-            // (None) falls through to the general marcher.
+            // degenerate micro-arcs (the 98-free-edge corruption). A pair that
+            // is not coaxial (None) goes to the analytic intersection, which
+            // traces a cone and a cylinder exactly.
             match analytic_intersection::exact_cone_cylinder(cone, cyl)? {
                 Some(exacts) => {
                     let mut results = Vec::new();
