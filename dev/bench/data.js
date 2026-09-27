@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790516176195,
+  "lastUpdate": 1790517396746,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44171,6 +44171,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42956714,
             "range": "± 564749",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "634a8ab0dd9f6b17526fff387ef667168aa5c083",
+          "message": "fix(operations): revolve a profile touching the axis part way (#1842)\n\nRevolves now handle profiles that touch the rotation axis, part way or a\nfull turn, producing valid, watertight solids with the expected volume.\n\n## What was wrong\n\n- On main, three profiles in `y = 0` touching the z axis all failed when\nrevolved 90, 180, or 270 degrees about z, with both profile windings.\nThe profiles were a triangle with a leg on the axis, a unit square with\na side on it, and a triangle touching it at one corner.\n- All 18 partial results failed `validate_solid` with `edge N has\nnear-zero length` and tessellated to open meshes. Full turns of the same\nprofiles were valid.\n- A half disc (a half circle and its diameter on the z axis) failed the\nsame way at every angle, full turn included, and measured volume 0.\n- The segmented revolve copied every profile vertex into every ring and\nswept a circle from each vertex, including vertices on the axis. Each\non-axis vertex therefore produced a zero-length arc edge per segment,\nwhile an edge along the axis swept a degenerate band.\n\n## What this does\n\n- A vertex on the axis remains a single vertex across every ring and\nsweeps no arc. Its entry in `arc_edges` is `None`.\n- A band adjacent to an on-axis vertex closes as a three-edge wedge.\n- An edge along the axis (both ends and its middle on it) sweeps no face\nand remains the same edge at every ring. A curved edge with both ends on\nthe axis still sweeps its band.\n- An arc centred on the axis sweeps a sphere band\n(`revolution_sphere_band`) with its poles on the axis. Its winding\nfollows the NURBS band's chord × sweep convention, read at the arc's\nmidpoint half way through the sweep, where the sweep direction exists\neven when the chord lies on the axis. The arc is turned back to the\nprofile by its segment's own angle, since a centre on the axis gives no\ndirection to measure that turn by.\n- Band orientation uses the radial direction at the profile edge\nendpoint away from the axis, since an apex has no radial direction.\n\n## Verification\n\n- All 24 results on the branch, comprising the 18 partial turns and 6\nfull turns, are valid, tessellate watertight, and measure their Pappus\nvolume.\n- The new `a_profile_touching_the_axis_revolves_part_way` test covers\nall 3 profiles, 2 windings, and rotations of 90, 180, 270, and 360\ndegrees. Each solid validates, meshes watertight, and measures its\nPappus volume within `1e-9`.\n- The new `a_disc_sector_revolves_to_a_ball_part_way` test revolves a\nhalf disc and a quarter disc, both windings, 90 to 360 degrees: each is\nvalid, watertight, and within `1e-9` of its Pappus volume. Its full\nturns take the segmented revolve.\n- The new `a_spherical_shell_sector_revolves_part_way` test revolves the\nshell `1 < r < 2` between 10 and 40 degrees from the axis, its inner arc\nstored one way and run the other: each result is valid, watertight, and\nwithin `1e-8` of its volume. It fails without the per-segment turn.\n- `revolve_square_half_circle` expects 8 faces and no NURBS faces. Its\nprevious 10-face count included two degenerate NURBS bands swept by the\non-axis side.\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, reads 487 exact results of 540, as on main. The\npose sweep's 300 lines contain no open result.\n- The workspace suite passes: 3189 tests run, 3189 passed, 20 skipped.\nLint is clean.\n- The roadmap row is Closed.",
+          "timestamp": "2026-09-27T13:53:55Z",
+          "tree_id": "5bb79b2a1375be3bc8b88a204d638474c45e916a",
+          "url": "https://github.com/andymai/brepkit/commit/634a8ab0dd9f6b17526fff387ef667168aa5c083"
+        },
+        "date": 1790517392107,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1019055,
+            "range": "± 8390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1104391,
+            "range": "± 1705",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13275,
+            "range": "± 14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 765854,
+            "range": "± 1336",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42827099,
+            "range": "± 98216",
             "unit": "ns/iter"
           }
         ]
