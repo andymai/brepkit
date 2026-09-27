@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790532333749,
+  "lastUpdate": 1790533197991,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44981,6 +44981,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43111138,
             "range": "± 158070",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "99a39a4a382e112fb81958985362e552366c484a",
+          "message": "chore(main): release 4.0.69 (#1859)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.69](https://github.com/andymai/brepkit/compare/v4.0.68...v4.0.69)\n(2026-09-27)\n\n\n### Bug Fixes\n\n* **heal:** turn a recognized face over when its NURBS normal opposes\nthe new surface\n([#1854](https://github.com/andymai/brepkit/issues/1854))\n([5571574](https://github.com/andymai/brepkit/commit/55715748750614a12063a4395db5a5d2f12111eb))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.69, which includes a bug fix that flips a\nrecognized face when its NURBS normal opposes the new surface.\n\n<sup>Written for commit a9977b66ff5c7575aa5829d95614503852f68bed.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1859?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-27T18:17:13Z",
+          "tree_id": "4e32fd46a09aa0e966ebbd7614cf6ab9f6ce8e7c",
+          "url": "https://github.com/andymai/brepkit/commit/99a39a4a382e112fb81958985362e552366c484a"
+        },
+        "date": 1790533193187,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1023211,
+            "range": "± 2403",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1107762,
+            "range": "± 1649",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13094,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 766748,
+            "range": "± 1815",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42918865,
+            "range": "± 80398",
             "unit": "ns/iter"
           }
         ]
