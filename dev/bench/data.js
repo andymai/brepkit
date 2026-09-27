@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790484330706,
+  "lastUpdate": 1790484522076,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42875,6 +42875,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35567674,
             "range": "± 485988",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "19e6b9d1b5e1984a345ae17bdfed0d7368068fb1",
+          "message": "fix(operations): keep the ball less a column whose corner lies inside it (#1819)\n\nThe ball less a column whose corner lies inside it now comes out exact:\n10 faces in 3 pieces, valid and watertight in all five poses of the pose\nsweep.\n\n## What was wrong\n\n- `make_sphere(3, 32)` less `make_box(4.5, 4.5, 10)` at `(-2.5, -2.5,\n-5)`, whose corner at `(2, 2)` lies inside the ball, fell back on main\nin every pose of the pose sweep. The 348 face mesh measured 20.323\nagainst the numerically integrated truth of 21.17459.\n\n- The engine produced the correct three pieces in 10 faces: the wedge\npast the walls `x = 2` and `y = 2`, plus the caps past `x = -2.5` and `y\n= -2.5`. Three readers misjudged the wedge, whose curved faces are\ncornered only on their rims.\n\n- `perform_areas` in `BuilderSolid` signs each shell using a volume over\nits corners. The wedge read `-5.31` even though its surface flux reads\noutward, so the negative shell in the multi-shell result became a\ncavity.\n\n- `validate_solid` nesting checks in `piece_issues` used\n`count_ray_crossings`. Its sphere-face test represents a face bounded by\narcs in several planes as the intersection of their half-spaces through\n`nonplanar_sphere_arc_halfspaces`. The wedge is instead the union of `x\n> 2` and `y > 2`. A ray from a cap corner crossing the wedge sphere face\nat `(0.35, 2.62, 1.43)` therefore counted no crossing, and the cap read\nas inside the wedge.\n\n- The Cut gate, `all_component_centers_outside`, found the wedge box\ncentre `(-0.118, -0.118, 0)` inside the tool and in no piece. Its\nremaining evidence came from plane-face centroids, which lie on the tool\nwalls for this wedge.\n\n## What this does\n\n- Treats a negative shell in a multi-shell result as a lump when no\nother shell holds it and its flux reads outward. A shell holds it when\nmost of three rays from a point on its edge cross that shell an odd\nnumber of times, by the engine's ray cast. A cavity lies inside another\nshell.\n\n- Adds `RayCastGeoms::of_faces` for closed face sets that need not form\na solid. `piece_issues` casts its three rays with `ray_parity_cached`,\nallowing sphere faces to be read by their wires.\n\n- Extends the Cut gate with points one quarter, one half, and three\nquarters along every piece edge. A point is evidence when it lies\nclearly outside the tool, beyond `1e-4` of the piece box diagonal plus\n100 times the linear tolerance. A stray tool-interior piece has every\nedge inside the tool or on it.\n\n## Verification\n\n- The result is 10 faces in 3 pieces, valid and watertight in all five\nposes, with no misread grid point. Only these 5 of the pose sweep’s 270\nresults changed.\n\n- `solid_volume` reads `21.1746`. The check crate agrees within\n`2.6e-12`.\n\n- `a_column_with_a_corner_in_the_ball_keeps_its_collars` now covers ball\nless column in `crates/operations/tests/sphere_box_corner.rs`: exact,\nvalid, watertight, 10 faces, within `1e-3` of the truth, and classifying\npoints in the wedge and both caps inside and points in the removed\ncolumn and past the ball outside. With main’s four source files, it\nfails with `ball less column: fell back to a mesh`.\n\n- The workspace suite passed before rebasing onto #1815: 3166 run, 3166\npassed, 20 skipped. Afterward, algo and operations passed: 1528 run,\n1528 passed. Lint is clean.\n\n- The roadmap closes this case, narrows the corner-column row to the\ncolumn offset to `(-2.6, -2.2, -5)` and turned, and adds an open\n`operations::classify` row. Its `classify_point` still counts\nsphere-face crossings through `nonplanar_sphere_arc_halfspaces`.",
+          "timestamp": "2026-09-27T04:46:00Z",
+          "tree_id": "ee5c7ad107f6c97064c6eba7024f7320f86e1e2d",
+          "url": "https://github.com/andymai/brepkit/commit/19e6b9d1b5e1984a345ae17bdfed0d7368068fb1"
+        },
+        "date": 1790484517644,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1019886,
+            "range": "± 907",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1103210,
+            "range": "± 3123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13245,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 766718,
+            "range": "± 3489",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42458696,
+            "range": "± 147949",
             "unit": "ns/iter"
           }
         ]
