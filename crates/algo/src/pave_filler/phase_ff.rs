@@ -1301,7 +1301,8 @@ fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool 
 }
 
 /// Whether `p` lies within `near` of one of a face's edges, each read as
-/// 256 chords.
+/// 256 chords widened by their own sagitta (a closed rim's chords run up to
+/// `7.5e-5 R` inside it).
 fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> bool {
     let Ok(f) = topo.face(face) else {
         return false;
@@ -1319,12 +1320,14 @@ fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> b
             };
             let (a, b) = (sv.point(), ev.point());
             let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-            let at = |k: u32| {
-                let t = (t1 - t0).mul_add(f64::from(k) / 256.0, t0);
+            let at = |k: f64| {
+                let t = (t1 - t0).mul_add(k / 256.0, t0);
                 edge.curve().evaluate_with_endpoints(t, a, b)
             };
             (0..256).any(|k| {
-                let (q0, q1) = (at(k), at(k + 1));
+                let k = f64::from(k);
+                let (q0, q1) = (at(k), at(k + 1.0));
+                let sag = (at(k + 0.5) - (q0 + (q1 - q0) * 0.5)).length();
                 let d = q1 - q0;
                 let l2 = d.dot(d);
                 let f = if l2 > 0.0 {
@@ -1332,7 +1335,7 @@ fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> b
                 } else {
                     0.0
                 };
-                (p - (q0 + d * f)).length() <= near
+                (p - (q0 + d * f)).length() <= near + sag
             })
         })
 }
@@ -6460,6 +6463,38 @@ mod tests {
                 assert_eq!(kept, crosses, "{} corners: {c:?}", boundary.len());
             }
         }
+    }
+
+    /// A disc bounded by one closed rim of radius 3: every point on the rim
+    /// reads on the face's edge, between the rim's chords too, and a point
+    /// a hundredth inside does not.
+    #[test]
+    fn a_point_on_a_closed_rim_reads_on_the_face_edge_between_chords() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve as EC};
+        use brepkit_topology::face::{Face, FaceSurface as FS};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let rim = Circle3D::new(Point3::new(0.0, 0.0, 0.0), up, 3.0).unwrap();
+        let mut topo = Topology::new();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EC::Circle(rim.clone())));
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(w, vec![], FS::Plane { normal: up, d: 0.0 }));
+        let near = 1e-5 * 4.0;
+        for k in 0..64 {
+            let t = (f64::from(k) + 0.37) * std::f64::consts::TAU / 64.0;
+            let p = rim.evaluate(t);
+            assert!(point_on_face_edges(&topo, face, p, near), "t {t}: {p:?}");
+        }
+        assert!(!point_on_face_edges(
+            &topo,
+            face,
+            Point3::new(2.99, 0.0, 0.0),
+            near
+        ));
     }
 
     fn hit_at(angle: f64) -> (f64, Point3) {
