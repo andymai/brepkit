@@ -1045,8 +1045,7 @@ fn shell_extent(topo: &Topology, faces: &[FaceId]) -> f64 {
             })
         })
         .flatten();
-    let bbox = brepkit_math::aabb::Aabb3::from_points(points);
-    (bbox.max - bbox.min).length()
+    brepkit_math::aabb::Aabb3::try_from_points(points).map_or(0.0, |b| (b.max - b.min).length())
 }
 
 /// The box of a shell's outer-wire corners.
@@ -1863,6 +1862,7 @@ fn assemble(
     // dropped rather than polluting the assembled volume.
     // TODO: use a `Compound` for true multi-region results.
     let mut outer_faces = growth_shells[outer_idx].clone();
+    let mut outer_extent: Option<f64> = None;
     for (i, gs) in growth_shells.iter().enumerate() {
         if i == outer_idx {
             continue;
@@ -1884,7 +1884,10 @@ fn assemble(
                 "open growth shell with {} faces would be dropped; aborting analytic assembly",
                 gs.len()
             )));
-        } else if shell_extent(topo, gs) > 0.05 * shell_extent(topo, &outer_faces) {
+        } else if shell_extent(topo, gs)
+            > 0.05
+                * *outer_extent.get_or_insert_with(|| shell_extent(topo, &growth_shells[outer_idx]))
+        {
             // A sliver is small; an open piece spanning a real share of the
             // result is part of its boundary that lost its neighbours (a
             // cone's wall split wrong across its seam), and dropping it
