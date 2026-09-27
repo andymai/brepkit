@@ -2479,17 +2479,22 @@ fn detect_trivial_relation(
 
     // The boundary witness guards both terms: the analytic term tests the
     // tool's VERTICES, and a round tool (two seam vertices on a cylinder)
-    // can hold every vertex inside the blank while its rims leave it.
-    let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
-        || (ca.is_none()
-            && aabb_strictly_contains(&aabb_b, &aabb_a)
-            && !volume_refutes(topo, b, a)))
+    // can hold every vertex inside the blank while its rims leave it. A
+    // container with a cavity holds nothing trivially: the other solid can
+    // swallow the cavity with every vertex, probe and its centre in material.
+    let hollow = |s: SolidId| topo.solid(s).is_ok_and(|s| !s.inner_shells().is_empty());
+    let b_in_a = !hollow(a)
+        && ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
+            || (ca.is_none()
+                && aabb_strictly_contains(&aabb_b, &aabb_a)
+                && !volume_refutes(topo, b, a)))
         && !center_outside(topo, b, a, &aabb_b)
         && !boundary_probe_outside(topo, b, a, &aabb_b);
-    let a_in_b = ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
-        || (cb.is_none()
-            && aabb_strictly_contains(&aabb_a, &aabb_b)
-            && !volume_refutes(topo, a, b)))
+    let a_in_b = !hollow(b)
+        && ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
+            || (cb.is_none()
+                && aabb_strictly_contains(&aabb_a, &aabb_b)
+                && !volume_refutes(topo, a, b)))
         && !center_outside(topo, a, b, &aabb_a)
         && !boundary_probe_outside(topo, a, b, &aabb_a);
 

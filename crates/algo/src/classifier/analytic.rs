@@ -377,6 +377,11 @@ pub fn try_build_analytic_classifier(
     solid: SolidId,
 ) -> Option<AnalyticClassifier> {
     let s = topo.solid(solid).ok()?;
+    // Every classifier here reads the outer shell alone, so a cavity would
+    // read as solid material.
+    if !s.inner_shells().is_empty() {
+        return None;
+    }
     let shell = topo.shell(s.outer_shell()).ok()?;
     let tol = Tolerance::new();
 
