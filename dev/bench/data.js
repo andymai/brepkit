@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790509287036,
+  "lastUpdate": 1790515306530,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -44063,6 +44063,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43041986,
             "range": "± 136886",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bdb474b903c7ba16e40ade17d537206e8582765d",
+          "message": "fix(algo): fail the assembly instead of dropping a real piece of a face as a sliver (#1841)\n\nThe affected cone and plate fuses now fail exact shell assembly and fall\nback to a valid mesh result instead of silently losing a real face\nfragment.\n\n## What was wrong\n\n- On main, `make_cone(1.2, 0, 10)` at `(0.4, 5, -4)`, turned 5.3 to 5.6\nradians about its axis and fused with `make_box(10, 10, 2)`, returns an\nexact 8-face result. It fails `validate_solid` with \"7 shared edges have\ninconsistent face orientations\" and reads 201.1009 against 213.0521. The\ncone wall face measures 5.5739. The only signal is a warning from\nlenient validation.\n\n- The engine splits the cone wall into two pieces where three belong\nbecause the plate window crosses the wall seam. `BuilderSolid` drops one\npiece, alone in its own open shell, as a fragmentation sliver. It drops\nany open growth shell of one to three faces, while four or more abort\nassembly. This leaves neighboring faces stitched in the wrong\norientation.\n\n## What this does\n\n- An open growth shell of one to three faces now aborts assembly when\nits extent exceeds 5% of the outer growth shell's extent, computed once.\nThe extent comes from the bounding box around each edge's endpoints and\nquarter points, calculated by the new `shell_extent`. The boolean then\nuses the mesh fallback. The underlying wall split remains open on the\nroadmap.\n\n- A gate on misoriented shared edges is not viable. Accepted, watertight\nresults from captured gridfinity operands contain them. An absolute\ncheck fails 37 `brepkit-io` fixtures, while a check relative to the\noperands fails 15.\n\n## Verification\n\n- The affected spins return a valid, watertight 47-face mesh reading\n212.8707, which is 0.085% short.\n\n- New test `a_pointed_cone_through_a_plate_edge_fuses_to_a_valid_solid`\ncovers the cone at `x = 0` and `x = 0.4`, turned every sixteenth of a\nturn. All 32 fuses are valid and within 2e-3 of the plate and cone less\ntheir overlap, calculated by Simpson integration over cone slices inside\nthe plate. It also asserts exactness at every turn at `x = 0` and at the\nturns at `x = 0.4` that main builds exactly, so the check cannot fire\nunseen, and that every mesh fallback tessellates watertight. It fails on\nmain at `x = 0.4`, turned 5.498.\n\n- A battery of 180 box placements against `make_sphere(3, 32)`, with\nthree operations each, reads 487 exact results of 540 with nothing\nflagged, matching main. The pose sweep's 300 lines retain their\nstructure with no open result.\n\n- The workspace suite passes: 3184 run, 3184 passed, 20 skipped. All 307\n`brepkit-io` fixtures pass. Lint is clean.\n\n- The roadmap marks this case closed and records the current pointed\ncone behavior: exact results are valid and measure correctly, meshes\nremain open where the window crosses the seam, and the wall split occurs\nat `x = 0.4` from 5.3 to 5.6 radians. Mesher fixes are parked on a\nbranch.",
+          "timestamp": "2026-09-27T13:19:07Z",
+          "tree_id": "b0dce7e751b1b95b592288fcca38034a353ebe75",
+          "url": "https://github.com/andymai/brepkit/commit/bdb474b903c7ba16e40ade17d537206e8582765d"
+        },
+        "date": 1790515301167,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 824719,
+            "range": "± 1359",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 892895,
+            "range": "± 14153",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11032,
+            "range": "± 90",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 604028,
+            "range": "± 6774",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36091483,
+            "range": "± 128134",
             "unit": "ns/iter"
           }
         ]
