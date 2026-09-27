@@ -1373,3 +1373,54 @@ fn the_engine_reads_a_hole_by_its_planes() {
         }
     }
 }
+
+/// `solid_volume` reads sphere booleans whose meshes misread them exactly:
+/// the ball within, and the column less the ball, for the column
+/// `|x|, |y| < 2.5` tilted `rotation_x(0.3) * rotation_y(0.2)` through its
+/// centre (the ball less four caps of height 0.5, and the rest of the
+/// column), and the ball less a box holding the pole, whose ring face's hole
+/// winds the axis.
+#[test]
+fn solid_volume_reads_sphere_booleans_exactly() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let caps = 4.0 * PI * 0.25 * 0.5f64.mul_add(-1.0, 3.0 * RADIUS) / 3.0;
+    let tilt = Mat4::rotation_x(0.3) * Mat4::rotation_y(0.2);
+    for (op, truth) in [
+        (BooleanOp::Intersect, ball - caps),
+        (BooleanOp::Cut, 250.0 - (ball - caps)),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let column = make_box(&mut topo, 5.0, 5.0, 10.0).unwrap();
+        transform_solid(
+            &mut topo,
+            column,
+            &(tilt * Mat4::translation(-2.5, -2.5, -5.0)),
+        )
+        .unwrap();
+        let result = if op == BooleanOp::Cut {
+            boolean(&mut topo, op, column, sphere)
+        } else {
+            boolean(&mut topo, op, sphere, column)
+        }
+        .unwrap();
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "tilted column {op:?}: volume {volume}, truth {truth}"
+        );
+    }
+    for (a, b, c) in [(-0.7, -1.1, 0.1), (-0.3, -0.4, 0.2), (-0.05, -1.1, 0.1)] {
+        let truth = ball - corner_piece(a, b, c);
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(a, b, c)).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, sphere, block).unwrap();
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-9 * truth,
+            "ball less the box at ({a}, {b}, {c}): volume {volume}, truth {truth}"
+        );
+    }
+}

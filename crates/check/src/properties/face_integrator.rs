@@ -465,7 +465,7 @@ fn integrate_planar_face(
 /// outer wire's region less its holes'. A curved edge is read exactly rather
 /// than through chords. `None` for a face with a wire that does not chain
 /// into a loop.
-fn planar_face_by_edges(
+pub(super) fn planar_face_by_edges(
     topo: &Topology,
     face_id: FaceId,
     normal: Vec3,

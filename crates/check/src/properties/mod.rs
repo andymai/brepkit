@@ -69,6 +69,40 @@ pub fn solid_volume(
     Ok(total_volume)
 }
 
+/// [`solid_volume`] when every face integrates exactly, else `None`.
+///
+/// A plane face integrates along its edges, a cylinder, cone or sphere face
+/// along its wires. `None` for a solid with a torus or NURBS face, or a face
+/// neither path reads (a wire that does not chain, a cone face across its
+/// apex), for a caller that would otherwise measure it from a mesh.
+///
+/// # Errors
+///
+/// Returns an error if any topology entity is missing.
+pub fn exact_solid_volume(topo: &Topology, solid: SolidId) -> Result<Option<f64>, CheckError> {
+    use brepkit_topology::face::FaceSurface;
+    let about = volume_anchor(topo, solid);
+    let mut total = 0.0;
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(fid)?;
+        let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+        let contribution = match face.surface() {
+            FaceSurface::Plane { normal, .. } => {
+                face_integrator::planar_face_by_edges(topo, fid, *normal * sign, about)?
+            }
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
+                boundary::curved_face_by_boundary(topo, face, sign, about)?
+            }
+            FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => None,
+        };
+        let Some(contribution) = contribution else {
+            return Ok(None);
+        };
+        total += contribution.volume;
+    }
+    Ok(Some(total))
+}
+
 /// The point [`solid_volume`] sums about: the origin, as it always has, unless
 /// the solid sits more than ten of its own half-diagonals from it, where the
 /// far-off coordinates would swamp the flux. A solid without vertices (an
