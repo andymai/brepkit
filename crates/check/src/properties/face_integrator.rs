@@ -1265,6 +1265,55 @@ mod tests {
         }
     }
 
+    /// A unit ball's face bounded by one closed circle 0.5 about the axis
+    /// `(1, 1, 1)`, clear of the sphere's poles: run counter-clockwise about
+    /// the outward normal it bounds the cap, `2π(1 - cos 0.5)`, and run
+    /// clockwise the rest of the ball, both poles held.
+    #[test]
+    fn a_sphere_face_bounded_by_one_circle_reads_either_side() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let tilt = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        let half = 0.5_f64;
+        let rim = Circle3D::new(
+            Point3::new(0.0, 0.0, 0.0) + tilt * half.cos(),
+            tilt,
+            half.sin(),
+        )
+        .unwrap();
+        let cap = 2.0 * std::f64::consts::PI * (1.0 - half.cos());
+        for forward in [true, false] {
+            let mut topo = Topology::new();
+            let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim.clone())));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap());
+            let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
+            let c = integrate_face(&topo, face, 5).unwrap();
+            let truth = if forward {
+                cap
+            } else {
+                4.0 * std::f64::consts::PI - cap
+            };
+            assert!(
+                (c.area - truth).abs() < 1e-9,
+                "forward {forward}: area {}, truth {truth}",
+                c.area
+            );
+            assert!(
+                (c.volume - truth / 3.0).abs() < 1e-9,
+                "forward {forward}: volume {}, truth {}",
+                c.volume,
+                truth / 3.0
+            );
+        }
+    }
+
     /// A disc of radius 2 at `z = 3` with a hole of radius 1, bounded by
     /// closed circles: its area, flux and first moments come out exact, where
     /// 32 chords a circle hold 0.64% less.

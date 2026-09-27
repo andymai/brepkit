@@ -194,42 +194,61 @@ fn edge_pieces(edge: &BoundaryEdge<'_>) -> Vec<(f64, f64)> {
 /// A face's integrals over the region on its wires' left, each wire's edges
 /// in traversal order: area and area moments unsigned, the volume terms
 /// times `sign` (the face's orientation against its surface's normal).
-/// `None` when a wire's turn about the axis is not whole, or the wires hold
-/// a pole the surface does not have.
+/// `None` when the wires do not read: consecutive edges that do not meet, a
+/// piece that turns a quarter turn about the axis away from a pole (a wire
+/// too near one), a turn that is not whole, a wire of no area whose side the
+/// sum of turns cannot tell, a pole the surface does not have, or a region
+/// of no area.
+#[allow(clippy::too_many_lines)]
 pub(super) fn integrate_by_boundary<S: ParametricSurface>(
     chart: &Chart<'_, S>,
     wires: &[Vec<BoundaryEdge<'_>>],
     sign: f64,
     about: Vec3,
 ) -> Option<FaceContribution> {
+    const AREA_SLACK: f64 = 1e-12;
     let gauss = gauss_legendre_points(8);
+    // A point with no `u` of its own (a cone's apex) may take any.
+    let singular = |u: f64, v: f64| {
+        chart.surface.partial_u(u, v).length() <= 1e-6 * chart.surface.partial_v(u, v).length()
+    };
+    let quarter = std::f64::consts::FRAC_PI_2;
     let mut total = [0.0; 8];
-    let (mut turns_sum, mut winds, mut patch) = (0_i64, false, false);
+    let (mut turns_sum, mut winds, mut patch, mut holes) = (0_i64, false, false, true);
     for wire in wires {
         let first = wire.first()?;
-        let (mut u, v_start) = (chart.project)(first.curve.evaluate_with_endpoints(
-            first.from,
-            first.start,
-            first.end,
-        ));
+        let entry = first
+            .curve
+            .evaluate_with_endpoints(first.from, first.start, first.end);
+        let (mut u, v_start) = (chart.project)(entry);
         let u_start = u;
         let mut acc = [0.0; 8];
         let mut twice_area = 0.0;
+        let (mut exit, mut chord) = (entry, 0.0);
         for edge in wire {
-            let at = |t: f64| {
-                (chart.project)(edge.curve.evaluate_with_endpoints(t, edge.start, edge.end))
-            };
+            let point = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
+            let at = |t: f64| (chart.project)(point(t));
+            let (enter, leave) = (point(edge.from), point(edge.to));
+            chord = (leave - enter).length();
+            if (enter - exit).length() > 1e-6 + 1e-3 * chord {
+                return None;
+            }
+            exit = leave;
             for (ta, tb) in edge_pieces(edge) {
-                let (ua, _) = at(ta);
+                let (ua, va) = at(ta);
                 let u_a = u + wrap_pi(ua - u);
                 let (half, mid) = (0.5 * (tb - ta), 0.5 * (ta + tb));
                 // A five-point stencil wide enough that rounding in far-off
                 // coordinates stays small against it.
                 let h = 1e-3 * (tb - ta);
+                let a_singular = singular(ua, va);
                 for gp in gauss {
                     let t = half.mul_add(gp.x, mid);
                     let (un, vn) = at(t);
                     let un = u_a + wrap_pi(un - u_a);
+                    if !a_singular && (un - u_a).abs() > quarter {
+                        return None;
+                    }
                     let [(u1, v1), (u2, v2), (u3, v3), (u4, v4)] =
                         [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(at);
                     let du = 8.0f64.mul_add(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
@@ -245,9 +264,16 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                     }
                     twice_area += w * (un * dv - vn * du);
                 }
-                let (ub, _) = at(tb);
-                u = u_a + wrap_pi(ub - u_a);
+                let (ub, vb) = at(tb);
+                let u_b = u_a + wrap_pi(ub - u_a);
+                if !a_singular && !singular(ub, vb) && (u_b - u_a).abs() > quarter {
+                    return None;
+                }
+                u = u_b;
             }
+        }
+        if (entry - exit).length() > 1e-6 + 1e-3 * chord {
+            return None;
         }
         let turn = u - u_start;
         let turns = (turn / TAU).round();
@@ -260,21 +286,24 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
             let h = mean_integral(chart, v_start, about);
             #[allow(clippy::cast_precision_loss)]
             add(&mut acc, &h, -TAU * turns as f64);
+        } else if twice_area.abs() <= AREA_SLACK {
+            return None;
         }
         add(&mut total, &acc, 1.0);
         turns_sum += turns;
         winds |= turns != 0;
-        patch |= turns == 0 && twice_area > 1e-12;
+        patch |= turns == 0 && twice_area > AREA_SLACK;
+        holes &= turns == 0 && twice_area < -AREA_SLACK;
     }
     // A total of one turn holds the high pole (the face on the wire's left,
     // toward growing `v`), minus one the low; with none, a band or a patch
-    // holds neither and a face of holes both. A pole the surface does not
-    // have (a cone's open end) holds no face.
+    // holds neither and a face of clockwise holes both. A pole the surface
+    // does not have (a cone's open end) holds no face.
     let (holds_low, holds_high) = match turns_sum {
         1 => (false, true),
         -1 => (true, false),
         0 if winds || patch => (false, false),
-        0 => (true, true),
+        0 if holes => (true, true),
         _ => return None,
     };
     if holds_high {
@@ -282,6 +311,9 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
     }
     if holds_low {
         add(&mut total, &mean_integral(chart, chart.low?, about), -TAU);
+    }
+    if total[0] <= 0.0 {
+        return None;
     }
     Some(FaceContribution {
         area: total[0],
@@ -380,14 +412,15 @@ fn boundary_wires<'t>(
     Ok(Some(wires))
 }
 
-/// Points along every wire, sixteen to an edge.
+/// Points along every wire, sixty-four to an edge (close enough that a rim
+/// cannot pass a pole between two of them by more than a tenth of a degree).
 fn wire_samples(wires: &[Vec<BoundaryEdge<'_>>]) -> Vec<Point3> {
     wires
         .iter()
         .flatten()
         .flat_map(|e| {
-            (0..16).map(move |k| {
-                let t = (e.to - e.from).mul_add(f64::from(k) / 16.0, e.from);
+            (0..=64).map(move |k| {
+                let t = (e.to - e.from).mul_add(f64::from(k) / 64.0, e.from);
                 e.curve.evaluate_with_endpoints(t, e.start, e.end)
             })
         })
@@ -404,16 +437,27 @@ pub(super) fn curved_face_by_boundary(
     sign: f64,
     about: Vec3,
 ) -> Result<Option<FaceContribution>, CheckError> {
+    if !matches!(
+        face.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_)
+    ) {
+        return Ok(None);
+    }
     let Some(wires) = boundary_wires(topo, face)? else {
         return Ok(None);
     };
     Ok(match face.surface() {
         FaceSurface::Cylinder(s) => {
             let project = |p: Point3| s.project_point(p);
+            // No pole: `H` from where the first wire starts, where one panel
+            // of its integral stays short.
+            let v_ref = wires.first().and_then(|w| w.first()).map_or(0.0, |e| {
+                project(e.curve.evaluate_with_endpoints(e.from, e.start, e.end)).1
+            });
             let chart = Chart {
                 surface: s,
                 project: &project,
-                v_ref: 0.0,
+                v_ref,
                 low: None,
                 high: None,
             };
