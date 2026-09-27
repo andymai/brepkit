@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790469855632,
+  "lastUpdate": 1790470144422,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -42389,6 +42389,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45694670,
             "range": "± 393047",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "77bb3f7c7c4e14fd419ac7e847d608bd3fa233fb",
+          "message": "fix(algo): sample a sphere piece's interior in one u window (#1809)\n\nMirrored sphere and box corner booleans now retain the correct sphere\nregion and produce exact, valid results consistent with the upright\npose.\n\n## What was wrong\n\n- On main, `make_sphere(3, 32)` less `make_box(10, 10, 10)` at `(0.5,\n-0.5, 0.5)`, with the scene transformed by `Mat4::scale(-1, 1, 1)`,\nreturned an invalid four-face solid measuring 13.04. The upright Cut\nmeasures 103.08. Mirrored corners at `(0, 0, 1)` and `(0, 0, 0.5)` also\nreturned four faces. Both inputs were valid, with measures 113.0973 and\n1000.\n- The upper hemisphere split into the corner patch and the remaining\nregion in both poses. Mirrored, the patch sampled `(1.787, 0.063,\n2.409)`, on the ball's far side from the corner. Both pieces therefore\nclassified Outside the box. The builder closed the patch with the box's\nthree faces and dropped the remaining two-face sliver.\n- The patch takes the split's \"cap interior to the boundary\" branch,\nleaving its interior to `interior_point_3d`. After mirroring, freshly\ncomputed pcurves placed consecutive arcs one turn apart. The sampled\npolygon jumped from `u = 0.61` to `u = 7.07`, ran back from 4.88 to\n0.17, crossed itself, and selected an interior at `u = 3.18`.\n\n## What this does\n\n- `interior_point_3d` now reads a sphere piece's outer loop from the\nedges' own curves through `sample_wire_loop_uv_on_surface`, matching the\ncone path.\n- `sphere_loop_uv` unwraps that loop into one continuous `u` window\nwhenever it closes there. Loops that wind around the axis or pass\nthrough a pole retain their current handling.\n\n## Verification\n\n- Added `a_mirrored_ball_less_a_box_corner_keeps_its_region` covering\nall three corners, Cut and Intersect, upright and mirrored through `x =\n0` and `y = 0`. Every result is exact and valid, matches the upright\nmeasure within `1e-9` relative tolerance and the closed form within\n`1e-4`, and reads the corner and far-side points correctly. The test\nfails without this change.\n- The `1e-4` bound covers the tracked sphere measure gap. The upright\n`(0.5, -0.5, 0.5)` Cut is 2.5e-5 (relative) below its closed form.\n- `corner_piece` now starts each strip at the section circle for corners\nbelow `y = 0`. Existing corner values remain unchanged and pass at\n`1e-7`.\n- The pose sweep is unchanged against main. The workspace suite reports\n3156 passed and 20 skipped from 3156 tests run. Lint is clean.\n- The roadmap records this case as closed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes mirrored sphere-and-box corner booleans returning invalid\nfour-face solids with wrong volumes. Mirrored, freshly computed section\npcurves placed a corner patch's consecutive arcs one turn apart; the\npatch's `(u, v)` polygon crossed itself and its interior sample landed\non the ball's far side, so the Cut kept the patch and dropped the rest.\n\n**Bug Fixes**\n- A sphere piece's interior now reads its outer loop on the edges' own\ncurves, unwrapped into one continuous `u` window, when the loop closes\nthere; loops through both poles keep their pcurve handling.\n- `corner_piece`'s closed form now integrates from the section circle\nfor corners below `y = 0`.\n- Added a test covering three corners, Cut and Intersect, upright and\nmirrored through `x = 0` and `y = 0`; every result is exact, valid, and\nmatches the upright measure within `1e-9` relative tolerance.\n\n<sup>Written for commit 4e3e463f1ea6431404abb6df313bfe4da3ac8018.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1809?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-27T00:46:05Z",
+          "tree_id": "59d2c372efb90bc7b7e8ca23a9d4febad81b541d",
+          "url": "https://github.com/andymai/brepkit/commit/77bb3f7c7c4e14fd419ac7e847d608bd3fa233fb"
+        },
+        "date": 1790470139517,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1010140,
+            "range": "± 7704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1045456,
+            "range": "± 12585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13003,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 713708,
+            "range": "± 4873",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41972888,
+            "range": "± 489608",
             "unit": "ns/iter"
           }
         ]
