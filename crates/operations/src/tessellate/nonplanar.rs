@@ -2092,16 +2092,43 @@ pub(super) fn tessellate_nonplanar_cdt(
             .collect();
 
         if !seam_edge_indices.is_empty() && ring.is_none() {
+            // A pointed cone's wall whose seam a hole notches: the seam runs
+            // to the apex and back, and the hole's halves hang from its two
+            // copies. Its rim alone spans the wall; the halves' continuous
+            // unwrap, carried through the apex's arbitrary u, can sit a
+            // period off.
+            let notched_cone = match face_data.surface() {
+                FaceSurface::Cone(cone) if seam_edge_indices.len() > 1 => boundary_3d
+                    .iter()
+                    .any(|b| (b.0 - cone.apex()).length() < 1e-9),
+                _ => false,
+            };
+            let off_seam = |i: usize| !seam_edge_indices.contains(&boundary_3d[i].2.index());
+            let v_rim = (0..n_boundary)
+                .filter(|&i| off_seam(i))
+                .map(|i| boundary_uv[i].1)
+                .fold(f64::NEG_INFINITY, f64::max);
             let non_seam_uvs: Vec<(f64, f64)> = boundary_uv
                 .iter()
                 .enumerate()
-                .filter(|(i, _)| !seam_edge_indices.contains(&boundary_3d[*i].2.index()))
+                .filter(|&(i, _)| off_seam(i))
                 .map(|(_, &uv)| uv)
                 .collect();
             let (u_min_bnd, u_max_bnd, v_min_bnd, v_max_bnd) = if non_seam_uvs.is_empty() {
                 (u_min, u_max, v_min, v_max)
             } else {
                 uv_bounds(&non_seam_uvs)
+            };
+            let (u_min_bnd, u_max_bnd) = if notched_cone {
+                let rim: Vec<(f64, f64)> = non_seam_uvs
+                    .iter()
+                    .copied()
+                    .filter(|uv| (uv.1 - v_rim).abs() < 1e-9)
+                    .collect();
+                let (lo, hi, _, _) = uv_bounds(&rim);
+                (lo, hi)
+            } else {
+                (u_min_bnd, u_max_bnd)
             };
             // A rim's seam vertex joins whichever run the wire reaches it in,
             // so when both rims hand theirs to the seam runs, the rims' span
@@ -2168,19 +2195,52 @@ pub(super) fn tessellate_nonplanar_cdt(
             // halves are put on the seam's two sides, the apex row joining
             // them is inserted here, `(after index, from u, to u, v, id)`.
             let mut apex_rows: Vec<(usize, f64, f64, f64, u32)> = Vec::new();
-            // A holed cone only: its wall takes the refined developable
+            // A holed cone, or one whose seam a hole notches (the seam is then
+            // more than one edge): its wall takes the refined developable
             // metric below; a whole cone keeps the snap mesher's grid.
             let apex = match face_data.surface() {
-                FaceSurface::Cone(cone) if !face_data.inner_wires().is_empty() => Some(cone.apex()),
+                FaceSurface::Cone(cone)
+                    if !face_data.inner_wires().is_empty() || seam_edge_indices.len() > 1 =>
+                {
+                    Some(cone.apex())
+                }
                 _ => None,
             };
+            let seam_u_period = seam_span(
+                face_data.surface(),
+                &boundary_3d,
+                &boundary_uv,
+                &seam_edge_indices,
+            );
             for run in &seam_runs {
                 // The rim sample just before the run is the seam's own vertex
                 // on that rim, already unwrapped to the seam's side of the
                 // span; the edge's sense only says which side for one wire
                 // orientation.
                 let before = (run.indices[0] + n_boundary - 1) % n_boundary;
-                let u_assign = if seam_edge_indices.contains(&boundary_3d[before].2.index()) {
+                // On a notched cone the samples beside a seam copy lie on the
+                // wall's side of it: +u of the lower copy, -u of the upper.
+                // Read from the wrapped offset to the seam, the side needs no
+                // unwrap the apex could have thrown a period off.
+                let beside = || -> Option<f64> {
+                    let (seam_u, period) = seam_u_period?;
+                    let mut i = before;
+                    while off_seam(i) {
+                        let d = (boundary_uv[i].0 - seam_u + 0.5 * period).rem_euclid(period)
+                            - 0.5 * period;
+                        if d.abs() > 1e-9 {
+                            return Some(if d > 0.0 { u_min_bnd } else { u_max_bnd });
+                        }
+                        i = (i + n_boundary - 1) % n_boundary;
+                        if i == before {
+                            break;
+                        }
+                    }
+                    None
+                };
+                let u_assign = if let Some(u) = notched_cone.then(beside).flatten() {
+                    u
+                } else if seam_edge_indices.contains(&boundary_3d[before].2.index()) {
                     if run.is_forward { u_max_bnd } else { u_min_bnd }
                 } else if (boundary_uv[before].0 - u_min_bnd).abs()
                     < (boundary_uv[before].0 - u_max_bnd).abs()
@@ -2260,6 +2320,26 @@ pub(super) fn tessellate_nonplanar_cdt(
                 }
             }
 
+            // Hang each stretch off the seam point before it: shifted by whole
+            // periods, its first sample sits beside that point's copy.
+            if notched_cone && let Some((_, period)) = surface_periods(face_data.surface()).0 {
+                for i in 0..n_boundary {
+                    let prev = (i + n_boundary - 1) % n_boundary;
+                    if !off_seam(i) || off_seam(prev) {
+                        continue;
+                    }
+                    let shift =
+                        ((boundary_uv[prev].0 - boundary_uv[i].0) / period).round() * period;
+                    let mut j = i;
+                    while off_seam(j) && shift != 0.0 {
+                        boundary_uv[j].0 += shift;
+                        j = (j + 1) % n_boundary;
+                        if j == i {
+                            break;
+                        }
+                    }
+                }
+            }
             apex_rows.sort_by_key(|row| std::cmp::Reverse(row.0));
             let rim_spacing = if apex_rows.is_empty() {
                 1.0

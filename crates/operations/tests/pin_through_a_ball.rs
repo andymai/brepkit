@@ -1,7 +1,6 @@
-//! A tapered pin through a ball off the ball's centre. Upright and tilted,
-//! in every pose, the Cut and the Intersect are exact and take what the pin
-//! holds of the ball; laid across the equator they fall back to a mesh that
-//! still holds it.
+//! A tapered pin through a ball off the ball's centre, upright, tilted and
+//! laid across the ball's equator: in every pose the Cut and the Intersect
+//! are exact and take what the pin holds of the ball.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -79,16 +78,22 @@ fn a_pin_through_a_ball_is_exact() {
                 * Mat4::rotation_y(0.4)
                 * Mat4::translation(0.0, 0.0, -5.0),
         ),
+        (
+            "across",
+            Mat4::translation(-5.0, 0.0, 0.3) * Mat4::rotation_y(PI / 2.0),
+        ),
     ] {
         let base = place.mul_point(Point3::new(0.0, 0.0, 0.0));
         let axis = (place.mul_point(Point3::new(0.0, 0.0, 1.0)) - base)
             .normalize()
             .unwrap();
         let taken = inside(base, axis);
-        // On the axis where it passes nearest the ball's centre, and on the
-        // ball's other side half as far again from the centre.
-        let foot = base + axis * (Point3::new(0.0, 0.0, 0.0) - base).dot(axis);
-        let away = Point3::new(0.0, 0.0, 0.0) - (foot - Point3::new(0.0, 0.0, 0.0)) * 1.5;
+        // On the axis where it passes nearest the ball's centre, and in the
+        // ball two from the centre, square to the axis and to that point:
+        // at least two from the axis, past the pin's radius.
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let foot = base + axis * (centre - base).dot(axis);
+        let away = centre + axis.cross(foot - centre).normalize().unwrap() * 2.0;
         for pose in ["upright", "turned", "mirrored", "scaled"] {
             for (op, truth) in [
                 (BooleanOp::Cut, ball - taken),
@@ -156,36 +161,5 @@ fn a_pin_through_a_ball_is_exact() {
                 }
             }
         }
-    }
-}
-
-/// The pin laid along `x` just above the ball's centre: its loops cross the
-/// ball's chordal equator, which the hemispheres cannot be split along, so
-/// the result falls back to a mesh. Whatever path it takes, each piece is
-/// valid and within the mesh's `3e-2` of what the pin holds of the ball.
-#[test]
-fn a_pin_across_the_equator_keeps_its_piece() {
-    let base = Point3::new(-5.0, 0.0, 0.3);
-    let place = Mat4::translation(-5.0, 0.0, 0.3) * Mat4::rotation_y(PI / 2.0);
-    let taken = inside(base, Vec3::new(1.0, 0.0, 0.0));
-    let ball = 4.0 / 3.0 * PI * BALL.powi(3);
-    for (op, truth) in [
-        (BooleanOp::Cut, ball - taken),
-        (BooleanOp::Intersect, taken),
-    ] {
-        let mut topo = Topology::new();
-        let a = make_sphere(&mut topo, BALL, 32).unwrap();
-        let b = make_cone(&mut topo, BASE, TIP, LENGTH).unwrap();
-        transform_solid(&mut topo, b, &place).unwrap();
-        let result = boolean(&mut topo, op, a, b).unwrap();
-        assert!(
-            validate_solid(&topo, result).unwrap().is_valid(),
-            "{op:?}: invalid"
-        );
-        let volume = solid_volume(&topo, result, 0.01).unwrap();
-        assert!(
-            (volume - truth).abs() < 3e-2 * truth,
-            "{op:?}: volume {volume}, truth {truth}"
-        );
     }
 }
