@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790576446943,
+  "lastUpdate": 1790578116233,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46331,6 +46331,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43059564,
             "range": "± 161670",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "748eebbd9d064200856a35886a89e3973761f25a",
+          "message": "fix(operations): give the developable wall mesher 32 refinement passes (#1883)\n\nRaising `MAX_HALVING_PASSES` from 16 to 32 allows the curved-face CDT\nmesher to complete refinement for the pointed cone through plate edge\ncase.\n\n## What was wrong\n\n- Fusing `make_cone(1.2, 0, 10)` at `(0, 5, -4)`, turned about its axis,\nwith `make_box(10, 10, 2)` produced a valid, correctly measured exact\nfuse. At turns 0.79, 5.11, 5.3, 5.6, and 5.89 radians, its solid mesh\nhad 102 to 152 open or non-manifold edges.\n- At turn 0.79, the plate window notches the cone wall across its seam.\nDeveloped-metric refinement continued splitting 2 to 8 triangles per\npass and converged on pass 17. The 16-pass cap caused the face to use\nthe snap mesher, producing a cone fan measuring 37.87 against the exact\nface value of 34.17.\n\n## What this does\n\n- Increases `MAX_HALVING_PASSES` to 32.\n- The wall now meshes at 34.109 against 34.173, with no bad mesh edges.\n- Adds a Closed roadmap entry. The plate-edge row now lists only turns\n1.57, 1.96, 3.93, 4.32, and 4.71 radians. These remain open, with 105\nand 102 edges at 1.57 and 4.71, and 3 at each other turn.\n\n## Verification\n\n- `a_pointed_cone_through_a_plate_edge_fuses_to_a_valid_solid` now\nrequires every exact fuse to mesh watertight except those five roadmap\nturns. With the cap at 16, it fails at turn 0.785.\n- `brepkit-operations` and `brepkit-io` pass: 1649 tests, 17 skipped.\n- The 300-line pose sweep matches main.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRaises the developable-wall mesher's refinement cap from 16 to 32\nhalving passes so the pointed cone through a plate's edge meshes\nwatertight where its notched wall previously fell back to the snap\nmesher.\n\n- The wall now meshes at 34.109 against 34.173 with no bad mesh edges.\n- The fuse test now requires every exact result to mesh watertight; five\nturns at `x = 0` remain open and are logged in the roadmap.\n- Bumps `MAX_HALVING_PASSES` to 32 and notes the change and roadmap row\nin the skill file.\n\n<sup>Written for commit bbd1f4f5ccc7198773eb4f1e1d68b0ad6e8c67ae.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1883?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-28T06:45:38Z",
+          "tree_id": "e39f36ccf6b0ffd566046a19c1751b66013dc171",
+          "url": "https://github.com/andymai/brepkit/commit/748eebbd9d064200856a35886a89e3973761f25a"
+        },
+        "date": 1790578110982,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1033526,
+            "range": "± 4781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1121705,
+            "range": "± 2745",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13363,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 774734,
+            "range": "± 1504",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43993517,
+            "range": "± 475357",
             "unit": "ns/iter"
           }
         ]
