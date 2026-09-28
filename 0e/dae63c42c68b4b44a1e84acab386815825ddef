@@ -1,0 +1,22 @@
+crates/operations/tests/column_and_rod_against_a_ball.rs
+  s_ba2f7b5c6902b6::t_9fbabcd47f4530 12,14,55-66,70-73,108-114,120-128
+  s_ba2f7b5c6902b6::t_b5c9ea3d2de74a 4-6,107
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_138c732fb97cc3 179,205-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0edae63c42c68b4b44a1e84acab386815825ddef",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
