@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.86](https://github.com/andymai/brepkit/compare/v4.0.85...v4.0.86) (2026-09-28)
+
+
+### Bug Fixes
+
+* **operations:** sample a floor's arc finer where a hole passes nearer than its sag ([#1894](https://github.com/andymai/brepkit/issues/1894)) ([b67cb58](https://github.com/andymai/brepkit/commit/b67cb5814d20489fbf292563240f921c62f969bf))
+
 ## [4.0.85](https://github.com/andymai/brepkit/compare/v4.0.84...v4.0.85) (2026-09-28)
 
 
