@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.83](https://github.com/andymai/brepkit/compare/v4.0.82...v4.0.83) (2026-09-28)
+
+
+### Bug Fixes
+
+* **operations:** mesh a cone or cylinder patch a section bounds through the local mesher ([#1888](https://github.com/andymai/brepkit/issues/1888)) ([5055d1a](https://github.com/andymai/brepkit/commit/5055d1a54fb96ff5cbb3eb5207da6f7df97765a6))
+
 ## [4.0.82](https://github.com/andymai/brepkit/compare/v4.0.81...v4.0.82) (2026-09-28)
 
 
