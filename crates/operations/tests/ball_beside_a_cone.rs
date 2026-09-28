@@ -10,10 +10,10 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::classify::{PointClassification, classify_point};
-use brepkit_operations::measure::solid_volume;
+use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_cone, make_sphere};
-use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::tessellate::{TriangleMesh, is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -60,6 +60,16 @@ fn shared(top: f64, centre: Point3, r: f64) -> f64 {
         total += w * lens(cone_radius(top, z), ball, d);
     }
     total * h / 3.0
+}
+
+fn mesh_area(mesh: &TriangleMesh) -> f64 {
+    mesh.indices
+        .chunks(3)
+        .map(|t| {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+            0.5 * (b - a).cross(c - a).length()
+        })
+        .sum()
 }
 
 fn pose_of(name: &str) -> Mat4 {
@@ -173,6 +183,26 @@ fn a_ball_beside_a_cone_is_exact() {
                     let got = classify_point(&topo, result, placed(p, name), 0.01, 1e-7).unwrap();
                     assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
                 }
+                // A pointed wall the ball bites into meshes on its own too, as
+                // a per-face export takes it.
+                for &f in &faces {
+                    if top > 0.0
+                        || op == BooleanOp::Intersect
+                        || topo.face(f).unwrap().surface().type_tag() != "cone"
+                    {
+                        continue;
+                    }
+                    let area = mesh_area(&tessellate(&topo, f, 0.01).unwrap());
+                    let exact = face_area(&topo, f, 0.01).unwrap();
+                    assert!(
+                        (area - exact).abs() < 0.01 * exact,
+                        "{label}: cone face meshes {area} of {exact}"
+                    );
+                }
+                // Mirrored afterwards, its wires run the other way round.
+                transform_solid(&mut topo, result, &Mat4::scale(-1.0, 1.0, 1.0)).unwrap();
+                let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open mesh mirrored");
             }
         }
     }

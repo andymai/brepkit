@@ -2708,8 +2708,8 @@ fn ruling_torus_cylinder(
 /// through a ball): along a generator `apex + v g` the sphere is a quadratic
 /// in `v`, and each of its two roots, taken in order, sweeps one closed loop
 /// around the cone. `None` when the centre lies on the axis (phase FF takes
-/// [`exact_cone_sphere`]'s circles there), and when a generator misses the
-/// sphere or meets it behind the apex (the marcher's cases).
+/// [`exact_cone_sphere`]'s circles there). A sphere only some generators
+/// cross goes to [`window_cone_sphere`].
 fn ruling_cone_sphere(
     cone: &ConicalSurface,
     sphere: &SphericalSurface,
@@ -2771,8 +2771,11 @@ fn ruling_cone_sphere(
 /// out along the arc and the farther ones back. Sampled at
 /// `u = mid − half·cos θ`, the roots' split `±√(h² − K)` changes sign with
 /// `sin θ` and the loop stays smooth through both touching generators.
-/// `Some(empty)` when no generator crosses ahead of the apex, `None` when
-/// the apex lies within the sphere.
+/// `Some(empty)` when no generator crosses ahead of the apex. `None`, the
+/// marcher's case, when the apex lies within the sphere, when the centre is
+/// too near the axis to place the arc, and when every generator reaches the
+/// sphere (the extremes' test then failed on a touching generator or a root
+/// at the apex).
 fn window_cone_sphere(
     cone: &ConicalSurface,
     sphere: &SphericalSurface,
@@ -4026,7 +4029,7 @@ mod tests {
         )
         .unwrap();
         assert!(ruling_cone_sphere(&away, &ball, true).unwrap().is_empty());
-        // Grazing: the generators that miss span about 0.002 of a turn,
+        // Grazing: the generators that miss span about 0.002 radians,
         // narrower than a 2048-angle scan's step, and the near and far
         // roots join into one loop across them.
         let step = TAU / 2048.0;

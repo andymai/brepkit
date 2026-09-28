@@ -1844,9 +1844,28 @@ pub(super) fn tessellate_nonplanar_cdt(
 
     let anchored = anchor_closed_edges_at_vertices(topo, wire, edge_global_indices, merged)?;
 
+    // A pointed cone's wall whose seam a hole notches is walked from a seam
+    // edge that follows another edge: every other stretch then runs between
+    // seam samples, and no seam run loses its samples to the loop's closure.
+    let notched_cone = notched_pointed_cone(topo, face_data, wire)?;
+    let mut edges = wire.edges().to_vec();
+    if notched_cone {
+        let seam = |i: usize| {
+            edges
+                .iter()
+                .filter(|other| other.edge() == edges[i].edge())
+                .count()
+                > 1
+        };
+        let n = edges.len();
+        if let Some(k) = (0..n).find(|&i| seam(i) && !seam((i + n - 1) % n)) {
+            edges.rotate_left(k);
+        }
+    }
+
     // Fourth element: is_forward flag -- needed for seam UV assignment.
     let mut boundary_3d: Vec<(Point3, u32, EdgeId, bool)> = Vec::new();
-    for oe in wire.edges() {
+    for oe in &edges {
         let edge_id_local = oe.edge();
         let edge_idx = edge_id_local.index();
         let is_fwd = oe.is_forward();
@@ -2092,22 +2111,7 @@ pub(super) fn tessellate_nonplanar_cdt(
             .collect();
 
         if !seam_edge_indices.is_empty() && ring.is_none() {
-            // A pointed cone's wall whose seam a hole notches: the seam runs
-            // to the apex and back, and the hole's halves hang from its two
-            // copies. Its rim alone spans the wall; the halves' continuous
-            // unwrap, carried through the apex's arbitrary u, can sit a
-            // period off.
-            let notched_cone = match face_data.surface() {
-                FaceSurface::Cone(cone) if seam_edge_indices.len() > 1 => boundary_3d
-                    .iter()
-                    .any(|b| (b.0 - cone.apex()).length() < 1e-9),
-                _ => false,
-            };
             let off_seam = |i: usize| !seam_edge_indices.contains(&boundary_3d[i].2.index());
-            let v_rim = (0..n_boundary)
-                .filter(|&i| off_seam(i))
-                .map(|i| boundary_uv[i].1)
-                .fold(f64::NEG_INFINITY, f64::max);
             let non_seam_uvs: Vec<(f64, f64)> = boundary_uv
                 .iter()
                 .enumerate()
@@ -2119,17 +2123,21 @@ pub(super) fn tessellate_nonplanar_cdt(
             } else {
                 uv_bounds(&non_seam_uvs)
             };
-            let (u_min_bnd, u_max_bnd) = if notched_cone {
-                let rim: Vec<(f64, f64)> = non_seam_uvs
-                    .iter()
-                    .copied()
-                    .filter(|uv| (uv.1 - v_rim).abs() < 1e-9)
-                    .collect();
-                let (lo, hi, _, _) = uv_bounds(&rim);
-                (lo, hi)
+            // On a notched pointed cone the seam runs to the apex and back,
+            // and the hole's halves hang from its two copies: the wall spans
+            // one period between them. The seam's own vertices place them; a
+            // closed rim's samples stand in for its vertex only to within
+            // half a step, and the halves' continuous unwrap, carried through
+            // the apex's arbitrary u, can sit a period off.
+            let seam_vertex_u = if notched_cone {
+                seam_vertex_u(topo, &edges, face_data.surface())?
             } else {
-                (u_min_bnd, u_max_bnd)
+                None
             };
+            let (u_min_bnd, u_max_bnd) = seam_vertex_u.map_or((u_min_bnd, u_max_bnd), |seam_u| {
+                let lo = ((u_min_bnd - seam_u) / TAU).round().mul_add(TAU, seam_u);
+                (lo, lo + TAU)
+            });
             // A rim's seam vertex joins whichever run the wire reaches it in,
             // so when both rims hand theirs to the seam runs, the rims' span
             // stops a sample short of the period on that side and the seam
@@ -2206,12 +2214,6 @@ pub(super) fn tessellate_nonplanar_cdt(
                 }
                 _ => None,
             };
-            let seam_u_period = seam_span(
-                face_data.surface(),
-                &boundary_3d,
-                &boundary_uv,
-                &seam_edge_indices,
-            );
             for run in &seam_runs {
                 // The rim sample just before the run is the seam's own vertex
                 // on that rim, already unwrapped to the seam's side of the
@@ -2221,13 +2223,15 @@ pub(super) fn tessellate_nonplanar_cdt(
                 // On a notched cone the samples beside a seam copy lie on the
                 // wall's side of it: +u of the lower copy, -u of the upper.
                 // Read from the wrapped offset to the seam, the side needs no
-                // unwrap the apex could have thrown a period off.
+                // unwrap the apex could have thrown a period off. The sample
+                // before the run is the seam's own vertex, which a closed rim
+                // stands in for with its nearest sample, up to half a step
+                // to either side.
                 let beside = || -> Option<f64> {
-                    let (seam_u, period) = seam_u_period?;
-                    let mut i = before;
+                    let seam_u = seam_vertex_u?;
+                    let mut i = (before + n_boundary - 1) % n_boundary;
                     while off_seam(i) {
-                        let d = (boundary_uv[i].0 - seam_u + 0.5 * period).rem_euclid(period)
-                            - 0.5 * period;
+                        let d = (boundary_uv[i].0 - seam_u + 0.5 * TAU).rem_euclid(TAU) - 0.5 * TAU;
                         if d.abs() > 1e-9 {
                             return Some(if d > 0.0 { u_min_bnd } else { u_max_bnd });
                         }
@@ -2320,19 +2324,21 @@ pub(super) fn tessellate_nonplanar_cdt(
                 }
             }
 
-            // Hang each stretch off the seam point before it: shifted by whole
-            // periods, its first sample sits beside that point's copy.
+            // Hang each stretch off the seam point before it, each sample
+            // within half a period of the one before: a stretch can run on
+            // past the wire's first sample, where the unwrap above broke.
             if notched_cone && let Some((_, period)) = surface_periods(face_data.surface()).0 {
                 for i in 0..n_boundary {
                     let prev = (i + n_boundary - 1) % n_boundary;
                     if !off_seam(i) || off_seam(prev) {
                         continue;
                     }
-                    let shift =
-                        ((boundary_uv[prev].0 - boundary_uv[i].0) / period).round() * period;
+                    let mut last = boundary_uv[prev].0;
                     let mut j = i;
-                    while off_seam(j) && shift != 0.0 {
-                        boundary_uv[j].0 += shift;
+                    while off_seam(j) {
+                        let u = boundary_uv[j].0;
+                        last = ((last - u) / period).round().mul_add(period, u);
+                        boundary_uv[j].0 = last;
                         j = (j + 1) % n_boundary;
                         if j == i {
                             break;
@@ -3086,6 +3092,66 @@ fn seam_span(
             seam_edges.contains(&edge.index()) && apex.is_none_or(|a| (*p - a).length() > 1e-9)
         })
         .map(|(_, &(u, _))| (u, period))
+}
+
+/// Whether a cone face is a pointed cone's wall whose seam a hole notches:
+/// its wire runs more than one seam edge each way, and reaches the apex.
+fn notched_pointed_cone(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    wire: &brepkit_topology::wire::Wire,
+) -> Result<bool, crate::OperationsError> {
+    let FaceSurface::Cone(cone) = face_data.surface() else {
+        return Ok(false);
+    };
+    let edges = wire.edges();
+    let twice = edges
+        .iter()
+        .enumerate()
+        .filter(|&(i, oe)| {
+            edges[..i].iter().all(|other| other.edge() != oe.edge())
+                && edges[i + 1..].iter().any(|other| other.edge() == oe.edge())
+        })
+        .count();
+    if twice < 2 {
+        return Ok(false);
+    }
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        for v in [edge.start(), edge.end()] {
+            if (topo.vertex(v)?.point() - cone.apex()).length() < 1e-9 {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// The u of a cone's seam, read off a vertex of an edge its wire runs both
+/// ways, away from the apex.
+fn seam_vertex_u(
+    topo: &Topology,
+    edges: &[brepkit_topology::wire::OrientedEdge],
+    surface: &FaceSurface,
+) -> Result<Option<f64>, crate::OperationsError> {
+    let FaceSurface::Cone(cone) = surface else {
+        return Ok(None);
+    };
+    for (i, oe) in edges.iter().enumerate() {
+        if edges[i + 1..].iter().all(|other| other.edge() != oe.edge()) {
+            continue;
+        }
+        let edge = topo.edge(oe.edge())?;
+        for v in [edge.start(), edge.end()] {
+            let p = topo.vertex(v)?.point();
+            if (p - cone.apex()).length() >= 1e-9
+                && let Some((u, _)) = surface.project_point(p)
+            {
+                return Ok(Some(u));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Re-sequence a wire's closed edges so each cycle starts and ends at the
@@ -4274,8 +4340,8 @@ fn segments_cross(a: (f64, f64), b: (f64, f64), c: (f64, f64), d: (f64, f64)) ->
 
 /// Whether a cylinder or cone wall's outer wire carries a notch (a hole that
 /// straddles its seam): it wraps round, its seam line used twice, between
-/// rims at both ends of its axial extent, closed or cut into arcs, and some
-/// other edge runs between them.
+/// rims at both ends of its axial extent (a pointed cone's apex at one end),
+/// closed or cut into arcs, and some other edge runs between them.
 pub(super) fn is_notched_wall(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -4326,7 +4392,17 @@ pub(super) fn is_notched_wall(
             _ => between = true,
         }
     }
-    Ok(seam_twice && rim_low && rim_high && between)
+    // A pointed cone's seam runs up to its apex, which stands in for a rim.
+    let apex_end = match surface {
+        FaceSurface::Cone(cone) => {
+            let v_apex = surface
+                .project_point(cone.apex())
+                .map_or(f64::NAN, |(_, v)| v);
+            (v_apex - v_min).abs() <= tol || (v_apex - v_max).abs() <= tol
+        }
+        _ => false,
+    };
+    Ok(seam_twice && between && ((rim_low && rim_high) || (apex_end && (rim_low || rim_high))))
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
