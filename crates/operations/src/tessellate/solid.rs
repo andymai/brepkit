@@ -934,7 +934,7 @@ fn tessellate_solid_core(
     }
 
     phase("normals", &mut phase_t);
-    weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
+    let repeated = weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
 
     // Drop coincident/cancelling triangles left by booleans that
     // produced overlapping coplanar faces (issue #696). Keyed on quantized
@@ -943,13 +943,24 @@ fn tessellate_solid_core(
     dedupe_coincident_triangles(&mut merged, tri_faces.as_mut());
     phase("weld_dedupe", &mut phase_t);
 
-    if let Some(tf) = tri_faces.as_mut() {
-        let surfaces: Vec<Option<FaceSurface>> = all_faces
+    if repeated && let Some(tf) = tri_faces.as_mut() {
+        let surfaces: Vec<Option<&FaceSurface>> = all_faces
             .iter()
-            .map(|&f| topo.face(f).ok().map(|fd| fd.surface().clone()))
+            .map(|&f| topo.face(f).ok().map(brepkit_topology::face::Face::surface))
             .collect();
+        // A curved analytic surface projects exactly; a plane holds its
+        // chords already, and a NURBS projection can fail to a far point.
         let on_face = |fi: u32, p: Point3| -> Option<Point3> {
-            let surface = surfaces.get(fi as usize)?.as_ref()?;
+            let surface = (*surfaces.get(fi as usize)?)?;
+            if !matches!(
+                surface,
+                FaceSurface::Cylinder(_)
+                    | FaceSurface::Cone(_)
+                    | FaceSurface::Sphere(_)
+                    | FaceSurface::Torus(_)
+            ) {
+                return None;
+            }
             let (u, v) = surface.project_point(p)?;
             surface.evaluate(u, v)
         };
