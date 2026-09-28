@@ -262,10 +262,11 @@ pub(super) fn tessellate_with_uvs_floor(
         });
     // So is a cylinder or cone wall that a hole straddling its seam notches,
     // or that a section loop winds round, and a pointed cone's tip a section
-    // bounds.
+    // bounds; and any cylinder or cone patch a section bounds in part, which
+    // is not the (u, v) box the grid below fills.
     let notched_wall = super::nonplanar::is_notched_wall(topo, face_data)?
         || super::nonplanar::is_wound_wall(topo, face_data)?
-        || super::nonplanar::is_section_tip(topo, face_data)?;
+        || super::nonplanar::is_section_bound(topo, face_data)?;
     let holed_wall =
         if holed_analytic || notched_wall || trimmed_nurbs || trimmed_sphere || trimmed_torus {
             match super::nonplanar::tessellate_holed_face_local(

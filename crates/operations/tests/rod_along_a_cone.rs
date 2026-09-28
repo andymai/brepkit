@@ -171,8 +171,7 @@ fn a_rod_along_a_cone_is_exact() {
                 // within a chord, and so does each wall meshed on its own, as
                 // a per-face export takes it. A face the rod's rim or loop
                 // bounds alone (its end discs, the Intersect's cone patches)
-                // is an 18-gon's 2% short; the per-face mesh of those patches
-                // is an open roadmap row.
+                // is an 18-gon's 2% short.
                 let (grouped, offsets) = tessellate_solid_grouped_with_tolerance(
                     &topo,
                     result,
@@ -191,7 +190,7 @@ fn a_rod_along_a_cone_is_exact() {
                         (area - exact).abs() < bound,
                         "{label}: face {k} meshes {area} of {exact} in the solid"
                     );
-                    if patch {
+                    if plane {
                         continue;
                     }
                     let own = tessellate(&topo, f, 0.01).unwrap();
