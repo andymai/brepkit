@@ -700,6 +700,27 @@ pub fn perform(
                             );
                             continue;
                         }
+                        // Crossing no boundary twice, the circle lies wholly on
+                        // a wall or off it but for a touch (a slab level with
+                        // an oblique rim's peak), and one off it sections
+                        // nothing.
+                        let off_a_wall = [fa, fb].into_iter().any(|f| {
+                            crate::classifier::LateralTrim::new(topo, f)
+                                .ok()
+                                .flatten()
+                                .is_some_and(|trim| {
+                                    (0..8)
+                                        .filter(|&k| {
+                                            let t = std::f64::consts::FRAC_PI_4 * f64::from(k);
+                                            !trim.holds(circle.evaluate(t), 10.0 * tol.linear)
+                                        })
+                                        .count()
+                                        > 4
+                                })
+                        });
+                        if off_a_wall {
+                            continue;
+                        }
                         // A circle running along one face's inscribed boundary
                         // sections only the plane it lies in, and only once:
                         // both hemispheres of a faceted sphere yield it.
@@ -5066,7 +5087,9 @@ fn circle_face_hits(
                 let slack = tol.linear / el.semi_minor().max(tol.linear);
                 for (p, t) in circle.intersect_ellipse(el, tol.linear) {
                     let s = (el.project(p) - t0).rem_euclid(std::f64::consts::TAU) + t0;
-                    if full || s <= t1 + slack {
+                    // A hit at the arc's first end can round to just short
+                    // of it and wrap a whole turn.
+                    if full || s <= t1 + slack || s >= t0 + std::f64::consts::TAU - slack {
                         edge_hits.push((t, p, Some(oe.edge())));
                     }
                 }
@@ -5661,9 +5684,11 @@ fn emit_split_circle_arcs(
             })
         })
     };
+    // A wall's trim stands in for its box, which samples an oblique rim
+    // too coarsely to hold the arcs just under its peak.
     let in_both = |p: Point3| -> bool {
-        let a_ok = bbox_a.as_ref().is_none_or(|b| b.contains_point(p));
-        let b_ok = bbox_b.as_ref().is_none_or(|b| b.contains_point(p));
+        let a_ok = trim_a.is_some() || bbox_a.as_ref().is_none_or(|b| b.contains_point(p));
+        let b_ok = trim_b.is_some() || bbox_b.as_ref().is_none_or(|b| b.contains_point(p));
         let side_ok = |side: &Option<(Point3, Vec3)>| {
             side.as_ref()
                 .is_none_or(|(c, axis)| (p - *c).dot(*axis) >= -side_eps)
