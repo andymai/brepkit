@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.88](https://github.com/andymai/brepkit/compare/v4.0.87...v4.0.88) (2026-09-28)
+
+
+### Bug Fixes
+
+* **algo:** seed and section a frustum cap's thin ring exactly ([#1897](https://github.com/andymai/brepkit/issues/1897)) ([eb31f3e](https://github.com/andymai/brepkit/commit/eb31f3e897a8801504444ca8025daa60125981a0))
+
 ## [4.0.87](https://github.com/andymai/brepkit/compare/v4.0.86...v4.0.87) (2026-09-28)
 
 
