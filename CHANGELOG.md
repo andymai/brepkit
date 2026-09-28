@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.77](https://github.com/andymai/brepkit/compare/v4.0.76...v4.0.77) (2026-09-28)
+
+
+### Bug Fixes
+
+* **algo:** cut a section window at its own seam crossings ([#1873](https://github.com/andymai/brepkit/issues/1873)) ([752acf8](https://github.com/andymai/brepkit/commit/752acf82bdebb466406562f333293db1ce75e4c5))
+
 ## [4.0.76](https://github.com/andymai/brepkit/compare/v4.0.75...v4.0.76) (2026-09-28)
 
 
