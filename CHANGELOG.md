@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.87](https://github.com/andymai/brepkit/compare/v4.0.86...v4.0.87) (2026-09-28)
+
+
+### Bug Fixes
+
+* **algo:** split a wall's circle where it crosses an oblique ellipse rim ([#1900](https://github.com/andymai/brepkit/issues/1900)) ([53cd9ec](https://github.com/andymai/brepkit/commit/53cd9ec9ea7db0c747e54d24106c7f62282479a8))
+
 ## [4.0.86](https://github.com/andymai/brepkit/compare/v4.0.85...v4.0.86) (2026-09-28)
 
 
