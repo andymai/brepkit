@@ -184,19 +184,22 @@ fn a_ball_beside_a_cone_is_exact() {
                     let got = classify_point(&topo, result, placed(p, name), 0.01, 1e-7).unwrap();
                     assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
                 }
-                // A pointed wall the ball bites into meshes on its own too, as
-                // a per-face export takes it.
+                // A pointed cone's faces mesh on their own too, as a per-face
+                // export takes them: the wall the ball bites into within 1%,
+                // and a lens the section alone bounds within its chords' 3%.
                 for &f in &faces {
-                    if top > 0.0
-                        || op == BooleanOp::Intersect
-                        || topo.face(f).unwrap().surface().type_tag() != "cone"
-                    {
+                    if top > 0.0 || topo.face(f).unwrap().surface().type_tag() != "cone" {
                         continue;
                     }
                     let area = mesh_area(&tessellate(&topo, f, 0.01).unwrap());
                     let exact = face_area(&topo, f, 0.01).unwrap();
+                    let bound = if op == BooleanOp::Intersect {
+                        0.03
+                    } else {
+                        0.01
+                    };
                     assert!(
-                        (area - exact).abs() < 0.01 * exact,
+                        (area - exact).abs() < bound * exact,
                         "{label}: cone face meshes {area} of {exact}"
                     );
                 }
