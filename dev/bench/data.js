@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790582140884,
+  "lastUpdate": 1790585019427,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46601,6 +46601,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42354785,
             "range": "± 467723",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5055d1a54fb96ff5cbb3eb5207da6f7df97765a6",
+          "message": "fix(operations): mesh a cone or cylinder patch a section bounds through the local mesher (#1888)\n\nA cylinder or cone face bounded in part by a NURBS or ellipse edge now\nmeshes on its own within 1.8% of its area, where it filled the wrong\nregion.\n\n## What was wrong\n\n- Tessellating one cylinder or cone face with no hole and no notch sent\nit to the grid over its `(u, v)` box. A cone with a NURBS edge tried the\nlocal band mesher first. The solid mesh of the same faces was correct.\nThis path serves wasm face meshes and the OBJ, glTF, and PLY writers.\n- On main, the seam-split lens from a ball biting a cone wall meshed\n0.459 of 0.305 and 2.312 of 2.765. A rod patch on a pointed cone meshed\n0.855 of 2.529. The band left by a box tilted 0.8 radians through `z =\n1` meshed 56.101 of 52.074.\n\n## What this does\n\n- `face.rs` routes any cylinder or cone face whose outer wire has a\nNURBS or ellipse edge through `tessellate_holed_face_local`, which runs\nthe solid mesher's CDT over the face's own edge samples.\n- The existing path remains in use when the local mesher returns no\ntriangles or fails.\n- The roadmap gains a Closed entry. The open per-face row now covers\nonly a mirrored holed frustum wall, which meshes 83.247 of 84.850 on its\nown.\n\n## Verification\n\n- The lens pieces now mesh within 1.4%, at 2.7265 of 2.7652. The rod\npatches are within 1.8%, at 2.4834 of 2.5289. The tilted band is within\n0.17%, at 51.9862 of 52.0743. Other probed faces are unchanged.\n- The rod patch is bounded by curves alone. Its solid mesh has the same\n1.8% difference, at 2.4836 of 2.5289.\n- `ball_beside_a_cone.rs` checks every pointed cone face independently,\nwith walls within 1% and Intersect lenses within 3%. On main it fails at\nthe lens, 2.312 of 2.765.\n- `rod_along_a_cone.rs` checks every curved face independently, with\nIntersect patches within 3%. `cone_cut_by_a_plane_across_its_wall`\nchecks every wall piece independently within 1%.\n- `brepkit-operations` and `brepkit-io` pass: 1650 tests, 17 skipped.\nThe 300-line pose sweep and `truth_audit` match main.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes per-face meshes of cone or cylinder patches a section bounds so\nthey no longer fill the wrong region, and meshes them in their developed\nmetric.\n\nA cone or cylinder face whose outer wire has a NURBS or ellipse edge\nused to mesh over its `(u, v)` box, reading 2.312 of 2.765 for a\nball-bitten lens and 56.101 of 52.074 for a tilted plane's band. Those\nfaces now go through the local mesher, the same CDT the solid mesh uses.\nRaw `(u, v)` mixes radians with lengths, so Delaunay sheared a rod's\nwall under a tilted plane into strips longer than the surface (59.533 of\n56.549); such walls now take the developed metric in the CDT and land\nwithin 0.2% to 1.8% of the exact area. The grid path stays as a fallback\nwhen the local mesher returns no triangles.\n\n**Verification**\n- Per-face checks in `ball_beside_a_cone.rs`, `rod_along_a_cone.rs`,\n`cone_cut_by_a_plane_across_its_wall`, and `oblique_rod_cut.rs` now\ncover every curved face independently.\n- `mitsukude_panel_cut_inmem.rs` pins the exact cut volume through\n`solid_volume`, which no mesh density moves; the pre-fix leak measured\n68 more.\n- `brepkit-operations` and `brepkit-io` pass (1650 tests, 17 skipped);\nthe pose sweep and `truth_audit` match main.\n\n<sup>Written for commit b4df05d8716379c03a11e06060faf98a75da7dcf.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1888?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-28T08:40:45Z",
+          "tree_id": "da18d4639beaa5eeb4b1271e85348a706977e3e5",
+          "url": "https://github.com/andymai/brepkit/commit/5055d1a54fb96ff5cbb3eb5207da6f7df97765a6"
+        },
+        "date": 1790585013844,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1021787,
+            "range": "± 14351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112770,
+            "range": "± 3166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12986,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 772473,
+            "range": "± 895",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42920665,
+            "range": "± 78633",
             "unit": "ns/iter"
           }
         ]
