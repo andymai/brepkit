@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790598485224,
+  "lastUpdate": 1790599764361,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47141,6 +47141,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29063451,
             "range": "± 152428",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f10b37786d73a8342eaf8fee0d5711efd0499b75",
+          "message": "chore(main): release 4.0.87 (#1902)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.87](https://github.com/andymai/brepkit/compare/v4.0.86...v4.0.87)\n(2026-09-28)\n\n\n### Bug Fixes\n\n* **algo:** split a wall's circle where it crosses an oblique ellipse\nrim ([#1900](https://github.com/andymai/brepkit/issues/1900))\n([53cd9ec](https://github.com/andymai/brepkit/commit/53cd9ec9ea7db0c747e54d24106c7f62282479a8))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.87, bumping all workspace crates in lockstep and\nupdating the changelog.\n\nThis release fixes a single bug: a wall's circle is now split where it\ncrosses an oblique ellipse rim, so that geometry is handled correctly at\nthose intersections.\n\n<sup>Written for commit d0b99420b71c71bd580acaac85d6e107fa1ddfd3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1902?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-28T12:46:25Z",
+          "tree_id": "fca1b5203baae570fb0595f789c791ebaf84d319",
+          "url": "https://github.com/andymai/brepkit/commit/f10b37786d73a8342eaf8fee0d5711efd0499b75"
+        },
+        "date": 1790599758426,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1078945,
+            "range": "± 23821",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1164532,
+            "range": "± 7361",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14378,
+            "range": "± 1321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 806315,
+            "range": "± 2613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46438427,
+            "range": "± 92031",
             "unit": "ns/iter"
           }
         ]
