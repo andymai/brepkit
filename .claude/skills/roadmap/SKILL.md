@@ -205,9 +205,9 @@ One line each; the fixture/PR carries the story. Newest first.
   probes (the ball's equator, its reach along the axes and past flat faces)
   missed it, so every op dropped the 1.65e-5 sliver. A ball whose centre
   lies nearer the other solid's boundary than its radius now refutes
-  containment, measured by `point_to_solid_distance`, whose cone and
-  cylinder projections of a point on the axis, or within rounding of it,
-  landed on the axis instead of the surface (0.6 and 1.799 for 1.342).
+  containment, measured by `point_to_solid_distance`: a cone's projection
+  of a point on its axis landed on the axis, and within rounding of it the
+  foot left the surface (0.6 and 1.799 for 1.342).
 
 - **A holed frustum wall mirrored meshed short on its own (CLOSED 2026-09-28; the frustum placement in the per-face check of `ball_beside_a_cone.rs`)**:
   `make_cone(3, 1.5, 6)` less `make_sphere(0.9, 32)` at `(0.5, 2, 0.5)`,
