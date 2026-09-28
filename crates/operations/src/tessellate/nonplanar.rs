@@ -2103,6 +2103,29 @@ pub(super) fn tessellate_nonplanar_cdt(
             } else {
                 uv_bounds(&non_seam_uvs)
             };
+            // A rim's seam vertex joins whichever run the wire reaches it in,
+            // so when both rims hand theirs to the seam runs, the rims' span
+            // stops a sample short of the period on that side and the seam
+            // would be placed a sample inside the wall. The seam's own
+            // projection fixes its u to within whole periods. A span well
+            // short of the period is a face that does not wrap.
+            let (u_min_bnd, u_max_bnd) = seam_span(
+                face_data.surface(),
+                &boundary_3d,
+                &boundary_uv,
+                &seam_edge_indices,
+            )
+            .map_or((u_min_bnd, u_max_bnd), |(seam_u, period)| {
+                let slack = 1e-9 * period;
+                let lo = seam_u - ((seam_u - u_min_bnd - slack) / period).ceil() * period;
+                let span = u_max_bnd - u_min_bnd;
+                if span < period - slack && span > 0.75 * period && lo + period >= u_max_bnd - slack
+                {
+                    (lo, lo + period)
+                } else {
+                    (u_min_bnd, u_max_bnd)
+                }
+            });
 
             #[allow(clippy::items_after_statements)]
             struct SeamRun {
@@ -2961,6 +2984,28 @@ fn project_via_pcurve(
     } else {
         None
     }
+}
+
+/// The u of a straight seam on a periodic face, from one of its samples off
+/// a cone's apex, with the face's u period.
+fn seam_span(
+    surface: &FaceSurface,
+    boundary_3d: &[(Point3, u32, brepkit_topology::edge::EdgeId, bool)],
+    boundary_uv: &[(f64, f64)],
+    seam_edges: &DetHashSet<usize>,
+) -> Option<(f64, f64)> {
+    let (_, period) = surface_periods(surface).0?;
+    let apex = match surface {
+        FaceSurface::Cone(cone) => Some(cone.apex()),
+        _ => None,
+    };
+    boundary_3d
+        .iter()
+        .zip(boundary_uv)
+        .find(|((p, _, edge, _), _)| {
+            seam_edges.contains(&edge.index()) && apex.is_none_or(|a| (*p - a).length() > 1e-9)
+        })
+        .map(|(_, &(u, _))| (u, period))
 }
 
 /// Re-sequence a wire's closed edges so each cycle starts and ends at the

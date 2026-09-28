@@ -112,13 +112,7 @@ fn a_rod_through_a_plate_edge_fuses_whole() {
         // The window's angular span, where the rod's wall lies over x > 0.
         let span = 2.0 * (-cx).clamp(-1.0, 1.0).acos();
         let wall = 2.0 * PI * 10.0 - 2.0 * span;
-        // At cx = 0 turned 1 radian the fuse falls back to a mesh.
-        let spins: &[f64] = if cx == 0.0 {
-            &[0.0, PI]
-        } else {
-            &[0.0, 1.0, PI]
-        };
-        for &spin in spins {
+        for spin in [0.0, 1.0, PI] {
             let label = format!("cx {cx} spin {spin}");
             let (topo, fused) = fuse(false, cx, spin);
             let faces = solid_faces(&topo, fused).unwrap();
@@ -247,7 +241,9 @@ fn a_rod_cut_at_a_plate_edge_keeps_its_segments() {
     for (cx, spins) in [
         (-0.5, vec![0.0, 1.0, 2.0, 2.5, PI]),
         (-0.3, vec![0.0, 1.0, 0.3f64.acos(), 2.0, 2.5, PI]),
+        (0.0, vec![0.0, 1.0, PI]),
         (0.4, vec![0.0, 1.0, 2.5, PI]),
+        (0.7, vec![0.0, 1.0]),
     ] {
         let overlap = 2.0 * disc_past_zero(1.0, cx);
         let (in_overlap, beside) = (
