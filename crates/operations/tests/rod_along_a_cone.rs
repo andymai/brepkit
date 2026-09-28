@@ -1,8 +1,8 @@
 //! A rod parallel to a pointed cone's axis, through its wall beside the
-//! axis and clear of the wall's seam: every ruling of the rod meets the cone
-//! once, so the section winds the rod as one closed loop. In every pose each
-//! operation is exact, valid and watertight, and holds the volume integrated
-//! from the lens-shaped sections.
+//! axis, clear of the wall's seam or straddling it: every ruling of the rod
+//! meets the cone once, so the section winds the rod as one closed loop. In
+//! every pose each operation is exact, valid and watertight, and holds the
+//! volume integrated from the lens-shaped sections.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -11,10 +11,10 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::classify::{PointClassification, classify_point};
-use brepkit_operations::measure::solid_volume;
+use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_cone, make_cylinder};
-use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::tessellate::{TriangleMesh, is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -57,6 +57,16 @@ fn shared(d: f64) -> f64 {
     total * h / 3.0
 }
 
+fn mesh_area(mesh: &TriangleMesh) -> f64 {
+    mesh.indices
+        .chunks(3)
+        .map(|t| {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+            0.5 * (b - a).cross(c - a).length()
+        })
+        .sum()
+}
+
 fn pose_of(name: &str) -> Mat4 {
     match name {
         "turned" => {
@@ -93,7 +103,7 @@ fn placed(p: Point3, name: &str) -> Point3 {
 fn a_rod_along_a_cone_is_exact() {
     let cone = PI * 9.0 * 6.0 / 3.0;
     let rod = PI * ROD * ROD * 20.0;
-    for (x, y) in [(0.0_f64, 1.3_f64), (-1.3, 0.0), (0.5, -1.2)] {
+    for (x, y) in [(1.2_f64, 0.5_f64), (0.0, 1.3), (-1.3, 0.0), (0.5, -1.2)] {
         let d = x.hypot(y);
         let both = shared(d);
         // On the rod's axis: inside the cone at z = 0, outside it at z = 2.
@@ -153,6 +163,22 @@ fn a_rod_along_a_cone_is_exact() {
                 for (p, want) in [(low, at_low), (high, at_high)] {
                     let got = classify_point(&topo, result, placed(p, name), 0.01, 1e-7).unwrap();
                     assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
+                }
+                // The wall the rod passes through meshes on its own too, as a
+                // per-face export takes it. The Intersect's cone faces are
+                // trimmed patches, whose per-face mesh is an open roadmap row.
+                for &f in &faces {
+                    if op == BooleanOp::Intersect
+                        || topo.face(f).unwrap().surface().type_tag() != "cone"
+                    {
+                        continue;
+                    }
+                    let area = mesh_area(&tessellate(&topo, f, 0.01).unwrap());
+                    let exact = face_area(&topo, f, 0.01).unwrap();
+                    assert!(
+                        (area - exact).abs() < 0.01 * exact,
+                        "{label}: cone face meshes {area} of {exact}"
+                    );
                 }
             }
         }
