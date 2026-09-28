@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790599764361,
+  "lastUpdate": 1790599964180,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47195,6 +47195,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46438427,
             "range": "± 92031",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eb31f3e897a8801504444ca8025daa60125981a0",
+          "message": "fix(algo): seed and section a frustum cap's thin ring exactly (#1897)\n\nA ball touching only a frustum's top cap now gives exact Cut, Intersect\nand Fuse results in all five poses, and the roadmap row is closed with a\nClosed entry.\n\n## What was wrong\n\n- For `make_cone(3, 1.5, 6)` at `z = -3` against `make_sphere(1.5148,\n32)` or `make_sphere(1.5195, 32)` at `(0, 0, 2.75)`, the ball touches\nonly the frustum's top cap. This leaves rings 0.006 and 0.0012 wide\naround the section circle. These cases fell back to the mesh boolean,\nwhich was a safe result per the roadmap row.\n\n- The face splitter seed search steps inward from the outer boundary by\n0.5% of the distance to the centroid per step, passing over a thinner\nring. The hole rejection polygon also samples each arc at 16 points,\nsagging about 0.029 inside the section circle. In the turned pose, a\nseed 1.493438 from the circle's centre, for a circle of radius 1.494028,\nwas inside the hole but read as material.\n\n- In the turned pose, FF retained the ball's circle on the frustum's\nextended wall, 0.016 above the top. The analytic face extent admits 1%\nof its `v` span as margin. Upright, the circle's box missed the wall's\nbox, so only the turned pose reached this path.\n\n## What this does\n\n- After coarse seed steps fail, tries finer first steps from `1e-5`\nthrough `3e-3` of the distance to the centroid.\n\n- With a plane frame, evaluates holes whose edges are all lines,\ncircles, or ellipses exactly through `region2d::point_in_region`. Holes\ncontaining a NURBS edge retain polygon evaluation.\n\n- Drops a closed circle when all 24 samples lie beyond a face's `v`\nwindow by more than 10 times the linear tolerance and the circle crosses\nneither face boundary. Only cylinder or cone faces with outer wires\ncomposed entirely of lines and circles provide this exact window.\nEllipse or NURBS rims can peak between the five samples per edge used to\nestablish the window.\n\n## Verification\n\n- `crates/operations/tests/ball_on_a_cone_axis.rs` covers both\nplacements. Every operation in upright, turned, flipped, mirrored, and\nscaled poses is exact, valid, watertight, within `1e-6` of the\nsection-integrated volume, and correctly classifies the ball's centre.\n\n- Each change is required. Without finer steps, all 30 results fall\nback. Without exact hole evaluation, 12 fall back. Without the FF drop,\nthe 0.0012 ring's turned and mirrored results fall back, covering 6\nresults.\n\n- `brepkit-algo`, `brepkit-operations`, and `brepkit-io` pass with 1881\ntests and 17 skipped. The pose sweep and `truth_audit` match the base.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nA ball touching only a frustum's top cap now gives exact Cut, Intersect,\nand Fuse results in all five poses, closing the roadmap row.\n\n- Reads holes of lines, circles, and ellipses exactly through\n`region2d::point_in_region`; the coarse seed search then retries at six\nfiner steps when coarse steps skip a thin ring.\n- Phase FF drops a closed circle lying wholly beyond an analytic face's\n`v` window, but only when that window is exact and the face has no inner\nwires, so a holed wall keeps its circles.\n- Adds the two cap-touching placements to `ball_on_a_cone_axis.rs`;\nevery operation in all poses is exact, valid, watertight, and within\n`1e-6` of the section-integrated volume.\n\n<sup>Written for commit e4d33eb2bb97adf1621e44d5d67c644159f2452f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1897?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-28T12:50:08Z",
+          "tree_id": "d0af6d71bcea4d25fa3bf620aed374d68c632df7",
+          "url": "https://github.com/andymai/brepkit/commit/eb31f3e897a8801504444ca8025daa60125981a0"
+        },
+        "date": 1790599958662,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 694131,
+            "range": "± 9055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 764917,
+            "range": "± 48178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8931,
+            "range": "± 100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 541447,
+            "range": "± 8417",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 32284178,
+            "range": "± 1404237",
             "unit": "ns/iter"
           }
         ]
