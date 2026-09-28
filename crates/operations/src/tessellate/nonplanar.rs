@@ -2783,7 +2783,10 @@ pub(super) fn tessellate_nonplanar_cdt(
         .filter(|_| !constraints_added_steiner_vertices)
         .or(holed_wall_radius)
     {
-        const MAX_HALVING_PASSES: usize = 16;
+        // Halving reaches any tolerance from a full turn in a dozen passes,
+        // but every split leaves its Delaunay neighbours to fit again, and a
+        // front of splits through a wide band can need several more.
+        const MAX_HALVING_PASSES: usize = 32;
         // A cone's rims are sampled at their own radius, so a triangle's
         // sag is bounded by its widest corner (the radius is linear in v),
         // not the face's widest end.
