@@ -2085,9 +2085,21 @@ fn emit_curve_windows(
                 continue;
             }
         }
-        let mut t_lo = t_at(r0);
-        if r0 > 0 {
-            let (mut out_t, mut in_t) = (t_at(r0 - 1), t_lo);
+        // The run's end samples pass the margin-inclusive test; the strict
+        // one can reject them (a sample within the margin outside the face),
+        // and a bracket between two outside samples never moves. Bisect from
+        // the outermost samples the chosen predicate accepts.
+        let (first, last) = if anchor.is_some() {
+            (
+                (r0..=r1).find(|&i| inside(t_at(i))).unwrap_or(r0),
+                (r0..=r1).rev().find(|&i| inside(t_at(i))).unwrap_or(r1),
+            )
+        } else {
+            (r0, r1)
+        };
+        let mut t_lo = t_at(first);
+        if first > 0 {
+            let (mut out_t, mut in_t) = (t_at(first - 1), t_lo);
             for _ in 0..48 {
                 let mid = 0.5 * (out_t + in_t);
                 if inside(mid) {
@@ -2098,13 +2110,13 @@ fn emit_curve_windows(
             }
             t_lo = in_t;
         }
-        let mut t_hi = t_at(r1);
-        // `r1 == n` ends exactly at the seam duplicate (no out-sample to
-        // bisect against in-domain); `r1 > n` is the wrapped-Ellipse
+        let mut t_hi = t_at(last);
+        // `last == n` ends exactly at the seam duplicate (no out-sample to
+        // bisect against in-domain); `last > n` is the wrapped-Ellipse
         // fall-through, whose periodic evaluation makes the out-of-domain
         // bisection valid.
-        if r1 != n {
-            let (mut in_t, mut out_t) = (t_hi, t_at(r1 + 1));
+        if last != n {
+            let (mut in_t, mut out_t) = (t_hi, t_at(last + 1));
             for _ in 0..48 {
                 let mid = 0.5 * (in_t + out_t);
                 if inside(mid) {
