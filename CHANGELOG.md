@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.76](https://github.com/andymai/brepkit/compare/v4.0.75...v4.0.76) (2026-09-28)
+
+
+### Bug Fixes
+
+* **algo:** seed a thin ring's interior point from its rim's vertices ([#1872](https://github.com/andymai/brepkit/issues/1872)) ([f88b806](https://github.com/andymai/brepkit/commit/f88b806033c6736cc38a90f3570cde5d960a49a5))
+
 ## [4.0.75](https://github.com/andymai/brepkit/compare/v4.0.74...v4.0.75) (2026-09-28)
 
 
