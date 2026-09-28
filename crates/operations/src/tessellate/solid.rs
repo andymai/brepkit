@@ -311,7 +311,11 @@ fn tessellate_solid_core(
     // A hole passing a planar face's arc nearer than the arc's chords sag
     // would cross them in the face's mesh: the arc is sampled finer, until
     // its chords sag at most half the hole's clearance. The arc's samples
-    // are shared, so the face across it takes them too.
+    // are shared, so the face across it takes them too. The chords sag
+    // toward the arc's centre, so only a hole inside its circle can meet
+    // them, and the hole's mesh boundary is the polyline through its
+    // samples, whose farthest points from the centre are its vertices:
+    // the samples alone give the clearance, a straight edge's included.
     for &face_id in &all_faces {
         let face_data = topo.face(face_id)?;
         if !face_data.surface().is_planar() || face_data.inner_wires().is_empty() {

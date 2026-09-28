@@ -151,6 +151,10 @@ fn a_hole_nearer_a_floors_arc_than_its_chords_sag_meshes_watertight() {
         transform_solid(&mut topo, lid, &Mat4::translation(-0.7, -1.1, 0.1)).unwrap();
         let piece = boolean(&mut topo, op, bored, lid).unwrap();
         let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+        assert!(
+            !mesh.indices.is_empty(),
+            "bored ball {op:?} the box: no triangles"
+        );
         let (edges, boundary) = boundary_edges(&mesh.positions, &mesh.indices);
         assert_eq!(
             boundary, 0,
