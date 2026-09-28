@@ -1551,22 +1551,24 @@ fn split_periodic_face_by_winding_chain(
     Some(bands)
 }
 
-/// Split a u-periodic cylinder/cone lateral (two closed rims plus the seam)
-/// along closed section loops of winding zero when some of them straddle the
-/// seam meridian (a bore through a tube's wall at the wall's seam). The seam
-/// cannot run through a hole, so each straddling hole notches the
-/// remainder's outer wire: going up one copy of the seam the wire detours
-/// around the hole's half on that side, and coming down the other copy
-/// around the other half. The seam's piece inside the hole bounds the two
-/// half-discs the hole leaves. Loops clear of the seam stay inner wires, each
-/// with its disc. The seam-anchor pre-pass cuts a straddling loop at its seam
-/// crossings, so each such hole meets the seam at two section vertices.
+/// Split a u-periodic cylinder/cone lateral (two closed rims, or a pointed
+/// cone's one rim and its apex, plus the seam) along closed section loops of
+/// winding zero when some of them straddle the seam meridian (a bore through a
+/// tube's wall at the wall's seam). The seam cannot run through a hole, so each
+/// straddling hole notches the remainder's outer wire: going up one copy of the
+/// seam the wire detours around the hole's half on that side, and coming down
+/// the other copy around the other half. The seam's piece inside the hole
+/// bounds the two half-discs the hole leaves. Loops clear of the seam stay
+/// inner wires, each with its disc. The seam-anchor pre-pass cuts a straddling
+/// loop at its seam crossings, so each such hole meets the seam at two section
+/// vertices.
 ///
 /// Returns `None` (caller falls through) unless the boundary is exactly two
-/// closed rims plus seam edges, every section belongs to a closed loop of
-/// winding zero lying strictly between the rims, every seam crossing is a
-/// section vertex, at least one loop meets the seam and each that does meets
-/// it exactly twice, and those holes' seam spans do not overlap.
+/// closed rims plus seam edges (a pointed cone's apex standing in for one
+/// rim), every section belongs to a closed loop of winding zero lying
+/// strictly between the rims, every seam crossing is a section vertex, at
+/// least one loop meets the seam and each that does meets it exactly twice,
+/// and those holes' seam spans do not overlap.
 #[allow(clippy::too_many_lines)]
 fn split_periodic_face_around_seam_holes(
     surface: &FaceSurface,
@@ -1610,36 +1612,57 @@ fn split_periodic_face_around_seam_holes(
             _ => return None,
         }
     }
-    if boundary_circles.len() != 2 || seam_edges.is_empty() {
+    // A pointed cone's wall has one rim: its seam runs up to the apex and
+    // back, and the apex stands in for the other rim.
+    let apex = match surface {
+        FaceSurface::Cone(cone) if boundary_circles.len() == 1 => Some(cone.apex()),
+        _ => None,
+    };
+    if seam_edges.is_empty() || (boundary_circles.len() != 2 && apex.is_none()) {
         return None;
     }
-    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
+    let off_apex = |p: Point3| apex.is_none_or(|a| (p - a).length() > close_tol);
+    let seam_foot = [seam_edges[0].start_3d, seam_edges[0].end_3d]
+        .into_iter()
+        .find(|&p| off_apex(p))?;
+    let (seam_u, _) = surface.project_point(seam_foot)?;
     let circle_v = |e: &OrientedPCurveEdge| -> Option<f64> {
         let (_, v) = surface.project_point(e.start_3d)?;
         let on_seam = surface.evaluate(seam_u, v)?;
         ((on_seam - e.start_3d).length() < close_tol).then_some(v)
     };
-    let v0 = circle_v(boundary_circles[0])?;
-    let v1 = circle_v(boundary_circles[1])?;
-    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
-        (v0, boundary_circles[0], v1, boundary_circles[1])
-    } else {
-        (v1, boundary_circles[1], v0, boundary_circles[0])
+    let mut rims: Vec<(f64, Option<&OrientedPCurveEdge>)> = boundary_circles
+        .iter()
+        .map(|&e| circle_v(e).map(|v| (v, Some(e))))
+        .collect::<Option<_>>()?;
+    if let Some(a) = apex {
+        rims.push((surface.project_point(a)?.1, None));
+    }
+    rims.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let [(v_bot, bot_edge), (v_top, top_edge)] = rims[..] else {
+        return None;
     };
     if v_top - v_bot < close_tol {
         return None;
     }
+    // Whether a rim leaves the seam toward +u; the two rims of a wall run
+    // opposite ways.
+    let leaves_up = |rim: &OrientedPCurveEdge| -> Option<bool> {
+        let EdgeCurve::Circle(c) = &rim.curve_3d else {
+            return None;
+        };
+        let t0 = c.project(rim.start_3d);
+        let step = if rim.forward { 0.25 } else { -0.25 };
+        let (u, _) = surface.project_point(c.evaluate(t0 + step))?;
+        Some(wrap_pi(u - seam_u) > 0.0)
+    };
     // Whether the bottom rim leaves the seam toward +u: the face lies on the
     // other side of the seam copy the wire climbs, and on this side of the
     // one it descends.
-    let rim_ascends = {
-        let EdgeCurve::Circle(c) = &bot_edge.curve_3d else {
-            return None;
-        };
-        let t0 = c.project(bot_edge.start_3d);
-        let step = if bot_edge.forward { 0.25 } else { -0.25 };
-        let (u, _) = surface.project_point(c.evaluate(t0 + step))?;
-        wrap_pi(u - seam_u) > 0.0
+    let rim_ascends = match (bot_edge, top_edge) {
+        (Some(bot), _) => leaves_up(bot)?,
+        (None, Some(top)) => !leaves_up(top)?,
+        (None, None) => return None,
     };
 
     let on_seam = |p: Point3| -> bool {
@@ -1930,7 +1953,7 @@ fn split_periodic_face_around_seam_holes(
         return None;
     }
 
-    let mut outer = vec![bot_edge.clone()];
+    let mut outer: Vec<OrientedPCurveEdge> = bot_edge.into_iter().cloned().collect();
     let mut v_cur = v_bot;
     for s in &straddles {
         outer.push(mk_seam(v_cur, s.v_a)?);
@@ -1938,7 +1961,7 @@ fn split_periodic_face_around_seam_holes(
         v_cur = s.v_b;
     }
     outer.push(mk_seam(v_cur, v_top)?);
-    outer.push(top_edge.clone());
+    outer.extend(top_edge.cloned());
     v_cur = v_top;
     for s in straddles.iter().rev() {
         outer.push(mk_seam(v_cur, s.v_b)?);
