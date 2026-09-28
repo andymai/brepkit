@@ -198,14 +198,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **A ball bulging through a cylinder's side wall fell back (CLOSED 2026-09-28; pin `crates/operations/tests/ball_through_a_cylinder_wall.rs`)**:
+- **A ball bulging through a cylinder's side wall fell back (CLOSED 2026-09-27; pin `crates/operations/tests/ball_through_a_cylinder_wall.rs`)**:
   the section loop crosses the ball's chordal equator, so phase FF gives
   each hemisphere its own window of it, but `compute_seam_anchors` cut each
   window as the whole closed loop at the wall's seam crossings and handed
   each hemisphere the other's arcs too (its two inner pieces came out doubled
   and were dropped); off the seam line the two windows share both ends and
   welded into one edge. Windows are now cut at their own seam crossings, and
-  a window twinned end to end at its middle. Mirrored, the wall's mesh then
+  a window twinned end to end is cut at its middle. Mirrored, the wall's mesh then
   lost the strip between its seam and the rims' last samples: both rims had
   handed their seam vertex to the seam runs, whose u was taken from the
   rims' span a sample short of the period; the seam's own projection now

@@ -2107,7 +2107,8 @@ pub(super) fn tessellate_nonplanar_cdt(
             // so when both rims hand theirs to the seam runs, the rims' span
             // stops a sample short of the period on that side and the seam
             // would be placed a sample inside the wall. The seam's own
-            // projection fixes its u to within whole periods.
+            // projection fixes its u to within whole periods. A span well
+            // short of the period is a face that does not wrap.
             let (u_min_bnd, u_max_bnd) = seam_span(
                 face_data.surface(),
                 &boundary_3d,
@@ -2117,7 +2118,9 @@ pub(super) fn tessellate_nonplanar_cdt(
             .map_or((u_min_bnd, u_max_bnd), |(seam_u, period)| {
                 let slack = 1e-9 * period;
                 let lo = seam_u - ((seam_u - u_min_bnd - slack) / period).ceil() * period;
-                if u_max_bnd - u_min_bnd < period - slack && lo + period >= u_max_bnd - slack {
+                let span = u_max_bnd - u_min_bnd;
+                if span < period - slack && span > 0.75 * period && lo + period >= u_max_bnd - slack
+                {
                     (lo, lo + period)
                 } else {
                     (u_min_bnd, u_max_bnd)

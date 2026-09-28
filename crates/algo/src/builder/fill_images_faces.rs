@@ -1298,7 +1298,8 @@ const SEAM_ON_CIRCLE_TOL: f64 = 1e-6;
 /// A loop that also crosses the seam of a periodic face it does not wind (a
 /// bore's hole in a tube's wall, straddling the wall's seam) is cut into
 /// `pieces` at those crossings, so every face it bounds shares the vertices
-/// the wall's notched seam needs.
+/// the wall's notched seam needs. For a window of a closed loop, `anchor` is
+/// the window's start and `pieces` are the window cut at its own crossings.
 struct SeamAnchor {
     anchor: Point3,
     rotated: Option<brepkit_math::nurbs::curve::NurbsCurve>,
@@ -1311,7 +1312,9 @@ struct SeamAnchor {
 /// surface (cylinder/cone) with a seam Line edge, returns the point on the
 /// circle at the seam's u parameter; for each closed NURBS curve that winds
 /// such a surface's period once, the point where it crosses the seam and the
-/// curve re-parameterized to start there. Keyed by the curve's arena index.
+/// curve re-parameterized to start there; for a window of a closed NURBS
+/// loop, the window cut at the seam crossings inside it. Keyed by the curve's
+/// arena index.
 fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, SeamAnchor> {
     use std::f64::consts::TAU;
 
@@ -1322,7 +1325,7 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Se
             let (d0, d1) = nurbs.domain();
             let (w0, w1) = curve_ds.t_range;
             if w1 - w0 < (d1 - d0) * (1.0 - 1e-9) {
-                if let Some(seam) = cut_window_at_seams(topo, arena, curve_ds, nurbs) {
+                if let Some(seam) = cut_window_at_seams(topo, arena, idx, nurbs) {
                     anchors.insert(idx, seam);
                 }
                 continue;
@@ -1563,13 +1566,14 @@ fn seam_crossings_of_contractible_loop(
 /// of one of its faces, a ball's equator, and each face keeps its own arc) is
 /// an open curve: it is cut at the seam crossings inside the window only, so
 /// no face receives the arcs of the loop that lie on another. `None` when the
-/// window crosses no seam.
+/// window crosses no seam and has no twin, or a split fails.
 fn cut_window_at_seams(
     topo: &Topology,
     arena: &GfaArena,
-    curve_ds: &crate::ds::IntersectionCurveDS,
+    idx: usize,
     nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
 ) -> Option<SeamAnchor> {
+    let curve_ds = arena.curves.get(idx)?;
     let (d0, d1) = nurbs.domain();
     let (w0, w1) = curve_ds.t_range;
     let (Some(from), Some(to)) = curve_endpoints(topo, arena, curve_ds) else {
@@ -1590,7 +1594,7 @@ fn cut_window_at_seams(
     // The loop's other window ends where this one does, and the edge merge
     // would weld two uncut windows into one edge: a vertex midway keeps them
     // apart.
-    if cuts.is_empty() && shares_both_ends_with_another_window(topo, arena, curve_ds, from, to) {
+    if cuts.is_empty() && shares_both_ends_with_another_section(topo, arena, idx, from, to) {
         cuts.push(0.5 * (w0 + w1));
     }
     if cuts.is_empty() {
@@ -1599,12 +1603,13 @@ fn cut_window_at_seams(
     cuts.sort_by(f64::total_cmp);
     cuts.dedup_by(|a, b| (nurbs.evaluate(*a) - nurbs.evaluate(*b)).length() <= SEAM_ON_CIRCLE_TOL);
     let mut window = nurbs.clone();
-    if w0 > d0 {
+    let edge = 1e-9 * (d1 - d0);
+    if w0 > d0 + edge {
         window = brepkit_math::nurbs::knot_ops::curve_split(&window, w0)
             .ok()?
             .1;
     }
-    if w1 < d1 {
+    if w1 < d1 - edge {
         window = brepkit_math::nurbs::knot_ops::curve_split(&window, w1)
             .ok()?
             .0;
@@ -1626,17 +1631,23 @@ fn cut_window_at_seams(
     })
 }
 
-/// Whether another section curve of a closed loop's window has the same two
-/// ends as `curve_ds`.
-fn shares_both_ends_with_another_window(
+/// Whether another NURBS section on one of the same faces as curve `idx`
+/// runs between the same two ends.
+fn shares_both_ends_with_another_section(
     topo: &Topology,
     arena: &GfaArena,
-    curve_ds: &crate::ds::IntersectionCurveDS,
+    idx: usize,
     from: Point3,
     to: Point3,
 ) -> bool {
-    arena.curves.iter().any(|other| {
-        if std::ptr::eq(other, curve_ds) || !matches!(other.curve, EdgeCurve::NurbsCurve(_)) {
+    let Some(this) = arena.curves.get(idx) else {
+        return false;
+    };
+    arena.curves.iter().enumerate().any(|(other_idx, other)| {
+        let shares_a_face = [other.face_a, other.face_b]
+            .iter()
+            .any(|&f| f == this.face_a || f == this.face_b);
+        if other_idx == idx || !shares_a_face || !matches!(other.curve, EdgeCurve::NurbsCurve(_)) {
             return false;
         }
         let (Some(a), Some(b)) = curve_endpoints(topo, arena, other) else {

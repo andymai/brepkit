@@ -36,8 +36,8 @@ fn lens(r1: f64, r2: f64, d: f64) -> f64 {
     a + b - c
 }
 
-/// The ball's part inside the cylinder: across the axis, the two sections
-/// are discs the ball centre's distance from the axis apart.
+/// The ball's part inside the cylinder: at each height along the axis, the
+/// two sections are discs the ball centre's distance from the axis apart.
 fn inside(d: f64, r: f64) -> f64 {
     let n = 200_000;
     let h = 2.0 * r / f64::from(n);
