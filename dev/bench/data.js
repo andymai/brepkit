@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790587402581,
+  "lastUpdate": 1790589324015,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46817,6 +46817,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36204791,
             "range": "± 141150",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b192f4617a8680b1af32d2342c8391d066478921",
+          "message": "fix(operations): refute a ball's containment when its centre nears the boundary (#1892)\n\nA ball just past tangency with a cone's wall no longer reads as\ncontained, so every op keeps its `1.65e-5` sliver, and the cone and\ncylinder projections of a point on the axis land on the surface.\n\n## What was wrong\n\n- For `make_cone(3, 0, 6)` at `z = -3` and `make_sphere(3 / sqrt(5) +\n1e-4, 32)` at the origin, the wall is `3 / sqrt(5)` from the axis point,\nso the ball bulges `1e-4` through it. Every operation read the ball as\ncontained and dropped the sliver. Cut returned `46.430672` against\n`46.430689`.\n\n- `detect_trivial_relation` refuted containment using the ball's equator\nedges, its reach along the three axes, and points past the outer solid's\nflat faces. None of these witnesses reached a bulge through a cone's\ncurved wall.\n\n- `point_to_solid_distance` was incorrect for points on a cone's axis.\n`point_to_cone` returned the axis point itself, producing distance `0.6`\nwhere the distance was `3 / sqrt(5) = 1.342`. In a mirrored pose,\nrounding left radial noise that normalized without crossing the axis,\nmoving the foot off the surface and producing `1.799`.\n\n## What this does\n\n- A ball cannot be contained when its centre is nearer the outer solid's\nboundary than its radius less ten tolerances, because it then holds a\nboundary point inside it. `detect_trivial_relation` now uses\n`point_to_solid_distance` to apply this containment refutation.\n\n- `point_to_cone` and `point_to_cylinder` take the radial part's\nrounding along the axis out again before normalizing it, so a point\nwithin rounding of the axis projects across it onto the surface, and a\npoint exactly on the axis projects to the generator at `u = 0`. The test\nis scale-free: a point far along the axis keeps a small real offset\nacross it.\n\n- The roadmap records this work as Closed and removes the open row.\n\n## Verification\n\n- `ball_on_a_cone_axis.rs` covers the tangent placement in five poses\nand all three operations. Results are exact, valid, watertight, and\nwithin `1e-6` of the expected volume. The test fails without the new\nwitness.\n\n- A geometry unit test checks the cone's and the cylinder's projections\nof a point on the axis and 1e-13 and 1e-9 off it, upright and on a\ntilted axis, and of a point 0.5 off a cylinder's axis 1e12 along it. It\nfails on the old cone projection (`0.6`).\n\n- `brepkit-geometry`, `brepkit-check`, `brepkit-operations`, and\n`brepkit-io` pass: 1810 tests, 17 skipped. The 300-line pose sweep and\n`truth_audit` match main.",
+          "timestamp": "2026-09-28T09:52:42Z",
+          "tree_id": "25451b478d7f909cd5d13e12ec6e5dafcc3b1d99",
+          "url": "https://github.com/andymai/brepkit/commit/b192f4617a8680b1af32d2342c8391d066478921"
+        },
+        "date": 1790589317689,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 834257,
+            "range": "± 1550",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 912591,
+            "range": "± 1461",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10290,
+            "range": "± 186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 626053,
+            "range": "± 1720",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 37626525,
+            "range": "± 96821",
             "unit": "ns/iter"
           }
         ]
