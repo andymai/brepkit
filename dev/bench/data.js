@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790601111693,
+  "lastUpdate": 1790603044776,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47303,6 +47303,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42469893,
             "range": "± 173578",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "58ec3a3339dc67ecf26892ce0abf0448faa1d3df",
+          "message": "fix(operations): part the chords two faces lay across the same narrow gap (#1901)\n\nCoarse tessellation of the exact, valid column and rod boolean is now\nwatertight across all tested deflections, with the repair pass gated to\nthe shared chord condition.\n\n## What was wrong\n\n- The case is `make_sphere(3, 32)` less `make_box(5, 5, 10)` at `(-2.5,\n-2.5, -5)`, fused with `make_cylinder(0.15, 10)` at `(-2.7, -0.9, -5)`.\nThe exact boolean result has 9 faces and is valid.\n- On main, `tessellate_solid` produced 8, 4, 1, and 2 bad mesh edges at\ndeflections 0.2, 0.1, 0.05, and 0.02. It was watertight at 0.01 and\nfiner.\n- The rod's outermost ruling runs 0.004 inside the ball between the two\ncurves where the rod leaves it. At coarse deflections, the rod wall and\nball cap used the same straight chord across this narrow waist. One\nexample runs from `(-2.8409, -0.9514, -0.1551)` to `(-2.8409, -0.9514,\n0.1551)`. That chord bounded four triangles, two from each face.\n\n## What this does\n\n- `split_pinched_chords` in\n`crates/operations/src/tessellate/mesh_ops.rs` runs after welding and\ndeduplication, only when the weld reports a directed mesh edge used\ntwice.\n- It sorts packed edge keys to find edges bounded by exactly four\ntriangles. When exactly two faces own two triangles each, it splits one\nface's pair at that face's surface point over the edge midpoint.\n- The selected face is the one whose surface stands farther from the\nchord, limited to half the chord length. Cylinder, cone, sphere, and\ntorus faces provide surface points. Plane chords already lie on their\nsurfaces, while NURBS projection can produce a far point.\n- Surfaces are borrowed rather than cloned. The core always tracks\ntriangle ownership using one `u32` per triangle, and returns the map\nonly when requested.\n\n## Verification\n\n- `column_and_rod_against_a_ball.rs` now requires watertight meshes at\ndeflections 0.2, 0.1, 0.05, 0.02, 0.01, and 0.001. The roadmap\ncoarse-deflection row has a Closed entry.\n- With the pass ungated, `brepkit-operations`, `brepkit-io`, and\n`brepkit-wasm` passed (1887 tests, 20 skipped) and the pose sweep and\n`truth_audit` matched the base; with the gate, the tessellation tests\npass.\n- On `make_torus(4, 1.5)`, the gated pass is within run-to-run noise:\n9.35 against 9.31 ms at 19404 triangles and deflection 0.01.\nMeasurements also covered 194224 triangles at 0.001 and the reported\ncase. The ungated pass cost 1.3 ms and 8 to 20 ms there.",
+          "timestamp": "2026-09-28T13:41:15Z",
+          "tree_id": "0bd4a77236d483cfe75e033b18e638ac77341c30",
+          "url": "https://github.com/andymai/brepkit/commit/58ec3a3339dc67ecf26892ce0abf0448faa1d3df"
+        },
+        "date": 1790603039073,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 863530,
+            "range": "± 13152",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 952050,
+            "range": "± 23851",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10668,
+            "range": "± 374",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 669411,
+            "range": "± 19641",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 37641816,
+            "range": "± 982583",
             "unit": "ns/iter"
           }
         ]
