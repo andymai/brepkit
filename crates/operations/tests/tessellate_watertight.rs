@@ -162,3 +162,80 @@ fn a_hole_nearer_a_floors_arc_than_its_chords_sag_meshes_watertight() {
         );
     }
 }
+
+/// A ball less a box holding its pole keeps a sphere face whose hole winds
+/// the axis, and with the box's wall 0.0001 from the pole the hole's arc
+/// passes over it. Meshed on its own, that face lies on the ball (its flux
+/// about the centre is the radius times its area), and the solid's mesh is
+/// watertight and short of the solid by its chords only.
+#[test]
+fn a_sphere_face_whose_hole_winds_the_axis_meshes_on_the_sphere() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::measure::solid_volume;
+    use brepkit_operations::tessellate::tessellate;
+    use brepkit_operations::transform::transform_solid;
+    use brepkit_topology::explorer::solid_faces;
+    for corner in [(-0.0001, -1.1, 0.1), (-0.7, -1.1, 0.1)] {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, 3.0, 32).unwrap();
+        let lid = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(
+            &mut topo,
+            lid,
+            &Mat4::translation(corner.0, corner.1, corner.2),
+        )
+        .unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, ball, lid).unwrap();
+        let holed: Vec<_> = solid_faces(&topo, cut)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| {
+                let data = topo.face(f).unwrap();
+                data.surface().type_tag() == "sphere" && !data.inner_wires().is_empty()
+            })
+            .collect();
+        assert!(
+            !holed.is_empty(),
+            "corner {corner:?}: no sphere face with a hole (the cut fell back?)"
+        );
+        for face in holed {
+            let mesh = tessellate(&topo, face, 0.01).unwrap();
+            let (mut area, mut flux) = (0.0, 0.0);
+            for t in mesh.indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                let n = (b - a).cross(c - a);
+                let g = Point3::new(
+                    (a.x() + b.x() + c.x()) / 3.0,
+                    (a.y() + b.y() + c.y()) / 3.0,
+                    (a.z() + b.z() + c.z()) / 3.0,
+                );
+                area += 0.5 * n.length();
+                flux += 0.5 * (g - Point3::new(0.0, 0.0, 0.0)).dot(n);
+            }
+            assert!(
+                (flux.abs() / area - 3.0).abs() < 0.03,
+                "corner {corner:?}: the holed face meshes {area} with flux {flux}"
+            );
+        }
+        let mesh = tessellate_solid(&topo, cut, 0.01).unwrap();
+        let (edges, boundary) = boundary_edges(&mesh.positions, &mesh.indices);
+        assert_eq!(
+            boundary, 0,
+            "corner {corner:?}: {boundary}/{edges} open edges"
+        );
+        let meshed: f64 = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[t[k] as usize]);
+                (a - Point3::new(0.0, 0.0, 0.0)).dot((b - a).cross(c - a)) / 6.0
+            })
+            .sum();
+        let truth = solid_volume(&topo, cut, 0.01).unwrap();
+        assert!(
+            meshed <= truth && truth - meshed < 5e-3 * truth,
+            "corner {corner:?}: mesh volume {meshed}, solid {truth}"
+        );
+    }
+}

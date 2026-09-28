@@ -1340,6 +1340,28 @@ pub(super) fn tessellate_latitude_band_shared(
         return Ok(false);
     }
 
+    // The rows run along the floor's own columns, so a wide gap between
+    // them spans the band with chords that no row can bend back to the
+    // surface (a floor through the pole leaves half a turn unsampled and cuts
+    // through the ball); past four deflections of sag, the CDT takes it.
+    if let FaceSurface::Sphere(sphere) = face_data.surface() {
+        let mut us: Vec<f64> = floor.iter().map(|r| r.0).collect();
+        us.sort_by(f64::total_cmp);
+        let gap = us
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .chain(std::iter::once(us[0] + TAU - us[us.len() - 1]))
+            .fold(0.0_f64, f64::max);
+        let (lo, hi) = (v_cap.min(floor_v_min), v_cap.max(floor_v_max));
+        let widest = if lo <= 0.0 && hi >= 0.0 {
+            1.0
+        } else {
+            lo.abs().min(hi.abs()).cos()
+        };
+        if sphere.radius() * widest * (1.0 - (0.5 * gap).cos()) > 4.0 * deflection {
+            return Ok(false);
+        }
+    }
     // The outer (scalloped) ring is the lower boundary; sweep up to the cap.
     // Use the absolute band height: the floor can sit above the cap latitude
     // (a southern collar), and a negative range trips the chord-deviation
