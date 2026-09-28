@@ -7,6 +7,7 @@
 
 use std::f64::consts::PI;
 
+use brepkit_math::chord::DEFAULT_ANGULAR_TOL;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
@@ -14,7 +15,9 @@ use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_cone, make_cylinder};
-use brepkit_operations::tessellate::{TriangleMesh, is_watertight, tessellate, tessellate_solid};
+use brepkit_operations::tessellate::{
+    is_watertight, tessellate, tessellate_solid, tessellate_solid_grouped_with_tolerance,
+};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -57,11 +60,11 @@ fn shared(d: f64) -> f64 {
     total * h / 3.0
 }
 
-fn mesh_area(mesh: &TriangleMesh) -> f64 {
-    mesh.indices
+fn mesh_area(positions: &[Point3], indices: &[u32]) -> f64 {
+    indices
         .chunks(3)
         .map(|t| {
-            let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| positions[i as usize]);
             0.5 * (b - a).cross(c - a).length()
         })
         .sum()
@@ -164,22 +167,44 @@ fn a_rod_along_a_cone_is_exact() {
                     let got = classify_point(&topo, result, placed(p, name), 0.01, 1e-7).unwrap();
                     assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
                 }
-                // The wall the rod passes through meshes on its own too, as a
-                // per-face export takes it. The Intersect's cone faces are
-                // trimmed patches, whose per-face mesh is an open roadmap row.
-                for &f in &faces {
-                    if op == BooleanOp::Intersect
-                        || topo.face(f).unwrap().surface().type_tag() != "cone"
-                    {
+                // Each face's share of the solid's mesh covers the face to
+                // within a chord, and so does each wall meshed on its own, as
+                // a per-face export takes it. A face the rod's rim or loop
+                // bounds alone (its end discs, the Intersect's cone patches)
+                // is an 18-gon's 2% short; the per-face mesh of those patches
+                // is an open roadmap row.
+                let (grouped, offsets) = tessellate_solid_grouped_with_tolerance(
+                    &topo,
+                    result,
+                    0.01,
+                    DEFAULT_ANGULAR_TOL,
+                )
+                .unwrap();
+                for (k, &f) in faces.iter().enumerate() {
+                    let exact = face_area(&topo, f, 0.01).unwrap();
+                    let plane = topo.face(f).unwrap().surface().type_tag() == "plane";
+                    let patch = plane || op == BooleanOp::Intersect;
+                    let bound = if patch { 0.03 } else { 0.01 } * exact;
+                    let share = &grouped.indices[offsets[k] as usize..offsets[k + 1] as usize];
+                    let area = mesh_area(&grouped.positions, share);
+                    assert!(
+                        (area - exact).abs() < bound,
+                        "{label}: face {k} meshes {area} of {exact} in the solid"
+                    );
+                    if patch {
                         continue;
                     }
-                    let area = mesh_area(&tessellate(&topo, f, 0.01).unwrap());
-                    let exact = face_area(&topo, f, 0.01).unwrap();
+                    let own = tessellate(&topo, f, 0.01).unwrap();
+                    let area = mesh_area(&own.positions, &own.indices);
                     assert!(
-                        (area - exact).abs() < 0.01 * exact,
-                        "{label}: cone face meshes {area} of {exact}"
+                        (area - exact).abs() < bound,
+                        "{label}: face {k} meshes {area} of {exact} on its own"
                     );
                 }
+                // Mirrored afterwards, its wires run the other way round.
+                transform_solid(&mut topo, result, &Mat4::scale(-1.0, 1.0, 1.0)).unwrap();
+                let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open mesh mirrored");
             }
         }
     }
