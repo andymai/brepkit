@@ -1,7 +1,8 @@
-//! A ball off a cone's axis that only some of the cone's generators reach:
-//! beside a pointed cone's wall, across its seam, near its base, and across
-//! a frustum's wall. In every pose each operation is exact, valid and
-//! watertight, and holds the volume integrated from the lens-shaped sections.
+//! A ball off a cone's axis that only some of the cone's generators reach
+//! (beside a pointed cone's wall, across its seam, near its base, and across
+//! a frustum's wall), and one holding a pointed cone's apex. In every pose
+//! each operation is exact, valid and watertight, and holds the volume
+//! integrated from the lens-shaped sections.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -200,6 +201,107 @@ fn a_ball_beside_a_cone_is_exact() {
                     );
                 }
                 // Mirrored afterwards, its wires run the other way round.
+                transform_solid(&mut topo, result, &Mat4::scale(-1.0, 1.0, 1.0)).unwrap();
+                let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open mesh mirrored");
+            }
+        }
+    }
+}
+
+/// A ball holding the pointed cone's apex off its axis: every generator
+/// leaves it once ahead of the apex, one loop round the cone, and the cone's
+/// piece in the ball is a tip that loop bounds.
+#[test]
+fn a_ball_holding_the_apex_is_exact() {
+    for (centre, r) in [
+        (Point3::new(0.5, 0.0, 2.5), 2.0_f64),
+        (Point3::new(-0.4, 0.3, 2.0), 1.5),
+    ] {
+        let cone = PI * 2.0 * 9.0;
+        let ball = 4.0 / 3.0 * PI * r.powi(3);
+        let both = shared(0.0, centre, r);
+        let in_cone =
+            |p: Point3| p.z() > -3.0 && p.z() < 3.0 && p.x().hypot(p.y()) < cone_radius(0.0, p.z());
+        let in_ball = |p: Point3| (p - centre).length() < r;
+        // Below the apex on the axis, in both; low on the axis; and past the
+        // apex in the ball.
+        let points = [
+            Point3::new(0.0, 0.0, 2.5),
+            Point3::new(0.0, 0.0, -2.5),
+            Point3::new(centre.x(), centre.y(), centre.z() + 0.9 * r),
+        ];
+        for name in ["upright", "turned", "mirrored", "scaled"] {
+            for (op, truth) in [
+                (BooleanOp::Cut, cone - both),
+                (BooleanOp::Intersect, both),
+                (BooleanOp::Fuse, cone + ball - both),
+            ] {
+                let label = format!("ball {r} at {centre:?} holding the apex, {name} {op:?}");
+                let mut topo = Topology::new();
+                let a = make_cone(&mut topo, 3.0, 0.0, 6.0).unwrap();
+                transform_solid(&mut topo, a, &Mat4::translation(0.0, 0.0, -3.0)).unwrap();
+                let b = make_sphere(&mut topo, r, 32).unwrap();
+                transform_solid(
+                    &mut topo,
+                    b,
+                    &Mat4::translation(centre.x(), centre.y(), centre.z()),
+                )
+                .unwrap();
+                let (a, b) = (posed(&mut topo, a, name), posed(&mut topo, b, name));
+                let result = boolean(&mut topo, op, a, b).unwrap();
+                let faces = solid_faces(&topo, result).unwrap();
+                assert!(faces.len() <= 8, "{label}: {} faces", faces.len());
+                let tags: Vec<&str> = faces
+                    .iter()
+                    .map(|&f| topo.face(f).unwrap().surface().type_tag())
+                    .collect();
+                assert!(
+                    tags.contains(&"sphere") && tags.contains(&"cone") && !tags.contains(&"nurbs"),
+                    "{label}: surfaces {tags:?}"
+                );
+                assert!(
+                    validate_solid(&topo, result).unwrap().is_valid(),
+                    "{label}: invalid"
+                );
+                let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                let volume = solid_volume(&topo, result, 0.01).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-6,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+                for p in points {
+                    let off_cone = (p.x().hypot(p.y()) - cone_radius(0.0, p.z())).abs();
+                    if off_cone < 1e-3 || ((p - centre).length() - r).abs() < 1e-3 {
+                        continue;
+                    }
+                    let inside = match op {
+                        BooleanOp::Cut => in_cone(p) && !in_ball(p),
+                        BooleanOp::Intersect => in_cone(p) && in_ball(p),
+                        BooleanOp::Fuse => in_cone(p) || in_ball(p),
+                    };
+                    let want = if inside {
+                        PointClassification::Inside
+                    } else {
+                        PointClassification::Outside
+                    };
+                    let got = classify_point(&topo, result, placed(p, name), 0.01, 1e-7).unwrap();
+                    assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
+                }
+                // The tip meshes on its own too, as a per-face export takes
+                // it.
+                for &f in &faces {
+                    if topo.face(f).unwrap().surface().type_tag() != "cone" {
+                        continue;
+                    }
+                    let area = mesh_area(&tessellate(&topo, f, 0.01).unwrap());
+                    let exact = face_area(&topo, f, 0.01).unwrap();
+                    assert!(
+                        (area - exact).abs() < 0.01 * exact,
+                        "{label}: cone face meshes {area} of {exact}"
+                    );
+                }
                 transform_solid(&mut topo, result, &Mat4::scale(-1.0, 1.0, 1.0)).unwrap();
                 let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
                 assert!(is_watertight(&mesh), "{label}: open mesh mirrored");

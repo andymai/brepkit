@@ -2707,9 +2707,10 @@ fn ruling_torus_cylinder(
 /// generator of the cone crosses the sphere twice on the cone's nappe (a pin
 /// through a ball): along a generator `apex + v g` the sphere is a quadratic
 /// in `v`, and each of its two roots, taken in order, sweeps one closed loop
-/// around the cone. `None` when the centre lies on the axis (phase FF takes
-/// [`exact_cone_sphere`]'s circles there). A sphere only some generators
-/// cross goes to [`window_cone_sphere`].
+/// around the cone. A ball holding the apex is left once by every generator,
+/// one loop. `None` when the centre lies on the axis (phase FF takes
+/// [`exact_cone_sphere`]'s circles there), or the apex on the sphere. A
+/// sphere only some generators cross goes to [`window_cone_sphere`].
 fn ruling_cone_sphere(
     cone: &ConicalSurface,
     sphere: &SphericalSurface,
@@ -2723,11 +2724,56 @@ fn ruling_cone_sphere(
     if across < lin_tol {
         return None;
     }
+    // With the apex inside the ball, `v² + 2hv + K` has roots of opposite
+    // signs (`K = |offset|² − R² < 0`): every generator leaves the ball once
+    // ahead of the apex, at `v = √(h² − K) − h`, one loop round the cone.
+    // Where `h > 0` the root is taken as `−K / (h + √(h² − K))`, free of the
+    // cancellation.
+    let k = offset.dot(offset) - radius * radius;
+    if radius - offset.length() > lin_tol {
+        let exit = |u: f64| {
+            let h = (cone.evaluate(u, 1.0) - apex).dot(offset);
+            let root = h.mul_add(h, -k).sqrt();
+            cone.evaluate(u, if h > 0.0 { -k / (h + root) } else { root - h })
+        };
+        // A ball that barely holds the apex turns the loop sharply where it
+        // passes the apex, at the scale of `√−K`: a step whose midpoint
+        // strays from its chord by a hundredth of the chord (a turn of about
+        // 0.08 radians) is halved until the turn is resolved.
+        let mut samples: Vec<(f64, Point3)> = (0..=RULING_SAMPLES)
+            .map(|i| (ruling_u(i), exit(ruling_u(i))))
+            .collect();
+        for _ in 0..10 {
+            let mut refined = Vec::with_capacity(2 * samples.len());
+            for pair in samples.windows(2) {
+                let ((u0, p0), (u1, p1)) = (pair[0], pair[1]);
+                refined.push(pair[0]);
+                let um = 0.5 * (u0 + u1);
+                let pm = exit(um);
+                let chord = (p1 - p0).length();
+                if chord > lin_tol && (pm - (p0 + (p1 - p0) * 0.5)).length() > 0.01 * chord {
+                    refined.push((um, pm));
+                }
+            }
+            refined.extend(samples.last().copied());
+            if refined.len() == samples.len() {
+                break;
+            }
+            samples = refined;
+        }
+        let mut pts: Vec<Point3> = samples.iter().map(|&(_, p)| p).collect();
+        if let Some(last) = pts.last_mut() {
+            *last = samples[0].1;
+        }
+        return Some(fit_ruling_loops(&[pts], |p| {
+            in_order(cone.project_point(p), sphere.project_point(p), cone_first)
+        }));
+    }
     // Both roots along a generator of unit direction `g` (`v` the distance
     // from the apex), nearer first, from `h = g·offset`, when it crosses the
     // sphere twice ahead of the apex.
     let crossing = |h: f64| {
-        let (disc, vp, vm) = ruling_quadratic(1.0, 2.0 * h, offset.dot(offset) - radius * radius);
+        let (disc, vp, vm) = ruling_quadratic(1.0, 2.0 * h, k);
         (disc > lin_tol && vm >= lin_tol).then_some((vm, vp))
     };
     // Around the cone `h` runs between these bounds. Where both roots lie
@@ -2783,10 +2829,10 @@ fn window_cone_sphere(
 ) -> Option<Vec<IntersectionCurve>> {
     let offset = cone.apex() - sphere.center();
     let lin_tol = Tolerance::new().linear;
-    let k = offset.dot(offset) - sphere.radius() * sphere.radius();
-    if k <= lin_tol {
+    if offset.length() - sphere.radius() <= lin_tol {
         return None;
     }
+    let k = offset.dot(offset) - sphere.radius() * sphere.radius();
     let (sin_a, cos_a) = cone.half_angle().sin_cos();
     let (ox, oy) = (offset.dot(cone.x_axis()), offset.dot(cone.y_axis()));
     let (c, a) = (sin_a * offset.dot(cone.axis()), cos_a * ox.hypot(oy));
@@ -4000,10 +4046,10 @@ mod tests {
                 }
             }
         }
-        // On the ball's axis the loops are circles, and a pin whose apex is
-        // inside the ball meets it behind the apex: both defer. A pin only
-        // partly through the ball meets it in one loop over the generators
-        // that reach it, and one that opens away from it not at all.
+        // On the ball's axis the loops are circles, which defer. A pin whose
+        // apex is inside the ball leaves it once along every generator, and
+        // one only partly through the ball meets it over the generators that
+        // reach it: one loop each. One that opens away meets it not at all.
         let coaxial =
             ConicalSurface::new(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0), 1.4)
                 .unwrap();
@@ -4021,7 +4067,7 @@ mod tests {
             FRAC_PI_2 - half,
         )
         .unwrap();
-        assert!(ruling_cone_sphere(&holding, &ball, true).is_none());
+        assert_eq!(ruling_cone_sphere(&holding, &ball, true).unwrap().len(), 1);
         let away = ConicalSurface::new(
             Point3::new(1.0, 0.5, 10.0),
             Vec3::new(0.0, 0.0, 1.0),
@@ -4072,11 +4118,47 @@ mod tests {
                 );
             }
         }
-        // A ball the nappe's generators miss, and one holding the apex.
+        // A ball the nappe's generators miss, and one on the apex.
         let clear = SphericalSurface::new(Point3::new(4.0, 0.0, 0.0), 0.5).unwrap();
         assert!(ruling_cone_sphere(&cone, &clear, true).unwrap().is_empty());
-        let holding = SphericalSurface::new(Point3::new(0.3, 0.0, 2.5), 1.0).unwrap();
-        assert!(ruling_cone_sphere(&cone, &holding, true).is_none());
+        let on_apex = SphericalSurface::new(Point3::new(0.6, 0.0, 3.8), 1.0).unwrap();
+        assert!(ruling_cone_sphere(&cone, &on_apex, true).is_none());
+    }
+
+    #[test]
+    fn a_ball_holding_a_cones_apex_meets_it_in_one_loop() {
+        use crate::traits::ParametricCurve;
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 3.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            2.0_f64.atan(),
+        )
+        .unwrap();
+        // Off the axis, and barely holding the apex: the generators pointing
+        // away from the centre leave it just past the apex.
+        for (centre, radius) in [
+            (Point3::new(0.5, 0.0, 2.5), 2.0),
+            (Point3::new(-0.4, 0.3, 2.0), 1.5),
+            (Point3::new(0.0, 0.8, 3.0), 0.8001),
+            (Point3::new(0.0, 0.8, 3.0), 0.800_001),
+        ] {
+            let ball = SphericalSurface::new(centre, radius).unwrap();
+            let curves = ruling_cone_sphere(&cone, &ball, true).unwrap();
+            assert_eq!(curves.len(), 1, "one loop for the ball at {centre:?}");
+            let (t0, t1) = curves[0].curve.domain();
+            for k in 0..=4096 {
+                let p = ParametricCurve::evaluate(
+                    &curves[0].curve,
+                    (t1 - t0).mul_add(f64::from(k) / 4096.0, t0),
+                );
+                let on_ball = (p - centre).length() - radius;
+                let on_cone = p.x().hypot(p.y()) - (3.0 - p.z()) / 2.0;
+                assert!(
+                    on_ball.abs() < 1e-5 && on_cone.abs() < 1e-5 && p.z() < 3.0,
+                    "ball at {centre:?}: off by {on_ball}, {on_cone} at {p:?}"
+                );
+            }
+        }
     }
 
     #[test]
