@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790553386912,
+  "lastUpdate": 1790555578830,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45629,6 +45629,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35315549,
             "range": "± 25146",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ccee00288cac23eed7d0f008a9807418f8dcda60",
+          "message": "fix(algo): meet a ball on a cone's axis in exact circles (#1870)\n\nA ball centred on a cone's axis now meets the cone in exact circles, and\nevery tested Cut, Intersect and Fuse comes out exact and valid in 0.00\ns.\n\n## What was wrong\n\n- Phase FF had no exact path for a cone and sphere. A ball centreed on\nthe cone axis entered the general marcher.\n- On main, with `make_cone(3, 0, 6)` or the frustum `make_cone(3, 1.5,\n6)` at `z = -3` and `make_sphere(r, 32)` on the axis, probes measured:\n- Radius 1.3 at `z = 2.5`, swallowing the pointed cone apex: raw GFA\ntook 109 s and produced a cone wire with 37,379 edges. `unify_faces` did\nnot finish within ten minutes.\n  - Radius 0.5 at `z = 2.5`, through the apex: no result after 200 s.\n- Radius 2 at the origin, through the pointed cone middle: mesh fallback\nafter 26 s, off by up to 0.64.\n- Radius 2 at `z = 2`, across the frustum wall and top: mesh fallback\nafter 42 s, off by up to 0.85.\n- Radius 2.4 at `z = -2`, across the wall and base: Cut and Intersect\nfell back after 7 s. Fuse was exact but 2.5 off.\n- Radius 1.45 at `z = 2.5`, clear of the frustum wall and through its\ntop: mesh fallback after 20 s.\n\n## What this does\n\n- `exact_cone_sphere` in `crates/math/src/analytic_intersection.rs`\nhandles spheres whose centre lies on the cone axis. Every generator\n`apex + v g` has the same `h = g·(apex − C)`, so every generator meets\nthe sphere at the same roots `v`.\n- Each root ahead of the apex defines a circle of radius `v cos a`,\npositioned `v sin a` along the axis. This yields two circles for a ball\nthe cone passes through, one for a ball that swallows or passes through\nthe apex or touches the wall, and none for a ball the cone misses or\nthat sits inside clear of the wall. At a tangent ball the discriminant\ncancels to a few ulps of its terms, which can land below zero, so a\ndiscriminant within that noise reads as a touch.\n- `crates/algo/src/pave_filler/phase_ff.rs` emits them as exact Circles\nfor either face order, as it does for the coaxial sphere and cylinder.\nOff-axis pairs return `None` and proceed to analytic generator tracing\n(#1868).\n\n## Verification\n\n- All six placements, upright, turned, and flipped with the ball spun\n0.5 rad about its centre, pass all three operations. Results are exact,\nvalid, and within `3.6e-10` of volumes integrated from concentric disc\nsections.\n- `crates/operations/tests/ball_on_a_cone_axis.rs` runs those placements\nupright, turned, flipped, mirrored through a slanted plane and mirrored\nby `scale(-1, 1, 1)`, and checks at most 8 faces with a sphere face and\nnone NURBS, validity, a watertight tessellation, volume within `1e-6`,\nand centre classification. It fails on main after 759 s, with 338 faces\nin the first Cut.\n- `a_ball_on_a_cones_axis_meets_it_in_circles` checks 2, 1, 1, 0 and 0\ncircles for a ball through the middle, swallowing the apex, through the\napex, inside clear of the wall, and on the other nappe's side, each\nwithin `1e-9` of both surfaces, `None` off the axis, and one circle for\na ball touching a wide cone a million units out, whose discriminant\ncomputes to -1.8e-4.\n- The workspace suite passes: 3226 tests, 20 skipped. The 300-line pose\nsweep and `truth_audit` match main. `approx_census` matches apart from\nthe run-varying face pair in the NURBS loft offset error.\n- Probes also recorded two unrelated roadmap faults present on main: a\n0.058-wide thin top-cap ring can drop out, and a ball `1e-4` past\ninternal tangency can be classified as contained, missing a `1.6e-5`\nsliver.",
+          "timestamp": "2026-09-28T00:30:40Z",
+          "tree_id": "224ab56298a8f46cc3a53476289427b2374dbdc6",
+          "url": "https://github.com/andymai/brepkit/commit/ccee00288cac23eed7d0f008a9807418f8dcda60"
+        },
+        "date": 1790555573641,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 565763,
+            "range": "± 16855",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 622659,
+            "range": "± 9601",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8007,
+            "range": "± 190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 415524,
+            "range": "± 3444",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27777229,
+            "range": "± 53653",
             "unit": "ns/iter"
           }
         ]
