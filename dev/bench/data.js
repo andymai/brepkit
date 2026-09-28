@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790586078864,
+  "lastUpdate": 1790586506699,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46709,6 +46709,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43175555,
             "range": "± 110393",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fd897416657fa25835683874750d7c4ba444585f",
+          "message": "fix(operations): place a seamed wall's seam copies from the seam's own vertex (#1890)\n\nCylinder and cone walls that run their seam both ways now use a\none-period seam span, bringing the mirrored holed frustum’s standalone\nface mesh from 83.247 to 84.740 against an exact area of 84.850.\n\n## What was wrong\n\n- For `make_cone(3, 1.5, 6)` at `z = -3` less `make_sphere(0.9, 32)` at\n`(0.5, 2, 0.5)`, mirrored through a slanted plane, the holed frustum\nwall read 83.247 on its own while its solid mesh read 84.747.\n- Step 2b of `tessellate_nonplanar_cdt` derived the wall’s `u` span from\noff-seam samples. A closed rim represents the seam vertex only within\nhalf a step.\n- The rim extremes placed the seam copies at `u` 1.6916 and 7.8540,\n6.1624 apart instead of a period. The resulting `(u, v)` region was 0.12\nradians short. The solid mesher’s shared pool happened to place them at\n1.5305 and 7.8137.\n\n## What this does\n\n- Every cylinder or cone wall that runs its seam both ways takes its `u`\nspan from the seam’s own vertex, with one period between the two copies.\n- The rims’ stand-ins for the seam vertex are snapped onto those copies.\nWound walls and notched pointed cones already use this treatment.\n- The roadmap has a Closed entry. The plate-edge row lists the four open\nturns.\n\n## Verification\n\n- The mirrored wall meshes 84.740 on its own, and 84.741 upright.\n- The pointed cone through a plate’s edge meshes watertight when turned\n3.93 radians, where it had 3 open mesh edges.\n- The per-face check in `crates/operations/tests/ball_beside_a_cone.rs`\nincludes the frustum, and `ball_through_a_cylinder_wall.rs` checks its\ncylinder faces on their own in every pose (walls within 1%, the\nIntersect's patches within 3%). The plate-edge test’s open turns at `x =\n0` are 1.57, 1.96, 4.32, and 4.71 radians.\n- `brepkit-operations` and `brepkit-io` pass: 1650 tests, 17 skipped.\nThe 300-line pose sweep and `truth_audit` match main.",
+          "timestamp": "2026-09-28T09:05:16Z",
+          "tree_id": "81bd7eb6936a303cceb97415c9cb41d5cd658830",
+          "url": "https://github.com/andymai/brepkit/commit/fd897416657fa25835683874750d7c4ba444585f"
+        },
+        "date": 1790586500871,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1114222,
+            "range": "± 1252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1162146,
+            "range": "± 1976",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14234,
+            "range": "± 67",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 783987,
+            "range": "± 38289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46386413,
+            "range": "± 145705",
             "unit": "ns/iter"
           }
         ]
