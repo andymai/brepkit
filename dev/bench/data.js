@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790556612799,
+  "lastUpdate": 1790559317559,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45737,6 +45737,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42278593,
             "range": "± 171223",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f88b806033c6736cc38a90f3570cde5d960a49a5",
+          "message": "fix(algo): seed a thin ring's interior point from its rim's vertices (#1872)\n\nThin tubes, counterbored cups, and ball-cut cap rings now produce exact,\nvalid results within `5e-12` of the closed-form or section-integrated\nvolume.\n\n## What was wrong\n\n- A split plane face gets its interior point from\n`find_point_outside_holes` in\n`crates/algo/src/builder/face_splitter/containment.rs`. It stepped\ninward only from outer-polygon edge midpoints.\n- `sample_wire_loop_uv_via_frame` samples a closed rim circle into 8\npoints. Their chord midpoints lie 7.6% of the radius inside the rim.\nWhen a ring was narrower, every candidate landed inside the hole\npolygon. The returned chord midpoint lay in the true hole, so the ring\nclassified with the hole and was dropped.\n- On main, 10/9.5 and 2/1.9 tubes used the mesh fallback. The\nthrough-bored 10/9.5 tube had 547 faces and was 0.35 off. The same bore\n5 deep had 338 faces and was 2.8 off. A 10/9 tube, with a ring 10% of\nthe radius, was exact.\n- Cylinder and frustum ball operations with cap rings 0.051, 0.053, and\n0.058 wide also fell back.\n\n## What this does\n\n- If no midpoint candidate lies inside the outer polygon and outside\nevery hole, the search also steps inward from each outer-polygon vertex.\nThese vertices lie on the rim itself.\n- Faces whose midpoint search succeeds are unchanged.\n- Frustum cap rings 0.006 and 0.0012 wide (balls of radius 1.5148 and\n1.5195 at `z = 2.75`, touching only the cap) still fall back, recorded\nin the roadmap: the first step, half a percent toward the centroid,\npasses these rings. Finer first steps make both exact and valid and the\n0.006 ring watertight, but the 0.0012 ring's Cut and Fuse then mesh\nopen, matching the existing roadmap row for a hole closer to a plane\nface's arc than its chords' sag.\n\n## Verification\n\n- `crates/operations/tests/thin_ring_caps.rs` covers the 10/9.5 and\n2/1.9 tubes, through and 5 deep, plus the cylinder cases and frustum\nball cases with rings 0.058 and 0.041 using Cut, Intersect, and Fuse.\n- Both tests run upright, turned, mirrored through a slanted plane, and\nmirrored by `scale(-1, 1, 1)`. They require at most 8 faces, no NURBS\nface, validity, watertight tessellation, volume within `1e-6`, and\nexpected point classifications. Both fail on main.\n- The workspace suite passes: 3228 tests, 20 skipped. The 300-line pose\nsweep and `truth_audit` match main. `approx_census` matches main apart\nfrom the run-varying face pair named in the NURBS loft offset error.",
+          "timestamp": "2026-09-28T01:32:25Z",
+          "tree_id": "ece70bb1bae691491744c7f8ecdf90f560040b16",
+          "url": "https://github.com/andymai/brepkit/commit/f88b806033c6736cc38a90f3570cde5d960a49a5"
+        },
+        "date": 1790559314107,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1046416,
+            "range": "± 4258",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1129846,
+            "range": "± 1617",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13064,
+            "range": "± 20",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 807920,
+            "range": "± 4080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43334215,
+            "range": "± 446245",
             "unit": "ns/iter"
           }
         ]
