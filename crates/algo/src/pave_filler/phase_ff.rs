@@ -3904,6 +3904,24 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Cone(cone), FaceSurface::Sphere(sphere))
+        | (FaceSurface::Sphere(sphere), FaceSurface::Cone(cone)) => {
+            // A ball on a cone's axis meets it in circles (a ball swallowing
+            // the apex, a pin through a ball's centre): exact Circles give the
+            // closed-circle split what it carves a cap with, where the
+            // marcher's fragments splinter the cone's wall.
+            match analytic_intersection::exact_cone_sphere(cone, sphere)? {
+                Some(exacts) => Ok(exact_raw_curves(exacts)),
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (a, b) if a.as_analytic().is_some() && b.as_analytic().is_some() => {
             if let (Some(aa), Some(ab)) = (a.as_analytic(), b.as_analytic()) {
                 analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
