@@ -3001,7 +3001,7 @@ fn algebraic_parallel_cone_cylinder(
     // the loop winds the cone too and stays in two branches, and so does a
     // wall passing so near the axis that the loop's bend there, about
     // `(d - r) / sqrt(d r)` of a turn wide, spans fewer than a few rulings.
-    let slack = 1e-12 * turn_hi;
+    let slack = Tolerance::new().linear;
     #[allow(clippy::cast_precision_loss)]
     let resolved = d - r > 3.0 * (d * r).sqrt() * TAU / RULING_SAMPLES as f64;
     if v_min <= turn_lo + slack && v_max >= turn_hi - slack && resolved {
