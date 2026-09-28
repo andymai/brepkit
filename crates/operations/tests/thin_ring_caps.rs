@@ -1,6 +1,6 @@
 //! A cap whose ring between its circular rim and a hole is thinner than the
 //! sag of the rim's chords: a thin-walled tube, a counterbored cup, and a
-//! ball through a cylinder's cap near its rim. In every pose each operation
+//! ball through a cylinder's or a frustum's cap near its rim. In every pose each operation
 //! keeps the ring, is exact and valid, and holds the closed-form volume.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -12,7 +12,8 @@ use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::mirror::mirror;
-use brepkit_operations::primitives::{make_cylinder, make_sphere};
+use brepkit_operations::primitives::{make_cone, make_cylinder, make_sphere};
+use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -68,12 +69,19 @@ fn check(
     points: &[(Point3, PointClassification)],
     pose: &str,
 ) {
-    let faces = solid_faces(topo, result).unwrap().len();
-    assert!(faces <= 6, "{label}: {faces} faces");
+    let faces = solid_faces(topo, result).unwrap();
+    assert!(faces.len() <= 8, "{label}: {} faces", faces.len());
+    let tags: Vec<&str> = faces
+        .iter()
+        .map(|&f| topo.face(f).unwrap().surface().type_tag())
+        .collect();
+    assert!(!tags.contains(&"nurbs"), "{label}: surfaces {tags:?}");
     assert!(
         validate_solid(topo, result).unwrap().is_valid(),
         "{label}: invalid"
     );
+    let mesh = tessellate_solid(topo, result, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
     let volume = solid_volume(topo, result, 0.01).unwrap();
     assert!(
         (volume - truth).abs() < 1e-6,
@@ -113,9 +121,9 @@ fn a_thin_walled_tube_is_exact() {
     }
 }
 
-/// The volume a cylinder of radius 1.5 over `-3 < z < 3` shares with a
-/// ball of radius `r` centred on its axis at `zc`.
-fn shared(r: f64, zc: f64) -> f64 {
+/// The volume a solid of revolution about `z` over `-3 < z < 3`, of radius
+/// `radius(z)`, shares with a ball of radius `r` centred on its axis at `zc`.
+fn shared(radius: impl Fn(f64) -> f64, r: f64, zc: f64) -> f64 {
     let (lo, hi) = ((zc - r).max(-3.0), (zc + r).min(3.0));
     let n = 200_000;
     let h = (hi - lo) / f64::from(n);
@@ -130,19 +138,36 @@ fn shared(r: f64, zc: f64) -> f64 {
         } else {
             2.0
         };
-        total += w * PI * ball.min(1.5).powi(2);
+        total += w * PI * ball.min(radius(z)).powi(2);
     }
     total * h / 3.0
 }
 
-/// A ball inside a cylinder's wall that crosses its top cap near the rim:
-/// the cap's ring is 0.051 and 0.053 wide against the rim's radius of 1.5.
+/// A ball inside a cap's rim crossing the cap near it: a cylinder of radius
+/// 1.5, whose ring is 0.051 and 0.053 wide, and the frustum from radius 3 to
+/// 1.5, whose rings are 0.058 and 0.041 wide.
 #[test]
 fn a_ball_through_a_caps_rim_is_exact() {
-    let body = PI * 1.5 * 1.5 * 6.0;
-    for (r, zc) in [(1.47_f64, 2.75), (1.45, 2.9)] {
+    for (frustum, r, zc) in [
+        (false, 1.47_f64, 2.75_f64),
+        (false, 1.45, 2.9),
+        (true, 1.5265, 2.5),
+        (true, 1.5265, 2.55),
+    ] {
+        let radius = |z: f64| {
+            if frustum {
+                (1.5 - 3.0f64).mul_add((z + 3.0) / 6.0, 3.0)
+            } else {
+                1.5
+            }
+        };
+        let body = if frustum {
+            PI * 2.0 * 1.5f64.mul_add(1.5, 3.0f64.mul_add(1.5, 9.0))
+        } else {
+            PI * 1.5 * 1.5 * 6.0
+        };
         let ball = 4.0 / 3.0 * PI * r.powi(3);
-        let both = shared(r, zc);
+        let both = shared(radius, r, zc);
         for pose in POSES {
             for (op, truth, centre) in [
                 (BooleanOp::Cut, body - both, PointClassification::Outside),
@@ -153,9 +178,14 @@ fn a_ball_through_a_caps_rim_is_exact() {
                     PointClassification::Inside,
                 ),
             ] {
-                let label = format!("ball {r} at {zc}, {pose} {op:?}");
+                let shape = if frustum { "frustum" } else { "cylinder" };
+                let label = format!("{shape}, ball {r} at {zc}, {pose} {op:?}");
                 let mut topo = Topology::new();
-                let a = make_cylinder(&mut topo, 1.5, 6.0).unwrap();
+                let a = if frustum {
+                    make_cone(&mut topo, 3.0, 1.5, 6.0).unwrap()
+                } else {
+                    make_cylinder(&mut topo, 1.5, 6.0).unwrap()
+                };
                 transform_solid(&mut topo, a, &Mat4::translation(0.0, 0.0, -3.0)).unwrap();
                 let b = make_sphere(&mut topo, r, 32).unwrap();
                 transform_solid(&mut topo, b, &Mat4::translation(0.0, 0.0, zc)).unwrap();
