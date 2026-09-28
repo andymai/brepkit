@@ -3911,23 +3911,7 @@ fn compute_raw_curves(
             // closed-circle split what it carves a cap with, where the
             // marcher's fragments splinter the cone's wall.
             match analytic_intersection::exact_cone_sphere(cone, sphere)? {
-                Some(exacts) => Ok(exacts
-                    .into_iter()
-                    .filter_map(|exact| match exact {
-                        analytic_intersection::ExactIntersectionCurve::Circle(circle) => {
-                            let domain = (0.0, std::f64::consts::TAU);
-                            Some(RawCurve {
-                                bbox: circle_bbox(&circle),
-                                p_start: ParametricCurve::evaluate(&circle, domain.0),
-                                p_end: ParametricCurve::evaluate(&circle, domain.1),
-                                curve: EdgeCurve::Circle(circle),
-                                t_range: domain,
-                            })
-                        }
-                        analytic_intersection::ExactIntersectionCurve::Ellipse(_)
-                        | analytic_intersection::ExactIntersectionCurve::Points(_) => None,
-                    })
-                    .collect()),
+                Some(exacts) => Ok(exact_raw_curves(exacts)),
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
                         analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)

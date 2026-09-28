@@ -2345,9 +2345,10 @@ pub fn exact_sphere_cylinder(
 /// `apex + v g` (`g` a unit direction, `v` the distance from the apex) has
 /// the same `h = g·(apex − C)`, so all of them meet the sphere at the same
 /// roots of `v² + 2hv + |apex − C|² − R² = 0`. Each root ahead of the apex is
-/// a circle of radius `v cos a` at `v sin a` along the axis: two for a pin
-/// through a ball, one for a ball that swallows the apex or touches the
-/// cone, none for a ball the cone misses.
+/// a circle of radius `v cos a` at `v sin a` along the axis: two for a ball
+/// the cone passes through, one for a ball that swallows the apex, passes
+/// through it or touches the wall, none for a ball the cone misses or that
+/// sits inside it clear of the wall.
 ///
 /// Returns `Some(vec![..])` for a coaxial pair and `None` (the ruling trace
 /// or the marcher) otherwise.
@@ -2366,12 +2367,13 @@ pub fn exact_cone_sphere(
     }
     let lin_tol = Tolerance::new().linear;
     let (sin_a, cos_a) = cone.half_angle().sin_cos();
-    let (disc, far, near) = ruling_quadratic(
-        1.0,
-        2.0 * sin_a * along,
-        offset.dot(offset) - sphere.radius() * sphere.radius(),
-    );
-    if disc < 0.0 {
+    let (far_sq, radius_sq) = (offset.dot(offset), sphere.radius() * sphere.radius());
+    let b = 2.0 * sin_a * along;
+    let (disc, far, near) = ruling_quadratic(1.0, b, far_sq - radius_sq);
+    // At a tangent ball `b² − 4c` cancels to a few ulps of its terms, which
+    // can land below zero: that is a touch, not a miss.
+    let noise = 16.0 * f64::EPSILON * 4.0f64.mul_add(far_sq + radius_sq, b * b);
+    if disc < -noise {
         return Ok(Some(vec![]));
     }
     let roots: &[f64] = if far - near < lin_tol {
@@ -4355,6 +4357,20 @@ mod tests {
         }
         let aside = SphericalSurface::new(Point3::new(0.5, 0.0, 0.0), 2.0).unwrap();
         assert!(exact_cone_sphere(&cone, &aside).unwrap().is_none());
+        // A ball touching a wide cone a million units out, where the
+        // discriminant cancels to a few ulps below zero.
+        let wide =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.3).unwrap();
+        let far = SphericalSurface::new(Point3::new(0.0, 0.0, 1e6), 1e6 * 0.3_f64.cos()).unwrap();
+        let curves = exact_cone_sphere(&wide, &far).unwrap().unwrap();
+        let circles = circles_of(&curves);
+        assert_eq!(circles.len(), 1, "the touch");
+        let touch = 1e6 * 0.3_f64.sin() * 0.3_f64.cos();
+        assert!(
+            (circles[0].radius() - touch).abs() < 1e-3,
+            "{}",
+            circles[0].radius()
+        );
     }
 
     /// The circles among exact section curves.
