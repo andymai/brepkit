@@ -90,6 +90,15 @@ fn collect_face_boundary_edges(
 struct FaceContainment {
     bbox: Aabb3,
     planar: Option<PlanarContainment>,
+    trimmed: Option<TrimmedContainment>,
+}
+
+/// A curved face's loops in its own `(u, v)`, for crossings found between
+/// samples: a face's surface runs on past its boundary, and an edge crossing
+/// the surface there crosses no face.
+struct TrimmedContainment {
+    loops: crate::classifier::FaceLoops2d,
+    margin: f64,
 }
 
 struct PlanarContainment {
@@ -99,6 +108,26 @@ struct PlanarContainment {
 }
 
 impl FaceContainment {
+    /// Whether a crossing found between samples lies in the face: inside its
+    /// loops, or within the loops' sampling of their boundary. A face whose
+    /// loops enclose no area in `(u, v)` (a hemisphere bounded by its
+    /// equator) keeps the bounding test alone.
+    fn accepts_trimmed(&self, pt: Point3) -> bool {
+        if !self.accepts(pt) {
+            return false;
+        }
+        let Some(trimmed) = &self.trimmed else {
+            return true;
+        };
+        let loops = &trimmed.loops;
+        loops.to_uv(pt).is_some_and(|q| {
+            loops.contains(q)
+                || std::iter::once(&loops.outer)
+                    .chain(&loops.holes)
+                    .any(|l| l.len() >= 2 && distance_to_polygon_boundary(q, l) <= trimmed.margin)
+        })
+    }
+
     fn accepts(&self, pt: Point3) -> bool {
         if !self.bbox.contains_point(pt) {
             return false;
@@ -197,6 +226,7 @@ fn build_face_containment(
                 max: Point3::new(0.0, 0.0, 0.0),
             },
             planar: None,
+            trimmed: None,
         });
     };
     let diag = (bbox.max - bbox.min).length();
@@ -218,19 +248,42 @@ fn build_face_containment(
                     polygon,
                     margin,
                 }),
+                trimmed: None,
             });
         }
         return Ok(FaceContainment {
             bbox: bbox.expanded((diag * 0.5).max(tol.linear * 10.0)),
             planar: None,
+            trimmed: None,
         });
     }
 
     // Curved faces can bulge past their boundary AABB (e.g. a hemisphere
     // bounded by its equator), so expand generously by half the diagonal.
+    // Their loops in `(u, v)`, where those enclose an area, bound the face
+    // itself; a loop's samples stand off its boundary by at most half a step.
+    let loops = crate::classifier::FaceLoops2d::new(topo, fid)?;
+    let outer = &loops.outer;
+    let area = 0.5
+        * (0..outer.len())
+            .map(|i| {
+                let (p, q) = (outer[i], outer[(i + 1) % outer.len()]);
+                p.x().mul_add(q.y(), -(q.x() * p.y()))
+            })
+            .sum::<f64>()
+            .abs();
+    let step = std::iter::once(outer)
+        .chain(&loops.holes)
+        .flat_map(|l| (0..l.len()).map(move |i| (l[(i + 1) % l.len()] - l[i]).length()))
+        .fold(0.0, f64::max);
+    let trimmed = (outer.len() >= 3 && area > step * step * 1e-3).then_some(TrimmedContainment {
+        margin: 0.5 * step,
+        loops,
+    });
     Ok(FaceContainment {
         bbox: bbox.expanded((diag * 0.5).max(tol.linear * 10.0)),
         planar: None,
+        trimmed,
     })
 }
 
@@ -322,7 +375,15 @@ fn check_edge_face_pairs(
                 FaceSurface::Plane { normal, d } => {
                     find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
                 }
-                _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
+                _ => find_edge_surface_crossings(
+                    &curve,
+                    start_pos,
+                    end_pos,
+                    (t0, t1),
+                    surface,
+                    &|p| containments[face_idx].accepts_trimmed(p),
+                    tol,
+                ),
             };
 
             // Endpoint-drop windows, one per crossing and per endpoint,
@@ -548,20 +609,56 @@ fn find_edge_surface_crossings(
     curve: &EdgeCurve,
     start_pos: Point3,
     end_pos: Point3,
-    t0: f64,
-    t1: f64,
+    (t0, t1): (f64, f64),
     surface: &FaceSurface,
+    in_face: &dyn Fn(Point3) -> bool,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
     let n = N_SAMPLES;
     let mut crossings = Vec::new();
     let mut prev_dist = f64::MAX;
     let mut prev_t = t0;
+    let side_at = |t: f64| {
+        surface_side(
+            curve.evaluate_with_endpoints(t, start_pos, end_pos),
+            surface,
+        )
+    };
+    let mut prev_side = side_at(t0);
 
     for i in 0..=n {
         let t = t0 + (t1 - t0) * (i as f64 / n as f64);
         let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
         let dist = distance_to_surface(pt, surface);
+        let side = side_at(t);
+
+        // A transverse crossing between two samples leaves both off the
+        // surface; an analytic surface's side changes sign across it.
+        if i > 0
+            && let (Some(a), Some(b)) = (prev_side, side)
+            && a.abs() > tol.linear
+            && b.abs() > tol.linear
+            && (a < 0.0) != (b < 0.0)
+        {
+            let (mut lo, mut hi) = (prev_t, t);
+            for _ in 0..60 {
+                let mid = f64::midpoint(lo, hi);
+                match side_at(mid) {
+                    Some(m) if (m < 0.0) == (a < 0.0) => lo = mid,
+                    Some(_) => hi = mid,
+                    None => break,
+                }
+            }
+            let tc = f64::midpoint(lo, hi);
+            let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+            let is_dup = crossings
+                .iter()
+                .any(|&(ct, _): &(f64, Point3)| (tc - ct).abs() < (t1 - t0) / (n as f64) * 2.0);
+            if !is_dup && distance_to_surface(pc, surface) < tol.linear && in_face(pc) {
+                crossings.push((tc, pc));
+            }
+        }
+        prev_side = side;
 
         if i > 0 && dist < tol.linear {
             let is_dup = crossings
@@ -721,6 +818,37 @@ fn distance_to_surface(pt: Point3, surface: &FaceSurface) -> f64 {
     }
 }
 
+/// Which side of an analytic surface a point lies on, as a length that is
+/// zero on the surface and changes sign across it; `None` for a NURBS
+/// surface. A cone's value vanishes only on its forward nappe, the one its
+/// faces lie on.
+fn surface_side(pt: Point3, surface: &FaceSurface) -> Option<f64> {
+    let radial = |origin: Point3, axis: brepkit_math::vec::Vec3| {
+        let w = pt - origin;
+        let along = w.dot(axis);
+        ((w - axis * along).length(), along)
+    };
+    match surface {
+        FaceSurface::Plane { normal, d } => Some(
+            pt.x()
+                .mul_add(normal.x(), pt.y().mul_add(normal.y(), pt.z() * normal.z()))
+                - d,
+        ),
+        FaceSurface::Sphere(sphere) => Some((pt - sphere.center()).length() - sphere.radius()),
+        FaceSurface::Cylinder(cyl) => Some(radial(cyl.origin(), cyl.axis()).0 - cyl.radius()),
+        FaceSurface::Cone(cone) => {
+            let (r, along) = radial(cone.apex(), cone.axis());
+            let (sin_a, cos_a) = cone.half_angle().sin_cos();
+            Some(r.mul_add(sin_a, -along * cos_a))
+        }
+        FaceSurface::Torus(torus) => {
+            let (r, along) = radial(torus.center(), torus.z_axis());
+            Some((r - torus.major_radius()).hypot(along) - torus.minor_radius())
+        }
+        FaceSurface::Nurbs(_) => None,
+    }
+}
+
 /// Refine a crossing between two parameter values using ternary search.
 fn refine_crossing(
     curve: &EdgeCurve,
@@ -764,6 +892,44 @@ mod tests {
     use super::*;
     use brepkit_math::vec::Point3;
     use brepkit_topology::edge::EdgeCurve;
+
+    #[test]
+    fn crossings_between_samples_are_found_on_curved_surfaces() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface};
+        use brepkit_math::vec::Vec3;
+        let tol = Tolerance::new();
+        // A cone's base rim through a ball off its axis, and a line through a
+        // cylinder: every crossing falls between the 64 samples.
+        let rim = EdgeCurve::Circle(
+            Circle3D::new(Point3::new(0.0, 0.0, -3.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap(),
+        );
+        let at = Point3::new(3.0, 0.0, -3.0);
+        let (t0, t1) = rim.domain_with_endpoints(at, at);
+        let ball =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(1.0, 0.0, 1.0), 5.0).unwrap());
+        let crossings = find_edge_surface_crossings(&rim, at, at, (t0, t1), &ball, &|_| true, tol);
+        let y = 8.75_f64.sqrt();
+        assert_eq!(crossings.len(), 2, "{crossings:?}");
+        for (_, p) in crossings {
+            assert!(
+                (p.x() - 0.5).abs() < 1e-9 && (p.y().abs() - y).abs() < 1e-9,
+                "{p:?}"
+            );
+        }
+        let (a, b) = (Point3::new(-5.0, 0.3, 0.0), Point3::new(5.0, 0.3, 0.0));
+        let wall = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap(),
+        );
+        let crossings =
+            find_edge_surface_crossings(&EdgeCurve::Line, a, b, (0.0, 1.0), &wall, &|_| true, tol);
+        let x = 3.91_f64.sqrt();
+        assert_eq!(crossings.len(), 2, "{crossings:?}");
+        for (_, p) in crossings {
+            assert!((p.x().abs() - x).abs() < 1e-9, "{p:?}");
+        }
+    }
 
     #[test]
     fn sampling_detects_tangent_touch() {
