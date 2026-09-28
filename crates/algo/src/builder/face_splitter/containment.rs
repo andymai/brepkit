@@ -56,10 +56,10 @@ pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveE
 
 /// Find a UV point inside the outer wire but outside all holes.
 ///
-/// Steps inward from each outer-wire edge midpoint toward the outer polygon's
-/// centroid in small increments, returning the first candidate inside the
-/// outer wire and outside every hole. Falls back to an outer-wire vertex
-/// midpoint, then the raw centroid.
+/// Steps inward from each outer-wire edge midpoint, then from each vertex,
+/// toward the outer polygon's centroid in small increments, returning the
+/// first candidate inside the outer wire and outside every hole. Falls back
+/// to an outer-wire vertex midpoint, then the raw centroid.
 pub(super) fn find_point_outside_holes(
     outer_pts: &[Point2],
     inner_wires: &[Vec<OrientedPCurveEdge>],
@@ -158,6 +158,24 @@ pub(super) fn find_point_outside_holes(
             let candidate = Point2::new(
                 edge_mid.x() * (1.0 - t) + centroid_x * t,
                 edge_mid.y() * (1.0 - t) + centroid_y * t,
+            );
+            if super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
+                && !in_any_hole(candidate)
+            {
+                return candidate;
+            }
+        }
+    }
+
+    // A curved rim reaches the outer polygon as chords whose midpoints stand
+    // a sagitta inside it, so a ring thinner than that (a hole near a circular
+    // cap's rim) has every midpoint in its hole. The vertices lie on the rim.
+    for vertex in outer_pts {
+        for k in 1..=99 {
+            let t = f64::from(k) * 0.005;
+            let candidate = Point2::new(
+                vertex.x() * (1.0 - t) + centroid_x * t,
+                vertex.y() * (1.0 - t) + centroid_y * t,
             );
             if super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
                 && !in_any_hole(candidate)
