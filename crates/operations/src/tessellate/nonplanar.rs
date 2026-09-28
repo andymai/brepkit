@@ -2128,8 +2128,10 @@ pub(super) fn tessellate_nonplanar_cdt(
             // one period between them. The seam's own vertices place them; a
             // closed rim's samples stand in for its vertex only to within
             // half a step, and the halves' continuous unwrap, carried through
-            // the apex's arbitrary u, can sit a period off.
-            let seam_vertex_u = if notched_cone {
+            // the apex's arbitrary u, can sit a period off. A wall a section
+            // winds round spans one period too, and its off-seam samples
+            // would put a copy on the section's sample nearest the seam.
+            let seam_vertex_u = if notched_cone || is_wound_wall(topo, face_data)? {
                 seam_vertex_u(topo, &edges, face_data.surface())?
             } else {
                 None
@@ -2343,6 +2345,25 @@ pub(super) fn tessellate_nonplanar_cdt(
                         if j == i {
                             break;
                         }
+                    }
+                }
+            }
+            // A closed rim stands in for the seam's vertex with its nearest
+            // sample, up to half a step off the seam: where the rim reaches
+            // it, it sits on the seam copy too.
+            if let Some(seam_u) = seam_vertex_u {
+                let on_seam: DetHashSet<u32> = seam_runs
+                    .iter()
+                    .flat_map(|run| run.indices.iter().map(|&i| boundary_3d[i].1))
+                    .collect();
+                let at_apex = |p: Point3| match face_data.surface() {
+                    FaceSurface::Cone(cone) => (p - cone.apex()).length() < 1e-9,
+                    _ => false,
+                };
+                for i in (0..n_boundary).filter(|&i| off_seam(i)) {
+                    if on_seam.contains(&boundary_3d[i].1) && !at_apex(boundary_3d[i].0) {
+                        let u = boundary_uv[i].0;
+                        boundary_uv[i].0 = ((u - seam_u) / TAU).round().mul_add(TAU, seam_u);
                     }
                 }
             }
@@ -2563,8 +2584,10 @@ pub(super) fn tessellate_nonplanar_cdt(
     // A hole straddling the seam is carried by the outer wire instead (the
     // seam cannot cross it): two closed rims, a seam of lines, and the hole's
     // edges (arcs, lines or marched pieces) notching the wire between the
-    // seam's two copies. It leaves the same rim-to-hole fans.
-    let notched_wall = is_notched_wall(topo, face_data)?;
+    // seam's two copies. It leaves the same rim-to-hole fans. So does a wall
+    // a section loop winds round, whose loop dips between its seam copies:
+    // across the dip Delaunay joins the loop's two sides.
+    let notched_wall = is_notched_wall(topo, face_data)? || is_wound_wall(topo, face_data)?;
     let holed_wall_radius = if holes.is_empty() && !notched_wall {
         None
     } else {
@@ -3127,15 +3150,17 @@ fn notched_pointed_cone(
     Ok(false)
 }
 
-/// The u of a cone's seam, read off a vertex of an edge its wire runs both
-/// ways, away from the apex.
+/// The u of a cylinder's or cone's seam, read off a vertex of an edge its
+/// wire runs both ways, away from a cone's apex.
 fn seam_vertex_u(
     topo: &Topology,
     edges: &[brepkit_topology::wire::OrientedEdge],
     surface: &FaceSurface,
 ) -> Result<Option<f64>, crate::OperationsError> {
-    let FaceSurface::Cone(cone) = surface else {
-        return Ok(None);
+    let apex = match surface {
+        FaceSurface::Cone(cone) => Some(cone.apex()),
+        FaceSurface::Cylinder(_) => None,
+        _ => return Ok(None),
     };
     for (i, oe) in edges.iter().enumerate() {
         if edges[i + 1..].iter().all(|other| other.edge() != oe.edge()) {
@@ -3144,7 +3169,7 @@ fn seam_vertex_u(
         let edge = topo.edge(oe.edge())?;
         for v in [edge.start(), edge.end()] {
             let p = topo.vertex(v)?.point();
-            if (p - cone.apex()).length() >= 1e-9
+            if apex.is_none_or(|a| (p - a).length() >= 1e-9)
                 && let Some((u, _)) = surface.project_point(p)
             {
                 return Ok(Some(u));
@@ -4403,6 +4428,41 @@ pub(super) fn is_notched_wall(
         _ => false,
     };
     Ok(seam_twice && between && ((rim_low && rim_high) || (apex_end && (rim_low || rim_high))))
+}
+
+/// Whether a cylinder or cone wall wraps round, its seam line used twice,
+/// with a NURBS edge in its outer wire (most often a marched or traced
+/// section winding the wall between the seam's two copies). A pointed cone's
+/// wall reaching its apex keeps its own meshers.
+pub(super) fn is_wound_wall(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    let apex = match face_data.surface() {
+        FaceSurface::Cone(cone) => Some(cone.apex()),
+        FaceSurface::Cylinder(_) => None,
+        _ => return Ok(false),
+    };
+    let edges = topo.wire(face_data.outer_wire())?.edges();
+    let (mut seam_twice, mut section) = (false, false);
+    for (i, oe) in edges.iter().enumerate() {
+        let edge = topo.edge(oe.edge())?;
+        if let Some(apex) = apex {
+            for v in [edge.start(), edge.end()] {
+                if (topo.vertex(v)?.point() - apex).length() < 1e-9 {
+                    return Ok(false);
+                }
+            }
+        }
+        match edge.curve() {
+            EdgeCurve::Line => {
+                seam_twice |= edges[i + 1..].iter().any(|other| other.edge() == oe.edge());
+            }
+            EdgeCurve::NurbsCurve(_) => section = true,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {}
+        }
+    }
+    Ok(seam_twice && section)
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
