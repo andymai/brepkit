@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.78](https://github.com/andymai/brepkit/compare/v4.0.77...v4.0.78) (2026-09-28)
+
+
+### Bug Fixes
+
+* **math:** trace a parallel rod's whole loop through a cone along its rulings ([#1876](https://github.com/andymai/brepkit/issues/1876)) ([378132d](https://github.com/andymai/brepkit/commit/378132d59039c792fd3cdb2655642930b146ba07))
+
 ## [4.0.77](https://github.com/andymai/brepkit/compare/v4.0.76...v4.0.77) (2026-09-28)
 
 
