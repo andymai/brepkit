@@ -986,6 +986,10 @@ enum FaceExtent {
         v1: f64,
         margin: f64,
         u_gap: Option<(f64, f64)>,
+        /// `v0` and `v1` are the face's true extremes: a cylinder or cone
+        /// bounded by rulings and coaxial circles, whose sampled ends are
+        /// exact. An ellipse or NURBS rim peaks between its samples.
+        exact_window: bool,
     },
 }
 
@@ -1105,12 +1109,24 @@ impl FaceExtent {
             // half of the cylinder is wrongly kept, wrapping the trimmed arc
             // onto the wrong side of the wedge.
             let u_gap = face_circumferential_u_gap(topo, face_id, surface);
+            let exact_window = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+                && topo
+                    .face(face_id)
+                    .and_then(|face| topo.wire(face.outer_wire()))
+                    .is_ok_and(|wire| {
+                        wire.edges().iter().all(|oe| {
+                            topo.edge(oe.edge()).is_ok_and(|e| {
+                                matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_))
+                            })
+                        })
+                    });
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
                 v1,
                 margin,
                 u_gap,
+                exact_window,
             })
         }
     }
@@ -1137,24 +1153,19 @@ impl FaceExtent {
         }
     }
 
-    /// Whether `p` lies past an analytic face's `v` window by more than
-    /// `depth`, measured on the surface: in its boundary margin at most, never
-    /// on the face. A plane's window is a sampled polygon an arc bulges past,
-    /// so a plane never answers.
+    /// Whether `p` lies past a face's `v` window by more than `depth`: in
+    /// its boundary margin at most, never on the face. Only a window known to
+    /// be exact answers (a plane's is a sampled polygon an arc bulges past).
     fn clear_of(&self, p: Point3, depth: f64) -> bool {
         let Self::Analytic {
-            surface, v0, v1, ..
+            surface,
+            v0,
+            v1,
+            exact_window: true,
+            ..
         } = self
         else {
             return false;
-        };
-        let depth = match surface {
-            FaceSurface::Sphere(s) => depth / s.radius(),
-            FaceSurface::Torus(t) => depth / t.minor_radius(),
-            FaceSurface::Plane { .. }
-            | FaceSurface::Nurbs(_)
-            | FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_) => depth,
         };
         surface
             .project_point(p)
@@ -1222,6 +1233,7 @@ impl FaceExtent {
                 v1,
                 margin,
                 u_gap,
+                ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
                 let in_v = v >= *v0 - *margin && v <= *v1 + *margin;
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
