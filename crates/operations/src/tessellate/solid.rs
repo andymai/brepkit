@@ -308,6 +308,60 @@ fn tessellate_solid_core(
         }
     }
 
+    // A hole passing a planar face's arc nearer than the arc's chords sag
+    // would cross them in the face's mesh: the arc is sampled finer, until
+    // its chords sag at most half the hole's clearance. The arc's samples
+    // are shared, so the face across it takes them too. The chords sag
+    // toward the arc's centre, so only a hole inside its circle can meet
+    // them, and the hole's mesh boundary is the polyline through its
+    // samples, whose farthest points from the centre are its vertices:
+    // the samples alone give the clearance, a straight edge's included.
+    for &face_id in &all_faces {
+        let face_data = topo.face(face_id)?;
+        if !face_data.surface().is_planar() || face_data.inner_wires().is_empty() {
+            continue;
+        }
+        let mut hole_points: Vec<Point3> = Vec::new();
+        for &wire_id in face_data.inner_wires() {
+            for oe in topo.wire(wire_id)?.edges() {
+                if let Some(points) = edge_points.get(&oe.edge().index()) {
+                    hole_points.extend_from_slice(points);
+                }
+            }
+        }
+        for oe in topo.wire(face_data.outer_wire())?.edges() {
+            let edge_data = topo.edge(oe.edge())?;
+            let EdgeCurve::Circle(circle) = edge_data.curve() else {
+                continue;
+            };
+            let Some(points) = edge_points.get(&oe.edge().index()) else {
+                continue;
+            };
+            let (t_start, t_end) = circle_param_range(topo, edge_data, circle)?;
+            let span = (t_end - t_start).abs();
+            let segments = points.len().saturating_sub(1).max(1);
+            #[allow(clippy::cast_precision_loss)]
+            let sag = circle.radius() * (1.0 - (0.5 * span / segments as f64).cos());
+            let clearance = hole_points
+                .iter()
+                .map(|&p| ((p - circle.center()).length() - circle.radius()).abs())
+                .fold(f64::INFINITY, f64::min);
+            if clearance >= 2.0 * sag || clearance <= 0.0 {
+                continue;
+            }
+            let half_step = (1.0 - 0.5 * clearance / circle.radius())
+                .clamp(-1.0, 1.0)
+                .acos();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let needed = ((0.5 * span / half_step).ceil() as usize).min(4096);
+            if needed > segments {
+                let finer =
+                    brepkit_geometry::sampling::sample_uniform(circle, t_start, t_end, needed + 1);
+                edge_points.insert(oe.edge().index(), finer);
+            }
+        }
+    }
+
     // A sphere face's circle edge running over the sphere's pole (a wall
     // through its axis) takes the pole as a sample: the face's u turns over
     // there, and its mesher runs the loop along the pole's row from it. Both
