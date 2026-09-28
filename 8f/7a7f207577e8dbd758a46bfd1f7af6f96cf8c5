@@ -1,0 +1,27 @@
+crates/operations/tests/ball_on_a_cone_axis.rs
+  s_ba2f7b5c6902b6::t_5798fc03cceea3 3-5,93-95
+crates/operations/src/boolean/mod.rs
+  s_ba2f7b5c6902b6::t_db596bf3e0a573 2452-2461
+crates/geometry/src/extrema/point_surface.rs
+  s_ba2f7b5c6902b6::t_a043cac8a4fefd 94-96,171-174
+  s_ba2f7b5c6902b6::t_200c3837d7fe3a 175
+  s_ba2f7b5c6902b6::t_430c59eab46a4f 521-558
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_bce9b5386016d0 202-211
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8f7a7f207577e8dbd758a46bfd1f7af6f96cf8c5",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
