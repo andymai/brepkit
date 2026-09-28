@@ -10,10 +10,10 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::classify::{PointClassification, classify_point};
-use brepkit_operations::measure::solid_volume;
+use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_cylinder, make_sphere};
-use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -160,6 +160,34 @@ fn a_ball_through_a_cylinder_wall_is_exact() {
                 for (p, want) in [(centre, at_centre), (bulge, in_bulge)] {
                     let got = classify_point(&topo, result, placed(p, name), 0.01, 1e-7).unwrap();
                     assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
+                }
+                // The cylinder's faces mesh on their own too, as a per-face
+                // export takes them: the wall the ball bites into (its hole
+                // across or beside the seam) within 1%, and the patch the
+                // section alone bounds within its chords' 3%.
+                for &f in &faces {
+                    if topo.face(f).unwrap().surface().type_tag() != "cylinder" {
+                        continue;
+                    }
+                    let own = tessellate(&topo, f, 0.01).unwrap();
+                    let area: f64 = own
+                        .indices
+                        .chunks_exact(3)
+                        .map(|t| {
+                            let [a, b, c] = [0, 1, 2].map(|k| own.positions[t[k] as usize]);
+                            0.5 * (b - a).cross(c - a).length()
+                        })
+                        .sum();
+                    let exact = face_area(&topo, f, 0.01).unwrap();
+                    let bound = if op == BooleanOp::Intersect {
+                        0.03
+                    } else {
+                        0.01
+                    };
+                    assert!(
+                        (area - exact).abs() < bound * exact,
+                        "{label}: cylinder face meshes {area} of {exact}"
+                    );
                 }
             }
         }

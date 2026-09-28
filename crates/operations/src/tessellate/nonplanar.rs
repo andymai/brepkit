@@ -2123,19 +2123,16 @@ pub(super) fn tessellate_nonplanar_cdt(
             } else {
                 uv_bounds(&non_seam_uvs)
             };
-            // On a notched pointed cone the seam runs to the apex and back,
-            // and the hole's halves hang from its two copies: the wall spans
-            // one period between them. The seam's own vertices place them; a
-            // closed rim's samples stand in for its vertex only to within
-            // half a step, and the halves' continuous unwrap, carried through
-            // the apex's arbitrary u, can sit a period off. A wall a section
-            // winds round spans one period too, and its off-seam samples
-            // would put a copy on the section's sample nearest the seam.
-            let seam_vertex_u = if notched_cone || is_wound_wall(topo, face_data)? {
-                seam_vertex_u(topo, &edges, face_data.surface())?
-            } else {
-                None
-            };
+            // A wall that runs its seam both ways spans one period between
+            // the seam's two copies, and the seam's own vertices place them:
+            // a closed rim's samples stand in for its vertex only to within
+            // half a step, so bounds read off the rims can fall short of the
+            // period (and the wall's mesh short of its area). On a notched
+            // pointed cone the halves' continuous unwrap, carried through the
+            // apex's arbitrary u, can also sit a period off, and on a wall a
+            // section winds round the off-seam samples would put a copy on
+            // the section's sample nearest the seam.
+            let seam_vertex_u = seam_vertex_u(topo, &edges, face_data.surface())?;
             let (u_min_bnd, u_max_bnd) = seam_vertex_u.map_or((u_min_bnd, u_max_bnd), |seam_u| {
                 let lo = ((u_min_bnd - seam_u) / TAU).round().mul_add(TAU, seam_u);
                 (lo, lo + TAU)
