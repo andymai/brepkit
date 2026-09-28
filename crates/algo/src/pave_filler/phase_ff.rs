@@ -987,8 +987,8 @@ enum FaceExtent {
         margin: f64,
         u_gap: Option<(f64, f64)>,
         /// `v0` and `v1` are the face's true extremes: a cylinder or cone
-        /// bounded by rulings and coaxial circles, whose sampled ends are
-        /// exact. An ellipse or NURBS rim peaks between its samples.
+        /// bounded by one wire of rulings and coaxial circles, whose sampled
+        /// ends are exact. An ellipse or NURBS rim peaks between its samples.
         exact_window: bool,
     },
 }
@@ -1109,17 +1109,19 @@ impl FaceExtent {
             // half of the cylinder is wrongly kept, wrapping the trimmed arc
             // onto the wrong side of the wedge.
             let u_gap = face_circumferential_u_gap(topo, face_id, surface);
+            // Only the outer wire sets the window and meets a circle's
+            // crossings, so a face with inner wires does not qualify.
             let exact_window = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
-                && topo
-                    .face(face_id)
-                    .and_then(|face| topo.wire(face.outer_wire()))
-                    .is_ok_and(|wire| {
-                        wire.edges().iter().all(|oe| {
-                            topo.edge(oe.edge()).is_ok_and(|e| {
-                                matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_))
+                && topo.face(face_id).is_ok_and(|face| {
+                    face.inner_wires().is_empty()
+                        && topo.wire(face.outer_wire()).is_ok_and(|wire| {
+                            wire.edges().iter().all(|oe| {
+                                topo.edge(oe.edge()).is_ok_and(|e| {
+                                    matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_))
+                                })
                             })
                         })
-                    });
+                });
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
