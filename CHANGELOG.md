@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.90](https://github.com/andymai/brepkit/compare/v4.0.89...v4.0.90) (2026-09-28)
+
+
+### Bug Fixes
+
+* **operations:** send a sphere collar with a wide floor gap to the CDT ([#1903](https://github.com/andymai/brepkit/issues/1903)) ([0af4af2](https://github.com/andymai/brepkit/commit/0af4af293d1efbd2001f16287da62cbcf6fafb93))
+
 ## [4.0.89](https://github.com/andymai/brepkit/compare/v4.0.88...v4.0.89) (2026-09-28)
 
 
