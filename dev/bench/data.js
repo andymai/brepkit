@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790579115622,
+  "lastUpdate": 1790580551053,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46439,6 +46439,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43085390,
             "range": "± 131774",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ae3f27a9ecb995848df7a1700c9cd20cf48eec9",
+          "message": "fix(math): trace a ball holding a cone's apex as one loop round the cone (#1884)\n\nA ball holding a pointed cone's apex off its axis is now traced as one\nloop: all three booleans are exact and take 3 ms.\n\n## What was wrong\n\n- `ruling_cone_sphere` sent this configuration to the general marcher.\nAlong a generator `apex + v g`, with `h = g·(apex − C)`, the sphere\nequation is `v² + 2hv + K = 0`, where `K = |apex − C|² − R²`. When the\napex is inside the ball, `K < 0`, the roots have opposite signs, and\nevery generator leaves the ball once ahead of the apex.\n- For `make_cone(3, 0, 6)` at `z = -3` against `make_sphere(2, 32)` at\n`(0.5, 0, 2.5)`, main takes 70 s before Intersect falls back to a\n133-face mesh. Cut and Fuse run past 150 s.\n- The Intersect's cone face is a tip bounded by the loop and the seam up\nto the apex and back. It meshed open (3 edges) because the seam's run\nthrough the apex was placed on one seam copy, and per face it went to\nthe apex sweep, which read 9.886 against 7.991.\n\n## What this does\n\n- When the apex is more than the linear tolerance inside the ball,\ndetermined by a distance test rather than `K`, the section is traced as\none loop at `v = √(h² − K) − h`. For `h > 0`, this is evaluated as `−K /\n(h + √(h² − K))` to avoid cancellation. `window_cone_sphere` now also\ntests the apex's distance to the sphere.\n- Sharp turns near a barely enclosed apex refine any step whose midpoint\nstrays from its chord by more than a hundredth of the chord, halving up\nto ten times. Ordinary loops retain 128 samples. Balls holding the apex\nby `1e-4` and `1e-6` use 431 and 566.\n- `is_section_tip` (a cone face reaching its apex with a NURBS or\nellipse edge) gives such a tip the apex row joining both seam copies and\nthe developed metric with angular refinement, and routes it through the\nlocal mesher per face (`tessellate`, used by the wasm face meshes and\nthe OBJ, glTF and PLY writers).\n- The roadmap gains a Closed entry. The open row covers a ball holding\nthe apex and reaching past the base, `make_sphere(5, 32)` at `(1, 0,\n1)`, which still falls back in 0.06 to 0.11 s. The per-face row adds a\ntilted-plane band that meshes 56.101 of 52.074 on its own, matching\nmain.\n\n## Verification\n\n- `a_ball_holding_the_apex_is_exact` covers two balls, four poses, and\nthree operations: exactness, validity, watertightness, volume within\n`1e-6`, three classified points, each cone face meshed independently\nwithin 1%, and watertight mirrored results.\n- Unit coverage verifies one loop and checks four balls, including two\nbarely holding the apex, at 4097 points within `1e-5` of both surfaces.\n- `cone_cut_by_a_plane_across_its_wall` checks a pointed tip's per-face\nmesh within 1% and watertight mirrored pieces. The tilted `0.8` case\nimproves from 6.990 against 11.149 to 11.136, with the solid mesh\nunchanged.\n- All three operations in the reported case take 3 ms and produce exact\nvolumes within `1e-9` of the lens-section integral.\n- `brepkit-math`, `brepkit-operations`, and `brepkit-io` pass: 2175\ntests, 17 skipped. The 300-line pose sweep and `truth_audit` match main.\nLocal review points are applied.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes tracing of a ball holding a pointed cone's apex so the section is\ntreated as one loop round the cone instead of falling back to a meshed\nresult, and mends per-face meshes of cone tips bounded by a section.\n\n- `ruling_cone_sphere` now traces a single exit loop when the apex is\ninside the ball, using a cancellation-free root form and adaptive step\nrefinement near a barely enclosed apex; the three operations in the\nreported case go from 70–150 s to 3 ms and produce exact volumes.\n- `is_section_tip` routes a pointed cone tip bounded by a NURBS or\nellipse edge through the local hole-aware mesher with the apex row and\ndeveloped metric, fixing open per-face meshes for such tips and a\nplane-cut tip's area.\n- Tests add `a_ball_holding_the_apex_is_exact` and extend\n`cone_cut_by_a_plane_across_its_wall` to verify per-face meshing and\nmirrored watertightness; all check suites pass.\n\n<sup>Written for commit c8440d7ddc9d8371bbe4c4142ad4f0f3a5f1d7a3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1884?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-28T07:26:11Z",
+          "tree_id": "b75dbf60ecb654fbde5683efe5812aadc4def83c",
+          "url": "https://github.com/andymai/brepkit/commit/4ae3f27a9ecb995848df7a1700c9cd20cf48eec9"
+        },
+        "date": 1790580545800,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1068141,
+            "range": "± 1279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1159849,
+            "range": "± 29860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14183,
+            "range": "± 58",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 790588,
+            "range": "± 1368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 45618573,
+            "range": "± 113002",
             "unit": "ns/iter"
           }
         ]
