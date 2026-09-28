@@ -1,0 +1,34 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_c16e0320d6155a 1554
+  s_ba2f7b5c6902b6::t_288822d7c9fcfa 1556-1564
+  s_ba2f7b5c6902b6::t_c6f47688f001c7 1567,1615-1621,1624-1628,1634-1643,1648-1651,1654-1655,1657-1665,1956,1964
+  s_ba2f7b5c6902b6::t_8c0fbef7671705 1568-1571
+  s_ba2f7b5c6902b6::t_12f75347aae46e 1555
+crates/operations/tests/rod_along_a_cone.rs
+  s_ba2f7b5c6902b6::t_c16e0320d6155a 168
+  s_ba2f7b5c6902b6::t_7deac9aadf7976 169
+  s_ba2f7b5c6902b6::t_eb0a05022cf977 2,14,17,60-69,167,170-182
+  s_ba2f7b5c6902b6::t_4cfabd7d4b0ad5 3-5
+  s_ba2f7b5c6902b6::t_3d3ab3fe9957c9 106
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_5910350582536f 209
+  s_ba2f7b5c6902b6::t_4bcb8d1c5a9f58 174,202-204
+  s_ba2f7b5c6902b6::t_c16e0320d6155a 175,206-208
+  s_ba2f7b5c6902b6::t_f389d37dff1e81 205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0b58ee9bda6a6a6b93e41f1f50ee5a699a3c164b",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
