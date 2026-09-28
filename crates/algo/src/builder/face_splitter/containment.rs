@@ -1,7 +1,9 @@
 //! Point containment tests for UV-space hole detection.
 
 use brepkit_math::curves2d::Curve2D;
-use brepkit_math::vec::Point2;
+use brepkit_math::region2d::{Boundary2, point_in_region};
+use brepkit_math::vec::{Point2, Vec2, Vec3};
+use brepkit_topology::edge::EdgeCurve;
 
 use super::super::split_types::OrientedPCurveEdge;
 use super::sampling::sample_wire_loop_uv;
@@ -52,6 +54,57 @@ pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveE
         }
     }
     false
+}
+
+/// How near a hole's boundary a seed may lie and still be read outside it.
+const SEED_CLEARANCE: f64 = 1e-7;
+
+/// A hole's boundary flattened into the plane frame, each line a segment and
+/// each circle or ellipse the arc it is. `None` when an edge is a NURBS curve.
+fn exact_hole(
+    hole: &[OrientedPCurveEdge],
+    frame: &super::super::plane_frame::PlaneFrame,
+) -> Option<Vec<Boundary2>> {
+    let along = |d: Vec3| Vec2::new(d.dot(frame.u_axis()), d.dot(frame.v_axis()));
+    hole.iter()
+        .map(|e| {
+            // The edge's native orientation: `domain_with_endpoints` takes
+            // the positive span from the first point to the second.
+            let (s3, e3) = if e.forward {
+                (e.start_3d, e.end_3d)
+            } else {
+                (e.end_3d, e.start_3d)
+            };
+            match &e.curve_3d {
+                EdgeCurve::Line => Some(Boundary2::Segment(frame.project(s3), frame.project(e3))),
+                EdgeCurve::Circle(c) => {
+                    let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                    Some(Boundary2::Arc {
+                        center: frame.project(c.center()),
+                        u: along(c.u_axis()),
+                        v: along(c.v_axis()),
+                        a: c.radius(),
+                        b: c.radius(),
+                        t0,
+                        t1,
+                    })
+                }
+                EdgeCurve::Ellipse(el) => {
+                    let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                    Some(Boundary2::Arc {
+                        center: frame.project(el.center()),
+                        u: along(el.u_axis()),
+                        v: along(el.v_axis()),
+                        a: el.semi_major(),
+                        b: el.semi_minor(),
+                        t0,
+                        t1,
+                    })
+                }
+                EdgeCurve::NurbsCurve(_) => None,
+            }
+        })
+        .collect()
 }
 
 /// Find a UV point inside the outer wire but outside all holes.
@@ -132,10 +185,22 @@ pub(super) fn find_point_outside_holes(
             pts
         })
         .collect();
+    // With the frame, a hole of lines and conic arcs is read exactly: its
+    // sampled polygon still sags inside each arc, and a ring thinner than
+    // that sag (a ball touching only a frustum's cap) would take a seed in
+    // the hole for material.
+    let exact_holes: Vec<Option<Vec<Boundary2>>> = inner_wires
+        .iter()
+        .map(|hole| frame.and_then(|f| exact_hole(hole, f)))
+        .collect();
     let in_any_hole = |pt: Point2| -> bool {
         hole_polys
             .iter()
-            .any(|poly| poly.len() >= 3 && super::super::classify_2d::point_in_polygon_2d(pt, poly))
+            .zip(&exact_holes)
+            .any(|(poly, exact)| match exact {
+                Some(pieces) => point_in_region(pieces, pt, SEED_CLEARANCE) != Some(false),
+                None => poly.len() >= 3 && super::super::classify_2d::point_in_polygon_2d(pt, poly),
+            })
     };
 
     // Strategy: take midpoints between outer wire edge midpoints and the outer
@@ -147,19 +212,29 @@ pub(super) fn find_point_outside_holes(
     // hole wins. Small steps handle THIN rings (e.g. the ~1.2mm gridfinity
     // lip annulus on an 83mm cap), where a single large nudge overshoots
     // straight into the hole and no ring point is ever found.
+    let step = |from: Point2, t: f64| {
+        Point2::new(
+            from.x() * (1.0 - t) + centroid_x * t,
+            from.y() * (1.0 - t) + centroid_y * t,
+        )
+    };
+    let usable = |candidate: &Point2| {
+        super::super::classify_2d::point_in_polygon_2d(*candidate, outer_pts)
+            && !in_any_hole(*candidate)
+    };
     let step_in = |from: Point2| {
         (1..=99)
-            .map(|k| {
-                let t = f64::from(k) * 0.005;
-                Point2::new(
-                    from.x() * (1.0 - t) + centroid_x * t,
-                    from.y() * (1.0 - t) + centroid_y * t,
-                )
-            })
-            .find(|&candidate| {
-                super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
-                    && !in_any_hole(candidate)
-            })
+            .map(|k| step(from, f64::from(k) * 0.005))
+            .find(usable)
+    };
+    // A ring thinner than the first step (a ball touching a frustum's cap
+    // leaves one a thousandth of its rim's radius wide) is stepped over by
+    // every one of them; only then are finer steps tried.
+    let step_in_finely = |from: Point2| {
+        [1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3]
+            .into_iter()
+            .map(|t| step(from, t))
+            .find(usable)
     };
     let edge_mids = (0..outer_pts.len()).map(|i| {
         let j = (i + 1) % outer_pts.len();
@@ -172,7 +247,16 @@ pub(super) fn find_point_outside_holes(
     // chords whose midpoints stand a sagitta inside it, so a ring thinner
     // than that (a hole near a circular cap's rim) has every midpoint in its
     // hole; the vertices, tried next, lie on the rim.
-    if let Some(candidate) = edge_mids.chain(outer_pts.iter().copied()).find_map(step_in) {
+    if let Some(candidate) = edge_mids
+        .clone()
+        .chain(outer_pts.iter().copied())
+        .find_map(step_in)
+        .or_else(|| {
+            edge_mids
+                .chain(outer_pts.iter().copied())
+                .find_map(step_in_finely)
+        })
+    {
         return candidate;
     }
 
