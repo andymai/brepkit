@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.79](https://github.com/andymai/brepkit/compare/v4.0.78...v4.0.79) (2026-09-28)
+
+
+### Bug Fixes
+
+* **math:** trace a ball beside a cone over the generators that reach it ([#1878](https://github.com/andymai/brepkit/issues/1878)) ([16246f0](https://github.com/andymai/brepkit/commit/16246f0994bbb6a7081ea487769c44c723cf5b15))
+
 ## [4.0.78](https://github.com/andymai/brepkit/compare/v4.0.77...v4.0.78) (2026-09-28)
 
 
