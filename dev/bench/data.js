@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790590404129,
+  "lastUpdate": 1790592197366,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46925,6 +46925,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43515106,
             "range": "± 334823",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b67cb5814d20489fbf292563240f921c62f969bf",
+          "message": "fix(operations): sample a floor's arc finer where a hole passes nearer than its sag (#1894)\n\nA planar face whose hole passes nearer its outer arc than the arc's\nchords sag now meshes watertight.\n\n## What was wrong\n\n- `make_sphere(3, 32)` is bored by `make_cylinder(0.3, 10)` at `(2.69,\n0, -5)`, then intersected with or cut by `make_box(10, 10, 10)` at\n`(-0.7, -1.1, 0.1)`.\n- The bore circle in the box floor at `z = 0.1` passes `0.008` from the\nfloor's ball arc. At deflection `0.01`, the arc's chords sag up to\n`0.01`, cut into the bore circle, and make the floor mesh cross the\nhole, producing 18 open or non-manifold mesh edges. The boolean results\nremain exact and valid.\n\n## What this does\n\n- Before sphere pole insertion, each planar face with holes is checked\nagainst every circle edge in its outer wire.\n- The pass compares chord sag, `r(1 - cos(span / (2 segments)))`, with\nthe hole clearance, defined as the smallest distance between the hole\nedges' samples and the arc's circle.\n- When clearance is under twice the sag, the arc is sampled uniformly\nuntil chord sag is at most half the clearance, with at most 4096\nsegments.\n- These samples enter the shared edge pool, so the face across the arc\n(the ball's) meshes from the same samples.\n\n## Verification\n\n- `a_hole_nearer_a_floors_arc_than_its_chords_sag_meshes_watertight`\nmeshes both results with `tessellate_solid` at deflection `0.01` and\nasserts no open or non-manifold mesh edges. It fails without this\nchange.\n- `brepkit-operations` and `brepkit-io` pass: 1651 tests, 17 skipped.\n- The pose sweep and `truth_audit` match the base.\n- The roadmap contains a Closed entry, and the open row is removed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes watertight meshing for planar faces whose holes pass closer to an\nouter arc than the arc's chord sag, which previously produced open or\nnon-manifold edges.\n\n- The arc is now sampled until its chord sag is at most half the hole's\nclearance, capped at 4096 segments.\n- Samples are shared via the edge pool so the adjacent face uses the\nsame points.\n- Adds a regression test covering both intersect and cut results,\nrequiring the pieces to mesh at all.\n- Removes the corresponding open roadmap entry and adds a closed one.\n\n<sup>Written for commit 2bf9727872fc3a40f725fe43527a77df39deb37a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1894?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-28T03:40:20-07:00",
+          "tree_id": "cf47e879f5a798db052877336b5f938c25df75e2",
+          "url": "https://github.com/andymai/brepkit/commit/b67cb5814d20489fbf292563240f921c62f969bf"
+        },
+        "date": 1790592192251,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1028329,
+            "range": "± 7981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112141,
+            "range": "± 3203",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12993,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 768193,
+            "range": "± 5095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43352609,
+            "range": "± 612861",
             "unit": "ns/iter"
           }
         ]
