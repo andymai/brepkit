@@ -570,3 +570,55 @@ fn a_ball_less_a_slab_keeps_both_pieces() {
         }
     }
 }
+
+/// A ball of radius 10 against a stepped block: the box over `x > 0`,
+/// `y > -1` less the notch over `x > 3`, `z > 4`. On the upper hemisphere
+/// the block's walls chain from the equator over the pole, down the notch's
+/// wall and floor and back to the equator, and the chain bends back over
+/// the block's lune: that lune is still read from inside it (a point past
+/// the pole toward the chain's middle would lie in the notch). Each op is
+/// exact; the ball within and less the block add to the ball, the fuse
+/// holds the block and the ball less what they share, and points in the
+/// notch, beside it and under it read on the right side.
+#[test]
+fn a_stepped_block_through_the_axis_keeps_its_lunes() {
+    let ball = 4000.0 * PI / 3.0;
+    let block = 20.0 * 21.0 * 40.0 - 17.0 * 21.0 * 16.0;
+    let stepped = |topo: &mut Topology| {
+        let body = make_box(topo, 20.0, 21.0, 40.0).unwrap();
+        transform_solid(topo, body, &Mat4::translation(0.0, -1.0, -20.0)).unwrap();
+        let notch = make_box(topo, 17.0, 40.0, 16.0).unwrap();
+        transform_solid(topo, notch, &Mat4::translation(3.0, -20.0, 4.0)).unwrap();
+        boolean(topo, BooleanOp::Cut, body, notch).unwrap()
+    };
+    let (in_notch, beside, under) = (
+        Point3::new(6.0, 3.0, 6.0),
+        Point3::new(1.0, 3.0, 6.0),
+        Point3::new(6.0, 3.0, 2.0),
+    );
+    let mut volumes = Vec::new();
+    for op in [BooleanOp::Intersect, BooleanOp::Cut] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, 10.0, 32).unwrap();
+        let tool = stepped(&mut topo);
+        let piece = boolean(&mut topo, op, sphere, tool).unwrap();
+        let within = matches!(op, BooleanOp::Intersect);
+        let probes = [(in_notch, !within), (beside, within), (under, within)];
+        let volume = solid_volume(&topo, piece, 0.01).unwrap();
+        assert_exact_piece(&topo, piece, 6, volume, &probes, &format!("{op:?}"));
+        volumes.push(volume);
+    }
+    // The ball within the block, integrated slice by slice across `z`.
+    assert!(
+        (volumes[0] - 1069.3249).abs() < 1e-2,
+        "within {}",
+        volumes[0]
+    );
+    assert!((volumes[0] + volumes[1] - ball).abs() < 1e-9 * ball);
+    let mut topo = Topology::new();
+    let sphere = make_sphere(&mut topo, 10.0, 32).unwrap();
+    let tool = stepped(&mut topo);
+    let fused = boolean(&mut topo, BooleanOp::Fuse, sphere, tool).unwrap();
+    let truth = block + ball - volumes[0];
+    assert_exact_piece(&topo, fused, 11, truth, &[], "Fuse");
+}

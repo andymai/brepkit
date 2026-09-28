@@ -814,27 +814,68 @@ fn split_into_lunes(
     {
         return None;
     }
-    // Each lune's sample lies halfway along the great circle from its seam
-    // arc's middle to the chain's (by length), both on its boundary.
-    let chain_pts: Vec<Point3> = chain.iter().flat_map(|arc| edge_samples(arc, 64)).collect();
-    let total: f64 = chain_pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+    // Each lune's sample lies on the great circle from its seam arc's middle
+    // toward the chain's middle (by length), halfway to where that circle
+    // first meets the chain: the seam arc bounds the lune, so that stretch
+    // lies inside it however the chain bends back over the lune (a stepped
+    // tool's notch wall).
+    let center = sphere.center();
+    let chain_dirs: Vec<brepkit_math::vec::Vec3> = chain
+        .iter()
+        .flat_map(|arc| edge_samples(arc, 64))
+        .map(|p| (p - center).normalize())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let lengths: Vec<f64> = chain_dirs
+        .windows(2)
+        .map(|w| (w[1] - w[0]).length())
+        .collect();
+    let total: f64 = lengths.iter().sum();
     let mut walked = 0.0;
-    let mut chain_mid = chain_pts[0];
-    for w in chain_pts.windows(2) {
-        let step = (w[1] - w[0]).length();
+    let mut chain_mid = chain_dirs[0];
+    for (w, &step) in chain_dirs.windows(2).zip(&lengths) {
         if walked + step >= 0.5 * total {
-            chain_mid =
-                w[0] + (w[1] - w[0]) * ((0.5 * total - walked) / step.max(f64::MIN_POSITIVE));
+            let f = (0.5 * total - walked) / step.max(f64::MIN_POSITIVE);
+            chain_mid = (w[0] + (w[1] - w[0]) * f).normalize().ok()?;
             break;
         }
         walked += step;
     }
-    let toward_chain = (chain_mid - sphere.center()).normalize().ok()?;
+    // The fraction of the way from `m` to `c` (both unit) where the great
+    // circle between them first crosses the chain, or 1.
+    let first_crossing = |m: brepkit_math::vec::Vec3, c: brepkit_math::vec::Vec3| {
+        let (plane, span) = (m.cross(c), m.dot(c).clamp(-1.0, 1.0).acos());
+        let mut first = 1.0_f64;
+        for w in chain_dirs.windows(2) {
+            let (p, q) = (w[0], w[1]);
+            let side = |x: brepkit_math::vec::Vec3| plane.dot(x);
+            let (sp, sq) = (side(p), side(q));
+            if sp * sq > 0.0 {
+                continue;
+            }
+            let chord = p.cross(q);
+            if chord.dot(m) * chord.dot(c) > 0.0 {
+                continue;
+            }
+            let Ok(x) = plane.cross(chord).normalize() else {
+                continue;
+            };
+            let x = if x.dot(m + c) < 0.0 { x * -1.0 } else { x };
+            if x.dot(p + q) <= 0.0 {
+                continue;
+            }
+            let t = m.dot(x).clamp(-1.0, 1.0).acos() / span.max(f64::MIN_POSITIVE);
+            if t > 1e-9 {
+                first = first.min(t);
+            }
+        }
+        (first, span)
+    };
     let lune = |outer: Vec<OrientedPCurveEdge>, seam: &OrientedPCurveEdge| {
-        let mid = *edge_samples(seam, 2).get(1)?;
-        let across = ((mid - sphere.center()).normalize().ok()? + toward_chain)
-            .normalize()
-            .ok()?;
+        let m = (*edge_samples(seam, 2).get(1)? - center).normalize().ok()?;
+        let (reach, span) = first_crossing(m, chain_mid);
+        let (a, b) = ((1.0 - 0.5 * reach) * span, 0.5 * reach * span);
+        let across = (m * a.sin() + chain_mid * b.sin()).normalize().ok()?;
         Some(SplitSubFace {
             surface: surface.clone(),
             outer_wire: outer,
@@ -842,7 +883,7 @@ fn split_into_lunes(
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: Some(sphere.center() + across * sphere.radius()),
+            precomputed_interior: Some(center + across * sphere.radius()),
         })
     };
     let first_side: Vec<OrientedPCurveEdge> = chain
