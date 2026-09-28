@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.84](https://github.com/andymai/brepkit/compare/v4.0.83...v4.0.84) (2026-09-28)
+
+
+### Bug Fixes
+
+* **operations:** place a seamed wall's seam copies from the seam's own vertex ([#1890](https://github.com/andymai/brepkit/issues/1890)) ([fd89741](https://github.com/andymai/brepkit/commit/fd897416657fa25835683874750d7c4ba444585f))
+
 ## [4.0.83](https://github.com/andymai/brepkit/compare/v4.0.82...v4.0.83) (2026-09-28)
 
 
