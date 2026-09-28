@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790634514957,
+  "lastUpdate": 1790636047428,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47519,6 +47519,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 30942978,
             "range": "± 605640",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0af4af293d1efbd2001f16287da62cbcf6fafb93",
+          "message": "fix(operations): send a sphere collar with a wide floor gap to the CDT (#1903)\n\nThe sphere collar now declines when its worst row chord exceeds four\ndeflections, allowing the constrained CDT to produce an accurate,\nwatertight mesh for axis-winding holes near a pole.\n\n## What was wrong\n\n- For `make_sphere(3, 32)` less `make_box(10, 10, 10)` at `(-0.0001,\n-1.1, 0.1)`, the exact, valid boolean keeps an upper sphere face whose\nhole winds the axis. Its arc on the box’s `x = -0.0001` wall passes\n0.0001 from the pole.\n\n- The collar took this face. Its floor samples run at `u = 1.5711` up to\n`v = 1.468`, then resume at `u = 4.7118`. The 3.1407 gap is just under\nthe pi accepted by `collect_var_v_ring`, so collar rows joined the\ncolumns with chords through the ball.\n\n- The face mesh had centre flux 0.8275 times its area, where a radius 3\nsphere mesh gives 3. It contained 62 triangles more than 0.05 inside the\nsphere. Mesh volume was 64.94 against solid volume 92.56.\n\n## What this does\n\n- For spherical Case 2 collars, the largest gap between sorted floor `u`\nsamples determines the worst row sag at the band’s widest latitude:\n\n  `radius * cos(v) * (1 - cos(gap / 2))`\n\n- When that sag exceeds four deflections, the collar declines and the\nCDT meshes the face.\n\n- The threshold follows measured suite behavior. Collar sag ratios were\nmostly 0.6 to 2.96, with outliers at 7.52, 15.3 (40 builds), 42, and 52.\nThose outliers now use the CDT, with all tests passing.\n\n- Tori retain the collar. Their `u` spans the major circle, and none\nwere measured.\n\n## Verification\n\n- The regression test\n`a_sphere_face_whose_hole_winds_the_axis_meshes_on_the_sphere` covers\nboth box positions. Each holed sphere face has flux within 1% of radius\ntimes area, and each solid mesh is watertight and inscribed within 0.5%\nof `solid_volume`. It fails without the guard.\n\n- The near-pole case now has flux 2.9962 and mesh volume 92.41. At\n`(-0.7, -1.1, 0.1)`, flux is 2.9960 and mesh volume is 85.60, against\n84.68 on main (the solid holds 85.75).\n\n- `brepkit-operations`, `brepkit-io`, and `brepkit-wasm` pass: 1889\ntests, 20 skipped. The pose sweep and `truth_audit` match the base.\n\n- The axis-winding, dipping-boundary, and chordal-equator rows are\nclosed under one Closed entry. The ball with the box over its octant\nturned about `z`, whose walls run through both poles and which falls\nback to a mesh in every op, joins the open row for walls through the\naxis.",
+          "timestamp": "2026-09-28T22:51:15Z",
+          "tree_id": "4faf4d7b592172c41c0ee6af1c0134066f9897b7",
+          "url": "https://github.com/andymai/brepkit/commit/0af4af293d1efbd2001f16287da62cbcf6fafb93"
+        },
+        "date": 1790636043016,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1026508,
+            "range": "± 33399",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1106983,
+            "range": "± 6226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13040,
+            "range": "± 83",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 793108,
+            "range": "± 1387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42928627,
+            "range": "± 125881",
             "unit": "ns/iter"
           }
         ]
