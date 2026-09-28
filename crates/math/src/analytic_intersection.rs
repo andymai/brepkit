@@ -3997,10 +3997,10 @@ mod tests {
                 }
             }
         }
-        // On the ball's axis the loops are circles, a pin only partly
-        // through the ball has generators that miss it, and a pin whose apex
-        // is inside the ball or that opens away from it meets the ball
-        // behind the apex.
+        // On the ball's axis the loops are circles, and a pin whose apex is
+        // inside the ball meets it behind the apex: both defer. A pin only
+        // partly through the ball meets it in one loop over the generators
+        // that reach it, and one that opens away from it not at all.
         let coaxial =
             ConicalSurface::new(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0), 1.4)
                 .unwrap();
@@ -4011,23 +4011,31 @@ mod tests {
             FRAC_PI_2 - half,
         )
         .unwrap();
-        assert!(ruling_cone_sphere(&aside, &ball, true).is_none());
-        for (tip, axis) in [
-            (Point3::new(1.0, 0.5, 1.0), Vec3::new(0.0, 0.0, -1.0)),
-            (Point3::new(1.0, 0.5, 10.0), Vec3::new(0.0, 0.0, 1.0)),
-        ] {
-            let behind = ConicalSurface::new(tip, axis, FRAC_PI_2 - half).unwrap();
-            assert!(ruling_cone_sphere(&behind, &ball, true).is_none());
-        }
+        assert_eq!(ruling_cone_sphere(&aside, &ball, true).unwrap().len(), 1);
+        let holding = ConicalSurface::new(
+            Point3::new(1.0, 0.5, 1.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            FRAC_PI_2 - half,
+        )
+        .unwrap();
+        assert!(ruling_cone_sphere(&holding, &ball, true).is_none());
+        let away = ConicalSurface::new(
+            Point3::new(1.0, 0.5, 10.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            FRAC_PI_2 - half,
+        )
+        .unwrap();
+        assert!(ruling_cone_sphere(&away, &ball, true).unwrap().is_empty());
         // Grazing: the generators that miss span about 0.002 of a turn,
-        // narrower than a 2048-angle scan's step.
+        // narrower than a 2048-angle scan's step, and the near and far
+        // roots join into one loop across them.
         let step = TAU / 2048.0;
         let grazed =
             SphericalSurface::new(Point3::new(step.cos(), step.sin(), 10.0), 9.255_250_971_8)
                 .unwrap();
         let wide =
             ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5).unwrap();
-        assert!(ruling_cone_sphere(&wide, &grazed, true).is_none());
+        assert_eq!(ruling_cone_sphere(&wide, &grazed, true).unwrap().len(), 1);
     }
 
     #[test]
