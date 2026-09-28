@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790569347117,
+  "lastUpdate": 1790574380898,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46169,6 +46169,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36203516,
             "range": "± 656017",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d18388cdb3a8285731f15a9feff08a21e96bcbb0",
+          "message": "fix(algo): let a pointed cone's apex stand in for a rim around seam-straddling holes (#1880)\n\nA rod whose section loop straddles a pointed cone's seam now splits the\ncone's wall exactly, and more of a pointed cone's fuses through a\nplate's edge mesh watertight.\n\n## What was wrong\n\n- `split_periodic_face_around_seam_holes` splits walls around closed\nsection loops that straddle the seam, but accepted only walls with two\nclosed rims.\n- A pointed cone has one rim. Its seam runs to the apex and back.\n- For `make_cone(3, 0, 6)` at `z = -3` and `make_cylinder(0.6, 20)` at\n`(1.2, 0.5, -10)`, the rod is parallel to the cone axis and its section\nloop straddles the seam. On main, every operation uses the mesh boolean.\nThe upright Cut has 57 faces.\n\n## What this does\n\n- For a cone face with one boundary circle, the apex stands in for the\nother rim because the seam pieces run to it and back.\n- The seam `u` is read from a seam vertex away from the apex. The wall\nsense is read from its one rim, accounting for the opposite directions\nof a wall's two rims.\n- Two-rim walls follow the same path as before.\n- The roadmap adds a Closed entry for this case. The open rod row now\nlists only the loop around the axis and the frustum top. The plate-edge\nrow records the current measurements and removes the parked branch\nreference whose mesher changes landed in #1878.\n\n## Verification\n\n- `rod_along_a_cone.rs` covers the `(1.2, 0.5)` placement upright,\nturned, mirrored through a slanted plane, and mirrored by `scale(-1, 1,\n1)`.\n- Cut, Intersect, and Fuse each have at most 8 faces, include cone and\ncylinder faces, contain no NURBS, are valid and watertight, match\nlens-section volume integration within `1e-4`, and classify two rod-axis\npoints.\n- Every cone face from Cut and Fuse tessellates independently within 1%\nof its exact area. The test fails with the splitter change reverted.\n- Plate-edge probes cover both specified placements at every sixteenth\nturn and from 5.3 through 5.6 radians. At `x = 0.4`, every exact turn\nnow meshes watertight. At `x = 0`, open turns decrease from twelve to\nten, with 0.39, 1.18, 5.4, and 5.5 radians now watertight.\n- `brepkit-operations`, `brepkit-io`, and `brepkit-algo` pass: 1879\ntests, 17 skipped. Local review found no correctness issue, and its\ndocumentation and test-comment points are applied.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nLets `split_periodic_face_around_seam_holes` split a pointed cone's wall\nwhen a section loop straddles its seam. The splitter only accepted walls\nwith two rims; a pointed cone has one, with the seam running to the apex\nand back, so it fell back to mesh booleans. The apex now stands in for\nthe missing rim: the seam `u` is read from a seam vertex away from the\napex, and the wall's sense comes from its one rim. Two-rim walls take\nthe same path as before. A rod parallel to a pointed cone's axis that\nstraddles the seam is now cut and fused exactly, valid, and watertight.\nThe change also closes the plate-edge `x = 0.4` open meshes and four of\nthe `x = 0` turns.\n\n**Verification**\n- `rod_along_a_cone.rs` covers the `(1.2, 0.5)` placement upright,\nturned, mirrored through a slanted plane, and scaled by `(-1, 1, 1)`;\nevery op matches lens-section volume within `1e-4`.\n- Each Cut and Fuse cone face tessellates within 1% of its exact area;\nthe test fails with the splitter change reverted.\n\n<sup>Written for commit 0b58ee9bda6a6a6b93e41f1f50ee5a699a3c164b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1880?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-27T22:43:22-07:00",
+          "tree_id": "a1c1991674a69b0dccbfaa74c1cca8e2c8fe8119",
+          "url": "https://github.com/andymai/brepkit/commit/d18388cdb3a8285731f15a9feff08a21e96bcbb0"
+        },
+        "date": 1790574374635,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1067382,
+            "range": "± 3304",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1162061,
+            "range": "± 14371",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14186,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 786015,
+            "range": "± 20836",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46679634,
+            "range": "± 272425",
             "unit": "ns/iter"
           }
         ]
