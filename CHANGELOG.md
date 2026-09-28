@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.82](https://github.com/andymai/brepkit/compare/v4.0.81...v4.0.82) (2026-09-28)
+
+
+### Bug Fixes
+
+* **math:** trace a ball holding a cone's apex as one loop round the cone ([#1884](https://github.com/andymai/brepkit/issues/1884)) ([4ae3f27](https://github.com/andymai/brepkit/commit/4ae3f27a9ecb995848df7a1700c9cd20cf48eec9))
+
 ## [4.0.81](https://github.com/andymai/brepkit/compare/v4.0.80...v4.0.81) (2026-09-28)
 
 
