@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790561767773,
+  "lastUpdate": 1790563638497,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45953,6 +45953,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45729016,
             "range": "± 189494",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "378132d59039c792fd3cdb2655642930b146ba07",
+          "message": "fix(math): trace a parallel rod's whole loop through a cone along its rulings (#1876)\n\nAxis-parallel rods through a pointed cone wall beside its axis now\nproduce exact, valid, and watertight Cut, Intersect, and Fuse results.\n\n## What was wrong\n\n- For `make_cone(3, 0, 6)` at `z = -3` and `make_cylinder(0.6, 20)` at\n`(0, 1.3, -10)`, `(-1.3, 0, -10)`, or `(0.5, -1.2, -10)`, every\noperation on main uses the mesh boolean. At `(0, 1.3)`, Intersect\nreports 3.664 instead of 3.766.\n- `algebraic_parallel_cone_cylinder` sampled the section in the cone's\n`v` and returned two open branches meeting at both turning points. The\nloop winds the rod, but splitting the wall band requires one closed\ncurve anchored at the wall seam. Consequently, the rod wall remained one\nsub-face.\n\n## What this does\n\n- When the cylinder axis is farther from the cone axis than the cylinder\nradius, and both turning points are within both faces' `v` ranges, the\nloop is traced along the cylinder rulings. Each ruling meets the nappe\nonce, at `ρ tan a` along the axis from the apex. The samples are fitted\nas one closed curve like the other ruling traces.\n- A cylinder around the axis (a near-coaxial pair, which the\n`circleinsert` socket fuse fixture exercises), a cylinder whose wall\npasses so near the axis that the loop's bend there, about `(d - r) /\nsqrt(d r)` of a turn wide, spans fewer than three ruling steps, and a\nloop clipped by a face keep the two branches.\n- The roadmap records three cases that still use the mesh boolean: a\nloop straddling the cone seam, a rod around the axis, and a rod leaving\nthrough a frustum top. For the seam case, using the apex as the second\nrim of the seam-hole split makes the wall exact and valid, but the\nnotched pointed wall meshes open.\n\n## Verification\n\n- Each op reads the same volume at all three placements (Cut 52.782381,\nIntersect 3.766287, Fuse 75.401848), within 1e-4 of the volume\nintegrated from the lens-shaped sections.\n- `crates/operations/tests/rod_along_a_cone.rs` covers upright, turned,\nslanted-plane mirrored, and `scale(-1, 1, 1)` poses. It checks all\noperations, at most 8 faces, cone and cylinder faces with no NURBS,\nvalidity, watertight tessellation, volume within 1e-4, and rod-axis\nclassification at `z = 0` and `z = 2`. It fails on main.\n- `parallel_rod_through_a_cones_wall_closes_one_loop` checks one closed\nloop within 1e-5 of both surfaces at `(0, 1.3)` and `(1.2, 0.5)`, and\ntwo branches for rods at `(0.3, 0.2)` (around the axis) and `(0.65, 0)`\n(beside it by less than the bend the rulings resolve).\n- The workspace suite passes 3231 tests with 20 skipped. The 300-line\npose sweep and `truth_audit` match main. `approx_census` matches main\napart from the run-varying face pair named in the NURBS loft offset\nerror.",
+          "timestamp": "2026-09-28T02:43:51Z",
+          "tree_id": "9a838933989e7819792a883f6fface4d9c315df5",
+          "url": "https://github.com/andymai/brepkit/commit/378132d59039c792fd3cdb2655642930b146ba07"
+        },
+        "date": 1790563633218,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1029384,
+            "range": "± 1974",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1113035,
+            "range": "± 1210",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13200,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771317,
+            "range": "± 6447",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43293806,
+            "range": "± 600553",
             "unit": "ns/iter"
           }
         ]
