@@ -1,0 +1,22 @@
+crates/operations/src/tessellate/solid.rs
+  s_ba2f7b5c6902b6::t_90a268380a88c4 314-318
+crates/operations/tests/tessellate_watertight.rs
+  s_ba2f7b5c6902b6::t_802bb1b8439f5a 154
+  s_ba2f7b5c6902b6::t_a179534446d646 155-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2bf9727872fc3a40f725fe43527a77df39deb37a",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
