@@ -1,0 +1,48 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_ba2f7b5c6902b6::t_c16e0320d6155a 1554
+  s_ba2f7b5c6902b6::t_288822d7c9fcfa 1556-1564
+  s_ba2f7b5c6902b6::t_c6f47688f001c7 1567,1615-1621,1624-1628,1634-1643,1648-1651,1654-1655,1657-1665,1956,1964
+  s_ba2f7b5c6902b6::t_8c0fbef7671705 1568-1571
+  s_ba2f7b5c6902b6::t_12f75347aae46e 1555
+crates/operations/tests/rod_along_a_cone.rs
+  s_ba2f7b5c6902b6::t_eb0a05022cf977 2,15,65-66,68-72,195-196,199,202-203
+  s_ba2f7b5c6902b6::t_4cfabd7d4b0ad5 3-5
+  s_ba2f7b5c6902b6::t_3d3ab3fe9957c9 109
+  s_ba2f7b5c6902b6::t_0ccbfdabaecf17 170,185,191,200
+  s_ba2f7b5c6902b6::t_f8c2ca9ff2caab 18,20,176-184,190,192-193,201,204-207
+  s_ba2f7b5c6902b6::t_435040eb1cf720 171-175,186-187,194
+  s_ba2f7b5c6902b6::t_673b5a7e3c8941 10,19,63-64,67,188-189,197-198
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_5910350582536f 222
+  s_ba2f7b5c6902b6::t_4bcb8d1c5a9f58 174,215-217
+  s_ba2f7b5c6902b6::t_c16e0320d6155a 175,219-221
+  s_ba2f7b5c6902b6::t_f389d37dff1e81 218
+  s_ba2f7b5c6902b6::t_f504bafb827137 208
+  s_ba2f7b5c6902b6::t_28289e96d1ca7e 203,206-207,209-214
+  s_ba2f7b5c6902b6::t_20ed25f88ef1b4 204-205
+  s_ba2f7b5c6902b6::t_6fdae2e3a47d27 190
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_7863ab186cfba8 2351-2358,2363,2365-2369
+  s_ba2f7b5c6902b6::t_70c89b629bc365 2587-2590,4433,4437-4440,4446-4448,4458-4465
+  s_ba2f7b5c6902b6::t_20ed25f88ef1b4 2131-2133,2359-2362,2364,4434-4436,4441-4445,4449-4457
+  s_ba2f7b5c6902b6::t_26921015ad69f3 2134,3153-3154,3160-3163,3172
+  s_ba2f7b5c6902b6::t_1a4b60156b0a26 4466-4467
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_70c89b629bc365 263-266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b117a09b716cc5455b3368dbe0fecc1a9d0d5a67",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
