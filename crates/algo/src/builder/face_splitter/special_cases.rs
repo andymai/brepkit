@@ -119,9 +119,10 @@ pub(super) fn split_noseam_face_direct(
         );
     };
     // A closed section inside the face (a box's top across a patch around
-    // the pole) splits one of the two pieces below, which they do not
-    // follow: fail the face rather than keep a piece whole over it. One in
-    // the boundary's own plane runs along the boundary.
+    // the pole) splits one of the two pieces below: the interior cap below
+    // nests it in the piece holding it, and the pieces along the boundary
+    // fail the face rather than keep a piece whole over it. One in the
+    // boundary's own plane runs along the boundary.
     let boundary_pts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
     let boundary_plane = loop_plane(&boundary_pts);
     let on_boundary = |c: &OrientedPCurveEdge| {
@@ -131,9 +132,11 @@ pub(super) fn split_noseam_face_direct(
                 .all(|p| (*p - at).dot(n).abs() <= 1e3 * tol)
         })
     };
-    if closed_sections.iter().any(|c| !on_boundary(c)) {
-        return Vec::new();
-    }
+    let interior_closed: Vec<OrientedPCurveEdge> = closed_sections
+        .iter()
+        .filter(|c| !on_boundary(c))
+        .cloned()
+        .collect();
 
     // Boundary edges covered by a cap arc: both segment endpoints lie on
     // the arc's circle within its angular span. Those edges are replaced
@@ -164,6 +167,9 @@ pub(super) fn split_noseam_face_direct(
         pave_block_id: e.pave_block_id,
     };
 
+    if covered.iter().any(|&c| c) && !interior_closed.is_empty() {
+        return Vec::new();
+    }
     if covered.iter().any(|&c| c) {
         // Cap loop runs along part of the boundary: remainder = uncovered
         // boundary edges + reversed non-coincident arcs, chained closed.
@@ -239,6 +245,15 @@ pub(super) fn split_noseam_face_direct(
         cap_edges
     };
     let hole_edges = reverse_loop(&cap_edges);
+    if !interior_closed.is_empty() {
+        return nest_closed_sections(
+            surface,
+            boundary_edges,
+            cap_edges,
+            &interior_closed,
+            (rank, reversed, face_id),
+        );
+    }
     vec![
         SplitSubFace {
             surface: surface.clone(),
@@ -259,6 +274,101 @@ pub(super) fn split_noseam_face_direct(
             precomputed_interior: None,
         },
     ]
+}
+
+/// A sphere face's interior cap and band with closed sections inside them
+/// (a box whose floor and walls ring the pole and whose top cuts a circle
+/// round it): each section is a hole of whichever piece holds most of its
+/// samples in `(u, v)` and bounds a patch of its own, each piece sampled
+/// clear of its holes. Empty (the face fails) when a section lies in
+/// another's patch or a piece has no clear sample.
+fn nest_closed_sections(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    cap: Vec<OrientedPCurveEdge>,
+    closed: &[OrientedPCurveEdge],
+    (rank, reversed, face_id): (crate::ds::Rank, bool, FaceId),
+) -> Vec<SplitSubFace> {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::TAU;
+    let FaceSurface::Sphere(sphere) = surface else {
+        return Vec::new();
+    };
+    let holds = |poly: &[Point2], p: Point2| {
+        let u_min = poly.iter().map(|q| q.x()).fold(f64::INFINITY, f64::min);
+        let u = u_min + (p.x() - u_min).rem_euclid(TAU);
+        [u, u + TAU, u - TAU]
+            .into_iter()
+            .any(|u| super::super::classify_2d::point_in_polygon_2d(Point2::new(u, p.y()), poly))
+    };
+    // Each section as its patch: counter-clockwise about the outward normal,
+    // with the disc it bounds on its left.
+    let patches: Vec<Vec<OrientedPCurveEdge>> = closed
+        .iter()
+        .map(|c| {
+            let edge = vec![c.clone()];
+            if sphere_loop_counter_clockwise(surface, &edge) == Some(false) {
+                reverse_loop(&edge)
+            } else {
+                edge
+            }
+        })
+        .collect();
+    let patch_uv: Vec<Vec<Point2>> = patches
+        .iter()
+        .map(|p| sphere_region_polygon(sphere, p))
+        .collect();
+    let samples: Vec<Vec<Point2>> = patches
+        .iter()
+        .map(|p| sphere_loop_polyline(sphere, p))
+        .collect();
+    let held = |poly: &[Point2], pts: &[Point2]| {
+        pts.iter().filter(|&&q| holds(poly, q)).count() * 2 > pts.len()
+    };
+    for (i, pts) in samples.iter().enumerate() {
+        if patch_uv
+            .iter()
+            .enumerate()
+            .any(|(j, poly)| i != j && held(poly, pts))
+        {
+            return Vec::new();
+        }
+    }
+    let cap_uv = sphere_region_polygon(sphere, &cap);
+    let (mut cap_holes, mut band_holes) = (Vec::new(), vec![reverse_loop(&cap)]);
+    for (patch, pts) in patches.iter().zip(&samples) {
+        if held(&cap_uv, pts) {
+            cap_holes.push(reverse_loop(patch));
+        } else {
+            band_holes.push(reverse_loop(patch));
+        }
+    }
+    let piece = |outer: Vec<OrientedPCurveEdge>, holes: Vec<Vec<OrientedPCurveEdge>>| {
+        let inside = region_sample(surface, &outer, &holes)?;
+        Some(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: outer,
+            inner_wires: holes,
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(inside),
+        })
+    };
+    let mut pieces = Vec::new();
+    for built in [
+        piece(cap, cap_holes),
+        piece(boundary_edges.to_vec(), band_holes),
+    ]
+    .into_iter()
+    .chain(patches.into_iter().map(|p| piece(p, Vec::new())))
+    {
+        let Some(built) = built else {
+            return Vec::new();
+        };
+        pieces.push(built);
+    }
+    pieces
 }
 
 /// Split a sphere face whose disjoint open arcs cannot chain alone into a

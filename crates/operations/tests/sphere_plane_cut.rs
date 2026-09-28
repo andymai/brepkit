@@ -622,3 +622,71 @@ fn a_stepped_block_through_the_axis_keeps_its_lunes() {
     let truth = block + ball - volumes[0];
     assert_exact_piece(&topo, fused, 11, truth, &[], "Fuse");
 }
+
+/// The ball against the box over `(-0.7, -1.1, 0.1)` whose top cuts it at
+/// `z = 2.95`: on the upper hemisphere the box's floor and walls close one
+/// loop round the pole, and its top a circle round the pole inside that
+/// loop, which is a hole of the patch the loop bounds and a patch of its
+/// own. Each op is exact; the three volumes agree with the ball's and the
+/// box's, and the ball within the box with its integrated volume.
+#[test]
+fn a_box_top_circling_the_pole_inside_its_footprint_is_exact() {
+    let ball = 36.0 * PI;
+    let block = 10.0 * 10.0 * 2.85;
+    // The ball's slices across `z`, each read over `x` for the part past
+    // both walls.
+    let (nz, nx) = (1200_u32, 800_u32);
+    let dz = 2.85 / f64::from(nz);
+    let mut within = 0.0;
+    for k in 0..nz {
+        let z = (f64::from(k) + 0.5).mul_add(dz, 0.1);
+        let r = z.mul_add(-z, 9.0).sqrt();
+        let (x0, dx) = ((-r).max(-0.7), (r - (-r).max(-0.7)) / f64::from(nx));
+        for i in 0..nx {
+            let x = (f64::from(i) + 0.5).mul_add(dx, x0);
+            let half = x.mul_add(-x, r * r).max(0.0).sqrt();
+            within += (half - (-half).max(-1.1)).max(0.0) * dx * dz;
+        }
+    }
+    let mut volumes = Vec::new();
+    for (op, max, probes) in [
+        (
+            BooleanOp::Intersect,
+            5,
+            [
+                (Point3::new(0.5, 0.5, 2.0), true),
+                (Point3::new(0.0, 0.0, 2.98), false),
+            ],
+        ),
+        (
+            BooleanOp::Cut,
+            7,
+            [
+                (Point3::new(0.5, 0.5, 2.0), false),
+                (Point3::new(0.0, 0.0, 2.98), true),
+            ],
+        ),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, 3.0, 32).unwrap();
+        let top = make_box(&mut topo, 10.0, 10.0, 2.85).unwrap();
+        transform_solid(&mut topo, top, &Mat4::translation(-0.7, -1.1, 0.1)).unwrap();
+        let piece = boolean(&mut topo, op, sphere, top).unwrap();
+        let volume = solid_volume(&topo, piece, 0.01).unwrap();
+        assert_exact_piece(&topo, piece, max, volume, &probes, &format!("{op:?}"));
+        volumes.push(volume);
+    }
+    assert!(
+        (volumes[0] - within).abs() < 1e-3,
+        "within {}, integrated {within}",
+        volumes[0]
+    );
+    assert!((volumes[0] + volumes[1] - ball).abs() < 1e-9 * ball);
+    let mut topo = Topology::new();
+    let sphere = make_sphere(&mut topo, 3.0, 32).unwrap();
+    let top = make_box(&mut topo, 10.0, 10.0, 2.85).unwrap();
+    transform_solid(&mut topo, top, &Mat4::translation(-0.7, -1.1, 0.1)).unwrap();
+    let fused = boolean(&mut topo, BooleanOp::Fuse, sphere, top).unwrap();
+    let truth = block + ball - volumes[0];
+    assert_exact_piece(&topo, fused, 9, truth, &[], "Fuse");
+}
