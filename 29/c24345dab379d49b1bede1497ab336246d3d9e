@@ -1,0 +1,32 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_570a143a57f2b1 2214-2217
+  s_ba2f7b5c6902b6::t_1e5a1e6282f3e7 4482-4504
+  s_ba2f7b5c6902b6::t_9e063949808936 2600-2604
+  s_ba2f7b5c6902b6::t_7dec5f3113306f 2208-2213,2218-2219,2222-2224
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_1e5a1e6282f3e7 264-265,267-268
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_2176df19aec90a 189-190,203-214
+  s_ba2f7b5c6902b6::t_4d6e476b3e7022 215
+crates/math/src/analytic_intersection.rs
+  s_ba2f7b5c6902b6::t_c28e23c53cb1c6 2710-2713,2727-2746,2751
+  s_ba2f7b5c6902b6::t_24327cff9c3dd5 4024-4027,4045,4096,4099-4135
+crates/operations/tests/ball_beside_a_cone.rs
+  s_ba2f7b5c6902b6::t_43a3a387b78077 1-5,211-311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "29c24345dab379d49b1bede1497ab336246d3d9e",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
