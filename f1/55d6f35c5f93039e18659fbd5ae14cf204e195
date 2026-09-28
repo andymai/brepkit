@@ -1,17 +1,17 @@
-crates/operations/tests/rod_along_a_cone.rs
-  s_ba2f7b5c6902b6::t_f8c2ca9ff2caab 18,20,170-182,185-188,190,197-198,201-204
-  s_ba2f7b5c6902b6::t_673b5a7e3c8941 10,19,63-64,67,183-184,194-195
 crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_70c89b629bc365 2581-2584,4427-4433,4438-4451
   s_ba2f7b5c6902b6::t_26921015ad69f3 2132,3147-3148,3154-3157,3166
   s_ba2f7b5c6902b6::t_7863ab186cfba8 2349-2363
   s_ba2f7b5c6902b6::t_673b5a7e3c8941 4434-4437
-  s_ba2f7b5c6902b6::t_70c89b629bc365 2581-2584,4427-4433,4438-4451
-  s_ba2f7b5c6902b6::t_3e0142009ba9ff 4452-4453
+  s_ba2f7b5c6902b6::t_1a4b60156b0a26 4452-4453
+crates/operations/tests/rod_along_a_cone.rs
+  s_ba2f7b5c6902b6::t_673b5a7e3c8941 10,19,63-64,67,183-184,194-195
+  s_ba2f7b5c6902b6::t_f8c2ca9ff2caab 18,20,170-182,185-188,190,197-198,201-204
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_28289e96d1ca7e 202-206,208-213
+  s_ba2f7b5c6902b6::t_f504bafb827137 207
 crates/operations/src/tessellate/face.rs
   s_ba2f7b5c6902b6::t_70c89b629bc365 263-266
-.claude/skills/roadmap/SKILL.md
-  s_ba2f7b5c6902b6::t_f504bafb827137 207
-  s_ba2f7b5c6902b6::t_28289e96d1ca7e 202-206,208-213
 ---
 {
   "schema_version": "authorship/3.0.0",
