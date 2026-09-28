@@ -1456,6 +1456,7 @@ fn restrict_curves_to_faces(
             continue;
         }
 
+        let raw = start_outside_windows(&raw, &ext_a, &ext_b, N).unwrap_or(raw);
         let pt = |i: usize| -> Point3 {
             #[allow(clippy::cast_precision_loss)]
             let f = i as f64 / N as f64;
@@ -1628,6 +1629,51 @@ fn restrict_curves_to_faces(
         out.push(raw);
     }
     out
+}
+
+/// A closed NURBS section whose in-both run wraps its start, restarted at a
+/// sample outside every run. A clamped NURBS has no periodic evaluation to
+/// bisect across its start, so a wrapping run would be trimmed at sample
+/// indices on both sides of it, off the faces' boundaries; restarted, every
+/// run is an ordinary window whose ends are bisected onto them. `None` when
+/// the curve is not such a section.
+fn start_outside_windows(
+    raw: &RawCurve,
+    ext_a: &FaceExtent,
+    ext_b: &FaceExtent,
+    n: usize,
+) -> Option<RawCurve> {
+    let EdgeCurve::NurbsCurve(nurbs) = &raw.curve else {
+        return None;
+    };
+    let (d0, d1) = nurbs.domain();
+    let span = raw.t_range.1 - raw.t_range.0;
+    if (raw.p_start - raw.p_end).length() >= 1e-7
+        || (raw.t_range.0 - d0).abs() > 1e-9 * span
+        || (raw.t_range.1 - d1).abs() > 1e-9 * span
+    {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let t_at = |i: usize| (i as f64 / n as f64).mul_add(span, raw.t_range.0);
+    let inside = |t: f64| {
+        let p = nurbs.evaluate(t);
+        ext_a.contains(p) && ext_b.contains(p)
+    };
+    if !inside(t_at(0)) {
+        return None;
+    }
+    let gap = (1..n).find(|&i| !inside(t_at(i)))?;
+    let rotated = crate::builder::fill_images_faces::start_closed_curve_at(nurbs, t_at(gap))?;
+    let (r0, r1) = rotated.domain();
+    let start = rotated.evaluate(r0);
+    Some(RawCurve {
+        curve: EdgeCurve::NurbsCurve(rotated),
+        bbox: raw.bbox,
+        t_range: (r0, r1),
+        p_start: start,
+        p_end: start,
+    })
 }
 
 /// Trim a plane×torus oval to its EXACT in-box arc at the box-edge∩torus

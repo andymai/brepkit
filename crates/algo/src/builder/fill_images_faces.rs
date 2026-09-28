@@ -1724,7 +1724,7 @@ fn anchor_and_cut_loop(
 /// A closed NURBS curve re-parameterized to start and end at `t`: split
 /// there and joined the other way round. The halves meet at the curve's old
 /// start, whose weight the second half is scaled to match.
-fn start_closed_curve_at(
+pub fn start_closed_curve_at(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     t: f64,
 ) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {

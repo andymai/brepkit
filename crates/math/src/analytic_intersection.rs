@@ -2708,8 +2708,8 @@ fn ruling_torus_cylinder(
 /// through a ball): along a generator `apex + v g` the sphere is a quadratic
 /// in `v`, and each of its two roots, taken in order, sweeps one closed loop
 /// around the cone. `None` when the centre lies on the axis (phase FF takes
-/// [`exact_cone_sphere`]'s circles there), and when a generator misses the
-/// sphere or meets it behind the apex (the marcher's cases).
+/// [`exact_cone_sphere`]'s circles there). A sphere only some generators
+/// cross goes to [`window_cone_sphere`].
 fn ruling_cone_sphere(
     cone: &ConicalSurface,
     sphere: &SphericalSurface,
@@ -2738,7 +2738,7 @@ fn ruling_cone_sphere(
     if crossing(sin_a.mul_add(along, cos_a * across)).is_none()
         || crossing(sin_a.mul_add(along, -cos_a * across)).is_none()
     {
-        return None;
+        return window_cone_sphere(cone, sphere, cone_first);
     }
     let rows: Vec<(f64, f64)> = (0..RULING_SAMPLES)
         .map(|i| crossing((cone.evaluate(ruling_u(i), 1.0) - apex).dot(offset)))
@@ -2758,6 +2758,63 @@ fn ruling_cone_sphere(
         })
         .collect();
     Some(fit_ruling_loops(&loops, |p| {
+        in_order(cone.project_point(p), sphere.project_point(p), cone_first)
+    }))
+}
+
+/// A cone and a sphere off its axis that only some generators cross (a ball
+/// against the cone's side), with the apex outside the sphere: along the
+/// generator at `u`, `h(u) = g·(apex − C)` is `c + A cos(u − φ)`, and the
+/// generator crosses twice ahead of the apex where `h ≤ −√K`, with
+/// `K = |apex − C|² − R²`. That is one arc of `u`, whose ends are where the
+/// generator touches the sphere; the section is one loop, the nearer roots
+/// out along the arc and the farther ones back. Sampled at
+/// `u = mid − half·cos θ`, the roots' split `±√(h² − K)` changes sign with
+/// `sin θ` and the loop stays smooth through both touching generators.
+/// `Some(empty)` when no generator crosses ahead of the apex. `None`, the
+/// marcher's case, when the apex lies within the sphere, when the centre is
+/// too near the axis to place the arc, and when every generator reaches the
+/// sphere (the extremes' test then failed on a touching generator or a root
+/// at the apex).
+fn window_cone_sphere(
+    cone: &ConicalSurface,
+    sphere: &SphericalSurface,
+    cone_first: bool,
+) -> Option<Vec<IntersectionCurve>> {
+    let offset = cone.apex() - sphere.center();
+    let lin_tol = Tolerance::new().linear;
+    let k = offset.dot(offset) - sphere.radius() * sphere.radius();
+    if k <= lin_tol {
+        return None;
+    }
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    let (ox, oy) = (offset.dot(cone.x_axis()), offset.dot(cone.y_axis()));
+    let (c, a) = (sin_a * offset.dot(cone.axis()), cos_a * ox.hypot(oy));
+    if a < lin_tol {
+        return None;
+    }
+    let reach = (-k.sqrt() - c) / a;
+    if reach <= -1.0 {
+        return Some(Vec::new());
+    }
+    if reach >= 1.0 {
+        return None;
+    }
+    let (mid, half) = (oy.atan2(ox) + std::f64::consts::PI, reach.acos());
+    let half = std::f64::consts::PI - half;
+    let n = RULING_SAMPLES;
+    let mut pts: Vec<Point3> = (0..n)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let theta = TAU * i as f64 / n as f64;
+            let u = half.mul_add(-theta.cos(), mid);
+            let h = a.mul_add((u - mid + std::f64::consts::PI).cos(), c);
+            let split = h.mul_add(h, -k).max(0.0).sqrt();
+            cone.evaluate(u, -h - split.copysign(theta.sin()))
+        })
+        .collect();
+    pts.push(pts[0]);
+    Some(fit_ruling_loops(&[pts], |p| {
         in_order(cone.project_point(p), sphere.project_point(p), cone_first)
     }))
 }
@@ -3943,10 +4000,10 @@ mod tests {
                 }
             }
         }
-        // On the ball's axis the loops are circles, a pin only partly
-        // through the ball has generators that miss it, and a pin whose apex
-        // is inside the ball or that opens away from it meets the ball
-        // behind the apex.
+        // On the ball's axis the loops are circles, and a pin whose apex is
+        // inside the ball meets it behind the apex: both defer. A pin only
+        // partly through the ball meets it in one loop over the generators
+        // that reach it, and one that opens away from it not at all.
         let coaxial =
             ConicalSurface::new(Point3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0), 1.4)
                 .unwrap();
@@ -3957,23 +4014,69 @@ mod tests {
             FRAC_PI_2 - half,
         )
         .unwrap();
-        assert!(ruling_cone_sphere(&aside, &ball, true).is_none());
-        for (tip, axis) in [
-            (Point3::new(1.0, 0.5, 1.0), Vec3::new(0.0, 0.0, -1.0)),
-            (Point3::new(1.0, 0.5, 10.0), Vec3::new(0.0, 0.0, 1.0)),
-        ] {
-            let behind = ConicalSurface::new(tip, axis, FRAC_PI_2 - half).unwrap();
-            assert!(ruling_cone_sphere(&behind, &ball, true).is_none());
-        }
-        // Grazing: the generators that miss span about 0.002 of a turn,
-        // narrower than a 2048-angle scan's step.
+        assert_eq!(ruling_cone_sphere(&aside, &ball, true).unwrap().len(), 1);
+        let holding = ConicalSurface::new(
+            Point3::new(1.0, 0.5, 1.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            FRAC_PI_2 - half,
+        )
+        .unwrap();
+        assert!(ruling_cone_sphere(&holding, &ball, true).is_none());
+        let away = ConicalSurface::new(
+            Point3::new(1.0, 0.5, 10.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            FRAC_PI_2 - half,
+        )
+        .unwrap();
+        assert!(ruling_cone_sphere(&away, &ball, true).unwrap().is_empty());
+        // Grazing: the generators that miss span about 0.002 radians,
+        // narrower than a 2048-angle scan's step, and the near and far
+        // roots join into one loop across them.
         let step = TAU / 2048.0;
         let grazed =
             SphericalSurface::new(Point3::new(step.cos(), step.sin(), 10.0), 9.255_250_971_8)
                 .unwrap();
         let wide =
             ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5).unwrap();
-        assert!(ruling_cone_sphere(&wide, &grazed, true).is_none());
+        assert_eq!(ruling_cone_sphere(&wide, &grazed, true).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_ball_beside_a_cone_meets_it_in_one_loop() {
+        use crate::traits::ParametricCurve;
+        // Apex 3 up, opening downward, the radius half the depth below it.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 3.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            2.0_f64.atan(),
+        )
+        .unwrap();
+        for (centre, radius) in [
+            (Point3::new(1.0, 0.8, 1.2), 1.1),
+            (Point3::new(1.5, 0.0, 0.0), 0.8),
+        ] {
+            let ball = SphericalSurface::new(centre, radius).unwrap();
+            let curves = ruling_cone_sphere(&cone, &ball, true).unwrap();
+            assert_eq!(curves.len(), 1, "one loop for the ball at {centre:?}");
+            let (t0, t1) = curves[0].curve.domain();
+            for k in 0..=64 {
+                let p = ParametricCurve::evaluate(
+                    &curves[0].curve,
+                    (t1 - t0).mul_add(f64::from(k) / 64.0, t0),
+                );
+                let on_ball = (p - centre).length() - radius;
+                let on_cone = p.x().hypot(p.y()) - (3.0 - p.z()) / 2.0;
+                assert!(
+                    on_ball.abs() < 1e-5 && on_cone.abs() < 1e-5,
+                    "ball at {centre:?}: off by {on_ball}, {on_cone}"
+                );
+            }
+        }
+        // A ball the nappe's generators miss, and one holding the apex.
+        let clear = SphericalSurface::new(Point3::new(4.0, 0.0, 0.0), 0.5).unwrap();
+        assert!(ruling_cone_sphere(&cone, &clear, true).unwrap().is_empty());
+        let holding = SphericalSurface::new(Point3::new(0.3, 0.0, 2.5), 1.0).unwrap();
+        assert!(ruling_cone_sphere(&cone, &holding, true).is_none());
     }
 
     #[test]
