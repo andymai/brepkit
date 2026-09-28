@@ -1,0 +1,20 @@
+crates/operations/tests/ball_through_a_cylinder_wall.rs
+  s_ba2f7b5c6902b6::t_c34c59b1c574a1 13,16,164-190
+  s_ba2f7b5c6902b6::t_ae98e755ddfda1 191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cd91e3340ada8f447d36176afdb4814e8bde6fb1",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
