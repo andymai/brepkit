@@ -201,13 +201,15 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **Per-face meshes of a cone or cylinder patch a section bounds filled the wrong region (CLOSED 2026-09-28; the per-face checks in `ball_beside_a_cone.rs`, `rod_along_a_cone.rs` and `cone_cut_by_a_plane_across_its_wall`)**:
+- **Per-face meshes of a cone or cylinder patch a section bounds filled the wrong region (CLOSED 2026-09-28; the per-face checks in `ball_beside_a_cone.rs`, `rod_along_a_cone.rs`, `cone_cut_by_a_plane_across_its_wall` and `rod_cut_by_an_oblique_plane`)**:
   a face with no hole and no notch took the grid over its `(u, v)` box:
   the lens a ball bites from a cone's wall, split by the seam, meshed 0.459
   of 0.305 and 2.312 of 2.765, a rod's patches on a cone 0.855 of 2.529,
   and the band a tilted plane leaves 56.101 of 52.074. A cylinder or cone
   patch with a NURBS or ellipse edge now meshes through the local mesher,
-  as the solid mesher does.
+  as the solid mesher does, in the developed metric: in raw `(u, v)`
+  Delaunay sheared a rod's wall under a tilted plane into strips longer
+  than the surface (59.533 of 56.549 at a 0.3 slope).
 
 - **A ball holding a pointed cone's apex off its axis took minutes and fell back (CLOSED 2026-09-27; `a_ball_holding_the_apex_is_exact` in `crates/operations/tests/ball_beside_a_cone.rs`, the tip checks in `cone_cut_by_a_plane_across_its_wall`)**:
   `ruling_cone_sphere` handed an apex inside the ball to the marcher, and

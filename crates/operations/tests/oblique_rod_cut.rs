@@ -11,7 +11,7 @@ use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::primitives::{make_box, make_cylinder};
-use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -115,6 +115,21 @@ fn rod_cut_by_an_oblique_plane() {
             assert!(
                 meshed <= truth && truth - meshed < 5e-3 * truth,
                 "{label}: mesh volume {meshed}, truth {truth}"
+            );
+
+            // The wall meshes on its own too, as a per-face export takes it.
+            let own = tessellate(&topo, wall, 0.01).unwrap();
+            let own_area: f64 = own
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| own.positions[t[k] as usize]);
+                    0.5 * (b - a).cross(c - a).length()
+                })
+                .sum();
+            assert!(
+                (own_area - wall_truth).abs() < 1e-2 * wall_truth,
+                "{label}: the wall meshes {own_area} on its own, truth {wall_truth}"
             );
         }
     }

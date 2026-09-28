@@ -266,20 +266,7 @@ pub(super) fn tessellate_with_uvs_floor(
     // is not the (u, v) box the grid below fills.
     let notched_wall = super::nonplanar::is_notched_wall(topo, face_data)?
         || super::nonplanar::is_wound_wall(topo, face_data)?
-        || super::nonplanar::is_section_tip(topo, face_data)?
-        || (matches!(
-            face_data.surface(),
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
-        ) && {
-            let mut section = false;
-            for oe in topo.wire(face_data.outer_wire())?.edges() {
-                section |= matches!(
-                    topo.edge(oe.edge())?.curve(),
-                    EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_)
-                );
-            }
-            section
-        });
+        || super::nonplanar::is_section_bound(topo, face_data)?;
     let holed_wall =
         if holed_analytic || notched_wall || trimmed_nurbs || trimmed_sphere || trimmed_torus {
             match super::nonplanar::tessellate_holed_face_local(

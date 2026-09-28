@@ -2590,11 +2590,13 @@ pub(super) fn tessellate_nonplanar_cdt(
     // edges (arcs, lines or marched pieces) notching the wire between the
     // seam's two copies. It leaves the same rim-to-hole fans. So does a wall
     // a section loop winds round, whose loop dips between its seam copies:
-    // across the dip Delaunay joins the loop's two sides. And a pointed
-    // cone's tip a section bounds fans from its apex row to the section.
+    // across the dip Delaunay joins the loop's two sides. And so does any
+    // patch a section bounds in part: raw `(u, v)` mixes radians with
+    // lengths, and Delaunay there joins rim samples to section samples far
+    // round the wall, a sheared strip longer than the surface it spans.
     let notched_wall = is_notched_wall(topo, face_data)?
         || is_wound_wall(topo, face_data)?
-        || is_section_tip(topo, face_data)?;
+        || is_section_bound(topo, face_data)?;
     let holed_wall_radius = if holes.is_empty() && !notched_wall {
         None
     } else {
@@ -4496,6 +4498,29 @@ pub(super) fn is_section_tip(
         );
     }
     Ok(apex && section)
+}
+
+/// Whether a cylinder or cone face is bounded in part by a section: a NURBS
+/// or ellipse edge in its outer wire.
+pub(super) fn is_section_bound(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    if !matches!(
+        face_data.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    ) {
+        return Ok(false);
+    }
+    for oe in topo.wire(face_data.outer_wire())?.edges() {
+        if matches!(
+            topo.edge(oe.edge())?.curve(),
+            EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_)
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
