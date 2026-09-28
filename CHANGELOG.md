@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.85](https://github.com/andymai/brepkit/compare/v4.0.84...v4.0.85) (2026-09-28)
+
+
+### Bug Fixes
+
+* **operations:** refute a ball's containment when its centre nears the boundary ([#1892](https://github.com/andymai/brepkit/issues/1892)) ([b192f46](https://github.com/andymai/brepkit/commit/b192f4617a8680b1af32d2342c8391d066478921))
+
 ## [4.0.84](https://github.com/andymai/brepkit/compare/v4.0.83...v4.0.84) (2026-09-28)
 
 
