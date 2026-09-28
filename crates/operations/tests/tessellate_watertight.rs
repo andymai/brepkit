@@ -130,3 +130,31 @@ fn pointed_cone_tessellation_is_watertight_at_every_deflection() {
         }
     }
 }
+
+/// A ball bored by a thin rod near its side, then cut to a box whose floor
+/// the bore crosses 0.008 from the floor's arc of the ball: the arc's chords
+/// would sag 0.01 at this deflection and cut into the bore's circle, so the
+/// arc is sampled finer where the bore passes it. Kept or cut away, the
+/// piece meshes watertight.
+#[test]
+fn a_hole_nearer_a_floors_arc_than_its_chords_sag_meshes_watertight() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::transform::transform_solid;
+    for op in [BooleanOp::Intersect, BooleanOp::Cut] {
+        let mut topo = Topology::new();
+        let ball = make_sphere(&mut topo, 3.0, 32).unwrap();
+        let rod = make_cylinder(&mut topo, 0.3, 10.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(2.69, 0.0, -5.0)).unwrap();
+        let bored = boolean(&mut topo, BooleanOp::Cut, ball, rod).unwrap();
+        let lid = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(&mut topo, lid, &Mat4::translation(-0.7, -1.1, 0.1)).unwrap();
+        let piece = boolean(&mut topo, op, bored, lid).unwrap();
+        let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+        let (edges, boundary) = boundary_edges(&mesh.positions, &mesh.indices);
+        assert_eq!(
+            boundary, 0,
+            "bored ball {op:?} the box: {boundary}/{edges} open or non-manifold edges"
+        );
+    }
+}

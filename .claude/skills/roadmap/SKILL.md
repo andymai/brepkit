@@ -178,7 +178,6 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Sphere leftovers: the chordal equator** | `make_torus(4, 1.5)` less `make_sphere(3)` reads 166.4567 against 166.3658 (`torus_coaxial_tools.rs` bounds it at 1e-3; its torus faces take the mesh); the ball less its positive octant has an open solid mesh (the same for the ball fused with the box over that octant, in any turn about `z`). Both trace to the hemispheres meeting on chords (the quirk row below). A ball less a box holding the pole keeps a ring face, bounded by the chordal equator with a hole winding the axis, that meshes badly (that Cut's mesh volume is 90.80 at deflection 0.01, 95.18 at 0.0005), though `solid_volume` reads the Cut exactly |
 | **A column fused with a thin rod, less a turned ball, meshes open** (the ball turned `rotation_y(0.3)` then `rotation_z(1)`, `make_box(5, 5, 10)` at `(-2.5, -2.5, -5)` fused with the rod of radius 0.1 at `(2.75, 0)`) | The tool less the ball is exact and valid but not watertight, and the ball less the tool and within it fall back. Undug |
 | **A column and a rod through a ball's cap, less the ball, meshes open** (`make_box(5, 5, 10)` at `(-2.5, -2.5, -5)` fused with `make_cylinder(0.15, 10)` at `(-2.7, -0.9, -5)`, less `make_sphere(3, 32)`) | Exact (14 faces) and valid, but `tessellate_solid` is not watertight; the ball less the same tool and within it mesh closed. Undug: the sphere patch inside the rod's rim, or the rod's wall between the rims |
-| **A hole closer to a plane face's outer arc than its chords' sag meshes open** (`make_sphere(3, 32)` bored by `make_cylinder(0.3, 10)` at `(2.69, 0, -5)`, within or less the box over `(-0.7, -1.1, 0.1)`) | Exact, valid and within 1e-3 of the truth, but at deflection 0.01 the solid mesh is open: the bore's circle in the box's floor passes 0.008 from the floor's arc of the ball, whose chords sag up to 0.01 and cut into it |
 | **A sphere face holding the pole within a boundary that dips meshes past its region** (`make_sphere(3, 32)` less the column `|x|, |y| < 2.2`, `-5 < z < 2`, whose top rim pierces the ball) | The Cut is exact and `solid_volume` reads its 30.3591. The sphere face holding the pole (the cap over the column joined to the four side caps' upper halves by sixteen arcs) meshes on its own to 50.2209 against its `face_area` of 48.8942, and the solid's mesh is open. Undug |
 | **A sphere face whose hole winds the axis close to the pole meshes off the sphere** (probe `zz_ringmesh` in the session scratchpad) | The ball less a box whose wall passes near the pole keeps a ring face with that hole, right by topology, point classification and `solid_volume`, but its mesh cuts through the ball: with the corner at `(-0.0001, -1.1, 0.1)` the ring meshes to area 37.52 (37.81 exact) with a flux of 29.8 where a mesh on the sphere gives the radius times its area (112.6) |
 | **A sphere face whose arcs chain into one loop around a closed section falls back** | `split_noseam_face_direct` pairs the open arcs into a cap and its remainder and cannot place a closed section in either, so a box whose top cuts a full circle inside the patch around the pole (the box over `(-0.7, -1.1, 0.1)` to `z = 2.95`) fails the face and falls back. Nesting the circle as a hole of the piece that holds it, with its disc as its own face, needs a point-in-region test on the sphere for a loop that winds the axis |
@@ -198,6 +197,14 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A hole closer to a plane face's arc than the arc's chords sag meshed open (CLOSED 2026-09-28; `a_hole_nearer_a_floors_arc_than_its_chords_sag_meshes_watertight` in `crates/operations/tests/tessellate_watertight.rs`)**:
+  `make_sphere(3, 32)` bored by `make_cylinder(0.3, 10)` at `(2.69, 0,
+  -5)`, within or less the box over `(-0.7, -1.1, 0.1)`: the bore's circle
+  in the box's floor passes 0.008 from the floor's arc of the ball, whose
+  chords sag up to 0.01 at deflection 0.01 and cut into it (18 open or
+  non-manifold mesh edges). The shared edge pool now samples such an arc
+  until its chords sag at most half the hole's clearance.
 
 - **A ball just past tangency inside a cone's wall read as contained (CLOSED 2026-09-28; the tangent placement in `crates/operations/tests/ball_on_a_cone_axis.rs`)**:
   `make_sphere(3 / sqrt(5) + 1e-4)` at the origin inside `make_cone(3, 0,
