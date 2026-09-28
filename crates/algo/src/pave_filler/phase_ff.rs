@@ -986,6 +986,10 @@ enum FaceExtent {
         v1: f64,
         margin: f64,
         u_gap: Option<(f64, f64)>,
+        /// `v0` and `v1` are the face's true extremes: a cylinder or cone
+        /// bounded by one wire of rulings and coaxial circles, whose sampled
+        /// ends are exact. An ellipse or NURBS rim peaks between its samples.
+        exact_window: bool,
     },
 }
 
@@ -1105,12 +1109,26 @@ impl FaceExtent {
             // half of the cylinder is wrongly kept, wrapping the trimmed arc
             // onto the wrong side of the wedge.
             let u_gap = face_circumferential_u_gap(topo, face_id, surface);
+            // Only the outer wire sets the window and meets a circle's
+            // crossings, so a face with inner wires does not qualify.
+            let exact_window = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+                && topo.face(face_id).is_ok_and(|face| {
+                    face.inner_wires().is_empty()
+                        && topo.wire(face.outer_wire()).is_ok_and(|wire| {
+                            wire.edges().iter().all(|oe| {
+                                topo.edge(oe.edge()).is_ok_and(|e| {
+                                    matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_))
+                                })
+                            })
+                        })
+                });
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
                 v1,
                 margin,
                 u_gap,
+                exact_window,
             })
         }
     }
@@ -1135,6 +1153,25 @@ impl FaceExtent {
             }
             Self::Analytic { v0, v1, .. } => (v1 - v0).abs(),
         }
+    }
+
+    /// Whether `p` lies past a face's `v` window by more than `depth`: in
+    /// its boundary margin at most, never on the face. Only a window known to
+    /// be exact answers (a plane's is a sampled polygon an arc bulges past).
+    fn clear_of(&self, p: Point3, depth: f64) -> bool {
+        let Self::Analytic {
+            surface,
+            v0,
+            v1,
+            exact_window: true,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        surface
+            .project_point(p)
+            .is_some_and(|(_, v)| v < *v0 - depth || v > *v1 + depth)
     }
 
     /// Like `contains`, but requires the point to sit INSIDE the true face
@@ -1198,6 +1235,7 @@ impl FaceExtent {
                 v1,
                 margin,
                 u_gap,
+                ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
                 let in_v = v >= *v0 - *margin && v <= *v1 + *margin;
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
@@ -1645,6 +1683,19 @@ fn restrict_curves_to_faces(
             emit_curve_windows(
                 topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, closed, tol, junctions, &mut out,
             );
+            continue;
+        }
+        // A closed circle lying wholly in one face's boundary margin, past
+        // its window and crossing neither face's boundary, misses that face
+        // (a ball on a frustum's axis meets its extended wall just above the
+        // top). Upright its box misses the wall's; turned, only this reads it.
+        if closed
+            && let EdgeCurve::Circle(circle) = &raw.curve
+            && [&ext_a, &ext_b]
+                .iter()
+                .any(|ext| (0..N).all(|i| ext.clear_of(pt(i), 10.0 * tol.linear)))
+            && closed_circle_boundary_crossings(topo, fa, fb, circle, tol).len() < 2
+        {
             continue;
         }
         out.push(raw);

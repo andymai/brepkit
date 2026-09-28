@@ -1,8 +1,8 @@
 //! A ball on a cone's axis meets the cone's wall in circles: through the
 //! middle of a pointed cone, swallowing or touching its apex, across a
 //! frustum's wall and top, across the wall and the base, beside a frustum's
-//! wall without touching it, and just past tangency with a pointed cone's
-//! wall. In every pose each operation is
+//! wall without touching it, just past tangency with a pointed cone's wall,
+//! and touching only a frustum's cap. In every pose each operation is
 //! exact, valid and watertight, and holds the section-integrated volume.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -93,6 +93,10 @@ fn a_ball_on_a_cones_axis_is_exact() {
         // Just past tangency with the wall (whose distance from the axis
         // point is 3 / sqrt(5)): a band 1e-4 deep leaves the cone.
         (0.0, 3.0 / 5.0_f64.sqrt() + 1e-4, 0.0),
+        // Touching only the frustum's cap, leaving rings of it 0.006 and
+        // 0.0012 wide round its rim.
+        (1.5, 1.5148, 2.75),
+        (1.5, 1.5195, 2.75),
     ] {
         let cone = PI * 2.0 * top.mul_add(top, 3.0f64.mul_add(top, 9.0));
         let ball = 4.0 / 3.0 * PI * r.powi(3);
