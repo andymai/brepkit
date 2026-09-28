@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790581557456,
+  "lastUpdate": 1790582140884,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46547,6 +46547,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 37406195,
             "range": "± 78801",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "683b29b1c150f5871eb07097da3d5231ba063113",
+          "message": "docs(roadmap): record the missed rim crossings behind two ball fallbacks (#1887)\n\nThe roadmap now records two open boolean cases and the reasons their\nfixes remain parked.\n\n- `make_cone(3, 0, 6)` at `z = -3` against `make_sphere(5, 32)` at `(1,\n0, 1)`, a ball holding the apex and reaching past the base, falls back\nin every op. Phase EF never splits the base rim where the ball crosses\nit. `find_edge_surface_crossings` tests unsigned distance at 64 samples,\ndetecting a curved edge's transverse crossing of a curved surface only\nwhen a sample lands on it. The wall loop window ends 0.02 to 0.035 below\nthe base because its run's end samples pass the margin-inclusive extent\ntest but not the strict one, and `emit_curve_windows` brackets the\nbisection from them.\n\n- `make_cylinder(3, 6)` at `z = -3` within the same ball also falls\nback. The parked changes split the rim and close the sphere's side loop,\nbut the face splitter lays the cylinder's top rim a period low and\nplaces both seam uses at one `u`, leaving the wall as one piece.\n\nThe fixes live on `fix/ef-signed-crossings`, which uses signed-side\nchanges and strictly inside samples, but regresses\n`gridbin4x4_feet_fuse_is_exact_and_strictly_valid`,\n`slotted_nolip_socket_fuse_is_analytic_watertight`, and\n`halfsockets_export_fuse_is_analytic_and_watertight`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nThe roadmap now records two open boolean fallback cases and why the\nfixes remain parked.\n\n- A ball holding a pointed cone's apex and reaching past its base, plus\na cylinder's rim crossing the same ball, both miss rim crossings:\n`find_edge_surface_crossings` samples the unsigned distance at 64\npoints, and the wall loop's end samples pass only the margin-inclusive\nextent check.\n- The fix branch `fix/ef-signed-crossings` detects signed-side changes\nand brackets from strictly inside samples, but regresses\n`gridbin4x4_feet_fuse_is_exact_and_strictly_valid`,\n`slotted_nolip_socket_fuse_is_analytic_watertight`, and\n`halfsockets_export_fuse_is_analytic_and_watertight`.\n\n<sup>Written for commit 905eed0ad059d69926dbab9b849c40585d2201a2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1887?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-28T07:52:50Z",
+          "tree_id": "6501e5d6374dafc642ac33def679f88d0444bf72",
+          "url": "https://github.com/andymai/brepkit/commit/683b29b1c150f5871eb07097da3d5231ba063113"
+        },
+        "date": 1790582135238,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1021180,
+            "range": "± 1343",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1105003,
+            "range": "± 1616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13109,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771599,
+            "range": "± 2889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42354785,
+            "range": "± 467723",
             "unit": "ns/iter"
           }
         ]
