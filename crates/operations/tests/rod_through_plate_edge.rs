@@ -485,7 +485,9 @@ fn a_ball_and_a_ring_join_an_n_way_fuse() {
 /// `x = 0.4` the engine builds (a fallback there would be the new check
 /// firing where it should not). At `x = 0.4` turned 5.5 the wall split wrong
 /// across its seam and the builder dropped a real piece of it as a sliver:
-/// the fuse read as exact while failing validation, and falls back now.
+/// the fuse read as exact while failing validation, and falls back now. The
+/// exact fuses mesh watertight too, but for five turns at `x = 0` (an open
+/// roadmap row).
 #[test]
 fn a_pointed_cone_through_a_plate_edge_fuses_to_a_valid_solid() {
     let radius = |z: f64| 1.2 * (1.0 - (z + 4.0) / 10.0);
@@ -512,9 +514,14 @@ fn a_pointed_cone_through_a_plate_edge_fuses_to_a_valid_solid() {
             let report = validate_solid(&topo, fused).unwrap();
             assert!(report.is_valid(), "{label}: {:?}", report.issues);
             let builds_exactly = cx == 0.0 || matches!(k, 0..=5 | 7..=9 | 15);
+            let meshes_open = cx == 0.0 && matches!(k, 4 | 5 | 10..=12);
             let faces = solid_faces(&topo, fused).unwrap().len();
             if builds_exactly {
                 assert!(faces <= 12, "{label}: fell back to a mesh ({faces} faces)");
+            }
+            if faces <= 12 && !meshes_open {
+                let mesh = tessellate_solid(&topo, fused, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: the exact fuse meshes open");
             } else if faces > 12 {
                 let mesh = tessellate_solid(&topo, fused, 0.01).unwrap();
                 assert!(is_watertight(&mesh), "{label}: the mesh fallback is open");
