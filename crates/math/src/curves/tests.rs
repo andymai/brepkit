@@ -602,6 +602,86 @@ fn circle_intersect_circle_two_points() {
     }
 }
 
+/// The rim of a rod of radius 3 mitred by the plane z = 3 + 0.5 x: the
+/// ellipse centred on the axis at z = 3, its major axis up the slope.
+fn mitre_rim() -> Ellipse3D {
+    let root5 = 5.0_f64.sqrt();
+    Ellipse3D::with_axes(
+        Point3::new(0.0, 0.0, 3.0),
+        Vec3::new(-1.0 / root5, 0.0, 2.0 / root5),
+        3.0 * 1.25_f64.sqrt(),
+        3.0,
+        Vec3::new(2.0 / root5, 0.0, 1.0 / root5),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn circle_intersect_ellipse_crossing_its_plane() {
+    // The wall's circle at z = 4.3 crosses the rim where 3 + 0.5 x = 4.3.
+    let circle = Circle3D::new(Point3::new(0.0, 0.0, 4.3), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+    let hits = circle.intersect_ellipse(&mitre_rim(), 1e-9);
+    assert_eq!(hits.len(), 2);
+    let y = (9.0_f64 - 2.6 * 2.6).sqrt();
+    for (p, t) in &hits {
+        assert!((p.x() - 2.6).abs() < 1e-12, "{p:?}");
+        assert!((p.y().abs() - y).abs() < 1e-12, "{p:?}");
+        assert!((p.z() - 4.3).abs() < 1e-12, "{p:?}");
+        assert!((circle.evaluate(*t) - *p).length() < 1e-12);
+    }
+    assert!(hits[0].0.y() * hits[1].0.y() < 0.0);
+}
+
+#[test]
+fn circle_intersect_ellipse_at_and_past_its_peak() {
+    let rim = mitre_rim();
+    let at = |z: f64| {
+        Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), 3.0)
+            .unwrap()
+            .intersect_ellipse(&rim, 1e-9)
+    };
+    let touch = at(4.5);
+    assert_eq!(touch.len(), 1);
+    assert!((touch[0].0 - Point3::new(3.0, 0.0, 4.5)).length() < 1e-6);
+    assert!(at(4.6).is_empty());
+    // A circle of another radius in a crossed plane meets the ellipse nowhere.
+    let wide = Circle3D::new(Point3::new(0.0, 0.0, 4.3), Vec3::new(0.0, 0.0, 1.0), 3.5).unwrap();
+    assert!(wide.intersect_ellipse(&rim, 1e-9).is_empty());
+}
+
+#[test]
+fn circle_intersect_ellipse_in_its_plane() {
+    // The ellipse with semi-axes 2 and 1 crosses the circle of radius 1.5
+    // four times.
+    let ellipse = Ellipse3D::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        2.0,
+        1.0,
+    )
+    .unwrap();
+    let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.5).unwrap();
+    let hits = circle.intersect_ellipse(&ellipse, 1e-9);
+    assert_eq!(hits.len(), 4);
+    for (p, t) in &hits {
+        let d = *p - ellipse.center();
+        let (x, y) = (d.dot(ellipse.u_axis()) / 2.0, d.dot(ellipse.v_axis()));
+        assert!(
+            (x.mul_add(x, y * y) - 1.0).abs() < 1e-9,
+            "{p:?} is off the ellipse"
+        );
+        assert!(
+            ((*p - circle.center()).length() - 1.5).abs() < 1e-9,
+            "{p:?}"
+        );
+        assert!((circle.evaluate(*t) - *p).length() < 1e-9);
+    }
+    // In a parallel plane off it, none.
+    let above = Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0), 1.5).unwrap();
+    assert!(above.intersect_ellipse(&ellipse, 1e-9).is_empty());
+}
+
 #[test]
 fn circle_intersect_circle_lite_pad_configuration() {
     // The lite magnet-pad junction: pad circle r=4.45 about (-50,-76) crossing

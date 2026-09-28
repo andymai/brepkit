@@ -247,3 +247,84 @@ fn tube_cut_by_an_oblique_plane() {
         }
     }
 }
+
+/// A rod mitred by an oblique plane, then cut by a slab across the plane's
+/// high side: the slab's face meets the wall along the arc of its circle
+/// under the ellipse rim, ending where it crosses the rim. With the rim
+/// rising from the seam, 22.5 or 45 degrees off it or on it, and the slab
+/// low on the tip, high on it or level with its peak, each result
+/// holds the volume and keeps none of the tip past the slab. These fall
+/// back to the mesh boolean (the roadmap's mitred-rod row), and an exact
+/// result must hold the volume to within rounding.
+#[test]
+fn mitred_rod_cut_by_a_slab_across_its_rim() {
+    let (radius, height_at_axis, slope) = (3.0_f64, 3.0_f64, 0.5_f64);
+    for turn_deg in [0.0_f64, 22.5, 45.0, 135.0] {
+        // The last touches the rim's peak and cuts nothing.
+        for top in [4.07_f64, 4.09, 4.3, 4.45, 4.5] {
+            let label = format!("turned {turn_deg} degrees, slab at {top}");
+            let (s, c) = turn_deg.to_radians().sin_cos();
+            let plane_z = |x: f64, y: f64| slope.mul_add(x * c + y * s, height_at_axis);
+            // The mitred rod less the slab's cut of it: across the disc,
+            // where the rim rises past the slab (beyond x0 along the rise),
+            // the plane's height over the slab, integrated over the segment.
+            let x0 = (top - height_at_axis) / slope;
+            let w = radius.mul_add(radius, -(x0 * x0)).sqrt();
+            let segment = x0.mul_add(
+                -(radius * radius)
+                    .mul_add(0.5 * (0.5 * PI - (x0 / radius).asin()), -(0.5 * x0 * w)),
+                w.powi(3) / 3.0,
+            );
+            let truth = (PI * radius * radius).mul_add(height_at_axis, -2.0 * slope * segment);
+
+            let mut topo = Topology::new();
+            let rod = make_cylinder(&mut topo, radius, 6.0).unwrap();
+            let lid = make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            let place = Mat4::rotation_z(turn_deg.to_radians())
+                * Mat4::translation(0.0, 0.0, height_at_axis)
+                * Mat4::rotation_y(-slope.atan())
+                * Mat4::translation(-10.0, -10.0, 0.0);
+            transform_solid(&mut topo, lid, &place).unwrap();
+            let mitred = boolean(&mut topo, BooleanOp::Cut, rod, lid).unwrap();
+            let slab = make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+            transform_solid(&mut topo, slab, &Mat4::translation(-10.0, -10.0, top)).unwrap();
+            let cut = boolean(&mut topo, BooleanOp::Cut, mitred, slab).unwrap();
+
+            let report = validate_solid(&topo, cut).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, cut, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            // Exact, the solid holds the truth; as a mesh, it is short by the
+            // chords of its curved faces.
+            let exact = solid_faces(&topo, cut).unwrap().len() <= 8;
+            let volume = solid_volume(&topo, cut, 0.01).unwrap();
+            let slack = if exact { 1e-9 } else { 1e-2 } * truth;
+            assert!(
+                (volume - truth).abs() < slack,
+                "{label}: volume {volume}, truth {truth}, exact {exact}"
+            );
+            let classify = |x: f64, y: f64, z: f64| {
+                classify_point(
+                    &topo,
+                    cut,
+                    Point3::new(x, y, z),
+                    &ClassifyOptions::default(),
+                )
+                .unwrap()
+            };
+            let (tx, ty) = (2.99 * c, 2.99 * s);
+            if plane_z(tx, ty) > top {
+                assert_eq!(
+                    classify(tx, ty, 0.5 * (top + plane_z(tx, ty))),
+                    PointClassification::Outside,
+                    "{label}: the tip past the slab"
+                );
+            }
+            assert_eq!(
+                classify(0.0, 0.0, 1.0),
+                PointClassification::Inside,
+                "{label}: below the slab"
+            );
+        }
+    }
+}

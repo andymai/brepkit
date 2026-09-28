@@ -569,6 +569,77 @@ impl Circle3D {
         }
         out
     }
+
+    /// Where an ellipse meets this circle, with this circle's parameter at
+    /// each point: the ellipse's crossings of this circle's plane that lie at
+    /// its radius, as where a wall's circle meets its oblique ellipse rim. In
+    /// this circle's plane, the points where the ellipse crosses the circle
+    /// (a touch without a crossing is missed); in a parallel plane, none.
+    #[must_use]
+    pub fn intersect_ellipse(&self, ellipse: &Ellipse3D, tol: f64) -> Vec<(Point3, f64)> {
+        let mut out: Vec<(Point3, f64)> = Vec::new();
+        let mut push = |p: Point3| {
+            let v = p - self.center;
+            let mut t = v.dot(self.v_axis).atan2(v.dot(self.u_axis));
+            if t < 0.0 {
+                t += std::f64::consts::TAU;
+            }
+            if !out
+                .iter()
+                .any(|(q, _): &(Point3, f64)| (*q - p).length() < tol)
+            {
+                out.push((p, t));
+            }
+        };
+        // The ellipse's height over this plane is h + a cos s + b sin s.
+        let n = self.normal;
+        let a = ellipse.semi_major() * ellipse.u_axis().dot(n);
+        let b = ellipse.semi_minor() * ellipse.v_axis().dot(n);
+        let h = (ellipse.center() - self.center).dot(n);
+        let amp = a.hypot(b);
+        if amp <= tol {
+            if h.abs() <= tol {
+                // Coplanar: the sign changes of |e(s) - c|^2 - r^2 around the
+                // ellipse, each narrowed by bisection.
+                const STEPS: u32 = 256;
+                let g = |s: f64| {
+                    let d = ellipse.evaluate(s) - self.center;
+                    self.radius.mul_add(-self.radius, d.dot(d))
+                };
+                let mut prev = (0.0, g(0.0));
+                for k in 1..=STEPS {
+                    let s = std::f64::consts::TAU * f64::from(k) / f64::from(STEPS);
+                    let cur = (s, g(s));
+                    if (prev.1 <= 0.0) != (cur.1 <= 0.0) {
+                        let (mut lo, mut hi) = (prev, cur);
+                        for _ in 0..60 {
+                            let mid = f64::midpoint(lo.0, hi.0);
+                            let gm = g(mid);
+                            if (gm <= 0.0) == (lo.1 <= 0.0) {
+                                lo = (mid, gm);
+                            } else {
+                                hi = (mid, gm);
+                            }
+                        }
+                        push(ellipse.evaluate(f64::midpoint(lo.0, hi.0)));
+                    }
+                    prev = cur;
+                }
+            }
+            return out;
+        }
+        if h.abs() > amp + tol {
+            return out;
+        }
+        let (phi, spread) = (b.atan2(a), (-h / amp).clamp(-1.0, 1.0).acos());
+        for s in [phi - spread, phi + spread] {
+            let p = ellipse.evaluate(s);
+            if ((p - self.center).length() - self.radius).abs() <= tol {
+                push(p);
+            }
+        }
+        out
+    }
 }
 
 // ── Ellipse3D ──────────────────────────────────────────────────────
