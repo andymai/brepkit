@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790596228817,
+  "lastUpdate": 1790598485224,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47087,6 +47087,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42793808,
             "range": "± 295800",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "53cd9ec9ea7db0c747e54d24106c7f62282479a8",
+          "message": "fix(algo): split a wall's circle where it crosses an oblique ellipse rim (#1900)\n\nMitred rod slab cuts that could return valid but silently wrong solids\nnow produce exact results where supported and otherwise use the mesh\nboolean fallback.\n\n## What was wrong\n\n- The case is `make_cylinder(3, 6)` less the half-space above `z = 3 +\n0.5 (x cos t + y sin t)`, then less a slab above `z = top`. The wall's\ntop rim is one closed ellipse edge peaking at 4.5. Turns of 0, 22.5, 45,\n135, 225, and 315 degrees were probed.\n- On main, tops from 4.07 to 4.3 usually passed `validate_solid` but\nwere 19.6 to 49.1 off in volume, against a truth of about 84.4. At 4.3,\nthe slab was ignored when the rim peak was at least 45 degrees from the\nseam. At turn 0, tops from 4.45 to 4.4999 produced volumes from 139 to\n141. At turn 22.5 and beyond, tops 4.45 and 4.49 ignored the slab, with\nerrors of 2.06e-3 and 3.68e-5.\n- `circle_face_hits` skipped ellipse boundary edges, so the slab plane's\ncircle found no rim crossings and remained as a whole internal loop.\n`emit_split_circle_arcs` classified the wall by its box, retaining\nfar-side arcs above the rim, while nine samples per rim edge missed arcs\njust below its peak. `face_v_range` similarly used five samples per edge\nand under-reported peaks between samples.\n- With the true wall range, a circle level with the peak only touched\nthe wall once and remained whole.\n\n## What this does\n\n- `Circle3D::intersect_ellipse` finds ellipse crossings of the circle\nplane at the circle radius. For coplanar pairs, it finds sign changes of\n`|e(s) - c|^2 - r^2` and narrows them by bisection. A touch without a\ncrossing is missed. `circle_face_hits` now accepts ellipse hits within\nthe edge span, with slack at both ends.\n- `LateralTrim`, built around `UvTrim`, evaluates a cylinder or cone\nface against its wires in `(u, v)`. The arc filter requires it in place\nof the wall box.\n- For ellipse edges on cylinders or cones, `face_v_range` includes the\nrim's axial highest and lowest points when the arc contains them.\n- A closed circle crossing no boundary twice is either wholly on a wall\nor wholly off it. It is dropped when more than half of eight samples lie\noutside the wall trim.\n- Every slab from 4.07 through 4.49 uses the mesh boolean fallback and\nis valid, watertight, and 0.4% short in volume. At 4.5, the slab cuts\nnothing and returns the exact mitred rod at every turn.\n- At 1e-4 below the peak, a tip of 4e-10 returns three faces and is 1e-5\noff in volume; its mesh is open at turn 0. The roadmap has a Closed\nentry for the silently wrong results and an open row naming the\nremaining roots for the fallbacks and this tip case.\n\n## Verification\n\n- With the ellipse hits, the arc filter's trim and the axial ranges\nalone in place, disabling each made 18, 8, and 4 of 24 slab cells\nsilently wrong. Without the zero-crossing circle rule, five cells at 4.5\nwere 20 to 26 off. Without trim replacing the box, the two 22.5-degree\ncells at 4.45 and 4.49 ignored the slab.\n- `intersect_ellipse` unit tests cover two mitre-rim crossings at `x =\n2.6`, one peak touch, none above the peak or at another radius, four\ncoplanar crossings, and none in a parallel plane.\n- `mitred_rod_cut_by_a_slab_across_its_rim` covers turns 0, 22.5, 45,\nand 135 and tops 4.07, 4.09, 4.3, 4.45, and 4.5. It checks validity,\nwatertightness, closed-form volume truth, and tip classification. Exact\nresults of at most eight faces require `1e-9` relative volume agreement;\nfallbacks allow 1%. The test fails on main.\n- `brepkit-math`, `brepkit-algo`, `brepkit-operations`, and `brepkit-io`\npass: 2410 tests, 17 skipped. The pose sweep and `truth_audit` match the\nbase.",
+          "timestamp": "2026-09-28T05:25:45-07:00",
+          "tree_id": "2f8ecbcc430eb6ba99dabb5f63298cfd15ae471b",
+          "url": "https://github.com/andymai/brepkit/commit/53cd9ec9ea7db0c747e54d24106c7f62282479a8"
+        },
+        "date": 1790598480677,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 591833,
+            "range": "± 5143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 649297,
+            "range": "± 5353",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8473,
+            "range": "± 82",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 463737,
+            "range": "± 46403",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29063451,
+            "range": "± 152428",
             "unit": "ns/iter"
           }
         ]
