@@ -2205,12 +2205,16 @@ pub(super) fn tessellate_nonplanar_cdt(
             // halves are put on the seam's two sides, the apex row joining
             // them is inserted here, `(after index, from u, to u, v, id)`.
             let mut apex_rows: Vec<(usize, f64, f64, f64, u32)> = Vec::new();
-            // A holed cone, or one whose seam a hole notches (the seam is then
-            // more than one edge): its wall takes the refined developable
-            // metric below; a whole cone keeps the snap mesher's grid.
+            // A holed cone, one whose seam a hole notches (the seam is then
+            // more than one edge), or a tip a section bounds: its wall takes
+            // the refined developable metric below; a whole cone keeps the
+            // snap mesher's grid.
+            let section_tip = is_section_tip(topo, face_data)?;
             let apex = match face_data.surface() {
                 FaceSurface::Cone(cone)
-                    if !face_data.inner_wires().is_empty() || seam_edge_indices.len() > 1 =>
+                    if !face_data.inner_wires().is_empty()
+                        || seam_edge_indices.len() > 1
+                        || section_tip =>
                 {
                     Some(cone.apex())
                 }
@@ -2586,8 +2590,11 @@ pub(super) fn tessellate_nonplanar_cdt(
     // edges (arcs, lines or marched pieces) notching the wire between the
     // seam's two copies. It leaves the same rim-to-hole fans. So does a wall
     // a section loop winds round, whose loop dips between its seam copies:
-    // across the dip Delaunay joins the loop's two sides.
-    let notched_wall = is_notched_wall(topo, face_data)? || is_wound_wall(topo, face_data)?;
+    // across the dip Delaunay joins the loop's two sides. And a pointed
+    // cone's tip a section bounds fans from its apex row to the section.
+    let notched_wall = is_notched_wall(topo, face_data)?
+        || is_wound_wall(topo, face_data)?
+        || is_section_tip(topo, face_data)?;
     let holed_wall_radius = if holes.is_empty() && !notched_wall {
         None
     } else {
@@ -4466,6 +4473,29 @@ pub(super) fn is_wound_wall(
         }
     }
     Ok(seam_twice && section)
+}
+
+/// Whether a cone face is a pointed cone's tip that a section bounds: its
+/// wire reaches the apex and carries a NURBS or ellipse edge.
+pub(super) fn is_section_tip(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    let FaceSurface::Cone(cone) = face_data.surface() else {
+        return Ok(false);
+    };
+    let (mut apex, mut section) = (false, false);
+    for oe in topo.wire(face_data.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        for v in [edge.start(), edge.end()] {
+            apex |= (topo.vertex(v)?.point() - cone.apex()).length() < 1e-9;
+        }
+        section |= matches!(
+            edge.curve(),
+            EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_)
+        );
+    }
+    Ok(apex && section)
 }
 
 /// Evaluate a non-planar surface at `(u, v)` and return a 3D point.

@@ -19,7 +19,7 @@ use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
 use brepkit_operations::measure::{face_area, solid_volume};
 use brepkit_operations::mirror::mirror;
 use brepkit_operations::primitives::{make_box, make_cone};
-use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::tessellate::{is_watertight, tessellate, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -207,6 +207,28 @@ fn cone_cut_by_a_plane_across_its_wall() {
             "{label}: mesh volume {meshed}, truth {}",
             case.volume
         );
+
+        // A pointed tip meshes on its own too, as a per-face export takes it.
+        if case.keep_tip && case.top_radius == 0.0 {
+            let own = tessellate(&topo, wall, 0.01).unwrap();
+            let own_area: f64 = own
+                .indices
+                .chunks_exact(3)
+                .map(|t| {
+                    let [a, b, c] = [0, 1, 2].map(|k| own.positions[t[k] as usize]);
+                    0.5 * (b - a).cross(c - a).length()
+                })
+                .sum();
+            assert!(
+                (own_area - case.wall).abs() < 1e-2 * case.wall,
+                "{label}: the wall meshes {own_area} on its own, truth {}",
+                case.wall
+            );
+        }
+        // Mirrored afterwards, its wires run the other way round.
+        transform_solid(&mut topo, piece, &Mat4::scale(-1.0, 1.0, 1.0)).unwrap();
+        let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{label}: open mesh mirrored");
     }
 }
 
