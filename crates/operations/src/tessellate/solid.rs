@@ -9,7 +9,7 @@ use brepkit_topology::solid::SolidId;
 
 use super::TriangleMesh;
 use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_deviation_a};
-use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
+use super::mesh_ops::{dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices};
 use super::nonplanar::{
     circle_pole_params, tessellate_latitude_band_shared, tessellate_nonplanar_cdt,
     tessellate_nonplanar_snap, tessellate_revolution_band_shared, tessellate_torus_notch_band,
@@ -586,7 +586,8 @@ fn tessellate_solid_core(
     // When tracking, `tri_faces` runs parallel to the mesh triangles:
     // tri_faces[t] is the index (into `all_faces`) of the face that produced
     // triangle t. The ungrouped caller skips this bookkeeping entirely.
-    let mut tri_faces: Option<Vec<u32>> = track_faces.then(Vec::new);
+    // Tracked always: the pinched-chord pass needs each triangle's face.
+    let mut tri_faces: Option<Vec<u32>> = Some(Vec::new());
     #[allow(clippy::items_after_statements)]
     struct CdtJob {
         face_index: u32,
@@ -942,7 +943,20 @@ fn tessellate_solid_core(
     dedupe_coincident_triangles(&mut merged, tri_faces.as_mut());
     phase("weld_dedupe", &mut phase_t);
 
-    Ok((merged, tri_faces, all_faces.len()))
+    if let Some(tf) = tri_faces.as_mut() {
+        let surfaces: Vec<Option<FaceSurface>> = all_faces
+            .iter()
+            .map(|&f| topo.face(f).ok().map(|fd| fd.surface().clone()))
+            .collect();
+        let on_face = |fi: u32, p: Point3| -> Option<Point3> {
+            let surface = surfaces.get(fi as usize)?.as_ref()?;
+            let (u, v) = surface.project_point(p)?;
+            surface.evaluate(u, v)
+        };
+        split_pinched_chords(&mut merged, tf, &on_face);
+    }
+
+    Ok((merged, tri_faces.filter(|_| track_faces), all_faces.len()))
 }
 
 /// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid

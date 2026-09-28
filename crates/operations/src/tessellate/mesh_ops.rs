@@ -72,6 +72,112 @@ pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
     edge_count.values().filter(|&&c| c > 2).count()
 }
 
+/// Split the chords two faces both lay between the same two vertices: where
+/// the faces pass within the deflection of each other (a rod's wall 0.004
+/// inside a ball, between the two curves where it leaves the ball), each
+/// face's mesh bridges the narrow gap with the same straight edge, which then
+/// bounds four triangles. One face's pair is split at its own surface point
+/// over the edge's midpoint (`on_face`: the face index and a point to the
+/// point of that face's surface over it), taking the face whose surface
+/// stands farther off the chord, and the two sheets part there.
+pub(super) fn split_pinched_chords(
+    mesh: &mut TriangleMesh,
+    tri_faces: &mut Vec<u32>,
+    on_face: &dyn Fn(u32, Point3) -> Option<Point3>,
+) {
+    let key = |a: u32, b: u32| if a < b { (a, b) } else { (b, a) };
+    // Each round splits the pinched chords whose triangles no earlier split
+    // in the round touched, then the edges are read again.
+    for _ in 0..8 {
+        let mut by_edge: DetHashMap<(u32, u32), Vec<usize>> = DetHashMap::default();
+        for (t, tri) in mesh.indices.chunks_exact(3).enumerate() {
+            for k in 0..3 {
+                by_edge
+                    .entry(key(tri[k], tri[(k + 1) % 3]))
+                    .or_default()
+                    .push(t);
+            }
+        }
+        let mut pinched: Vec<((u32, u32), Vec<usize>)> = by_edge
+            .into_iter()
+            .filter(|(_, tris)| tris.len() == 4)
+            .collect();
+        pinched.sort_unstable_by_key(|(e, _)| *e);
+        let mut touched: DetHashSet<usize> = DetHashSet::default();
+        let mut split_any = false;
+        for ((a, b), tris) in pinched {
+            if tris.iter().any(|t| touched.contains(t)) {
+                continue;
+            }
+            let faces: Vec<u32> = tris.iter().map(|&t| tri_faces[t]).collect();
+            let (f0, f1) = (faces[0], faces.iter().copied().find(|&f| f != faces[0]));
+            let Some(f1) = f1 else {
+                continue;
+            };
+            if faces.iter().filter(|&&f| f == f0).count() != 2 {
+                continue;
+            }
+            let (pa, pb) = (mesh.positions[a as usize], mesh.positions[b as usize]);
+            let mid = Point3::new(
+                0.5 * (pa.x() + pb.x()),
+                0.5 * (pa.y() + pb.y()),
+                0.5 * (pa.z() + pb.z()),
+            );
+            let off = |f: u32| on_face(f, mid).map(|q| ((q - mid).length(), q));
+            let chosen = match (off(f0), off(f1)) {
+                (Some((d0, q0)), Some((d1, q1))) => {
+                    if d0 >= d1 {
+                        (f0, d0, q0)
+                    } else {
+                        (f1, d1, q1)
+                    }
+                }
+                (Some((d0, q0)), None) => (f0, d0, q0),
+                (None, Some((d1, q1))) => (f1, d1, q1),
+                (None, None) => continue,
+            };
+            let (face, gap, q) = chosen;
+            if gap <= 1e-9 * (pb - pa).length() {
+                continue;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let m = mesh.positions.len() as u32;
+            mesh.positions.push(q);
+            let n = mesh.normals[a as usize] + mesh.normals[b as usize];
+            mesh.normals
+                .push(n.normalize().unwrap_or(mesh.normals[a as usize]));
+            let own: Vec<usize> = tris
+                .iter()
+                .copied()
+                .filter(|&t| tri_faces[t] == face)
+                .collect();
+            for t in own {
+                let tri = [
+                    mesh.indices[3 * t],
+                    mesh.indices[3 * t + 1],
+                    mesh.indices[3 * t + 2],
+                ];
+                // The edge runs from tri[k] to tri[k + 1] in the triangle's
+                // own winding, which both halves keep.
+                let Some(k) =
+                    (0..3).find(|&k| key(tri[k], tri[(k + 1) % 3]) == (a.min(b), a.max(b)))
+                else {
+                    continue;
+                };
+                let (x, y, z) = (tri[k], tri[(k + 1) % 3], tri[(k + 2) % 3]);
+                mesh.indices[3 * t..3 * t + 3].copy_from_slice(&[x, m, z]);
+                mesh.indices.extend_from_slice(&[m, y, z]);
+                tri_faces.push(face);
+            }
+            touched.extend(tris);
+            split_any = true;
+        }
+        if !split_any {
+            break;
+        }
+    }
+}
+
 /// Remove duplicate triangles, cancelling opposing pairs and dedup same-winding pairs.
 ///
 /// Workaround for issue #696: when a boolean leaves overlapping coplanar faces
