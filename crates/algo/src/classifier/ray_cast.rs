@@ -1395,6 +1395,76 @@ impl UvTrim {
     }
 }
 
+/// A cylinder or cone face's wires in its `(u, v)`, to read whether a point
+/// of its surface lies on the face itself, however its rims bow (an oblique
+/// ellipse rim peaks between any `v` range's samples).
+pub struct LateralTrim {
+    surface: brepkit_topology::face::FaceSurface,
+    trim: UvTrim,
+}
+
+impl LateralTrim {
+    /// The trim of a cylinder or cone face. `None` for any other surface, or
+    /// a face whose wires hold no edge of any length.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgoError`] if a topology lookup fails.
+    pub fn new(
+        topo: &Topology,
+        face_id: brepkit_topology::face::FaceId,
+    ) -> Result<Option<Self>, AlgoError> {
+        use brepkit_topology::face::FaceSurface;
+        let face = topo.face(face_id)?;
+        let surface = face.surface().clone();
+        let trim = match &surface {
+            FaceSurface::Cylinder(cyl) => {
+                UvTrim::new(topo, face, &|p| cyl.project_point(p), &|_| cyl.radius())?
+            }
+            FaceSurface::Cone(cone) => UvTrim::new(topo, face, &|p| cone.project_point(p), &|v| {
+                cone.radius_at(v)
+            })?,
+            FaceSurface::Plane { .. }
+            | FaceSurface::Nurbs(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => None,
+        };
+        Ok(trim.map(|trim| Self { surface, trim }))
+    }
+
+    /// Whether `point`, on the face's surface, lies on the face: within
+    /// `near` of a wire counts as on it. On a cone, a point on the nappe the
+    /// face's wires avoid does not.
+    pub fn holds(&self, point: Point3, near: f64) -> bool {
+        use brepkit_topology::face::FaceSurface;
+        match &self.surface {
+            FaceSurface::Cylinder(cyl) => {
+                let project = |p: Point3| cyl.project_point(p);
+                let (u, v) = project(point);
+                let (on, close) = self.trim.contains(u, v, 1.0, cyl.radius(), near, &project);
+                on || close
+            }
+            FaceSurface::Cone(cone) => {
+                let project = |p: Point3| cone.project_point(p);
+                let (v_min, v_max) = self.trim.v_bounds();
+                let away = if v_max >= -v_min { 1.0 } else { -1.0 };
+                let (u, v) = project(point);
+                if v * away < -near {
+                    return false;
+                }
+                let (on, close) =
+                    self.trim
+                        .contains(u, v, away, cone.radius_at(v).abs(), near, &project);
+                on || close
+            }
+            FaceSurface::Plane { .. }
+            | FaceSurface::Nurbs(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => true,
+        }
+    }
+}
+
 impl UvEdge {
     /// The `v` where the edge between samples `a` and `b` (offset `ga` and
     /// `gb` from `u`) reaches `u`, found on the curve by regula falsi with

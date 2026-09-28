@@ -3661,6 +3661,32 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
                 }
             }
         }
+        // An oblique ellipse rim on a wall peaks between those samples (a
+        // tube cut along a slant, rising 45 degrees from its seam). Along a
+        // cylinder's or cone's axis `v` grows with height, so the rim's
+        // highest and lowest points, where its arc holds them, bound it.
+        let wall_axis = match surface {
+            FaceSurface::Cylinder(c) => Some(c.axis()),
+            FaceSurface::Cone(c) => Some(c.axis()),
+            FaceSurface::Plane { .. }
+            | FaceSurface::Nurbs(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => None,
+        };
+        if let (EdgeCurve::Ellipse(el), Some(axis)) = (edge.curve(), wall_axis) {
+            let rise = el.semi_minor() * el.v_axis().dot(axis);
+            let peak = rise.atan2(el.semi_major() * el.u_axis().dot(axis));
+            for s in [peak, peak + std::f64::consts::PI] {
+                let s = (s - t0).rem_euclid(std::f64::consts::TAU) + t0;
+                if s <= t1
+                    && let Some((_, v)) =
+                        surface.project_point(edge.curve().evaluate_with_endpoints(s, sp, ep))
+                {
+                    v_min = v_min.min(v);
+                    v_max = v_max.max(v);
+                }
+            }
+        }
     }
     if matches!(surface, FaceSurface::Sphere(_)) && u_progress.abs() > std::f64::consts::PI {
         if u_progress > 0.0 {
@@ -5031,7 +5057,21 @@ fn circle_face_hits(
                     }
                 }
             }
-            _ => continue,
+            // An oblique rim (a tube cut along a slant): a circle of the
+            // wall crossing it below the rim's peak leaves the face there,
+            // and uncounted it would be kept whole as an internal loop.
+            EdgeCurve::Ellipse(el) => {
+                let full = (sv.point() - ev.point()).length() < tol.linear;
+                let (t0, t1) = edge.curve().domain_with_endpoints(sv.point(), ev.point());
+                let slack = tol.linear / el.semi_minor().max(tol.linear);
+                for (p, t) in circle.intersect_ellipse(el, tol.linear) {
+                    let s = (el.project(p) - t0).rem_euclid(std::f64::consts::TAU) + t0;
+                    if full || s <= t1 + slack {
+                        edge_hits.push((t, p, Some(oe.edge())));
+                    }
+                }
+            }
+            EdgeCurve::NurbsCurve(_) => continue,
         }
         for (t, p, src) in edge_hits {
             let dup = hits
@@ -5584,6 +5624,14 @@ fn emit_split_circle_arcs(
     };
     let loops_a = planar_loops(face_a);
     let loops_b = planar_loops(face_b);
+    // A cylinder or cone face's region read against its own wires: its box
+    // holds the arc of a wall's circle that runs above an oblique rim.
+    let lateral = |fid: FaceId| {
+        crate::classifier::LateralTrim::new(topo, fid)
+            .ok()
+            .flatten()
+    };
+    let (trim_a, trim_b) = (lateral(face_a), lateral(face_b));
     // The sagitta band applies per chord, and only to a chord short enough to
     // be one of a rim arc's sixteen samples on this circle: a straight side
     // (a turned box face's ten-unit edge) would otherwise widen the band by
@@ -5625,6 +5673,8 @@ fn emit_split_circle_arcs(
             && side_ok(&side_b)
             && in_region(&loops_a, p)
             && in_region(&loops_b, p)
+            && trim_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && trim_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*

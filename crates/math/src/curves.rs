@@ -569,6 +569,40 @@ impl Circle3D {
         }
         out
     }
+
+    /// Where an ellipse meets this circle, with this circle's parameter at
+    /// each point: the ellipse's crossings of this circle's plane that lie at
+    /// its radius, as where a wall's circle meets its oblique ellipse rim. An
+    /// ellipse in a plane parallel to this one's gives none.
+    #[must_use]
+    pub fn intersect_ellipse(&self, ellipse: &Ellipse3D, tol: f64) -> Vec<(Point3, f64)> {
+        let mut out: Vec<(Point3, f64)> = Vec::new();
+        // The ellipse's height over this plane is h + a cos s + b sin s.
+        let n = self.normal;
+        let a = ellipse.semi_major() * ellipse.u_axis().dot(n);
+        let b = ellipse.semi_minor() * ellipse.v_axis().dot(n);
+        let h = (ellipse.center() - self.center).dot(n);
+        let amp = a.hypot(b);
+        if amp <= tol || h.abs() > amp + tol {
+            return out;
+        }
+        let (phi, spread) = (b.atan2(a), (-h / amp).clamp(-1.0, 1.0).acos());
+        for s in [phi - spread, phi + spread] {
+            let p = ellipse.evaluate(s);
+            if ((p - self.center).length() - self.radius).abs() > tol {
+                continue;
+            }
+            let v = p - self.center;
+            let mut t = v.dot(self.v_axis).atan2(v.dot(self.u_axis));
+            if t < 0.0 {
+                t += std::f64::consts::TAU;
+            }
+            if !out.iter().any(|(q, _)| (*q - p).length() < tol) {
+                out.push((p, t));
+            }
+        }
+        out
+    }
 }
 
 // ── Ellipse3D ──────────────────────────────────────────────────────
