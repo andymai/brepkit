@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790560162133,
+  "lastUpdate": 1790560765147,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -45845,6 +45845,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27994386,
             "range": "± 251801",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "752acf82bdebb466406562f333293db1ce75e4c5",
+          "message": "fix(algo): cut a section window at its own seam crossings (#1873)\n\nAll four ball through cylinder wall placements now produce exact, valid,\nwatertight Cut, Intersect, and Fuse results across upright, turned,\nslanted plane mirrored, and `scale(-1, 1, 1)` poses, with volumes\nmatching section integration to about `1e-5`.\n\n## What was wrong\n\n- The case: `make_cylinder(2, 6)` at `z = -3` with `make_sphere(1.1,\n32)` at `(1, 0.8, 1.2)`, `(1, 0.8, 0)` or `(1.28, 0, 1.2)`, or\n`make_sphere(1, 32)` at `(1.5, 0, 0)`. On main all four placements use\nthe mesh boolean for Cut and Intersect, and the two `(1, 0.8)`\nplacements also for Fuse. At `(1, 0.8, 1.2)`, Cut reports `69.954`\nagainst `70.397`, and Intersect `4.856` against `5.001`.\n\n- The section loop crosses the ball's chordal equator, so\n`restrict_curves_to_faces` gives each hemisphere a parameter window of\none closed NURBS. `compute_seam_anchors`\n(`crates/algo/src/builder/fill_images_faces.rs`) treated every closed\nNURBS as a whole loop and cut it at the wall seam crossings, giving each\nhemisphere all four arcs. The identical inner pieces were removed by\n`remove_doubled_faces`, leaving the shell open.\n\n- When the ball is off the wall seam line, neither window crosses a seam\nand the windows share both ends. The wall received one section instead\nof two, and each hemisphere split was empty.\n\n- In mirrored poses, the wall mesh lost the strip between its seam and\nthe rims' last samples. `tessellate_nonplanar_cdt`\n(`crates/operations/src/tessellate/nonplanar.rs`) placed each seam run\nat the `u` bounds of non-seam boundary samples. When both rims assigned\ntheir seam vertex to the seam runs, those bounds stopped one sample,\n`11.25` degrees, short of the period on that side.\n\n## What this does\n\n- `cut_window_at_seams` cuts only at seam crossings inside a window. A\nwindow that shares both ends with another NURBS section on one of its\nfaces is cut at its middle.\n\n- `seam_span` takes the seam's `u` from its own projection, to within\nwhole periods, when the rims' span falls short of the period but covers\nmore than three quarters of it.\n\n- The roadmap adds a Closed entry for this case. The seam-adjacent hole\nrow is narrowed to the remaining open-mesh case: the rod at `x = 0.4`,\nturned 2 radians and fused with the plate. Its other cases are exact and\nwatertight on main, now pinned in\n`crates/operations/tests/rod_through_plate_edge.rs` (the fuse at `x = 0`\nturned 1 radian, and the cuts at `x = 0` and `x = 0.7`).\n\n## Verification\n\n- `crates/operations/tests/ball_through_a_cylinder_wall.rs` covers 48\ncells from four placements, three operations, and four poses. It\nrequires at most 8 faces, including sphere and cylinder faces with no\nNURBS faces, validity, watertight tessellation, volume within `1e-4`,\nand classification of the ball centre and a point in the bulge. The test\nfails on main.\n\n- Before the tessellator change, the 8 mirrored and scaled Cut and Fuse\ncells at the `(1, 0.8)` placements were exact and valid but meshed open.\n\n- The workspace suite passes: 3227 tests, 20 skipped. The 300-line pose\nsweep and `truth_audit` match main. `approx_census` matches main apart\nfrom the face pair named in the NURBS loft offset error, which varies\nbetween runs.",
+          "timestamp": "2026-09-28T01:57:07Z",
+          "tree_id": "06c15c7291806cf82215fc84a291c80e4b84fe37",
+          "url": "https://github.com/andymai/brepkit/commit/752acf82bdebb466406562f333293db1ce75e4c5"
+        },
+        "date": 1790560760257,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 582810,
+            "range": "± 7258",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 634777,
+            "range": "± 22977",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8242,
+            "range": "± 214",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 453501,
+            "range": "± 12963",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28818160,
+            "range": "± 684440",
             "unit": "ns/iter"
           }
         ]
