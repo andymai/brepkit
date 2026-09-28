@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790564533883,
+  "lastUpdate": 1790568471799,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46061,6 +46061,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43131111,
             "range": "± 4197995",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16246f0994bbb6a7081ea487769c44c723cf5b15",
+          "message": "fix(math): trace a ball beside a cone over the generators that reach it (#1878)\n\nCone and sphere booleans reached by only some cone generators are now\nexact, valid, and watertight, including a pin laid across a ball’s\nequator.\n\n## What was wrong\n\n- `ruling_cone_sphere` accepted a ball only when every generator crossed\nit twice ahead of the apex. Other cone and sphere pairs went to the\nmarcher. On main, all five tested placements use the mesh boolean. The\nCut at `(1, 0.8, 1.2)` is 0.26 off.\n\n- The intersection loop crosses the ball’s chordal equator, so each\nhemisphere takes a window. When an in-both run wrapped the start of a\nclosed NURBS, phase FF trimmed at sample indices instead of the window\nboundary. At `(1, 0.8, 1.2)`, the ends were 0.087 above the equator and\nthe hemisphere split was empty.\n\n- A pointed cone wall notched across its seam meshed open. The Cut at\n`(1.5, 0, 0)` had 40 open or non-manifold mesh edges. The seam turns at\nthe apex, but the continuous `u` walk carried the apex’s arbitrary `u`\ninto the hole’s second half. Per-face tessellation also gridded the\nwhole cone for this wall.\n\n## What this does\n\n- `window_cone_sphere` handles an apex outside the ball. Generators\nintersect twice ahead of the apex where `h(u) = c + A cos(u - φ) <=\n-√K`, with `K = |apex - C|² - R²`. This defines one `u` arc with\ntouching endpoints. Tracing `u = mid - half cos θ` and assigning the\nroots’ `±√(h² - K)` by the sign of `sin θ` produces a loop smooth\nthrough both touching generators. A ball missed by every forward\ngenerator returns no curve. A ball containing the apex defers.\n\n- `start_outside_windows` restarts a wrapping closed NURBS at a sample\noutside every window. Each window end is then bisected onto its\nboundary.\n\n- `tessellate_nonplanar_cdt` starts from a seam edge following another\nedge, derives the wall’s `u` span from the seam vertices, assigns each\nseam run to the copy beside its neighbouring sample, turns at the apex,\nand unwraps each stretch sample by sample from that seam copy.\n`is_notched_wall` allows a pointed cone apex to stand in for one rim,\nrouting per-face tessellation through the local hole-aware mesher.\n\n## Verification\n\n- `ball_beside_a_cone.rs` covers the four pointed-cone placements and\nthe frustum placement, upright, turned, mirrored through a slanted\nplane, and mirrored with `scale(-1, 1, 1)`, for Cut, Intersect, and\nFuse. Results have at most eight faces, retain sphere and cone faces\nwithout NURBS, pass validity and watertightness checks, and match\nsection-integrated volume within `1e-6`. Probe results are within\n`5.1e-8`.\n\n- Pointed-cone Cut and Fuse faces mesh independently within 1% of exact\narea. Results mirrored by `scale(-1, 1, 1)` after the boolean (which\nreverses their wires) still mesh watertight; the branch's earlier mesher\nfails that check at `(1, 0.8, 1.2)`. Reverting only `is_notched_wall`\nproduces `63.114` against `60.153` at `(1, 0.8, 1.2)`.\n\n- `pin_through_a_ball.rs` now tests the across-equator placement exactly\nin all four poses. Its Cut is `101.068879` against `101.068879`. Unit\ncoverage expects one loop for partially penetrating and grazing pins,\nand no curve when the pin opens away from the ball.\n\n- The workspace suite passed on the branch's first commits with 3232\ntests and 20 skipped. At head, `brepkit-operations` and `brepkit-io`\npass with 1649 tests and 17 skipped. The 300-line pose sweep matches\nmain.\n\n- The roadmap closes both boolean cases and records the separate\nper-face trimmed-patch region error. The solid mesh remains correct. The\ndoc comments on `ruling_cone_sphere` and `window_cone_sphere` now list\nwhen each returns no answer.",
+          "timestamp": "2026-09-28T04:05:03Z",
+          "tree_id": "ba35aaaa78fb837a2884a68eebf16fb1d204139f",
+          "url": "https://github.com/andymai/brepkit/commit/16246f0994bbb6a7081ea487769c44c723cf5b15"
+        },
+        "date": 1790568466055,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1023564,
+            "range": "± 2723",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1109390,
+            "range": "± 1140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13206,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 772101,
+            "range": "± 3287",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43005163,
+            "range": "± 78620",
             "unit": "ns/iter"
           }
         ]
