@@ -1,0 +1,23 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_35cc49d199cc8b 1119-1142
+  s_ba2f7b5c6902b6::t_397af3ef35bf68 1653-1665
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_5ada4121116f85 200-209
+  s_ba2f7b5c6902b6::t_7f76e92cd09c32 210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fc9e58518444407c29527056aa2d55f6404fb92d",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
