@@ -2994,12 +2994,13 @@ fn algebraic_parallel_cone_cylinder(
     if v_max - v_min <= 1e-12 {
         return Ok(Some(vec![]));
     }
-    // With both turning points inside both faces the loop is whole: traced
-    // along the cylinder's rulings, each of which meets the nappe once, it
-    // comes back as one closed curve, which the band split of a cylinder the
-    // loop winds needs. A cylinder through the apex pinches it there.
+    // A cylinder beside the axis, with both turning points inside both faces,
+    // meets the cone in a whole loop: traced along the cylinder's rulings,
+    // each of which meets the nappe once, it comes back as one closed curve,
+    // which the band split of the cylinder it winds needs. Around the axis
+    // the loop winds the cone too and stays in two branches.
     let slack = 1e-12 * turn_hi;
-    if v_min <= turn_lo + slack && v_max >= turn_hi - slack && (d - r).abs() > 1e-9 {
+    if v_min <= turn_lo + slack && v_max >= turn_hi - slack && d > r + 1e-9 {
         let mut pts: Vec<Point3> = (0..RULING_SAMPLES)
             .map(|i| {
                 let (sin_u, cos_u) = ruling_u(i).sin_cos();
@@ -4049,8 +4050,8 @@ mod tests {
             2.0_f64.atan(),
         )
         .unwrap();
-        // Beside the axis, and around it: each ruling meets the nappe once.
-        for (x, y) in [(0.0, 1.3), (0.3, 0.2)] {
+        // Beside the axis: each ruling meets the nappe once.
+        for (x, y) in [(0.0, 1.3), (1.2, 0.5)] {
             let rod =
                 CylindricalSurface::new(Point3::new(x, y, -10.0), Vec3::new(0.0, 0.0, 1.0), 0.6)
                     .unwrap();
