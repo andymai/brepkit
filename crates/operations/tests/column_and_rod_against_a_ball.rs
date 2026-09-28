@@ -1,8 +1,8 @@
 //! A square column fused with a thin rod beside it, against a ball wider
 //! than the column: the ball bulges through the column's four sides and the
 //! rod runs through the ball's side. Upright and with the ball turned, each
-//! operation is exact and valid, meshes watertight at deflections 0.01 and
-//! 0.001, holds the integrated volume, and keeps or removes the right
+//! operation is exact and valid, meshes watertight at deflections from 0.2
+//! to 0.001, holds the integrated volume, and keeps or removes the right
 //! material.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -104,7 +104,7 @@ fn a_column_and_rod_against_a_ball_are_exact() {
                 validate_solid(&topo, result).unwrap().is_valid(),
                 "{label}: invalid"
             );
-            for deflection in [0.01, 0.001] {
+            for deflection in [0.2, 0.1, 0.05, 0.02, 0.01, 0.001] {
                 let mesh = tessellate_solid(&topo, result, deflection).unwrap();
                 assert!(!mesh.indices.is_empty(), "{label}: no triangles");
                 assert!(

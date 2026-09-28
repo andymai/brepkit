@@ -72,6 +72,117 @@ pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
     edge_count.values().filter(|&&c| c > 2).count()
 }
 
+/// Split the chords two faces both lay between the same two vertices: where
+/// the faces pass within the deflection of each other (a rod's wall 0.004
+/// inside a ball, between the two curves where it leaves the ball), each
+/// face's mesh bridges the narrow gap with the same straight edge, which then
+/// bounds four triangles. One face's pair is split at its own surface point
+/// over the edge's midpoint (`on_face`: the face index and a point to the
+/// point of that face's surface over it), taking the face whose surface
+/// stands farther off the chord, and the two sheets part there.
+pub(super) fn split_pinched_chords(
+    mesh: &mut TriangleMesh,
+    tri_faces: &mut Vec<u32>,
+    on_face: &dyn Fn(u32, Point3) -> Option<Point3>,
+) {
+    let key = |a: u32, b: u32| if a < b { (a, b) } else { (b, a) };
+    // Each round splits the pinched chords whose triangles no earlier split
+    // in the round touched, then the edges are read again. The edges are
+    // found by sorting packed keys: a mesh without a pinch costs one sort.
+    for _ in 0..8 {
+        let mut keyed: Vec<(u64, usize)> = Vec::with_capacity(mesh.indices.len());
+        for (t, tri) in mesh.indices.chunks_exact(3).enumerate() {
+            for k in 0..3 {
+                let (a, b) = key(tri[k], tri[(k + 1) % 3]);
+                keyed.push(((u64::from(a) << 32) | u64::from(b), t));
+            }
+        }
+        keyed.sort_unstable();
+        let mut pinched: Vec<((u32, u32), Vec<usize>)> = Vec::new();
+        let mut i = 0;
+        while i < keyed.len() {
+            let j = i + keyed[i..].iter().take_while(|k| k.0 == keyed[i].0).count();
+            if j - i == 4 {
+                #[allow(clippy::cast_possible_truncation)]
+                let edge = ((keyed[i].0 >> 32) as u32, keyed[i].0 as u32);
+                pinched.push((edge, keyed[i..j].iter().map(|k| k.1).collect()));
+            }
+            i = j;
+        }
+        if pinched.is_empty() {
+            break;
+        }
+        let mut touched: DetHashSet<usize> = DetHashSet::default();
+        let mut split_any = false;
+        for ((a, b), tris) in pinched {
+            if tris.iter().any(|t| touched.contains(t)) {
+                continue;
+            }
+            let faces: Vec<u32> = tris.iter().map(|&t| tri_faces[t]).collect();
+            let f0 = faces[0];
+            let Some(f1) = faces.iter().copied().find(|&f| f != f0) else {
+                continue;
+            };
+            let count = |f: u32| faces.iter().filter(|&&g| g == f).count();
+            if count(f0) != 2 || count(f1) != 2 {
+                continue;
+            }
+            let (pa, pb) = (mesh.positions[a as usize], mesh.positions[b as usize]);
+            let mid = Point3::new(
+                0.5 * (pa.x() + pb.x()),
+                0.5 * (pa.y() + pb.y()),
+                0.5 * (pa.z() + pb.z()),
+            );
+            // A surface point farther off than half the chord is not the
+            // face's own over it (a projection that failed).
+            let len = (pb - pa).length();
+            let Some((face, q)) = [f0, f1]
+                .into_iter()
+                .filter_map(|f| on_face(f, mid).map(|q| (f, (q - mid).length(), q)))
+                .filter(|&(_, gap, _)| gap > 1e-9 * len && gap <= 0.5 * len)
+                .max_by(|x, y| x.1.total_cmp(&y.1))
+                .map(|(f, _, q)| (f, q))
+            else {
+                continue;
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let m = mesh.positions.len() as u32;
+            mesh.positions.push(q);
+            let n = mesh.normals[a as usize] + mesh.normals[b as usize];
+            mesh.normals
+                .push(n.normalize().unwrap_or(mesh.normals[a as usize]));
+            let own: Vec<usize> = tris
+                .iter()
+                .copied()
+                .filter(|&t| tri_faces[t] == face)
+                .collect();
+            for t in own {
+                let tri = [
+                    mesh.indices[3 * t],
+                    mesh.indices[3 * t + 1],
+                    mesh.indices[3 * t + 2],
+                ];
+                // The edge runs from tri[k] to tri[k + 1] in the triangle's
+                // own winding, which both halves keep.
+                let Some(k) =
+                    (0..3).find(|&k| key(tri[k], tri[(k + 1) % 3]) == (a.min(b), a.max(b)))
+                else {
+                    continue;
+                };
+                let (x, y, z) = (tri[k], tri[(k + 1) % 3], tri[(k + 2) % 3]);
+                mesh.indices[3 * t..3 * t + 3].copy_from_slice(&[x, m, z]);
+                mesh.indices.extend_from_slice(&[m, y, z]);
+                tri_faces.push(face);
+            }
+            touched.extend(tris);
+            split_any = true;
+        }
+        if !split_any {
+            break;
+        }
+    }
+}
+
 /// Remove duplicate triangles, cancelling opposing pairs and dedup same-winding pairs.
 ///
 /// Workaround for issue #696: when a boolean leaves overlapping coplanar faces
@@ -360,15 +471,17 @@ pub fn sample_solid_edges_filtered(
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
 /// `tri_faces` is the parallel tri -> face attribution array; entries for
-/// removed degenerate triangles are filtered alongside.
+/// removed degenerate triangles are filtered alongside. Returns whether any
+/// directed edge was used twice before the weld: two faces bridging the same
+/// gap with one chord leave one (see [`split_pinched_chords`]).
 pub(super) fn weld_boundary_vertices(
     mesh: &mut TriangleMesh,
     deflection: f64,
     tri_faces: Option<&mut Vec<u32>>,
-) {
+) -> bool {
     let n_verts = mesh.positions.len();
     if n_verts == 0 || mesh.indices.is_empty() {
-        return;
+        return false;
     }
 
     let mut half_edges: DetHashMap<(u32, u32), usize> = DetHashMap::default();
@@ -378,6 +491,7 @@ pub(super) fn weld_boundary_vertices(
         *half_edges.entry((i1, i2)).or_default() += 1;
         *half_edges.entry((i2, i0)).or_default() += 1;
     }
+    let repeated = half_edges.values().any(|&count| count > 1);
 
     // Boundary vertices: incident on half-edges without a matching reverse.
     let mut boundary_set: DetHashSet<u32> = DetHashSet::default();
@@ -389,7 +503,7 @@ pub(super) fn weld_boundary_vertices(
     }
 
     if boundary_set.is_empty() {
-        return;
+        return repeated;
     }
 
     // Sorted iteration keeps grid-cell contents and union order independent
@@ -488,4 +602,5 @@ pub(super) fn weld_boundary_vertices(
             *tf = new_tri_faces;
         }
     }
+    repeated
 }

@@ -9,7 +9,7 @@ use brepkit_topology::solid::SolidId;
 
 use super::TriangleMesh;
 use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_deviation_a};
-use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
+use super::mesh_ops::{dedupe_coincident_triangles, split_pinched_chords, weld_boundary_vertices};
 use super::nonplanar::{
     circle_pole_params, tessellate_latitude_band_shared, tessellate_nonplanar_cdt,
     tessellate_nonplanar_snap, tessellate_revolution_band_shared, tessellate_torus_notch_band,
@@ -586,7 +586,8 @@ fn tessellate_solid_core(
     // When tracking, `tri_faces` runs parallel to the mesh triangles:
     // tri_faces[t] is the index (into `all_faces`) of the face that produced
     // triangle t. The ungrouped caller skips this bookkeeping entirely.
-    let mut tri_faces: Option<Vec<u32>> = track_faces.then(Vec::new);
+    // Tracked always: the pinched-chord pass needs each triangle's face.
+    let mut tri_faces: Option<Vec<u32>> = Some(Vec::new());
     #[allow(clippy::items_after_statements)]
     struct CdtJob {
         face_index: u32,
@@ -933,7 +934,7 @@ fn tessellate_solid_core(
     }
 
     phase("normals", &mut phase_t);
-    weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
+    let repeated = weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
 
     // Drop coincident/cancelling triangles left by booleans that
     // produced overlapping coplanar faces (issue #696). Keyed on quantized
@@ -942,7 +943,31 @@ fn tessellate_solid_core(
     dedupe_coincident_triangles(&mut merged, tri_faces.as_mut());
     phase("weld_dedupe", &mut phase_t);
 
-    Ok((merged, tri_faces, all_faces.len()))
+    if repeated && let Some(tf) = tri_faces.as_mut() {
+        let surfaces: Vec<Option<&FaceSurface>> = all_faces
+            .iter()
+            .map(|&f| topo.face(f).ok().map(brepkit_topology::face::Face::surface))
+            .collect();
+        // A curved analytic surface projects exactly; a plane holds its
+        // chords already, and a NURBS projection can fail to a far point.
+        let on_face = |fi: u32, p: Point3| -> Option<Point3> {
+            let surface = (*surfaces.get(fi as usize)?)?;
+            if !matches!(
+                surface,
+                FaceSurface::Cylinder(_)
+                    | FaceSurface::Cone(_)
+                    | FaceSurface::Sphere(_)
+                    | FaceSurface::Torus(_)
+            ) {
+                return None;
+            }
+            let (u, v) = surface.project_point(p)?;
+            surface.evaluate(u, v)
+        };
+        split_pinched_chords(&mut merged, tf, &on_face);
+    }
+
+    Ok((merged, tri_faces.filter(|_| track_faces), all_faces.len()))
 }
 
 /// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid
