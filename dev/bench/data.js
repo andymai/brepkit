@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790599964180,
+  "lastUpdate": 1790601111693,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47249,6 +47249,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 32284178,
             "range": "± 1404237",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "403699c39c1eac92338115e57b7cfdfe781e407e",
+          "message": "chore(main): release 4.0.88 (#1904)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.88](https://github.com/andymai/brepkit/compare/v4.0.87...v4.0.88)\n(2026-09-28)\n\n\n### Bug Fixes\n\n* **algo:** seed and section a frustum cap's thin ring exactly\n([#1897](https://github.com/andymai/brepkit/issues/1897))\n([eb31f3e](https://github.com/andymai/brepkit/commit/eb31f3e897a8801504444ca8025daa60125981a0))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.0.88, bumping the workspace crate versions and\nupdating the changelog.\n\n- Fixes a bug in `brepkit-algo` where a frustum cap's thin ring is now\nseeded and sectioned exactly.\n\n<sup>Written for commit 221398ae579407b513addbe38ab758ace13439c4.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1904?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-28T13:08:59Z",
+          "tree_id": "2572f61730bec554e5c3584712dc30ac06aef6a6",
+          "url": "https://github.com/andymai/brepkit/commit/403699c39c1eac92338115e57b7cfdfe781e407e"
+        },
+        "date": 1790601105994,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1019552,
+            "range": "± 2415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1101433,
+            "range": "± 26959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12984,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 786743,
+            "range": "± 2148",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42469893,
+            "range": "± 173578",
             "unit": "ns/iter"
           }
         ]
