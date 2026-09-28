@@ -1319,6 +1319,14 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Se
     for (idx, curve_ds) in arena.curves.iter().enumerate() {
         if let EdgeCurve::NurbsCurve(nurbs) = &curve_ds.curve {
             let faces = [curve_ds.face_a, curve_ds.face_b];
+            let (d0, d1) = nurbs.domain();
+            let (w0, w1) = curve_ds.t_range;
+            if w1 - w0 < (d1 - d0) * (1.0 - 1e-9) {
+                if let Some(seam) = cut_window_at_seams(topo, arena, curve_ds, nurbs) {
+                    anchors.insert(idx, seam);
+                }
+                continue;
+            }
             if loop_nearly_meets_a_sibling(arena, idx, nurbs) {
                 continue;
             }
@@ -1549,6 +1557,94 @@ fn seam_crossings_of_contractible_loop(
         crossings.push(0.5 * (lo + hi));
     }
     crossings
+}
+
+/// A section that is a window of a closed loop (the loop crosses a boundary
+/// of one of its faces, a ball's equator, and each face keeps its own arc) is
+/// an open curve: it is cut at the seam crossings inside the window only, so
+/// no face receives the arcs of the loop that lie on another. `None` when the
+/// window crosses no seam.
+fn cut_window_at_seams(
+    topo: &Topology,
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> Option<SeamAnchor> {
+    let (d0, d1) = nurbs.domain();
+    let (w0, w1) = curve_ds.t_range;
+    let (Some(from), Some(to)) = curve_endpoints(topo, arena, curve_ds) else {
+        return None;
+    };
+    let mut cuts: Vec<f64> = [curve_ds.face_a, curve_ds.face_b]
+        .iter()
+        .filter_map(|&fid| topo.face(fid).ok())
+        .flat_map(|face| seam_crossings_of_contractible_loop(topo, face, nurbs))
+        .filter(|&t| {
+            let p = nurbs.evaluate(t);
+            t > w0
+                && t < w1
+                && (p - from).length() > SEAM_ON_CIRCLE_TOL
+                && (p - to).length() > SEAM_ON_CIRCLE_TOL
+        })
+        .collect();
+    // The loop's other window ends where this one does, and the edge merge
+    // would weld two uncut windows into one edge: a vertex midway keeps them
+    // apart.
+    if cuts.is_empty() && shares_both_ends_with_another_window(topo, arena, curve_ds, from, to) {
+        cuts.push(0.5 * (w0 + w1));
+    }
+    if cuts.is_empty() {
+        return None;
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup_by(|a, b| (nurbs.evaluate(*a) - nurbs.evaluate(*b)).length() <= SEAM_ON_CIRCLE_TOL);
+    let mut window = nurbs.clone();
+    if w0 > d0 {
+        window = brepkit_math::nurbs::knot_ops::curve_split(&window, w0)
+            .ok()?
+            .1;
+    }
+    if w1 < d1 {
+        window = brepkit_math::nurbs::knot_ops::curve_split(&window, w1)
+            .ok()?
+            .0;
+    }
+    let mut pieces = Vec::with_capacity(cuts.len() + 1);
+    let (mut rest, mut at) = (window, from);
+    for &t in &cuts {
+        let (head, tail) = brepkit_math::nurbs::knot_ops::curve_split(&rest, t).ok()?;
+        let next = nurbs.evaluate(t);
+        pieces.push((head, at, next));
+        rest = tail;
+        at = next;
+    }
+    pieces.push((rest, at, to));
+    Some(SeamAnchor {
+        anchor: from,
+        rotated: None,
+        pieces,
+    })
+}
+
+/// Whether another section curve of a closed loop's window has the same two
+/// ends as `curve_ds`.
+fn shares_both_ends_with_another_window(
+    topo: &Topology,
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+    from: Point3,
+    to: Point3,
+) -> bool {
+    arena.curves.iter().any(|other| {
+        if std::ptr::eq(other, curve_ds) || !matches!(other.curve, EdgeCurve::NurbsCurve(_)) {
+            return false;
+        }
+        let (Some(a), Some(b)) = curve_endpoints(topo, arena, other) else {
+            return false;
+        };
+        let near = |p: Point3, q: Point3| (p - q).length() <= SEAM_ON_CIRCLE_TOL;
+        (near(a, from) && near(b, to)) || (near(a, to) && near(b, from))
+    })
 }
 
 /// A closed NURBS loop started at its winding face's seam point (or, with
