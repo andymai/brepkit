@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790575414464,
+  "lastUpdate": 1790576446943,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46277,6 +46277,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28374068,
             "range": "± 197958",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a638456543c45a9587d26f52dc46848e86b15054",
+          "message": "chore(main): release 4.0.80 (#1882)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.0.80](https://github.com/andymai/brepkit/compare/v4.0.79...v4.0.80)\n(2026-09-28)\n\n\n### Bug Fixes\n\n* **algo:** let a pointed cone's apex stand in for a rim around\nseam-straddling holes\n([#1880](https://github.com/andymai/brepkit/issues/1880))\n([d18388c](https://github.com/andymai/brepkit/commit/d18388cdb3a8285731f15a9feff08a21e96bcbb0))\n* **operations:** mesh a wall a section loop winds round in its\ndeveloped metric\n([#1881](https://github.com/andymai/brepkit/issues/1881))\n([aa549c0](https://github.com/andymai/brepkit/commit/aa549c0ca42e63a10202b5de0453bd5094ddb8ae))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases brepkit 4.0.80 with two meshing bug fixes; the workspace and\nall `brepkit` crates bump from 4.0.79.\n\n**Bug Fixes**\n- Lets a pointed cone's apex stand in for a rim around seam-straddling\nholes.\n- Meshes a wall that a section loop winds around using its developed\nmetric.\n\n<sup>Written for commit 37d2ac07bc814cb5a3a3cda5a72ec7f3d7857b1b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1882?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-28T06:17:54Z",
+          "tree_id": "6bbbf1824e8c32e0809d5763f9de2a029810bc8d",
+          "url": "https://github.com/andymai/brepkit/commit/a638456543c45a9587d26f52dc46848e86b15054"
+        },
+        "date": 1790576441346,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1026160,
+            "range": "± 3008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112096,
+            "range": "± 1265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14010,
+            "range": "± 54",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771329,
+            "range": "± 7428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43059564,
+            "range": "± 161670",
             "unit": "ns/iter"
           }
         ]
