@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790574380898,
+  "lastUpdate": 1790575414464,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -46223,6 +46223,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46679634,
             "range": "± 272425",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa549c0ca42e63a10202b5de0453bd5094ddb8ae",
+          "message": "fix(operations): mesh a wall a section loop winds round in its developed metric (#1881)\n\nA cylinder or cone wall that a section loop winds round now meshes\nwithin a chord of its exact area, in the solid mesh and on its own.\n\n## What was wrong\n\n- For `make_cone(3, 0, 6)` at `z = -3` and `make_cylinder(0.6, 20)`\nparallel to its axis through its wall, the rod retains wall pieces\nbounded by a rim circle, a seam line used twice in the wire, and a\nsection loop. The loop height varies around the rod and dips between the\nseam copies. Tested placements are `(0, 1.3)`, `(-1.3, 0)`, `(0.5,\n-1.2)`, and `(1.2, 0.5)`.\n\n- `tessellate_nonplanar_cdt` triangulated these walls in raw `(u, v)`\ncoordinates without refinement. Delaunay joined the loop sides across\nthe dip, where samples at 15 and 165 degrees have the same height,\nproducing triangles through the rod. The meshes stayed watertight, but\nin the solid mesh the Fuse's upper piece read 29.10, 30.77 and 33.49\nagainst its exact 36.72 at three placements, and the Cut's inner piece\n11.15 against 12.29. Per-face `tessellate`, including wasm face meshes\nand OBJ, glTF, and PLY output, was also short.\n\n- After `scale(-1, 1, 1)` reversed the result wires, the `(0.5, -1.2)`\nFuse meshed open with 3 edges. The upper seam copy landed on the loop's\nlast sample, 0.026 radians short of the seam, aligning the loop end,\nseam foot, and rim stand-in so a sliver triangle was dropped.\n\n## What this does\n\n- `is_wound_wall` identifies cylinder or cone walls whose outer wire\nruns a line both ways and includes a NURBS edge, excluding pointed cone\nwalls that reach the apex.\n\n- These walls now join holed and notched walls in using the developed\n`(radius * u, v)` metric, angular refinement, and per-face routing to\nthe local hole-aware mesher. This also applies to mesh boolean operand\nmeshes.\n\n- The `u` span is placed from the seam's own vertex. A closed rim sample\nstanding in for the seam vertex, up to half a step away, is snapped onto\nthe seam copy. The apex is never snapped.\n\n## Verification\n\n- Rod pieces now mesh to 36.63 of 36.72 in grouped and per-face meshes,\nwith unchanged triangle counts. Every placement, Cut, Intersect, and\nFuse, and every tested upright, turned, slanted-plane mirrored, and\n`scale(-1, 1, 1)` pose is watertight, including mirroring after the\nboolean.\n\n- Mesh time was unchanged: 5.3 ms before and after for the `(0, 1.3)`\nCut, and 6.9 versus 6.7 ms for `(1.2, 0.5)`.\n\n- `rod_along_a_cone.rs` checks grouped face areas within 1% for walls\nand 3% for faces bounded only by the rod rim or loop. The 18-gon end\ndiscs and Intersect cone patches are 2% short. It also checks standalone\nCut and Fuse walls within 1% and watertightness after mirroring.\nReverting the mesher change fails at 11.15 of 12.29.\n\n- `brepkit-operations` and `brepkit-io` pass: 1649 tests, 17 skipped.\nThe 300-line pose sweep matches main. Before the review fixes,\n`truth_audit` matched main, and `approx_census` matched apart from\ntimings and the run-varying NURBS loft offset face pair. Local review\nfound no blocking issue, and its comment, test-bound, and apex points\nare applied.\n\n- The roadmap closes this case and records an open one found on the way,\nthe same on main: `make_cone(3, 0, 6)` at `z = -3` against\n`make_sphere(2, 32)` at `(0.5, 0, 2.5)`, a ball holding the apex off the\naxis, falls back after 70 s on the Intersect, and the Cut and Fuse run\npast 150 s.",
+          "timestamp": "2026-09-28T06:01:08Z",
+          "tree_id": "1e554485a5f1ff96307ab345bf2e8d2da641d436",
+          "url": "https://github.com/andymai/brepkit/commit/aa549c0ca42e63a10202b5de0453bd5094ddb8ae"
+        },
+        "date": 1790575408638,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 581193,
+            "range": "± 3739",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 640897,
+            "range": "± 3318",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8044,
+            "range": "± 101",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 440202,
+            "range": "± 11905",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28374068,
+            "range": "± 197958",
             "unit": "ns/iter"
           }
         ]
