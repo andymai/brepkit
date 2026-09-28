@@ -1,0 +1,23 @@
+crates/operations/tests/thin_ring_caps.rs
+  s_ba2f7b5c6902b6::t_57118b58f95e30 1-62,71-138,140-149,155-169
+  s_ba2f7b5c6902b6::t_8032aa8470bd46 63-70,139,150-154
+crates/algo/src/builder/face_splitter/containment.rs
+  s_ba2f7b5c6902b6::t_ab54343d224daf 59-62
+  s_ba2f7b5c6902b6::t_c44213dd74bb3e 170-187
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bc5e29698e57f762dfd22a0fbf97da2a226ede1d",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
