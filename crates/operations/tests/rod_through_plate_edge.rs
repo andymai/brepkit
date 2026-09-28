@@ -486,7 +486,7 @@ fn a_ball_and_a_ring_join_an_n_way_fuse() {
 /// firing where it should not). At `x = 0.4` turned 5.5 the wall split wrong
 /// across its seam and the builder dropped a real piece of it as a sliver:
 /// the fuse read as exact while failing validation, and falls back now. The
-/// exact fuses mesh watertight too, but for five turns at `x = 0` (an open
+/// exact fuses mesh watertight too, but for four turns at `x = 0` (an open
 /// roadmap row).
 #[test]
 fn a_pointed_cone_through_a_plate_edge_fuses_to_a_valid_solid() {
@@ -514,7 +514,7 @@ fn a_pointed_cone_through_a_plate_edge_fuses_to_a_valid_solid() {
             let report = validate_solid(&topo, fused).unwrap();
             assert!(report.is_valid(), "{label}: {:?}", report.issues);
             let builds_exactly = cx == 0.0 || matches!(k, 0..=5 | 7..=9 | 15);
-            let meshes_open = cx == 0.0 && matches!(k, 4 | 5 | 10..=12);
+            let meshes_open = cx == 0.0 && matches!(k, 4 | 5 | 11 | 12);
             let faces = solid_faces(&topo, fused).unwrap().len();
             if builds_exactly {
                 assert!(faces <= 12, "{label}: fell back to a mesh ({faces} faces)");
