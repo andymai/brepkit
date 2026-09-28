@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.81](https://github.com/andymai/brepkit/compare/v4.0.80...v4.0.81) (2026-09-28)
+
+
+### Bug Fixes
+
+* **operations:** give the developable wall mesher 32 refinement passes ([#1883](https://github.com/andymai/brepkit/issues/1883)) ([748eebb](https://github.com/andymai/brepkit/commit/748eebbd9d064200856a35886a89e3973761f25a))
+
 ## [4.0.80](https://github.com/andymai/brepkit/compare/v4.0.79...v4.0.80) (2026-09-28)
 
 
