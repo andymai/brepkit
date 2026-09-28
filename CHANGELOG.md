@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.75](https://github.com/andymai/brepkit/compare/v4.0.74...v4.0.75) (2026-09-28)
+
+
+### Bug Fixes
+
+* **algo:** meet a ball on a cone's axis in exact circles ([#1870](https://github.com/andymai/brepkit/issues/1870)) ([ccee002](https://github.com/andymai/brepkit/commit/ccee00288cac23eed7d0f008a9807418f8dcda60))
+
 ## [4.0.74](https://github.com/andymai/brepkit/compare/v4.0.73...v4.0.74) (2026-09-27)
 
 
