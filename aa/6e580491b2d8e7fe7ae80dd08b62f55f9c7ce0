@@ -1,0 +1,46 @@
+crates/operations/src/tessellate/face.rs
+  s_ba2f7b5c6902b6::t_f844b3905b007f 265-266
+  s_ba2f7b5c6902b6::t_2c5ee6f87457fd 269
+crates/operations/tests/ball_beside_a_cone.rs
+  s_ba2f7b5c6902b6::t_75d2403408d1ba 196-200
+  s_ba2f7b5c6902b6::t_0d94b8da13f0c9 202
+  s_ba2f7b5c6902b6::t_743b224ff085e0 187-189,191
+crates/operations/tests/rod_along_a_cone.rs
+  s_ba2f7b5c6902b6::t_0d94b8da13f0c9 174,193
+crates/operations/tests/cone_plane_cut.rs
+  s_ba2f7b5c6902b6::t_75d2403408d1ba 212-225
+  s_ba2f7b5c6902b6::t_0d94b8da13f0c9 211
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_3e29e89bd07d59 213-217
+  s_ba2f7b5c6902b6::t_37caf98075bd52 221
+  s_ba2f7b5c6902b6::t_8e50ded6a704c1 212,218-220
+  s_ba2f7b5c6902b6::t_817f78944d5e89 175,203-210
+  s_ba2f7b5c6902b6::t_08d57bb6f4a838 211
+crates/operations/tests/oblique_rod_cut.rs
+  s_ba2f7b5c6902b6::t_66f2369fda8a4e 14,119-132
+  s_ba2f7b5c6902b6::t_4c286ce8fdf4d8 133
+crates/operations/src/tessellate/nonplanar.rs
+  s_ba2f7b5c6902b6::t_2c5ee6f87457fd 2590-2593,2596,4500-4520
+  s_ba2f7b5c6902b6::t_35a13535395900 4521-4522
+  s_ba2f7b5c6902b6::t_6d3f89f2bbe985 2126-2135
+crates/io/tests/mitsukude_panel_cut_inmem.rs
+  s_ba2f7b5c6902b6::t_8fd0b29e1b50fa 92-94,96-97
+crates/operations/tests/rod_through_plate_edge.rs
+  s_ba2f7b5c6902b6::t_817f78944d5e89 489,517
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "aa6e580491b2d8e7fe7ae80dd08b62f55f9c7ce0",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
