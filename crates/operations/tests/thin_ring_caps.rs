@@ -1,7 +1,8 @@
 //! A cap whose ring between its circular rim and a hole is thinner than the
-//! sag of the rim's chords: a thin-walled tube, a counterbored cup, and a
-//! ball through a cylinder's or a frustum's cap near its rim. In every pose each operation
-//! keeps the ring, is exact and valid, and holds the closed-form volume.
+//! sag of the rim's chords: a thin-walled tube, the tube bored part way, and
+//! a ball through a cylinder's or a frustum's cap near its rim. In every pose
+//! each operation keeps the ring, is exact and valid, and holds the
+//! closed-form volume.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;

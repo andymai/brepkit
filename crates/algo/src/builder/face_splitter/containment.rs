@@ -142,47 +142,38 @@ pub(super) fn find_point_outside_holes(
     // boundary -- these are likely in the ring region between outer and inner.
     let centroid_x = outer_pts.iter().map(|p| p.x()).sum::<f64>() / outer_pts.len() as f64;
     let centroid_y = outer_pts.iter().map(|p| p.y()).sum::<f64>() / outer_pts.len() as f64;
-    for i in 0..outer_pts.len() {
+    // Step inward from a boundary point toward the centroid in small
+    // increments; the first point inside the outer wire and outside every
+    // hole wins. Small steps handle THIN rings (e.g. the ~1.2mm gridfinity
+    // lip annulus on an 83mm cap), where a single large nudge overshoots
+    // straight into the hole and no ring point is ever found.
+    let step_in = |from: Point2| {
+        (1..=99)
+            .map(|k| {
+                let t = f64::from(k) * 0.005;
+                Point2::new(
+                    from.x() * (1.0 - t) + centroid_x * t,
+                    from.y() * (1.0 - t) + centroid_y * t,
+                )
+            })
+            .find(|&candidate| {
+                super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
+                    && !in_any_hole(candidate)
+            })
+    };
+    let edge_mids = (0..outer_pts.len()).map(|i| {
         let j = (i + 1) % outer_pts.len();
-        let edge_mid = Point2::new(
+        Point2::new(
             (outer_pts[i].x() + outer_pts[j].x()) * 0.5,
             (outer_pts[i].y() + outer_pts[j].y()) * 0.5,
-        );
-        // Step inward from the edge midpoint toward the centroid in small
-        // increments; the first point inside the outer wire and outside every
-        // hole wins. Small steps handle THIN rings (e.g. the ~1.2mm gridfinity
-        // lip annulus on an 83mm cap), where a single large nudge overshoots
-        // straight into the hole and no ring point is ever found.
-        for k in 1..=99 {
-            let t = f64::from(k) * 0.005;
-            let candidate = Point2::new(
-                edge_mid.x() * (1.0 - t) + centroid_x * t,
-                edge_mid.y() * (1.0 - t) + centroid_y * t,
-            );
-            if super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
-                && !in_any_hole(candidate)
-            {
-                return candidate;
-            }
-        }
-    }
-
-    // A curved rim reaches the outer polygon as chords whose midpoints stand
-    // a sagitta inside it, so a ring thinner than that (a hole near a circular
-    // cap's rim) has every midpoint in its hole. The vertices lie on the rim.
-    for vertex in outer_pts {
-        for k in 1..=99 {
-            let t = f64::from(k) * 0.005;
-            let candidate = Point2::new(
-                vertex.x() * (1.0 - t) + centroid_x * t,
-                vertex.y() * (1.0 - t) + centroid_y * t,
-            );
-            if super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
-                && !in_any_hole(candidate)
-            {
-                return candidate;
-            }
-        }
+        )
+    });
+    // The edge midpoints first. A curved rim reaches the outer polygon as
+    // chords whose midpoints stand a sagitta inside it, so a ring thinner
+    // than that (a hole near a circular cap's rim) has every midpoint in its
+    // hole; the vertices, tried next, lie on the rim.
+    if let Some(candidate) = edge_mids.chain(outer_pts.iter().copied()).find_map(step_in) {
+        return candidate;
     }
 
     // Fallback: try vertex midpoints between consecutive outer wire vertices.
