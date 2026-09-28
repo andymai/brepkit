@@ -2449,6 +2449,16 @@ fn detect_trivial_relation(
                     clear_outside(p)
                 })
             }) || round_of(topo, inner).is_some_and(|round| {
+                // A ball whose centre lies nearer the outer solid's boundary
+                // than its radius holds a boundary point inside it, so it
+                // cannot lie in the outer: exact, where the probes below
+                // sample (a ball just past tangency with a cone's wall).
+                if let Round::Ball(center, radius) = round
+                    && crate::distance::point_to_solid_distance(topo, center, outer)
+                        .is_ok_and(|d| d.distance < radius - tol.linear * 10.0)
+                {
+                    return true;
+                }
                 // A ball's edges run only around its equator and a whole
                 // ring's are its collapsed seams, so their reach along the
                 // axes and past the outer solid's flat faces is probed too:

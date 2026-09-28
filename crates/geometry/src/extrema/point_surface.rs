@@ -83,15 +83,18 @@ pub fn point_to_cylinder(point: Point3, cyl: &CylindricalSurface) -> SurfaceProj
     );
     // Height along axis (v parameter).
     let h = pv.dot(cyl.axis());
-    // Radial vector: pv - h * axis.
+    // Radial vector: pv - h * axis. Within rounding of the axis what is left
+    // lies along the axis as much as across it: take that part out again,
+    // so the direction normalized below lies across the axis.
     let radial = Vec3::new(
         pv.x() - h * cyl.axis().x(),
         pv.y() - h * cyl.axis().y(),
         pv.z() - h * cyl.axis().z(),
     );
+    let radial = radial - cyl.axis() * radial.dot(cyl.axis());
     let r_len = radial.length();
 
-    if r_len < 1e-15 {
+    if r_len < 1e-300 {
         // Point is on the axis — pick u = 0 arbitrarily.
         let closest = cyl.evaluate(0.0, h);
         SurfaceProjection {
@@ -131,12 +134,15 @@ pub fn point_to_cone(point: Point3, cone: &ConicalSurface) -> SurfaceProjection 
     );
     let h = pv.dot(cone.axis());
 
-    // Radial component perpendicular to axis.
+    // Radial component perpendicular to axis, its rounding along the axis
+    // taken out again (within rounding of the axis that part is as large as
+    // the part across it).
     let radial = Vec3::new(
         pv.x() - h * cone.axis().x(),
         pv.y() - h * cone.axis().y(),
         pv.z() - h * cone.axis().z(),
     );
+    let radial = radial - cone.axis() * radial.dot(cone.axis());
     let r_len = radial.length();
 
     if h <= 0.0 && r_len < 1e-15 {
@@ -167,13 +173,9 @@ pub fn point_to_cone(point: Point3, cone: &ConicalSurface) -> SurfaceProjection 
     let cone_r = v * cos_a;
     let cone_h = v * sin_a;
 
-    let (closest, u) = if r_len < 1e-15 {
-        let closest = Point3::new(
-            cone.apex().x() + cone_h * cone.axis().x(),
-            cone.apex().y() + cone_h * cone.axis().y(),
-            cone.apex().z() + cone_h * cone.axis().z(),
-        );
-        (closest, 0.0_f64)
+    // On the axis every generator is as near: take the one at u = 0.
+    let (closest, u) = if r_len < 1e-300 {
+        (cone.evaluate(0.0, v), 0.0_f64)
     } else {
         let radial_dir_x = radial.x() / r_len;
         let radial_dir_y = radial.y() / r_len;
@@ -517,6 +519,59 @@ mod tests {
     // Helpers
     fn approx(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() < tol
+    }
+
+    #[test]
+    fn a_point_on_a_cones_or_cylinders_axis_projects_onto_the_surface() {
+        use brepkit_math::surfaces::{ConicalSurface, CylindricalSurface};
+        // Apex 3 up, opening downward, the radius half the depth below it:
+        // the axis point at the origin is 3 / sqrt(5) from every generator.
+        // Tilted, the same point sits on the axis only to within rounding.
+        let tilt = Vec3::new(
+            0.190_476_190_476_190_5,
+            0.038_095_238_095_238_1,
+            -0.980_952_380_952_381,
+        );
+        for axis in [Vec3::new(0.0, 0.0, -1.0), tilt.normalize().unwrap()] {
+            let apex = Point3::new(0.0, 0.0, 0.0) + axis * -3.0;
+            let cone = ConicalSurface::new(apex, axis, 2.0_f64.atan()).unwrap();
+            let cyl = CylindricalSurface::new(apex, axis, 2.0).unwrap();
+            // On the axis, and a hair off it (past the rounding of either).
+            let across = axis.cross(Vec3::new(1.0, 0.0, 0.0)).normalize().unwrap();
+            for off in [0.0, 1e-13, 1e-9] {
+                let p = Point3::new(0.0, 0.0, 0.0) + across * off;
+                let proj = point_to_cone(p, &cone);
+                let want = 3.0 / 5.0_f64.sqrt();
+                assert!(
+                    approx(proj.distance, want, 1e-8),
+                    "cone {off}: dist={}",
+                    proj.distance
+                );
+                let foot = cone.evaluate(proj.u, proj.v);
+                assert!(
+                    (foot - proj.point).length() < 1e-12,
+                    "cone {off}: {:?} off {:?}",
+                    proj.point,
+                    foot
+                );
+                let proj = point_to_cylinder(p, &cyl);
+                assert!(
+                    approx(proj.distance, 2.0 - off, 1e-12),
+                    "cylinder {off}: dist={}",
+                    proj.distance
+                );
+            }
+        }
+        // Far along the axis a small offset across it still counts.
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let proj = point_to_cylinder(Point3::new(0.5, 0.0, 1e12), &cyl);
+        assert!(
+            approx(proj.distance, 1.5, 1e-3),
+            "far: dist={}",
+            proj.distance
+        );
     }
 
     // ── point_to_plane ───────────────────────────────────────────────────────
