@@ -2998,9 +2998,13 @@ fn algebraic_parallel_cone_cylinder(
     // meets the cone in a whole loop: traced along the cylinder's rulings,
     // each of which meets the nappe once, it comes back as one closed curve,
     // which the band split of the cylinder it winds needs. Around the axis
-    // the loop winds the cone too and stays in two branches.
+    // the loop winds the cone too and stays in two branches, and so does a
+    // wall passing so near the axis that the loop's bend there, about
+    // `(d - r) / sqrt(d r)` of a turn wide, spans fewer than a few rulings.
     let slack = 1e-12 * turn_hi;
-    if v_min <= turn_lo + slack && v_max >= turn_hi - slack && d > r + 1e-9 {
+    #[allow(clippy::cast_precision_loss)]
+    let resolved = d - r > 3.0 * (d * r).sqrt() * TAU / RULING_SAMPLES as f64;
+    if v_min <= turn_lo + slack && v_max >= turn_hi - slack && resolved {
         let mut pts: Vec<Point3> = (0..RULING_SAMPLES)
             .map(|i| {
                 let (sin_u, cos_u) = ruling_u(i).sin_cos();
@@ -4073,10 +4077,21 @@ mod tests {
                 let on_rod = (p.x() - x).hypot(p.y() - y) - 0.6;
                 let on_cone = p.x().hypot(p.y()) - (3.0 - p.z()) / 2.0;
                 assert!(
-                    on_rod.abs() < 1e-4 && on_cone.abs() < 1e-4,
+                    on_rod.abs() < 1e-5 && on_cone.abs() < 1e-5,
                     "({x}, {y}): off by {on_rod}, {on_cone}"
                 );
             }
+        }
+        // Around the axis, and beside it by less than the bend the rulings
+        // resolve: two branches.
+        for (x, y) in [(0.3, 0.2), (0.65, 0.0)] {
+            let rod =
+                CylindricalSurface::new(Point3::new(x, y, -10.0), Vec3::new(0.0, 0.0, 1.0), 0.6)
+                    .unwrap();
+            let curves = algebraic_parallel_cone_cylinder(&cone, &rod, None, None)
+                .unwrap()
+                .unwrap();
+            assert_eq!(curves.len(), 2, "two branches at ({x}, {y})");
         }
     }
 
