@@ -1,13 +1,17 @@
 //! A square column fused with a thin rod beside it, against a ball wider
 //! than the column: the ball bulges through the column's four sides and the
 //! rod runs through the ball's side. Upright and with the ball turned, each
-//! operation is exact, valid and watertight, and holds the integrated volume.
+//! operation is exact and valid, meshes watertight at deflections 0.01 and
+//! 0.001, holds the integrated volume, and keeps or removes the right
+//! material.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
@@ -48,11 +52,25 @@ fn a_column_and_rod_against_a_ball_are_exact() {
     for (r, (x, y), turned) in [(0.1, (2.75, 0.0), true), (0.15, (-2.7, -0.9), false)] {
         let tool = 250.0 + PI * r * r * 10.0;
         let shared = ball - caps + rod_in_ball(x, y, r);
-        for (op, ball_first, truth) in [
+        // Probes, each held by exactly one of the three results or by none:
+        // the ball's centre (inside both), a corner of the column clear of
+        // the ball, the ball's cap bulging past the column's side, the rod
+        // above the ball, and the rod within it.
+        let probes = [
+            (Point3::new(0.0, 0.0, 0.0), [false, false, true]),
+            (Point3::new(2.4, 2.4, 4.0), [true, false, false]),
+            (Point3::new(0.0, -2.8, 0.0), [false, true, false]),
+            (Point3::new(x, y, 4.5), [true, false, false]),
+            (Point3::new(x, y, 0.0), [false, false, true]),
+        ];
+        for (k, (op, ball_first, truth)) in [
             (BooleanOp::Cut, false, tool - shared),
             (BooleanOp::Cut, true, ball - shared),
             (BooleanOp::Intersect, false, shared),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let label =
                 format!("rod {r} at ({x}, {y}), turned {turned}, {op:?} ball first {ball_first}");
             let mut topo = Topology::new();
@@ -86,14 +104,28 @@ fn a_column_and_rod_against_a_ball_are_exact() {
                 validate_solid(&topo, result).unwrap().is_valid(),
                 "{label}: invalid"
             );
-            let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
-            assert!(!mesh.indices.is_empty(), "{label}: no triangles");
-            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            for deflection in [0.01, 0.001] {
+                let mesh = tessellate_solid(&topo, result, deflection).unwrap();
+                assert!(!mesh.indices.is_empty(), "{label}: no triangles");
+                assert!(
+                    is_watertight(&mesh),
+                    "{label}: open or non-manifold mesh at {deflection}"
+                );
+            }
             let volume = solid_volume(&topo, result, 0.01).unwrap();
             assert!(
                 (volume - truth).abs() < 1e-4,
                 "{label}: volume {volume}, truth {truth}"
             );
+            for (at, held) in probes {
+                let want = if held[k] {
+                    PointClassification::Inside
+                } else {
+                    PointClassification::Outside
+                };
+                let got = classify_point(&topo, result, at, 0.01, 1e-7).unwrap();
+                assert_eq!(got, want, "{label}: {at:?} reads {got:?}");
+            }
         }
     }
 }
