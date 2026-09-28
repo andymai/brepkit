@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790593212625,
+  "lastUpdate": 1790596228817,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47033,6 +47033,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42927009,
             "range": "± 171109",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ba39f070777eb207571018a643af9f01c22f0187",
+          "message": "test(operations): pin a column and rod against a ball as exact and watertight (#1895)\n\nTwo open roadmap rows were remeasured on main, found closed, removed\nfrom the open table with one Closed entry, and pinned by a passing\nregression test. One related coarse deflection gap remains open.\n\n## What this pins\n\n- “A column fused with a thin rod, less a turned ball, meshes open” and\n“A column and a rod through a ball's cap, less the ball, meshes open”.\n- The setups fuse `make_box(5, 5, 10)` at `(-2.5, -2.5, -5)` with rods\noutside the column, against a radius 3 ball that bulges through the\ncolumn's four sides. They cover the turned ball with the 0.1 rod at\n`(2.75, 0)`, and the upright ball with the 0.15 rod at `(-2.7, -0.9)`.\n- `crates/operations/tests/column_and_rod_against_a_ball.rs` checks all\nthree operations for both setups: face count and types, validation,\nwatertight meshes at 0.01 and 0.001, volume within `1e-4` of the truth\n(the ball less four caps, plus the rod's share integrated over its\ndisc), and classification at five probes.\n\n## Verification\n\n- On main on 2026-09-28, all three operations were exact and valid for\nboth setups. Meshed with `tessellate_solid` at 0.2, 0.1, 0.05, 0.02,\n0.01, 0.005, and 0.001, every result was watertight except the ball less\nthe tool with the 0.15 rod through the cap, which remains open from 0.2\nthrough 0.02 and is watertight at 0.01 and finer. This is recorded as a\nnew open roadmap row.\n- The new test passes.",
+          "timestamp": "2026-09-28T11:47:37Z",
+          "tree_id": "f9f648196de90e2b83c80a4bbecf95aceb146fbc",
+          "url": "https://github.com/andymai/brepkit/commit/ba39f070777eb207571018a643af9f01c22f0187"
+        },
+        "date": 1790596223356,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1027482,
+            "range": "± 2130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1114287,
+            "range": "± 3415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13248,
+            "range": "± 553",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 767919,
+            "range": "± 2817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42793808,
+            "range": "± 295800",
             "unit": "ns/iter"
           }
         ]
