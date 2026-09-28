@@ -1,0 +1,35 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_ba2f7b5c6902b6::t_8aa1935b9a3d60 5090-5092
+  s_ba2f7b5c6902b6::t_399750a6fc75f7 5687-5688,5690-5691
+  s_ba2f7b5c6902b6::t_2b33a6425e7476 703-723
+.claude/skills/roadmap/SKILL.md
+  s_ba2f7b5c6902b6::t_9e6defea2d7f9d 181
+crates/operations/tests/oblique_rod_cut.rs
+  s_ba2f7b5c6902b6::t_50875ba4692066 274-275
+  s_ba2f7b5c6902b6::t_8e17c209e58817 256-258,268-273,276-277,297-299,301,303-304
+  s_ba2f7b5c6902b6::t_cd2d6444cbc424 254-255,263-264,315-322
+  s_ba2f7b5c6902b6::t_c6e1f1100c9d33 278
+crates/math/src/curves.rs
+  s_ba2f7b5c6902b6::t_51d2331d0213d8 575-577,581-586,591-593,600-631,637-638
+  s_ba2f7b5c6902b6::t_50875ba4692066 587-590
+crates/math/src/curves/tests.rs
+  s_ba2f7b5c6902b6::t_b64527e556bbe0 655-656,668-677
+  s_ba2f7b5c6902b6::t_50875ba4692066 623,664,681
+  s_ba2f7b5c6902b6::t_ee3571e92c5b79 605-622,624-654,657-663,665-667,678-680,682-684
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a2e60be0c67da1199119f7e3162bed0976bd6a14",
+  "prompts": {},
+  "sessions": {
+    "s_ba2f7b5c6902b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db011e0f-8dc2-4c24-8391-23fa6804e69d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
