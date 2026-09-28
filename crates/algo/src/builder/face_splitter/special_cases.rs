@@ -308,6 +308,22 @@ fn split_noseam_by_arrangement(
     let (inner_loops, open_sections) =
         split_off_closed_chains(open_sections, tol * 100.0, &clear_of_seam);
     let open_sections = open_sections.as_slice();
+    // One chain from the seam through the pole and back (a wall holding the
+    // axis, or two walls meeting on it) leaves no region holding the pole:
+    // the face is the two lunes either side of the chain.
+    if closed_sections.is_empty()
+        && inner_loops.is_empty()
+        && let Some(lunes) = split_into_lunes(
+            surface,
+            boundary_edges,
+            open_sections,
+            (seam_n, seam_p),
+            (rank, reversed, face_id),
+            tol,
+        )
+    {
+        return lunes;
+    }
     // A chain through or near the pole (a wall holding the axis) leaves no
     // region holding the pole, or one the region polygons' chords misread,
     // so no collar to keep. Each arc is read at a spacing under half the
@@ -716,6 +732,129 @@ fn region_sample(
     }
     let (_, p) = best?;
     Some(sphere.evaluate(p.x(), p.y()))
+}
+
+/// A sphere face split by one chain of arcs running from its seam through
+/// its pole and back to the seam: the two lunes either side of the chain,
+/// each closed by the seam arc on its side (run the way the face's boundary
+/// runs), sampled halfway up the meridian over that arc's middle. `None`
+/// unless the arcs make exactly that one chain.
+fn split_into_lunes(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    arcs: &[OrientedPCurveEdge],
+    (seam_n, seam_p): (brepkit_math::vec::Vec3, Point3),
+    (rank, reversed, face_id): (crate::ds::Rank, bool, FaceId),
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    let FaceSurface::Sphere(sphere) = surface else {
+        return None;
+    };
+    let near = tol * 100.0;
+    let on_seam = |p: Point3| (p - seam_p).dot(seam_n).abs() <= tol * 1e3;
+    let turned = |e: &OrientedPCurveEdge| reverse_loop(std::slice::from_ref(e)).remove(0);
+    let mut pool = arcs.to_vec();
+    let first = pool
+        .iter()
+        .position(|a| on_seam(a.start_3d) || on_seam(a.end_3d))?;
+    let head = pool.swap_remove(first);
+    let mut chain = vec![if on_seam(head.start_3d) {
+        head
+    } else {
+        turned(&head)
+    }];
+    while !pool.is_empty() {
+        let tail = chain.last()?.end_3d;
+        if on_seam(tail) {
+            return None;
+        }
+        let k = pool.iter().position(|a| {
+            (a.start_3d - tail).length() < near || (a.end_3d - tail).length() < near
+        })?;
+        let next = pool.swap_remove(k);
+        chain.push(if (next.start_3d - tail).length() < near {
+            next
+        } else {
+            turned(&next)
+        });
+    }
+    let (a, b) = (chain[0].start_3d, chain.last()?.end_3d);
+    if !on_seam(b) || (a - b).length() < near {
+        return None;
+    }
+    // The chain runs through (or within reach of) a pole, where the region
+    // tracer cannot read which side holds it; read at a spacing under half
+    // the reach, as the arrangement's own check does.
+    let reach = 5e-3 * sphere.radius();
+    let poles = [1.0, -1.0].map(|s| sphere.center() + seam_n * (s * sphere.radius()));
+    let passes_pole = chain.iter().any(|arc| {
+        let coarse = edge_samples(arc, 64);
+        let length: f64 = coarse.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = ((2.0 * length / reach).ceil() as usize).clamp(64, 1 << 14);
+        edge_samples(arc, n)
+            .iter()
+            .any(|&p| poles.iter().any(|&pole| (p - pole).length() < reach))
+    });
+    if !passes_pole {
+        return None;
+    }
+    let seam_arcs = build_seam_arcs(surface, boundary_edges, arcs, tol)?;
+    let [one, other] = &seam_arcs[..] else {
+        return None;
+    };
+    let (back, over) = if (one.start_3d - b).length() < near {
+        (one.clone(), other.clone())
+    } else {
+        (other.clone(), one.clone())
+    };
+    if (back.start_3d - b).length() >= near
+        || (back.end_3d - a).length() >= near
+        || (over.end_3d - b).length() >= near
+    {
+        return None;
+    }
+    // Each lune's sample lies halfway along the great circle from its seam
+    // arc's middle to the chain's (by length), both on its boundary.
+    let chain_pts: Vec<Point3> = chain.iter().flat_map(|arc| edge_samples(arc, 64)).collect();
+    let total: f64 = chain_pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+    let mut walked = 0.0;
+    let mut chain_mid = chain_pts[0];
+    for w in chain_pts.windows(2) {
+        let step = (w[1] - w[0]).length();
+        if walked + step >= 0.5 * total {
+            chain_mid =
+                w[0] + (w[1] - w[0]) * ((0.5 * total - walked) / step.max(f64::MIN_POSITIVE));
+            break;
+        }
+        walked += step;
+    }
+    let toward_chain = (chain_mid - sphere.center()).normalize().ok()?;
+    let lune = |outer: Vec<OrientedPCurveEdge>, seam: &OrientedPCurveEdge| {
+        let mid = *edge_samples(seam, 2).get(1)?;
+        let across = ((mid - sphere.center()).normalize().ok()? + toward_chain)
+            .normalize()
+            .ok()?;
+        Some(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: outer,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(sphere.center() + across * sphere.radius()),
+        })
+    };
+    let first_side: Vec<OrientedPCurveEdge> = chain
+        .iter()
+        .cloned()
+        .chain(std::iter::once(back.clone()))
+        .collect();
+    let second_side: Vec<OrientedPCurveEdge> = reverse_loop(&chain)
+        .into_iter()
+        .chain(std::iter::once(over.clone()))
+        .collect();
+    Some(vec![lune(first_side, &back)?, lune(second_side, &over)?])
 }
 
 /// Reconstruct a sphere face's seam (boundary) as its exact circle and split it

@@ -222,16 +222,58 @@ fn ball_cut_by_a_plane_across_its_equator() {
     }
 }
 
+/// Whether `piece` is exact (sphere and plane faces, at most `max` of
+/// them), valid, meshes watertight, holds `truth` to within rounding, and
+/// reads each of `probes` as held or not.
+fn assert_exact_piece(
+    topo: &Topology,
+    piece: brepkit_topology::solid::SolidId,
+    max: usize,
+    truth: f64,
+    probes: &[(Point3, bool)],
+    label: &str,
+) {
+    let faces = solid_faces(topo, piece).unwrap();
+    assert!(faces.len() <= max, "{label}: {} faces", faces.len());
+    assert!(
+        faces.iter().all(|&f| matches!(
+            topo.face(f).unwrap().surface(),
+            FaceSurface::Sphere(_) | FaceSurface::Plane { .. }
+        )),
+        "{label}: a face neither sphere nor plane"
+    );
+    let report = validate_solid(topo, piece).unwrap();
+    assert!(report.is_valid(), "{label}: {:?}", report.issues);
+    let mesh = tessellate_solid(topo, piece, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+    let volume = solid_volume(topo, piece, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-9 * truth,
+        "{label}: volume {volume}, truth {truth}"
+    );
+    for &(at, held) in probes {
+        let got = classify_point(topo, piece, at, &ClassifyOptions::default()).unwrap();
+        let want = if held {
+            PointClassification::Inside
+        } else {
+            PointClassification::Outside
+        };
+        assert_eq!(got, want, "{label}: {at:?} reads {got:?}");
+    }
+}
+
 /// A ball cut by a plane through its axis, keeping either half: the section
-/// runs through both poles, which leaves no region holding a pole on either
-/// hemisphere, so the result falls back to a mesh rather than reading a
-/// collar that is not there. Whatever path it takes, each half is valid and
-/// holds half the ball (within the mesh's `2e-2`).
+/// runs from the equator through a pole and back on each hemisphere, which
+/// then splits into the two lunes either side of it. Each half is exact,
+/// valid and watertight, and holds half the ball.
 #[test]
 fn a_plane_through_the_axis_keeps_half_the_ball() {
     let r = 3.0_f64;
     let half = 2.0 * PI * r.powi(3) / 3.0;
-    for turn in [0.0_f64, 0.3, 1.0] {
+    for turn in [0.0_f64, 0.3, 1.0, 2.5] {
+        let (s, c) = turn.sin_cos();
+        // The slab holds x' > 0 in its turned frame.
+        let side = |d: f64| Point3::new(c * d, s * d, 0.4);
         for op in [BooleanOp::Intersect, BooleanOp::Cut] {
             let label = format!("turned {turn}, {op:?}");
             let mut topo = Topology::new();
@@ -240,43 +282,70 @@ fn a_plane_through_the_axis_keeps_half_the_ball() {
             let place = Mat4::rotation_z(turn) * Mat4::translation(0.0, -10.0, -10.0);
             transform_solid(&mut topo, slab, &place).unwrap();
             let piece = boolean(&mut topo, op, ball, slab).unwrap();
-            let report = validate_solid(&topo, piece).unwrap();
-            assert!(report.is_valid(), "{label}: {:?}", report.issues);
-            let volume = solid_volume(&topo, piece, 0.01).unwrap();
-            assert!(
-                (volume - half).abs() < 2e-2 * half,
-                "{label}: volume {volume}, truth {half}"
-            );
+            let kept = matches!(op, BooleanOp::Intersect);
+            let probes = [(side(1.5), kept), (side(-1.5), !kept)];
+            assert_exact_piece(&topo, piece, 3, half, &probes, &label);
         }
     }
 }
 
-/// The ball within and less the box over `x > 0`, `y > -1`: its wall
-/// `x = 0` holds the axis, so on the upper hemisphere that wall's arc runs
-/// through the pole between its ends (the wall `y = -1` cuts it off centre).
-/// No region there holds the pole, and the result falls back rather than
-/// read one; each piece is valid and within `2e-2` of `40π/3` and the rest.
+/// A ball against a quarter wedge through its axis (the box over `x' > 0`,
+/// `y' > 0` in a frame turned about z): its two walls meet on the axis, so
+/// each hemisphere's section turns a right angle at the pole and splits it
+/// into lunes of a quarter and three quarters. Each piece is exact.
+#[test]
+fn a_wedge_through_the_axis_keeps_its_quarter() {
+    let ball = 36.0 * PI;
+    for turn in [0.0_f64, 0.3, 1.0, 2.0] {
+        let (s, c) = turn.sin_cos();
+        let at = |x: f64, y: f64| Point3::new(c * x - s * y, s * x + c * y, 0.4);
+        for (op, truth, inside) in [
+            (BooleanOp::Intersect, ball / 4.0, true),
+            (BooleanOp::Cut, 0.75 * ball, false),
+        ] {
+            let label = format!("turned {turn}, {op:?}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, 3.0, 32).unwrap();
+            let wedge = make_box(&mut topo, 10.0, 10.0, 20.0).unwrap();
+            let place = Mat4::rotation_z(turn) * Mat4::translation(0.0, 0.0, -10.0);
+            transform_solid(&mut topo, wedge, &place).unwrap();
+            let piece = boolean(&mut topo, op, sphere, wedge).unwrap();
+            let probes = [(at(1.0, 1.0), inside), (at(-1.0, 1.0), !inside)];
+            assert_exact_piece(&topo, piece, 4, truth, &probes, &label);
+        }
+    }
+}
+
+/// The ball within and less the box over `x > x0`, `y > -1` with the wall
+/// `x = x0` on the axis or 1e-3 off it: on each hemisphere that wall's arc
+/// passes the pole on its way to the wall `y = -1`, and the chain of the two
+/// splits the hemisphere into lunes. Each piece is exact.
 #[test]
 fn a_wall_holding_the_axis_keeps_its_piece() {
-    let within = 40.0 * PI / 3.0;
     let ball = 36.0 * PI;
-    for (op, truth) in [
-        (BooleanOp::Intersect, within),
-        (BooleanOp::Cut, ball - within),
-    ] {
-        let label = format!("{op:?}");
-        let mut topo = Topology::new();
-        let sphere = make_sphere(&mut topo, 3.0, 32).unwrap();
-        let block = make_box(&mut topo, 10.0, 11.0, 20.0).unwrap();
-        transform_solid(&mut topo, block, &Mat4::translation(0.0, -1.0, -10.0)).unwrap();
-        let piece = boolean(&mut topo, op, sphere, block).unwrap();
-        let report = validate_solid(&topo, piece).unwrap();
-        assert!(report.is_valid(), "{label}: {:?}", report.issues);
-        let volume = solid_volume(&topo, piece, 0.01).unwrap();
-        assert!(
-            (volume - truth).abs() < 2e-2 * truth,
-            "{label}: volume {volume}, truth {truth}"
-        );
+    for x0 in [0.0_f64, 1e-3] {
+        // The ball's slice past the wall `y = -1`, then less the slab
+        // `0 < x < x0` of it, whose section is that slice's disc.
+        let cap = PI * 2.0_f64.powi(2) * (3.0 * 3.0 - 2.0) / 3.0;
+        let slice = PI * 9.0 - 9.0 * (1.0_f64 / 3.0).acos() + 8.0_f64.sqrt();
+        let within = 0.5 * (ball - cap) - x0 * slice;
+        for (op, truth) in [
+            (BooleanOp::Intersect, within),
+            (BooleanOp::Cut, ball - within),
+        ] {
+            let label = format!("x0 {x0}, {op:?}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, 3.0, 32).unwrap();
+            let block = make_box(&mut topo, 10.0, 11.0, 20.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::translation(x0, -1.0, -10.0)).unwrap();
+            let piece = boolean(&mut topo, op, sphere, block).unwrap();
+            let held = matches!(op, BooleanOp::Intersect);
+            let probes = [
+                (Point3::new(1.0, 0.5, 0.3), held),
+                (Point3::new(-1.0, 0.5, 0.3), !held),
+            ];
+            assert_exact_piece(&topo, piece, 4, truth, &probes, &label);
+        }
     }
 }
 
