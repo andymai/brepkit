@@ -187,11 +187,19 @@ fn a_sphere_face_whose_hole_winds_the_axis_meshes_on_the_sphere() {
         )
         .unwrap();
         let cut = boolean(&mut topo, BooleanOp::Cut, ball, lid).unwrap();
-        for face in solid_faces(&topo, cut).unwrap() {
-            let data = topo.face(face).unwrap();
-            if data.surface().type_tag() != "sphere" || data.inner_wires().is_empty() {
-                continue;
-            }
+        let holed: Vec<_> = solid_faces(&topo, cut)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| {
+                let data = topo.face(f).unwrap();
+                data.surface().type_tag() == "sphere" && !data.inner_wires().is_empty()
+            })
+            .collect();
+        assert!(
+            !holed.is_empty(),
+            "corner {corner:?}: no sphere face with a hole (the cut fell back?)"
+        );
+        for face in holed {
             let mesh = tessellate(&topo, face, 0.01).unwrap();
             let (mut area, mut flux) = (0.0, 0.0);
             for t in mesh.indices.chunks_exact(3) {
