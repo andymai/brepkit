@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.0.80](https://github.com/andymai/brepkit/compare/v4.0.79...v4.0.80) (2026-09-28)
+
+
+### Bug Fixes
+
+* **algo:** let a pointed cone's apex stand in for a rim around seam-straddling holes ([#1880](https://github.com/andymai/brepkit/issues/1880)) ([d18388c](https://github.com/andymai/brepkit/commit/d18388cdb3a8285731f15a9feff08a21e96bcbb0))
+* **operations:** mesh a wall a section loop winds round in its developed metric ([#1881](https://github.com/andymai/brepkit/issues/1881)) ([aa549c0](https://github.com/andymai/brepkit/commit/aa549c0ca42e63a10202b5de0453bd5094ddb8ae))
+
 ## [4.0.79](https://github.com/andymai/brepkit/compare/v4.0.78...v4.0.79) (2026-09-28)
 
 
