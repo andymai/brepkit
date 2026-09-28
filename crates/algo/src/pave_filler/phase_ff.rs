@@ -1137,6 +1137,30 @@ impl FaceExtent {
         }
     }
 
+    /// Whether `p` lies past an analytic face's `v` window by more than
+    /// `depth`, measured on the surface: in its boundary margin at most, never
+    /// on the face. A plane's window is a sampled polygon an arc bulges past,
+    /// so a plane never answers.
+    fn clear_of(&self, p: Point3, depth: f64) -> bool {
+        let Self::Analytic {
+            surface, v0, v1, ..
+        } = self
+        else {
+            return false;
+        };
+        let depth = match surface {
+            FaceSurface::Sphere(s) => depth / s.radius(),
+            FaceSurface::Torus(t) => depth / t.minor_radius(),
+            FaceSurface::Plane { .. }
+            | FaceSurface::Nurbs(_)
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_) => depth,
+        };
+        surface
+            .project_point(p)
+            .is_some_and(|(_, v)| v < *v0 - depth || v > *v1 + depth)
+    }
+
     /// Like `contains`, but requires the point to sit INSIDE the true face
     /// window by at least `depth` (no boundary margin credit). Distinguishes a
     /// section that genuinely crosses the window interior from one that only
@@ -1645,6 +1669,19 @@ fn restrict_curves_to_faces(
             emit_curve_windows(
                 topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, closed, tol, junctions, &mut out,
             );
+            continue;
+        }
+        // A closed circle lying wholly in one face's boundary margin, past
+        // its window and crossing neither face's boundary, misses that face
+        // (a ball on a frustum's axis meets its extended wall just above the
+        // top). Upright its box misses the wall's; turned, only this reads it.
+        if closed
+            && let EdgeCurve::Circle(circle) = &raw.curve
+            && [&ext_a, &ext_b]
+                .iter()
+                .any(|ext| (0..N).all(|i| ext.clear_of(pt(i), 10.0 * tol.linear)))
+            && closed_circle_boundary_crossings(topo, fa, fb, circle, tol).len() < 2
+        {
             continue;
         }
         out.push(raw);
