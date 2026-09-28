@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.89](https://github.com/andymai/brepkit/compare/v4.0.88...v4.0.89) (2026-09-28)
+
+
+### Bug Fixes
+
+* **operations:** part the chords two faces lay across the same narrow gap ([#1901](https://github.com/andymai/brepkit/issues/1901)) ([58ec3a3](https://github.com/andymai/brepkit/commit/58ec3a3339dc67ecf26892ce0abf0448faa1d3df))
+
 ## [4.0.88](https://github.com/andymai/brepkit/compare/v4.0.87...v4.0.88) (2026-09-28)
 
 
