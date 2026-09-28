@@ -3,6 +3,7 @@ crates/operations/tests/column_and_rod_against_a_ball.rs
   s_ba2f7b5c6902b6::t_b5c9ea3d2de74a 4-6,107
 .claude/skills/roadmap/SKILL.md
   s_ba2f7b5c6902b6::t_138c732fb97cc3 179,205-206
+  s_ba2f7b5c6902b6::t_ad4f78fe3963df 207-208
 ---
 {
   "schema_version": "authorship/3.0.0",
