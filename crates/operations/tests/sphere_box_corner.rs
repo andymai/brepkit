@@ -46,10 +46,11 @@ fn corner_piece(a: f64, b: f64, c: f64) -> f64 {
     let across = |x: f64| {
         let c2 = RADIUS.mul_add(RADIUS, -(x * x));
         let y_end = (c2 - c * c).max(0.0).sqrt();
+        let rim = c2.sqrt();
         let g = |y: f64| {
             0.5 * y.mul_add(
-                y.mul_add(-y, c2).max(0.0).sqrt(),
-                c2 * (y / c2.sqrt()).asin(),
+                ((rim - y) * (rim + y)).max(0.0).sqrt(),
+                c2 * (y / rim).asin(),
             ) - c * y
         };
         g(y_end) - g(b.max(-y_end))
@@ -465,17 +466,59 @@ fn turned_octants_are_exact() {
     }
 }
 
+/// A ball-and-box result checked for exactness, validity, a watertight
+/// mesh and its volume, and read by the ray cast at a point of the overlap,
+/// one in the ball alone and one in the box alone, each held or not as the
+/// op keeps it.
+fn assert_exact_ball_box(
+    topo: &Topology,
+    piece: SolidId,
+    truth: f64,
+    [overlap, ball_only, box_only]: [Point3; 3],
+    (op, swap): (BooleanOp, bool),
+    label: &str,
+) {
+    assert!(exact(topo, piece), "{label}: fell back to a mesh");
+    let report = validate_solid(topo, piece).unwrap();
+    assert!(report.is_valid(), "{label}: {:?}", report.issues);
+    let mesh = tessellate_solid(topo, piece, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+    let volume = solid_volume(topo, piece, 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-9 * truth,
+        "{label}: volume {volume}, truth {truth}"
+    );
+    let held = match (op, swap) {
+        (BooleanOp::Intersect, _) => [true, false, false],
+        (BooleanOp::Cut, false) => [false, true, false],
+        _ => [false, false, true],
+    };
+    for (p, want) in [overlap, ball_only, box_only].into_iter().zip(held) {
+        let got = classify_point(topo, piece, p, &ClassifyOptions::default()).unwrap();
+        let want = if want {
+            PointClassification::Inside
+        } else {
+            PointClassification::Outside
+        };
+        assert_eq!(got, want, "{label}: {p:?} reads {got:?}");
+    }
+}
+
 /// The upright ball against the box over an octant turned about `z` alone:
 /// its walls meet the equator between the chordal vertices, and its floor
 /// lies in the equator's plane, riding the seam from one wall to the other.
 /// The upper hemisphere splits into the lunes either side of the two walls'
 /// arcs and the lower keeps whole with its seam laid on the exact circle,
-/// split where the walls reach it. Each op is exact, valid and watertight.
+/// split where the walls reach it. Each op is exact, valid and watertight,
+/// and keeps the turned wedge, not another one of the same volume.
 #[test]
 fn an_octant_turned_off_the_chordal_vertices_is_exact() {
     let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
     let octant = ball / 8.0;
     for turn in [0.3_f64, 1.0, 2.0] {
+        let place = Mat4::rotation_z(turn);
+        let probes = [(1.0, 1.0, 1.0), (-1.0, -1.0, 1.0), (3.0, 3.0, 3.0)]
+            .map(|(x, y, z)| place.mul_point(Point3::new(x, y, z)));
         for (op, swap, truth) in [
             (BooleanOp::Intersect, false, octant),
             (BooleanOp::Cut, false, ball - octant),
@@ -485,23 +528,54 @@ fn an_octant_turned_off_the_chordal_vertices_is_exact() {
             let mut topo = Topology::new();
             let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
             let block = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
-            transform_solid(&mut topo, block, &Mat4::rotation_z(turn)).unwrap();
+            transform_solid(&mut topo, block, &place).unwrap();
             let (a, b) = if swap {
                 (block, sphere)
             } else {
                 (sphere, block)
             };
             let piece = boolean(&mut topo, op, a, b).unwrap();
-            assert!(exact(&topo, piece), "{label}: fell back to a mesh");
-            let report = validate_solid(&topo, piece).unwrap();
-            assert!(report.is_valid(), "{label}: {:?}", report.issues);
-            let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
-            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
-            let volume = solid_volume(&topo, piece, 0.01).unwrap();
-            assert!(
-                (volume - truth).abs() < 1e-9 * truth,
-                "{label}: volume {volume}, truth {truth}"
-            );
+            assert_exact_ball_box(&topo, piece, truth, probes, (op, swap), &label);
+        }
+    }
+}
+
+/// The ball against the box over `x > -0.5`, `y > 0.5`, `z > 0`: its walls
+/// meet the equator between the chordal vertices and their arcs meet short
+/// of the pole, so the upper hemisphere takes the arrangement's collar and
+/// lune, and its floor rides the seam as in the octant above. Each op is
+/// exact against the ball's corner piece, upright and with the scene
+/// turned.
+#[test]
+fn a_corner_on_the_equator_off_the_axis_is_exact() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let within = corner_piece(-0.5, 0.5, 0.0);
+    let block_volume = 5.5 * 4.5 * 5.0;
+    for scene in [
+        Mat4::identity(),
+        Mat4::rotation_x(0.35) * Mat4::rotation_z(0.5),
+    ] {
+        let probes = [(0.5, 1.5, 1.0), (-1.5, -0.5, 1.0), (3.0, 3.0, 3.0)]
+            .map(|(x, y, z)| scene.mul_point(Point3::new(x, y, z)));
+        for (op, swap, truth) in [
+            (BooleanOp::Intersect, false, within),
+            (BooleanOp::Cut, false, ball - within),
+            (BooleanOp::Cut, true, block_volume - within),
+        ] {
+            let label = format!("{op:?} swap {swap}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 5.5, 4.5, 5.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::translation(-0.5, 0.5, 0.0)).unwrap();
+            transform_solid(&mut topo, block, &scene).unwrap();
+            transform_solid(&mut topo, sphere, &scene).unwrap();
+            let (a, b) = if swap {
+                (block, sphere)
+            } else {
+                (sphere, block)
+            };
+            let piece = boolean(&mut topo, op, a, b).unwrap();
+            assert_exact_ball_box(&topo, piece, truth, probes, (op, swap), &label);
         }
     }
 }
