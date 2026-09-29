@@ -434,25 +434,12 @@ fn split_noseam_by_arrangement(
     {
         return lunes;
     }
-    // A chain through or near the pole (a wall holding the axis) leaves no
-    // region holding the pole, or one the region polygons' chords misread,
-    // so no collar to keep. Each arc is read at a spacing under half the
-    // reach, so one crossing the pole between its ends is caught.
-    if let FaceSurface::Sphere(sphere) = surface {
-        let reach = 5e-3 * sphere.radius();
-        let poles = [1.0, -1.0].map(|s| sphere.center() + seam_n * (s * sphere.radius()));
-        let near_pole = |a: &OrientedPCurveEdge| {
-            let coarse = edge_samples(a, 64);
-            let length: f64 = coarse.windows(2).map(|w| (w[1] - w[0]).length()).sum();
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let n = ((2.0 * length / reach).ceil() as usize).clamp(64, 1 << 14);
-            edge_samples(a, n)
-                .iter()
-                .any(|&p| poles.iter().any(|&pole| (p - pole).length() < reach))
-        };
-        if open_sections.iter().any(near_pole) {
-            return Vec::new();
-        }
+    // Any other chain through or near the pole leaves no region holding the
+    // pole, or one the region polygons' chords misread, so no collar to keep.
+    if let FaceSurface::Sphere(sphere) = surface
+        && passes_near_pole(sphere, seam_n, open_sections)
+    {
+        return Vec::new();
     }
     let seam_ends = open_sections
         .iter()
@@ -844,6 +831,28 @@ fn region_sample(
     Some(sphere.evaluate(p.x(), p.y()))
 }
 
+/// Whether any of `arcs` passes within `5e-3` of the radius of either pole
+/// of `sphere` along `axis`, where the region tracer cannot read which side
+/// holds the pole. Each arc is read at a spacing under half that reach, so
+/// one crossing a pole between its ends is caught.
+fn passes_near_pole(
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    axis: brepkit_math::vec::Vec3,
+    arcs: &[OrientedPCurveEdge],
+) -> bool {
+    let reach = 5e-3 * sphere.radius();
+    let poles = [1.0, -1.0].map(|s| sphere.center() + axis * (s * sphere.radius()));
+    arcs.iter().any(|arc| {
+        let coarse = edge_samples(arc, 64);
+        let length: f64 = coarse.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = ((2.0 * length / reach).ceil() as usize).clamp(64, 1 << 14);
+        edge_samples(arc, n)
+            .iter()
+            .any(|&p| poles.iter().any(|&pole| (p - pole).length() < reach))
+    })
+}
+
 /// A sphere face split by one chain of arcs running from its seam through
 /// its pole and back to the seam: the two lunes either side of the chain,
 /// each closed by the seam arc on its side (run the way the face's boundary
@@ -892,21 +901,7 @@ fn split_into_lunes(
     if !on_seam(b) || (a - b).length() < near {
         return None;
     }
-    // The chain runs through (or within reach of) a pole, where the region
-    // tracer cannot read which side holds it; read at a spacing under half
-    // the reach, as the arrangement's own check does.
-    let reach = 5e-3 * sphere.radius();
-    let poles = [1.0, -1.0].map(|s| sphere.center() + seam_n * (s * sphere.radius()));
-    let passes_pole = chain.iter().any(|arc| {
-        let coarse = edge_samples(arc, 64);
-        let length: f64 = coarse.windows(2).map(|w| (w[1] - w[0]).length()).sum();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n = ((2.0 * length / reach).ceil() as usize).clamp(64, 1 << 14);
-        edge_samples(arc, n)
-            .iter()
-            .any(|&p| poles.iter().any(|&pole| (p - pole).length() < reach))
-    });
-    if !passes_pole {
+    if !passes_near_pole(sphere, seam_n, &chain) {
         return None;
     }
     let seam_arcs = build_seam_arcs(surface, boundary_edges, arcs, tol)?;
