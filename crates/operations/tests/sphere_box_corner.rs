@@ -506,6 +506,49 @@ fn an_octant_turned_off_the_chordal_vertices_is_exact() {
     }
 }
 
+/// The ball less the box of the test above turned 1 radian, its floor a few
+/// 1e-6 under the equator: the floor's section no longer rides the seam, and
+/// a seam laid through its ends would put vertices off their own circle,
+/// which both volume readers misread (the check crate's by up to 13%).
+/// Whatever path the op takes, it is valid and watertight, and when exact
+/// both readers hold the truth: the ball less a quarter of its part above
+/// the floor.
+#[test]
+fn a_floor_just_under_the_equator_is_never_misread() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    for z0 in [-9.9e-6_f64, -5e-6, -1e-6] {
+        let label = format!("floor at {z0:e}");
+        let below = RADIUS + z0;
+        let above = ball - PI * below * below * (3.0 * RADIUS - below) / 3.0;
+        let truth = ball - above / 4.0;
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let block = make_box(&mut topo, 5.0, 5.0, 5.0 - z0).unwrap();
+        let place = Mat4::rotation_z(1.0) * Mat4::translation(0.0, 0.0, z0);
+        transform_solid(&mut topo, block, &place).unwrap();
+        let piece = boolean(&mut topo, BooleanOp::Cut, sphere, block).unwrap();
+        let report = validate_solid(&topo, piece).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+        if exact(&topo, piece) {
+            let volume = solid_volume(&topo, piece, 0.01).unwrap();
+            let checked = brepkit_check::properties::solid_volume(
+                &topo,
+                piece,
+                &brepkit_check::properties::PropertiesOptions::default(),
+            )
+            .unwrap();
+            for (reader, v) in [("operations", volume), ("check", checked)] {
+                assert!(
+                    (v - truth).abs() < 1e-6 * truth,
+                    "{label}: {reader} volume {v}, truth {truth}"
+                );
+            }
+        }
+    }
+}
+
 /// The ball less, and fused with, the box over an octant, both turned 0.3
 /// about `z`, above and below the equator: exact and valid, the ball less its
 /// octant or joined to the box by the rest of it. The volume bound covers the

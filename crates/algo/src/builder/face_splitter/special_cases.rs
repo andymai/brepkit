@@ -191,15 +191,30 @@ pub(super) fn split_noseam_face_direct(
         // between the chordal vertices) leaves the uncovered chords short of
         // its ends, so no remainder closes. The arrangement rebuilds the
         // seam as its exact circle and splits it where the other arcs reach
-        // it, which lays the riding arc's span down again as a seam arc.
+        // it, which lays the riding arc's span down again as a seam arc. Only
+        // an arc flush with the boundary's plane at the vertex scale does: a
+        // floor a few 1e-6 off it would leave the seam arcs' ends off their
+        // circle.
         let Some(remainder) = chain_closed_loop(pool, close_tol) else {
+            let flush = |a: &OrientedPCurveEdge| {
+                boundary_plane.is_some_and(|(n, at)| {
+                    edge_samples(a, 8)
+                        .iter()
+                        .all(|p| (*p - at).dot(n).abs() <= tol * 10.0)
+                })
+            };
+            let riding_flush = cap_edges
+                .iter()
+                .zip(&coincident)
+                .filter(|&(_, &coin)| coin)
+                .all(|(arc, _)| flush(arc));
             let crossing: Vec<OrientedPCurveEdge> = cap_edges
                 .iter()
                 .zip(&coincident)
                 .filter(|&(_, &coin)| !coin)
                 .map(|(arc, _)| arc.clone())
                 .collect();
-            if crossing.is_empty() {
+            if crossing.is_empty() || !riding_flush {
                 return Vec::new();
             }
             return split_noseam_by_arrangement(
@@ -484,12 +499,16 @@ fn split_noseam_by_arrangement(
     {
         return lunes;
     }
-    // Arcs riding the seam (a box floor in the equator's plane) split no
-    // region off. Where one ends between the chordal vertices the face's
-    // chords cannot meet the pieces beside it there, so the face stays
-    // whole with its seam rebuilt as the exact circle split at those ends.
-    let rides_seam =
-        |a: &OrientedPCurveEdge| edge_samples(a, 8).into_iter().all(|p| !clear_of_seam(p));
+    // Arcs riding the seam (a box floor in the equator's plane, flush with it
+    // at the vertex scale) split no region off. Where one ends between the
+    // chordal vertices the face's chords cannot meet the pieces beside it
+    // there, so the face stays whole with its seam rebuilt as the exact
+    // circle split at those ends.
+    let rides_seam = |a: &OrientedPCurveEdge| {
+        edge_samples(a, 8)
+            .into_iter()
+            .all(|p| (p - seam_p).dot(seam_n).abs() <= tol * 10.0)
+    };
     let off_vertex = |p: Point3| {
         boundary_edges
             .iter()
