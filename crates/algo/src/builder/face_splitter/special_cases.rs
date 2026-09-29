@@ -33,6 +33,7 @@ pub(super) fn split_noseam_face_direct(
     reversed: bool,
     face_id: FaceId,
     wire_pts: &[Point3],
+    holes: &[Vec<OrientedPCurveEdge>],
     tol: f64,
 ) -> Vec<SplitSubFace> {
     let close_tol = tol * 100.0;
@@ -112,6 +113,7 @@ pub(super) fn split_noseam_face_direct(
             boundary_edges,
             &open_sections,
             &closed_sections,
+            holes,
             rank,
             reversed,
             face_id,
@@ -119,9 +121,10 @@ pub(super) fn split_noseam_face_direct(
         );
     };
     // A closed section inside the face (a box's top across a patch around
-    // the pole) splits one of the two pieces below, which they do not
-    // follow: fail the face rather than keep a piece whole over it. One in
-    // the boundary's own plane runs along the boundary.
+    // the pole) splits one of the two pieces below: the interior cap below
+    // nests it in the piece holding it, and the pieces along the boundary
+    // fail the face rather than keep a piece whole over it. One in the
+    // boundary's own plane runs along the boundary.
     let boundary_pts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
     let boundary_plane = loop_plane(&boundary_pts);
     let on_boundary = |c: &OrientedPCurveEdge| {
@@ -131,9 +134,11 @@ pub(super) fn split_noseam_face_direct(
                 .all(|p| (*p - at).dot(n).abs() <= 1e3 * tol)
         })
     };
-    if closed_sections.iter().any(|c| !on_boundary(c)) {
-        return Vec::new();
-    }
+    let interior_closed: Vec<OrientedPCurveEdge> = closed_sections
+        .iter()
+        .filter(|c| !on_boundary(c))
+        .cloned()
+        .collect();
 
     // Boundary edges covered by a cap arc: both segment endpoints lie on
     // the arc's circle within its angular span. Those edges are replaced
@@ -164,6 +169,9 @@ pub(super) fn split_noseam_face_direct(
         pave_block_id: e.pave_block_id,
     };
 
+    if covered.iter().any(|&c| c) && !interior_closed.is_empty() {
+        return Vec::new();
+    }
     if covered.iter().any(|&c| c) {
         // Cap loop runs along part of the boundary: remainder = uncovered
         // boundary edges + reversed non-coincident arcs, chained closed.
@@ -239,6 +247,20 @@ pub(super) fn split_noseam_face_direct(
         cap_edges
     };
     let hole_edges = reverse_loop(&cap_edges);
+    // The face's own holes are attached to the pieces afterwards, which
+    // does not weigh them against a nested section's patch.
+    if !interior_closed.is_empty() && !holes.is_empty() {
+        return Vec::new();
+    }
+    if !interior_closed.is_empty() {
+        return nest_closed_sections(
+            surface,
+            boundary_edges,
+            cap_edges,
+            &interior_closed,
+            (rank, reversed, face_id),
+        );
+    }
     vec![
         SplitSubFace {
             surface: surface.clone(),
@@ -261,6 +283,119 @@ pub(super) fn split_noseam_face_direct(
     ]
 }
 
+/// Whether a sphere region's `(u, v)` polygon holds `p`, read a turn either
+/// way in `u`.
+fn uv_region_holds(poly: &[brepkit_math::vec::Point2], p: brepkit_math::vec::Point2) -> bool {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::TAU;
+    let u_min = poly.iter().map(|q| q.x()).fold(f64::INFINITY, f64::min);
+    let u = u_min + (p.x() - u_min).rem_euclid(TAU);
+    [u, u + TAU, u - TAU]
+        .into_iter()
+        .any(|u| super::super::classify_2d::point_in_polygon_2d(Point2::new(u, p.y()), poly))
+}
+
+/// A sphere face's interior cap and band with closed sections inside them
+/// (a box whose floor and walls ring the pole and whose top cuts a circle
+/// round it): each section is a hole of whichever piece holds most of its
+/// samples in `(u, v)` and bounds a patch of its own, each piece sampled
+/// clear of its holes. A section in the band round the cap (a tube's wall
+/// circling a column's cap) holds the cap as its patch's hole. Empty (the
+/// face fails) when a section lies in another's patch or a piece has no
+/// clear sample.
+fn nest_closed_sections(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    cap: Vec<OrientedPCurveEdge>,
+    closed: &[OrientedPCurveEdge],
+    (rank, reversed, face_id): (crate::ds::Rank, bool, FaceId),
+) -> Vec<SplitSubFace> {
+    use brepkit_math::vec::Point2;
+    let FaceSurface::Sphere(sphere) = surface else {
+        return Vec::new();
+    };
+    // Each section as its patch: counter-clockwise about the outward normal,
+    // with the disc it bounds on its left.
+    let patches: Vec<Vec<OrientedPCurveEdge>> = closed
+        .iter()
+        .map(|c| {
+            let edge = vec![c.clone()];
+            if sphere_loop_counter_clockwise(surface, &edge) == Some(false) {
+                reverse_loop(&edge)
+            } else {
+                edge
+            }
+        })
+        .collect();
+    let patch_uv: Vec<Vec<Point2>> = patches
+        .iter()
+        .map(|p| sphere_region_polygon(sphere, p))
+        .collect();
+    let samples: Vec<Vec<Point2>> = patches
+        .iter()
+        .map(|p| sphere_loop_polyline(sphere, p))
+        .collect();
+    let held = |poly: &[Point2], pts: &[Point2]| {
+        pts.iter().filter(|&&q| uv_region_holds(poly, q)).count() * 2 > pts.len()
+    };
+    for (i, pts) in samples.iter().enumerate() {
+        if patch_uv
+            .iter()
+            .enumerate()
+            .any(|(j, poly)| i != j && held(poly, pts))
+        {
+            return Vec::new();
+        }
+    }
+    let cap_uv = sphere_region_polygon(sphere, &cap);
+    let cap_pts = sphere_loop_polyline(sphere, &cap);
+    let (mut cap_holes, mut band_holes) = (Vec::new(), Vec::new());
+    let mut patch_holes: Vec<Vec<Vec<OrientedPCurveEdge>>> = vec![Vec::new(); patches.len()];
+    for (i, (patch, pts)) in patches.iter().zip(&samples).enumerate() {
+        if held(&cap_uv, pts) {
+            cap_holes.push(reverse_loop(patch));
+        } else {
+            band_holes.push(reverse_loop(patch));
+            if held(&patch_uv[i], &cap_pts) {
+                patch_holes[i].push(reverse_loop(&cap));
+            }
+        }
+    }
+    if patch_holes.iter().all(Vec::is_empty) {
+        band_holes.insert(0, reverse_loop(&cap));
+    }
+    let piece = |outer: Vec<OrientedPCurveEdge>, holes: Vec<Vec<OrientedPCurveEdge>>| {
+        let inside = region_sample(surface, &outer, &holes)?;
+        Some(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: outer,
+            inner_wires: holes,
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(inside),
+        })
+    };
+    let mut pieces = Vec::new();
+    for built in [
+        piece(cap, cap_holes),
+        piece(boundary_edges.to_vec(), band_holes),
+    ]
+    .into_iter()
+    .chain(
+        patches
+            .into_iter()
+            .zip(patch_holes)
+            .map(|(p, holes)| piece(p, holes)),
+    ) {
+        let Some(built) = built else {
+            return Vec::new();
+        };
+        pieces.push(built);
+    }
+    pieces
+}
+
 /// Split a sphere face whose disjoint open arcs cannot chain alone into a
 /// region sub-face, by interleaving the seam (boundary) sub-segments between
 /// the arcs.
@@ -280,6 +415,7 @@ fn split_noseam_by_arrangement(
     boundary_edges: &[OrientedPCurveEdge],
     open_sections: &[OrientedPCurveEdge],
     closed_sections: &[OrientedPCurveEdge],
+    holes: &[Vec<OrientedPCurveEdge>],
     rank: crate::ds::Rank,
     reversed: bool,
     face_id: FaceId,
@@ -308,25 +444,29 @@ fn split_noseam_by_arrangement(
     let (inner_loops, open_sections) =
         split_off_closed_chains(open_sections, tol * 100.0, &clear_of_seam);
     let open_sections = open_sections.as_slice();
-    // A chain through or near the pole (a wall holding the axis) leaves no
-    // region holding the pole, or one the region polygons' chords misread,
-    // so no collar to keep. Each arc is read at a spacing under half the
-    // reach, so one crossing the pole between its ends is caught.
-    if let FaceSurface::Sphere(sphere) = surface {
-        let reach = 5e-3 * sphere.radius();
-        let poles = [1.0, -1.0].map(|s| sphere.center() + seam_n * (s * sphere.radius()));
-        let near_pole = |a: &OrientedPCurveEdge| {
-            let coarse = edge_samples(a, 64);
-            let length: f64 = coarse.windows(2).map(|w| (w[1] - w[0]).length()).sum();
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let n = ((2.0 * length / reach).ceil() as usize).clamp(64, 1 << 14);
-            edge_samples(a, n)
-                .iter()
-                .any(|&p| poles.iter().any(|&pole| (p - pole).length() < reach))
-        };
-        if open_sections.iter().any(near_pole) {
-            return Vec::new();
-        }
+    // One chain from the seam through the pole and back (a wall holding the
+    // axis, or two walls meeting on it) leaves no region holding the pole:
+    // the face is the two lunes either side of the chain.
+    if closed_sections.is_empty()
+        && inner_loops.is_empty()
+        && let Some(lunes) = split_into_lunes(
+            surface,
+            boundary_edges,
+            open_sections,
+            holes,
+            (seam_n, seam_p),
+            (rank, reversed, face_id),
+            tol,
+        )
+    {
+        return lunes;
+    }
+    // Any other chain through or near the pole leaves no region holding the
+    // pole, or one the region polygons' chords misread, so no collar to keep.
+    if let FaceSurface::Sphere(sphere) = surface
+        && passes_near_pole(sphere, seam_n, open_sections)
+    {
+        return Vec::new();
     }
     let seam_ends = open_sections
         .iter()
@@ -716,6 +856,185 @@ fn region_sample(
     }
     let (_, p) = best?;
     Some(sphere.evaluate(p.x(), p.y()))
+}
+
+/// Whether any of `arcs` passes within `5e-3` of the radius of either pole
+/// of `sphere` along `axis`, where the region tracer cannot read which side
+/// holds the pole. Each arc is read at a spacing under half that reach, so
+/// one crossing a pole between its ends is caught.
+fn passes_near_pole(
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    axis: brepkit_math::vec::Vec3,
+    arcs: &[OrientedPCurveEdge],
+) -> bool {
+    let reach = 5e-3 * sphere.radius();
+    let poles = [1.0, -1.0].map(|s| sphere.center() + axis * (s * sphere.radius()));
+    arcs.iter().any(|arc| {
+        let coarse = edge_samples(arc, 64);
+        let length: f64 = coarse.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = ((2.0 * length / reach).ceil() as usize).clamp(64, 1 << 14);
+        edge_samples(arc, n)
+            .iter()
+            .any(|&p| poles.iter().any(|&pole| (p - pole).length() < reach))
+    })
+}
+
+/// A sphere face split by one chain of arcs running from its seam through
+/// its pole and back to the seam: the two lunes either side of the chain,
+/// each closed by the seam arc on its side (run the way the face's boundary
+/// runs), sampled halfway up the meridian over that arc's middle. `None`
+/// unless the arcs make exactly that one chain.
+fn split_into_lunes(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    arcs: &[OrientedPCurveEdge],
+    holes: &[Vec<OrientedPCurveEdge>],
+    (seam_n, seam_p): (brepkit_math::vec::Vec3, Point3),
+    (rank, reversed, face_id): (crate::ds::Rank, bool, FaceId),
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    let FaceSurface::Sphere(sphere) = surface else {
+        return None;
+    };
+    // The face's own holes are attached to the pieces afterwards as whole
+    // loops, which a chain through or beside one would leave in the wrong
+    // lune or touching its wire.
+    if !holes.is_empty() {
+        return None;
+    }
+    let near = tol * 100.0;
+    let on_seam = |p: Point3| (p - seam_p).dot(seam_n).abs() <= tol * 1e3;
+    let turned = |e: &OrientedPCurveEdge| reverse_loop(std::slice::from_ref(e)).remove(0);
+    let mut pool = arcs.to_vec();
+    let first = pool
+        .iter()
+        .position(|a| on_seam(a.start_3d) || on_seam(a.end_3d))?;
+    let head = pool.swap_remove(first);
+    let mut chain = vec![if on_seam(head.start_3d) {
+        head
+    } else {
+        turned(&head)
+    }];
+    while !pool.is_empty() {
+        let tail = chain.last()?.end_3d;
+        if on_seam(tail) {
+            return None;
+        }
+        let k = pool.iter().position(|a| {
+            (a.start_3d - tail).length() < near || (a.end_3d - tail).length() < near
+        })?;
+        let next = pool.swap_remove(k);
+        chain.push(if (next.start_3d - tail).length() < near {
+            next
+        } else {
+            turned(&next)
+        });
+    }
+    let (a, b) = (chain[0].start_3d, chain.last()?.end_3d);
+    if !on_seam(b) || (a - b).length() < near {
+        return None;
+    }
+    if !passes_near_pole(sphere, seam_n, &chain) {
+        return None;
+    }
+    let seam_arcs = build_seam_arcs(surface, boundary_edges, arcs, tol)?;
+    let [one, other] = &seam_arcs[..] else {
+        return None;
+    };
+    let (back, over) = if (one.start_3d - b).length() < near {
+        (one.clone(), other.clone())
+    } else {
+        (other.clone(), one.clone())
+    };
+    if (back.start_3d - b).length() >= near
+        || (back.end_3d - a).length() >= near
+        || (over.end_3d - b).length() >= near
+    {
+        return None;
+    }
+    // Each lune's sample lies on the great circle from its seam arc's middle
+    // toward the chain's middle (by length), halfway to where that circle
+    // first meets the chain: the seam arc bounds the lune, so that stretch
+    // lies inside it however the chain bends back over the lune (a stepped
+    // tool's notch wall).
+    let center = sphere.center();
+    let chain_dirs: Vec<brepkit_math::vec::Vec3> = chain
+        .iter()
+        .flat_map(|arc| edge_samples(arc, 64))
+        .map(|p| (p - center).normalize())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    let lengths: Vec<f64> = chain_dirs
+        .windows(2)
+        .map(|w| (w[1] - w[0]).length())
+        .collect();
+    let total: f64 = lengths.iter().sum();
+    let mut walked = 0.0;
+    let mut chain_mid = chain_dirs[0];
+    for (w, &step) in chain_dirs.windows(2).zip(&lengths) {
+        if walked + step >= 0.5 * total {
+            let f = (0.5 * total - walked) / step.max(f64::MIN_POSITIVE);
+            chain_mid = (w[0] + (w[1] - w[0]) * f).normalize().ok()?;
+            break;
+        }
+        walked += step;
+    }
+    // The fraction of the way from `m` to `c` (both unit) where the great
+    // circle between them first crosses the chain, or 1.
+    let first_crossing = |m: brepkit_math::vec::Vec3, c: brepkit_math::vec::Vec3| {
+        let (plane, span) = (m.cross(c), m.dot(c).clamp(-1.0, 1.0).acos());
+        let mut first = 1.0_f64;
+        for w in chain_dirs.windows(2) {
+            let (p, q) = (w[0], w[1]);
+            let side = |x: brepkit_math::vec::Vec3| plane.dot(x);
+            let (sp, sq) = (side(p), side(q));
+            if sp * sq > 0.0 {
+                continue;
+            }
+            let chord = p.cross(q);
+            if chord.dot(m) * chord.dot(c) > 0.0 {
+                continue;
+            }
+            let Ok(x) = plane.cross(chord).normalize() else {
+                continue;
+            };
+            let x = if x.dot(m + c) < 0.0 { x * -1.0 } else { x };
+            if x.dot(p + q) <= 0.0 {
+                continue;
+            }
+            let t = m.dot(x).clamp(-1.0, 1.0).acos() / span.max(f64::MIN_POSITIVE);
+            if t > 1e-9 {
+                first = first.min(t);
+            }
+        }
+        (first, span)
+    };
+    let lune = |outer: Vec<OrientedPCurveEdge>, seam: &OrientedPCurveEdge| {
+        let m = (*edge_samples(seam, 2).get(1)? - center).normalize().ok()?;
+        let (reach, span) = first_crossing(m, chain_mid);
+        let (a, b) = ((1.0 - 0.5 * reach) * span, 0.5 * reach * span);
+        let across = (m * a.sin() + chain_mid * b.sin()).normalize().ok()?;
+        Some(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: outer,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(center + across * sphere.radius()),
+        })
+    };
+    let first_side: Vec<OrientedPCurveEdge> = chain
+        .iter()
+        .cloned()
+        .chain(std::iter::once(back.clone()))
+        .collect();
+    let second_side: Vec<OrientedPCurveEdge> = reverse_loop(&chain)
+        .into_iter()
+        .chain(std::iter::once(over.clone()))
+        .collect();
+    Some(vec![lune(first_side, &back)?, lune(second_side, &over)?])
 }
 
 /// Reconstruct a sphere face's seam (boundary) as its exact circle and split it

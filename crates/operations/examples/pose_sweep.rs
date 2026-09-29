@@ -265,6 +265,89 @@ fn ball_column_rod(r: f64, at: f64) -> [f64; 3] {
     ]
 }
 
+/// A ball of radius `r` about the origin less, within and outside the union
+/// of `blocks` (disjoint boxes, each from `lo` to `hi`): each slice across
+/// `z` meets a box in a disc-and-rectangle area taken in closed form,
+/// integrated by 5-point Gauss over 2000 panels between the heights where a
+/// wall or a vertical edge of the box meets the slice's rim.
+fn ball_and_blocks(r: f64, blocks: &[([f64; 3], [f64; 3])]) -> [f64; 3] {
+    const GAUSS: [(f64, f64); 5] = [
+        (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+        (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.0, 0.568_888_888_888_888_9),
+        (0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+    ];
+    let within_block = |lo: [f64; 3], hi: [f64; 3]| {
+        let slice = |rho: f64| {
+            let (a, b) = (lo[0].max(-rho), hi[0].min(rho));
+            if a >= b {
+                return 0.0;
+            }
+            let half = |x: f64| ((rho - x) * (rho + x)).max(0.0).sqrt();
+            let under = |x: f64| {
+                let x = x.clamp(-rho, rho);
+                0.5 * x.mul_add(half(x), rho * rho * (x / rho).asin())
+            };
+            let mut cuts = vec![a, b];
+            for y in [lo[1], hi[1]] {
+                if y.abs() < rho {
+                    cuts.extend([-half(y), half(y)].into_iter().filter(|&x| x > a && x < b));
+                }
+            }
+            cuts.sort_by(f64::total_cmp);
+            cuts.windows(2)
+                .map(|w| {
+                    let (p, q) = (w[0], w[1]);
+                    let s = half(0.5 * (p + q));
+                    if hi[1].min(s) <= lo[1].max(-s) {
+                        return 0.0;
+                    }
+                    let arc = under(q) - under(p);
+                    let top = if hi[1] < s { hi[1] * (q - p) } else { arc };
+                    let bottom = if lo[1] > -s { lo[1] * (q - p) } else { -arc };
+                    top - bottom
+                })
+                .sum::<f64>()
+        };
+        let (z0, z1) = (lo[2].max(-r), hi[2].min(r));
+        if z0 >= z1 {
+            return 0.0;
+        }
+        let mut reach: Vec<f64> = [lo[0], hi[0], lo[1], hi[1]].iter().map(|c| c * c).collect();
+        for x in [lo[0], hi[0]] {
+            for y in [lo[1], hi[1]] {
+                reach.push(x.mul_add(x, y * y));
+            }
+        }
+        let mut cuts = vec![z0, z1];
+        for c in reach.into_iter().filter(|&c| c < r * r) {
+            let z = (r * r - c).sqrt();
+            cuts.extend([-z, z].into_iter().filter(|&z| z > z0 && z < z1));
+        }
+        cuts.sort_by(f64::total_cmp);
+        let panels = 2000_u32;
+        let mut total = 0.0;
+        for w in cuts.windows(2) {
+            let h = (w[1] - w[0]) / f64::from(panels);
+            for k in 0..panels {
+                let mid = h.mul_add(f64::from(k) + 0.5, w[0]);
+                for (t, weight) in GAUSS {
+                    let z = (0.5 * h).mul_add(t, mid);
+                    total += weight * 0.5 * h * slice(((r - z) * (r + z)).max(0.0).sqrt());
+                }
+            }
+        }
+        total
+    };
+    let within: f64 = blocks.iter().map(|&(lo, hi)| within_block(lo, hi)).sum();
+    let block: f64 = blocks
+        .iter()
+        .map(|(lo, hi)| (hi[0] - lo[0]) * (hi[1] - lo[1]) * (hi[2] - lo[2]))
+        .sum();
+    [4.0 * PI * r.powi(3) / 3.0 - within, within, block - within]
+}
+
 #[allow(clippy::too_many_lines)]
 fn cases() -> Vec<Case> {
     let ball = Prim::Ball {
@@ -294,6 +377,8 @@ fn cases() -> Vec<Case> {
         r1: 2.0,
         h: 10.0,
     };
+    let block = |lo: [f64; 3], hi: [f64; 3]| Prim::Block { lo, hi };
+    let wedge = block([0.0, 0.0, -5.0], [5.0; 3]);
     vec![
         Case {
             name: "ball | column 2.5",
@@ -408,6 +493,102 @@ fn cases() -> Vec<Case> {
                 hi: [2.0; 3],
             })]),
             truth: Some([7.0 * PI / 6.0, PI / 6.0, 8.0 - PI / 6.0]),
+        },
+        Case {
+            name: "ball | half x > 0",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([0.0, -5.0, -5.0], [10.0, 5.0, 5.0]))]),
+            truth: Some([18.0 * PI, 18.0 * PI, 1000.0 - 18.0 * PI]),
+        },
+        Case {
+            name: "ball | wedge x, y > 0",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(wedge)]),
+            truth: Some([27.0 * PI, 9.0 * PI, 250.0 - 9.0 * PI]),
+        },
+        Case {
+            name: "ball | wedge rz1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![posed(wedge, Mat4::rotation_z(1.0))]),
+            truth: Some([27.0 * PI, 9.0 * PI, 250.0 - 9.0 * PI]),
+        },
+        Case {
+            name: "ball rx0.35 | wedge x, y > 0",
+            a: Operand(vec![posed(ball, Mat4::rotation_x(0.35))]),
+            b: Operand(vec![part(wedge)]),
+            truth: Some([27.0 * PI, 9.0 * PI, 250.0 - 9.0 * PI]),
+        },
+        Case {
+            name: "ball | x > 0, y > -1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([0.0, -1.0, -5.0], [5.0; 3]))]),
+            truth: Some(ball_and_blocks(3.0, &[([0.0, -1.0, -5.0], [5.0; 3])])),
+        },
+        Case {
+            name: "ball | x > 0.01, y > -1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([0.01, -1.0, -5.0], [5.0; 3]))]),
+            truth: Some(ball_and_blocks(3.0, &[([0.01, -1.0, -5.0], [5.0; 3])])),
+        },
+        Case {
+            name: "ball | x > 0.02, y > -1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([0.02, -1.0, -5.0], [5.0; 3]))]),
+            truth: Some(ball_and_blocks(3.0, &[([0.02, -1.0, -5.0], [5.0; 3])])),
+        },
+        Case {
+            name: "ball | octant rz1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![posed(
+                block([0.0; 3], [5.0; 3]),
+                Mat4::rotation_z(1.0),
+            )]),
+            truth: Some([31.5 * PI, 4.5 * PI, 125.0 - 4.5 * PI]),
+        },
+        Case {
+            name: "ball | corner 0,0,-1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([0.0, 0.0, -1.0], [5.0; 3]))]),
+            truth: Some(ball_and_blocks(3.0, &[([0.0, 0.0, -1.0], [5.0; 3])])),
+        },
+        Case {
+            name: "ball | corner -0.5,0.5,0",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([-0.5, 0.5, 0.0], [5.0; 3]))]),
+            truth: Some(ball_and_blocks(3.0, &[([-0.5, 0.5, 0.0], [5.0; 3])])),
+        },
+        Case {
+            name: "ball | y > 0, z > 1",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([-5.0, 0.0, 1.0], [5.0; 3]))]),
+            truth: Some(ball_and_blocks(3.0, &[([-5.0, 0.0, 1.0], [5.0; 3])])),
+        },
+        Case {
+            name: "ball | box top 2.95 round the pole",
+            a: Operand(vec![part(ball)]),
+            b: Operand(vec![part(block([-0.7, -1.1, 0.1], [9.3, 8.9, 2.95]))]),
+            truth: Some(ball_and_blocks(
+                3.0,
+                &[([-0.7, -1.1, 0.1], [9.3, 8.9, 2.95])],
+            )),
+        },
+        Case {
+            name: "ball 10 | stepped block",
+            a: Operand(vec![part(Prim::Ball {
+                r: 10.0,
+                segments: 32,
+            })]),
+            b: Operand(vec![
+                part(block([0.0, -1.0, -20.0], [20.0, 20.0, 4.0])),
+                part(block([0.0, -1.0, 4.0], [3.0, 20.0, 20.0])),
+            ]),
+            truth: Some(ball_and_blocks(
+                10.0,
+                &[
+                    ([0.0, -1.0, -20.0], [20.0, 20.0, 4.0]),
+                    ([0.0, -1.0, 4.0], [3.0, 20.0, 20.0]),
+                ],
+            )),
         },
         Case {
             name: "frustum | box 3",
