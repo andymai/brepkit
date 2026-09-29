@@ -186,10 +186,48 @@ pub(super) fn split_noseam_face_direct(
                 pool.push(reverse_of(arc));
             }
         }
-        // When the open arcs do not chain into one loop, the face fails
-        // instead of being kept whole (see the arrangement below).
+        // An arc riding the boundary that ends partway along a chord (a box
+        // floor in the equator's plane, its walls meeting the equator
+        // between the chordal vertices) leaves the uncovered chords short of
+        // its ends, so no remainder closes. The arrangement rebuilds the
+        // seam as its exact circle and splits it where the other arcs reach
+        // it, which lays the riding arc's span down again as a seam arc. Only
+        // an arc flush with the boundary's plane at the vertex scale does: a
+        // floor a few 1e-6 off it would leave the seam arcs' ends off their
+        // circle.
         let Some(remainder) = chain_closed_loop(pool, close_tol) else {
-            return Vec::new();
+            let flush = |a: &OrientedPCurveEdge| {
+                boundary_plane.is_some_and(|(n, at)| {
+                    edge_samples(a, 8)
+                        .iter()
+                        .all(|p| (*p - at).dot(n).abs() <= tol * 10.0)
+                })
+            };
+            let riding_flush = cap_edges
+                .iter()
+                .zip(&coincident)
+                .filter(|&(_, &coin)| coin)
+                .all(|(arc, _)| flush(arc));
+            let crossing: Vec<OrientedPCurveEdge> = cap_edges
+                .iter()
+                .zip(&coincident)
+                .filter(|&(_, &coin)| !coin)
+                .map(|(arc, _)| arc.clone())
+                .collect();
+            if crossing.is_empty() || !riding_flush {
+                return Vec::new();
+            }
+            return split_noseam_by_arrangement(
+                surface,
+                boundary_edges,
+                &crossing,
+                &closed_sections,
+                holes,
+                rank,
+                reversed,
+                face_id,
+                tol,
+            );
         };
         // The remainder starts on the face's own boundary, so it keeps the
         // face's winding; the cap chained its arcs whichever way they came
@@ -460,6 +498,46 @@ fn split_noseam_by_arrangement(
         )
     {
         return lunes;
+    }
+    // Arcs riding the seam (a box floor in the equator's plane, flush with it
+    // at the vertex scale) split no region off. Where one ends between the
+    // chordal vertices the face's chords cannot meet the pieces beside it
+    // there, so the face stays whole with its seam rebuilt as the exact
+    // circle split at those ends.
+    let rides_seam = |a: &OrientedPCurveEdge| {
+        edge_samples(a, 8)
+            .into_iter()
+            .all(|p| (p - seam_p).dot(seam_n).abs() <= tol * 10.0)
+    };
+    let off_vertex = |p: Point3| {
+        boundary_edges
+            .iter()
+            .all(|e| (e.start_3d - p).length() >= tol * 100.0)
+    };
+    if closed_sections.is_empty()
+        && inner_loops.is_empty()
+        && open_sections.iter().all(rides_seam)
+        && open_sections
+            .iter()
+            .any(|a| off_vertex(a.start_3d) || off_vertex(a.end_3d))
+    {
+        let Some(seam_arcs) =
+            build_seam_arcs_split(surface, boundary_edges, open_sections, tol, true)
+        else {
+            return Vec::new();
+        };
+        let Some(inside) = region_sample(surface, &seam_arcs, &[]) else {
+            return Vec::new();
+        };
+        return vec![SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: seam_arcs,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(inside),
+        }];
     }
     // Any other chain through or near the pole leaves no region holding the
     // pole, or one the region polygons' chords misread, so no collar to keep.
@@ -1050,6 +1128,20 @@ fn build_seam_arcs(
     open_sections: &[OrientedPCurveEdge],
     tol: f64,
 ) -> Option<Vec<OrientedPCurveEdge>> {
+    build_seam_arcs_split(surface, boundary_edges, open_sections, tol, false)
+}
+
+/// [`build_seam_arcs`], with `halve_wide` also splitting each arc spanning
+/// half a turn or more into pieces under half a turn: two seam arcs of one
+/// face sharing both ends would otherwise be welded into one edge by the
+/// assembler's endpoint-keyed merge.
+fn build_seam_arcs_split(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    open_sections: &[OrientedPCurveEdge],
+    tol: f64,
+    halve_wide: bool,
+) -> Option<Vec<OrientedPCurveEdge>> {
     use brepkit_math::curves::Circle3D;
     use std::f64::consts::{PI, TAU};
 
@@ -1094,6 +1186,27 @@ fn build_seam_arcs(
         .map(|p| (seam_circle.project(p), p))
         .collect();
     by_angle.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if halve_wide {
+        for entry in &mut by_angle {
+            entry.0 = entry.0.rem_euclid(TAU);
+        }
+        by_angle.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut extra = Vec::new();
+        for (i, &(a0, _)) in by_angle.iter().enumerate() {
+            let a1 = by_angle[(i + 1) % by_angle.len()].0;
+            let span = (a1 - a0).rem_euclid(TAU);
+            let span = if span <= 0.0 { TAU } else { span };
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pieces = (span / (0.999 * PI)).ceil().max(1.0) as usize;
+            for k in 1..pieces {
+                #[allow(clippy::cast_precision_loss)]
+                let at = (a0 + span * k as f64 / pieces as f64).rem_euclid(TAU);
+                extra.push((at, seam_circle.evaluate(at)));
+            }
+        }
+        by_angle.extend(extra);
+        by_angle.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
 
     let mut arcs: Vec<OrientedPCurveEdge> = Vec::new();
     let m = by_angle.len();
