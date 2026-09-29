@@ -12,7 +12,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::{face_area, oriented_solid_volume, solid_volume};
-use brepkit_operations::primitives::{make_box, make_sphere};
+use brepkit_operations::primitives::{make_box, make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
@@ -689,4 +689,131 @@ fn a_box_top_circling_the_pole_inside_its_footprint_is_exact() {
     let fused = boolean(&mut topo, BooleanOp::Fuse, sphere, top).unwrap();
     let truth = block + ball - volumes[0];
     assert_exact_piece(&topo, fused, 9, truth, &[], "Fuse");
+}
+
+/// Composite 5-point Gauss over `[lo, hi]` in `panels` panels.
+fn gauss(lo: f64, hi: f64, panels: u32, f: &dyn Fn(f64) -> f64) -> f64 {
+    const NODES: [(f64, f64); 5] = [
+        (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+        (-0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.0, 0.568_888_888_888_888_9),
+        (0.538_469_310_105_683_1, 0.478_628_670_499_366_5),
+        (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+    ];
+    let h = (hi - lo) / f64::from(panels);
+    (0..panels)
+        .map(|k| {
+            let mid = h.mul_add(f64::from(k) + 0.5, lo);
+            NODES
+                .iter()
+                .map(|&(t, w)| w * 0.5 * h * f((0.5 * h).mul_add(t, mid)))
+                .sum::<f64>()
+        })
+        .sum()
+}
+
+/// A ball of radius 10 against a tube (a cylinder of radius `outer` less the
+/// column `|x|, |y| < w`, both through the ball, turned `turn` about `z`):
+/// on each hemisphere the column's walls close a loop round the pole and the
+/// tube's wall a circle round that loop, whose patch holds the column's cap
+/// as a hole. Each op is exact; the truths take the cylinder's part of the
+/// ball in closed form and the column's by its chord over the square.
+#[test]
+fn a_tube_round_a_columns_cap_is_exact() {
+    let r = 10.0_f64;
+    for (outer, w, turn) in [(7.0_f64, 4.0_f64, 0.0_f64), (6.5, 4.2, 0.3)] {
+        let ball = 4.0 * PI * r.powi(3) / 3.0;
+        let cylinder = 4.0 * PI / 3.0 * (r.powi(3) - (r * r - outer * outer).powf(1.5));
+        let column = gauss(-w, w, 200, &|x| {
+            gauss(-w, w, 200, &|y| 2.0 * (r * r - x * x - y * y).sqrt())
+        });
+        let within = cylinder - column;
+        let tube = (PI * outer * outer - 4.0 * w * w) * 4.0 * r;
+        for (op, swap, truth) in [
+            (BooleanOp::Cut, false, ball - within),
+            (BooleanOp::Intersect, false, within),
+            (BooleanOp::Cut, true, tube - within),
+        ] {
+            let label = format!("outer {outer} w {w} turn {turn} {op:?} swap {swap}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, r, 32).unwrap();
+            let rod = make_cylinder(&mut topo, outer, 4.0 * r).unwrap();
+            transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, -2.0 * r)).unwrap();
+            let hole = make_box(&mut topo, 2.0 * w, 2.0 * w, 8.0 * r).unwrap();
+            transform_solid(&mut topo, hole, &Mat4::translation(-w, -w, -4.0 * r)).unwrap();
+            let tool = boolean(&mut topo, BooleanOp::Cut, rod, hole).unwrap();
+            transform_solid(&mut topo, tool, &Mat4::rotation_z(turn)).unwrap();
+            let (a, b) = if swap { (tool, sphere) } else { (sphere, tool) };
+            let piece = boolean(&mut topo, op, a, b).unwrap();
+            let faces = solid_faces(&topo, piece).unwrap();
+            assert!(faces.len() <= 14, "{label}: {} faces", faces.len());
+            let report = validate_solid(&topo, piece).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, piece, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-9 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
+
+/// A ball bored from `z = 1` up, within the box over `x > x0` whose wall
+/// passes the pole and runs through the bore: its arcs on the upper
+/// hemisphere run through the bore's mouth, so no two lunes either side of
+/// them can take the bore as a whole hole. Whatever path the op takes, it
+/// is never an exact-looking solid off its volume: exact within `1e-7` of
+/// the truth, or a valid, watertight mesh within `2e-2` of it. The truth is
+/// the ball's cap past the wall less the bore's part past it, each ring of
+/// the bore about its axis integrated over its arc past the wall.
+#[test]
+fn a_wall_through_a_bore_by_the_pole_is_never_silently_wrong() {
+    let r = 3.0_f64;
+    for (bx, by, br, x0) in [
+        (0.3_f64, 1.2_f64, 0.4_f64, 0.012_f64),
+        (0.2, 0.8, 0.35, 0.0),
+        (0.2, 1.2, 0.35, 0.008),
+        (0.2, 1.6, 0.35, 0.014),
+    ] {
+        let label = format!("bore ({bx}, {by}) r {br}, wall x = {x0}");
+        let depth = |x: f64, y: f64| (r * r - x * x - y * y).max(0.0).sqrt() - 1.0;
+        let ring = |rho: f64| {
+            let c = (x0 - bx) / rho;
+            if c >= 1.0 {
+                return 0.0;
+            }
+            let half = if c <= -1.0 { PI } else { c.acos() };
+            rho * gauss(-half, half, 200, &|t| {
+                depth(rho.mul_add(t.cos(), bx), rho.mul_add(t.sin(), by))
+            })
+        };
+        let knee = (bx - x0).abs().min(br);
+        let bore = gauss(0.0, knee, 200, &ring) + gauss(knee, br, 200, &ring);
+        let h = r - x0;
+        let truth = PI * h * h * (3.0 * r - h) / 3.0 - bore;
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, r, 16).unwrap();
+        let drill = make_cylinder(&mut topo, br, 10.0).unwrap();
+        transform_solid(&mut topo, drill, &Mat4::translation(bx, by, 1.0)).unwrap();
+        let bored = boolean(&mut topo, BooleanOp::Cut, sphere, drill).unwrap();
+        let block = make_box(&mut topo, 10.0 - x0, 20.0, 20.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(x0, -10.0, -10.0)).unwrap();
+        let piece = boolean(&mut topo, BooleanOp::Intersect, bored, block).unwrap();
+        let report = validate_solid(&topo, piece).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, piece, 0.01).unwrap();
+        let fallback = solid_faces(&topo, piece)
+            .unwrap()
+            .iter()
+            .all(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { .. }));
+        let bound = if fallback { 2e-2 } else { 1e-7 };
+        assert!(
+            (volume - truth).abs() < bound * truth,
+            "{label}: volume {volume}, truth {truth}, fallback {fallback}"
+        );
+    }
 }

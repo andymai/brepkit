@@ -5512,6 +5512,7 @@ fn split_face_2d_impl(
             reversed,
             face_id,
             &wire_pts,
+            &original_inner_wires,
             tol.linear,
         );
         if matches!(surface, FaceSurface::Sphere(_)) {
