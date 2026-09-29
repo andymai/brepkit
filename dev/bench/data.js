@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790637354557,
+  "lastUpdate": 1790715547137,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47627,6 +47627,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42880005,
             "range": "± 247338",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c929f8c08e7ee034ecf6436c27ddec1e25e0fe9",
+          "message": "feat(algo): build exact sphere lunes and polar cap hole patches (#1907)\n\nSphere booleans whose sections reach or enclose a pole now build exactly\ninstead of falling back to a mesh: 133 pose-sweep results turn exact,\nvalid and watertight, and none gets worse.\n\n## What was wrong\n\n- When a hemisphere's section arcs formed one chain from its seam\nthrough its pole and back to the seam, no region held the pole.\n`split_noseam_by_arrangement` kept no collar and returned no split, so\nthe face failed and the boolean fell back to a mesh. This affected\nplanes through the ball's axis, box walls holding the axis, and two\nwalls meeting on the axis.\n- `split_noseam_face_direct` failed when a closed section lay inside the\nface rather than along its boundary. One example was a box whose floor\nand walls ring the pole and whose top at `z = 2.95` cuts a circle around\nthe pole inside that ring.\n- The pose sweep read the ball within and less the turned-ball quarter\nwedge (`ball rx0.35 | wedge x, y > 0`) as invalid, open mesh fallbacks\nin the `rx0.35` and `ry0.3rz1` scene poses.\n\n## What this does\n\n- `split_into_lunes` handles exactly one seam-to-seam chain that passes\nwithin `5e-3` times the radius of a pole. It creates the two lunes on\neither side of the chain, each closed by the seam arc on its side.\n- Each lune's interior sample lies on the great circle from the middle\nof its seam arc toward the chain's midpoint by length, halfway to the\ncircle's first chain crossing. Because the seam arc bounds the lune,\nthis stretch remains inside even when the chain bends back over it,\nincluding the stepped block's notch wall.\n- `passes_near_pole` is shared by the arrangement and lune splits.\nSeveral chains where one reaches a pole still return no split, as on\nmain. The face fails and the boolean falls back to a mesh, because the\nlune split takes exactly one chain.\n- `nest_closed_sections` turns an interior closed section into a hole of\nthe piece holding most of its `(u, v)` samples, plus a patch of its own.\nA band section ringing a cap, such as a tube wall around a column cap,\ninstead holds the cap as a hole in its patch.\n- A section inside another section's patch still fails the face, a safe\nfallback rather than a wrong solid. Pieces without clear interior\nsamples also fail. Faces already containing holes retain main's failure\nbehavior, and `split_into_lunes` declines them.\n\n## Verification\n\n- `crates/operations/tests/sphere_plane_cut.rs` now requires exact\nresults for the existing axis-plane and axis-wall cases. It adds wedge,\nstepped-block, pole-ringed box and tube-around-cap tests, which require\nexact, valid, watertight results within `1e-9` of their volumes, and a\nbore test whose seven walls cross, clip or graze a bore by the pole,\nwhich accepts only an exact result within `1e-7` of an integrated truth\nor a valid watertight mesh within `2e-2`. Each new test fails with its\nfix disabled, and all 13 tests pass.\n- The pose sweep adds 13 ball cases, each across 5 poses and 3\noperations. Truths use closed forms or the slice-by-slice\n`ball_and_blocks` integral, which agrees with closed forms within\n`2e-12` relative.\n- Against main, 133 results become exact, valid, and watertight, none\nregress, and 362 remain unchanged. Every new exact result has 0 misread\ngrid points. Of 195 results in the new cases, all 164 exact results are\nwithin `3.5e-12` relative by both volume calculations.\n- `truth_audit` output is identical. Known positive-octant, box-corner,\nand mirrored elevated-box cases continue to fall back safely. The\nroadmap closed-section row moves to Closed.\n- Release runs report 0 failures: `brepkit-operations` 1354 passed,\n`brepkit-io` 309 passed, `brepkit-algo` 230 passed, and `brepkit-wasm\n--lib gridfinity` 27 passed.",
+          "timestamp": "2026-09-29T20:56:07Z",
+          "tree_id": "8f788e040901feeda3623bc93ba1807ba1fedcab",
+          "url": "https://github.com/andymai/brepkit/commit/0c929f8c08e7ee034ecf6436c27ddec1e25e0fe9"
+        },
+        "date": 1790715541703,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1062488,
+            "range": "± 1525",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1153327,
+            "range": "± 1184",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14146,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 800832,
+            "range": "± 1552",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46212765,
+            "range": "± 169704",
             "unit": "ns/iter"
           }
         ]
