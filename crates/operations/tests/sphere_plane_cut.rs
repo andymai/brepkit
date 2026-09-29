@@ -760,36 +760,44 @@ fn a_tube_round_a_columns_cap_is_exact() {
     }
 }
 
-/// A ball bored from `z = 1` up, within the box over `x > x0` whose wall
-/// passes the pole and runs through the bore: its arcs on the upper
-/// hemisphere run through the bore's mouth, so no two lunes either side of
-/// them can take the bore as a whole hole. Whatever path the op takes, it
-/// is never an exact-looking solid off its volume: exact within `1e-7` of
-/// the truth, or a valid, watertight mesh within `2e-2` of it. The truth is
-/// the ball's cap past the wall less the bore's part past it, each ring of
-/// the bore about its axis integrated over its arc past the wall.
+/// A ball bored from `z = 1` up, within the box over `x > x0` (turned `turn`
+/// about `z`) whose wall passes the pole and crosses, clips or grazes the
+/// bore: its arcs on the upper hemisphere run through or beside the bore's
+/// mouth, so no two lunes either side of them can take the bore as a whole
+/// hole. Whatever path the op takes, it is never an exact-looking solid off
+/// its volume: exact within `1e-7` of the truth, or a valid, watertight mesh
+/// within `2e-2` of it. The truth is the ball's cap past the wall less the
+/// bore's part past it, each ring of the bore about its axis integrated
+/// over its arc past the wall.
 #[test]
 fn a_wall_through_a_bore_by_the_pole_is_never_silently_wrong() {
     let r = 3.0_f64;
-    for (bx, by, br, x0) in [
-        (0.3_f64, 1.2_f64, 0.4_f64, 0.012_f64),
-        (0.2, 0.8, 0.35, 0.0),
-        (0.2, 1.2, 0.35, 0.008),
-        (0.2, 1.6, 0.35, 0.014),
+    for (bx, by, br, x0, turn) in [
+        (0.3_f64, 1.2_f64, 0.4_f64, 0.012_f64, 0.0_f64),
+        (0.2, 0.8, 0.35, 0.0, 0.0),
+        (0.2, 1.2, 0.35, 0.008, 0.0),
+        (0.2, 1.6, 0.35, 0.014, 0.0),
+        // Clipped 6e-3 deep between the rim's samples, and 1e-5 deep.
+        (0.171_180_269, 1.2, 0.4, 0.008, PI / 16.0),
+        (0.407_99, 1.2, 0.4, 0.008, 0.0),
+        // Grazed.
+        (0.408, 1.2, 0.4, 0.008, 0.0),
     ] {
-        let label = format!("bore ({bx}, {by}) r {br}, wall x = {x0}");
+        let label = format!("bore ({bx}, {by}) r {br}, wall at {x0} turned {turn}");
+        let (s, c) = turn.sin_cos();
+        let reach = c.mul_add(bx, s * by);
         let depth = |x: f64, y: f64| (r * r - x * x - y * y).max(0.0).sqrt() - 1.0;
         let ring = |rho: f64| {
-            let c = (x0 - bx) / rho;
-            if c >= 1.0 {
+            let past = (x0 - reach) / rho;
+            if past >= 1.0 {
                 return 0.0;
             }
-            let half = if c <= -1.0 { PI } else { c.acos() };
-            rho * gauss(-half, half, 200, &|t| {
+            let half = if past <= -1.0 { PI } else { past.acos() };
+            rho * gauss(turn - half, turn + half, 200, &|t| {
                 depth(rho.mul_add(t.cos(), bx), rho.mul_add(t.sin(), by))
             })
         };
-        let knee = (bx - x0).abs().min(br);
+        let knee = (reach - x0).abs().min(br);
         let bore = gauss(0.0, knee, 200, &ring) + gauss(knee, br, 200, &ring);
         let h = r - x0;
         let truth = PI * h * h * (3.0 * r - h) / 3.0 - bore;
@@ -799,7 +807,8 @@ fn a_wall_through_a_bore_by_the_pole_is_never_silently_wrong() {
         transform_solid(&mut topo, drill, &Mat4::translation(bx, by, 1.0)).unwrap();
         let bored = boolean(&mut topo, BooleanOp::Cut, sphere, drill).unwrap();
         let block = make_box(&mut topo, 10.0 - x0, 20.0, 20.0).unwrap();
-        transform_solid(&mut topo, block, &Mat4::translation(x0, -10.0, -10.0)).unwrap();
+        let place = Mat4::rotation_z(turn) * Mat4::translation(x0, -10.0, -10.0);
+        transform_solid(&mut topo, block, &place).unwrap();
         let piece = boolean(&mut topo, BooleanOp::Intersect, bored, block).unwrap();
         let report = validate_solid(&topo, piece).unwrap();
         assert!(report.is_valid(), "{label}: {:?}", report.issues);

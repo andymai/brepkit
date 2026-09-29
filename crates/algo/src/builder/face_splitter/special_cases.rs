@@ -295,42 +295,6 @@ fn uv_region_holds(poly: &[brepkit_math::vec::Point2], p: brepkit_math::vec::Poi
         .any(|u| super::super::classify_2d::point_in_polygon_2d(Point2::new(u, p.y()), poly))
 }
 
-/// Whether any of `arcs` runs into one of a sphere face's `holes`: a sample
-/// between its ends inside the hole's own region. The holes are attached to
-/// the pieces afterwards as whole loops, so a piece built across one would
-/// keep the hole where its region no longer is.
-fn arcs_enter_holes(
-    surface: &FaceSurface,
-    arcs: &[OrientedPCurveEdge],
-    holes: &[Vec<OrientedPCurveEdge>],
-) -> bool {
-    use brepkit_math::vec::Point2;
-    let FaceSurface::Sphere(sphere) = surface else {
-        return false;
-    };
-    let regions: Vec<Vec<Point2>> = holes
-        .iter()
-        .map(|hole| {
-            let own = if sphere_loop_counter_clockwise(surface, hole) == Some(false) {
-                reverse_loop(hole)
-            } else {
-                hole.clone()
-            };
-            sphere_region_polygon(sphere, &own)
-        })
-        .filter(|poly| poly.len() >= 3)
-        .collect();
-    arcs.iter().any(|arc| {
-        let pts = edge_samples(arc, 16);
-        pts[1..pts.len() - 1].iter().any(|&p| {
-            let (u, v) = sphere.project_point(p);
-            regions
-                .iter()
-                .any(|poly| uv_region_holds(poly, Point2::new(u, v)))
-        })
-    })
-}
-
 /// A sphere face's interior cap and band with closed sections inside them
 /// (a box whose floor and walls ring the pole and whose top cuts a circle
 /// round it): each section is a hole of whichever piece holds most of its
@@ -933,6 +897,12 @@ fn split_into_lunes(
     let FaceSurface::Sphere(sphere) = surface else {
         return None;
     };
+    // The face's own holes are attached to the pieces afterwards as whole
+    // loops, which a chain through or beside one would leave in the wrong
+    // lune or touching its wire.
+    if !holes.is_empty() {
+        return None;
+    }
     let near = tol * 100.0;
     let on_seam = |p: Point3| (p - seam_p).dot(seam_n).abs() <= tol * 1e3;
     let turned = |e: &OrientedPCurveEdge| reverse_loop(std::slice::from_ref(e)).remove(0);
@@ -965,7 +935,7 @@ fn split_into_lunes(
     if !on_seam(b) || (a - b).length() < near {
         return None;
     }
-    if !passes_near_pole(sphere, seam_n, &chain) || arcs_enter_holes(surface, &chain, holes) {
+    if !passes_near_pole(sphere, seam_n, &chain) {
         return None;
     }
     let seam_arcs = build_seam_arcs(surface, boundary_edges, arcs, tol)?;
