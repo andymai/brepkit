@@ -465,6 +465,47 @@ fn turned_octants_are_exact() {
     }
 }
 
+/// The upright ball against the box over an octant turned about `z` alone:
+/// its walls meet the equator between the chordal vertices, and its floor
+/// lies in the equator's plane, riding the seam from one wall to the other.
+/// The upper hemisphere splits into the lunes either side of the two walls'
+/// arcs and the lower keeps whole with its seam laid on the exact circle,
+/// split where the walls reach it. Each op is exact, valid and watertight.
+#[test]
+fn an_octant_turned_off_the_chordal_vertices_is_exact() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let octant = ball / 8.0;
+    for turn in [0.3_f64, 1.0, 2.0] {
+        for (op, swap, truth) in [
+            (BooleanOp::Intersect, false, octant),
+            (BooleanOp::Cut, false, ball - octant),
+            (BooleanOp::Cut, true, 125.0 - octant),
+        ] {
+            let label = format!("turn {turn} {op:?} swap {swap}");
+            let mut topo = Topology::new();
+            let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+            let block = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::rotation_z(turn)).unwrap();
+            let (a, b) = if swap {
+                (block, sphere)
+            } else {
+                (sphere, block)
+            };
+            let piece = boolean(&mut topo, op, a, b).unwrap();
+            assert!(exact(&topo, piece), "{label}: fell back to a mesh");
+            let report = validate_solid(&topo, piece).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            let volume = solid_volume(&topo, piece, 0.01).unwrap();
+            assert!(
+                (volume - truth).abs() < 1e-9 * truth,
+                "{label}: volume {volume}, truth {truth}"
+            );
+        }
+    }
+}
+
 /// The ball less, and fused with, the box over an octant, both turned 0.3
 /// about `z`, above and below the equator: exact and valid, the ball less its
 /// octant or joined to the box by the rest of it. The volume bound covers the
