@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.0](https://github.com/andymai/brepkit/compare/v4.0.90...v4.1.0) (2026-09-29)
+
+
+### Features
+
+* **algo:** build exact sphere lunes and polar cap hole patches ([#1907](https://github.com/andymai/brepkit/issues/1907)) ([0c929f8](https://github.com/andymai/brepkit/commit/0c929f8c08e7ee034ecf6436c27ddec1e25e0fe9))
+
 ## [4.0.90](https://github.com/andymai/brepkit/compare/v4.0.89...v4.0.90) (2026-09-28)
 
 
