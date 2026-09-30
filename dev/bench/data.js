@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790810314196,
+  "lastUpdate": 1790810548780,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48221,6 +48221,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42926084,
             "range": "± 91090",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1753b56383acd4643896ead3decb0e2b4c19090c",
+          "message": "fix(algo): trim a plane x NURBS section to the plane face's straight edges (#1919)\n\nThe kumiko corner wrap lattice compound cut captured from brepkit-wasm\n3.4.0, and every constituent single-strut cut, are now exact, closed,\nand manifold while retaining NURBS faces.\n\n## What was wrong\n\n- On main, `kumiko_wrap_lattice_compound_cut_stays_exact` took the mesh\nfallback, as did each of the four helical struts when cut alone through\n`replay_pair.rs`. Raw GFA reported an open growth shell with 8 faces for\nstruts 0 through 2 and 6 faces for strut 3. The fallback produced\nall-planar meshes with 154, 162, 172, and 101 faces.\n\n- The lattice inner rim contains sliver planes about 0.05 wide,\nincluding faces spanning x 1.544 to 1.550 and y 0 to 0.049. For a plane\nx NURBS pair, the FF phase left the open section whole for the splitter,\nbut a NURBS face splitter trims sections only against its own boundary.\nSections on strut face 83 therefore crossed the entire NURBS patch. The\nsection from lattice face 60, whose face starts at x 1.544, started at x\n0.9647. The section from the y = 0 face 41, whose face starts at x\n1.550, started at x 1.0512. These sections carved a strut-wall piece\nreaching x 0.966, inside the lattice inner hole and outside the lattice,\ninto the 6-face open shell.\n\n## What this does\n\n- The core fix is one line of scope: the partner gate for\n`trim_open_curve_to_plane_face_lines` now admits NURBS faces as well as\ncones. The function clips an open marched NURBS section to its in-face\nspans at exact crossings with a plane face's straight boundary edges.\nCylinder partners remain on the generic path used by the calibrated\nhoneycomb wall-cut weave.\n\n- Review exposed a nearby endpoint-junction issue. The vertical kumiko\nstrut cut by the ruled diagonal strut was exact on main at 29 faces and\nvolume 45.381, but fell back with trimming enabled. A radial-plane\nsection ended at `(2.96749, 4.02418, 15.55195)`, where the plane's\nstraight edge meets the outer cylinder. The cylinder x NURBS window was\nsnapped to the same junction, while its fitted curve ended 1.03e-5 away.\nThis exceeded the 1e-5 band where `curve_endpoints` uses section vertex\npositions instead of curve ends, producing a zero-length connector and\nan open shell. That band now uses the junction registry snap band, 1000\ntimes linear tolerance, or 1e-4.\n\n- For NURBS partners, clipping uses only the plane face's own polygon\nand requires every plane-face boundary edge to be straight. Rim\ncrossings and the partner-extent test remain cone-only because NURBS\nextent is a `v` band derived from a few boundary samples, and the NURBS\nsplitter already trims sections to its own boundary.\n\n## Verification\n\n- The four single-strut cuts produce 136, 132, 134, and 94 faces,\nincluding 48, 48, 48, and 18 NURBS faces. Their volumes are 383.229,\n383.216, 383.228, and 404.008, compared with fallback-mesh volumes of\n383.230, 383.216, 383.229, and 404.008. The compound cut uses no mesh\nfallback, retains NURBS faces, is manifold, and its formerly ignored\nrepro is active.\n\n- All 4 `gridfinity_honeycomb_cut_inmem` tests and all 5\n`kumiko_strut_fuse_inmem` tests pass. The cylinder-band\n`kumiko_wrap_strut_cut_inmem` repro still fails and remains ignored.\n\n- Across 120 cut, fuse, and intersect cases covering four strut\ncaptures, 10 poses each, main is exact in 74 and this branch in 99. No\ncase exact on main becomes worse. Exact cut and intersection volumes sum\nto the vertical strut volume within 8e-5 relative. The new three-pose\nregression test fails when the endpoint band is restored to 1e-5.\n\n- `brepkit-algo`, `brepkit-operations`, and `brepkit-io` pass 1,905\ntests with 0 failures. All 236 `brepkit-wasm` library tests pass, with 3\nignored. The pose sweep matches main. `truth_audit` differs only in the\nring corner Cut row, from 8e-11 to 9e-11, already moved on main by torus\nmerge #1914.\n\n- The roadmap now records the lattice cut as exact and reduces the\ndeferred-defect pin inventory from five to four. Export-time impact is\nunmeasured.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nThe kumiko wrap lattice cut (a 62-plane lattice compound-cut by four\nhelical struts) now stays exact and manifold instead of falling back to\nplanar meshes.\n\n- `trim_open_curve_to_plane_face_lines` now also trims open NURBS\nsections at a plane face's straight boundary edges, not just cones; for\nNURBS partners it trims only against the plane face's own polygon, and\nonly when every boundary edge is straight.\n- Previously a NURBS section left whole ran across the entire patch,\npast the lattice's 0.05-wide sliver planes, and carved strut wall\noutside the lattice into an open growth shell.\n- The trim's exact end now meets a neighbour trimmed at the same edge: a\nfitted curve landing 1.03e-5 past the snap band left a zero-length\nconnector, so the band now matches the junction registry's own snap band\n(1000x the linear tolerance).\n- Cylinder partners stay on the generic path that the honeycomb wall-cut\nweave is calibrated against.\n- All four single-strut cuts, the compound cut, and the diagonal-strut\ncut/intersect pair are now exact and manifold,\n`kumiko_wrap_lattice_compound_cut_stays_exact` is active, and the\nroadmap's deferred-defect pin count drops from five to four.\n\n<sup>Written for commit 1f76217ffda9ce2325007d404e5e0b57a7deeb7d.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1919?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-30T23:19:26Z",
+          "tree_id": "9f0d78ca3d6df513ab31a44b5436665928019cc7",
+          "url": "https://github.com/andymai/brepkit/commit/1753b56383acd4643896ead3decb0e2b4c19090c"
+        },
+        "date": 1790810543297,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1028762,
+            "range": "± 5140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1108400,
+            "range": "± 5763",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13432,
+            "range": "± 165",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 816440,
+            "range": "± 6488",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43477863,
+            "range": "± 242564",
             "unit": "ns/iter"
           }
         ]
