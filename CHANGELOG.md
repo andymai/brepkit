@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.1](https://github.com/andymai/brepkit/compare/v4.1.0...v4.1.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **algo:** make turned-octant ball-box booleans exact when the floor rides the seam ([#1909](https://github.com/andymai/brepkit/issues/1909)) ([2c305ad](https://github.com/andymai/brepkit/commit/2c305ad4fae25bc0329e1e2cda8aa28c99b2db6d))
+* **algo:** sample sphere bands inside their split regions ([#1910](https://github.com/andymai/brepkit/issues/1910)) ([2860a4e](https://github.com/andymai/brepkit/commit/2860a4e7e40a7ac52720bd33c33095f384e68994))
+
 ## [4.1.0](https://github.com/andymai/brepkit/compare/v4.0.90...v4.1.0) (2026-09-29)
 
 
