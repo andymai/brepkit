@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790798417611,
+  "lastUpdate": 1790802938827,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48059,6 +48059,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35913127,
             "range": "± 199317",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a3d9b9de378bfff3cdf91e0cf5e3ba3f0eb8b7c",
+          "message": "fix(algo): correct torus boolean splitting and measurement (#1914)\n\nThe torus box sweep improves from 182 to 377 right results, reduces mesh\nfallbacks from 228 to 55, eliminates 19 exact-but-wrong and 3\nexact-but-open results, and has no result worse than main.\n\n## What was wrong\n\n- `plane_torus_crossings` sampled each tube angle `v` on two `u`\nbranches, then chained samples greedily under a fixed step cap. This\nsplit loops at turns, bridged narrow waists, and failed away from unit\nscale. One face at `y = 4.35` left two open halves with endpoints `0.66`\napart in x, leaving the ring unsplit.\n\n- A whole ring's outer wire contains two zero-length seam placeholders.\n`BuilderSolid` read its `(u, v)` box as a point, took no orientation\nflux, classified the Cut shell as inward, and failed with `no outer\nshell found`.\n\n- `split_torus_by_tube_loops` rejected any chain set containing a loop\nthat did not wind the tube. A box spanning the tube height produces two\ntube-winding loops and a far-wall lobe that winds neither angle.\n\n- The CDT pinned every seam run to one `u`. That is correct for a\ncylinder meridian but wrong for a torus sector seam along the ring,\nproducing area `331.9` instead of `191.7` without holes and `113.8` or\n`168.8` instead of `40.6` with a lobe hole.\n\n- `solid_volume` treated a sector with a lobe hole as a torus notch band\nand obtained its volume from the mesh.\n\n- `trim_torus_oval_to_box_face` selected crossings from the nearest of\n1,025 oval samples. An arc could fold past its exact endpoint, including\none extending `0.007` past its vertex, and leave the mesh open.\n\n## What this does\n\n- `plane_torus_loops` constructs each section run directly from its two\nbranches between exactly bisected turns. Greedy chaining under a step\ncap has no scale-free threshold that separates a turn from a waist\nbetween two loops.\n\n- Runs are sampled with `v = t_lo + (t_hi - t_lo)(1 - cos t)/2`,\nproducing even curve steps near turns. Each loop also takes at least\n`n_v` times its branches' `u` sweep over π steps, full-`v` sections\nbecome two loops, touching branches remain open, and both\n`sample_plane_torus` and `intersect_plane_torus` use the result.\n\n- `BuilderSolid` integrates a whole ring over the torus's whole domain.\n\n- A lobe becomes a hole in its containing sector and a disc of its own.\nA sector seam may wind the tube once, using `dv` or `dv ± 2π` shortest\nfirst, and `seam_clear_of` rejects seams crossing, touching, or\napproaching a lobe boundary within `1e-6`.\n\n- A seam run keeps its unwrapped `(u, v)` when consecutive samples of\nthe same seam edge differ in `u` by more than `1e-6`. Existing placement\nremains for meridian seams on cylinders, cones, and torus rim fillet\nbands.\n\n- The notch-band volume path now requires both wires to wrap the tube,\nwith every edge sampled over its own parameter domain. Torus face flux\nis exact where its mesh is not.\n\n- Oval crossings are refined around the nearest sample by golden-section\nsearch, closing the 3 exact-but-open results from main.\n\n## Verification\n\n- The probe runs Cut, Intersect, and Fuse for `make_torus(4, 1.5)`\nagainst 144 tube-centred cubes: x in `{0.1, 1.3}`, y in `{2.3, 3.05,\n4.1, 5.2}`, z in `{-0.4, 0.37, 1.1}`, and half-sizes `0.6, 0.9, 1.3,\n1.7, 2.2, 3.0`. A right result among the 432 outputs is exact, valid,\nwatertight, and within `1e-6` of grid-integral volume truth.\n\n- In the review chaining harness, unclosed or miscounted sections fell\nfrom 7,865 to 356 across 13,833 random planes, and from 7,144 to 575\nacross 12,000 walls `x = d`. None chains worse than main. Remaining\nmisses involve near-horn tori `(R = 4, r = 3.9)` and tiny loops between\nscan samples.\n\n- `plane_torus_wall_sections_close_into_their_loops` covers tori `(4,\n1.5)`, `(100, 30)`, and `(0.05, 0.01)`, expecting two closed loops for\n`d` within `R - r` and one beyond it.\n`plane_torus_sections_round_the_axis_stay_on_the_torus` covers centre\nplanes tilted `0.03`, `0.08`, and `0.2` radians, with both fitted loops\nwithin `1e-6`; sizing only from the `v` run puts the `0.03` fit `2.1e-5`\noff.\n\n- `cube_through_the_tube_wall` exercises six boxes upright, transformed\nby `rotation_x(0.7) rotation_z(0.3)`, and mirrored, across all three\noperations. Results are exact, valid, watertight, classify overlap,\nring-only, and box-only points correctly, match `ring_in_block` within\n`1e-6`, and satisfy common plus cut equals ring and fuse minus cut\nequals cube within `1e-9`.\n\n- `a_wall_cutting_a_lobe_from_the_ring_is_exact` covers `d` in `{3.0735,\n3.8135, 4.0, 4.3255, 4.5, 4.8615, 5.0, 5.3385}`. Common is within `1e-5`\nof `ring_in_box`, and common plus cut equals ring within `1e-9`.\n\n- `brepkit-math`, `brepkit-algo`, `brepkit-operations`, and `brepkit-io`\npass 2,434 tests with 0 failures. `brepkit-wasm --lib gridfinity` passes\n27, the pose sweep matches main exactly, and `truth_audit` differs only\nin the ring-corner Cut error, from `8e-11` to `9e-11`.\n\n- Remaining fallbacks are faces tangent to the tube and a sliver lens\nwith two degree-3 nodes at centre `(0.1, 3.05, 0.37)` and half-size\n`0.6`. The roadmap records both, plus sections missed or misread by the\n128-step `v` scan: sub-step runs are dropped, sub-step gaps become\ntouches, and inner tangencies at odd multiples of `π/128` close their\nself-touching sections.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBoxes passing through a torus's tube wall now split exactly instead of\nfalling back to meshes or returning wrong results. A sweep of 144 box\nplacements against `make_torus(4, 1.5)` across Cut, Intersect, and Fuse\ngoes from 182 exact results on main (22 of them wrong or open) to 377\nexact and correct out of 432, with 55 safe mesh fallbacks, 2 common\nparts within grid resolution, and no result worse than main.\n\n**Bug Fixes**\n\n- A plane's section through a torus is now built from its two `u`\nbranches: each run of `v` is one loop, out one branch between its exact\nturns and back the other, sampled so points fall at even steps along the\ncurve. This replaces the greedy nearest-neighbour chaining, which split\nloops at their turns, bridged narrow waists, and failed at off-unit\nscales.\n- A whole ring's outer wire is its seam placeholders, read as a point,\nso `BuilderSolid` took no orientation flux from it and treated the cut's\nshell as a cavity. It now integrates over the whole torus domain.\n- A wall's lobe that winds neither torus angle made the tube-loop\nsplitter give up. Lobes are now holes of the sector holding them and\ndiscs of their own, a sector seam may wind the tube once to pass one,\nand a seam is rejected if it crosses, touches, or runs along a lobe's\nboundary.\n- The CDT pinned a torus sector's seam to one `u` as it does a cylinder\nmeridian, and `solid_volume` read a lobe-holed sector as a notch band\noff its mesh. A seam along the ring keeps its unwrapped `(u, v)` — read\nper run of seam samples, since a meridian seam's two copies lie a period\napart — and the notch-band test now requires both wires to wrap the\ntube.\n- A box edge crossing was taken at the nearest of 1,025 oval samples, so\nan arc starting there folded back past its exact endpoint and meshed\nopen. Crossings are now refined with golden-section search, and the\nnotch-band test samples each edge over its own parameter domain.\n\n<sup>Written for commit 9c689c4551f09e4c345b3c106421c150cb6d0e3e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1914?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-30T21:13:05Z",
+          "tree_id": "49761faf566b895062d8f0453ff162b2e033e118",
+          "url": "https://github.com/andymai/brepkit/commit/6a3d9b9de378bfff3cdf91e0cf5e3ba3f0eb8b7c"
+        },
+        "date": 1790802933236,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 825437,
+            "range": "± 3270",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 897988,
+            "range": "± 52062",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11130,
+            "range": "± 89",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 622282,
+            "range": "± 2937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 35537661,
+            "range": "± 325254",
             "unit": "ns/iter"
           }
         ]
