@@ -5,26 +5,81 @@ use crate::nurbs::fitting::{approximate_lspia, chord_length_params, interpolate}
 use crate::nurbs::projection::project_point_to_curve;
 use crate::vec::Point3;
 
+use super::surface_marching::near_existing_segment;
 use super::{IntersectionCurve, IntersectionPoint};
 
-/// Build intersection curves from a set of points by chaining and fitting.
+/// Assemble the marcher's traced segments into ordered chains.
 ///
-/// First chains points into connected components (separate intersection
-/// branches), then fits a NURBS curve through each chain independently.
-pub(super) fn build_curves_from_points(
-    points: &[IntersectionPoint],
-) -> Result<Vec<IntersectionCurve>, MathError> {
-    if points.is_empty() {
-        return Ok(Vec::new());
+/// Each segment is already ordered along its curve, so its points are never
+/// re-chained by proximity: a proximity threshold taken from their spacing
+/// collapses where a march refines toward a boundary in short steps, and
+/// once widened its nearest-neighbour walk no longer follows the curve. The
+/// points of a later segment within `near` of an earlier one (a seed just
+/// past that segment's end re-tracing it) are dropped, splitting it where
+/// they fall; chains whose ends meet within `join` are then concatenated.
+pub(super) fn chain_traced_segments(
+    segments: Vec<Vec<IntersectionPoint>>,
+    near: f64,
+    join: f64,
+) -> Vec<Vec<IntersectionPoint>> {
+    let mut chains: Vec<Vec<IntersectionPoint>> = Vec::new();
+    for segment in segments {
+        let mut runs = Vec::new();
+        let mut run: Vec<IntersectionPoint> = Vec::new();
+        for p in segment {
+            if near_existing_segment(&chains, &p, near) {
+                if run.len() >= 2 {
+                    runs.push(std::mem::take(&mut run));
+                } else {
+                    run.clear();
+                }
+            } else {
+                run.push(p);
+            }
+        }
+        if run.len() >= 2 {
+            runs.push(run);
+        }
+        chains.extend(runs);
     }
-
-    // Estimate a chaining threshold from the average spacing.
-    let threshold = estimate_chain_threshold(points);
-
-    // Chain points into connected components.
-    let chains = chain_intersection_points(points, threshold);
-
-    build_curves_from_chains(&chains)
+    let meets = |a: Point3, b: Point3| (a - b).length() < join;
+    'join: loop {
+        for i in 0..chains.len() {
+            for j in 0..chains.len() {
+                if i == j {
+                    continue;
+                }
+                let (first_i, last_i) = (chains[i][0].point, chains[i][chains[i].len() - 1].point);
+                let (first_j, last_j) = (chains[j][0].point, chains[j][chains[j].len() - 1].point);
+                if (first_i - last_i).length() < 1e-12 {
+                    continue;
+                }
+                let joined = if meets(last_i, first_j) {
+                    Some((false, false))
+                } else if meets(last_i, last_j) {
+                    Some((false, true))
+                } else if meets(first_i, first_j) {
+                    Some((true, false))
+                } else {
+                    None
+                };
+                if let Some((flip_i, flip_j)) = joined {
+                    let mut tail = chains.remove(j);
+                    let i = if j < i { i - 1 } else { i };
+                    if flip_j {
+                        tail.reverse();
+                    }
+                    if flip_i {
+                        chains[i].reverse();
+                    }
+                    chains[i].extend(tail);
+                    continue 'join;
+                }
+            }
+        }
+        break;
+    }
+    chains
 }
 
 /// Fit a NURBS curve through each ALREADY-ORDERED chain of points.
@@ -123,67 +178,6 @@ pub(super) fn build_curves_from_chains(
     }
 
     Ok(curves)
-}
-
-/// Estimate a reasonable chaining threshold from point spacing.
-#[allow(clippy::cast_precision_loss)]
-#[must_use]
-pub(super) fn estimate_chain_threshold(points: &[IntersectionPoint]) -> f64 {
-    if points.len() < 2 {
-        return 1.0;
-    }
-
-    // Compute average nearest-neighbor distance (sample up to 100 points for speed).
-    let sample_size = points.len().min(100);
-    let mut total_min_dist = 0.0_f64;
-    let mut count = 0_usize;
-    for i in 0..sample_size {
-        let mut min_d = f64::MAX;
-        for (j, q) in points.iter().enumerate() {
-            if i == j {
-                continue;
-            }
-            let d = (points[i].point - q.point).length();
-            if d < min_d {
-                min_d = d;
-            }
-        }
-        if min_d < f64::MAX {
-            total_min_dist += min_d;
-            count += 1;
-        }
-    }
-
-    if count == 0 {
-        return 1.0;
-    }
-
-    // Use 3x average nearest-neighbor distance as threshold.
-    // The threshold must be large enough to chain adjacent sampling
-    // points along the same intersection branch. We also compute
-    // the bounding box diagonal as an upper-bound reference.
-    let avg = total_min_dist / count as f64;
-
-    // Also compute the bounding box diagonal of all points.
-    let mut bb_min = [f64::MAX; 3];
-    let mut bb_max = [f64::MIN; 3];
-    for p in points {
-        bb_min[0] = bb_min[0].min(p.point.x());
-        bb_min[1] = bb_min[1].min(p.point.y());
-        bb_min[2] = bb_min[2].min(p.point.z());
-        bb_max[0] = bb_max[0].max(p.point.x());
-        bb_max[1] = bb_max[1].max(p.point.y());
-        bb_max[2] = bb_max[2].max(p.point.z());
-    }
-    let diag = ((bb_max[0] - bb_min[0]).powi(2)
-        + (bb_max[1] - bb_min[1]).powi(2)
-        + (bb_max[2] - bb_min[2]).powi(2))
-    .sqrt();
-
-    // Floor: 5% of the bounding diagonal, which handles cases where
-    // many points converge to the same location after Newton refinement.
-    let floor = diag * 0.05;
-    (avg * 3.0).max(floor).max(1e-4)
 }
 
 /// Chain intersection points into connected components using proximity.

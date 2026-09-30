@@ -545,6 +545,23 @@ fn at_boundary(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> bool {
         .any(|((&s, &c), &is_per)| !is_per && (s - c).abs() > f64::EPSILON)
 }
 
+/// Whether a state lies in the band `refine_onto_boundary` snaps: within
+/// 1.5x the clamp margin of a non-periodic domain edge of either surface.
+fn in_clamp_band(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> bool {
+    let domains = [s1.domain_u(), s1.domain_v(), s2.domain_u(), s2.domain_v()];
+    let periodic = [
+        s1.is_periodic_u(),
+        s1.is_periodic_v(),
+        s2.is_periodic_u(),
+        s2.is_periodic_v(),
+    ];
+    (0..4).any(|i| {
+        let (min, max) = domains[i];
+        let band = 1.5 * NONPERIODIC_CLAMP_MARGIN * (max - min);
+        !periodic[i] && (state[i] <= min + band || state[i] >= max - band)
+    })
+}
+
 /// March in one direction along the intersection curve using RKF45
 /// adaptive stepping with closed-loop detection and curvature-based
 /// step adaptation.
@@ -617,11 +634,11 @@ fn march_direction(
         let (y4, accepted_h) = loop {
             total_evals += 1;
             if total_evals > max_evals {
-                return finish_chain(points, s1, s2, tolerance, false);
+                return finish_chain(points, seed, s1, s2, tolerance, false);
             }
 
             let Some(result) = rkf45_step(s1, s2, &y, h, sign) else {
-                return finish_chain(points, s1, s2, tolerance, false);
+                return finish_chain(points, seed, s1, s2, tolerance, false);
             };
 
             let (y4, y5) = result;
@@ -649,7 +666,6 @@ fn march_direction(
 
             break (y4, accepted);
         };
-        let _ = accepted_h;
 
         // Accept the 4th-order solution (more conservative).
         let next = constrain_state(&y4, s1, s2);
@@ -659,7 +675,15 @@ fn march_direction(
             refine_ssi_point(s1, s2, next[0], next[1], next[2], next[3], tolerance)
         {
             // Check that we actually moved.
+            // A step past a domain edge is clamped back and refines onto the
+            // point it left, or fails to refine: short of the edge that is an
+            // overshoot, so retry shorter until the march reaches the band
+            // `finish_chain` snaps; in the band it is the curve's end.
             if (refined.point - current.point).length() < tolerance {
+                if accepted_h > h_min && !in_clamp_band(&y, s1, s2) {
+                    h = (accepted_h * 0.5).max(h_min);
+                    continue;
+                }
                 break;
             }
 
@@ -764,12 +788,14 @@ fn march_direction(
 
             points.push(refined);
             current = refined;
+        } else if accepted_h > h_min && !in_clamp_band(&y, s1, s2) {
+            h = (accepted_h * 0.5).max(h_min);
         } else {
             break;
         }
     }
 
-    finish_chain(points, s1, s2, tolerance, closed_loop)
+    finish_chain(points, seed, s1, s2, tolerance, closed_loop)
 }
 
 /// Finalize a marched chain: if the march terminated inside the domain-clamp
@@ -783,20 +809,27 @@ fn march_direction(
 /// sections miss each other by twice the margin — a gap that scales with
 /// patch size and defeats every downstream junction weld (the kumiko strut
 /// fuse chains). Point evaluation AT a boundary is safe (`find_span` clamps),
-/// so the endpoint itself may sit exactly on the edge.
+/// so the endpoint itself may sit exactly on the edge. A march that takes no
+/// step from a seed already in that band ends at the seed, so the refined
+/// point is appended after it instead.
 fn finish_chain(
     mut points: Vec<IntersectionPoint>,
+    seed: &IntersectionPoint,
     s1: &NurbsSurface,
     s2: &NurbsSurface,
     tolerance: f64,
     closed_loop: bool,
 ) -> Vec<IntersectionPoint> {
-    if !closed_loop
-        && let Some(&last) = points.last()
-        && let Some(end) = refine_onto_boundary(s1, s2, &last, tolerance)
-        && let Some(slot) = points.last_mut()
-    {
-        *slot = end;
+    if closed_loop {
+        return points;
+    }
+    let last = points.last().copied().unwrap_or(*seed);
+    if let Some(end) = refine_onto_boundary(s1, s2, &last, tolerance) {
+        match points.last_mut() {
+            Some(slot) => *slot = end,
+            None if (end.point - seed.point).length() > tolerance => points.push(end),
+            None => {}
+        }
     }
     points
 }

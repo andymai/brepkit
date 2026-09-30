@@ -278,7 +278,7 @@ fn tilted_intersects_flat() {
 /// each on an interior horizontal edge) must come back as ONE curve. The
 /// scan used to visit every interior cell edge from both adjacent cells, so
 /// every crossing refined to an identical duplicate; each point's nearest
-/// neighbor was its own twin, `estimate_chain_threshold`'s average-spacing
+/// neighbor was its own twin, the proximity chainer's average-spacing
 /// statistic collapsed to ~0, and the threshold degenerated to its floor —
 /// below the real row pitch, so the crossing chained as dashes (the kumiko
 /// strut end-patch x wedge plane).

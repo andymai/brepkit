@@ -47,7 +47,23 @@ fn face_points(topo: &Topology, fid: FaceId) -> Vec<Point3> {
     pts
 }
 
+struct Tap;
+impl log::Log for Tap {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.target().starts_with("brepkit_")
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            println!("    [log] {}", r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+static TAP: Tap = Tap;
+
 fn main() {
+    let _ = log::set_logger(&TAP);
+    log::set_max_level(log::LevelFilter::Off);
     let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
     let band_path = std::env::var_os("BAND").map_or_else(
         || data.join("kumiko_wrap_band.bin"),
@@ -102,8 +118,35 @@ fn main() {
             if !cbb.intersects(*wbb) {
                 continue;
             }
+            let want = std::env::var("PAIR").ok();
+            let tag = format!("{},{}", cf.index(), wf.index());
+            if want.as_ref().is_some_and(|w| *w != tag) {
+                continue;
+            }
+            if want.is_some() {
+                log::set_max_level(log::LevelFilter::Trace);
+            }
             let t = std::time::Instant::now();
             let curves = intersect_nurbs_nurbs(cn, wn, 32, 0.01);
+            log::set_max_level(log::LevelFilter::Off);
+            if want.is_some()
+                && let Ok(cs) = &curves
+            {
+                for (i, ic) in cs.iter().enumerate() {
+                    for p in &ic.points {
+                        println!(
+                            "  curve {i} ({:.7},{:.7},{:.7}) p1=({:.6},{:.6}) p2=({:.6},{:.6})",
+                            p.point.x(),
+                            p.point.y(),
+                            p.point.z(),
+                            p.param1.0,
+                            p.param1.1,
+                            p.param2.0,
+                            p.param2.1
+                        );
+                    }
+                }
+            }
             let ms = t.elapsed().as_secs_f64() * 1e3;
             let mut n_curves = 0;
             let mut n_points = 0;

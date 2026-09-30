@@ -5,12 +5,12 @@
 //!
 //! The corner band is a 6-face solid (2 cylinders, 4 planes). Each tilted
 //! corner strut is a rectangle swept along a helix segment: 16 NURBS wall
-//! patches per wall, 64 NURBS faces plus 2 planar caps. Cutting the band by
-//! one strut spends 4.2 s in the face-face phase, the marcher reports section
-//! curves deviating up to 1.8 mm from the surfaces before re-fitting, and the
-//! exact result has 42 free edges (35 on the strut's NURBS sub-faces), so the
-//! op falls back to a 167-face planar mesh. The export runs 21 such compound
-//! cuts (532 s, 23 fallbacks). The reference kernel exports it watertight.
+//! patches per wall, 64 NURBS faces plus 2 planar caps. The strut's sections
+//! with the band's cylinders chain across those patches, and the cut is
+//! exact only when every patch's section is one curve that ends on the patch
+//! edge where the next begins: a march stopping at its seed short of a patch
+//! edge, a seed at the edge left unsnapped, or a re-traced curve re-chained
+//! by proximity each broke one chain and left the cut open.
 //!
 //! Data: `kumiko_wrap_band.bin` (cut base), `kumiko_wrap_strut.bin` (one
 //! of the three tools of the captured compound cut).
@@ -145,7 +145,6 @@ fn kumiko_corner_fixture_is_faithful() {
 }
 
 #[test]
-#[ignore = "ready repro: the band cut by a helical-sweep strut must stay exact (the marcher's sections drift off the surfaces); the 4.4 s it takes today is the bench harness's concern"]
 fn kumiko_corner_strut_cut_stays_exact() {
     let mut topo = Topology::new();
     let band = load(&mut topo, "kumiko_wrap_band.bin");
