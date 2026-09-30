@@ -1872,6 +1872,9 @@ fn trim_torus_oval_to_box_face(
         raw.curve
             .evaluate_with_endpoints(tt, raw.p_start, raw.p_end)
     };
+    // The nearest sample is refined to the crossing's own parameter: each kept
+    // arc starts there and takes the exact crossing as its first point, so a
+    // parameter a sample off would fold the arc back on itself past its end.
     let frac_of = |p: Point3| -> f64 {
         let mut best_f = 0.0;
         let mut best_d = f64::MAX;
@@ -1884,7 +1887,20 @@ fn trim_torus_oval_to_box_face(
                 best_f = f;
             }
         }
-        best_f
+        #[allow(clippy::cast_precision_loss)]
+        let step = 1.0 / n_dense as f64;
+        let dist = |f: f64| (oval_at(f.rem_euclid(1.0)) - p).length();
+        let phi = 0.5 * (5.0_f64.sqrt() - 1.0);
+        let (mut lo, mut hi) = (best_f - step, best_f + step);
+        for _ in 0..60 {
+            let (m1, m2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
+            if dist(m1) < dist(m2) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        f64::midpoint(lo, hi).rem_euclid(1.0)
     };
     let mut marks: Vec<(f64, Point3)> = crossings.iter().map(|&p| (frac_of(p), p)).collect();
     marks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));

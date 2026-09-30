@@ -2234,6 +2234,60 @@ fn seam_inside(
     })
 }
 
+/// Whether the straight `(u, v)` seam from `(ua, va)` across `span` in `u`
+/// and `dv` in `v` keeps clear of a lobe's `(u, v)` polygon: no point of it
+/// inside, and no step of it crossing, touching or running along the
+/// polygon's sides in any period copy.
+fn seam_clear_of(lobe: &[(f64, f64)], (ua, va): (f64, f64), span: f64, dv: f64) -> bool {
+    use std::f64::consts::TAU;
+    const STEPS: u32 = 128;
+    // Closer than this in (u, v), a seam touches the lobe's boundary.
+    const CLEARANCE: f64 = 1e-6;
+    let at = |k: u32| {
+        let t = f64::from(k) / f64::from(STEPS);
+        (span.mul_add(t, ua), dv.mul_add(t, va))
+    };
+    if (0..=STEPS).any(|k| {
+        let (u, v) = at(k);
+        torus_polygon_holds(lobe, u, v)
+    }) {
+        return false;
+    }
+    let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
+        (b.0 - a.0).mul_add(c.1 - a.1, -((b.1 - a.1) * (c.0 - a.0)))
+    };
+    let to_segment = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dx.mul_add(dx, dy * dy);
+        let t = if len2 > 0.0 {
+            ((p.0 - a.0).mul_add(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p.0 - dx.mul_add(t, a.0)).hypot(p.1 - dy.mul_add(t, a.1))
+    };
+    let crosses = |p: (f64, f64), q: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        (orient(p, q, a) * orient(p, q, b) < 0.0 && orient(a, b, p) * orient(a, b, q) < 0.0)
+            || to_segment(p, a, b)
+                .min(to_segment(q, a, b))
+                .min(to_segment(a, p, q))
+                .min(to_segment(b, p, q))
+                < CLEARANCE
+    };
+    for su in [-TAU, 0.0, TAU] {
+        for sv in [-2.0 * TAU, -TAU, 0.0, TAU, 2.0 * TAU] {
+            for w in 0..lobe.len() {
+                let (a, b) = (lobe[w], lobe[(w + 1) % lobe.len()]);
+                let (a, b) = ((a.0 + su, a.1 + sv), (b.0 + su, b.1 + sv));
+                if (0..STEPS).any(|k| crosses(at(k), at(k + 1), a, b)) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Sections stitched end to end into closed chains, a closed section a chain
 /// of its own; `None` unless every section closes a chain.
 fn closed_chains(
@@ -2282,6 +2336,10 @@ fn closed_chains(
     Some(chains)
 }
 
+/// A loop on a torus that winds neither of its angles: its edges and its
+/// `(u, v)` polygon.
+type TorusLobe = (Vec<OrientedPCurveEdge>, Vec<(f64, f64)>);
+
 /// Split a whole torus into sectors around the ring at closed chains of
 /// sections that each wind once around the tube (tube cross-sections from
 /// planes through the axis, a plane's loops around the tube, or arcs of
@@ -2306,8 +2364,16 @@ fn split_torus_by_tube_loops(
 
     let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
     let mut loops: Vec<TubeLoop> = Vec::new();
+    // A loop that winds neither angle (a wall's lobe beside the walls whose
+    // loops wind the tube) is a hole of the sector holding it and bounds a
+    // disc of its own.
+    let mut lobes: Vec<TorusLobe> = Vec::new();
     for chain in closed_chains(sections, surface, rank, close_tol)? {
-        loops.push(TubeLoop::new(torus, chain, close_tol)?);
+        if let Some(poly) = torus_loop_polygon(torus, &chain) {
+            lobes.push((chain, poly));
+        } else {
+            loops.push(TubeLoop::new(torus, chain, close_tol)?);
+        }
     }
     if loops.len() < 2 {
         return None;
@@ -2374,31 +2440,58 @@ fn split_torus_by_tube_loops(
     };
 
     let n = loops.len();
+    // Each lobe lies wholly in one sector, and in no other lobe.
+    let sector_of = |u: f64, v: f64| {
+        (0..n).find(|&i| {
+            let off = (u - loops[i].u_at(v)).rem_euclid(TAU);
+            off > 1e-9 && off < width(i, v) - 1e-9
+        })
+    };
+    let mut held: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (k, (_, poly)) in lobes.iter().enumerate() {
+        let mut home = None;
+        for &(u, v) in poly {
+            let at = sector_of(u, v)?;
+            if home.is_some_and(|h| h != at) {
+                return None;
+            }
+            home = Some(at);
+        }
+        if lobes
+            .iter()
+            .enumerate()
+            .any(|(j, (_, other))| j != k && torus_polygon_holds(other, poly[0].0, poly[0].1))
+        {
+            return None;
+        }
+        held[home?].push(k);
+    }
     let mut sectors = Vec::with_capacity(n);
     for i in 0..n {
         let (first, next) = (loops[i], loops[(i + 1) % n]);
         // The vertex pair nearest in tube angle whose straight seam stays
-        // inside the sector.
+        // inside the sector and clear of its lobes; where a lobe lies on the
+        // short way round, the seam can wind once around the tube instead.
         let mut pairs: Vec<(f64, usize, Point3, usize, Point3)> = Vec::new();
         for (ka, a) in first.vertices() {
             for (kb, b) in next.vertices() {
                 let dv = wrap(torus.project_point(b).1 - torus.project_point(a).1);
-                pairs.push((dv.abs(), ka, a, kb, b));
+                let dv = if dv.abs() < 1e-9 { 0.0 } else { dv };
+                for turn in [dv, dv + TAU, dv - TAU] {
+                    pairs.push((turn, ka, a, kb, b));
+                }
             }
         }
-        pairs.sort_by(|p, q| p.0.total_cmp(&q.0));
-        let seam = pairs.iter().find_map(|&(_, ka, a, kb, b)| {
+        pairs.sort_by(|p, q| p.0.abs().total_cmp(&q.0.abs()));
+        let seam = pairs.iter().find_map(|&(dv, ka, a, kb, b)| {
             let (ua, va) = torus.project_point(a);
-            let (ub, vb) = torus.project_point(b);
-            let dv = wrap(vb - va);
-            let dv = if dv.abs() < 1e-9 { 0.0 } else { dv };
+            let (ub, _) = torus.project_point(b);
             let span = (ub - ua).rem_euclid(TAU);
-            seam_inside(first, next, (ua, va), span, dv).then_some((
-                ka,
-                (ua, va),
-                kb,
-                (ua + span, va + dv),
-            ))
+            (seam_inside(first, next, (ua, va), span, dv)
+                && held[i]
+                    .iter()
+                    .all(|&k| seam_clear_of(&lobes[k].1, (ua, va), span, dv)))
+            .then_some((ka, (ua, va), kb, (ua + span, va + dv)))
         })?;
         let (ka, at_a, kb, at_b) = seam;
         let mid = (f64::midpoint(at_a.0, at_b.0), f64::midpoint(at_a.1, at_b.1));
@@ -2425,6 +2518,65 @@ fn split_torus_by_tube_loops(
             rank,
             precomputed_interior: Some(interior),
         });
+    }
+    if lobes.is_empty() {
+        return Some(sectors);
+    }
+    let (discs, _) = torus_loop_interiors(
+        torus,
+        &lobes.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+    )?;
+    // Sectors run counterclockwise in (u, v): a disc does too, and its hole
+    // the other way.
+    for (i, lobe_ids) in held.iter().enumerate() {
+        if lobe_ids.is_empty() {
+            continue;
+        }
+        for &k in lobe_ids {
+            let (edges, poly) = &lobes[k];
+            let flat: Vec<Point2> = poly.iter().map(|&(u, v)| Point2::new(u, v)).collect();
+            let ccw = super::super::classify_2d::signed_area_2d(&flat) > 0.0;
+            let (disc, hole) = if ccw {
+                (edges.clone(), reverse_loop(edges))
+            } else {
+                (reverse_loop(edges), edges.clone())
+            };
+            sectors[i].inner_wires.push(hole);
+            sectors.push(SplitSubFace {
+                surface: surface.clone(),
+                outer_wire: disc,
+                inner_wires: Vec::new(),
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior: Some(discs[k]),
+            });
+        }
+        // The sector's sample, midway across it, moves clear of its holes:
+        // the candidate around the tube farthest from every lobe.
+        let lobe_samples: Vec<Point3> = lobe_ids
+            .iter()
+            .flat_map(|&k| lobes[k].0.iter().flat_map(|e| edge_samples(e, 32)))
+            .collect();
+        let best = (0..32_u32)
+            .filter_map(|j| {
+                let v = TAU * (f64::from(j) + 0.5) / 32.0;
+                let u = 0.5f64.mul_add(width(i, v), loops[i].u_at(v));
+                if lobe_ids
+                    .iter()
+                    .any(|&k| torus_polygon_holds(&lobes[k].1, u, v))
+                {
+                    return None;
+                }
+                let at = torus.evaluate(u, v);
+                let clear = lobe_samples
+                    .iter()
+                    .map(|&q| (q - at).length())
+                    .fold(f64::INFINITY, f64::min);
+                Some((clear, at))
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))?;
+        sectors[i].precomputed_interior = Some(best.1);
     }
     Some(sectors)
 }
@@ -2928,6 +3080,71 @@ fn torus_section_to_edge(
     }
 }
 
+/// A loop on a torus that winds neither of its angles, as a polygon in
+/// `(u, v)` unwrapped along its walk; `None` when it winds.
+fn torus_loop_polygon(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    loop_edges: &[OrientedPCurveEdge],
+) -> Option<Vec<(f64, f64)>> {
+    use std::f64::consts::{PI, TAU};
+    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let mut poly: Vec<(f64, f64)> = Vec::new();
+    for e in loop_edges {
+        for p in edge_samples(e, 32) {
+            let (u, v) = torus.project_point(p);
+            let next = poly
+                .last()
+                .map_or((u, v), |&(lu, lv)| (lu + wrap(u - lu), lv + wrap(v - lv)));
+            poly.push(next);
+        }
+    }
+    let (&first, &last) = (poly.first()?, poly.last()?);
+    if (last.0 + wrap(first.0 - last.0) - first.0).abs() > PI
+        || (last.1 + wrap(first.1 - last.1) - first.1).abs() > PI
+    {
+        return None;
+    }
+    Some(poly)
+}
+
+/// Where a torus loop's `(u, v)` polygon crosses the line of tube angle `v`,
+/// in increasing `u`.
+fn torus_polygon_crossings(poly: &[(f64, f64)], v: f64) -> Vec<f64> {
+    let mut xs: Vec<f64> = (0..poly.len())
+        .filter_map(|k| {
+            let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
+            ((a.1 <= v) != (b.1 <= v)).then(|| a.0 + (v - a.1) / (b.1 - a.1) * (b.0 - a.0))
+        })
+        .collect();
+    xs.sort_by(f64::total_cmp);
+    xs
+}
+
+/// Whether a point of a torus lies in a loop's `(u, v)` polygon: shifted by
+/// whole turns to the loop's middle, a ray along +u from it crosses the loop
+/// an odd number of times.
+fn torus_polygon_holds(poly: &[(f64, f64)], u: f64, v: f64) -> bool {
+    use std::f64::consts::{PI, TAU};
+    let ((u_lo, v_lo), (u_hi, v_hi)) = poly.iter().fold(
+        (
+            (f64::INFINITY, f64::INFINITY),
+            (f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |((a, b), (c, d)), &(pu, pv)| ((a.min(pu), b.min(pv)), (c.max(pu), d.max(pv))),
+    );
+    let near = |x: f64, mid: f64| x + TAU * ((mid - x + PI) / TAU).floor();
+    let (u, v) = (
+        near(u, f64::midpoint(u_lo, u_hi)),
+        near(v, f64::midpoint(v_lo, v_hi)),
+    );
+    torus_polygon_crossings(poly, v)
+        .iter()
+        .filter(|&&x| x > u)
+        .count()
+        % 2
+        == 1
+}
+
 /// Points inside the regions loops that wind neither of its angles split a
 /// whole torus into: one in each loop's disc, midway across the widest span
 /// the loop encloses on the line through its middle `v`, and one on the ring
@@ -2938,40 +3155,14 @@ fn torus_loop_interiors(
     torus: &brepkit_math::surfaces::ToroidalSurface,
     loops: &[Vec<OrientedPCurveEdge>],
 ) -> Option<(Vec<Point3>, Point3)> {
-    use std::f64::consts::{PI, TAU};
-    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    use std::f64::consts::TAU;
     let mut polys: Vec<Vec<(f64, f64)>> = Vec::with_capacity(loops.len());
     let mut samples: Vec<Point3> = Vec::new();
     for loop_edges in loops {
-        let mut poly: Vec<(f64, f64)> = Vec::new();
-        for e in loop_edges {
-            for p in edge_samples(e, 32) {
-                samples.push(p);
-                let (u, v) = torus.project_point(p);
-                let next = poly
-                    .last()
-                    .map_or((u, v), |&(lu, lv)| (lu + wrap(u - lu), lv + wrap(v - lv)));
-                poly.push(next);
-            }
-        }
-        let (&first, &last) = (poly.first()?, poly.last()?);
-        if (last.0 + wrap(first.0 - last.0) - first.0).abs() > PI
-            || (last.1 + wrap(first.1 - last.1) - first.1).abs() > PI
-        {
-            return None;
-        }
-        polys.push(poly);
+        samples.extend(loop_edges.iter().flat_map(|e| edge_samples(e, 32)));
+        polys.push(torus_loop_polygon(torus, loop_edges)?);
     }
-    let crossings = |poly: &[(f64, f64)], v: f64| -> Vec<f64> {
-        let mut xs: Vec<f64> = (0..poly.len())
-            .filter_map(|k| {
-                let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
-                ((a.1 <= v) != (b.1 <= v)).then(|| a.0 + (v - a.1) / (b.1 - a.1) * (b.0 - a.0))
-            })
-            .collect();
-        xs.sort_by(f64::total_cmp);
-        xs
-    };
+    let crossings = torus_polygon_crossings;
     let mut discs = Vec::with_capacity(polys.len());
     for poly in &polys {
         let (lo, hi) = poly
@@ -2987,23 +3178,7 @@ fn torus_loop_interiors(
             .max_by(|p, q| (p.1 - p.0).total_cmp(&(q.1 - q.0)))?;
         discs.push(torus.evaluate(f64::midpoint(a, b), v));
     }
-    // A point is in a loop when, shifted by whole turns to the loop's
-    // middle, a ray along +u from it crosses the loop an odd number of times.
-    let inside = |poly: &[(f64, f64)], u: f64, v: f64| -> bool {
-        let ((u_lo, v_lo), (u_hi, v_hi)) = poly.iter().fold(
-            (
-                (f64::INFINITY, f64::INFINITY),
-                (f64::NEG_INFINITY, f64::NEG_INFINITY),
-            ),
-            |((a, b), (c, d)), &(pu, pv)| ((a.min(pu), b.min(pv)), (c.max(pu), d.max(pv))),
-        );
-        let near = |x: f64, mid: f64| x + TAU * ((mid - x + PI) / TAU).floor();
-        let (u, v) = (
-            near(u, f64::midpoint(u_lo, u_hi)),
-            near(v, f64::midpoint(v_lo, v_hi)),
-        );
-        crossings(poly, v).iter().filter(|&&x| x > u).count() % 2 == 1
-    };
+    let inside = torus_polygon_holds;
     let mut best: Option<(f64, Point3)> = None;
     for i in 0..32_u32 {
         for j in 0..16_u32 {
