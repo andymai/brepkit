@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790792749422,
+  "lastUpdate": 1790797348625,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47951,6 +47951,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27447308,
             "range": "± 241588",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1abdbf8141ad7023e24c1153b688f7775cf6cff",
+          "message": "perf(algo): prune nurbs vertex-face checks with control bounds (#1915)\n\nPhase VF falls from 64, 49, and 16 ms to 1.2, 1.0, and 0.5 ms on the\nmeasured kumiko arrangements while preserving the result.\n\n## What this does\n\n- `check_vertex_face_pairs` tested every vertex against every face of\nthe other solid without a broad phase. Curved faces require\n`project_point`, which performs a 9 by 9 grid search followed by Newton\nfor a NURBS face.\n- Each NURBS face whose weights are all positive now gets its control\npoints' box. A vertex outside that box grown by its combined tolerance,\nvertex tolerance plus linear tolerance, is skipped.\n- This cannot remove a VF interference. By the convex hull property for\npositive weights, the surface lies inside the control points' box. A\nskipped vertex is therefore farther from the surface than its tolerance.\nThe old path records an interference only when the projected distance is\nwithin that tolerance, and the projected distance is at least the true\ndistance.\n\n## Verification\n\n- Replaying the kumiko wall lattice compound-cut by four helical struts\nin the profiling profile reduced the whole cut from about 1.94 s to\nabout 1.87 s. The result remains 403 planar faces with volume 335.606.\n- `hull_bound_keeps_vertices_within_tolerance_of_a_nurbs_face` records a\nvertex half a tolerance outside a saddle patch's box at a corner where\nthe patch meets the box, and rejects one well clear. Removing tolerance\ngrowth from the bound makes the test fail.\n- `brepkit-algo`, `brepkit-operations`, and `brepkit-io` passed 1,901\ntests with 0 failures. `brepkit-wasm --lib gridfinity` passed 27.\n- `pose_sweep` produced 495 results identical to main's, and\n`truth_audit` output is identical to main's.\n- `approx_census` matches main apart from timings and the reported face\npair for the NURBS loft offset, which errors on both. Three runs of main\nreported three different pairs: `Id(4)/Id(5)`, `Id(6)/Id(7)`, and\n`Id(3)/Id(7)`.\n- The pose sweep and census primitives contain no NURBS faces, so their\npave filler paths are unchanged. The NURBS-heavy IO fixtures run in the\nsuites above.",
+          "timestamp": "2026-09-30T12:39:02-07:00",
+          "tree_id": "db16dd410882331415b95cd3ac174c3550f8578f",
+          "url": "https://github.com/andymai/brepkit/commit/a1abdbf8141ad7023e24c1153b688f7775cf6cff"
+        },
+        "date": 1790797342268,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1031321,
+            "range": "± 19921",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1114277,
+            "range": "± 1711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13033,
+            "range": "± 72",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 786886,
+            "range": "± 4477",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43470274,
+            "range": "± 256582",
             "unit": "ns/iter"
           }
         ]
