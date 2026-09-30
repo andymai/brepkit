@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.4](https://github.com/andymai/brepkit/compare/v4.1.3...v4.1.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* **algo:** correct torus boolean splitting and measurement ([#1914](https://github.com/andymai/brepkit/issues/1914)) ([6a3d9b9](https://github.com/andymai/brepkit/commit/6a3d9b9de378bfff3cdf91e0cf5e3ba3f0eb8b7c))
+
 ## [4.1.3](https://github.com/andymai/brepkit/compare/v4.1.2...v4.1.3) (2026-09-30)
 
 
