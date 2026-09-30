@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790791423416,
+  "lastUpdate": 1790792749422,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47897,6 +47897,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 37003231,
             "range": "± 975387",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de0044eec6d084e4cdcaec2c0b5921ba695224f4",
+          "message": "chore(main): release 4.1.2 (#1913)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.1.2](https://github.com/andymai/brepkit/compare/v4.1.1...v4.1.2)\n(2026-09-30)\n\n\n### Performance\n\n* **algo:** prune line to NURBS EF checks with control hulls\n([#1911](https://github.com/andymai/brepkit/issues/1911))\n([5149a71](https://github.com/andymai/brepkit/commit/5149a71dbe791374e30feac3a09fd44f5248ef00))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` 4.1.2, which improves performance by pruning line to\nNURBS EF checks with control hulls. Updates the workspace and all crate\nversions in `Cargo.toml`, the release manifest, and the changelog.\n\n<sup>Written for commit 614858f3dad67e2f4e9b7ae6184f2226a8438e34.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1913?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-30T18:23:32Z",
+          "tree_id": "4d14dcbb76f66f8e6cf931123933fdc893e2469f",
+          "url": "https://github.com/andymai/brepkit/commit/de0044eec6d084e4cdcaec2c0b5921ba695224f4"
+        },
+        "date": 1790792744033,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 562509,
+            "range": "± 11883",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 616832,
+            "range": "± 3367",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7939,
+            "range": "± 168",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 433116,
+            "range": "± 853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27447308,
+            "range": "± 241588",
             "unit": "ns/iter"
           }
         ]
