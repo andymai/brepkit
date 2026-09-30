@@ -569,7 +569,7 @@ fn find_edge_plane_crossings(
     }
 }
 
-/// Find edge-surface crossings by sampling signed distance and refining.
+/// Find edge-surface crossings by sampling the distance to the surface and refining.
 #[allow(clippy::too_many_arguments)]
 fn find_edge_surface_crossings(
     curve: &EdgeCurve,
@@ -734,9 +734,13 @@ fn find_crossings_by_sampling(
     crossings
 }
 
-/// Past this distance from a surface the crossing search compares nothing,
-/// so a lower bound on the distance serves as well as the distance itself.
+/// Every threshold the crossing search compares a distance against (1, 2
+/// and 4 tolerances) is at most this many tolerances, and its one relative
+/// comparison (a midpoint nearer than its neighbours) counts only with the
+/// midpoint under 2 tolerances. So past it a lower bound on the distance
+/// reads every comparison as the distance itself does.
 const NEAR_LIMIT: f64 = 4.0;
+const _: () = assert!(2.0 <= NEAR_LIMIT);
 
 /// [`distance_to_surface`], or a lower bound on it once that exceeds
 /// `NEAR_LIMIT` tolerances: the distance to the surface's `hull`, a box
@@ -819,13 +823,123 @@ mod tests {
     use brepkit_topology::edge::EdgeCurve;
 
     /// The hull bound spares projections only where the distance is past
-    /// every threshold the search compares, so on a curved NURBS patch (the
-    /// saddle `z = u + v - 2uv`) it finds exactly the crossings the plain
-    /// search does: lines through it, lines skimming within a few
-    /// tolerances of it, and lines clear of it.
+    /// every threshold the search compares, so it finds exactly the crossings
+    /// the plain search does, and a line whose box misses the grown hull has
+    /// none. Seeded patches (bilinear and rational, up to cubic) against
+    /// lines through them, lines skimming them at up to 8 tolerances, and
+    /// lines running just outside a face of their hull.
     #[test]
     fn hull_bound_keeps_every_nurbs_crossing() {
-        let saddle = brepkit_math::nurbs::surface::NurbsSurface::new(
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Vec3;
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            #[allow(clippy::cast_precision_loss)]
+            let f = (state >> 11) as f64 / (1_u64 << 53) as f64;
+            f
+        };
+        let tol = Tolerance::new();
+        let (mut cases, mut crossing_cases, mut near_cases) = (0, 0, 0);
+        for patch in 0..24_u32 {
+            let degree = 1 + (patch as usize % 3);
+            let n = degree + 2;
+            let mut knots = vec![0.0; degree + 1];
+            knots.push(0.5);
+            knots.extend(vec![1.0; degree + 1]);
+            let rational = patch % 2 == 1;
+            let (mut points, mut weights) = (Vec::new(), Vec::new());
+            for i in 0..n {
+                let (mut row, mut wrow) = (Vec::new(), Vec::new());
+                for j in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    row.push(Point3::new(
+                        i as f64 + 0.6 * next() - 0.3,
+                        j as f64 + 0.6 * next() - 0.3,
+                        2.0 * next() - 1.0,
+                    ));
+                    wrow.push(if rational { 0.2 + 4.8 * next() } else { 1.0 });
+                }
+                points.push(row);
+                weights.push(wrow);
+            }
+            let patch =
+                NurbsSurface::new(degree, degree, knots.clone(), knots, points, weights).unwrap();
+            let hull = patch.aabb();
+            let surface = FaceSurface::Nurbs(patch.clone());
+            for kind in 0..9_u32 {
+                let (u, v) = (next(), next());
+                let at = patch.evaluate(u, v);
+                let normal = patch.normal(u, v).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                let dir = Vec3::new(next() - 0.5, next() - 0.5, next() - 0.5)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let gap = 8.0 * next() * tol.linear;
+                let (a, b) = match kind % 3 {
+                    0 => (at - dir * 2.0, at + dir * 3.0),
+                    1 => {
+                        let along = (dir - normal * dir.dot(normal)).normalize().unwrap_or(dir);
+                        let q = at + normal * gap;
+                        (q - along * 0.5, q + along * 0.5)
+                    }
+                    _ => {
+                        let q = Point3::new(at.x(), at.y(), hull.max.z() + gap);
+                        let flat = Vec3::new(dir.x(), dir.y(), 0.0);
+                        (q - flat * 2.0, q + flat * 2.0)
+                    }
+                };
+                let plain = find_edge_surface_crossings(
+                    &EdgeCurve::Line,
+                    a,
+                    b,
+                    0.0,
+                    1.0,
+                    &surface,
+                    None,
+                    tol,
+                );
+                let bounded = find_edge_surface_crossings(
+                    &EdgeCurve::Line,
+                    a,
+                    b,
+                    0.0,
+                    1.0,
+                    &surface,
+                    Some(hull),
+                    tol,
+                );
+                assert_eq!(plain, bounded, "line {a:?} -> {b:?}");
+                let edge_box = Aabb3::try_from_points([a, b]).unwrap();
+                if !edge_box.intersects(hull.expanded(tol.linear)) {
+                    assert!(plain.is_empty(), "a line clear of the hull crossed it");
+                }
+                for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    let p = a + (b - a) * t;
+                    let exact = distance_to_surface(p, &surface);
+                    let near = distance_to_surface_near(p, &surface, Some(hull), tol);
+                    assert_eq!(exact < tol.linear, near < tol.linear);
+                    if exact < NEAR_LIMIT * tol.linear {
+                        near_cases += 1;
+                    }
+                }
+                cases += 1;
+                if !plain.is_empty() {
+                    crossing_cases += 1;
+                }
+            }
+        }
+        assert_eq!(cases, 216);
+        assert!(crossing_cases >= 20, "only {crossing_cases} lines crossed");
+        assert!(near_cases >= 20, "only {near_cases} samples came near");
+
+        // A vertical line down through the saddle `z = u + v - 2uv` near the
+        // corner (1, 0, 1), where the patch meets its hull's top: its sample
+        // above the crossing lies 3.5 tolerances over the hull but some 6e-4
+        // off the patch. Read by the hull alone it would trigger the tangent
+        // search the plain distance does not.
+        let saddle = NurbsSurface::new(
             1,
             1,
             vec![0.0, 0.0, 1.0, 1.0],
@@ -839,38 +953,26 @@ mod tests {
         .unwrap();
         let hull = saddle.aabb();
         let surface = FaceSurface::Nurbs(saddle);
-        let tol = Tolerance::new();
-        let height = |x: f64, y: f64| x + y - 2.0 * x * y;
-        let mut lines = Vec::new();
-        for (x, y) in [(0.3, 0.6), (0.5, 0.5), (0.9, 0.1), (0.05, 0.95)] {
-            lines.push((Point3::new(x, y, -1.0), Point3::new(x, y, 2.0)));
-            let z = height(x, y) + 3e-7;
-            lines.push((Point3::new(x - 0.2, y, z), Point3::new(x + 0.2, y, z)));
-        }
-        lines.push((Point3::new(-1.0, -1.0, 0.5), Point3::new(2.0, 2.0, 0.5)));
-        lines.push((Point3::new(-2.0, 0.5, 3.0), Point3::new(3.0, 0.5, 3.0)));
-        lines.push((Point3::new(1.5, -1.0, 0.2), Point3::new(1.5, 2.0, 0.2)));
-        let mut found = 0;
-        for (a, b) in lines {
-            let plain =
-                find_edge_surface_crossings(&EdgeCurve::Line, a, b, 0.0, 1.0, &surface, None, tol);
-            let bounded = find_edge_surface_crossings(
-                &EdgeCurve::Line,
-                a,
-                b,
-                0.0,
-                1.0,
-                &surface,
-                Some(hull),
-                tol,
-            );
-            assert_eq!(plain, bounded, "line {a:?} -> {b:?}");
-            found += plain.len();
-        }
-        assert!(
-            found >= 4,
-            "the lines through the patch found {found} crossings"
+        let (y, step) = (0.0005, 0.01);
+        let x = (0.999 - y) / 2.0f64.mul_add(-y, 1.0);
+        let z_top = 3.5f64.mul_add(tol.linear, 1.0) + step;
+        let (a, b) = (
+            Point3::new(x, y, 64.0f64.mul_add(-step, z_top)),
+            Point3::new(x, y, z_top),
         );
+        let plain =
+            find_edge_surface_crossings(&EdgeCurve::Line, a, b, 0.0, 1.0, &surface, None, tol);
+        let bounded = find_edge_surface_crossings(
+            &EdgeCurve::Line,
+            a,
+            b,
+            0.0,
+            1.0,
+            &surface,
+            Some(hull),
+            tol,
+        );
+        assert_eq!(plain, bounded);
     }
 
     #[test]
