@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.2](https://github.com/andymai/brepkit/compare/v4.1.1...v4.1.2) (2026-09-30)
+
+
+### Performance
+
+* **algo:** prune line to NURBS EF checks with control hulls ([#1911](https://github.com/andymai/brepkit/issues/1911)) ([5149a71](https://github.com/andymai/brepkit/commit/5149a71dbe791374e30feac3a09fd44f5248ef00))
+
 ## [4.1.1](https://github.com/andymai/brepkit/compare/v4.1.0...v4.1.1) (2026-09-30)
 
 
