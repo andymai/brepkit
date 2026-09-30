@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.5](https://github.com/andymai/brepkit/compare/v4.1.4...v4.1.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* **algo:** slice a wall whose NURBS rim runs past its vertices ([#1917](https://github.com/andymai/brepkit/issues/1917)) ([10410a5](https://github.com/andymai/brepkit/commit/10410a5a6b35db70c5e4e0f4d2889c5aead82384))
+* **algo:** trim a plane x NURBS section to the plane face's straight edges ([#1919](https://github.com/andymai/brepkit/issues/1919)) ([1753b56](https://github.com/andymai/brepkit/commit/1753b56383acd4643896ead3decb0e2b4c19090c))
+
 ## [4.1.4](https://github.com/andymai/brepkit/compare/v4.1.3...v4.1.4) (2026-09-30)
 
 
