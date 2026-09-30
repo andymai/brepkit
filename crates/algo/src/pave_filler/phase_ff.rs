@@ -3052,6 +3052,7 @@ fn solve_segment_quadratic(a: f64, b: f64, c: f64, sp: Point3, d: Vec3) -> Vec<P
 /// crossings with a plane face's straight boundary edges.
 ///
 /// Gated (returns `None`, deferring to the generic sample-clip, otherwise):
+/// - the partner is a cone or a NURBS face,
 /// - `raw` is an open `NurbsCurve` (the plane×cone hyperbola/parabola fit;
 ///   lines are clipped by `clip_line_to_face`, circles/ellipses have exact
 ///   paths of their own),
@@ -3083,13 +3084,17 @@ fn trim_open_curve_to_plane_face_lines(
     use crate::builder::classify_2d::point_in_polygon_2d;
     use brepkit_math::vec::Point2;
 
-    // Gated to CONE partners: the plane x cone conic (the `Points`-fit
-    // hyperbola/parabola) is the configuration whose whole-curve sections
-    // leave small plane faces unsplit (the dovetail tongue relief). Marched
-    // sections against NURBS/cylinder partners stay on the generic path —
-    // the honeycomb wall-cut weave is calibrated against those staying whole
+    // Gated to CONE and NURBS partners. The plane x cone conic (the
+    // `Points`-fit hyperbola/parabola) is the configuration whose whole-curve
+    // sections leave small plane faces unsplit (the dovetail tongue relief).
+    // A section of a NURBS patch left whole runs across the patch past a
+    // plane face much smaller than it, and the patch's own splitter never
+    // trims it there, so it carves the patch outside the plane's solid (a
+    // helical strut through a lattice's 0.05-wide sliver planes). Marched
+    // sections against cylinder partners stay on the generic path: the
+    // honeycomb wall-cut weave is calibrated against those staying whole
     // (clipping them regressed its over-share pin).
-    if !matches!(other_surf, FaceSurface::Cone(_)) {
+    if !matches!(other_surf, FaceSurface::Cone(_) | FaceSurface::Nurbs(_)) {
         return None;
     }
     if !matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
