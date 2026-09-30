@@ -580,6 +580,182 @@ fn a_corner_on_the_equator_off_the_axis_is_exact() {
     }
 }
 
+/// The ball against the box over `y > b`, `z > c`, mirrored and turned about
+/// `z`. Above the equator the wall and floor arcs close into a loop inside
+/// the upper hemisphere (through its pole when `b = 0`), leaving a band with
+/// that loop as its hole, which is sampled clear of it. Below the equator
+/// (`c < 0`) a wall holding the axis runs through the ball's seam meridian
+/// in every pose, and at some turns rounding hands the floor arc's pcurve a
+/// turn out there; the collar must still wind the way the hemisphere does,
+/// so that row takes every sixteenth of a turn, mirrored or not. Each op is
+/// exact against the ball's part past the wall and the floor: half the cap
+/// over the floor when the wall holds the axis.
+#[test]
+fn a_wall_and_floor_over_the_ball_are_exact_mirrored_and_turned() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let half_cap = |c: f64| {
+        let h = RADIUS - c;
+        PI * h * h * 3.0f64.mul_add(RADIUS, -h) / 6.0
+    };
+    let mirror_x = Mat4::scale(-1.0, 1.0, 1.0);
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let few = vec![
+        ("upright".to_string(), Mat4::identity()),
+        ("mirrored".to_string(), mirror_x),
+        (
+            "mirrored turned pi/2".to_string(),
+            mirror_x * Mat4::rotation_z(quarter),
+        ),
+        (
+            "mirrored turned 0.3".to_string(),
+            mirror_x * Mat4::rotation_z(0.3),
+        ),
+    ];
+    let every_turn: Vec<(String, Mat4)> = (0..16)
+        .flat_map(|k| {
+            let turn = Mat4::rotation_z(f64::from(k) * PI / 8.0);
+            [
+                (format!("turned {k}pi/8"), turn),
+                (format!("mirrored turned {k}pi/8"), mirror_x * turn),
+            ]
+        })
+        .collect();
+    for (b, c, within, poses) in [
+        (0.0, 1.0, half_cap(1.0), &few),
+        (-0.4, 1.0, ball_past(-RADIUS, -0.4, 1.0), &few),
+        (0.0, 0.5, half_cap(0.5), &few),
+        (0.0, -1.0, half_cap(-1.0), &every_turn),
+    ] {
+        let block_volume = 10.0 * (5.0 - b) * (5.0 - c);
+        for (pose, scene) in poses {
+            let probes = [(0.0, 1.0, 2.0), (0.0, -1.0, 2.0), (4.0, 4.0, 4.0)]
+                .map(|(x, y, z)| scene.mul_point(Point3::new(x, y, z)));
+            for (op, swap, truth) in [
+                (BooleanOp::Intersect, false, within),
+                (BooleanOp::Cut, false, ball - within),
+                (BooleanOp::Cut, true, block_volume - within),
+            ] {
+                let label = format!("y > {b}, z > {c} {pose} {op:?} swap {swap}");
+                let mut topo = Topology::new();
+                let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+                let block = make_box(&mut topo, 10.0, 5.0 - b, 5.0 - c).unwrap();
+                transform_solid(&mut topo, block, &Mat4::translation(-5.0, b, c)).unwrap();
+                transform_solid(&mut topo, block, scene).unwrap();
+                transform_solid(&mut topo, sphere, scene).unwrap();
+                let (x, y) = if swap {
+                    (block, sphere)
+                } else {
+                    (sphere, block)
+                };
+                let piece = boolean(&mut topo, op, x, y).unwrap();
+                assert_exact_ball_box(&topo, piece, truth, probes, (op, swap), &label);
+            }
+        }
+    }
+}
+
+/// A block holding a ball-shaped cavity against the box over `y > 0`,
+/// `z > c`, turned upside down, about `z` and mirrored: the cavity's upper
+/// hemisphere keeps a band whose hole is the wall and floor loop through its
+/// pole, which reaches the internal-loops splitter and is sampled clear of
+/// that hole there. Each op is exact, the fuse keeping the cavity.
+#[test]
+fn a_cavity_cut_by_a_wall_and_floor_keeps_its_band() {
+    let ball = 4.0 / 3.0 * PI * RADIUS.powi(3);
+    let hollow = 1000.0 - ball;
+    let mirror_x = Mat4::scale(-1.0, 1.0, 1.0);
+    for c in [0.5, 1.0] {
+        let h = RADIUS - c;
+        let within = 50.0f64.mul_add(5.0 - c, -(PI * h * h * 3.0f64.mul_add(RADIUS, -h) / 6.0));
+        let block_volume = 12.0 * 6.0 * (6.0 - c);
+        for turn in [0.0, 1.1, 3.9] {
+            let scene = mirror_x * Mat4::rotation_z(turn) * Mat4::rotation_x(PI);
+            let probes = [(0.0, 4.0, 4.0), (0.0, -4.0, 4.0), (0.0, 1.0, 2.0)]
+                .map(|(x, y, z)| scene.mul_point(Point3::new(x, y, z)));
+            for (op, swap, truth) in [
+                (BooleanOp::Intersect, false, within),
+                (BooleanOp::Cut, false, hollow - within),
+                (BooleanOp::Cut, true, block_volume - within),
+                (BooleanOp::Fuse, false, hollow + block_volume - within),
+            ] {
+                let label = format!("z > {c} turned {turn} {op:?} swap {swap}");
+                let mut topo = Topology::new();
+                let cube = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+                transform_solid(&mut topo, cube, &Mat4::translation(-5.0, -5.0, -5.0)).unwrap();
+                let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+                let shell = boolean(&mut topo, BooleanOp::Cut, cube, sphere).unwrap();
+                let block = make_box(&mut topo, 12.0, 6.0, 6.0 - c).unwrap();
+                transform_solid(&mut topo, block, &Mat4::translation(-6.0, 0.0, c)).unwrap();
+                transform_solid(&mut topo, shell, &scene).unwrap();
+                transform_solid(&mut topo, block, &scene).unwrap();
+                let (x, y) = if swap { (block, shell) } else { (shell, block) };
+                let piece = boolean(&mut topo, op, x, y).unwrap();
+                if op == BooleanOp::Fuse {
+                    assert!(exact(&topo, piece), "{label}: fell back to a mesh");
+                    let report = validate_solid(&topo, piece).unwrap();
+                    assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                    let volume = solid_volume(&topo, piece, 0.01).unwrap();
+                    assert!(
+                        (volume - truth).abs() < 1e-9 * truth,
+                        "{label}: volume {volume}, truth {truth}"
+                    );
+                } else {
+                    assert_exact_ball_box(&topo, piece, truth, probes, (op, swap), &label);
+                }
+            }
+        }
+    }
+}
+
+/// The ball's piece past `x = 1`, `y = 1.2`, `z = 0.8` against a vertical
+/// rod of radius 0.2 through its sphere patch at `(1.8, 1.8)`: each op is
+/// exact, valid and watertight, the rod's part in the piece being its column
+/// from the floor up to the sphere.
+#[test]
+fn a_rod_through_a_box_corner_piece_is_exact() {
+    let (floor, (cx, cy), r) = (0.8, (1.8, 1.8), 0.2);
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let column = simpson(200, 0.0, r, &|s: f64| {
+        s * simpson(200, 0.0, 2.0 * PI, &|th: f64| {
+            let (x, y) = (s.mul_add(th.cos(), cx), s.mul_add(th.sin(), cy));
+            RADIUS.mul_add(RADIUS, -(x * x + y * y)).sqrt() - floor
+        })
+    });
+    let piece_volume = corner_piece(1.0, 1.2, floor);
+    let rod_volume = PI * r * r * 10.0;
+    for (op, truth) in [
+        (BooleanOp::Cut, piece_volume - column),
+        (BooleanOp::Intersect, column),
+        (BooleanOp::Fuse, piece_volume + rod_volume - column),
+    ] {
+        let mut topo = Topology::new();
+        let sphere = make_sphere(&mut topo, RADIUS, 32).unwrap();
+        let block = make_box(&mut topo, 4.0, 3.8, 4.2).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(1.0, 1.2, floor)).unwrap();
+        let piece = boolean(&mut topo, BooleanOp::Intersect, sphere, block).unwrap();
+        let rod = make_cylinder(&mut topo, r, 10.0).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(cx, cy, -5.0)).unwrap();
+        let result = boolean(&mut topo, op, piece, rod).unwrap();
+        assert!(exact(&topo, result), "{op:?}: fell back to a mesh");
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{op:?}: {:?}", report.issues);
+        let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{op:?}: open or non-manifold mesh");
+        let volume = solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-7 * truth,
+            "{op:?}: volume {volume}, truth {truth}"
+        );
+    }
+}
+
 /// The ball less the box of the test above turned 1 radian, its floor a few
 /// 1e-6 under the equator: the floor's section no longer rides the seam, and
 /// a seam laid through its ends would put vertices off their own circle,

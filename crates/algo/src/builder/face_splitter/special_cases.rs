@@ -299,6 +299,16 @@ pub(super) fn split_noseam_face_direct(
             (rank, reversed, face_id),
         );
     }
+    // The band's hole can run through a pole, where the generic hole test
+    // reads no `(u, v)` polygon: sample the band clear of it here, or fail
+    // the face rather than classify the band by a sample in its hole.
+    let Some(band_interior) = region_sample(
+        surface,
+        boundary_edges,
+        &[std::slice::from_ref(&hole_edges), holes].concat(),
+    ) else {
+        return Vec::new();
+    };
     vec![
         SplitSubFace {
             surface: surface.clone(),
@@ -316,7 +326,7 @@ pub(super) fn split_noseam_face_direct(
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: None,
+            precomputed_interior: Some(band_interior),
         },
     ]
 }
@@ -600,9 +610,18 @@ fn split_noseam_by_arrangement(
     // Net longitude wound by a loop (≈ ±2π for a chain that encircles the
     // sphere once, ~0 for a lune or a back-and-forth chain). Robust where signed
     // UV area is degenerate (all arrangement vertices sit on the seam, v=0).
+    // Read from the edges' own curves: an arc starting on the parameter seam
+    // can carry a pcurve a turn out at that end, which runs the long way round.
     let net_u = |l: &[OrientedPCurveEdge]| -> f64 {
         use std::f64::consts::{PI, TAU};
-        let poly = loop_polyline(l);
+        let poly = match surface {
+            FaceSurface::Sphere(sphere) => sphere_loop_polyline(sphere, l),
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_) => loop_polyline(l),
+        };
         if poly.len() < 2 {
             return 0.0;
         }
@@ -3884,6 +3903,18 @@ pub(super) fn split_face_with_internal_loops(
         && !remainder.inner_wires.is_empty()
     {
         remainder.precomputed_interior = cylinder_cone_remainder_interior(&remainder);
+    }
+    // A sphere's holes can run through a pole, where their `(u, v)` has no
+    // longitude and the generic hole test cannot read them: the face fails
+    // rather than classify the remainder by a sample in a hole.
+    if remainder.precomputed_interior.is_none()
+        && matches!(remainder.surface, FaceSurface::Sphere(_))
+        && !remainder.inner_wires.is_empty()
+    {
+        let Some(inside) = region_sample(surface, boundary_edges, &remainder.inner_wires) else {
+            return Vec::new();
+        };
+        remainder.precomputed_interior = Some(inside);
     }
     result.push(remainder);
 
