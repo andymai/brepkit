@@ -193,8 +193,9 @@ One line each; the fixture/PR carries the story. Newest first.
 
 - **A wall whose NURBS rim runs past its vertices fell back when sliced (CLOSED 2026-09-30; `a_slab_through_a_major_arc_wall_keeps_it_exact` in `crates/operations/tests/extrude_major_arcs.rs`, whose arcs include a NURBS running 0.05 past each vertex, stored either way round)**:
   three roots. The DCEL loop tracer kept the outside of a periodic wall
-  short of a full turn as a third piece (an orbit of pure synthetic
-  boundary twins is now never a region on a periodic face, wound or not).
+  short of a full turn as a third piece (the splitter now drops a traced
+  loop of boundary edges alone that does not wind the period and runs
+  clockwise read off the surface, whichever way the face winds).
   `split_arc_edges_at_collinear_vertices` skipped a NURBS stored against its
   edge (`t1 < t0`), so a wall kept the arc whole where the cap split it at
   its middle vertex; with the tracer fixed that returned an exact, wrong
