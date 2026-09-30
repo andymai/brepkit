@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790716783988,
+  "lastUpdate": 1790789057299,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47735,6 +47735,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43523665,
             "range": "± 696505",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2860a4e7e40a7ac52720bd33c33095f384e68994",
+          "message": "fix(algo): sample sphere bands inside their split regions (#1910)\n\nThe ball against the box over `y > b`, `z > c` now builds exactly in\nevery result of a 1,536-result probe of mirrored and turned poses, where\nmain fell back to a mesh 261 times.\n\n## What was wrong\n\n- On main, `ball | y > 0, z > 1` in the mirrored scene (`mx`) fell back\nto a mesh for `a-b`, `a&b`, and `b-a`, with volume errors 1.3e-2,\n1.6e-2, and 1.2e-3. Every other pose of that case was exact.\n\n- The box wall and floor arcs form a loop inside the upper hemisphere\nthrough its pole. The remaining hemisphere is a band with that loop as\nits hole. `split_noseam_face_direct` built the band without a\nprecomputed interior sample, so `interior_point_3d` aimed from the\nequator polygon's mean `u` toward the hole. Mirrored, the resulting\npoint `(2.651, 0.261, 1.379)` lies inside the hole. The band classified\nInside, Cut assembled an open shell, and the operation fell back.\nUpright, the corresponding point `(-2.651, -0.261, 1.379)` lies outside\nthe hole.\n\n- A pole loop can route through either sphere splitter because its\napparent axis winding depends on the pole's arbitrary `u`.\n`split_face_with_internal_loops` had the same missing band sample.\nSeparately, cases over `y > 0, z > -1` failed when rounding placed a\nfloor pcurve start at `u = 2 pi` instead of `0`. `net_u` then read `-2\npi` instead of `+2 pi`, left the collar unflipped, and sampled the upper\nhemisphere at `z = 2.10`.\n\n## What this does\n\n- Both splitters sample bands with `region_sample`, the existing grid\nsearch over the region's `(u, v)`. The band is sampled where the\nsplitters build it because they hold the hole loop and `region_sample`\nalready handles loops around or through a pole.\n\n- A face whose band finds no sample fails with an empty split instead of\ntaking the generic sample. A sample in the hole classifies the band\nincorrectly, and the other sphere split paths already fail this way. The\nrouting between the two splitters stays as it is because both now build\nthe same pieces with samples inside them.\n\n- `net_u` reads sphere loop winding from edge curves through\n`sphere_loop_polyline`. Other surfaces retain pcurve winding, matched\nvariant by variant.\n\n## Verification\n\n- A 1,536-result probe covered 16 box regions, sixteen turns, mirrored\nand upright scenes, and three operations. Main had 261 mesh fallbacks.\nThe branch has none. Every result is exact, valid, watertight, and\nwithin 1e-6 of its volume.\n\n- Pose sweep changes only the three failing `mx` lines. They now have 4,\n3, and 7 faces, are valid and closed, and have volume errors 1.1e-13,\n2.1e-12, and 1.6e-13. The other 492 lines and all `truth_audit` output\nare unchanged.\n\n- `a_wall_and_floor_over_the_ball_are_exact_mirrored_and_turned` covers\nfour box placements in three ops, the row below the equator at every\nsixteenth of a turn, mirrored or not: each result exact, valid,\nwatertight, within 1e-9 of its volume and ray cast right.\n`a_cavity_cut_by_a_wall_and_floor_keeps_its_band` covers a ball cavity\ncut by the same box upside down and mirrored, which reaches the\ninternal-loops splitter; on main its fuse can drop the cavity (1171.0\nagainst 1079.17). Reverting any one change fails at least one of the\ntwo.\n\n- The roadmap row's rod through a trimmed patch is already exact on\nmain; `a_rod_through_a_box_corner_piece_is_exact` pins it, and the row\nis replaced by a Closed entry.\n\n- Local runs completed with zero failures: 1,897 `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` tests and 27 `brepkit-wasm --lib\ngridfinity` tests on the first commit, and all 33 `sphere_box_corner.rs`\ntests, the scan and the pose sweep after the review follow-up.",
+          "timestamp": "2026-09-30T17:21:09Z",
+          "tree_id": "d5a41e2e7bd07efa8f4155d000d0e51313c27fc2",
+          "url": "https://github.com/andymai/brepkit/commit/2860a4e7e40a7ac52720bd33c33095f384e68994"
+        },
+        "date": 1790789050120,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1032717,
+            "range": "± 11190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1113940,
+            "range": "± 27209",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12870,
+            "range": "± 602",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 794182,
+            "range": "± 1230",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43873979,
+            "range": "± 248321",
             "unit": "ns/iter"
           }
         ]
