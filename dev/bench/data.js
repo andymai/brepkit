@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790804077399,
+  "lastUpdate": 1790810314196,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48167,6 +48167,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42096745,
             "range": "± 668939",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "10410a5a6b35db70c5e4e0f4d2889c5aead82384",
+          "message": "fix(algo): slice a wall whose NURBS rim runs past its vertices (#1917)\n\nWith this change, every slab result for both new NURBS storages is\nexact, valid, watertight, and measures its truth.\n\n## What was wrong\n\nThe tests extrude the major-arc cases by 0.2, then cut and intersect\nthem with the slab `z > 0.1`, upright and turned. The two new storages\nextend the NURBS 0.05 past each vertex in either direction. On main, 22\nof their 48 slab results were wrong. Twenty fell back to meshes: the\nmajor segment produced 52 faces measuring 0.774901 against 0.779961, the\nholed plate produced 56 faces measuring 9.225099 against 9.220039, and\nthe two-arc disc produced 54 or 56 faces measuring 0.311 against\n0.314159. Two exact results measured 0.349 and 0.360 against 0.314159.\nThe extruded two-arc disc measured 0.523599 against 0.628319.\n\n- Root 1: `build_wire_loops_dcel` drops only periodic-face rim rings\nthat wind the period. For a cylinder or cone wall short of a full turn,\nthe non-winding outside survived as a third piece, causing assembly to\nfail with `open 1-face growth shell spans the result`.\n\n- Root 2: `split_arc_edges_at_collinear_vertices` skipped reversed NURBS\nedges because `domain_with_endpoints` returned `t1 < t0`. A cap split at\nan arc's middle vertex then met an unsplit wall, formed its own shell,\nand was dropped.\n\n- Root 3: `angular_range_from_wire_arcs` returned `None` for every\nspline. Its vertex-and-midpoint fallback interpreted the three angles of\na 300 degree wall as 210 degrees.\n\n## What this does\n\n- After both u-periodic DCEL consults, the face splitter drops a\nboundary-only, non-winding loop that runs clockwise on the surface.\nBecause tracing keeps regions on the left, this selects the outside\nthrough boundary edges or their reversed twins while retaining\nboundary-only section-loop holes. `build_wire_loops_dcel` remains\nunchanged.\n\n- BuilderSolid now derives each split position as a fraction from the\nparameter at the start vertex, in either direction. This also orders\nmultiple cuts correctly when a reversed spline spans its edge exactly.\n`a_reversed_spline_splits_where_its_mate_does` covers cuts at C(0.7) and\nC(0.3) for domains (0.9, 0.1) and (1.0, 0.0).\n\n- Volume measurement now walks an open spline arc along its span like a\ncircle. Closed spline curves still return `None`, since a blend band's\nfull-circle arc has an ambiguous span between its vertices.\n\n- Spline walking additionally requires the resolved span endpoints to\nmatch the edge vertices within the 1e-5 weld distance, also used as the\nopen-curve threshold.\n`a_spline_rim_off_its_vertices_keeps_its_wall_a_quarter_turn` prevents\nthe erroneous 1.5707 result against pi/6 = 0.5236.\n\n- `a_periodic_walls_outside_is_its_boundary_run_clockwise` pins the 300\ndegree cylinder-wall classification: counter-clockwise is retained,\nclockwise is outside, and a loop containing a section is retained.\n\n- The three fixes ship together because fixing root 1 alone turns a safe\nmesh fallback into an exact but wrong solid.\n\n- `try_fillet` now requires exact and meshed volumes to agree within 1%.\nThis rejects a watertight second-fillet result measured as 1010.11\nexactly and 985.42 by mesh. All 236 `brepkit-wasm` library tests pass,\nwith 3 ignored. The roadmap records the remaining second-fillet geometry\nissue.\n\n## Verification\n\n- All 7 `extrude_major_arcs.rs` tests pass. Reverting any root fix fails\n`a_slab_through_a_major_arc_wall_keeps_it_exact`; reverting the helper\nchange also fails `a_disc_of_two_arcs_extrudes_to_its_area`.\n\n- `brepkit-algo`, `brepkit-operations`, and `brepkit-io` pass 1,904\ntests with 0 failures. `brepkit-wasm --lib gridfinity` passes 27. The\npose sweep and `truth_audit` match main exactly; `approx_census` matches\napart from timings and the face pair its nurbs-loft offset error names,\nwhich varies between runs on main too. After rebasing onto the torus\nmerge, the arc and torus test files and all three unit pins pass again.\n\n- The roadmap row for this case is closed with an entry pointing to the\npin.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes slicing of walls whose NURBS rim runs past its vertices, so\nupright and turned slab cuts and intersections stay exact and watertight\ninstead of falling back to meshes or returning wrong solids.\n\n- The DCEL loop tracer no longer returns the outside of a periodic wall\nshort of a full turn as a region; an orbit of pure synthetic boundary\ntwins is dropped whether or not it winds the period.\n- `split_arc_edges_at_collinear_vertices` reads a NURBS edge's cut span\nfrom the parameter at its start vertex, so curves stored against their\nedge (`t1 < t0`) and curves spanning their edge exactly both split in\norder.\n- `angular_range_from_wire_arcs` walks an open spline arc along its\nspan, but only when that span ends at its vertices; a spline whose curve\ncloses on itself, or whose span misses its vertices, returns `None`.\n\nAll 7 tests in `extrude_major_arcs.rs` pass, and reverting any fix fails\n`a_slab_through_a_major_arc_wall_keeps_it_exact`.\n\n<sup>Written for commit 178aa161a9bdc229eeb83c2b26bdeeb185b506ff.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1917?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-09-30T23:15:45Z",
+          "tree_id": "f44628d98cbde3dc90ab927be864da4d5745dc22",
+          "url": "https://github.com/andymai/brepkit/commit/10410a5a6b35db70c5e4e0f4d2889c5aead82384"
+        },
+        "date": 1790810307854,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1025377,
+            "range": "± 3599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1103677,
+            "range": "± 1254",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13082,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 783882,
+            "range": "± 3810",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42926084,
+            "range": "± 91090",
             "unit": "ns/iter"
           }
         ]
