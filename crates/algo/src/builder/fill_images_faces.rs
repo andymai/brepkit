@@ -2775,7 +2775,7 @@ fn curve_endpoints(
     // A marched/fitted curve evaluates off the exact junction its mint
     // snapped the pave vertices to (boundary-foot anchors); downstream boundary
     // splitters gate on the exact 1e-7 tolerance, so hand back the VERTEX
-    // positions when they are the same endpoints — never a repositioning,
+    // positions when they are the same endpoints: never a repositioning,
     // only the exact-snap variant of the same point. The band is the one the
     // junction registry snaps within (1000x the linear tolerance): a fitted
     // cylinder x NURBS window end lands 1.03e-5 off the triple junction that
