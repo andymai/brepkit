@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.3](https://github.com/andymai/brepkit/compare/v4.1.2...v4.1.3) (2026-09-30)
+
+
+### Performance
+
+* **algo:** prune nurbs vertex-face checks with control bounds ([#1915](https://github.com/andymai/brepkit/issues/1915)) ([a1abdbf](https://github.com/andymai/brepkit/commit/a1abdbf8141ad7023e24c1153b688f7775cf6cff))
+
 ## [4.1.2](https://github.com/andymai/brepkit/compare/v4.1.1...v4.1.2) (2026-09-30)
 
 
