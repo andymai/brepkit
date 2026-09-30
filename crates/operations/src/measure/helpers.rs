@@ -203,10 +203,12 @@ fn sample_edge_curve(
 /// largest uncovered gap is its opening. A wall keeping 270 degrees around a
 /// bracket sampled at its vertices and arc midpoints reads as five angles
 /// with a 90 degree gap, which the density heuristic of
-/// [`compute_angular_range`] calls a full turn. Returns `None` when the wire
-/// has no curved edge, or when a curved edge is a spline: a blend band's
-/// rational arc keeps its full circle as its domain, so walking it would
-/// cover the whole turn (the second-pass fillet fixture).
+/// [`compute_angular_range`] calls a full turn. A spline edge is walked the
+/// same way when its curve is open. Returns `None` when the wire has no
+/// curved edge, or when a spline's curve closes on itself: a blend band's
+/// rational arc keeps its full circle as its domain, so the span between its
+/// vertices is ambiguous and walking it could cover the whole turn (the
+/// second-pass fillet fixture).
 pub(super) fn angular_range_from_wire_arcs(
     topo: &Topology,
     wire: &brepkit_topology::wire::Wire,
@@ -222,7 +224,12 @@ pub(super) fn angular_range_from_wire_arcs(
         };
         match edge.curve() {
             EdgeCurve::Line => continue,
-            EdgeCurve::NurbsCurve(_) => return None,
+            EdgeCurve::NurbsCurve(nc) => {
+                let (a, b) = nc.domain();
+                if (nc.evaluate(a) - nc.evaluate(b)).length() <= 1e-7 {
+                    return None;
+                }
+            }
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {}
         }
         let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {

@@ -2716,8 +2716,10 @@ fn split_arc_edges_at_collinear_vertices(
             if is_closed {
                 continue;
             }
+            // A curve stored against its edge runs from `t0` DOWN to `t1`;
+            // every step below reads the span as a fraction from `t0`.
             let (t0, t1) = curve.domain_with_endpoints(sp, ep);
-            if t1 - t0 < 1e-12 {
+            if (t1 - t0).abs() < 1e-12 {
                 continue;
             }
             let n_samples = 32_usize;
@@ -2774,7 +2776,7 @@ fn split_arc_edges_at_collinear_vertices(
                 if (curve.evaluate_with_endpoints(tm, sp, ep) - p).length() > snap {
                     continue;
                 }
-                cuts.push((tm, vid));
+                cuts.push(((tm - t0) / (t1 - t0), vid));
             }
             if cuts.is_empty() {
                 continue;

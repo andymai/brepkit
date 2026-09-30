@@ -390,8 +390,7 @@ pub fn build_wire_loops_dcel(
         // shoelace over mixed copies is garbage (the full-period remainder
         // band read as strongly negative and was dropped as "outer"). Lift
         // each successive vertex by the minimal image against its
-        // predecessor; the net lift after closing the orbit is the WINDING —
-        // nonzero only for the unbounded rim rings of a periodic face.
+        // predecessor.
         let lift = |val: f64, anchor: f64, period: Option<f64>| -> f64 {
             match period {
                 Some(p) if p > 1e-12 => val + ((anchor - val) / p).round() * p,
@@ -402,29 +401,26 @@ pub fn build_wire_loops_dcel(
         let mut perimeter = 0.0;
         let first = halves[orbit[0]].start_uv;
         let mut prev = first;
-        let mut lifted_first = first;
         for k in 0..orbit.len() {
             let raw = halves[orbit[(k + 1) % orbit.len()]].start_uv;
             let b = Point2::new(
                 lift(raw.x(), prev.x(), u_period),
                 lift(raw.y(), prev.y(), v_period),
             );
-            if k + 1 == orbit.len() {
-                lifted_first = b;
-            }
             area += prev.x().mul_add(b.y(), -(b.x() * prev.y()));
             perimeter += (b - prev).length();
             prev = b;
         }
         let area = area * 0.5;
-        let winding_u = u_period.is_some_and(|p| (lifted_first.x() - first.x()).abs() > p * 0.5);
-        let winding_v = v_period.is_some_and(|p| (lifted_first.y() - first.y()).abs() > p * 0.5);
-        if (winding_u || winding_v) && orbit.iter().all(|&i| i >= n_real) {
-            // A period-winding orbit of pure synthetic halves is an unbounded
-            // rim ring (the periodic face's counterpart of the planar outer
-            // face). A winding orbit WITH real halves is a genuine
-            // full-period band region — a cylinder band's boundary rims are
-            // separate rings in the glued graph, so the band itself winds.
+        if (u_period.is_some() || v_period.is_some()) && orbit.iter().all(|&i| i >= n_real) {
+            // An orbit of pure synthetic halves runs the face's own boundary
+            // the wrong way round: a period-winding one is an unbounded rim
+            // ring (the periodic face's counterpart of the planar outer
+            // face), and one that does not wind is the outside of a face
+            // short of a full period. A winding orbit WITH real halves is a
+            // genuine full-period band region: a cylinder band's boundary
+            // rims are separate rings in the glued graph, so the band itself
+            // winds.
             continue;
         }
         // A zero-area orbit walks out-and-back around a dangling chain (the
@@ -435,7 +431,7 @@ pub fn build_wire_loops_dcel(
         orbits.push((area, orbit));
     }
     // The planar unbounded face is the most-negative-area orbit. On a
-    // u-periodic face the unbounded sides are the winding rim rings already
+    // periodic face the unbounded sides are the synthetic orbits already
     // dropped above, so every surviving closed orbit is a genuine region.
     let outer = if u_periodic || v_periodic {
         None
