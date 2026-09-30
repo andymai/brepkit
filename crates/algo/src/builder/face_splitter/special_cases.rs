@@ -299,6 +299,13 @@ pub(super) fn split_noseam_face_direct(
             (rank, reversed, face_id),
         );
     }
+    // The band's hole can run through a pole, where the generic hole test
+    // reads no `(u, v)` polygon: sample the band clear of it here.
+    let band_interior = region_sample(
+        surface,
+        boundary_edges,
+        &[std::slice::from_ref(&hole_edges), holes].concat(),
+    );
     vec![
         SplitSubFace {
             surface: surface.clone(),
@@ -316,7 +323,7 @@ pub(super) fn split_noseam_face_direct(
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: None,
+            precomputed_interior: band_interior,
         },
     ]
 }
@@ -600,9 +607,14 @@ fn split_noseam_by_arrangement(
     // Net longitude wound by a loop (≈ ±2π for a chain that encircles the
     // sphere once, ~0 for a lune or a back-and-forth chain). Robust where signed
     // UV area is degenerate (all arrangement vertices sit on the seam, v=0).
+    // Read from the edges' own curves: an arc starting on the parameter seam
+    // can carry a pcurve a turn out at that end, which runs the long way round.
     let net_u = |l: &[OrientedPCurveEdge]| -> f64 {
         use std::f64::consts::{PI, TAU};
-        let poly = loop_polyline(l);
+        let poly = match surface {
+            FaceSurface::Sphere(sphere) => sphere_loop_polyline(sphere, l),
+            _ => loop_polyline(l),
+        };
         if poly.len() < 2 {
             return 0.0;
         }
@@ -1421,9 +1433,14 @@ fn sphere_region_polygon(
 ) -> Vec<brepkit_math::vec::Point2> {
     use brepkit_math::vec::Point2;
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
-    let pts = sphere_loop_polyline(sphere, loop_edges);
+    let mut pts = sphere_loop_polyline(sphere, loop_edges);
     if pts.len() < 3 {
         return pts;
+    }
+    // A loop through a pole crosses it along the pole's row, which has no
+    // one step in `u`: start there, so the polygon closes along that row.
+    if let Some(k) = pts.iter().position(|p| FRAC_PI_2 - p.y().abs() <= 1e-9) {
+        pts.rotate_left(k);
     }
     let mut poly = super::unwrapped_u(&pts);
     if let Some(north) = super::winds_the_axis(&pts) {
@@ -3884,6 +3901,15 @@ pub(super) fn split_face_with_internal_loops(
         && !remainder.inner_wires.is_empty()
     {
         remainder.precomputed_interior = cylinder_cone_remainder_interior(&remainder);
+    }
+    // A sphere's holes can run through a pole, where their `(u, v)` has no
+    // longitude and the generic hole test cannot read them.
+    if remainder.precomputed_interior.is_none()
+        && matches!(remainder.surface, FaceSurface::Sphere(_))
+        && !remainder.inner_wires.is_empty()
+    {
+        remainder.precomputed_interior =
+            region_sample(surface, boundary_edges, &remainder.inner_wires);
     }
     result.push(remainder);
 
