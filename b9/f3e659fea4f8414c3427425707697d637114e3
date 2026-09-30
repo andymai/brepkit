@@ -1,0 +1,23 @@
+crates/wasm/src/helpers.rs
+  s_a13d2397d068b4::t_94aefbb3ff27a9 238-247
+  s_a13d2397d068b4::t_249462101d069d 248-250
+  s_a13d2397d068b4::t_ff728af6716312 251
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_2c6e1a0937542e 173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b9f3e659fea4f8414c3427425707697d637114e3",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
