@@ -1158,10 +1158,22 @@ fn plane_torus_loops(
         // `u` moves like the square root of the distance in `v` to a turn, so
         // the loop is sampled at `v = t_lo + (t_hi - t_lo) (1 - cos θ) / 2`
         // for even steps of `θ`: `v` then moves like `θ²` at each turn and the
-        // points fall at near-even steps along the curve, turns included.
+        // points fall at near-even steps along the curve, turns included. A
+        // loop that sweeps far round the axis on a short run of `v` (a plane
+        // through the centre, tilted a little) takes a step per half scan
+        // step of `u` its branches sweep.
+        let (u_lo, u_hi) = (0..len)
+            .map(run_v)
+            .chain([t_lo, t_hi])
+            .map(|v| rhs_at(v).clamp(-1.0, 1.0).acos())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
+                (lo.min(u), hi.max(u))
+            });
         let m = (len as f64)
+            .max((n_v as f64) * (u_hi - u_lo) / std::f64::consts::PI)
             .max(PLANE_TORUS_LOOP_SAMPLES.0)
-            .min(PLANE_TORUS_LOOP_SAMPLES.1);
+            .min(PLANE_TORUS_LOOP_SAMPLES.1)
+            .ceil();
         let at = |k: f64| {
             let f = 0.5 * (1.0 - (std::f64::consts::PI * k / m).cos());
             (t_hi - t_lo).mul_add(f, t_lo)
@@ -4380,6 +4392,35 @@ mod tests {
                     (loops.len(), closed),
                     (want, want),
                     "R {major} r {minor}, wall at {d}"
+                );
+            }
+        }
+    }
+
+    /// A plane through the centre tilted a little from the equator cuts two
+    /// loops that each run all the way round the axis on a short run of `v`;
+    /// their fitted curves stay on the torus.
+    #[test]
+    fn plane_torus_sections_round_the_axis_stay_on_the_torus() {
+        let (major, minor) = (4.0, 1.5);
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
+        for tilt in [0.03_f64, 0.08, 0.2] {
+            let normal = Vec3::new(tilt.sin(), 0.0, tilt.cos());
+            let curves = intersect_plane_torus(&torus, normal, 0.0).unwrap();
+            assert_eq!(curves.len(), 2, "tilt {tilt}");
+            for c in &curves {
+                let (t0, t1) = c.curve.domain();
+                let off = (0..=400)
+                    .map(|k| {
+                        let p = c
+                            .curve
+                            .evaluate((t1 - t0).mul_add(f64::from(k) / 400.0, t0));
+                        (p.x().hypot(p.y()) - major).hypot(p.z()) - minor
+                    })
+                    .fold(0.0_f64, |m, e| m.max(e.abs()));
+                assert!(
+                    off < 1e-6,
+                    "tilt {tilt}: fitted section {off} off the torus"
                 );
             }
         }
