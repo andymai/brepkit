@@ -261,6 +261,22 @@ fn check_edge_face_pairs(
         .iter()
         .map(|c| c.bbox.expanded(tol.linear))
         .collect();
+    // A NURBS surface lies in its control points' box (the convex hull
+    // property), so a point off that box is at least as far off the surface:
+    // a far tighter bound than a curved face's grown boundary box, and one
+    // that spares the surface projection wherever it already exceeds the
+    // largest distance the crossing search compares against.
+    let hulls: Vec<Option<Aabb3>> = faces
+        .iter()
+        .map(|&fid| {
+            topo.face(fid).map(|f| match f.surface() {
+                FaceSurface::Nurbs(n) if n.weights().iter().flatten().all(|&w| w > 0.0) => {
+                    Some(n.aabb())
+                }
+                _ => None,
+            })
+        })
+        .collect::<Result<_, _>>()?;
 
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
@@ -300,6 +316,14 @@ fn check_edge_face_pairs(
             {
                 continue;
             }
+            // A line's sampled box is its exact box, so it may also be held
+            // to the surface's own box; a curve's samples can undercut it.
+            if let (Some(ea), Some(hull), EdgeCurve::Line) = (&edge_aabb, hulls[face_idx], &curve)
+                && !ea.intersects(hull.expanded(tol.linear))
+            {
+                continue;
+            }
+            let hull = hulls[face_idx];
 
             let face = topo.face(fid)?;
             let surface = face.surface();
@@ -312,7 +336,7 @@ fn check_edge_face_pairs(
             let edge_on_surface = (0..=n_chk).all(|i| {
                 let t = t0 + (t1 - t0) * (f64::from(i) / f64::from(n_chk));
                 let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
-                distance_to_surface(pt, surface) < tol.linear
+                distance_to_surface_near(pt, surface, hull, tol) < tol.linear
             });
             if edge_on_surface {
                 continue;
@@ -322,7 +346,9 @@ fn check_edge_face_pairs(
                 FaceSurface::Plane { normal, d } => {
                     find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
                 }
-                _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
+                _ => find_edge_surface_crossings(
+                    &curve, start_pos, end_pos, t0, t1, surface, hull, tol,
+                ),
             };
 
             // Endpoint-drop windows, one per crossing and per endpoint,
@@ -544,6 +570,7 @@ fn find_edge_plane_crossings(
 }
 
 /// Find edge-surface crossings by sampling signed distance and refining.
+#[allow(clippy::too_many_arguments)]
 fn find_edge_surface_crossings(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -551,6 +578,7 @@ fn find_edge_surface_crossings(
     t0: f64,
     t1: f64,
     surface: &FaceSurface,
+    hull: Option<Aabb3>,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
     let n = N_SAMPLES;
@@ -561,7 +589,7 @@ fn find_edge_surface_crossings(
     for i in 0..=n {
         let t = t0 + (t1 - t0) * (i as f64 / n as f64);
         let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
-        let dist = distance_to_surface(pt, surface);
+        let dist = distance_to_surface_near(pt, surface, hull, tol);
 
         if i > 0 && dist < tol.linear {
             let is_dup = crossings
@@ -574,7 +602,7 @@ fn find_edge_surface_crossings(
         } else if i > 0 && prev_dist > tol.linear && dist > tol.linear {
             let mid_t = f64::midpoint(prev_t, t);
             let mid_pt = curve.evaluate_with_endpoints(mid_t, start_pos, end_pos);
-            let mid_dist = distance_to_surface(mid_pt, surface);
+            let mid_dist = distance_to_surface_near(mid_pt, surface, hull, tol);
             if mid_dist < prev_dist.min(dist) && mid_dist < tol.linear * 2.0 {
                 let refined = refine_crossing(curve, start_pos, end_pos, prev_t, t, surface, tol);
                 if distance_to_surface(refined.1, surface) < tol.linear {
@@ -583,7 +611,7 @@ fn find_edge_surface_crossings(
             }
 
             // Tangent contact: near-surface sample triggers golden section minimum search
-            if prev_dist < 4.0 * tol.linear || dist < 4.0 * tol.linear {
+            if prev_dist < NEAR_LIMIT * tol.linear || dist < NEAR_LIMIT * tol.linear {
                 let phi = 0.5 * (5.0_f64.sqrt() - 1.0);
                 let mut lo = prev_t;
                 let mut hi = t;
@@ -706,6 +734,31 @@ fn find_crossings_by_sampling(
     crossings
 }
 
+/// Past this distance from a surface the crossing search compares nothing,
+/// so a lower bound on the distance serves as well as the distance itself.
+const NEAR_LIMIT: f64 = 4.0;
+
+/// [`distance_to_surface`], or a lower bound on it once that exceeds
+/// `NEAR_LIMIT` tolerances: the distance to the surface's `hull`, a box
+/// holding the whole surface.
+fn distance_to_surface_near(
+    pt: Point3,
+    surface: &FaceSurface,
+    hull: Option<Aabb3>,
+    tol: Tolerance,
+) -> f64 {
+    if let Some(h) = hull {
+        let gap = |x: f64, lo: f64, hi: f64| (lo - x).max(x - hi).max(0.0);
+        let off = gap(pt.x(), h.min.x(), h.max.x())
+            .hypot(gap(pt.y(), h.min.y(), h.max.y()))
+            .hypot(gap(pt.z(), h.min.z(), h.max.z()));
+        if off > NEAR_LIMIT * tol.linear {
+            return off;
+        }
+    }
+    distance_to_surface(pt, surface)
+}
+
 /// Compute distance from point to surface.
 fn distance_to_surface(pt: Point3, surface: &FaceSurface) -> f64 {
     if let FaceSurface::Plane { normal, d } = surface {
@@ -764,6 +817,61 @@ mod tests {
     use super::*;
     use brepkit_math::vec::Point3;
     use brepkit_topology::edge::EdgeCurve;
+
+    /// The hull bound spares projections only where the distance is past
+    /// every threshold the search compares, so on a curved NURBS patch (the
+    /// saddle `z = u + v - 2uv`) it finds exactly the crossings the plain
+    /// search does: lines through it, lines skimming within a few
+    /// tolerances of it, and lines clear of it.
+    #[test]
+    fn hull_bound_keeps_every_nurbs_crossing() {
+        let saddle = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 1.0)],
+                vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let hull = saddle.aabb();
+        let surface = FaceSurface::Nurbs(saddle);
+        let tol = Tolerance::new();
+        let height = |x: f64, y: f64| x + y - 2.0 * x * y;
+        let mut lines = Vec::new();
+        for (x, y) in [(0.3, 0.6), (0.5, 0.5), (0.9, 0.1), (0.05, 0.95)] {
+            lines.push((Point3::new(x, y, -1.0), Point3::new(x, y, 2.0)));
+            let z = height(x, y) + 3e-7;
+            lines.push((Point3::new(x - 0.2, y, z), Point3::new(x + 0.2, y, z)));
+        }
+        lines.push((Point3::new(-1.0, -1.0, 0.5), Point3::new(2.0, 2.0, 0.5)));
+        lines.push((Point3::new(-2.0, 0.5, 3.0), Point3::new(3.0, 0.5, 3.0)));
+        lines.push((Point3::new(1.5, -1.0, 0.2), Point3::new(1.5, 2.0, 0.2)));
+        let mut found = 0;
+        for (a, b) in lines {
+            let plain =
+                find_edge_surface_crossings(&EdgeCurve::Line, a, b, 0.0, 1.0, &surface, None, tol);
+            let bounded = find_edge_surface_crossings(
+                &EdgeCurve::Line,
+                a,
+                b,
+                0.0,
+                1.0,
+                &surface,
+                Some(hull),
+                tol,
+            );
+            assert_eq!(plain, bounded, "line {a:?} -> {b:?}");
+            found += plain.len();
+        }
+        assert!(
+            found >= 4,
+            "the lines through the patch found {found} crossings"
+        );
+    }
 
     #[test]
     fn sampling_detects_tangent_touch() {
