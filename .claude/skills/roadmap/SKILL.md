@@ -191,18 +191,20 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **A wall and floor over the ball fell back mirrored or turned (CLOSED 2026-09-30; `a_wall_and_floor_over_the_ball_are_exact_mirrored_and_turned` in `crates/operations/tests/sphere_box_corner.rs`, pose sweep case `ball | y > 0, z > 1` mirrored)**:
+- **A wall and floor over the ball fell back mirrored or turned (CLOSED 2026-09-30; `a_wall_and_floor_over_the_ball_are_exact_mirrored_and_turned` and `a_cavity_cut_by_a_wall_and_floor_keeps_its_band` in `crates/operations/tests/sphere_box_corner.rs`, pose sweep case `ball | y > 0, z > 1` mirrored)**:
   the box over `y > b`, `z > c` leaves the upper hemisphere a band whose
   hole is the loop of wall and floor arcs, round the pole or through it.
   Neither splitter that takes such a loop (the no-seam shortcut, or the
   internal-loops path when the loop reads as winding nothing) sampled the
   band, and the generic sample, at the equator's mean `u`, landed in the
-  hole whenever a mirror or turn put it there. Both now take
-  `region_sample`, whose polygon starts a loop through a pole at the pole.
-  Below the equator, a chain ending exactly on the ball's parameter seam
-  (turned `7π/4`) carried a pcurve a turn out, so the arrangement read the
-  collar's winding backwards and sampled it past the other pole; the
-  winding is read from the edges' curves now. A scan of 1,536 results (four
+  hole whenever a mirror or turn put it there (a block holding a ball
+  cavity, cut the same way upside down and mirrored, fused to a solid with
+  the cavity dropped). Both now take `region_sample`, and the face fails
+  when it finds no sample. Below the equator, a wall holding the axis runs
+  through the ball's seam meridian, and at some turns rounding hands the
+  floor arc's pcurve a turn out there, so the arrangement read the collar's
+  winding backwards and sampled it past the other pole; the winding is read
+  from the edges' curves now. A scan of 1,536 results (four
   walls, four floors, sixteen turns, mirrored or not) went from 261
   fallbacks on main to none. The row's rods through a trimmed patch were
   already exact on main; the box-corner piece's is pinned by
