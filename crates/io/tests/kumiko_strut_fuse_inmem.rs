@@ -166,3 +166,48 @@ fn kumiko_diagonal_strut_fuse_is_exact() {
     );
     assert_eq!(free_edge_count(&topo, result), 0);
 }
+
+/// The corner-wrap cutter subtracts the struts, so the same pair is cut and
+/// intersected too, the diagonal shifted and turned: each stays exact with
+/// no free edges, and the cut and the intersection split the wedge strut's
+/// volume. A plane x NURBS section trimmed at the wedge's radial plane ends
+/// on the plane's edge where the cylinder x NURBS window ends too, and the
+/// two ends must meet in one vertex.
+#[test]
+fn kumiko_diagonal_strut_cut_and_intersect_are_exact() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
+    let wedge_volume = {
+        let mut topo = Topology::new();
+        let v = load("kumiko_strut_vertical.bin", &mut topo);
+        brepkit_operations::measure::solid_volume(&topo, v, 0.001).unwrap()
+    };
+    for (dx, dy, dz, turn) in [
+        (0.0, 0.0, 0.0, 0.0_f64),
+        (0.0, 0.0, 2.3, 0.0),
+        (0.2, -0.1, 0.5, 0.0),
+    ] {
+        let mut halves = 0.0;
+        for op in [BooleanOp::Cut, BooleanOp::Intersect] {
+            let mut topo = Topology::new();
+            let v = load("kumiko_strut_vertical.bin", &mut topo);
+            let d = load("kumiko_strut_diag_up_ruled.bin", &mut topo);
+            let place = Mat4::translation(dx, dy, dz) * Mat4::rotation_z(turn.to_radians());
+            brepkit_operations::transform::transform_solid(&mut topo, d, &place).unwrap();
+            let before = mesh_fallback_count();
+            let result = boolean(&mut topo, op, v, d).unwrap();
+            let label = format!("{op:?} at ({dx}, {dy}, {dz})");
+            assert_eq!(
+                mesh_fallback_count(),
+                before,
+                "{label} took the mesh fallback"
+            );
+            assert_eq!(free_edge_count(&topo, result), 0, "{label} has free edges");
+            halves += brepkit_operations::measure::solid_volume(&topo, result, 0.001).unwrap();
+        }
+        assert!(
+            (halves - wedge_volume).abs() < 1e-3 * wedge_volume,
+            "cut and intersection at ({dx}, {dy}, {dz}) sum to {halves}, the strut is {wedge_volume}"
+        );
+    }
+}

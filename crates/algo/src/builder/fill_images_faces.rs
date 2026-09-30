@@ -2772,17 +2772,20 @@ fn curve_endpoints(
     let dummy = Point3::new(0.0, 0.0, 0.0);
     let start_3d = curve_ds.curve.evaluate_with_endpoints(t0, dummy, dummy);
     let end_3d = curve_ds.curve.evaluate_with_endpoints(t1, dummy, dummy);
-    // A marched/fitted curve evaluates ~1e-6 off the exact junction its mint
+    // A marched/fitted curve evaluates off the exact junction its mint
     // snapped the pave vertices to (boundary-foot anchors); downstream boundary
     // splitters gate on the exact 1e-7 tolerance, so hand back the VERTEX
-    // positions when they are the same endpoints (within the weld band) —
-    // never a repositioning, only the exact-snap variant of the same point.
+    // positions when they are the same endpoints — never a repositioning,
+    // only the exact-snap variant of the same point. The band is the one the
+    // junction registry snaps within (1000x the linear tolerance): a fitted
+    // cylinder x NURBS window end lands 1.03e-5 off the triple junction that
+    // a plane x NURBS section trimmed at the same edge ends on exactly.
     if curve_ds.pave_blocks.len() == 1
         && !matches!(curve_ds.curve, brepkit_topology::edge::EdgeCurve::Line)
         && let Some(pb) = arena.pave_blocks.get(curve_ds.pave_blocks[0])
         && let (Ok(sv), Ok(ev)) = (topo.vertex(pb.start.vertex), topo.vertex(pb.end.vertex))
     {
-        let weld = 1e-5;
+        let weld = 1e-4;
         let (svp, evp) = (sv.point(), ev.point());
         if (svp - start_3d).length() <= weld && (evp - end_3d).length() <= weld {
             return (Some(svp), Some(evp));

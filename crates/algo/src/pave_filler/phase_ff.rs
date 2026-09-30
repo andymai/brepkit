@@ -3052,7 +3052,8 @@ fn solve_segment_quadratic(a: f64, b: f64, c: f64, sp: Point3, d: Vec3) -> Vec<P
 /// crossings with a plane face's straight boundary edges.
 ///
 /// Gated (returns `None`, deferring to the generic sample-clip, otherwise):
-/// - the partner is a cone or a NURBS face,
+/// - the partner is a cone, or a NURBS face with every plane-face boundary
+///   edge straight,
 /// - `raw` is an open `NurbsCurve` (the plane×cone hyperbola/parabola fit;
 ///   lines are clipped by `clip_line_to_face`, circles/ellipses have exact
 ///   paths of their own),
@@ -3129,6 +3130,14 @@ fn trim_open_curve_to_plane_face_lines(
                 has_curved_boundary = true;
             }
         }
+    }
+    // A NURBS partner's section is only trimmed against a polygon that IS
+    // the plane face's boundary, and only by the plane: its extent is a `v`
+    // band read off a few boundary samples, not a containment test, and the
+    // NURBS face trims its sections to its own boundary in its splitter.
+    let partner_is_cone = matches!(other_surf, FaceSurface::Cone(_));
+    if !partner_is_cone && has_curved_boundary {
+        return None;
     }
 
     let n_samples = 64usize;
@@ -3286,15 +3295,15 @@ fn trim_open_curve_to_plane_face_lines(
     // dangles past the rim, the splitter's pendant filter removes the whole
     // section chain, and the cone cap never splits out (the A1-corner
     // doubled-dovetail nub). Bisect v(t) to the exact rim crossing so the
-    // kept piece ends ON the rim. The destructure matches any Analytic
-    // extent, but this function's entry gate already restricted the partner
-    // surface to a Cone, whose `v` is axial and non-periodic.
-    if let FaceExtent::Analytic {
-        surface: other_surface,
-        v0,
-        v1,
-        ..
-    } = ext_other
+    // kept piece ends ON the rim. Only a cone's rims (axial, non-periodic
+    // `v`) are exact.
+    if partner_is_cone
+        && let FaceExtent::Analytic {
+            surface: other_surface,
+            v0,
+            v1,
+            ..
+        } = ext_other
     {
         let v_of =
             |t: f64| -> Option<f64> { other_surface.project_point(eval_at(t)).map(|(_, v)| v) };
@@ -3361,7 +3370,7 @@ fn trim_open_curve_to_plane_face_lines(
         }
         let t_mid = f64::midpoint(t0, t1);
         let p_mid = eval_at(t_mid);
-        if !inside_face(frame.project(p_mid)) || !ext_other.contains(p_mid) {
+        if !inside_face(frame.project(p_mid)) || (partner_is_cone && !ext_other.contains(p_mid)) {
             continue;
         }
         let (p0, p1) = (eval_at(t0), eval_at(t1));
