@@ -746,6 +746,14 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
                     v_lo = -std::f64::consts::FRAC_PI_2;
                 }
             }
+            // A whole ring's outer wire is its two seam placeholders, one
+            // vertex, so its box is a point and the ring would drop out of
+            // the vote; it spans the torus's whole domain, holes and all.
+            let (u_lo, u_hi, v_lo, v_hi) = if super::whole_ring(topo, fid).is_some() {
+                (0.0, std::f64::consts::TAU, 0.0, std::f64::consts::TAU)
+            } else {
+                (u_lo, u_hi, v_lo, v_hi)
+            };
             let rev_flag = face.is_reversed();
             let (n_u, n_v) = (24usize, 24usize);
             let du = (u_hi - u_lo) / n_u as f64;

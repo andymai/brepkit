@@ -95,8 +95,12 @@ fn solid_has_torus_notch_band(topo: &Topology, solid: SolidId) -> bool {
     };
     faces.iter().any(|&fid| {
         topo.face(fid).is_ok_and(|f| match f.surface() {
+            // Both of a notch band's wires wrap the tube; a sector whose one
+            // hole is a lobe keeps the exact per-face flux.
             FaceSurface::Torus(t) => {
-                f.inner_wires().len() == 1 && torus_wire_wraps_tube(topo, f.outer_wire(), t)
+                f.inner_wires().len() == 1
+                    && torus_wire_wraps_tube(topo, f.outer_wire(), t)
+                    && torus_wire_wraps_tube(topo, f.inner_wires()[0], t)
             }
             _ => false,
         })

@@ -2132,7 +2132,22 @@ pub(super) fn tessellate_nonplanar_cdt(
             .map(|(&idx, _)| idx)
             .collect();
 
-        if !seam_edge_indices.is_empty() && ring.is_none() {
+        // A torus sector's seam runs along the ring (a latitude arc, or a
+        // curve winding the tube), not along a meridian: its samples keep
+        // their unwrapped (u, v), which the placement below would pin to one u.
+        let seam_along_ring = matches!(face_data.surface(), FaceSurface::Torus(_)) && {
+            let seam_u: Vec<f64> = (0..n_boundary)
+                .filter(|&i| seam_edge_indices.contains(&boundary_3d[i].2.index()))
+                .map(|i| boundary_uv[i].0)
+                .collect();
+            let (lo, hi) = seam_u
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &u| {
+                    (lo.min(u), hi.max(u))
+                });
+            hi - lo > 1e-6
+        };
+        if !seam_edge_indices.is_empty() && ring.is_none() && !seam_along_ring {
             let off_seam = |i: usize| !seam_edge_indices.contains(&boundary_3d[i].2.index());
             let non_seam_uvs: Vec<(f64, f64)> = boundary_uv
                 .iter()

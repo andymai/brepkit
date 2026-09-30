@@ -1127,6 +1127,9 @@ fn chain_self_touches(ipts: &[IntersectionPoint], median_spacing: f64) -> bool {
     false
 }
 
+/// Samples approaching each turn of a plane's section through a torus.
+const PLANE_TORUS_TURN_SAMPLES: usize = 8;
+
 /// Closed-form `(u, v, point)` crossings of a plane with a torus.
 ///
 /// In the torus's own frame let `a = n·X`, `b = n·Y`, `c = n·Z`,
@@ -1191,17 +1194,51 @@ fn plane_torus_crossings(
     // inner-tangent figure-eight at v = π, where the two u branches collapse
     // to one point) — a coincident node lets greedy chaining thread through
     // and wrongly seal a self-touching section into a closed loop.
-    let v_off = TAU / (n_v as f64) * 0.5;
-    for i in 0..n_v {
-        let v = (i as f64).mul_add(TAU / (n_v as f64), v_off);
-        let tube_r = small_r.mul_add(v.cos(), big_r); // R + r·cos v > 0
-        let rhs = (d_local - small_r * c * v.sin()) / (s * tube_r);
-        if rhs.abs() > 1.0 {
-            continue;
-        }
-        let delta = rhs.clamp(-1.0, 1.0).acos();
+    let step = TAU / (n_v as f64);
+    let v_off = step * 0.5;
+    // R + r·cos v > 0 on a ring torus.
+    let rhs_at = |v: f64| (d_local - small_r * c * v.sin()) / (s * small_r.mul_add(v.cos(), big_r));
+    let push_both = |v: f64, pts: &mut Vec<(f64, f64, Point3)>| {
+        let delta = rhs_at(v).clamp(-1.0, 1.0).acos();
         for u in [phi + delta, phi - delta] {
             pts.push((u, v, torus.evaluate(u, v)));
+        }
+    };
+    for i in 0..n_v {
+        let v = (i as f64).mul_add(step, v_off);
+        if rhs_at(v).abs() > 1.0 {
+            continue;
+        }
+        push_both(v, &mut pts);
+    }
+    // Where a loop turns (|rhs| reaches 1 and the two branches meet at one
+    // point), `u` moves like the square root of the distance in `v` to the
+    // turn, so the last scan samples stop well short of it on both branches
+    // and no chaining joins them. Place the turn exactly and approach it at
+    // `v` steps shrinking quadratically, even steps along the curve.
+    for i in 0..n_v {
+        let va = (i as f64).mul_add(step, v_off);
+        let vb = va + step;
+        let (inside_a, inside_b) = (rhs_at(va).abs() <= 1.0, rhs_at(vb).abs() <= 1.0);
+        if inside_a == inside_b {
+            continue;
+        }
+        let (mut lo, mut hi) = if inside_a { (va, vb) } else { (vb, va) };
+        let v_in = lo;
+        for _ in 0..60 {
+            let mid = f64::midpoint(lo, hi);
+            if rhs_at(mid).abs() <= 1.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let turn = lo;
+        let delta = rhs_at(turn).clamp(-1.0, 1.0).acos();
+        pts.push((phi + delta, turn, torus.evaluate(phi + delta, turn)));
+        for k in 1..PLANE_TORUS_TURN_SAMPLES {
+            let f = k as f64 / PLANE_TORUS_TURN_SAMPLES as f64;
+            push_both((v_in - turn).mul_add(f * f, turn), &mut pts);
         }
     }
     pts

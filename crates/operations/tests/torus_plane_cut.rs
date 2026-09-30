@@ -683,6 +683,39 @@ fn cube_inside_the_tube() {
     }
 }
 
+/// The disc of radius `rho` about the axis within `x` in `[x_lo, x_hi]`,
+/// `y > y0`, in closed form: `under` is the area under its upper arc and
+/// `span` the width, each over `[a, b]` within the walls.
+fn disc_past(rho: f64, (x_lo, x_hi): (f64, f64), y0: f64) -> f64 {
+    let g = |x: f64| {
+        0.5 * x.mul_add(
+            (rho * rho - x * x).max(0.0).sqrt(),
+            rho * rho * (x / rho).clamp(-1.0, 1.0).asin(),
+        )
+    };
+    let span = |a: f64, b: f64| (b.min(x_hi) - a.max(x_lo)).max(0.0);
+    let under = |a: f64, b: f64| {
+        let (l, h) = (a.max(x_lo), b.min(x_hi));
+        if h > l { g(h) - g(l) } else { 0.0 }
+    };
+    let up = y0.max(0.0);
+    let mut area = 0.0;
+    if rho > up {
+        let q = rho.mul_add(rho, -up * up).sqrt();
+        area += up.mul_add(-span(-q, q), under(-q, q));
+    }
+    if y0 < 0.0 {
+        let depth = -y0;
+        let q = if rho > depth {
+            rho.mul_add(rho, -depth * depth).sqrt()
+        } else {
+            0.0
+        };
+        area += depth.mul_add(span(-q, q), under(-rho, rho) - under(-q, q));
+    }
+    area
+}
+
 /// The ring within a box over `x` in `[x_lo, x_hi]`, `y > y0`, reaching past
 /// the ring in `+y`: over the tube's cross-section, the area of the annulus
 /// between the circles about the axis at `big ∓ w`, each clipped to the box
@@ -698,37 +731,7 @@ fn ring_in_box(big: f64, small: f64, (x_lo, x_hi): (f64, f64), y0: f64) -> f64 {
         }
         sum * step / 3.0
     };
-    // The disc of radius `rho` within the box: `under` is the area under its
-    // upper arc and `span` the width, each over `[a, b]` within the walls.
-    let disc = |rho: f64| {
-        let g = |x: f64| {
-            0.5 * x.mul_add(
-                (rho * rho - x * x).max(0.0).sqrt(),
-                rho * rho * (x / rho).clamp(-1.0, 1.0).asin(),
-            )
-        };
-        let span = |a: f64, b: f64| (b.min(x_hi) - a.max(x_lo)).max(0.0);
-        let under = |a: f64, b: f64| {
-            let (l, h) = (a.max(x_lo), b.min(x_hi));
-            if h > l { g(h) - g(l) } else { 0.0 }
-        };
-        let up = y0.max(0.0);
-        let mut area = 0.0;
-        if rho > up {
-            let q = rho.mul_add(rho, -up * up).sqrt();
-            area += up.mul_add(-span(-q, q), under(-q, q));
-        }
-        if y0 < 0.0 {
-            let depth = -y0;
-            let q = if rho > depth {
-                rho.mul_add(rho, -depth * depth).sqrt()
-            } else {
-                0.0
-            };
-            area += depth.mul_add(span(-q, q), under(-rho, rho) - under(-q, q));
-        }
-        area
-    };
+    let disc = |rho: f64| disc_past(rho, (x_lo, x_hi), y0);
     let f = |t: f64| {
         let w = small * t.cos();
         w * (disc(big + w) - disc(big - w))
@@ -848,6 +851,153 @@ fn box_wall_on_either_side_of_the_ring_axis() {
                     "{label}: mesh volume {volume}, truth {truth}"
                 );
             }
+        }
+    }
+}
+
+/// The ring within the block over `x`, `y` and `z` in the given ranges: over
+/// the tube's cross-section from the block's floor to its top, the annulus
+/// between the circles about the axis at `big ∓ w`, each clipped to the
+/// block's footprint in closed form, split where a circle meets a wall's end.
+fn ring_in_block(
+    big: f64,
+    small: f64,
+    (x_lo, x_hi): (f64, f64),
+    (y_lo, y_hi): (f64, f64),
+    (z_lo, z_hi): (f64, f64),
+) -> f64 {
+    let simpson = |n: u32, lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+        let step = (hi - lo) / f64::from(n);
+        let mut sum = f(lo) + f(hi);
+        for k in 1..n {
+            sum += if k % 2 == 1 { 4.0 } else { 2.0 } * f(step.mul_add(f64::from(k), lo));
+        }
+        sum * step / 3.0
+    };
+    let disc = |rho: f64| disc_past(rho, (x_lo, x_hi), y_lo) - disc_past(rho, (x_lo, x_hi), y_hi);
+    let f = |t: f64| {
+        let w = small * t.cos();
+        w * (disc(big + w) - disc(big - w))
+    };
+    let (t_lo, t_hi) = (
+        (z_lo / small).clamp(-1.0, 1.0).asin(),
+        (z_hi / small).clamp(-1.0, 1.0).asin(),
+    );
+    let mut cuts = vec![t_lo, t_hi];
+    for rho in [
+        x_lo.abs(),
+        x_hi.abs(),
+        y_lo.abs(),
+        y_hi.abs(),
+        x_lo.hypot(y_lo),
+        x_hi.hypot(y_lo),
+        x_lo.hypot(y_hi),
+        x_hi.hypot(y_hi),
+    ] {
+        for c in [(big - rho) / small, (rho - big) / small] {
+            if c > 0.0 && c < 1.0 {
+                cuts.extend(
+                    [c.acos(), -c.acos()]
+                        .into_iter()
+                        .filter(|t| *t > t_lo && *t < t_hi),
+                );
+            }
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.windows(2).map(|w| simpson(800, w[0], w[1], &f)).sum()
+}
+
+/// A cube through the tube's wall, centred inside the tube off every
+/// symmetry, upright, tipped over and mirrored. Its walls meet the torus in
+/// arcs of plane sections that turn where their two branches meet; small,
+/// they close into a loop on the ring (the common part a disc of the torus
+/// closed by the walls); spanning the tube's height, its side walls cut
+/// loops around the tube and its far wall a lobe beside them, which stays a
+/// hole of the sector between those loops. Off to the side, a wall's oval
+/// section is cut where the box's edges cross the torus, each arc starting
+/// on its exact crossing. Each op is exact and meshes watertight against the
+/// ring in the block, the cut and the common part making up the ring.
+#[test]
+fn cube_through_the_tube_wall() {
+    use PointClassification::{Inside, Outside};
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let ring = 2.0 * PI * PI * big * small * small;
+    let poses = [
+        Mat4::identity(),
+        Mat4::rotation_x(0.7) * Mat4::rotation_z(0.3),
+        Mat4::scale(-1.0, 1.0, 1.0),
+    ];
+    // Each box's centre (inside the tube), half-size, and a point of the box
+    // clear of the torus.
+    for (centre, h, box_only) in [
+        ((0.1, 3.05, 0.37), 0.9, (0.1, 2.2, 0.37)),
+        ((0.1, 3.05, 0.37), 1.3, (0.1, 2.2, 0.37)),
+        ((0.1, 3.05, 0.37), 1.7, (0.1, 2.2, 0.37)),
+        ((0.1, 3.05, 0.37), 2.2, (0.1, 2.2, 0.37)),
+        ((1.3, 3.05, 0.37), 1.7, (0.0, 1.5, 0.37)),
+        ((1.3, 5.2, -0.4), 0.9, (2.1, 6.0, 0.4)),
+    ] {
+        let common_truth = ring_in_block(
+            big,
+            small,
+            (centre.0 - h, centre.0 + h),
+            (centre.1 - h, centre.1 + h),
+            (centre.2 - h, centre.2 + h),
+        );
+        let cube = 8.0 * h * h * h;
+        for (k, pose) in poses.iter().enumerate() {
+            let mut volumes = Vec::new();
+            for (op, kept) in [
+                (BooleanOp::Intersect, [Inside, Outside, Outside]),
+                (BooleanOp::Cut, [Outside, Inside, Outside]),
+                (BooleanOp::Fuse, [Inside, Inside, Inside]),
+            ] {
+                let label = format!("{centre:?} h {h}, pose {k}, {op:?}");
+                let mut topo = Topology::new();
+                let torus = make_torus(&mut topo, big, small, 32).unwrap();
+                let block = make_box(&mut topo, 2.0 * h, 2.0 * h, 2.0 * h).unwrap();
+                let corner = Mat4::translation(centre.0 - h, centre.1 - h, centre.2 - h);
+                transform_solid(&mut topo, block, &corner).unwrap();
+                transform_solid(&mut topo, torus, pose).unwrap();
+                transform_solid(&mut topo, block, pose).unwrap();
+                let piece = boolean(&mut topo, op, torus, block).unwrap();
+                let faces = solid_faces(&topo, piece).unwrap();
+                assert!(
+                    faces.len() < 20
+                        && faces.iter().any(|&f| matches!(
+                            topo.face(f).unwrap().surface(),
+                            FaceSurface::Torus(_)
+                        )),
+                    "{label}: fell back to a mesh ({} faces)",
+                    faces.len()
+                );
+                let report = validate_solid(&topo, piece).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+                assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+                // Inside the tube and the block, across the ring, and in the
+                // block clear of the tube.
+                let probes = [centre, (-big, 0.0, 0.0), box_only];
+                for ((x, y, z), class) in probes.into_iter().zip(kept) {
+                    let p = pose.mul_point(Point3::new(x, y, z));
+                    assert_eq!(at(&topo, piece, p), class, "{label}: ({x}, {y}, {z})");
+                }
+                volumes.push(solid_volume(&topo, piece, 0.01).unwrap());
+            }
+            let (common, cut, fused) = (volumes[0], volumes[1], volumes[2]);
+            assert!(
+                (common - common_truth).abs() < 1e-6 * common_truth,
+                "{centre:?} h {h}, pose {k}: common {common}, truth {common_truth}"
+            );
+            assert!(
+                (common + cut - ring).abs() < 1e-9 * ring,
+                "h {h}, pose {k}: {common} + {cut}"
+            );
+            assert!(
+                (fused - cut - cube).abs() < 1e-9 * fused,
+                "h {h}, pose {k}: {fused} - {cut}"
+            );
         }
     }
 }
