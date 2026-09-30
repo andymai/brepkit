@@ -1,6 +1,7 @@
 //! Extruding a face whose boundary holds a circular arc past half a turn, as
-//! a circle or as a rational NURBS stored either way round: the arc's wall
-//! faces outward, and the solid measures its face's area times the height.
+//! a circle or as a rational NURBS stored either way round, ending at its
+//! vertices or running past them: the arc's wall faces outward, and the solid
+//! measures its face's area times the height.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::{PI, TAU};
@@ -34,6 +35,11 @@ enum Arc {
     Nurbs,
     /// The same NURBS run from the edge's end back to its start.
     NurbsEndToStart,
+    /// A rational NURBS running 0.05 past each end of the edge, from its
+    /// start to its end.
+    NurbsPast,
+    /// That NURBS run from the edge's end back to its start.
+    NurbsPastEndToStart,
 }
 
 /// The arc of the circle about `center` with normal `(0, 0, turn)`
@@ -41,15 +47,17 @@ enum Arc {
 fn arc_curve(center: Point3, turn: f64, a: Point3, b: Point3, arc: Arc) -> EdgeCurve {
     let radius = (a - center).length();
     let circle = |turn: f64| Circle3D::new(center, Vec3::new(0.0, 0.0, turn), radius).unwrap();
-    let nurbs = |c: &Circle3D, from: Point3, to: Point3| {
+    let nurbs = |c: &Circle3D, from: Point3, to: Point3, past: f64| {
         let t0 = c.project(from);
         let span = (c.project(to) - t0).rem_euclid(TAU);
-        EdgeCurve::NurbsCurve(circle_to_nurbs(c, t0, t0 + span).unwrap())
+        EdgeCurve::NurbsCurve(circle_to_nurbs(c, t0 - past, t0 + span + past).unwrap())
     };
     match arc {
         Arc::Circle => EdgeCurve::Circle(circle(turn)),
-        Arc::Nurbs => nurbs(&circle(turn), a, b),
-        Arc::NurbsEndToStart => nurbs(&circle(-turn), b, a),
+        Arc::Nurbs => nurbs(&circle(turn), a, b, 0.0),
+        Arc::NurbsEndToStart => nurbs(&circle(-turn), b, a, 0.0),
+        Arc::NurbsPast => nurbs(&circle(turn), a, b, 0.05),
+        Arc::NurbsPastEndToStart => nurbs(&circle(-turn), b, a, 0.05),
     }
 }
 
@@ -205,10 +213,15 @@ struct Slice {
     outside: (f64, f64),
 }
 
-const ARCS: [(Arc, &str); 3] = [
+const ARCS: [(Arc, &str); 5] = [
     (Arc::Circle, "circle"),
     (Arc::Nurbs, "NURBS"),
     (Arc::NurbsEndToStart, "end-to-start NURBS"),
+    (Arc::NurbsPast, "NURBS past its vertices"),
+    (
+        Arc::NurbsPastEndToStart,
+        "end-to-start NURBS past its vertices",
+    ),
 ];
 
 /// A square with a keyhole notch: its top side opens into the circle's
@@ -352,7 +365,7 @@ fn a_nurbs_arc_past_its_vertices_extrudes_to_its_area() {
 /// A keyhole, a half-turn notch, the major segment (a chord and its 323
 /// degree arc), a plate with that segment as a hole run either way round,
 /// and a disc bounded by arcs of 300 and 60 degrees, extruded 0.2, cut by
-/// the slab `z > 0.1` and intersected with it, each arc stored three ways,
+/// the slab `z > 0.1` and intersected with it, each arc stored five ways,
 /// upright and turned: both halves stay exact (the face count and cylinder
 /// walls each keeps), valid and watertight, hold material in the kept half
 /// only, and measure the face's area times 0.1. The slab's face inside a
@@ -360,7 +373,11 @@ fn a_nurbs_arc_past_its_vertices_extrudes_to_its_area() {
 /// the keyhole's chamber puts outside it, so the piece is sampled at a
 /// point of the loop's own polygon; and a chord and its arc, or two arcs,
 /// sharing both endpoints are split apart where no section crosses them,
-/// since the assembler keys duplicate edges on their endpoints.
+/// since the assembler keys duplicate edges on their endpoints. A NURBS
+/// running past its vertices keeps its wall a spline-bounded cylinder short
+/// of a full turn, whose outside the loop tracer must not return as a piece,
+/// whose rims must split where the caps' do even when stored against their
+/// edges, and whose angular extent must be read from the arcs themselves.
 #[test]
 fn a_slab_through_a_major_arc_wall_keeps_it_exact() {
     let (_, chamber) = chamber();

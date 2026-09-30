@@ -957,6 +957,32 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
     }
 }
 
+/// Whether a loop the DCEL traced on a u-periodic face is that face's
+/// outside: the face stops short of a full turn, and the trace keeps every
+/// region on its left, so the outside is a loop of boundary edges alone that
+/// does not wind the period and runs clockwise read off the surface. A face
+/// whose boundary winds clockwise in `(u, v)` (a cavity wall) traces its
+/// outside along its own boundary edges, one winding counter-clockwise along
+/// their reversed twins, so the test reads the loop's sense, not which
+/// halves it holds. A region bounded by the boundary alone (one a section
+/// loop holes) runs counter-clockwise and is kept.
+fn is_periodic_face_outside(lp: &[OrientedPCurveEdge], surface: &FaceSurface) -> bool {
+    use std::f64::consts::{PI, TAU};
+    if lp.is_empty() || lp.iter().any(|e| e.source_edge_idx.is_some()) {
+        return false;
+    }
+    let mut pts = sampling::sample_wire_loop_uv_on_surface(lp, surface);
+    for i in 1..pts.len() {
+        let (prev, u) = (pts[i - 1].x(), pts[i].x());
+        pts[i] = Point2::new(u - ((u - prev) / TAU).round() * TAU, pts[i].y());
+    }
+    let (Some(first), Some(last)) = (pts.first().copied(), pts.last().copied()) else {
+        return false;
+    };
+    let closing = first.x() - ((first.x() - last.x()) / TAU).round() * TAU;
+    (closing - first.x()).abs() < PI && signed_area_2d(&pts) < 0.0
+}
+
 /// True when any traced loop's sampled UV polygon is area-degenerate — the
 /// classifier's sliver guard would silently drop it, so the loops path
 /// under-represents the face even though the loop COUNT looks fine. The
@@ -7375,7 +7401,8 @@ fn split_face_2d_impl(
         } else {
             all_edges.clone()
         };
-        let dcel = build_wire_loops_dcel(&dcel_input, tol.linear, u_periodic, v_periodic);
+        let mut dcel = build_wire_loops_dcel(&dcel_input, tol.linear, u_periodic, v_periodic);
+        dcel.retain(|lp| !is_periodic_face_outside(lp, &surface));
         // No pinch-split on the DCEL result: this branch is u-periodic by its
         // gate, and on a full-period face the band orbit legitimately
         // revisits the glued seam node with both visits stored at the same
@@ -7465,7 +7492,8 @@ fn split_face_2d_impl(
         // deleting the notch strip). The DCEL face trace enumerates the true
         // subdivision; adopt it only when it strictly refines the greedy
         // partition and is clean by every loop-health signature.
-        let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        let mut dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        dcel.retain(|lp| !is_periodic_face_outside(lp, &surface));
         // This branch is u-periodic by its gate: the pinch splitter is
         // unsafe on the glued seam graph (see the DCEL consult above), so
         // the trace is used as-is. The broken-loop flags are RELATIVE to the
@@ -9003,6 +9031,58 @@ mod tests {
         brepkit_math::curves2d::Curve2D::Line(
             Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
         )
+    }
+
+    /// The boundary of a cylinder wall 300 degrees round, one unit tall: run
+    /// counter-clockwise in `(u, v)` it bounds the wall and is kept, run
+    /// clockwise it is the wall's outside, whichever way the face itself
+    /// winds, and a loop holding a section is never the outside.
+    #[test]
+    fn a_periodic_walls_outside_is_its_boundary_run_clockwise() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+        let at = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let (u0, u1) = (0.5, 5.8);
+        let rim =
+            |v: f64| EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, v), z, 1.0).unwrap());
+        let edge =
+            |curve: EdgeCurve, a: (f64, f64), b: (f64, f64), forward: bool| OrientedPCurveEdge {
+                curve_3d: curve,
+                pcurve: dummy_pcurve(),
+                start_uv: Point2::new(a.0, a.1),
+                end_uv: Point2::new(b.0, b.1),
+                start_3d: at(a.0, a.1),
+                end_3d: at(b.0, b.1),
+                forward,
+                source_edge_idx: None,
+                pave_block_id: None,
+            };
+        let wall = vec![
+            edge(rim(0.0), (u0, 0.0), (u1, 0.0), true),
+            edge(EdgeCurve::Line, (u1, 0.0), (u1, 1.0), true),
+            edge(rim(1.0), (u1, 1.0), (u0, 1.0), false),
+            edge(EdgeCurve::Line, (u0, 1.0), (u0, 0.0), true),
+        ];
+        let outside: Vec<OrientedPCurveEdge> = wall
+            .iter()
+            .rev()
+            .map(|e| OrientedPCurveEdge {
+                start_uv: e.end_uv,
+                end_uv: e.start_uv,
+                start_3d: e.end_3d,
+                end_3d: e.start_3d,
+                forward: !e.forward,
+                ..e.clone()
+            })
+            .collect();
+        assert!(!is_periodic_face_outside(&wall, &surface));
+        assert!(is_periodic_face_outside(&outside, &surface));
+        let mut sectioned = outside;
+        sectioned[1].source_edge_idx = Some(0);
+        assert!(!is_periodic_face_outside(&sectioned, &surface));
     }
 
     /// The hole-dangling rescue: a fence chain whose two loose ends dangle

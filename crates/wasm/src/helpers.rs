@@ -235,7 +235,20 @@ pub fn try_fillet(
             && brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
                 .is_ok_and(|issues| issues.is_empty())
             && brepkit_operations::measure::oriented_solid_volume(topo, s, orientation_deflection)
-                .is_ok_and(|volume| volume > 1e-12)
+                .is_ok_and(|meshed| {
+                    // A solid whose exact volume and meshed volume disagree
+                    // is not a consistent B-rep (a second-pass band thrown
+                    // past its neighbouring blend reads 1010.11 exact and
+                    // 985.42 meshed); a sound one agrees to the mesh's chord
+                    // error, far inside 1%.
+                    meshed > 1e-12
+                        && brepkit_operations::measure::solid_volume(
+                            topo,
+                            s,
+                            orientation_deflection,
+                        )
+                        .is_ok_and(|exact| (exact - meshed).abs() <= 0.01 * exact.abs())
+                })
             && watertight()
     };
 
