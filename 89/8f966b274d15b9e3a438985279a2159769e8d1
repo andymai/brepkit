@@ -1,0 +1,40 @@
+crates/io/tests/kumiko_wrap_lattice_cut_inmem.rs
+  s_a13d2397d068b4::t_9e2da6c4bbf420 5-10
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_dfcb19117214c2 3088-3096
+  s_a13d2397d068b4::t_de241b120daeb8 3098
+  s_a13d2397d068b4::t_57bd0fefe9675e 3055-3056
+  s_a13d2397d068b4::t_a38f31faef4947 3134-3141,3298-3306,3373
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_6f310fe653d945 29,32,141
+crates/algo/src/builder/fill_images_faces.rs
+  s_a13d2397d068b4::t_57bd0fefe9675e 2775,2779-2782
+  s_a13d2397d068b4::t_f13b76ca2e5357 2788
+  s_a13d2397d068b4::t_57e075ea843797 2778
+crates/io/tests/kumiko_strut_fuse_inmem.rs
+  s_a13d2397d068b4::t_927adee1af1c61 169-209
+  s_a13d2397d068b4::t_657812ebc52b3b 210-213
+crates/math/src/nurbs/intersection/surface_marching.rs
+  s_a13d2397d068b4::t_267697780dfe60 683-686,791
+  s_a13d2397d068b4::t_f5e8950009a5fa 637
+  s_a13d2397d068b4::t_60fa2158e92b75 792
+crates/io/examples/kumiko_pair_probe.rs
+  s_a13d2397d068b4::t_f0c7adecab5ceb 50-63,65-66,121-128,131-142
+  s_a13d2397d068b4::t_87de6cc3e24332 143-145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "898f966b274d15b9e3a438985279a2159769e8d1",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
