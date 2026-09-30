@@ -204,11 +204,13 @@ fn sample_edge_curve(
 /// bracket sampled at its vertices and arc midpoints reads as five angles
 /// with a 90 degree gap, which the density heuristic of
 /// [`compute_angular_range`] calls a full turn. A spline edge is walked the
-/// same way when its curve is open. Returns `None` when the wire has no
-/// curved edge, or when a spline's curve closes on itself: a blend band's
-/// rational arc keeps its full circle as its domain, so the span between its
-/// vertices is ambiguous and walking it could cover the whole turn (the
-/// second-pass fillet fixture).
+/// same way when its curve is open and the span found for it ends at its
+/// vertices. Returns `None` when the wire has no curved edge, when a
+/// spline's curve closes on itself (a blend band's rational arc keeps its
+/// full circle as its domain, so the span between its vertices is ambiguous
+/// and walking it could cover the whole turn, the second-pass fillet
+/// fixture), or when a spline's span misses its vertices (a vertex off the
+/// curve leaves the span its whole domain).
 pub(super) fn angular_range_from_wire_arcs(
     topo: &Topology,
     wire: &brepkit_topology::wire::Wire,
@@ -217,6 +219,9 @@ pub(super) fn angular_range_from_wire_arcs(
     use brepkit_topology::edge::EdgeCurve;
     use std::f64::consts::TAU;
     const SAMPLES: usize = 16;
+    // The weld distance `EdgeCurve::domain_with_endpoints` accepts a
+    // projected vertex within, and calls a curve open beyond.
+    const SPLINE_END_TOL: f64 = 1e-5;
     let mut intervals: Vec<(f64, f64)> = Vec::new();
     for oe in wire.edges() {
         let Ok(edge) = topo.edge(oe.edge()) else {
@@ -226,7 +231,7 @@ pub(super) fn angular_range_from_wire_arcs(
             EdgeCurve::Line => continue,
             EdgeCurve::NurbsCurve(nc) => {
                 let (a, b) = nc.domain();
-                if (nc.evaluate(a) - nc.evaluate(b)).length() <= 1e-7 {
+                if (nc.evaluate(a) - nc.evaluate(b)).length() < SPLINE_END_TOL {
                     return None;
                 }
             }
@@ -240,6 +245,13 @@ pub(super) fn angular_range_from_wire_arcs(
             return Some((0.0, TAU));
         }
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        if let EdgeCurve::NurbsCurve(nc) = edge.curve() {
+            let (a, b) = (nc.evaluate(t0), nc.evaluate(t1));
+            let near = |p: Point3, q: Point3| (p - q).length() < SPLINE_END_TOL;
+            if !((near(a, sp) && near(b, ep)) || (near(a, ep) && near(b, sp))) {
+                return None;
+            }
+        }
         let point_at = |f: f64| -> Point3 {
             edge.curve()
                 .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)

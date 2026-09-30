@@ -2716,9 +2716,17 @@ fn split_arc_edges_at_collinear_vertices(
             if is_closed {
                 continue;
             }
-            // A curve stored against its edge runs from `t0` DOWN to `t1`;
-            // every step below reads the span as a fraction from `t0`.
+            // Every step below reads the span as a fraction from the
+            // parameter at `sp`: a curve stored against its edge runs from
+            // `t0` DOWN to `t1`, and one spanning its edge exactly reports
+            // its own domain whichever way it is stored.
             let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+            let at_t0 = curve.evaluate_with_endpoints(t0, sp, ep);
+            let (t0, t1) = if (at_t0 - ep).length() < (at_t0 - sp).length() {
+                (t1, t0)
+            } else {
+                (t0, t1)
+            };
             if (t1 - t0).abs() < 1e-12 {
                 continue;
             }
@@ -4238,6 +4246,75 @@ mod tests {
                 matches!(err, Err(AlgoError::AssemblyFailed(_))),
                 "omit={omit}: a 5-face open shell must abort assembly, got {err:?}"
             );
+        }
+    }
+
+    /// A spline edge stored from `C(t_s)` down to `C(t_e)`, and its mate split
+    /// at `C(0.7)` and `C(0.3)`: once refined, both faces' edges pair up,
+    /// whether the curve runs past the edge's vertices or spans it exactly.
+    #[test]
+    fn a_reversed_spline_splits_where_its_mate_does() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::traits::ParametricCurve;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let nc = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(2.0, 0.0, 0.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let c = |t: f64| ParametricCurve::evaluate(&nc, t);
+        for (t_s, t_e) in [(0.9, 0.1), (1.0, 0.0)] {
+            let curve = EdgeCurve::NurbsCurve(nc.clone());
+            let plane = FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            };
+            let mut topo = Topology::new();
+            let a0 = topo.add_vertex(Vertex::new(c(t_s), 1e-7));
+            let a1 = topo.add_vertex(Vertex::new(c(t_e), 1e-7));
+            let arc = topo.add_edge(Edge::new(a0, a1, curve.clone()));
+            let back = topo.add_edge(Edge::new(a1, a0, EdgeCurve::Line));
+            let wa = topo.add_wire(
+                Wire::new(
+                    vec![OrientedEdge::new(arc, true), OrientedEdge::new(back, true)],
+                    true,
+                )
+                .unwrap(),
+            );
+            let fa = topo.add_face(Face::new(wa, vec![], plane.clone()));
+            let vs: Vec<_> = [t_s, 0.7, 0.3, t_e]
+                .iter()
+                .map(|&t| topo.add_vertex(Vertex::new(c(t), 1e-7)))
+                .collect();
+            let mut oes: Vec<OrientedEdge> = vs
+                .windows(2)
+                .map(|w| {
+                    OrientedEdge::new(topo.add_edge(Edge::new(w[0], w[1], curve.clone())), true)
+                })
+                .collect();
+            oes.push(OrientedEdge::new(
+                topo.add_edge(Edge::new(vs[3], vs[0], EdgeCurve::Line)),
+                true,
+            ));
+            let wb = topo.add_wire(Wire::new(oes, true).unwrap());
+            let fb = topo.add_face(Face::new(wb, vec![], plane));
+            let mut face_ids = vec![fa, fb];
+            split_arc_edges_at_collinear_vertices(&mut topo, &mut face_ids).unwrap();
+            let mut ka = face_edge_keys(&topo, face_ids[0]).unwrap();
+            let mut kb = face_edge_keys(&topo, face_ids[1]).unwrap();
+            ka.sort_unstable();
+            kb.sort_unstable();
+            assert_eq!(ka, kb, "stored from {t_s} to {t_e}");
         }
     }
 }

@@ -4547,4 +4547,51 @@ mod tests {
             "flux {flux}, truth {truth}"
         );
     }
+
+    /// A quarter wall of the unit cylinder, one unit tall, whose bottom rim is
+    /// a spline running a quarter turn past each vertex with the vertices
+    /// 3e-5 above it: the rim's span cannot be found, so the wall's extent
+    /// comes from its vertices and it keeps a quarter turn.
+    #[test]
+    fn a_spline_rim_off_its_vertices_keeps_its_wall_a_quarter_turn() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        let bottom = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        let top = Circle3D::new(Point3::new(0.0, 0.0, 1.0), z, 1.0).unwrap();
+        let a0 = bottom.project(Point3::new(1.0, 0.0, 0.0));
+        let spline =
+            brepkit_geometry::convert::circle_to_nurbs(&bottom, a0 - FRAC_PI_2, a0 + PI).unwrap();
+        let [b0, b90, t0, t90] = [
+            Point3::new(1.0, 0.0, 3e-5),
+            Point3::new(0.0, 1.0, 3e-5),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+        ]
+        .map(|p| topo.add_vertex(Vertex::new(p, 1e-4)));
+        let rim = topo.add_edge(Edge::new(b0, b90, EdgeCurve::NurbsCurve(spline)));
+        let right = topo.add_edge(Edge::new(b90, t90, EdgeCurve::Line));
+        let top_arc = topo.add_edge(Edge::new(t0, t90, EdgeCurve::Circle(top)));
+        let left = topo.add_edge(Edge::new(t0, b0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(rim, true),
+                OrientedEdge::new(right, true),
+                OrientedEdge::new(top_arc, false),
+                OrientedEdge::new(left, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let fid = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+        let vol = analytic_cylinder_signed_volume(&topo, fid, Point3::new(0.0, 0.0, 0.0)).unwrap();
+        assert!(
+            (vol - PI / 6.0).abs() < 1e-3,
+            "flux {vol}, truth {}",
+            PI / 6.0
+        );
+    }
 }
