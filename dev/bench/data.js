@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790790191591,
+  "lastUpdate": 1790791423416,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -47843,6 +47843,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43035197,
             "range": "± 786086",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5149a71dbe791374e30feac3a09fd44f5248ef00",
+          "message": "perf(algo): prune line to NURBS EF checks with control hulls (#1911)\n\nReduces the kumiko wrap lattice compound cut, replayed natively, from\n7,584 ms to 1,938 ms while preserving the result: 403 planar faces,\nvolume 335.606, and the same assembly failures and fallback.\n\n## What was slow\n\n- In the three arrangements attempted by the compound cut, phase EF took\n2,863 ms, 2,441 ms, and 473 ms on main, totaling 5.7 s of the 7.6 s run.\n- Nearly all of that time came from lattice line edges tested against\nNURBS strut faces. In the first arrangement, 5,085 pairs passed the\nbroad phase and took 2,810 ms.\n- The existing containment box is the sampled face boundary box grown by\nhalf its diagonal. Each surviving pair samples the edge 65 times, then\nprojects every sample using a 9 by 9 grid search followed by Newton\niteration.\n\n## What this does\n\n- Gives each NURBS face with all positive weights a control-point hull\nbox. By the convex hull property, the surface lies inside this box.\n- Skips a line edge when its exact box misses the hull grown by the\ntolerance. The tighter broad phase applies to line edges only, because a\ncurved edge's box comes from 65 samples and can miss the curve by its\nsagitta.\n- `distance_to_surface_near` returns the hull distance without\nprojection when it exceeds `NEAR_LIMIT`, which is 4 tolerances. Surfaces\nwith a non-positive weight keep the old path, because the convex hull\nproperty needs positive weights.\n\n## Why results cannot change\n\n- Distance to the hull is a lower bound on projected distance. Every\ncrossing-search comparison uses a threshold of at most 4 tolerances,\nspecifically 1, 2, or 4, so substituting the bound above `NEAR_LIMIT`\nproduces the same comparison result.\n- The one relative comparison is gated by a 2-tolerance comparison. This\ninvariant is documented on `NEAR_LIMIT` and asserted at compile time.\n- Golden-section and refinement searches still project. A line rejected\nby the hull test has no point within tolerance of the surface, so it\ncannot produce a crossing.\n\n## Verification\n\n- Phase EF now takes 69 ms, 53 ms, and 18 ms. First-arrangement\ncandidates fall from 5,085 pairs in 2,810 ms to 593 pairs in 55 ms.\n- `hull_bound_keeps_every_nurbs_crossing` checks 216 seeded lines\nagainst 24 bilinear through cubic patches, half rational. Its saddle\ncase catches an unsound limit: lowering the substitution limit to 3 or 1\ntolerance makes the test fail.\n- Local review fuzzed 108,000 cases and found identical crossings. The\n`brepkit-algo`, `brepkit-operations`, and `brepkit-io` runs passed 1,898\ntests with 0 failures on a tree also carrying #1910.\n- The single-strut cut drops from 71 ms to 3.5 ms in EF. The roadmap\nrecords the lattice cut at 1.9 s and documents the pre-existing\ntransverse-crossing limitation.",
+          "timestamp": "2026-09-30T18:01:02Z",
+          "tree_id": "404bd81135966f3ae13e41b2ef4c98b2ac84608c",
+          "url": "https://github.com/andymai/brepkit/commit/5149a71dbe791374e30feac3a09fd44f5248ef00"
+        },
+        "date": 1790791417700,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 835979,
+            "range": "± 5318",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 907522,
+            "range": "± 3331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10470,
+            "range": "± 462",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 655849,
+            "range": "± 45176",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 37003231,
+            "range": "± 975387",
             "unit": "ns/iter"
           }
         ]
