@@ -2236,10 +2236,13 @@ fn seam_inside(
 
 /// Whether the straight `(u, v)` seam from `(ua, va)` across `span` in `u`
 /// and `dv` in `v` keeps clear of a lobe's `(u, v)` polygon: no point of it
-/// inside, and no step of it crossing the polygon's sides in any period copy.
+/// inside, and no step of it crossing, touching or running along the
+/// polygon's sides in any period copy.
 fn seam_clear_of(lobe: &[(f64, f64)], (ua, va): (f64, f64), span: f64, dv: f64) -> bool {
     use std::f64::consts::TAU;
     const STEPS: u32 = 128;
+    // Closer than this in (u, v), a seam touches the lobe's boundary.
+    const CLEARANCE: f64 = 1e-6;
     let at = |k: u32| {
         let t = f64::from(k) / f64::from(STEPS);
         (span.mul_add(t, ua), dv.mul_add(t, va))
@@ -2253,8 +2256,23 @@ fn seam_clear_of(lobe: &[(f64, f64)], (ua, va): (f64, f64), span: f64, dv: f64) 
     let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
         (b.0 - a.0).mul_add(c.1 - a.1, -((b.1 - a.1) * (c.0 - a.0)))
     };
+    let to_segment = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dx.mul_add(dx, dy * dy);
+        let t = if len2 > 0.0 {
+            ((p.0 - a.0).mul_add(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p.0 - dx.mul_add(t, a.0)).hypot(p.1 - dy.mul_add(t, a.1))
+    };
     let crosses = |p: (f64, f64), q: (f64, f64), a: (f64, f64), b: (f64, f64)| {
-        orient(p, q, a) * orient(p, q, b) < 0.0 && orient(a, b, p) * orient(a, b, q) < 0.0
+        (orient(p, q, a) * orient(p, q, b) < 0.0 && orient(a, b, p) * orient(a, b, q) < 0.0)
+            || to_segment(p, a, b)
+                .min(to_segment(q, a, b))
+                .min(to_segment(a, p, q))
+                .min(to_segment(b, p, q))
+                < CLEARANCE
     };
     for su in [-TAU, 0.0, TAU] {
         for sv in [-2.0 * TAU, -TAU, 0.0, TAU, 2.0 * TAU] {

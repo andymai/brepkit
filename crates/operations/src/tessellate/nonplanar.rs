@@ -2135,17 +2135,17 @@ pub(super) fn tessellate_nonplanar_cdt(
         // A torus sector's seam runs along the ring (a latitude arc, or a
         // curve winding the tube), not along a meridian: its samples keep
         // their unwrapped (u, v), which the placement below would pin to one u.
+        // Read along each run of seam samples: a meridian seam's two copies
+        // lie a period apart in u, but neither run moves in u.
         let seam_along_ring = matches!(face_data.surface(), FaceSurface::Torus(_)) && {
-            let seam_u: Vec<f64> = (0..n_boundary)
-                .filter(|&i| seam_edge_indices.contains(&boundary_3d[i].2.index()))
-                .map(|i| boundary_uv[i].0)
-                .collect();
-            let (lo, hi) = seam_u
-                .iter()
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &u| {
-                    (lo.min(u), hi.max(u))
-                });
-            hi - lo > 1e-6
+            let on_seam = |i: usize| seam_edge_indices.contains(&boundary_3d[i].2.index());
+            (0..n_boundary).any(|i| {
+                let j = (i + 1) % n_boundary;
+                on_seam(i)
+                    && on_seam(j)
+                    && boundary_3d[i].2 == boundary_3d[j].2
+                    && (boundary_uv[j].0 - boundary_uv[i].0).abs() > 1e-6
+            })
         };
         if !seam_edge_indices.is_empty() && ring.is_none() && !seam_along_ring {
             let off_seam = |i: usize| !seam_edge_indices.contains(&boundary_3d[i].2.index());
