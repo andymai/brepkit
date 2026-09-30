@@ -805,7 +805,7 @@ fn sample_plane_cone(
 
 /// Sample the plane-torus intersection as ordered 3D points.
 ///
-/// Uses the same closed-form crossings and chaining as `intersect_plane_torus`
+/// Uses the same closed-form loops as `intersect_plane_torus`
 /// but skips NURBS curve fitting (the callers here only need the points).
 #[allow(clippy::unnecessary_wraps)] // sibling match-arms and `?` callers need `Result`
 fn sample_plane_torus(
@@ -813,8 +813,7 @@ fn sample_plane_torus(
     normal: Vec3,
     d: f64,
 ) -> Result<Vec<Vec<Point3>>, MathError> {
-    let crossing_pts = plane_torus_crossings(torus, normal, d, 128);
-    Ok(chain_torus_crossings(&crossing_pts)
+    Ok(plane_torus_loops(torus, normal, d, 128)
         .into_iter()
         .map(|run| run.into_iter().map(|p| p.point).collect())
         .collect())
@@ -981,8 +980,8 @@ pub fn intersect_plane_cone(
 /// Intersect a plane with a toroidal surface.
 ///
 /// The section is a degree-4 curve, but for each `v` the `u` values solve in
-/// closed form (see `plane_torus_crossings`), so it is sampled by a v-scan
-/// and each connected loop is fitted to a NURBS curve.
+/// closed form (see `plane_torus_loops`), so it is sampled by a v-scan
+/// and each loop is fitted to a NURBS curve.
 ///
 /// # Errors
 ///
@@ -995,13 +994,11 @@ pub fn intersect_plane_torus(
     normal: Vec3,
     d: f64,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
-    // The section satisfies a per-v closed form (see `plane_torus_crossings`),
+    // The section satisfies a per-v closed form (see `plane_torus_loops`),
     // so scan v and solve u directly instead of a 2D sign-change grid with
     // Newton refinement: O(n) rather than O(n²), and every point is exact.
-    let crossing_pts = plane_torus_crossings(torus, normal, d, 128);
-
     let mut curves = Vec::new();
-    for ipts in chain_torus_crossings(&crossing_pts) {
+    for ipts in plane_torus_loops(torus, normal, d, 128) {
         let pts: Vec<Point3> = ipts.iter().map(|p| p.point).collect();
         if let Ok(curve) = interpolate(&pts, 3.min(pts.len() - 1)) {
             curves.push(IntersectionCurve {
@@ -1014,145 +1011,38 @@ pub fn intersect_plane_torus(
     Ok(curves)
 }
 
-/// Greedy nearest-neighbour chaining of torus-plane crossing points into
-/// closed section loops. Runs shorter than four points are dropped.
-///
-/// Plane × full torus is always a set of CLOSED loops, but the greedy walk
-/// stops one step short of closing (the first point is already `used`, so it
-/// is never re-added and the last point sits ~one step from the start).
-/// A loop whose end-to-start gap is within ~2 point-spacings is closed by
-/// repeating its first point, so a fitted NURBS closes exactly and downstream
-/// consumers see a closed curve. A fragmented chain (greedy walk broke a loop
-/// at a near-tangency) ends far from its start and is left open — it must not
-/// be force-closed into a wrong loop.
-fn chain_torus_crossings(crossing_pts: &[(f64, f64, Point3)]) -> Vec<Vec<IntersectionPoint>> {
-    let mut used = vec![false; crossing_pts.len()];
-    let mut runs = Vec::new();
+/// The fewest and most steps along each branch of a loop a plane cuts from
+/// a torus between its two turns.
+const PLANE_TORUS_LOOP_SAMPLES: (f64, f64) = (24.0, 512.0);
 
-    for start in 0..crossing_pts.len() {
-        if used[start] {
-            continue;
-        }
-        used[start] = true;
-        let mut chain = vec![start];
-
-        loop {
-            let last = chain[chain.len() - 1];
-            let last_pt = crossing_pts[last].2;
-            let mut best_idx = None;
-            let mut best_dist = 1.0_f64;
-
-            for (j, &is_used) in used.iter().enumerate() {
-                if is_used {
-                    continue;
-                }
-                let dist = (crossing_pts[j].2 - last_pt).length();
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_idx = Some(j);
-                }
-            }
-
-            if let Some(j) = best_idx {
-                used[j] = true;
-                chain.push(j);
-            } else {
-                break;
-            }
-        }
-
-        if chain.len() < 4 {
-            continue;
-        }
-        let mut ipts: Vec<IntersectionPoint> = chain
-            .iter()
-            .map(|&i| IntersectionPoint {
-                point: crossing_pts[i].2,
-                param1: (crossing_pts[i].0, crossing_pts[i].1),
-                param2: (0.0, 0.0),
-            })
-            .collect();
-
-        let closing_gap = (ipts[ipts.len() - 1].point - ipts[0].point).length();
-        let median_spacing = {
-            let mut spac: Vec<f64> = ipts
-                .windows(2)
-                .map(|w| (w[1].point - w[0].point).length())
-                .collect();
-            spac.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            spac.get(spac.len() / 2).copied().unwrap_or(0.0)
-        };
-        // Wrap when the closing gap is within ~2 point-spacings (measured
-        // ratio ≈ 1.0 for the census ovals) and not already coincident — but
-        // only for a SIMPLE loop. A self-touching section (the inner/outer
-        // tangent figure-eight) is traced as one chain that folds back through
-        // its node and also ends near its start; sealing it would misrepresent
-        // a non-manifold singularity as a closed loop, so leave it open.
-        if closing_gap > 1e-9
-            && median_spacing > 1e-12
-            && closing_gap <= 2.0 * median_spacing
-            && !chain_self_touches(&ipts, median_spacing)
-        {
-            ipts.push(ipts[0]);
-        }
-        runs.push(ipts);
-    }
-
-    runs
-}
-
-/// Whether a chain folds back on itself in its interior — the signature of a
-/// self-touching section (a tangent figure-eight), as opposed to a simple
-/// loop whose only near-return is the intended closure at its two ends.
-///
-/// Checks whether two chain points far apart in index (and both away from the
-/// endpoints, so the closure region is excluded) come within ~1.5 spacings of
-/// each other. A convex/simple oval never does; a figure-eight does, at its
-/// node. Only called when a chain already looks closeable, so the O(m²) scan
-/// is rare.
-fn chain_self_touches(ipts: &[IntersectionPoint], median_spacing: f64) -> bool {
-    let m = ipts.len();
-    let k = (m / 4).clamp(1, 6);
-    if m < 3 * k || median_spacing <= 0.0 {
-        return false;
-    }
-    let thresh = median_spacing * 1.5;
-    for i in k..(m - k) {
-        for j in (i + k)..(m - k) {
-            if (ipts[i].point - ipts[j].point).length() < thresh {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Samples approaching each turn of a plane's section through a torus.
-const PLANE_TORUS_TURN_SAMPLES: usize = 8;
-
-/// Closed-form `(u, v, point)` crossings of a plane with a torus.
+/// The loops a plane cuts from a torus, each as points on the torus in
+/// order, closed by repeating its first point.
 ///
 /// In the torus's own frame let `a = n·X`, `b = n·Y`, `c = n·Z`,
 /// `s = hypot(a, b)`, `phi = atan2(b, a)`. Substituting the torus
 /// parameterization into `n·P = d` gives
 ///   `(R + r·cos v)·s·cos(u − phi) + r·c·sin v = d − n·center`,
-/// so for each `v` the two `u` branches solve directly as
-/// `u = phi ± acos((d − n·center − r·c·sin v) / (s·(R + r·cos v)))`.
-/// Scanning `v` at `n_v` samples replaces a 2D sign-change grid plus Newton
-/// refinement: each point is `torus.evaluate(u, v)` (on the torus by
-/// construction) with `u` solved so it lies on the plane to floating-point
-/// precision, so no iterative refinement is needed.
+/// so at each tube angle `v` where `|rhs(v)| <= 1`, with
+/// `rhs(v) = (d − n·center − r·c·sin v) / (s·(R + r·cos v))`, the section's
+/// two branches are `u = phi ± acos(rhs(v))`. Each run of `v` where the
+/// section exists is one loop: out along one branch to where the run ends
+/// and the branches meet, and back along the other. A section present at
+/// every `v` is two loops winding the tube, one per branch. Every point
+/// comes from the closed form, so the loops need no chaining.
+///
+/// A loop whose branches touch inside its run (a plane tangent to an
+/// equator) is a self-touching section, not a simple loop, and is left open.
 ///
 /// When `s ≈ 0` the plane is perpendicular to the axis and the section is up
-/// to two full circles at the `v` values solving `r·c·sin v = d − n·center`;
-/// those are sampled by scanning `u`.
-#[allow(clippy::cast_precision_loss)]
-fn plane_torus_crossings(
+/// to two full circles at the `v` values solving `r·c·sin v = d − n·center`,
+/// sampled by scanning `u`.
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+fn plane_torus_loops(
     torus: &ToroidalSurface,
     normal: Vec3,
     d: f64,
     n_v: usize,
-) -> Vec<(f64, f64, Point3)> {
+) -> Vec<Vec<IntersectionPoint>> {
     let big_r = torus.major_radius();
     let small_r = torus.minor_radius();
     let a = normal.dot(torus.x_axis());
@@ -1161,17 +1051,24 @@ fn plane_torus_crossings(
     let s = a.hypot(b);
     let phi = b.atan2(a);
     let d_local = d - dot_np(normal, torus.center());
-
-    let mut pts: Vec<(f64, f64, Point3)> = Vec::new();
+    let point = |u: f64, v: f64| IntersectionPoint {
+        point: torus.evaluate(u, v),
+        param1: (u, v.rem_euclid(TAU)),
+        param2: (0.0, 0.0),
+    };
+    let closed = |mut run: Vec<IntersectionPoint>| {
+        run.push(run[0]);
+        run
+    };
 
     // Plane perpendicular to the axis: the section is up to two full circles.
     if s < 1e-12 {
         if c.abs() < 1e-12 {
-            return pts;
+            return Vec::new();
         }
         let sin_v = d_local / (small_r * c);
         if sin_v.abs() > 1.0 + 1e-9 {
-            return pts;
+            return Vec::new();
         }
         let v0 = sin_v.clamp(-1.0, 1.0).asin();
         let v1 = std::f64::consts::PI - v0;
@@ -1180,74 +1077,109 @@ fn plane_torus_crossings(
         if (v1 - v0).abs() > 1e-9 {
             vs.push(v1);
         }
-        for v in vs {
-            for i in 0..n_v {
-                let u = TAU * (i as f64) / (n_v as f64);
-                pts.push((u, v, torus.evaluate(u, v)));
-            }
-        }
-        return pts;
+        return vs
+            .into_iter()
+            .map(|v| {
+                closed(
+                    (0..n_v)
+                        .map(|i| point(TAU * (i as f64) / (n_v as f64), v))
+                        .collect(),
+                )
+            })
+            .collect();
     }
 
-    // General plane: scan v, solve the two u branches per v. Offset the scan
-    // by half a step so it never lands exactly on a tangency node (e.g. the
-    // inner-tangent figure-eight at v = π, where the two u branches collapse
-    // to one point) — a coincident node lets greedy chaining thread through
-    // and wrongly seal a self-touching section into a closed loop.
+    // The scan is offset by half a step so it never lands on a node where
+    // the branches touch (the inner-tangent figure-eight at v = π).
     let step = TAU / (n_v as f64);
     let v_off = step * 0.5;
     // R + r·cos v > 0 on a ring torus.
     let rhs_at = |v: f64| (d_local - small_r * c * v.sin()) / (s * small_r.mul_add(v.cos(), big_r));
-    let push_both = |v: f64, pts: &mut Vec<(f64, f64, Point3)>| {
-        let delta = rhs_at(v).clamp(-1.0, 1.0).acos();
-        for u in [phi + delta, phi - delta] {
-            pts.push((u, v, torus.evaluate(u, v)));
+    let branch = |v: f64, sign: f64| point(sign.mul_add(rhs_at(v).clamp(-1.0, 1.0).acos(), phi), v);
+    let inside = |v: f64| rhs_at(v).abs() <= 1.0;
+    let scan: Vec<f64> = (0..n_v).map(|i| (i as f64).mul_add(step, v_off)).collect();
+    // Whether |rhs| reaches 1 between two scan samples inside the section:
+    // the branches touch there.
+    let touches = |lo: f64, hi: f64| {
+        let golden = 0.5 * (5.0_f64.sqrt() - 1.0);
+        let (mut lo, mut hi) = (lo, hi);
+        for _ in 0..80 {
+            let (m1, m2) = (hi - golden * (hi - lo), lo + golden * (hi - lo));
+            if rhs_at(m1).abs() > rhs_at(m2).abs() {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
         }
+        1.0 - rhs_at(f64::midpoint(lo, hi)).abs() < 1e-12
     };
-    for i in 0..n_v {
-        let v = (i as f64).mul_add(step, v_off);
-        if rhs_at(v).abs() > 1.0 {
-            continue;
-        }
-        push_both(v, &mut pts);
-    }
-    // Where a loop turns (|rhs| reaches 1 and the two branches meet at one
-    // point), `u` moves like the square root of the distance in `v` to the
-    // turn, so the last scan samples stop well short of it on both branches
-    // and no chaining joins them. Place the turn exactly and approach it at
-    // `v` steps shrinking quadratically, even steps along the curve.
-    for i in 0..n_v {
-        let va = (i as f64).mul_add(step, v_off);
-        let vb = va + step;
-        let (inside_a, inside_b) = (rhs_at(va).abs() <= 1.0, rhs_at(vb).abs() <= 1.0);
-        if inside_a == inside_b {
-            continue;
-        }
-        let (mut lo, mut hi) = if inside_a { (va, vb) } else { (vb, va) };
-        let v_in = lo;
+    // Where the section's run ends between an inside and an outside sample.
+    let turn = |v_in: f64, v_out: f64| {
+        let (mut lo, mut hi) = (v_in, v_out);
         for _ in 0..60 {
             let mid = f64::midpoint(lo, hi);
-            if rhs_at(mid).abs() <= 1.0 {
+            if inside(mid) {
                 lo = mid;
             } else {
                 hi = mid;
             }
         }
-        let turn = lo;
-        let delta = rhs_at(turn).clamp(-1.0, 1.0).acos();
-        pts.push((phi + delta, turn, torus.evaluate(phi + delta, turn)));
-        for k in 1..PLANE_TORUS_TURN_SAMPLES {
-            let f = k as f64 / PLANE_TORUS_TURN_SAMPLES as f64;
-            push_both((v_in - turn).mul_add(f * f, turn), &mut pts);
-        }
+        lo
+    };
+    let in_scan: Vec<bool> = scan.iter().map(|&v| inside(v)).collect();
+    if in_scan.iter().all(|&x| x) {
+        let touching = scan.iter().any(|&v| touches(v, v + step));
+        return [1.0, -1.0]
+            .into_iter()
+            .map(|sign| {
+                let run: Vec<IntersectionPoint> = scan.iter().map(|&v| branch(v, sign)).collect();
+                if touching { run } else { closed(run) }
+            })
+            .collect();
     }
-    pts
+    let Some(first) = (0..n_v).find(|&i| in_scan[i] && !in_scan[(i + n_v - 1) % n_v]) else {
+        return Vec::new();
+    };
+    let mut loops = Vec::new();
+    let mut k = 0;
+    while k < n_v {
+        let i = (first + k) % n_v;
+        if !in_scan[i] {
+            k += 1;
+            continue;
+        }
+        // The run from scan sample `i`, its `v` unwrapped past a turn.
+        let len = (0..n_v - k).take_while(|&j| in_scan[(i + j) % n_v]).count();
+        let v_a = scan[i];
+        let v_b = ((len - 1) as f64).mul_add(step, v_a);
+        let run_v = |j: usize| (j as f64).mul_add(step, v_a);
+        let (t_lo, t_hi) = (turn(v_a, v_a - step), turn(v_b, v_b + step));
+        let touching = (0..len - 1).any(|j| touches(run_v(j), run_v(j + 1)));
+        // `u` moves like the square root of the distance in `v` to a turn, so
+        // the loop is sampled at `v = t_lo + (t_hi - t_lo) (1 - cos θ) / 2`
+        // for even steps of `θ`: `v` then moves like `θ²` at each turn and the
+        // points fall at near-even steps along the curve, turns included.
+        let m = (len as f64)
+            .max(PLANE_TORUS_LOOP_SAMPLES.0)
+            .min(PLANE_TORUS_LOOP_SAMPLES.1);
+        let at = |k: f64| {
+            let f = 0.5 * (1.0 - (std::f64::consts::PI * k / m).cos());
+            (t_hi - t_lo).mul_add(f, t_lo)
+        };
+        let steps = m as usize;
+        let mut pts: Vec<IntersectionPoint> =
+            (0..=steps).map(|k| branch(at(k as f64), 1.0)).collect();
+        pts.extend((1..steps).rev().map(|k| branch(at(k as f64), -1.0)));
+        loops.push(if touching { pts } else { closed(pts) });
+        k += len;
+    }
+    loops
 }
 
 /// The two sections of a plane that crosses every tube cross-section of a
 /// torus twice (one parallel to the axis within `R − r` of it, or tilted a
 /// little from that): both branches `u = phi ± acos(rhs(v))` of
-/// [`plane_torus_crossings`] are then defined for every `v`, so each closes
+/// [`plane_torus_loops`] are then defined for every `v`, so each closes
 /// into a loop that winds once around the tube. Sampled at `n_v` steps from
 /// `v = 0`, the outer equator, so every such loop on a torus starts on one
 /// latitude, as the tube cross-sections of a plane through the axis do.
@@ -4400,10 +4332,9 @@ mod tests {
         let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
 
         // A plane tangent to the inner equator (x = major - minor = 7) cuts a
-        // self-touching figure-eight. The marcher traces it as a single chain
-        // whose end lands on the opposite lobe — FAR from its start (gap is many
-        // point-spacings). The wrap-close must NOT force-close this into a wrong
-        // loop; it must stay OPEN so a self-touching curve is never sealed.
+        // self-touching figure-eight: its two branches touch at the node on
+        // the inner equator. It must stay OPEN so a self-touching curve is
+        // never sealed into a simple loop.
         let curves =
             intersect_plane_torus(&torus, Vec3::new(-1.0, 0.0, 0.0), -(major - minor)).unwrap();
         assert!(!curves.is_empty(), "inner-tangent plane found no curves");
@@ -4419,6 +4350,39 @@ mod tests {
             max_gap > 1e-2,
             "figure-eight chain was wrongly force-closed (max end-gap={max_gap})"
         );
+    }
+
+    /// A wall parallel to the axis cuts one loop from the ring past the
+    /// inner equator (its two turns where the branches meet), and two loops
+    /// winding the tube inside it; each closes, at any scale, however near
+    /// the wall runs to an equator.
+    #[test]
+    fn plane_torus_wall_sections_close_into_their_loops() {
+        for (major, minor) in [(4.0, 1.5), (100.0, 30.0), (0.05, 0.01)] {
+            let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
+            for k in 1..200 {
+                let (d, want) = match k.cmp(&100) {
+                    // Within the inner equator: two loops winding the tube.
+                    std::cmp::Ordering::Less => ((major - minor) * f64::from(k) / 100.0, 2),
+                    // Past it, short of the outer equator: one loop.
+                    std::cmp::Ordering::Greater => (
+                        2.0f64.mul_add(minor * f64::from(k - 100) / 100.0, major - minor),
+                        1,
+                    ),
+                    std::cmp::Ordering::Equal => continue,
+                };
+                let loops = plane_torus_loops(&torus, Vec3::new(1.0, 0.0, 0.0), d, 128);
+                let closed = loops
+                    .iter()
+                    .filter(|l| (l[0].point - l[l.len() - 1].point).length() < 1e-12)
+                    .count();
+                assert_eq!(
+                    (loops.len(), closed),
+                    (want, want),
+                    "R {major} r {minor}, wall at {d}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -130,9 +130,12 @@ fn torus_wire_wraps_tube(
         // Sample ALONG each edge (not just endpoints): a wrapping seam arc bows
         // far in v between its endpoints, so endpoint-only sampling can miss the
         // wrap and misclassify a notch band as a constant-v circle.
+        let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
         for k in 0..=8 {
             let f = f64::from(k) / 8.0;
-            let p = e.curve().evaluate_with_endpoints(f, sp, ep);
+            let p = e
+                .curve()
+                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep);
             vs.push(torus.project_point(p).1);
         }
     }

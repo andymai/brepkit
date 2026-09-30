@@ -1001,3 +1001,50 @@ fn cube_through_the_tube_wall() {
         }
     }
 }
+
+/// A box over `x > d` whose one wall meets the torus cuts a lobe from the
+/// ring: the section's two branches meet at the lobe's two turns, and the
+/// lobe closes whether the scan lands near a turn or not. Its common part
+/// and its cut are exact and make up the ring; the common part holds to the
+/// ring past `x = d` within the fitted section's 1e-5.
+#[test]
+fn a_wall_cutting_a_lobe_from_the_ring_is_exact() {
+    let (big, small) = (4.0_f64, 1.5_f64);
+    let ring = 2.0 * PI * PI * big * small * small;
+    for d in [3.0735, 3.8135, 4.0, 4.3255, 4.5, 4.8615, 5.0, 5.3385] {
+        // The ring past `x = d`, the region `y > d` turned a quarter.
+        let common_truth = ring_in_box(big, small, (-6.0, 6.0), d);
+        let mut volumes = Vec::new();
+        for op in [BooleanOp::Intersect, BooleanOp::Cut] {
+            let label = format!("wall at x = {d}, {op:?}");
+            let mut topo = Topology::new();
+            let torus = make_torus(&mut topo, big, small, 32).unwrap();
+            let block = make_box(&mut topo, 7.0 - d, 12.0, 6.0).unwrap();
+            transform_solid(&mut topo, block, &Mat4::translation(d, -6.0, -3.0)).unwrap();
+            let piece = boolean(&mut topo, op, torus, block).unwrap();
+            let faces = solid_faces(&topo, piece).unwrap();
+            assert!(
+                faces.len() < 10
+                    && faces
+                        .iter()
+                        .any(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_))),
+                "{label}: fell back to a mesh ({} faces)",
+                faces.len()
+            );
+            let report = validate_solid(&topo, piece).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            let mesh = tessellate_solid(&topo, piece, 0.01).unwrap();
+            assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+            volumes.push(solid_volume(&topo, piece, 0.01).unwrap());
+        }
+        let (common, cut) = (volumes[0], volumes[1]);
+        assert!(
+            (common - common_truth).abs() < 1e-5 * common_truth,
+            "wall at x = {d}: common {common}, truth {common_truth}"
+        );
+        assert!(
+            (common + cut - ring).abs() < 1e-9 * ring,
+            "wall at x = {d}: {common} + {cut}"
+        );
+    }
+}

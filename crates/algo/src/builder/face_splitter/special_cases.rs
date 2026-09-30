@@ -3080,12 +3080,6 @@ fn torus_section_to_edge(
     }
 }
 
-/// Points inside the regions loops that wind neither of its angles split a
-/// whole torus into: one in each loop's disc, midway across the widest span
-/// the loop encloses on the line through its middle `v`, and one on the ring
-/// outside every loop, at the grid point farthest from them. Each loop is
-/// read as a polygon in `(u, v)`, unwrapped along its walk. `None` when a
-/// loop winds.
 /// A loop on a torus that winds neither of its angles, as a polygon in
 /// `(u, v)` unwrapped along its walk; `None` when it winds.
 fn torus_loop_polygon(
@@ -3151,6 +3145,12 @@ fn torus_polygon_holds(poly: &[(f64, f64)], u: f64, v: f64) -> bool {
         == 1
 }
 
+/// Points inside the regions loops that wind neither of its angles split a
+/// whole torus into: one in each loop's disc, midway across the widest span
+/// the loop encloses on the line through its middle `v`, and one on the ring
+/// outside every loop, at the grid point farthest from them. Each loop is
+/// read as a polygon in `(u, v)`, unwrapped along its walk. `None` when a
+/// loop winds.
 fn torus_loop_interiors(
     torus: &brepkit_math::surfaces::ToroidalSurface,
     loops: &[Vec<OrientedPCurveEdge>],
