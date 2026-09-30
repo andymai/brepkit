@@ -186,11 +186,21 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 | **Stable row defect: offsets and shells outside the exact image** (decline reasons log at debug level from `brepkit_offset::image`) | `offset_solid` and `shell` build exact results only while the offset keeps the input's topology, as the image checks it: no edge turns round or leaves its faces' offsets, and no planar face's loops meet (so walls passing each other are caught only where a planar face lies between them). A solid with cavities is declined outright. Past that the offset falls to the phased pipeline, which returns invalid solids: a 10-cube offset by -6 comes back with 24 free edges, the pointed `make_cone(5, 0, 10)` (its apex has no normal to offset along) with one misoriented edge, a bored plate offset until the hole meets its sides with 26 free edges. A shell of a curved solid also leaves the exact path when an open face has a hole, when the opening is a face split into coplanar pieces (they touch, and touching open faces are declined), or when an edge is an ellipse or NURBS; it then takes the polygon walls, which chord curved faces (the bored plate's cup reads 243.19 and meshes open). Next: an offset that changes topology needs the phased pipeline's intersections to share edges between faces (each face builds its own trimmed edges today) |
 | **Stable row quirk: `make_sphere(r, segments)`** | The hemispheres meet on a chordal equator (line edges), a sagitta off the sphere. A plane face ending at the equator chords reads its region by them while the ray cast reads the sphere faces by the arc, so a ray through the equator plane between chords and circle loses a crossing (`sphere_ray_cast.rs` skips those rays) |
 | **Point classification reads cylinder walls through chords** | `brepkit_check::classify::classify_point` (which the operations one calls) tests a ray's hit on a cylinder face against its boundary sampled into chords (32 per closed circle) in its (u, v), so a hit within a sagitta of an ellipse or other non-constant-v rim is misread. |
-| **A NURBS arc past its vertices, stored against its edge, falls back when sliced** (the major segment of `a_nurbs_arc_past_its_vertices_extrudes_to_its_area` with its arc built from `vb` to `va` and used reversed, so its domain runs 0.9906 to 0.0094) | Safe fallback, the same on main: the extrusion is valid, but its cut by the slab `z > 0.1` aborts the analytic assembly ("open 1-face growth shell spans the result") and returns a 70-face mesh measuring 0.776323 against 0.779961. Stored with the edge, the same arc slices exactly. Undug |
 
 ## Closed: root cause + where the detail lives
 
 One line each; the fixture/PR carries the story. Newest first.
+
+- **A wall whose NURBS rim runs past its vertices fell back when sliced (CLOSED 2026-09-30; `a_slab_through_a_major_arc_wall_keeps_it_exact` in `crates/operations/tests/extrude_major_arcs.rs`, whose arcs include a NURBS running 0.05 past each vertex, stored either way round)**:
+  three roots. The DCEL loop tracer kept the outside of a periodic wall
+  short of a full turn as a third piece (an orbit of pure synthetic
+  boundary twins is now never a region on a periodic face, wound or not).
+  `split_arc_edges_at_collinear_vertices` skipped a NURBS stored against its
+  edge (`t1 < t0`), so a wall kept the arc whole where the cap split it at
+  its middle vertex; with the tracer fixed that returned an exact, wrong
+  solid (0.99 against 0.314). And the revolution volume read a
+  spline-bounded wall's extent from its vertices and arc midpoints, calling
+  300 degrees 210 (an open spline arc is now walked like a circle).
 
 - **A box through a torus's tube wall fell back or came back wrong (CLOSED 2026-09-30; `cube_through_the_tube_wall` in `crates/operations/tests/torus_plane_cut.rs`)**:
   five roots. A plane's section was chained from scattered `(u, v)`
