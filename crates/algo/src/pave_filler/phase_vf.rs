@@ -81,6 +81,20 @@ fn check_vertex_face_pairs(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    // A NURBS surface with positive weights lies in its control points' box,
+    // so a vertex farther from that box than its tolerance is farther from
+    // the surface too, and needs no projection.
+    let hulls: Vec<Option<brepkit_math::aabb::Aabb3>> = faces
+        .iter()
+        .map(|&fid| {
+            topo.face(fid).map(|f| match f.surface() {
+                FaceSurface::Nurbs(n) if n.weights().iter().flatten().all(|&w| w > 0.0) => {
+                    Some(n.aabb())
+                }
+                _ => None,
+            })
+        })
+        .collect::<Result<_, _>>()?;
     for &vid in vertices {
         let resolved_vid = arena.resolve_vertex(vid);
         let vertex = topo.vertex(resolved_vid)?;
@@ -99,6 +113,9 @@ fn check_vertex_face_pairs(
             let face = topo.face(fid)?;
             let surface = face.surface();
             let combined_tol = vtol + tol.linear;
+            if hulls[face_idx].is_some_and(|h| !h.expanded(combined_tol).contains_point(pos)) {
+                continue;
+            }
 
             match surface {
                 FaceSurface::Plane { normal, d } => {
@@ -171,4 +188,80 @@ fn plane_local_axes(normal: Vec3) -> Result<(Vec3, Vec3), AlgoError> {
     let u = normal.cross(reference).normalize()?;
     let v = normal.cross(u).normalize()?;
     Ok((u, v))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The hull bound skips only vertices farther than their tolerance from
+    /// a NURBS face's control-point box: a vertex just past the box, within
+    /// tolerance of the patch at a corner where the patch meets the box, is
+    /// still recorded, and one well clear of the box is not.
+    #[test]
+    fn hull_bound_keeps_vertices_within_tolerance_of_a_nurbs_face() {
+        let tol = Tolerance::new();
+        let mut topo = Topology::new();
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 1.0),
+        ];
+        let vids: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
+            .collect();
+        let eids: Vec<_> = (0..4)
+            .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % 4], EdgeCurve::Line)))
+            .collect();
+        let wire = Wire::new(
+            eids.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let saddle = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![corners[0], corners[3]], vec![corners[1], corners[2]]],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(saddle)));
+        let near = topo.add_vertex(Vertex::new(
+            Point3::new(1.0 + 0.5 * tol.linear, 0.0, 1.0),
+            tol.linear,
+        ));
+        let far = topo.add_vertex(Vertex::new(Point3::new(1.5, 0.5, 0.5), tol.linear));
+        let mut arena = GfaArena::new();
+        check_vertex_face_pairs(
+            &topo,
+            &[near, far],
+            &[face],
+            &[HashSet::new()],
+            tol,
+            &mut arena,
+        )
+        .unwrap();
+        let recorded: Vec<VertexId> = arena
+            .interference
+            .vf
+            .iter()
+            .filter_map(|i| match i {
+                crate::ds::Interference::VF { vertex, .. } => Some(*vertex),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recorded, vec![near]);
+    }
 }
