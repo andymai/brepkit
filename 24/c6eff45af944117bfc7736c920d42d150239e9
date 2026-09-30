@@ -1,0 +1,25 @@
+crates/io/tests/kumiko_wrap_lattice_cut_inmem.rs
+  s_a13d2397d068b4::t_9e2da6c4bbf420 5-10
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_eecb035833b32d 3055
+  s_a13d2397d068b4::t_dfcb19117214c2 3087-3095
+  s_a13d2397d068b4::t_de241b120daeb8 3097
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_6f310fe653d945 29,32,141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "24c6eff45af944117bfc7736c920d42d150239e9",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
