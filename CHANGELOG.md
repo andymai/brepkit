@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.1.12](https://github.com/andymai/brepkit/compare/v4.1.11...v4.1.12) (2026-10-01)
+
+
+### Bug Fixes
+
+* **algo:** keep the hinge lid's bores and the bin's clearance cut exact ([#1937](https://github.com/andymai/brepkit/issues/1937)) ([b2a9d37](https://github.com/andymai/brepkit/commit/b2a9d372e8ad89ea3714f013660f411696e7e565))
+
+
+### Performance
+
+* **algo:** skip same-domain overlap tests for coplanar outlines that only touch ([#1936](https://github.com/andymai/brepkit/issues/1936)) ([1dc92ea](https://github.com/andymai/brepkit/commit/1dc92ea1583430c5593312cd2138317951eb9a3f))
+
 ## [4.1.11](https://github.com/andymai/brepkit/compare/v4.1.10...v4.1.11) (2026-10-01)
 
 
