@@ -1275,3 +1275,43 @@ fn chord_split_disc_halves_are_not_duplicates() {
     );
     assert!(result.pairs.is_empty());
 }
+
+/// Outlines as the overlap test samples them: each edge's start and seven
+/// more points along it.
+fn sampled(corners: &[(f64, f64)]) -> Vec<brepkit_math::vec::Point2> {
+    let n = corners.len();
+    (0..n)
+        .flat_map(|k| {
+            let (a, b) = (corners[k], corners[(k + 1) % n]);
+            (0..SD_EDGE_SAMPLES).map(move |s| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = s as f64 / SD_EDGE_SAMPLES as f64;
+                brepkit_math::vec::Point2::new(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn convex_outlines_apart_reads_through_sampled_edges() {
+    let tol = Tolerance::new().linear;
+    let tri = sampled(&[(0.0, 0.0), (2.0, 0.0), (0.0, 2.0)]);
+    // A neighbour across the hypotenuse touches only along it.
+    let across = sampled(&[(2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]);
+    assert!(convex_outlines_apart(&tri, &across, tol));
+    // One sharing only a corner.
+    let corner = sampled(&[(2.0, 0.0), (4.0, 0.0), (3.0, 1.0)]);
+    assert!(convex_outlines_apart(&tri, &corner, tol));
+    // Overlapping, or one inside the other, is never apart.
+    let overlap = sampled(&[(0.5, 0.5), (3.0, 0.5), (0.5, 3.0)]);
+    assert!(!convex_outlines_apart(&tri, &overlap, tol));
+    let inside = sampled(&[(0.2, 0.2), (0.6, 0.2), (0.2, 0.6)]);
+    assert!(!convex_outlines_apart(&tri, &inside, tol));
+    // A sliver no wider than the tolerance lying on the shared edge could sit
+    // inside its neighbour by the boundary-tolerant test, so it is left to it.
+    let sliver = sampled(&[(0.0, 0.0), (2.0, 0.0), (1.0, tol * 0.5)]);
+    assert!(!convex_outlines_apart(&tri, &sliver, tol));
+    // A non-convex outline is left to the full test.
+    let notch = sampled(&[(2.0, 0.0), (4.0, 0.0), (4.0, 2.0), (3.0, 0.5), (2.0, 2.0)]);
+    assert!(!convex_outlines_apart(&tri, &notch, tol));
+}
