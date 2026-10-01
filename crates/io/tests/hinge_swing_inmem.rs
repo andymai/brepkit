@@ -1,25 +1,20 @@
-//! The gridfinity tool's hinged lid and bin (`hingeSwing.scenario.test.ts`,
-//! "swings clear of the bin on the back wall"), captured on a brepkit-wasm
-//! built from #1935's branch.
+//! The gridfinity tool's hinged lid and bin (`hingeSwing.scenario.test.ts`):
+//! each test makes one of the tool's calls on operands captured from them.
 //!
-//! The lid: compound-cut by its clearance bevel and four knuckle bores, the
-//! scenario's first boolean to fall back to a mesh. Every later op then ran
-//! against that blob: the three knuckle fuses fell back in turn and each
-//! swing-pose intersect took 22 s in wasm. Each bore (radius 2.45 along `y`)
-//! has its axis on the lid's pocket ceiling `z = -3.2`, crosses the ceiling's
-//! edge at the pocket wall `x = -59`, and pokes 0.05 past the back face
-//! `x = -62.75`, which the ceiling's plane splits in two.
+//! The lid is compound-cut by its clearance bevel and four knuckle bores. Each
+//! bore (radius 2.45 along `y`) has its axis on the lid's pocket ceiling
+//! `z = -3.2`, crosses the ceiling's edge at the pocket wall `x = -59`, and
+//! pokes 0.05 past the back face `x = -62.75`, which the ceiling's plane splits
+//! in two. The tool then fuses its knuckles on and cuts two keyhole pins from
+//! the knuckled lid.
 //!
-//! The bin: compound-cut by five clearance rods that only touch its lip. The
-//! result came back exact but with one face inside out, which every later
-//! boolean on the bin inherited.
+//! The bin is compound-cut by five clearance rods that only touch its lip.
 //!
 //! Data: `hinge_lid.bin` (the lid), `hinge_lid_clearance.bin` (the bevel's
 //! box), `hinge_lid_bore_<1..4>.bin`, `hinge_lid_knuckle.bin` (the first
 //! knuckle the tool fuses onto the cut lid), `hinge_lid_knuckled.bin` (the lid
-//! with its knuckles, captured on a wasm built with the fixes below) with
-//! `hinge_lid_pin_short.bin` and `hinge_lid_pin_long.bin` (the two keyhole
-//! pins the tool cuts from it next), `hinge_bin.bin` and
+//! with its knuckles) with `hinge_lid_pin_short.bin` and
+//! `hinge_lid_pin_long.bin` (the two keyhole pins), `hinge_bin.bin` and
 //! `hinge_bin_clearance_<1..5>.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]

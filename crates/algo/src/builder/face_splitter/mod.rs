@@ -1147,9 +1147,10 @@ fn loop_area_in_frame(wire: &[OrientedPCurveEdge], frame: &PlaneFrame) -> f64 {
     signed_area_2d(&pts) + segments
 }
 
-/// Whether planar sub-faces tile the area their boundary encloses, each outer
-/// wire winding the boundary's way. Only outlines of lines and conics are
-/// measured exactly; any NURBS piece passes.
+/// Whether planar sub-faces tile the area their boundary encloses, every outer
+/// wire winding the same way (the arrangement traces each region
+/// counter-clockwise, whichever way the face itself winds). Only outlines of
+/// lines and conics are measured exactly; any NURBS piece passes.
 fn subfaces_cover_boundary(
     subs: &[SplitSubFace],
     boundary: &[OrientedPCurveEdge],
@@ -1166,19 +1167,26 @@ fn subfaces_cover_boundary(
     {
         return true;
     }
-    let enclosed = loop_area_in_frame(boundary, frame);
-    let sense = enclosed.signum();
+    let enclosed = loop_area_in_frame(boundary, frame).abs();
+    let outers: Vec<f64> = subs
+        .iter()
+        .map(|s| loop_area_in_frame(&s.outer_wire, frame))
+        .collect();
+    if outers.iter().any(|&a| a > 0.0) && outers.iter().any(|&a| a < 0.0) {
+        return false;
+    }
     let covered: f64 = subs
         .iter()
-        .map(|s| {
-            sense * loop_area_in_frame(&s.outer_wire, frame)
+        .zip(&outers)
+        .map(|(s, outer)| {
+            outer.abs()
                 - s.inner_wires
                     .iter()
                     .map(|h| loop_area_in_frame(h, frame).abs())
                     .sum::<f64>()
         })
         .sum();
-    (covered - enclosed.abs()).abs() <= 1e-6 * enclosed.abs().max(1.0)
+    (covered - enclosed).abs() <= 1e-6 * enclosed.max(1.0)
 }
 
 /// Whether one loop encloses no area. On a plane face the loop is sampled
