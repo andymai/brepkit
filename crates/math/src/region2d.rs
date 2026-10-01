@@ -79,8 +79,10 @@ fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
             if len <= tol {
                 return Crossing::Count(0);
             }
-            let along = ap.dot(ab) / (len * len);
-            if (0.0..=1.0).contains(&along) && cross(ab, ap).abs() / len <= tol {
+            // Within `tol` of the closed segment: a point at a vertex rounds
+            // a hair past the end of both segments meeting there.
+            let along = (ap.dot(ab) / (len * len)).clamp(0.0, 1.0);
+            if (ap - ab * along).length() <= tol {
                 return Crossing::OnBoundary;
             }
             let det = cross(d, ab);
@@ -128,7 +130,11 @@ fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
             } else {
                 a.min(b)
             };
-            if radial <= tol && on_arc(y0.atan2(x0)) {
+            let end = |t: f64| center + u * (a * t.cos()) + v * (b * t.sin());
+            if (radial <= tol && on_arc(y0.atan2(x0)))
+                || (p - end(t0)).length() <= tol
+                || (p - end(t1)).length() <= tol
+            {
                 return Crossing::OnBoundary;
             }
             let disc = qb.mul_add(qb, -4.0 * qa * qc);
@@ -197,6 +203,39 @@ mod tests {
             Some(false)
         );
         assert_eq!(point_in_region(&disc, Point2::new(1.0, 0.0), 1e-9), None);
+    }
+
+    /// A triangle's corners, nudged by rounding past the ends of both edges
+    /// meeting there, and an arc's ends, read on the boundary.
+    #[test]
+    fn points_at_corners_read_on_the_boundary() {
+        let (a, b, c) = (
+            Point2::new(-18.75, -16.75),
+            Point2::new(-20.673_141_121_612_92, -17.530_361_288_064_512),
+            Point2::new(-20.75, 4.0),
+        );
+        let triangle = [
+            Boundary2::Segment(a, b),
+            Boundary2::Segment(b, c),
+            Boundary2::Segment(c, a),
+        ];
+        for corner in [a, b, c] {
+            for (dx, dy) in [(0.0, 0.0), (3e-15, -2e-15), (-4e-15, 1e-15)] {
+                let p = Point2::new(corner.x() + dx, corner.y() + dy);
+                assert_eq!(point_in_region(&triangle, p, 1e-9), None, "{p:?}");
+            }
+        }
+        let half = [
+            circle((0.0, 0.0), 2.0, 0.3, 2.9),
+            Boundary2::Segment(
+                Point2::new(2.0 * 2.9_f64.cos(), 2.0 * 2.9_f64.sin()),
+                Point2::new(2.0 * 0.3_f64.cos(), 2.0 * 0.3_f64.sin()),
+            ),
+        ];
+        for t in [0.3_f64, 2.9] {
+            let p = Point2::new(2.0 * t.cos() + 1e-15, 2.0 * t.sin());
+            assert_eq!(point_in_region(&half, p, 1e-9), None, "t {t}");
+        }
     }
 
     /// A half disc: its diameter and a half circle. Points just inside the
