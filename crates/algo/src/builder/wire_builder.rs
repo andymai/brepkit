@@ -256,6 +256,23 @@ pub fn build_wire_loops_dcel(
     u_periodic: bool,
     v_periodic: bool,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
+    build_wire_loops_dcel_measured(edges, tol, u_periodic, v_periodic, None)
+}
+
+/// Reads a loop's signed area in its face's parameter plane.
+pub type LoopArea<'a> = &'a dyn Fn(&[OrientedPCurveEdge]) -> f64;
+
+/// [`build_wire_loops_dcel`] with each orbit's signed area read by `area_of`
+/// instead of its vertex polygon. A rim that is one closed curve has a single
+/// vertex, so its polygon encloses nothing and both the face's own region and
+/// its unbounded face would be dropped as out-and-back walks.
+pub fn build_wire_loops_dcel_measured(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+    area_of: Option<LoopArea<'_>>,
+) -> Vec<Vec<OrientedPCurveEdge>> {
     if edges.is_empty() {
         return Vec::new();
     }
@@ -416,7 +433,9 @@ pub fn build_wire_loops_dcel(
             perimeter += (b - prev).length();
             prev = b;
         }
-        let area = area * 0.5;
+        let area = area_of.map_or(area * 0.5, |f| {
+            f(&orbit.iter().map(|&i| halves[i].clone()).collect::<Vec<_>>())
+        });
         let winding_u = u_period.is_some_and(|p| (lifted_first.x() - first.x()).abs() > p * 0.5);
         let winding_v = v_period.is_some_and(|p| (lifted_first.y() - first.y()).abs() > p * 0.5);
         if (winding_u || winding_v) && orbit.iter().all(|&i| i >= n_real) {
