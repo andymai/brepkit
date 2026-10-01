@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790897781358,
+  "lastUpdate": 1790897958457,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49085,6 +49085,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43239242,
             "range": "± 141811",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b2a9d372e8ad89ea3714f013660f411696e7e565",
+          "message": "fix(algo): keep the hinge lid's bores and the bin's clearance cut exact (#1937)\n\nThe captured kernel operations behind gridfinity’s\n`hingeSwing.scenario.test.ts` case `swings clear of the bin on the back\nwall` now preserve exact, valid B-Rep results through the lid cuts, the\nfirst knuckle fuse, and the bin clearance cut. The operands were\ncaptured through a per-operation hook using `brepkit-wasm` built from\n#1935’s branch. In that capture, the lid’s `compoundCut` was the first\nmesh fallback, followed by three knuckle fuses. Each swing-pose\n`intersectWithEvolution` then spent 21 to 23 seconds in a wasm mesh\nboolean.\n\n## What was wrong\n\n- Root 1, `fill_ef_in` in\n`crates/algo/src/pave_filler/fill_face_info.rs`: the 44-face lid has\nfour cones, 16 cylinders, and 24 planes. Each radius 2.45 bore runs\nalong y, with its axis on the pocket ceiling at z = -3.2. Its cap\ncrosses the back face plane twice at a shallow angle and sags 0.05 off\nthat plane, below the in-face gate’s 20% of chord. The arc was therefore\nadmitted into both halves of the split back face, leaving neither half\nsplittable. A leaf that touches the plane at both ends and leaves it\nbetween them is now kept only when both ends lie on the face boundary.\nThis discriminates by where the leaf ends rather than tightening the 20%\ngate, because `fuse_shelled_box_with_socket_loft` contains required\ncorner arcs that sag 0.0179 over a 0.7841 chord. The review suggestion\nto require kept two-crossing arcs to lie inside the face was not taken,\nbecause the faceted loft’s load-bearing corner arcs bulge outside their\nfacets by design. The cached face region is borrowed rather than cloned\nper interference.\n\n- Root 2, the FF filter in `crates/algo/src/pave_filler/phase_ff.rs`:\nthe ceiling meets each bore cap along a line through the cap center that\nlies inside both faces for 1.1 mm. Sampling the raw line at 16 points\nacross both face boxes skipped that interval, while the exact fallback\ndeclined because both outlines contain arcs. `line_face_intervals` now\nclips the line exactly against each planar face’s own lines and arcs,\nincluding holes.\n\n- Root 3, `point_in_region` in `crates/math/src/region2d.rs`: a point at\na polygon vertex could round just past both incident segments and be\nclassified inside or outside. Points within tolerance of a closed\nsegment or an arc endpoint now read as boundary. `region2d::on_boundary`\nuses distance to the boundary, while `point_in_region` still returns no\nanswer when every trial ray grazes. Root 1 depends on this because one\nsocket-loft facet corner read as outside.\n\n- Root 4, `unify_same_domain` in\n`crates/heal/src/upgrade/unify_same_domain.rs`: the bin cut merged two\nhalves of a reversed planar strip into a face whose outer loop ran\nclockwise about the surface normal, opposite its members. All four edges\nthen ran in the same direction as neighboring faces, making the cut\nresult invalid without changing its 44502.6553 volume. Planar merges now\npreserve member winding. Curved merges now chain surviving edges into\none loop or skip the merge, instead of listing edges face by face and\nproducing unclosed wires on the lid’s stacked corner cylinders.\n\n- Root 5, `split_plane_boundary_arcs_at_points` in\n`crates/algo/src/builder/face_splitter/mod.rs`: each boundary arc piece\nwas read along the short route between its endpoints, so pieces beyond\nhalf a turn were split at points they never traverse. Pieces are now\nread on their stored counter-clockwise span, accounting for reversed\ntraversal. The new span reading is retained and\n`split_arcs_shadowing_chords` deliberately inserts a midpoint vertex\nwhen an arc runs between the endpoints of a straight section. This\navoids the endpoint-keyed assembler welding a keyhole arc to its tail’s\nbase line. Restoring the old reading would reintroduce splits at absent\npoints and the rod fallbacks.\n\n- Root 6, `detect_trivial_relation` in\n`crates/operations/src/boolean/mod.rs`: its containment witness sampled\neach rim only at its start and quarter points. A radius 0.5 rod poking\n0.05 beyond a 10 x 10 x 2 box does so across 0.902 rad of its cap rims,\nallowing every sample to miss. The cut then retained the whole rod as a\ncavity and reported 196.8584 instead of 196.9171. `rim_reach` now probes\neach circle or ellipse rim’s farthest reach past every outer-solid\nplane, deepest first.\n\n## Verification\n\n- `crates/io/tests/hinge_swing_inmem.rs` checks fixture faithfulness,\none bore cut against the closed form, the five-tool `compound_cut`\nagainst sequential cuts, the first knuckle fuse, and the bin clearance\ncut. On main, four of these five tests fail. The faithfulness check\npasses.\n\n- One bore cut is exact with 49 faces and removes 193.5996 mm³, against\nthe 193.59955 closed form. Main leaves 12 free edges and falls back to a\n414-face planar mesh. The complete `compound_cut` is exact and valid\nwith 49 faces and volume 37205.1440, equal to five sequential cuts. Main\nfalls back to a 573-face planar mesh.\n\n- The first knuckle fuse is exact and valid. Its volume, 37297.8695,\nequals the lid plus the 92.7255 knuckle-minus-lid cut. Main leaves 12\nfree edges and falls back. This closes the roadmap’s “Lid knuckle fuse”\nrow. The test checks six points covering the knuckle in both bores, its\nlid overlap, the lid plate, the bore gap below the knuckle, and air\nbeyond the back face.\n\n- `crates/operations/tests/rod_along_a_box_side.rs` covers the box-side\nrod and a rounded plate whose top plane holds the rod axis, upright,\nturned, mirrored, and rotated to eighths of a turn about its axis. Both\ntests fail on main. All 24 branch cases are exact, valid, and equal to\n196.9171.\n\n- `points_at_corners_read_on_the_boundary` and the `on_boundary` test\ncover Root 3 and its review fix.\n`stacked_quarter_cylinders_merge_into_a_chained_wire` covers the curved\nsame-domain merge. The keyhole regression returns 13.9735 rather than\nthe 15-face, 13.8427 result produced without the deliberate midpoint\nsplit.\n\n- The branch passes 2,610 tests across `brepkit-math`, `brepkit-algo`,\n`brepkit-heal`, `brepkit-check`, `brepkit-operations`, and `brepkit-io`,\nwith 0 failures and 16 ignored. All 236 `brepkit-wasm` library tests\npass with 3 ignored. Clippy with `-D warnings`, `check-boundaries.sh`,\nand `check-doc-paths.sh` pass. The pose sweep and 120-case kumiko strut\nsweep match main. `truth_audit` differs only in the 14th decimal of one\ncylinder-corner error column, and `approx_census` only in the\nrun-variable face pair named by the offset NURBS-loft error.\n\n## Still open\n\n- The lid intersection with the knuckle falls back with eight free edges\nwhere the knuckle’s flat top lies in the bevel plane. This is outside\nthe tool’s path.\n\n- `compound_cut` unification still creates stacked corner-cylinder bands\nwhose ruled edges contain vertices that the mesher fans. The cut lid\nmeshes at 37189.8 instead of the exact 37205.1, and the cut bin at\n44194.6 instead of 44502.7. This remains under the existing fanned-band\nroadmap row.\n\n- Re-captured on a wasm built from this branch, the hinge test finishes\nin 59 s instead of timing out, and the bin reaches the swing exact. The\nlid's keyhole pin cut still falls back, so each swing intersect stays a\nmesh boolean (about 5.8 s in wasm) and the test's interference check\nreads 7.45 mm³ against its 5 mm³ floor. That cut is the roadmap's\npin-cut row.",
+          "timestamp": "2026-10-01T16:33:54-07:00",
+          "tree_id": "b1045be665b33b62d630b7567e39957139a45553",
+          "url": "https://github.com/andymai/brepkit/commit/b2a9d372e8ad89ea3714f013660f411696e7e565"
+        },
+        "date": 1790897952889,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1006806,
+            "range": "± 3150",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1098183,
+            "range": "± 16025",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13036,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 760704,
+            "range": "± 2240",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41824582,
+            "range": "± 98134",
             "unit": "ns/iter"
           }
         ]
