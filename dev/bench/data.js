@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790850364743,
+  "lastUpdate": 1790858390998,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48815,6 +48815,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36387411,
             "range": "± 119828",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5286d70956286b80881bee9f75c53dccc9a30d62",
+          "message": "fix(operations): cut a compound batch once when its box-by-box cuts cannot stay exact (#1931)\n\nThe gridfinity tool’s kumiko wrap compound cut that hung the tool on\nmain now finishes natively in 21 s. On a wasm built from main, the test\n`is not carved away by a kumiko wrap either` failed after 1,715 s. Its\ncompound cut of the first corner band, comprising 194 faces (14\ncylinders, 160 NURBS, and 20 planes), by 19 slot boxes ran for 1,698 s\nand then trapped with `RuntimeError: unreachable`.\n\n## What changes\n\n- Neither the batched cut nor box 1’s own cut stays exact. The batch has\n39 edges not used exactly twice, while box 1 has 4 free edges. After\n#1929 declined the mesh fallback for the batched probe, `compound_cut`\nproceeded tool by tool. Box 1 fell back to a mesh, and every subsequent\nbox was cut against that mesh. Natively on main, the first two boxes\nalone take 63 s and return a 3,026-face planar mesh with 2 over-shared\nedges.\n\n- `compound_cut` now runs the tool-by-tool cuts with the mesh fallback\ndeclined after a declined batch. It stops at the first cut that\ndeclines, then cuts the batch once with the fallback allowed. The\ndecline flag is read after every cut because a helper can swallow the\ndeclined error and return `Ok`. If every tool-by-tool cut remains exact,\nthat result is kept, so the exact band from #1929 still cuts box by box.\nAny other error from a tool-by-tool cut is returned as before.\n\nThe first two boxes now take 3.5 s and return a closed 2,079-face\nresult. With the classification change below but without this policy\nchange, they take two fallbacks and 50 s. With both changes, they take\none fallback and 3.4 s.\n\n- Mesh fallback classification now shares one generalized winding number\nacross pieces in the same region. Previously, each split piece took a\nwinding number over the whole other mesh. For the 19-box batch, the\noperands tessellate to 33,498 and 528 triangles, then split into 103,392\nand 70,422 pieces. Classification accounted for 134.5 s of the fallback\ncut’s 141.3 s.\n\nTwo pieces join when they share an edge whose midpoint is farther than\nthe on-surface epsilon from the other mesh. Because the split conforms\nto the intersection, pieces joined this way are on the same side. A\nregion containing three or more pieces receives a shared state only when\nthree probes agree: the largest piece, the piece whose centroid is\nfarthest from it, and the piece farthest from both. If the probes\ndisagree, every piece is tested independently. A piece whose centroid\nlies on the other surface also keeps its own test because its winding\nnumber is ill-conditioned.\n\nClassification now takes 2.9 s and the fallback cut takes 10.2 s. The\nresult is identical: 70,378 faces, 102 edges not used exactly twice, and\nvolume 267.058. The only piece whose region state disagreed with its\nindependent test was a sliver of area 2e-13 whose centroid lies 2.6e-10\nfrom the other surface. The on-surface rule keeps that piece on its own\ntest, after which every piece matches per-piece classification.\n\n## Verification\n\n- `region_classification_matches_each_triangle` in\n`crates/operations/src/mesh_boolean.rs` splits a faceted sphere against\nthree box placements and checks that region classification exactly\nmatches per-piece classification. Region classification requires 6 to 9\nwinding evaluations for 174 to 444 tool pieces, while per-piece\nclassification evaluates every piece.\n\n- `kumiko_wrap_first_band_compound_cut_takes_one_fallback` in the new\n`crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs` uses the band and\nits first two boxes as fixtures and checks that the compound cut takes\nat most one mesh fallback. It runs in 35 s in the debug test profile.\n\n- `compound_cut_takes_one_fallback_when_no_cut_stays_exact` in the new\n`crates/operations/tests/compound_cut_fallback_policy.rs` pins the\npolicy using primitives: a torus `(4, 1.5)` cut by a 6-cube around its\naxis and a 1 x 2 x 1 box over its top. It first verifies that cutting\ntool by tool takes two mesh fallbacks, then checks that `compound_cut`\ntakes one. With main’s `compound_cut`, it takes two. The test runs in 5\ns in the debug test profile.\n\n- On the branch head, `brepkit-math`, `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` pass 2,450 tests with 0 failures\nand 15 ignored. This includes\n`kumiko_wrap_slot_compound_cut_stays_exact`, which confirms that the\nexact band from #1929 remains exact and uses no fallback. All 236\n`brepkit-wasm` library tests pass, with 3 ignored. The pose sweep,\n`truth_audit`, `approx_census` apart from timings and the face pair\nnamed in the offset nurbs-loft error (which also differs between runs on\nmain), and the 120-case kumiko strut pose sweep are identical to main.\n\n## Next\n\nThe 19-box result remains a mesh that is not closed, with 28 free and 74\nover-shared edges. Box 1 leaves 4 free edges because the face splitter’s\nloop walker pairs the box section on one strut-wall patch with its own\nreverse. The next fix is that loop pairing, followed by the rest of the\n19 boxes and a tool re-measure. The roadmap’s kumiko row records this\nsequence, and a Closed entry records the classification work.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `compound_cut` so the kumiko corner wrap no longer hangs (1,698 s\nbefore trapping): when the box-by-box cuts cannot stay exact, the batch\nis cut once instead of grinding each later box through a growing mesh.\nIt also makes mesh fallback classification per-region instead of\nper-piece.\n\n**Behavior**\n- `compound_cut` now keeps sequential box-by-box cuts only while every\none stays exact; if any box declines, it cuts the merged batch once with\nmesh fallback allowed.\n- A new test pins this policy: a ring cut by two boxes that each fall\nback on their own takes exactly one fallback as a compound cut.\n- The exact kumiko band cut from the previous fix still runs box by box\nwith no fallback.\n\n**Mesh fallback classification**\n- Split pieces sharing an edge off the other mesh join into regions and\nshare one winding number when three spread probes agree.\n- Pieces whose centroid lies on the other surface keep their own test.\n- Classification on the 19-slot-box band drops from 134.5 s to 2.9 s,\nand the fallback cut from 141 s to 10 s.\n\n<sup>Written for commit 368bdb5c4938a5e6d272bf00d6d98a21815d9cfc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1931?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T12:36:54Z",
+          "tree_id": "14fcfe6b64941b024c03d786a8b4226971a2e3d2",
+          "url": "https://github.com/andymai/brepkit/commit/5286d70956286b80881bee9f75c53dccc9a30d62"
+        },
+        "date": 1790858384652,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1043134,
+            "range": "± 4704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1123615,
+            "range": "± 7904",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13209,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 795032,
+            "range": "± 7006",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43902029,
+            "range": "± 279109",
             "unit": "ns/iter"
           }
         ]
