@@ -54,6 +54,38 @@ thread_local! {
     /// fallbacks whose output actually reaches a caller, keeping its
     /// monotonic snapshot-and-diff contract exact (#1445).
     static LAST_USED_MESH_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a batching probe runs: the mesh fallback declines (returns
+    /// an error) instead of building a mesh the probe would discard, so a
+    /// batch that cannot stay exact fails in the time its GFA attempt takes.
+    static DECLINE_MESH_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set when a declined fallback fired, so the probe sees it even where a
+    /// helper swallowed the error (the multi-region cut keeps a component
+    /// whole on `InvalidInput`).
+    static MESH_FALLBACK_DECLINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Restores the decline switch on drop, so a panicking probe cannot leave it
+/// set for every later boolean on the thread.
+struct DeclineGuard {
+    prev: bool,
+}
+
+impl Drop for DeclineGuard {
+    fn drop(&mut self) {
+        DECLINE_MESH_FALLBACK.with(|d| d.set(self.prev));
+    }
+}
+
+/// Run `f` with the mesh fallback declined. Also returns whether any boolean
+/// inside declined it: such a result may be missing a piece and is no batch.
+fn without_mesh_fallback<T>(f: impl FnOnce() -> T) -> (T, bool) {
+    let _guard = DeclineGuard {
+        prev: DECLINE_MESH_FALLBACK.with(|d| d.replace(true)),
+    };
+    let outer = MESH_FALLBACK_DECLINED.with(|d| d.replace(false));
+    let out = f();
+    let declined = MESH_FALLBACK_DECLINED.with(|d| d.replace(outer));
+    (out, declined)
 }
 
 /// Perform a boolean operation on two solids.
@@ -849,6 +881,13 @@ fn boolean_inner(
         }
     }
 
+    if DECLINE_MESH_FALLBACK.with(std::cell::Cell::get) {
+        MESH_FALLBACK_DECLINED.with(|d| d.set(true));
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "boolean needs the mesh fallback, declined for a batching probe".into(),
+        });
+    }
+
     // Mesh boolean fallback (no recursion).
     log::debug!(
         target: "brepkit_approx",
@@ -955,10 +994,12 @@ pub fn compound_cut(
         // multi-component tool with overlapping components breaks parity
         // classification, so those take the fuse ladder.
         if tools_at_most_touch(&boxes) {
-            let shortcut = crate::compound_ops::merge_disjoint_solids(topo, tools)
-                .and_then(|tool| boolean_inner(topo, BooleanOp::Cut, target, tool));
+            let (shortcut, declined) = without_mesh_fallback(|| {
+                crate::compound_ops::merge_disjoint_solids(topo, tools)
+                    .and_then(|tool| boolean_inner(topo, BooleanOp::Cut, target, tool))
+            });
             match shortcut {
-                Ok(cut) if !LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) => {
+                Ok(cut) if !declined && !LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) => {
                     result = cut;
                     batched = true;
                 }
@@ -991,8 +1032,13 @@ pub fn compound_cut(
                     }
                 }
             });
+            // The batched cut is a probe as well: a mesh-degraded result is
+            // discarded for the sequential per-tool cuts, which stay exact
+            // where the one cut against the merged tool cannot (the kumiko
+            // band against its 19 overlapping slot boxes).
             if let Ok(Some(tool)) = merged
-                && let Ok(cut) = boolean(topo, BooleanOp::Cut, target, tool)
+                && let (Ok(cut), false) =
+                    without_mesh_fallback(|| boolean_inner(topo, BooleanOp::Cut, target, tool))
             {
                 result = cut;
                 batched = true;

@@ -8,7 +8,7 @@
 //! 19k-face planar mesh to every later compound cut in the export.
 //!
 //! Data: `kumiko_wrap_exact_band.bin` (cut base), `kumiko_wrap_slot_box_<i>.bin`
-//! for boxes 1 to 9, 13, 14, 18 and 19 (indices into the captured tool list).
+//! for all 19 boxes (indices into the captured tool list).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -24,11 +24,13 @@ const BOXES: [usize; 7] = [4, 8, 9, 13, 14, 18, 19];
 
 /// Each box's cut volume, from a band of 384.936; a cut that removed nothing
 /// or the wrong region would miss it.
-/// The first seven boxes, cut from the band one after another as the
-/// tool's compound cut would, and the volume after each.
-const CHAIN: [usize; 7] = [1, 2, 3, 4, 5, 6, 7];
+/// The boxes cut from the band one after another, and the volume after each.
+const CHAIN: [usize; 19] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+];
 const CHAIN_VOLUMES: [f64; CHAIN.len()] = [
-    382.976, 374.964, 366.873, 364.164, 362.705, 355.274, 347.612,
+    382.976, 374.964, 366.873, 364.164, 362.705, 355.274, 347.612, 344.780, 344.599, 343.140,
+    335.709, 328.049, 325.308, 325.126, 323.670, 316.286, 308.665, 305.871, 305.690,
 ];
 
 const CUT_VOLUMES: [f64; BOXES.len()] = [
@@ -157,4 +159,29 @@ fn kumiko_wrap_slot_chain_stays_exact() {
             "box {i}: volume {vol:.3}, expected {expected:.3}"
         );
     }
+}
+
+/// The tool's own call: one `compound_cut` of the band by all 19 boxes stays
+/// an exact B-Rep. The boxes overlap, so the batch fuses them and cuts once;
+/// that single cut cannot stay exact, and the batch falls back to the
+/// per-box cuts the chain above pins rather than to a mesh.
+#[test]
+fn kumiko_wrap_slot_compound_cut_stays_exact() {
+    let mut topo = Topology::new();
+    let band = load(&mut topo, "kumiko_wrap_exact_band.bin");
+    let tools: Vec<_> = CHAIN
+        .into_iter()
+        .map(|i| load(&mut topo, &format!("kumiko_wrap_slot_box_{i}.bin")))
+        .collect();
+    let before = boolean::mesh_fallback_count();
+    let cut =
+        boolean::compound_cut(&mut topo, band, &tools, boolean::BooleanOptions::default()).unwrap();
+    assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
+    assert_eq!(bad_edge_uses(&topo, cut), 0, "open or over-shared edges");
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, cut, 0.05).unwrap();
+    let expected = CHAIN_VOLUMES[CHAIN.len() - 1];
+    assert!(
+        (vol - expected).abs() <= 0.01,
+        "volume {vol:.3}, expected {expected:.3}"
+    );
 }

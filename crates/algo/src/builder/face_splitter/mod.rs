@@ -895,6 +895,47 @@ fn loop_containment(loop_pts: &[Point2], outer: &[Point2]) -> LoopContainment {
     }
 }
 
+/// Whether a `(u, v)` point lies inside a loop on a surface periodic in u
+/// (and in v, a torus): a hole's samples and a split piece's outer wire can sit
+/// whole turns apart when one was unwrapped into another period, so the point
+/// is moved by the turns that bring it nearest the loop's extent first.
+fn uv_in_loop_any_turn(p: Point2, loop_uv: &[Point2], surface: &FaceSurface) -> bool {
+    use std::f64::consts::TAU;
+    let u_periodic = matches!(
+        surface,
+        FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+    );
+    let v_periodic = matches!(surface, FaceSurface::Torus(_));
+    let (mut lo, mut hi) = (
+        Point2::new(f64::MAX, f64::MAX),
+        Point2::new(f64::MIN, f64::MIN),
+    );
+    for q in loop_uv {
+        lo = Point2::new(lo.x().min(q.x()), lo.y().min(q.y()));
+        hi = Point2::new(hi.x().max(q.x()), hi.y().max(q.y()));
+    }
+    // The shifts that bring the point nearest the loop's middle, one turn to
+    // either side of it.
+    let shifts = |periodic: bool, c: f64, a: f64, b: f64| -> [f64; 3] {
+        if periodic && a <= b {
+            let k = ((f64::midpoint(a, b) - c) / TAU).round() * TAU;
+            [k, k - TAU, k + TAU]
+        } else {
+            [0.0; 3]
+        }
+    };
+    let du = shifts(u_periodic, p.x(), lo.x(), hi.x());
+    let dv = shifts(v_periodic, p.y(), lo.y(), hi.y());
+    du.iter().any(|&a| {
+        dv.iter().any(|&b| {
+            super::classify_2d::point_in_polygon_2d(Point2::new(p.x() + a, p.y() + b), loop_uv)
+        })
+    })
+}
+
 /// Attach each whole hole to the sub-face that geometrically contains it.
 ///
 /// A hole is assigned to the INNERMOST containing sub-face (the one whose own
@@ -932,7 +973,7 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
         if hole_pts.len() >= 3 {
             let probe = super::classify_2d::sample_interior_point(&hole_pts);
             let containing: Vec<usize> = (0..sub_faces.len())
-                .filter(|&i| super::classify_2d::point_in_polygon_2d(probe, &sub_outer_uv[i]))
+                .filter(|&i| uv_in_loop_any_turn(probe, &sub_outer_uv[i], &sub_faces[i].surface))
                 .collect();
             let best = containing.iter().copied().max_by_key(|&i| {
                 containing
@@ -4542,7 +4583,11 @@ fn clip_sections_to_outer_region(
         let mut cuts: Vec<(f64, Point3)> = Vec::new();
         for w in 0..SEC_SAMPLES {
             let (a, b) = (&states[w], &states[w + 1]);
-            let flip = (clear_in(a) && !raw_inside(b)) || (!raw_inside(a) && clear_in(b));
+            // A crossing whose inside sample lands within the band still
+            // counts when the outside one is clearly out; samples hugging the
+            // boundary on both sides are no crossing.
+            let flip = raw_inside(a) != raw_inside(b)
+                && (clear_in(a) || clear_in(b) || clear_out(a) || clear_out(b));
             if !flip {
                 continue;
             }
@@ -7641,6 +7686,29 @@ fn split_face_2d_impl(
         }
     }
 
+    // A greedy plane trace that revisits a vertex toured several regions as
+    // one loop (a section run out and back, or a smooth section passing a
+    // junction where another branches off). The DCEL face trace partitions
+    // the arrangement itself; adopt it when it strictly refines the greedy
+    // partition and is clean by every loop-health signature.
+    if is_plane
+        && !sections.is_empty()
+        && original_inner_wires.is_empty()
+        && loops
+            .iter()
+            .any(|lp| split_loop_at_pinch_vertices(lp, tol.linear).len() != 1)
+    {
+        let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        if dcel.len() > loops.len()
+            && !wire_loops_have_degenerate_area(&dcel, tol.linear)
+            && !wire_loops_self_cross(&dcel, tol.linear)
+            && (!greedy_outer_loops_nested(&dcel, cw_loops)
+                || greedy_outer_loops_nested(&loops, cw_loops))
+        {
+            loops = dcel;
+        }
+    }
+
     // Classify each loop as outer (positive area) or hole (negative).
     // For loops with curved edges, sample intermediate UV points to get
     // an accurate area -- using only start_uv gives degenerate polygons
@@ -8143,7 +8211,7 @@ fn split_face_2d_impl(
                 // sub-face is the one whose own interior point lies inside the
                 // most other containing sub-faces.
                 let containing: Vec<usize> = (0..sub_faces.len())
-                    .filter(|&i| super::classify_2d::point_in_polygon_2d(probe, &sub_outer_uv[i]))
+                    .filter(|&i| uv_in_loop_any_turn(probe, &sub_outer_uv[i], &surface))
                     .collect();
                 let best = containing.iter().copied().max_by_key(|&i| {
                     containing
