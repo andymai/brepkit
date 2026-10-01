@@ -1,0 +1,66 @@
+crates/io/tests/data/kumiko_wrap_slot_box_18.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+crates/io/tests/data/kumiko_wrap_slot_box_4.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+crates/io/tests/data/kumiko_wrap_slot_box_8.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+crates/io/tests/data/kumiko_wrap_slot_box_13.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+crates/io/tests/data/kumiko_wrap_slot_box_14.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+crates/io/tests/data/kumiko_wrap_slot_box_9.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+crates/io/tests/kumiko_wrap_slot_cut_inmem.rs
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1-3,9-10,12-44,60-68,74-76,82-84,91,92-104,107-110
+  s_a13d2397d068b4::t_12a942d2916ef6 45-59,69-73,77-81
+  s_a13d2397d068b4::t_7091a53e2ca852 4-8,11,85-90,105-106
+crates/io/tests/data/kumiko_wrap_slot_box_19.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_759472c40b4e03 29,31-32
+  s_a13d2397d068b4::t_a11fb2c4f0e655 141
+crates/io/tests/data/kumiko_wrap_exact_band.bin
+  s_a13d2397d068b4::t_a7f5eaf8d53992 1
+crates/algo/src/builder/fill_images.rs
+  s_a13d2397d068b4::t_f452028a21ad7b 27-32,39-40
+crates/algo/src/pave_filler/tests.rs
+  s_a13d2397d068b4::t_88ff41ed13fe09 1882-1917
+crates/algo/src/pave_filler/helpers.rs
+  s_a13d2397d068b4::t_3f611dbf5c3a6a 110-113
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_a13d2397d068b4::t_7091a53e2ca852 209-212
+  s_a13d2397d068b4::t_90a5667885f442 139-142
+  s_a13d2397d068b4::t_da081e67468bf3 143-146
+crates/algo/src/ds/pave.rs
+  s_a13d2397d068b4::t_3f611dbf5c3a6a 74-83
+crates/algo/src/pave_filler/phase_ve.rs
+  s_a13d2397d068b4::t_3f611dbf5c3a6a 138-141
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a13d2397d068b4::t_b02fa2bd0589ea 525
+crates/algo/src/pave_filler/make_blocks.rs
+  s_a13d2397d068b4::t_f452028a21ad7b 107
+  s_a13d2397d068b4::t_3f611dbf5c3a6a 78-86
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_7091a53e2ca852 1505-1507,1511-1513,3554-3558,3566-3567
+  s_a13d2397d068b4::t_dfad55b8154ee3 2587,2603,3373
+  s_a13d2397d068b4::t_b02fa2bd0589ea 2590,2596-2598,3097,3366-3372,3374-3457,3484-3487,3490,3534-3553,3576-3579
+  s_a13d2397d068b4::t_cf9eb7cfd9237d 3580-3581
+  s_a13d2397d068b4::t_d47ec3b9f123db 2585-2586,2588-2589,2591-2595,2599-2602
+  s_a13d2397d068b4::t_a002cdedb1d008 3559-3565,3568-3575
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e68762e022800c05f005aef63cc7737af7efe971",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
