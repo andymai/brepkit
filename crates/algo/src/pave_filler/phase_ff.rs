@@ -2739,6 +2739,13 @@ fn trim_ellipse_to_boundary_crossings(
         return None;
     }
 
+    // The analytic face's extent is a `v` window and one angular gap; a rim
+    // that dips into the face between them (a strut groove's mouth on a
+    // band's outer wall) is read off its own wires.
+    let lateral = crate::classifier::LateralTrim::new(topo, analytic_face)
+        .ok()
+        .flatten();
+
     // Walk consecutive crossing pairs (including the wrap-around segment).
     // Emit an arc for each interval whose midpoint lies inside BOTH faces.
     let mut arcs = Vec::new();
@@ -2752,7 +2759,13 @@ fn trim_ellipse_to_boundary_crossings(
         }
         let t_mid = 0.5 * (t0 + t1);
         let mid = sec.evaluate(t_mid);
-        if !(ext_a.contains(mid) && ext_b.contains(mid) && plane_contains(mid)) {
+        if !(ext_a.contains(mid)
+            && ext_b.contains(mid)
+            && plane_contains(mid)
+            && lateral
+                .as_ref()
+                .is_none_or(|t| t.holds(mid, tol.linear * 10.0)))
+        {
             continue;
         }
         // Skip a degenerate sliver (the two crossings coincide angularly).

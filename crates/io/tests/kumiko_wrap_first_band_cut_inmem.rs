@@ -5,7 +5,9 @@
 //! 1,698 s and trapped.
 //!
 //! Data: `kumiko_wrap_first_band.bin` (cut base),
-//! `kumiko_wrap_first_band_box_<1..19>.bin` (the captured tool list).
+//! `kumiko_wrap_first_band_box_<1..19>.bin` (the captured tool list), and the
+//! tool's next call on the result: `kumiko_wrap_first_band_slab_base.bin` (the
+//! 19-box result in place) and `kumiko_wrap_first_band_slab.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -39,6 +41,10 @@ const REMOVED: [(usize, [f64; 3]); 3] = [
     (17, [2.5138, 2.2473, 33.4310]),
 ];
 const KEPT: [[f64; 3]; 2] = [[0.1529, 1.8115, 6.4787], [0.1529, 1.8115, 21.5934]];
+
+/// The 19-box result less the slab; it and the exact intersection with the
+/// slab sum to the band within 0.003.
+const SLAB_CUT_VOLUME: f64 = 186.411;
 
 fn load(topo: &mut Topology, name: &str) -> SolidId {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -193,5 +199,37 @@ fn kumiko_wrap_first_band_compound_cut_stays_exact() {
             Some(true),
             "material at {p:?} removed"
         );
+    }
+}
+
+/// The tool's next call on the band: the 19-box result, moved into place, cut
+/// by a slab across its middle. The slab's top face meets the band's outer
+/// wall in a circle that crosses a strut groove's mouth, where the wall does
+/// not exist; the arc there joined two cap regions and one was emitted twice.
+#[test]
+fn kumiko_wrap_first_band_slab_cut_stays_exact() {
+    let mut topo = Topology::new();
+    let band = load(&mut topo, "kumiko_wrap_first_band_slab_base.bin");
+    let slab = load(&mut topo, "kumiko_wrap_first_band_slab.bin");
+    let before = boolean::mesh_fallback_count();
+    let cut = boolean::boolean(&mut topo, BooleanOp::Cut, band, slab).unwrap();
+    assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
+    assert_eq!(bad_edge_uses(&topo, cut), 0, "open or over-shared edges");
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, cut, DEFLECTION).unwrap();
+    assert!(
+        (vol - SLAB_CUT_VOLUME).abs() <= 0.01,
+        "volume {vol:.3}, expected {SLAB_CUT_VOLUME:.3}"
+    );
+    let (band, cut) = (Probed::new(&topo, band), Probed::new(&topo, cut));
+    for (p, kept) in [
+        ([-63.5541, 38.3465, 12.4829], false),
+        ([-63.5541, 38.3465, 5.9610], true),
+    ] {
+        assert_eq!(
+            band.inside(&topo, p),
+            Some(true),
+            "probe {p:?} off the band"
+        );
+        assert_eq!(cut.inside(&topo, p), Some(kept), "probe {p:?}");
     }
 }
