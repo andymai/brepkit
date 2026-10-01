@@ -1,0 +1,36 @@
+crates/io/tests/data/kumiko_wrap_first_band_box_2.bin
+  s_a13d2397d068b4::t_b78eb2033dd9e9 1
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_a13d2397d068b4::t_b78eb2033dd9e9 1-62
+crates/operations/src/mesh_boolean.rs
+  s_a13d2397d068b4::t_8945ba0676c8a7 1407-1409,1415-1429
+  s_a13d2397d068b4::t_615cedbe1761fc 1375-1377,1388-1396,1399-1406,1410-1412,1430-1431,1433-1462,1464-1466,1469-1472,1474-1490,1498,1500-1504
+  s_a13d2397d068b4::t_c949b670c1f82c 1491-1497,1499
+  s_a13d2397d068b4::t_0d5d2c2f68b6bf 1351-1355,1397-1398,1467-1468,2110-2187
+  s_a13d2397d068b4::t_1a0d89e405ed20 2188
+crates/io/tests/data/kumiko_wrap_first_band_box_1.bin
+  s_a13d2397d068b4::t_b78eb2033dd9e9 1
+crates/io/tests/data/kumiko_wrap_first_band.bin
+  s_a13d2397d068b4::t_b78eb2033dd9e9 1
+crates/operations/src/boolean/mod.rs
+  s_a13d2397d068b4::t_d619b92f7c5f38 981
+  s_a13d2397d068b4::t_3a62fe7cf55a20 1040-1049,1055-1076
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_6f0d453ba66ab8 141,194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c30a5f3f149451b143b3163f310a39c8c173dc36",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
