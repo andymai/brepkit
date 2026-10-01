@@ -38,7 +38,7 @@ const REMOVED: [(usize, [f64; 3]); 3] = [
     (2, [3.0923, 1.5415, 6.6517]),
     (17, [2.5138, 2.2473, 33.4310]),
 ];
-const KEPT: [[f64; 3]; 2] = [[-0.3310, 2.2636, 8.9978], [0.1529, 1.8115, 6.4787]];
+const KEPT: [[f64; 3]; 2] = [[0.1529, 1.8115, 6.4787], [0.1529, 1.8115, 21.5934]];
 
 fn load(topo: &mut Topology, name: &str) -> SolidId {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -47,18 +47,37 @@ fn load(topo: &mut Topology, name: &str) -> SolidId {
     deserialize_solid(&std::fs::read(path).unwrap(), topo).unwrap()
 }
 
-/// Whether `p` is inside `solid`, when the ray and winding classifiers agree.
-fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> Option<bool> {
-    use brepkit_operations::classify::{
-        PointClassification as P, classify_point, classify_point_winding,
-    };
-    let p = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
-    let ray = classify_point(topo, solid, p, 0.05, 1e-7).ok()?;
-    let wind = classify_point_winding(topo, solid, p, 0.05, 1e-7).ok()?;
-    match (ray, wind) {
-        (P::Inside, P::Inside) => Some(true),
-        (P::Outside, P::Outside) => Some(false),
-        _ => None,
+/// A solid with its tessellation, for point probes.
+struct Probed {
+    solid: SolidId,
+    mesh: brepkit_operations::tessellate::TriangleMesh,
+}
+
+impl Probed {
+    fn new(topo: &Topology, solid: SolidId) -> Self {
+        let mesh = brepkit_operations::tessellate::tessellate_solid(topo, solid, 0.05).unwrap();
+        Self { solid, mesh }
+    }
+
+    /// Whether `p` is inside, when the ray cast and the generalized winding
+    /// number over the tessellation agree.
+    fn inside(&self, topo: &Topology, p: [f64; 3]) -> Option<bool> {
+        use brepkit_operations::classify::{PointClassification, classify_point};
+        let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
+        let ray = match classify_point(topo, self.solid, q, 0.05, 1e-7).ok()? {
+            PointClassification::Inside => true,
+            PointClassification::Outside => false,
+            PointClassification::OnBoundary => return None,
+        };
+        let mut solid_angle = 0.0;
+        for tri in self.mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| self.mesh.positions[i as usize] - q);
+            let (la, lb, lc) = (a.length(), b.length(), c.length());
+            let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+            solid_angle += 2.0 * a.dot(b.cross(c)).atan2(den);
+        }
+        let wind = (solid_angle / (4.0 * std::f64::consts::PI)).abs() > 0.5;
+        (ray == wind).then_some(ray)
     }
 }
 
@@ -124,7 +143,12 @@ fn kumiko_wrap_first_band_chain_stays_exact() {
             "box {i}: volume {vol:.3}, expected {expected:.3}"
         );
         for (b, p) in REMOVED.into_iter().filter(|&(b, _)| b == i) {
-            assert_eq!(inside(&topo, cur, p), Some(false), "box {b}: material left");
+            let probed = Probed::new(&topo, cur);
+            assert_eq!(
+                probed.inside(&topo, p),
+                Some(false),
+                "box {b}: material left"
+            );
         }
     }
 }
@@ -149,22 +173,23 @@ fn kumiko_wrap_first_band_compound_cut_stays_exact() {
         (vol - COMPOUND_VOLUME).abs() <= 0.01,
         "volume {vol:.3}, expected {COMPOUND_VOLUME:.3}"
     );
+    let (band, cut) = (Probed::new(&topo, band), Probed::new(&topo, cut));
     for (b, p) in REMOVED {
         assert_eq!(
-            inside(&topo, band, p),
+            band.inside(&topo, p),
             Some(true),
             "box {b}: probe off the band"
         );
-        assert_eq!(inside(&topo, cut, p), Some(false), "box {b}: material left");
+        assert_eq!(cut.inside(&topo, p), Some(false), "box {b}: material left");
     }
     for p in KEPT {
         assert_eq!(
-            inside(&topo, band, p),
+            band.inside(&topo, p),
             Some(true),
             "probe {p:?} off the band"
         );
         assert_eq!(
-            inside(&topo, cut, p),
+            cut.inside(&topo, p),
             Some(true),
             "material at {p:?} removed"
         );

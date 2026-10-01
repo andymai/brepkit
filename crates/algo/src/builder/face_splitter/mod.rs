@@ -1031,18 +1031,9 @@ fn is_periodic_face_outside(lp: &[OrientedPCurveEdge], surface: &FaceSurface) ->
 /// 2-arc closed loop whose pcurve-sampled polygon folds to ~zero area while
 /// the true disc is πr² (the blind-recess cap the result must keep).
 fn wire_loops_have_degenerate_area(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
-    loops.iter().any(|wl| {
-        let pts = sample_wire_loop_uv(wl);
-        if pts.len() < 3 {
-            return true;
-        }
-        let area = signed_area_2d(&pts);
-        let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
-        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
-            perimeter += (*last - *first).length();
-        }
-        area.abs() <= perimeter * tol
-    })
+    loops
+        .iter()
+        .any(|wl| loop_has_degenerate_area(wl, tol, None))
 }
 
 /// Whether one loop encloses no area. On a plane face the loop is sampled
