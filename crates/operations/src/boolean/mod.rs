@@ -2508,6 +2508,7 @@ fn detect_trivial_relation(
                 ) && crate::distance::point_to_solid_distance(topo, p, outer)
                     .is_ok_and(|d| d.distance > tol.linear * 10.0)
             };
+            let planes = outward_planes(topo, outer);
             let stride = edges.len().div_ceil(24).max(1);
             edges.iter().step_by(stride).any(|&eid| {
                 let Ok(e) = topo.edge(eid) else { return false };
@@ -2525,7 +2526,25 @@ fn detect_trivial_relation(
                             .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
                     };
                     clear_outside(p)
-                })
+                }) || {
+                    // A rim can leave the outer solid between those samples
+                    // (a rod poking a twentieth of its radius past a wall
+                    // does so over a seventh of a turn), so probe where it
+                    // reaches farthest past the outer's planes, deepest
+                    // first. A linear function peaks on a ruled or planar
+                    // face's boundary, so the rims carry those faces' reach.
+                    let mut reach: Vec<(f64, Point3)> = planes
+                        .iter()
+                        .filter_map(|&(n, offset)| {
+                            let p = rim_reach(e.curve(), (t0, t1), n)?;
+                            let depth = n.dot(p - Point3::new(0.0, 0.0, 0.0)) - offset;
+                            (depth > tol.linear * 10.0).then_some((depth, p))
+                        })
+                        .collect();
+                    reach.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    reach.dedup_by(|a, b| (a.1 - b.1).length() < tol.linear);
+                    reach.into_iter().take(4).any(|(_, p)| clear_outside(p))
+                }
             }) || round_of(topo, inner).is_some_and(|round| {
                 // A ball whose centre lies nearer the outer solid's boundary
                 // than its radius holds a boundary point inside it, so it
@@ -2591,6 +2610,38 @@ fn detect_trivial_relation(
         a_in_b,
         b_in_a,
     }
+}
+
+/// The point of a circle or ellipse edge, within its span `(t0, t1)`,
+/// farthest along the unit direction `n`; `None` for other curves, a
+/// direction along the conic's normal, or a peak off the span.
+fn rim_reach(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    (t0, t1): (f64, f64),
+    n: Vec3,
+) -> Option<Point3> {
+    use brepkit_topology::edge::EdgeCurve;
+    let (center, u, v, a, b) = match curve {
+        EdgeCurve::Circle(c) => (c.center(), c.u_axis(), c.v_axis(), c.radius(), c.radius()),
+        EdgeCurve::Ellipse(e) => (
+            e.center(),
+            e.u_axis(),
+            e.v_axis(),
+            e.semi_major(),
+            e.semi_minor(),
+        ),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+    };
+    let (nu, nv) = (a * n.dot(u), b * n.dot(v));
+    if nu.hypot(nv) <= 1e-12 * a.max(b) {
+        return None;
+    }
+    // A closed rim's span is a whole turn, which holds every peak.
+    let peak = nv.atan2(nu);
+    if (peak - t0).rem_euclid(std::f64::consts::TAU) > t1 - t0 {
+        return None;
+    }
+    Some(center + u * (a * peak.cos()) + v * (b * peak.sin()))
 }
 
 /// A solid bounded only by faces of one sphere (a ball) or of one torus (a

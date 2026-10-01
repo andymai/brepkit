@@ -580,7 +580,22 @@ pub fn perform(
                             (FaceClip::Range(a), FaceClip::Range(b)) => {
                                 a.0.max(b.0) < a.1.min(b.1) - 1e-9
                             }
-                            _ => false,
+                            // An outline with arcs (a rod's cap disc, a
+                            // rounded-corner floor) reads exactly on its own
+                            // curves.
+                            (FaceClip::Empty, _) | (_, FaceClip::Empty) => false,
+                            _ => {
+                                let tol_lin = tol.linear;
+                                match (
+                                    line_face_intervals(topo, fa, raw.p_start, raw.p_end, tol_lin),
+                                    line_face_intervals(topo, fb, raw.p_start, raw.p_end, tol_lin),
+                                ) {
+                                    (Some(ia), Some(ib)) => ia.iter().any(|a| {
+                                        ib.iter().any(|b| a.0.max(b.0) < a.1.min(b.1) - 1e-9)
+                                    }),
+                                    _ => false,
+                                }
+                            }
                         };
                     }
                     if traced && std::env::var("BK_F2_TRACE").is_ok() {
@@ -6512,6 +6527,105 @@ fn clip_line_to_face(topo: &Topology, face_id: FaceId, raw: &RawCurve) -> FaceCl
         Some(range) => FaceClip::Range(range),
         None => FaceClip::Empty,
     }
+}
+
+/// The fractions of the segment `p0` to `p1`, lying in a planar face's
+/// plane, where it runs through that face, read on the face's own lines and
+/// arcs, holes included. A run along the boundary counts as inside. `None`
+/// when the face is not a plane or has a NURBS edge.
+fn line_face_intervals(
+    topo: &Topology,
+    face_id: FaceId,
+    p0: Point3,
+    p1: Point3,
+    tol: f64,
+) -> Option<Vec<(f64, f64)>> {
+    use brepkit_math::region2d::{Boundary2, point_in_region};
+    use brepkit_math::vec::{Point2, Vec2};
+
+    let face = topo.face(face_id).ok()?;
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return None;
+    };
+    let frame = brepkit_math::frame::Frame3::from_normal(p0, *normal).ok()?;
+    let pieces =
+        brepkit_topology::planar::face_boundary_2d(topo, face_id, p0, frame.x, frame.y).ok()??;
+    let span = p1 - p0;
+    let d = Vec2::new(span.dot(frame.x), span.dot(frame.y));
+    let len = d.length();
+    if len <= tol {
+        return None;
+    }
+    let cross = |x: Vec2, y: Vec2| x.x().mul_add(y.y(), -(x.y() * y.x()));
+    let mut cuts = vec![0.0, 1.0];
+    for piece in &pieces {
+        match *piece {
+            Boundary2::Segment(a, b) => {
+                let ab = b - a;
+                let det = cross(d, ab);
+                if det.abs() <= 1e-12 * len * ab.length() {
+                    continue;
+                }
+                let ap = Vec2::new(a.x(), a.y());
+                let s = cross(ap, ab) / det;
+                let w = cross(ap, d) / det;
+                if (-1e-9..=1.0 + 1e-9).contains(&w) {
+                    cuts.push(s);
+                }
+            }
+            Boundary2::Arc {
+                center,
+                u,
+                v,
+                a,
+                b,
+                t0,
+                t1,
+            } => {
+                let q = Vec2::new(-center.x(), -center.y());
+                let (x0, y0) = (q.dot(u) / a, q.dot(v) / b);
+                let (dx, dy) = (d.dot(u) / a, d.dot(v) / b);
+                let qa = dx.mul_add(dx, dy * dy);
+                let qb = 2.0 * x0.mul_add(dx, y0 * dy);
+                let qc = x0.mul_add(x0, y0 * y0) - 1.0;
+                let disc = qb.mul_add(qb, -4.0 * qa * qc);
+                if disc < 0.0 {
+                    continue;
+                }
+                for s in [
+                    (-qb - disc.sqrt()) / (2.0 * qa),
+                    (-qb + disc.sqrt()) / (2.0 * qa),
+                ] {
+                    let t = s.mul_add(dy, y0).atan2(s.mul_add(dx, x0));
+                    if t0 + (t - t0).rem_euclid(std::f64::consts::TAU) <= t1 + 1e-9 {
+                        cuts.push(s);
+                    }
+                }
+            }
+        }
+    }
+    let mut cuts: Vec<f64> = cuts
+        .into_iter()
+        .filter(|s| (0.0..=1.0).contains(s))
+        .collect();
+    cuts.sort_by(f64::total_cmp);
+    let mut runs: Vec<(f64, f64)> = Vec::new();
+    for w in cuts.windows(2) {
+        let (s0, s1) = (w[0], w[1]);
+        if (s1 - s0) * len <= tol {
+            continue;
+        }
+        let mid = 0.5 * (s0 + s1);
+        let p = Point2::new(d.x() * mid, d.y() * mid);
+        if point_in_region(&pieces, p, tol) == Some(false) {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(last) if (s0 - last.1) * len <= tol => last.1 = s1,
+            _ => runs.push((s0, s1)),
+        }
+    }
+    Some(runs)
 }
 
 /// Test whether a simple polygon is convex via a signed-cross-product

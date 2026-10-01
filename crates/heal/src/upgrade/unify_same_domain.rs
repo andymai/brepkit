@@ -373,6 +373,15 @@ fn merge_group_simple(
     if boundary_edges.is_empty() {
         return Ok(None);
     }
+    // The faces' surviving edges come face by face; a wire must run them in
+    // traversal order.
+    let Some(boundary_edges) = chain_into_loop(topo, &boundary_edges)? else {
+        log::debug!(
+            "unify_same_domain: boundary of {} faces is not one loop",
+            group_face_ids.len()
+        );
+        return Ok(None);
+    };
 
     let Ok(merged_wire) = Wire::new(boundary_edges, true) else {
         log::warn!(
@@ -390,6 +399,38 @@ fn merge_group_simple(
         brepkit_topology::face::Face::new(new_wire_id, Vec::new(), surface.clone())
     };
     Ok(Some(vec![topo.add_face(new_face)]))
+}
+
+/// `edges` reordered into one closed loop, each starting where the previous
+/// ends, or `None` when they do not chain into exactly one loop.
+fn chain_into_loop(
+    topo: &Topology,
+    edges: &[OrientedEdge],
+) -> Result<Option<Vec<OrientedEdge>>, HealError> {
+    let mut rest = Vec::with_capacity(edges.len());
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        let (s, t) = if oe.is_forward() {
+            (edge.start(), edge.end())
+        } else {
+            (edge.end(), edge.start())
+        };
+        rest.push((*oe, s, t));
+    }
+    let Some((first, start, mut at)) = rest.first().copied() else {
+        return Ok(None);
+    };
+    rest.remove(0);
+    let mut chained = vec![first];
+    while !rest.is_empty() {
+        let Some(i) = rest.iter().position(|&(_, s, _)| s == at) else {
+            return Ok(None);
+        };
+        let (oe, _, t) = rest.remove(i);
+        chained.push(oe);
+        at = t;
+    }
+    Ok((at == start).then_some(chained))
 }
 
 /// A surviving edge with its traversal endpoints and 2D outgoing tangent.
@@ -658,11 +699,28 @@ fn merge_group_with_holes(
 
     let reversed = topo.face(group_face_ids[0])?.is_reversed();
 
-    // An outer loop bounds material on its left → positive signed UV area for a
-    // non-reversed face (flipped when the face inherits a reversed orientation).
-    // Holes carry the opposite sign. Reverse a loop's edge run when its current
-    // sign disagrees.
-    let outer_positive = !reversed;
+    // The merged outer loops wind as the members' outer wires do, and holes the
+    // other way; a reversed face may store its wire either way round its
+    // surface's normal, so read the sense off the members rather than the flag.
+    // Reverse a loop's edge run when its current sign disagrees.
+    let mut widest = 0.0_f64;
+    for &fid in group_face_ids {
+        let wire = topo.wire(topo.face(fid)?.outer_wire())?;
+        let mut pts = Vec::with_capacity(wire.edges().len());
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            pts.push(to_uv(topo.vertex(oe.oriented_start(edge))?.point()));
+        }
+        let area = polygon_signed_area(&pts);
+        if area.abs() > widest.abs() {
+            widest = area;
+        }
+    }
+    let outer_positive = if widest.abs() > lin * lin {
+        widest > 0.0
+    } else {
+        !reversed
+    };
     let build_wire =
         |topo: &mut Topology, info: &LoopInfo, want_positive: bool| -> Result<WireId, HealError> {
             let mut oes: Vec<OrientedEdge> =
@@ -1231,6 +1289,81 @@ mod merge_tests {
             .map(|&e| OrientedEdge::new(e, true))
             .collect();
         topo.add_wire(Wire::new(oes, is_closed).unwrap())
+    }
+
+    /// Two quarter-cylinder faces stacked along the axis share the arc
+    /// between them, which sits mid-wire in each; the merged face's wire runs
+    /// its surviving edges end to end.
+    #[test]
+    fn stacked_quarter_cylinders_merge_into_a_chained_wire() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::face::{Face, FaceSurface};
+
+        let mut topo = Topology::default();
+        let cyl = CylindricalSurface::new(origin(), z_axis(), 1.0).unwrap();
+        let at = |z: f64| Circle3D::new(Point3::new(0.0, 0.0, z), z_axis(), 1.0).unwrap();
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let [a0, b0, a1, b1, a2, b2] = [0.0, 1.0, 2.0]
+            .map(|z| {
+                [at(z).evaluate(0.0), at(z).evaluate(quarter)].map(|p| add_vertex(&mut topo, p))
+            })
+            .concat()
+            .try_into()
+            .unwrap();
+        let arc =
+            |topo: &mut Topology, a, b, z| topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(at(z))));
+        let (bottom, middle, top) = (
+            arc(&mut topo, a0, b0, 0.0),
+            arc(&mut topo, a1, b1, 1.0),
+            arc(&mut topo, a2, b2, 2.0),
+        );
+        let [ra, rb, sa, sb] = [(a0, a1), (b0, b1), (a1, a2), (b1, b2)]
+            .map(|(p, q)| topo.add_edge(Edge::new(p, q, EdgeCurve::Line)));
+        let face = |topo: &mut Topology, edges: [(brepkit_topology::edge::EdgeId, bool); 4]| {
+            let oes = edges.map(|(e, fwd)| OrientedEdge::new(e, fwd)).to_vec();
+            let wire = topo.add_wire(Wire::new(oes, true).unwrap());
+            topo.add_face(Face::new(
+                wire,
+                Vec::new(),
+                FaceSurface::Cylinder(cyl.clone()),
+            ))
+        };
+        let low = face(
+            &mut topo,
+            [(rb, true), (middle, false), (ra, false), (bottom, true)],
+        );
+        let high = face(
+            &mut topo,
+            [(middle, true), (sb, true), (top, false), (sa, false)],
+        );
+
+        let merged =
+            merge_group_simple(&mut topo, &[low, high], &FaceSurface::Cylinder(cyl.clone()))
+                .unwrap()
+                .unwrap();
+        let wire = topo
+            .wire(topo.face(merged[0]).unwrap().outer_wire())
+            .unwrap();
+        let ends: Vec<_> = wire
+            .edges()
+            .iter()
+            .map(|oe| {
+                let e = topo.edge(oe.edge()).unwrap();
+                if oe.is_forward() {
+                    (e.start(), e.end())
+                } else {
+                    (e.end(), e.start())
+                }
+            })
+            .collect();
+        assert_eq!(ends.len(), 6);
+        for (i, &(_, end)) in ends.iter().enumerate() {
+            assert_eq!(
+                end,
+                ends[(i + 1) % ends.len()].0,
+                "edge {i} does not meet the next"
+            );
+        }
     }
 
     #[test]

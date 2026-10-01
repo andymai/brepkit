@@ -195,6 +195,46 @@ fn dist_to_surface(
     }
 }
 
+/// A planar face's boundary in its own plane, read on its lines and arcs.
+struct PlaneRegion {
+    origin: brepkit_math::vec::Point3,
+    x: brepkit_math::vec::Vec3,
+    y: brepkit_math::vec::Vec3,
+    pieces: Vec<brepkit_math::region2d::Boundary2>,
+}
+
+impl PlaneRegion {
+    /// `None` for a face that is not a plane or has a NURBS edge.
+    fn of(topo: &Topology, face_id: FaceId) -> Option<Self> {
+        let face = topo.face(face_id).ok()?;
+        let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() else {
+            return None;
+        };
+        let first = *topo.wire(face.outer_wire()).ok()?.edges().first()?;
+        let origin = topo
+            .vertex(topo.edge(first.edge()).ok()?.start())
+            .ok()?
+            .point();
+        let frame = brepkit_math::frame::Frame3::from_normal(origin, *normal).ok()?;
+        let pieces =
+            brepkit_topology::planar::face_boundary_2d(topo, face_id, origin, frame.x, frame.y)
+                .ok()??;
+        Some(Self {
+            origin,
+            x: frame.x,
+            y: frame.y,
+            pieces,
+        })
+    }
+
+    /// Whether `p` lies within `tol` of the face's boundary.
+    fn on_boundary(&self, p: brepkit_math::vec::Point3, tol: f64) -> bool {
+        let d = p - self.origin;
+        let flat = brepkit_math::vec::Point2::new(d.dot(self.x), d.dot(self.y));
+        brepkit_math::region2d::on_boundary(&self.pieces, flat, tol)
+    }
+}
+
 /// Edges from EF interference go into the face's `pave_blocks_in`.
 ///
 /// Only the leaf pave blocks adjacent to the crossing parameter are
@@ -221,7 +261,13 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
         })
         .collect();
 
+    let mut regions: std::collections::HashMap<FaceId, Option<PlaneRegion>> =
+        std::collections::HashMap::new();
     for (edge_id, face_id, parameter) in ef_data {
+        let region = regions
+            .entry(face_id)
+            .or_insert_with(|| PlaneRegion::of(topo, face_id))
+            .as_ref();
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
             let selected: Vec<PaveBlockId> = match parameter {
@@ -308,13 +354,16 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                         edge.curve()
                             .evaluate_with_endpoints(f.mul_add(span, t0), osp, oep)
                     });
-                    let mut dev: f64 = 0.0;
-                    for p in std::iter::once(psv.point())
-                        .chain(std::iter::once(pev.point()))
+                    let mut ends: f64 = 0.0;
+                    let mut middle: f64 = 0.0;
+                    for (k, p) in [psv.point(), pev.point()]
+                        .into_iter()
                         .chain(interior)
+                        .enumerate()
                     {
                         match dist_to_surface(&surface, p) {
-                            Some(d) => dev = dev.max(d),
+                            Some(d) if k < 2 => ends = ends.max(d),
+                            Some(d) => middle = middle.max(d),
                             // Untrustworthy measurement (NURBS projection can
                             // silently return a wrong foot): keep the leaf —
                             // the pre-gate behavior — rather than risk a
@@ -322,6 +371,23 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                             None => return true,
                         }
                     }
+                    // Both ends on the plane and the middle off it: the leaf
+                    // crosses the plane at its ends. Ending on the face's
+                    // boundary, it stands in for a chord of that boundary (a
+                    // box's corner arc against a faceted loft's facet), which
+                    // the face needs; ending elsewhere it lies in no face (a
+                    // rod's cap arc between two shallow crossings of a wall,
+                    // one on either side of the wall's split).
+                    if ends <= on_band
+                        && middle > on_band
+                        && region.is_some_and(|r| {
+                            !r.on_boundary(psv.point(), on_band)
+                                || !r.on_boundary(pev.point(), on_band)
+                        })
+                    {
+                        return false;
+                    }
+                    let dev = ends.max(middle);
                     let chord = (pev.point() - psv.point()).length();
                     // The absolute ceiling applies to STRAIGHT leaves only: a
                     // line's deviation from a crossed plane grows linearly, so

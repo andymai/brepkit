@@ -239,7 +239,7 @@ pub(super) fn split_boundary_edges_at_3d_points(
 /// The pcurve of the piece of boundary edge `edge` from `from` to `to`
 /// (in traversal order): along the edge's own sense, so a piece of half a
 /// turn or more traces itself rather than its complement.
-fn boundary_piece_pcurve(
+pub(super) fn boundary_piece_pcurve(
     edge: &OrientedPCurveEdge,
     from: Point3,
     to: Point3,
