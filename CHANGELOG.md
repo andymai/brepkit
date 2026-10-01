@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.11](https://github.com/andymai/brepkit/compare/v4.1.10...v4.1.11) (2026-10-01)
+
+
+### Bug Fixes
+
+* **algo:** keep the first kumiko band's compound cut exact ([#1933](https://github.com/andymai/brepkit/issues/1933)) ([620e2a8](https://github.com/andymai/brepkit/commit/620e2a898c534d80490a0cbf74aa191b855307db))
+
 ## [4.1.10](https://github.com/andymai/brepkit/compare/v4.1.9...v4.1.10) (2026-10-01)
 
 
