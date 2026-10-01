@@ -1401,3 +1401,26 @@ fn closed_sections_are_traced_once() {
         "dome section winds {winding} times"
     );
 }
+
+/// An open section whose end lies within the join distance of a closed
+/// loop's start stays apart from the loop, whichever of the two was traced
+/// first.
+#[test]
+fn an_open_section_never_absorbs_a_closed_loop() {
+    let at = |x: f64, y: f64| IntersectionPoint {
+        point: Point3::new(x, y, 0.0),
+        param1: (0.0, 0.0),
+        param2: (0.0, 0.0),
+    };
+    let open = vec![at(-1.0, 0.0), at(-0.5, 0.0), at(0.99, 0.0)];
+    let loop_: Vec<IntersectionPoint> = (0..=8)
+        .map(|k| {
+            let a = std::f64::consts::TAU * f64::from(k % 8) / 8.0;
+            at(2.0 - a.cos(), a.sin())
+        })
+        .collect();
+    for segments in [vec![open.clone(), loop_.clone()], vec![loop_, open]] {
+        let chains = super::chaining::chain_traced_segments(segments, 1e-3, 0.05);
+        assert_eq!(chains.len(), 2, "the loop and the open section stay apart");
+    }
+}

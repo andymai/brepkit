@@ -51,7 +51,8 @@ pub(super) fn chain_traced_segments(
                 }
                 let (first_i, last_i) = (chains[i][0].point, chains[i][chains[i].len() - 1].point);
                 let (first_j, last_j) = (chains[j][0].point, chains[j][chains[j].len() - 1].point);
-                if (first_i - last_i).length() < 1e-12 {
+                // A closed loop joins nothing, on either side of the pair.
+                if (first_i - last_i).length() < 1e-12 || (first_j - last_j).length() < 1e-12 {
                     continue;
                 }
                 let joined = if meets(last_i, first_j) {
