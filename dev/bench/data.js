@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790840970274,
+  "lastUpdate": 1790842575718,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48653,6 +48653,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42945183,
             "range": "± 464256",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3ac8f5d7b207026515957afd3ce49c26d3724c3b",
+          "message": "chore(main): release 4.1.8 (#1927)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.1.8](https://github.com/andymai/brepkit/compare/v4.1.7...v4.1.8)\n(2026-10-01)\n\n\n### Bug Fixes\n\n* **algo:** keep the kumiko slot boxes exact when cut one after another\n([#1926](https://github.com/andymai/brepkit/issues/1926))\n([bbac432](https://github.com/andymai/brepkit/commit/bbac4323b46588eba7ac3972f746fa81d3ceeed4))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 4.1.8, which fixes kumiko slot boxes so they stay exact when cut\none after another.\n\n<sup>Written for commit 69a37e1ad39345a10285643d0b9e716c21b4b3f9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1927?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-01T08:13:59Z",
+          "tree_id": "bf9ff858ac326523b5d6d4e955c1dcda26652a6e",
+          "url": "https://github.com/andymai/brepkit/commit/3ac8f5d7b207026515957afd3ce49c26d3724c3b"
+        },
+        "date": 1790842568597,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 558424,
+            "range": "± 2311",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 611177,
+            "range": "± 3771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7841,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 425899,
+            "range": "± 1398",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26929590,
+            "range": "± 160020",
             "unit": "ns/iter"
           }
         ]
