@@ -2570,8 +2570,19 @@ fn trim_ellipse_to_boundary_crossings(
     // tread-boundary crossing that coincides with the seam but carries ~1e-6
     // of line-cylinder rounding (else the seam-boundary split, which uses the
     // kernel's 1e-7 tolerance, misses it and the chain end dangles).
-    if let Ok(aface) = topo.face(analytic_face) {
-        for oe in topo.wire(aface.outer_wire()).ok()?.edges() {
+    // Holes count as well: the arcs are kept or dropped by where their
+    // midpoints fall on the face, holes included, so an arc must end where
+    // it enters one.
+    let analytic_wires: Vec<_> = topo.face(analytic_face).map_or_else(
+        |_| Vec::new(),
+        |aface| {
+            std::iter::once(aface.outer_wire())
+                .chain(aface.inner_wires().iter().copied())
+                .collect()
+        },
+    );
+    for wid in analytic_wires {
+        for oe in topo.wire(wid).ok()?.edges() {
             let Ok(edge) = topo.edge(oe.edge()) else {
                 continue;
             };
