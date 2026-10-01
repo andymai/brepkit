@@ -1,0 +1,38 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a13d2397d068b4::t_44d8b4cd933452 4567-4571
+  s_a13d2397d068b4::t_05b0ffc40eb569 898-919,957,7670-7692,8195
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_bb99f3714f180b 141,194
+crates/io/tests/data/kumiko_wrap_slot_box_10.bin
+  s_a13d2397d068b4::t_0a6db2f17678fc 1
+crates/io/tests/data/kumiko_wrap_slot_box_11.bin
+  s_a13d2397d068b4::t_3a7895594559d0 1
+crates/io/tests/data/kumiko_wrap_slot_box_12.bin
+  s_a13d2397d068b4::t_74f3eade7fc3e0 1
+crates/io/tests/data/kumiko_wrap_slot_box_15.bin
+  s_a13d2397d068b4::t_47ded78e6cd886 1
+crates/io/tests/data/kumiko_wrap_slot_box_16.bin
+  s_a13d2397d068b4::t_277949aa996f52 1
+crates/io/tests/data/kumiko_wrap_slot_box_17.bin
+  s_a13d2397d068b4::t_d01bf21e1353b5 1
+crates/io/tests/kumiko_wrap_slot_cut_inmem.rs
+  s_a13d2397d068b4::t_86bf8acced949c 11,27-30,32-33,163-187
+crates/operations/src/boolean/mod.rs
+  s_a13d2397d068b4::t_709f36a9be1bd9 57-68,864-869,976-979,1014-1017,1019-1020
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6d1c7c36c73b8b68092e56cffc40a70c6871d279",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
