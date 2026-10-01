@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790842575718,
+  "lastUpdate": 1790848369052,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48707,6 +48707,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26929590,
             "range": "± 160020",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fbb3f69dd873d84a83586d8562a75a73b858259b",
+          "message": "fix(algo): keep the kumiko compound cut exact by cutting box by box (#1929)\n\nThe gridfinity tool's kumiko corner-wrap call, `compound_cut` of the\nstrut-cut band by its 19 overlapping slot boxes, now returns an exact\nB-Rep natively in 6.9 s (262 faces: 16 cylinders, 129 NURBS, 117 planes;\nclosed mesh; volume 305.690), where it took 112 s and returned a\n7,227-face planar mesh (volume 304.276). The second captured corner\nband, with 16 boxes, compound-cuts exactly in 5.1 s (265 faces, closed\nmesh).\n\n## What changes\n\n- `compound_cut` fuses the overlapping boxes with `fuse_n` (exact, 144\nfaces, 30 ms), then cuts the band once. That cut fails in GFA with an\nopen 50-face growth shell. The outer cylinder, split by 61 sections at\nonce, leaves 42.8 mm² uncovered. Mesh fallback consumed about 110 s of\nthe previous 112 s result.\n\nA thread-local switch now makes mesh fallback decline with an error\nwhile `compound_cut` runs the contact-thin shortcut and batched cut\nprobes. A batch that cannot remain exact therefore fails in the time\nrequired by its GFA attempt, allowing the existing sequential per-tool\nfallback to run. A decline also sets `MESH_FALLBACK_DECLINED`.\n`compound_cut` discards the batch whenever that flag is set, including\nwhen a helper such as the multi-region cut retry swallows the declined\nerror and retains an uncut component. `DeclineGuard` restores the switch\nif a probe panics, preventing later booleans from continuing to decline\nfallback.\n\n- Box 8 after box 7 exposed the first remaining root after #1926, which\nkept boxes 1 through 7 exact. `clip_sections_to_outer_region` counted a\ncrossing only when its inside sample cleared the 1e-3 band. Box 8's\nsection on the inner-cylinder face cut by box 7 crossed out of the face\nwith its inside sample 3e-4 from the boundary. The section remained\nwhole and dangled, producing 6 free edges. Any in/out change between\nsamples now counts when either sample is clear of the band.\n\n- Box 8 also splits the outer cylinder, which earlier boxes pierce with\nholes. The split pieces' outer wires occupy one higher turn in u, 10.99\nto 12.41, while the hole samples occupy 4.7 to 6.1. No piece passed the\nhole containment test, so the largest-piece fallback attached the holes\nabove box 8's section chain instead of below it. The result closed by\nedge id but was 9 mm³ too large, with 64 open mesh edges at the hole\nrims.\n\nHole placement in both the general split path and `attach_whole_holes`\nnow shifts each probe by the whole number of turns that places it\nnearest the loop's own u range. `uv_in_loop_any_turn` tests that turn\nand one turn on either side, handling any number of stored turns between\nthem. Torus faces receive the same treatment in v.\n\n- Box 9 exposed the third root. Its section on the plane face left on\nthe band by box 8's lower face caused the greedy walker to trace one\npinched loop, following the section out and back. The face did not split\nand retained 5 free edges. When a greedy loop on a plane face revisits a\nvertex, the DCEL face trace is now consulted. It is adopted only when it\nstrictly refines the partition and passes the loop-health checks, using\nthe same gate as the non-planar DCEL rescue.\n\n## Verification\n\n- `kumiko_wrap_slot_chain_stays_exact` cuts all 19 boxes in order with\n`operations::boolean`. Every step has no mesh fallback, no open or\nover-shared edges, and volume within 0.01 of its recorded value. Each\nrecorded volume agrees with the preceding volume minus the next box's\nintersection volume within 0.1.\n\n- `kumiko_wrap_slot_compound_cut_stays_exact` runs `compound_cut` with\nall 19 boxes. It has no mesh fallback, no open or over-shared edges, and\nvolume within 0.01 of 305.690. Boxes 10, 11, 12, 15, 16, and 17 are\nadded, making all 19 captured boxes fixtures.\n\n- The pins isolate each change. Reverting clipping makes box 8 fall\nback. Reverting hole placement leaves box 8's volume incorrect.\nReverting the DCEL consultation makes box 9 fall back. Reverting\ndeclined fallback makes the compound test return a mesh after 112 s.\n\n- On the head based on main, `brepkit-math`, `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` pass 2,448 tests with 0 failures\nand 15 ignored. All 236 `brepkit-wasm` library tests pass, with 3\nignored.\n\n- The pose sweep and `truth_audit` are identical to main.\n`approx_census` matches apart from timings and the face pair named in\nthe offset nurbs-loft error, which also differs between runs on main.\nThe kumiko strut pose sweep, covering 120 cut, fuse, and intersect\ncases, is identical to main at 102 exact.\n\n## Next\n\n- The roadmap closes the compound cut in one line. The open kumiko row\nnow calls for a tool-side re-measure using a wasm built from this fix.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes the kumiko corner-wrap `compound_cut` stay exact by cutting the\nband box by box instead of falling back to a planar mesh. Previously the\nsingle cut against all 19 fused boxes degraded to a 7,227-face mesh\ntaking 112 s; now it returns an exact B-Rep in 6.9 s (262 faces).\n\n**Details**\n- `compound_cut` declines the mesh fallback during its batched probes;\nthe decline flag is tracked thread-locally and survives helpers that\nswallow the error, so a batch that cannot stay exact is discarded and\nthe sequential per-tool fallback runs instead.\n- Fixed three precision bugs uncovered by the box-by-box replay: a\nsection clip that missed crossings with inside samples in the `1e-3`\nband, holes misplaced on periodic cylinders when samples sat a turn\napart, and a greedy plane-face loop that traced a pinched loop, now\nrecovered via the DCEL face trace.\n- Added fixtures for boxes 10–12 and 15–17 to cover all 19 boxes, and\ntwo tests (`kumiko_wrap_slot_chain_stays_exact` and\n`kumiko_wrap_slot_compound_cut_stays_exact`) that pin exactness with no\nmesh fallback and volume checks.\n\n<sup>Written for commit 21c92ead17603b552b3cc1624065b09ad76831d2.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1929?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T09:50:26Z",
+          "tree_id": "5b81ed26726c6d84ba85d6c2ae9c3c769f4f446e",
+          "url": "https://github.com/andymai/brepkit/commit/fbb3f69dd873d84a83586d8562a75a73b858259b"
+        },
+        "date": 1790848363049,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 572026,
+            "range": "± 3390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 621565,
+            "range": "± 1507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7806,
+            "range": "± 331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 454351,
+            "range": "± 10391",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28201157,
+            "range": "± 254236",
             "unit": "ns/iter"
           }
         ]
