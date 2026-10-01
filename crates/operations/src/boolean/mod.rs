@@ -2536,7 +2536,7 @@ fn detect_trivial_relation(
                     let mut reach: Vec<(f64, Point3)> = planes
                         .iter()
                         .filter_map(|&(n, offset)| {
-                            let p = rim_reach(e.curve(), ps, pe, (t0, t1), n)?;
+                            let p = rim_reach(e.curve(), (t0, t1), n)?;
                             let depth = n.dot(p - Point3::new(0.0, 0.0, 0.0)) - offset;
                             (depth > tol.linear * 10.0).then_some((depth, p))
                         })
@@ -2612,13 +2612,11 @@ fn detect_trivial_relation(
     }
 }
 
-/// The point of a circle or ellipse edge, within its span `(t0, t1)` from
-/// `ps` to `pe`, farthest along the unit direction `n`; `None` for other
-/// curves, a direction along the conic's normal, or a peak off the span.
+/// The point of a circle or ellipse edge, within its span `(t0, t1)`,
+/// farthest along the unit direction `n`; `None` for other curves, a
+/// direction along the conic's normal, or a peak off the span.
 fn rim_reach(
     curve: &brepkit_topology::edge::EdgeCurve,
-    ps: Point3,
-    pe: Point3,
     (t0, t1): (f64, f64),
     n: Vec3,
 ) -> Option<Point3> {
@@ -2638,9 +2636,9 @@ fn rim_reach(
     if nu.hypot(nv) <= 1e-12 * a.max(b) {
         return None;
     }
+    // A closed rim's span is a whole turn, which holds every peak.
     let peak = nv.atan2(nu);
-    let closed = (ps - pe).length() <= 1e-12 * a.max(b);
-    if !closed && (peak - t0).rem_euclid(std::f64::consts::TAU) > t1 - t0 {
+    if (peak - t0).rem_euclid(std::f64::consts::TAU) > t1 - t0 {
         return None;
     }
     Some(center + u * (a * peak.cos()) + v * (b * peak.sin()))
