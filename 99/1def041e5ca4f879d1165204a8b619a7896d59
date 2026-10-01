@@ -1,0 +1,32 @@
+crates/io/tests/kumiko_wrap_first_band_batch_inmem.rs
+  s_a13d2397d068b4::t_28729a04fe8edd 1-47
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a13d2397d068b4::t_59275fdeafe62b 1048-1057,7689,7701-7705,7709,7712,7715
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_e4a75861cb8699 6610-6635
+  s_a13d2397d068b4::t_b5454db6456ef3 6609
+  s_a13d2397d068b4::t_d6eb90946103e2 2597-2612,2783-2801,2803,2809-2811,2820,2850,2852,2862
+crates/io/tests/data/kumiko_wrap_first_band_box_17.bin
+  s_a13d2397d068b4::t_28729a04fe8edd 1
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_a13d2397d068b4::t_3a7ba347bef008 4,7,19-24,32-45,47,61-92
+  s_a13d2397d068b4::t_28729a04fe8edd 15
+crates/io/tests/data/kumiko_wrap_first_band_box_19.bin
+  s_a13d2397d068b4::t_28729a04fe8edd 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "991def041e5ca4f879d1165204a8b619a7896d59",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
