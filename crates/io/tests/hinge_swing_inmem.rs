@@ -16,7 +16,10 @@
 //!
 //! Data: `hinge_lid.bin` (the lid), `hinge_lid_clearance.bin` (the bevel's
 //! box), `hinge_lid_bore_<1..4>.bin`, `hinge_lid_knuckle.bin` (the first
-//! knuckle the tool fuses onto the cut lid), `hinge_bin.bin` and
+//! knuckle the tool fuses onto the cut lid), `hinge_lid_knuckled.bin` (the lid
+//! with its knuckles, captured on a wasm built with the fixes below) with
+//! `hinge_lid_pin_short.bin` and `hinge_lid_pin_long.bin` (the two keyhole
+//! pins the tool cuts from it next), `hinge_bin.bin` and
 //! `hinge_bin_clearance_<1..5>.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -190,6 +193,81 @@ fn hinge_lid_knuckle_fuse_is_exact() {
     ] {
         assert_eq!(inside(&topo, fused, p), Some(kept), "probe {p:?}");
     }
+}
+
+/// The short keyhole pin sits in a gap between two knuckles, coaxial with
+/// them, its caps flat on their end faces: it only touches the lid, which the
+/// cut leaves whole. Each end face reaches the cut as several coplanar pieces
+/// from the knuckle fuses, so one of them covers more than one piece of the
+/// pin's cap and same-domain pairing leaves a cap piece unpaired, wholly on
+/// the lid's boundary.
+#[test]
+fn hinge_lid_short_pin_cut_is_exact() {
+    let mut topo = Topology::new();
+    let lid = load(&mut topo, "hinge_lid_knuckled.bin");
+    let pin = load(&mut topo, "hinge_lid_pin_short.bin");
+    let before = volume(&topo, lid);
+    let cut = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Cut, lid, pin).unwrap()
+    });
+    let got = volume(&topo, cut);
+    assert!(
+        (got - before).abs() < 1e-6 * before,
+        "cut {got}, lid {before}"
+    );
+}
+
+/// The long keyhole pin (radius 1, along `x` from -47.905 to 58.56) runs
+/// through the knuckles coaxial with them, its axis in the lid's bevel plane.
+/// The bevel faces meet its wall along a ruling only in the gaps between
+/// knuckles, but each section ran the wall's whole length: one face touching
+/// the wall only at its end, and one reaching across a knuckle around a hole.
+/// The wall split along rulings inside the knuckles and three knuckles lost
+/// its lower quarter. The tool's call cuts both pins at once.
+#[test]
+fn hinge_lid_long_pin_cut_is_exact() {
+    let mut topo = Topology::new();
+    let lid = load(&mut topo, "hinge_lid_knuckled.bin");
+    let short = load(&mut topo, "hinge_lid_pin_short.bin");
+    let long = load(&mut topo, "hinge_lid_pin_long.bin");
+    let lid_copy = brepkit_operations::copy::copy_solid(&mut topo, lid).unwrap();
+    let cut = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Cut, lid_copy, long).unwrap()
+    });
+    let both = exact(&mut topo, |t| {
+        boolean::compound_cut(t, lid, &[short, long], BooleanOptions::default()).unwrap()
+    });
+    let (got, expected) = (volume(&topo, both), volume(&topo, cut));
+    assert!(
+        (got - expected).abs() < 1e-6 * expected,
+        "both pins {got}, the long pin alone {expected}"
+    );
+    // Material stays where the lid had it off the pin: around the axis at
+    // half and 1.3 of the pin's radius, below the tail, in knuckles and gaps.
+    let lid_ref = load(&mut topo, "hinge_lid_knuckled.bin");
+    let (mut kept_seen, mut removed_seen) = (0, 0);
+    for x in [
+        -42.58, -31.94, -21.29, -10.65, 0.0, 10.65, 21.29, 31.94, 42.58, 53.23,
+    ] {
+        for r in [0.5, 1.3] {
+            for deg in [200.0_f64, 250.0, 300.0, 340.0] {
+                let (s, c) = deg.to_radians().sin_cos();
+                let p = [x, 39.35 + r * c, -3.2 + r * s];
+                let Some(in_lid) = inside(&topo, lid_ref, p) else {
+                    continue;
+                };
+                let kept = in_lid && r > 1.0;
+                assert_eq!(inside(&topo, cut, p), Some(kept), "probe {p:?}");
+                assert_eq!(inside(&topo, both, p), Some(kept), "probe {p:?}");
+                if kept {
+                    kept_seen += 1;
+                } else if in_lid {
+                    removed_seen += 1;
+                }
+            }
+        }
+    }
+    assert!(kept_seen > 0 && removed_seen > 0);
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on

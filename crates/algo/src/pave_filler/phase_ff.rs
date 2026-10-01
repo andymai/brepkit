@@ -6244,16 +6244,20 @@ fn clip_trimmed_line_to_planes(
     }
 }
 
-/// A plane x plane section line, split where it crosses the outer boundary
-/// of either face when that boundary carries an elliptical or NURBS edge,
-/// with the pieces outside that face dropped. The polygon clips cannot
-/// represent such a boundary (`clip_line_to_face` is indeterminate there), so
-/// the line otherwise runs on past the face (a band's end plane, bounded by
-/// its bore and strut grooves) and splits its partner where no face meets it.
-/// A boundary edge lies in its face's plane, so it crosses the section line
-/// exactly where it crosses the partner plane. Outlines of lines and circular
-/// arcs, which the face splitter trims against on the true arc, and holes
-/// keep the whole-line paths those splits are calibrated on.
+/// A section line on a plane face, split where it crosses that face's
+/// boundary when the boundary carries an elliptical or NURBS edge, with the
+/// pieces outside the face dropped. The polygon clips cannot represent such a
+/// boundary (`clip_line_to_face` is indeterminate there), so the line
+/// otherwise runs on past the face (a band's end plane, bounded by its bore
+/// and strut grooves) and splits its partner where no face meets it. A
+/// boundary edge lies in its face's plane, so it crosses the line exactly
+/// where it crosses a plane through the line: the partner's own plane, or
+/// for a cylinder or cone ruling the plane through it square to the face.
+/// For a plane x plane line only the outer wires count: outlines of lines and
+/// circular arcs, which the face splitter trims against on the true arc, and
+/// holes keep the whole-line paths those splits are calibrated on. A ruling
+/// also stops at holes (a bevel face around the knuckles a coaxial pin
+/// passes through).
 fn split_plane_line_at_curved_boundaries(
     topo: &Topology,
     fa: FaceId,
@@ -6263,37 +6267,59 @@ fn split_plane_line_at_curved_boundaries(
     raw: RawCurve,
     tol: Tolerance,
 ) -> Vec<RawCurve> {
-    let (
-        EdgeCurve::Line,
-        FaceSurface::Plane {
-            normal: na, d: da, ..
-        },
-        FaceSurface::Plane {
-            normal: nb, d: db, ..
-        },
-    ) = (&raw.curve, surf_a, surf_b)
-    else {
+    if !matches!(raw.curve, EdgeCurve::Line) {
         return vec![raw];
-    };
+    }
     let seg = raw.p_end - raw.p_start;
     let len2 = seg.dot(seg);
     if len2 < tol.linear * tol.linear {
         return vec![raw];
     }
+    let banded = |s: &FaceSurface| matches!(s, FaceSurface::Cylinder(_) | FaceSurface::Cone(_));
+    let through_line = |n: &Vec3| -> Option<(Vec3, f64)> {
+        let q = n.cross(seg).normalize().ok()?;
+        Some((
+            q,
+            q.dot(Vec3::new(raw.p_start.x(), raw.p_start.y(), raw.p_start.z())),
+        ))
+    };
+    // Each face to split against, with the plane its boundary crosses the
+    // line on and whether its holes count.
+    let targets: Vec<(FaceId, &FaceSurface, Vec3, f64, bool)> = match (surf_a, surf_b) {
+        (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
+            vec![(fa, surf_a, *nb, *db, false), (fb, surf_b, *na, *da, false)]
+        }
+        (FaceSurface::Plane { normal, .. }, other) if banded(other) => {
+            let Some((q, dq)) = through_line(normal) else {
+                return vec![raw];
+            };
+            vec![(fa, surf_a, q, dq, true)]
+        }
+        (other, FaceSurface::Plane { normal, .. }) if banded(other) => {
+            let Some((q, dq)) = through_line(normal) else {
+                return vec![raw];
+            };
+            vec![(fb, surf_b, q, dq, true)]
+        }
+        _ => return vec![raw],
+    };
     let mut cuts: Vec<f64> = Vec::new();
-    let mut extents: Vec<(
-        crate::builder::plane_frame::PlaneFrame,
-        Vec<brepkit_math::vec::Point2>,
-        f64,
-    )> = Vec::new();
-    for (face_id, surf, partner_n, partner_d) in [(fa, surf_a, *nb, *db), (fb, surf_b, *na, *da)] {
+    let mut extents: Vec<(FaceExtent, bool)> = Vec::new();
+    for (face_id, surf, partner_n, partner_d, with_holes) in targets {
         let Ok(face) = topo.face(face_id) else {
             return vec![raw];
         };
-        let Ok(outer) = topo.wire(face.outer_wire()) else {
-            return vec![raw];
-        };
-        let curved = outer.edges().iter().any(|oe| {
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied().filter(|_| with_holes))
+            .collect();
+        let mut wires = Vec::with_capacity(wire_ids.len());
+        for wid in wire_ids {
+            let Ok(w) = topo.wire(wid) else {
+                return vec![raw];
+            };
+            wires.push(w);
+        }
+        let curved = wires.iter().flat_map(|w| w.edges()).any(|oe| {
             topo.edge(oe.edge()).is_ok_and(|e| {
                 matches!(e.curve(), EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_))
             })
@@ -6302,55 +6328,49 @@ fn split_plane_line_at_curved_boundaries(
             continue;
         }
         let mut hits: Vec<Point3> = Vec::new();
-        {
-            for oe in outer.edges() {
-                let Ok(edge) = topo.edge(oe.edge()) else {
-                    return vec![raw];
-                };
-                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-                    return vec![raw];
-                };
-                let (sp, ep) = (sv.point(), ev.point());
-                match edge.curve() {
-                    EdgeCurve::Line => {
-                        hits.extend(line_segment_plane_crossing(sp, ep, partner_n, partner_d));
-                    }
-                    EdgeCurve::Circle(c) => {
-                        hits.extend(circle_arc_plane_crossings(c, sp, ep, partner_n, partner_d));
-                    }
-                    EdgeCurve::Ellipse(e) => {
-                        hits.extend(conic_arc_plane_crossings(
-                            |t| e.evaluate(t),
-                            |q| e.project(q),
-                            sp,
-                            ep,
-                            partner_n,
-                            partner_d,
-                        ));
-                    }
-                    curve @ EdgeCurve::NurbsCurve(_) => {
-                        let (t0, t1) = curve.domain_with_endpoints(sp, ep);
-                        hits.extend(
-                            super::phase_ef::find_edge_plane_crossings(
-                                curve, sp, ep, t0, t1, partner_n, partner_d, tol,
-                            )
-                            .into_iter()
-                            .map(|(_, p)| p),
-                        );
-                    }
+        for oe in wires.iter().flat_map(|w| w.edges()) {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return vec![raw];
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return vec![raw];
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            match edge.curve() {
+                EdgeCurve::Line => {
+                    hits.extend(line_segment_plane_crossing(sp, ep, partner_n, partner_d));
+                }
+                EdgeCurve::Circle(c) => {
+                    hits.extend(circle_arc_plane_crossings(c, sp, ep, partner_n, partner_d));
+                }
+                EdgeCurve::Ellipse(e) => {
+                    hits.extend(conic_arc_plane_crossings(
+                        |t| e.evaluate(t),
+                        |q| e.project(q),
+                        sp,
+                        ep,
+                        partner_n,
+                        partner_d,
+                    ));
+                }
+                curve @ EdgeCurve::NurbsCurve(_) => {
+                    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                    hits.extend(
+                        super::phase_ef::find_edge_plane_crossings(
+                            curve, sp, ep, t0, t1, partner_n, partner_d, tol,
+                        )
+                        .into_iter()
+                        .map(|(_, p)| p),
+                    );
                 }
             }
         }
-        let Some(FaceExtent::Plane {
-            frame,
-            poly,
-            margin,
-            ..
-        }) = FaceExtent::new(topo, face_id, surf, None, tol)
+        let Some(extent @ FaceExtent::Plane { .. }) =
+            FaceExtent::new(topo, face_id, surf, None, tol)
         else {
             return vec![raw];
         };
-        extents.push((frame, poly, margin));
+        extents.push((extent, with_holes));
         for p in hits {
             let f = (p - raw.p_start).dot(seg) / len2;
             let foot = raw.p_start + seg * f;
@@ -6372,10 +6392,19 @@ fn split_plane_line_at_curved_boundaries(
     let mut kept: Vec<(f64, f64)> = Vec::new();
     for w in bounds.windows(2) {
         let mid = raw.p_start + seg * f64::midpoint(w[0], w[1]);
-        let inside = extents.iter().all(|(frame, poly, margin)| {
-            let uv = frame.project(mid);
-            crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
-                || point_to_polygon_dist(uv, poly) <= *margin
+        let inside = extents.iter().all(|(extent, with_holes)| match extent {
+            FaceExtent::Plane { .. } if *with_holes => extent.contains(mid),
+            FaceExtent::Plane {
+                frame,
+                poly,
+                margin,
+                ..
+            } => {
+                let uv = frame.project(mid);
+                crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
+                    || point_to_polygon_dist(uv, poly) <= *margin
+            }
+            FaceExtent::Analytic { .. } => true,
         });
         if !inside {
             continue;
