@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.6](https://github.com/andymai/brepkit/compare/v4.1.5...v4.1.6) (2026-10-01)
+
+
+### Bug Fixes
+
+* **math:** march a surface section to the patch edge and keep its trace order ([#1921](https://github.com/andymai/brepkit/issues/1921)) ([143680c](https://github.com/andymai/brepkit/commit/143680ca8b776cb01afc4071270e35b255550399))
+
 ## [4.1.5](https://github.com/andymai/brepkit/compare/v4.1.4...v4.1.5) (2026-09-30)
 
 
