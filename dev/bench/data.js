@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790836130749,
+  "lastUpdate": 1790840970274,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48599,6 +48599,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46343732,
             "range": "± 77996",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bbac4323b46588eba7ac3972f746fa81d3ceeed4",
+          "message": "fix(algo): keep the kumiko slot boxes exact when cut one after another (#1926)\n\nThe gridfinity tool's kumiko corner wrap cuts the strut-cut band\n(`kumiko_wrap_exact_band.bin`) by 19 tilted slot boxes in one\n`compound_cut`; #1924 made each box's cut exact on its own, and this PR\nkeeps boxes 1 through 7 exact when cut one after another in order.\n\n## What was wrong and what this does\n\n- **Box 2 after box 1:** Box 2's top face meets the face left on the\nband by box 1 along a straight section. `clip_line_to_face_boundary`\nclipped that section to the chord of the face's elliptical edge against\nthe inner cylinder because `arc_segment_crossings` returned nothing for\nellipse arcs. The section therefore ended at `(1.284, 0.755, 5.894)`,\n0.07 inside the bore, instead of the arc crossing at `(1.354, 0.755,\n5.911)`. Ellipse arcs now use the same sampled sign-change bisection as\nNURBS arcs, sampled over their native span from the stored start, as the\nfunction's classification polygon samples them, so a major arc is walked\nthe long way round.\n\n- **Inner-cylinder off-face clipping:** `clip_sections_to_outer_region`\ncut its copy of box 2's cylinder section at a crossing found on a\npolygon with 12 samples per boundary edge. Its boundary snap did not\nfire because the coarse gate compared the crossing against the nearest\nof 32 samples on the boundary arc using a `4e-3` threshold. A point on a\nlong arc can exceed that threshold between samples. The piece ended\n`1.5e-4` along the arc from the crossing where the boundary edge was\nsplit and dangled. The gate now allows for sample spacing, and\nalternating projections between the section and boundary curve refine\nthe cut onto the crossing.\n\n- **Box 2 top-face arrangement:** The planar arrangement models arcs by\ntheir chords and registered a section endpoint as a T-junction only when\nit lay on another section's chord. Box 1's line ended on the cylinder's\nelliptical section but was displaced from its chord by the sagitta, so\nit dangled. The arrangement returned three regions instead of four and\nwas adopted. The endpoint pass now also breaks a non-circle section arc\nat an endpoint on its true curve. Circle sections retain the chord path\nbecause applying this behavior to a fan of faceted lip sections makes\n`exact_coincident_lip_fuse_stays_analytic` fall back to a mesh.\n\n- **Box 4 after box 3:** Boxes 2 and 3 leave two holes in the band's\nouter cylinder. Boundary expansion skipped every face with holes, so the\nouter cylinder's floor rim was not split where box 4's section ends on\nit. A holed cylinder now expands its NURBS boundary like a hole-free\ncylinder. A holed plane keeps its outer wire whole for the\nintegrate-holes weave.\n\n## Verification\n\n- `kumiko_wrap_slot_chain_stays_exact` cuts boxes 1 through 7 in order\nwith `operations::boolean`. After every step it checks for no mesh\nfallback, no open or over-shared edges, and volume within `0.01` of the\nrecorded values: `382.976`, `374.964`, `366.873`, `364.164`, `362.705`,\n`355.274`, and `347.612`. Each recorded volume agrees within `0.1` with\nthe previous volume minus the next box's intersection volume. Fixtures\nfor boxes 1, 2, 3, 5, 6, and 7 are included.\n\n- Reverting ellipse crossings, projection refinement, the spacing-aware\ngate, or the arc T-junction makes box 2 fall back. Reverting\nholed-cylinder expansion makes box 4 fall back.\n\n- On the head rebased onto main, `brepkit-math`, `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` pass 2,447 tests with 0 failures\nand 15 ignored. All 236 `brepkit-wasm` library tests pass, with 3\nignored.\n\n- The pose sweep and `truth_audit` are identical to main.\n`approx_census` matches apart from timings and the face pair named in\nthe offset NURBS-loft error, which also differs between runs on main.\nThe kumiko strut pose sweep, covering 120 cut, fuse, and intersect\ncases, is identical to main at 102 exact.\n\n## Still open\n\n- The roadmap row is updated for the remaining failures. The single\n`compound_cut` still fails: it fuses the boxes exactly into 144 faces\nand cuts the band once, but the outer cylinder returns from its\n61-section split with `42.8 mm²` uncovered.\n\n- In the sequential chain, box 8 overlaps box 7 and is next. Its raw cut\ncloses but is `9 mm³` too large because a piece of box 8's lower face,\nwhose sample point lies in a strut groove, is classified inside.",
+          "timestamp": "2026-10-01T07:46:40Z",
+          "tree_id": "a9f290e98afc4b6412c47710c60350b5b3e8883d",
+          "url": "https://github.com/andymai/brepkit/commit/bbac4323b46588eba7ac3972f746fa81d3ceeed4"
+        },
+        "date": 1790840965952,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1020362,
+            "range": "± 1071",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1106696,
+            "range": "± 2142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13064,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 792068,
+            "range": "± 2467",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42945183,
+            "range": "± 464256",
             "unit": "ns/iter"
           }
         ]
