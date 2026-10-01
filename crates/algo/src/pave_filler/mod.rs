@@ -375,7 +375,10 @@ fn edge_pave_span(
     start: brepkit_math::vec::Point3,
     end: brepkit_math::vec::Point3,
 ) -> (f64, f64) {
-    // The weld band within which an edge's vertices sit on its curve's ends.
+    // The weld band within which an edge's vertices sit on its curve's ends:
+    // `EdgeCurve::domain_with_endpoints` (topology's edge.rs) accepts on-curve
+    // endpoints within the same `WELD_EPS`, and reports the whole domain for
+    // ends within its tighter `END_EPS`, which this band contains.
     const ON_END: f64 = 1e-5;
     let (t0, t1) = curve.domain_with_endpoints(start, end);
     if matches!(curve, brepkit_topology::edge::EdgeCurve::NurbsCurve(_))
