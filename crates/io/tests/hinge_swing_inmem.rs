@@ -54,6 +54,28 @@ fn tools(topo: &mut Topology) -> Vec<SolidId> {
         .collect()
 }
 
+/// Whether `p` is inside `solid`, when the ray cast and the generalized
+/// winding number over its tessellation agree.
+fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> Option<bool> {
+    use brepkit_operations::classify::{PointClassification, classify_point};
+    let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
+    let ray = match classify_point(topo, solid, q, 0.01, 1e-7).ok()? {
+        PointClassification::Inside => true,
+        PointClassification::Outside => false,
+        PointClassification::OnBoundary => return None,
+    };
+    let mesh = brepkit_operations::tessellate::tessellate_solid(topo, solid, 0.01).ok()?;
+    let mut solid_angle = 0.0;
+    for tri in mesh.indices.chunks_exact(3) {
+        let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.positions[i as usize] - q);
+        let (la, lb, lc) = (a.length(), b.length(), c.length());
+        let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+        solid_angle += 2.0 * a.dot(b.cross(c)).atan2(den);
+    }
+    let wind = (solid_angle / (4.0 * std::f64::consts::PI)).abs() > 0.5;
+    (ray == wind).then_some(ray)
+}
+
 fn volume(topo: &Topology, solid: SolidId) -> f64 {
     solid_volume(topo, solid, 0.001).unwrap()
 }
@@ -155,6 +177,19 @@ fn hinge_lid_knuckle_fuse_is_exact() {
         (got - expected).abs() < 1e-6 * expected,
         "fused {got}, lid plus the knuckle past it {expected}"
     );
+    // The knuckle's ends in the two bores, its overlap with the lid, and the
+    // lid's plate are material; the bore's gap below the knuckle, cleared by
+    // the bevel, and the air past the back face are not.
+    for (p, kept) in [
+        ([-60.35, -26.7, -2.5], true),
+        ([-60.35, -16.2, -2.5], true),
+        ([-59.5, -21.5, -1.2], true),
+        ([0.0, 0.0, -1.6], true),
+        ([-60.35, -21.5, -5.53], false),
+        ([-63.0, -21.5, -3.2], false),
+    ] {
+        assert_eq!(inside(&topo, fused, p), Some(kept), "probe {p:?}");
+    }
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on

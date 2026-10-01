@@ -58,6 +58,15 @@ pub fn point_in_region(pieces: &[Boundary2], p: Point2, tol: f64) -> Option<bool
     None
 }
 
+/// Whether `p` lies within `tol` of one of the region's boundary pieces.
+#[must_use]
+pub fn on_boundary(pieces: &[Boundary2], p: Point2, tol: f64) -> bool {
+    let along = Vec2::new(1.0, 0.0);
+    pieces
+        .iter()
+        .any(|piece| matches!(crossings(piece, p, along, tol), Crossing::OnBoundary))
+}
+
 /// How a ray from a point meets one boundary piece.
 enum Crossing {
     /// The point itself lies on the piece.
@@ -236,6 +245,21 @@ mod tests {
             let p = Point2::new(2.0 * t.cos() + 1e-15, 2.0 * t.sin());
             assert_eq!(point_in_region(&half, p, 1e-9), None, "t {t}");
         }
+    }
+
+    /// Points on a side or an arc read on the boundary, and points a ray
+    /// from which grazes a corner do not.
+    #[test]
+    fn on_boundary_reads_distance_not_ray_parity() {
+        let half = [
+            circle((0.0, 0.0), 2.0, 0.0, PI),
+            Boundary2::Segment(Point2::new(-2.0, 0.0), Point2::new(2.0, 0.0)),
+        ];
+        assert!(on_boundary(&half, Point2::new(0.5, 0.0), 1e-9));
+        assert!(on_boundary(&half, Point2::new(0.0, 2.0), 1e-9));
+        assert!(on_boundary(&half, Point2::new(2.0, 1e-15), 1e-9));
+        assert!(!on_boundary(&half, Point2::new(0.5, 0.5), 1e-9));
+        assert!(!on_boundary(&half, Point2::new(0.0, 2.1), 1e-9));
     }
 
     /// A half disc: its diameter and a half circle. Points just inside the

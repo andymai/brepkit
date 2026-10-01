@@ -383,39 +383,43 @@ fn split_plane_boundary_arcs_at_points(
     frame: &PlaneFrame,
     tol: f64,
 ) -> Vec<OrientedPCurveEdge> {
-    // Shorter-arc parameter t in (0,1) of `p` on the arc edge from `start` to
-    // `end`, or None if `p` is not on the arc interior.
-    let arc_param = |curve: &EdgeCurve, start: Point3, end: Point3, p: Point3| -> Option<f64> {
-        let (circle_proj, on_curve): (f64, Point3) = match curve {
+    // Parameter t in (0,1) of `p` along the arc piece, in traversal order,
+    // with its foot on the curve, or None if `p` is not on the piece's
+    // interior. A piece runs its stored edge's own counter-clockwise span,
+    // which past half a turn is the longer of the two arcs between its ends.
+    let arc_param = |edge: &OrientedPCurveEdge, p: Point3| -> Option<(f64, Point3)> {
+        let (angle, on_curve): (f64, Point3) = match &edge.curve_3d {
             EdgeCurve::Circle(c) => (c.project(p), c.evaluate(c.project(p))),
             EdgeCurve::Ellipse(e) => (e.project(p), e.evaluate(e.project(p))),
             // Only arc edges have a circle/ellipse parameter; a line or NURBS
             // edge is never split by this arc-only path.
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
         };
-        if (p - on_curve).length() > tol {
+        if (p - on_curve).length() > tol || (edge.start_3d - edge.end_3d).length() < tol {
             return None;
         }
-        let (a0, a_end) = match curve {
-            EdgeCurve::Circle(c) => (c.project(start), c.project(end)),
-            EdgeCurve::Ellipse(e) => (e.project(start), e.project(end)),
-            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+        let (stored_start, stored_end) = if edge.forward {
+            (edge.start_3d, edge.end_3d)
+        } else {
+            (edge.end_3d, edge.start_3d)
         };
-        let span = super::pcurve_compute::shorter_arc_delta(a_end - a0);
-        if span.abs() < 1e-12 {
+        let (t0, t1) = edge
+            .curve_3d
+            .domain_with_endpoints(stored_start, stored_end);
+        if (t1 - t0).abs() < 1e-12 {
             return None;
         }
-        let d = super::pcurve_compute::shorter_arc_delta(circle_proj - a0);
-        let t = d / span;
-        (t > tol && t < 1.0 - tol).then_some(t)
+        let along = sampling::normalize_angle_in_span(angle, t0, t1 - t0);
+        let t = if edge.forward { along } else { 1.0 - along };
+        (t > tol && t < 1.0 - tol).then_some((t, on_curve))
     };
 
     let mut result = Vec::with_capacity(edges.len());
     for edge in edges {
-        let mut splits: Vec<f64> = match &edge.curve_3d {
+        let mut splits: Vec<(f64, Point3)> = match &edge.curve_3d {
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => split_pts_3d
                 .iter()
-                .filter_map(|&p| arc_param(&edge.curve_3d, edge.start_3d, edge.end_3d, p))
+                .filter_map(|&p| arc_param(&edge, p))
                 .collect(),
             EdgeCurve::Line => {
                 let dir = edge.end_3d - edge.start_3d;
@@ -428,15 +432,16 @@ fn split_plane_boundary_arcs_at_points(
                         .filter_map(|&p| {
                             let t = (p - edge.start_3d).dot(dir) / len_sq;
                             let closest = edge.start_3d + dir * t;
-                            ((p - closest).length() < tol && t > tol && t < 1.0 - tol).then_some(t)
+                            ((p - closest).length() < tol && t > tol && t < 1.0 - tol)
+                                .then_some((t, closest))
                         })
                         .collect()
                 }
             }
             EdgeCurve::NurbsCurve(_) => Vec::new(),
         };
-        splits.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        splits.dedup_by(|a, b| (*a - *b).abs() < tol);
+        splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
         if splits.is_empty() {
             result.push(edge);
             continue;
@@ -445,8 +450,11 @@ fn split_plane_boundary_arcs_at_points(
         let mut prev_3d = edge.start_3d;
         let mut prev_uv = edge.start_uv;
         let mut push_piece = |s3: Point3, e3: Point3, s_uv: Point2, e_uv: Point2| {
-            let pcurve =
-                compute_pcurve_on_surface(&edge.curve_3d, s3, e3, surface, &[], Some(frame));
+            let pcurve = if matches!(edge.curve_3d, EdgeCurve::Line) {
+                compute_pcurve_on_surface(&edge.curve_3d, s3, e3, surface, &[], Some(frame))
+            } else {
+                edge_splitting::boundary_piece_pcurve(&edge, s3, e3, surface, Some(frame))
+            };
             result.push(OrientedPCurveEdge {
                 curve_3d: edge.curve_3d.clone(),
                 pcurve,
@@ -459,8 +467,7 @@ fn split_plane_boundary_arcs_at_points(
                 pave_block_id: None,
             });
         };
-        for &t in &splits {
-            let s3 = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+        for &(_, s3) in &splits {
             let s_uv = frame.project(s3);
             push_piece(prev_3d, s3, prev_uv, s_uv);
             prev_3d = s3;
@@ -469,6 +476,68 @@ fn split_plane_boundary_arcs_at_points(
         push_piece(prev_3d, edge.end_3d, prev_uv, edge.end_uv);
     }
     result
+}
+
+/// The boundary with each arc piece whose ends are both ends of one straight
+/// section split at its middle along its own span, or `None` when no piece is.
+fn split_arcs_shadowing_chords(
+    boundary: &[OrientedPCurveEdge],
+    sections: &[OrientedPCurveEdge],
+    surface: &FaceSurface,
+    frame: &PlaneFrame,
+    tol: f64,
+) -> Option<Vec<OrientedPCurveEdge>> {
+    let same = |a: Point3, b: Point3| (a - b).length() < tol;
+    let chords: Vec<(Point3, Point3)> = sections
+        .iter()
+        .filter(|e| matches!(e.curve_3d, EdgeCurve::Line))
+        .map(|e| (e.start_3d, e.end_3d))
+        .collect();
+    let shadows = |e: &OrientedPCurveEdge| {
+        matches!(e.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+            && !same(e.start_3d, e.end_3d)
+            && chords.iter().any(|&(p, q)| {
+                (same(p, e.start_3d) && same(q, e.end_3d))
+                    || (same(q, e.start_3d) && same(p, e.end_3d))
+            })
+    };
+    if !boundary.iter().any(shadows) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(boundary.len() + 1);
+    for e in boundary {
+        if !shadows(e) {
+            out.push(e.clone());
+            continue;
+        }
+        let (stored_start, stored_end) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(stored_start, stored_end);
+        let mid = e
+            .curve_3d
+            .evaluate_with_endpoints(0.5 * (t0 + t1), stored_start, stored_end);
+        let mid_uv = frame.project(mid);
+        for (from, to, from_uv, to_uv) in [
+            (e.start_3d, mid, e.start_uv, mid_uv),
+            (mid, e.end_3d, mid_uv, e.end_uv),
+        ] {
+            out.push(OrientedPCurveEdge {
+                curve_3d: e.curve_3d.clone(),
+                pcurve: edge_splitting::boundary_piece_pcurve(e, from, to, surface, Some(frame)),
+                start_uv: from_uv,
+                end_uv: to_uv,
+                start_3d: from,
+                end_3d: to,
+                forward: e.forward,
+                source_edge_idx: None,
+                pave_block_id: None,
+            });
+        }
+    }
+    Some(out)
 }
 
 /// Whether an edge curve is geometrically a straight segment, independent of
@@ -6827,6 +6896,23 @@ fn split_face_2d_impl(
             n_boundary_edges = split_boundary.len();
             all_edges.clear();
             all_edges.extend(split_boundary);
+            all_edges.extend(sections_tail);
+        }
+        // A boundary arc piece running between the two ends of a straight
+        // section bounds a region with that chord alone, and the assembler's
+        // endpoint-keyed edge merge would weld the two (a keyhole's rim below
+        // its tail's base line): give the arc a vertex at its middle.
+        if let Some(boundary) = split_arcs_shadowing_chords(
+            &all_edges[..n_boundary_edges],
+            &all_edges[n_boundary_edges..],
+            &surface,
+            frame,
+            tol.linear,
+        ) {
+            let sections_tail: Vec<OrientedPCurveEdge> = all_edges[n_boundary_edges..].to_vec();
+            n_boundary_edges = boundary.len();
+            all_edges.clear();
+            all_edges.extend(boundary);
             all_edges.extend(sections_tail);
         }
     }

@@ -196,7 +196,6 @@ fn dist_to_surface(
 }
 
 /// A planar face's boundary in its own plane, read on its lines and arcs.
-#[derive(Clone)]
 struct PlaneRegion {
     origin: brepkit_math::vec::Point3,
     x: brepkit_math::vec::Vec3,
@@ -232,7 +231,7 @@ impl PlaneRegion {
     fn on_boundary(&self, p: brepkit_math::vec::Point3, tol: f64) -> bool {
         let d = p - self.origin;
         let flat = brepkit_math::vec::Point2::new(d.dot(self.x), d.dot(self.y));
-        brepkit_math::region2d::point_in_region(&self.pieces, flat, tol).is_none()
+        brepkit_math::region2d::on_boundary(&self.pieces, flat, tol)
     }
 }
 
@@ -268,7 +267,7 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
         let region = regions
             .entry(face_id)
             .or_insert_with(|| PlaneRegion::of(topo, face_id))
-            .clone();
+            .as_ref();
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
             let selected: Vec<PaveBlockId> = match parameter {
@@ -381,7 +380,7 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                     // one on either side of the wall's split).
                     if ends <= on_band
                         && middle > on_band
-                        && region.as_ref().is_some_and(|r| {
+                        && region.is_some_and(|r| {
                             !r.on_boundary(psv.point(), on_band)
                                 || !r.on_boundary(pev.point(), on_band)
                         })

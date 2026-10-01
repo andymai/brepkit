@@ -1,7 +1,8 @@
-//! A rod along `y` whose axis lies in the plane of a face of the solid it cuts
-//! and crosses that face's edge, as a hinge lid's knuckle clearance bores do
-//! on its pocket ceiling. Every result is exact, valid and measures its closed
-//! form, upright, turned and mirrored, whichever way the rod's seam points.
+//! A rod along `y` cutting a box or plate along one of its sides: poking a
+//! tenth of its radius past the side, or with its axis in the plate's top
+//! plane and crossing that face's edge, as a hinge lid's knuckle clearance
+//! bores do. Every result is exact, valid and measures its closed form,
+//! upright, turned and mirrored, whichever way the rod's seam points.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::FRAC_PI_2;
@@ -61,6 +62,25 @@ fn cut_is_exact(topo: &mut Topology, base: SolidId, tool: SolidId, pose: &Mat4, 
         (vol - expected).abs() < 1e-6 * expected,
         "volume {vol}, expected {expected}"
     );
+}
+
+/// A rod pokes 0.05 past the side `x = 0` of a 10 x 10 x 2 box, its cap
+/// circles crossing that plane over a seventh of a turn. Each cap kept a
+/// longer-than-half-turn piece of its rim that the splitter, reading arcs the
+/// short way round, split at a point it never passes; and where the box's own
+/// box encloses the rod's (turned), the containment shortcut sampled each rim
+/// at quarter turns, missed the poke, and returned the box with the whole rod
+/// as a cavity, valid and 0.0587 short.
+#[test]
+fn a_rod_poking_past_a_box_side_is_exact() {
+    let (r, cx) = (0.5, 0.45);
+    let removed = 4.0 * disc_past_zero(r, cx);
+    for (pose, spin) in poses().into_iter().flat_map(spins) {
+        let mut topo = Topology::new();
+        let base = make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+        let tool = rod(&mut topo, r, cx, 1.0, 2.0, 6.0, spin);
+        cut_is_exact(&mut topo, base, tool, &pose, 200.0 - removed);
+    }
 }
 
 /// A plate whose top face has a rounded corner, cut by a rod whose axis lies
