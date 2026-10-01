@@ -895,26 +895,45 @@ fn loop_containment(loop_pts: &[Point2], outer: &[Point2]) -> LoopContainment {
     }
 }
 
-/// Whether a `(u, v)` point lies inside a loop, trying each whole turn of u on
-/// a surface periodic in u: a hole's samples and a split piece's outer wire
-/// can sit a turn apart when one was unwrapped into the next period.
+/// Whether a `(u, v)` point lies inside a loop on a surface periodic in u
+/// (and in v, a torus): a hole's samples and a split piece's outer wire can sit
+/// whole turns apart when one was unwrapped into another period, so the point
+/// is moved by the turns that bring it nearest the loop's extent first.
 fn uv_in_loop_any_turn(p: Point2, loop_uv: &[Point2], surface: &FaceSurface) -> bool {
     use std::f64::consts::TAU;
-    let periodic = matches!(
+    let u_periodic = matches!(
         surface,
         FaceSurface::Cylinder(_)
             | FaceSurface::Cone(_)
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)
     );
-    let turns: &[f64] = if periodic {
-        &[0.0, TAU, -TAU, 2.0 * TAU, -2.0 * TAU]
-    } else {
-        &[0.0]
+    let v_periodic = matches!(surface, FaceSurface::Torus(_));
+    let (mut lo, mut hi) = (
+        Point2::new(f64::MAX, f64::MAX),
+        Point2::new(f64::MIN, f64::MIN),
+    );
+    for q in loop_uv {
+        lo = Point2::new(lo.x().min(q.x()), lo.y().min(q.y()));
+        hi = Point2::new(hi.x().max(q.x()), hi.y().max(q.y()));
+    }
+    // The shifts that bring the point nearest the loop's middle, one turn to
+    // either side of it.
+    let shifts = |periodic: bool, c: f64, a: f64, b: f64| -> [f64; 3] {
+        if periodic && a <= b {
+            let k = ((f64::midpoint(a, b) - c) / TAU).round() * TAU;
+            [k, k - TAU, k + TAU]
+        } else {
+            [0.0; 3]
+        }
     };
-    turns
-        .iter()
-        .any(|&du| super::classify_2d::point_in_polygon_2d(Point2::new(p.x() + du, p.y()), loop_uv))
+    let du = shifts(u_periodic, p.x(), lo.x(), hi.x());
+    let dv = shifts(v_periodic, p.y(), lo.y(), hi.y());
+    du.iter().any(|&a| {
+        dv.iter().any(|&b| {
+            super::classify_2d::point_in_polygon_2d(Point2::new(p.x() + a, p.y() + b), loop_uv)
+        })
+    })
 }
 
 /// Attach each whole hole to the sub-face that geometrically contains it.
