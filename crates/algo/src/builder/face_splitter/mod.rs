@@ -2921,7 +2921,7 @@ fn arrangement_regions_from_inputs(
 
     // Whether `uv` lies on the TRUE curve of arc input `ai` (not just near its
     // chord): the nearest sample is refined on the arc's native parameter.
-    let on_true_arc = |ai: usize, uv: Point2, band: f64| -> bool {
+    let on_true_arc = |ai: usize, uv: Point2| -> bool {
         let Some(poly) = arc_polys[ai].as_ref() else {
             return false;
         };
@@ -2950,7 +2950,7 @@ fn arrangement_regions_from_inputs(
                 lo = m1;
             }
         }
-        off(f64::midpoint(lo, hi)) <= band
+        off(f64::midpoint(lo, hi)) <= tol * 100.0
     };
 
     let mut sub_edges: Vec<ArrSubEdge> = Vec::new();
@@ -3080,9 +3080,7 @@ fn arrangement_regions_from_inputs(
             // trace meeting a cylinder's section where it runs through) sits a
             // sagitta off the chord; it breaks the arc at that exact point. A
             // circle section (a rim that faceted sections of an exactly
-            // coincident lip fan into) and a chord whose far end also lies
-            // within fit error of the arc (a faceted copy of the same curve)
-            // keep the chord path.
+            // coincident lip fan into) keeps the chord path.
             for bp in [b0, b1] {
                 let w = (bp - a0).dot(d) / (len * len);
                 if w > 1e-6 && w < 1.0 - 1e-6 {
@@ -3095,8 +3093,7 @@ fn arrangement_regions_from_inputs(
                             && !on_chord
                             && (bp - a0).length() > tol * 100.0
                             && (bp - a1).length() > tol * 100.0
-                            && on_true_arc(i, bp, tol * 100.0)
-                            && !on_true_arc(i, if bp == b0 { b1 } else { b0 }, 1e-3))
+                            && on_true_arc(i, bp))
                     {
                         ts.push((w, Some(bp)));
                     }

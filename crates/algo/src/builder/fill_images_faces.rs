@@ -3073,8 +3073,20 @@ fn arc_segment_crossings(
             let _ = tol;
             let dir = line_end - line_start;
             let side = |p: Point3| (p - line_start).cross(dir).dot(n);
-            let eval = |f: f64| {
-                super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
+            // An ellipse arc is sampled over its native span from its stored
+            // start, as the classification polygon below samples it, so a
+            // major arc is walked the long way round.
+            let span = matches!(curve, EdgeCurve::Ellipse(_))
+                .then(|| curve.domain_with_endpoints(stored_start, stored_end));
+            let eval = |f: f64| match span {
+                Some((t0, t1)) => curve.evaluate_with_endpoints(
+                    (t1 - t0).mul_add(f, t0),
+                    stored_start,
+                    stored_end,
+                ),
+                None => {
+                    super::pcurve_compute::evaluate_edge_at_t(curve, stored_start, stored_end, f)
+                }
             };
             let mut hits = Vec::new();
             let mut prev_f = 0.0_f64;
