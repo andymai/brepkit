@@ -24,7 +24,7 @@ const BOXES: [usize; 7] = [4, 8, 9, 13, 14, 18, 19];
 
 /// Each box's cut volume, from a band of 384.936; a cut that removed nothing
 /// or the wrong region would miss it.
-const CUT_VOLUMES: [f64; 7] = [
+const CUT_VOLUMES: [f64; BOXES.len()] = [
     381.053, 380.861, 384.626, 380.875, 384.626, 380.848, 384.623,
 ];
 

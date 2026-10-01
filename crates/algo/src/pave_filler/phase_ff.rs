@@ -3436,12 +3436,12 @@ fn trim_open_curve_to_plane_face_lines(
     }
     // A section riding the partner's boundary keeps a midpoint within the
     // sampled polygon's chord sag of it.
-    let partner_band = partner_poly.as_ref().map_or(0.0, |poly| {
-        crate::builder::classify_2d::boundary_eps(poly) * 1e3
+    let partner_band = partner_poly.as_ref().map_or(0.0, |(poly, sag)| {
+        sag.mul_add(2.0, crate::builder::classify_2d::boundary_eps(poly))
     });
     let inside_partner = |p: Point3| -> bool {
         match &partner_poly {
-            Some(poly) => other_surf.project_point(p).is_none_or(|(u, v)| {
+            Some((poly, _)) => other_surf.project_point(p).is_none_or(|(u, v)| {
                 let q = Point2::new(u, v);
                 point_in_polygon_2d(q, poly)
                     || crate::builder::classify_2d::distance_to_polygon_boundary(q, poly)
@@ -3533,13 +3533,15 @@ fn trim_open_curve_to_plane_face_lines(
     Some(pieces)
 }
 
-/// A NURBS face's outer boundary sampled into its surface's `(u, v)`, or `None`
-/// for a face with holes or a boundary point the surface cannot project.
+/// A NURBS face's outer boundary sampled into its surface's `(u, v)`, with the
+/// largest distance between the boundary and the polygon's chords (measured at
+/// each chord's mid-parameter), or `None` for a face with holes or a boundary
+/// point the surface cannot project.
 fn nurbs_face_uv_polygon(
     topo: &Topology,
     face_id: FaceId,
     surface: &FaceSurface,
-) -> Option<Vec<brepkit_math::vec::Point2>> {
+) -> Option<(Vec<brepkit_math::vec::Point2>, f64)> {
     if !matches!(surface, FaceSurface::Nurbs(_)) {
         return None;
     }
@@ -3548,6 +3550,7 @@ fn nurbs_face_uv_polygon(
         return None;
     }
     let mut poly = Vec::new();
+    let mut sag: f64 = 0.0;
     for oe in topo.wire(face.outer_wire()).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(edge.start()).ok()?.point();
@@ -3555,7 +3558,8 @@ fn nurbs_face_uv_polygon(
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         // Every edge is sampled: a straight edge need not be straight in
         // (u, v), and the seam test below reads the steps between samples.
-        let n = 16;
+        // Odd samples sit at the chords' mid-parameters and measure the sag.
+        let n = 32;
         // A whole-curve NURBS edge stored against its curve still reports
         // the curve's own domain, so `t0` can sit at the edge's end: orient
         // the samples by the wire's start vertex instead.
@@ -3571,9 +3575,21 @@ fn nurbs_face_uv_polygon(
         if (pts[0] - start).length() > (pts[n] - start).length() {
             pts.reverse();
         }
-        for p in &pts[..n] {
-            let (u, v) = surface.project_point(*p)?;
-            poly.push(brepkit_math::vec::Point2::new(u, v));
+        let uv: Vec<brepkit_math::vec::Point2> = pts
+            .iter()
+            .map(|p| {
+                surface
+                    .project_point(*p)
+                    .map(|(u, v)| brepkit_math::vec::Point2::new(u, v))
+            })
+            .collect::<Option<_>>()?;
+        for k in (0..n).step_by(2) {
+            let (a, m, b) = (uv[k], uv[k + 1], uv[k + 2]);
+            sag = sag.max(crate::builder::classify_2d::distance_to_polygon_boundary(
+                m,
+                &[a, b],
+            ));
+            poly.push(a);
         }
     }
     // A boundary that crosses a closed surface's seam jumps across the
@@ -3585,7 +3601,7 @@ fn nurbs_face_uv_polygon(
     let seamless = poly.iter().zip(poly.iter().cycle().skip(1)).all(|(a, b)| {
         (a.x() - b.x()).abs() < 0.5 * (u1 - u0) && (a.y() - b.y()).abs() < 0.5 * (v1 - v0)
     });
-    (poly.len() >= 3 && seamless).then_some(poly)
+    (poly.len() >= 3 && seamless).then_some((poly, sag))
 }
 
 /// Extract the `[t0, t1]` sub-curve of a NURBS curve, preserving the original
