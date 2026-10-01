@@ -191,20 +191,7 @@ come first, since a Stable row that is wrong is worse than a Beta one.
 
 One line each; the fixture/PR carries the story. Newest first.
 
-- **Kumiko slot boxes cutting the strut-cut band fell back (CLOSED 2026-10-01; `kumiko_wrap_slot_cuts_stay_exact` in `crates/io/tests/kumiko_wrap_slot_cut_inmem.rs`, `descending_pave_span_splits_along_the_edge`)**:
-  seven of the 19 boxes fell back to 16k to 20k-face meshes, from four
-  roots. A box face's section with a strut-wall patch ran past the patch's
-  trimmed boundary (`trim_open_curve_to_plane_face_lines` now ends plane x
-  NURBS sections where the patch's boundary edges cross the plane, at the
-  EF crossing points); the band's floor rim, a circle stored as a NURBS edge
-  running against its curve, has a descending pave span that silently
-  dropped every crossing pave (insertion, splitting and image order now
-  follow the span's direction); the exact plane x cylinder arc trim skipped
-  NURBS rim edges; and an earlier strut cut's helical groove edge on the
-  outer cylinder was never expanded at the junctions the box's sections end
-  on (non-circular NURBS boundary edges now expand on cylinder and NURBS
-  faces, while planes and cones keep the circle gate the snapClip deepened
-  notch needs).
+- **Kumiko slot boxes cutting the strut-cut band fell back (CLOSED 2026-10-01; `kumiko_wrap_slot_cuts_stay_exact` in `crates/io/tests/kumiko_wrap_slot_cut_inmem.rs`, `descending_pave_span_splits_along_the_edge`)**: seven boxes cut the band exactly; the four roots (NURBS-partner overhang, descending pave spans, NURBS rim crossings, groove-edge expansion) are in the fixture's comment and #1924. The 19-box compound cut is the OPEN row.
 - **The kumiko corner band cut by a helical-sweep strut fell back (CLOSED 2026-09-30; `kumiko_corner_strut_cut_stays_exact` in `crates/io/tests/kumiko_wrap_strut_cut_inmem.rs`)**:
   the strut's sections with the band's cylinders chain across its 16 NURBS
   wall patches, and one patch's section came back as five two-point

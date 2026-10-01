@@ -1880,10 +1880,10 @@ fn build_fuse_n_three_axis_aligned_row_watertight() {
     );
 }
 
-/// A NURBS edge stored against its curve has a descending pave span (its
-/// start vertex sits at the larger curve parameter). Its crossing paves are
-/// kept, it splits into pieces running from its start to its end, and its
-/// images list those pieces in that order.
+/// A descending pave span (as on a NURBS edge stored against its curve, whose
+/// start vertex sits at the larger curve parameter), built here on a
+/// synthetic span: its crossing paves are kept, it splits into pieces running
+/// from its start to its end, and its images list those pieces in that order.
 #[test]
 fn descending_pave_span_splits_along_the_edge() {
     use crate::ds::Pave;
@@ -1914,4 +1914,24 @@ fn descending_pave_span_splits_along_the_edge() {
     }
     let images = crate::builder::fill_images::fill_edge_images(&arena);
     assert_eq!(images[&edge], pieces);
+}
+
+/// A NURBS edge on its whole curve, stored against the curve, gets a pave
+/// span that starts at the curve's far end.
+#[test]
+fn reversed_whole_nurbs_edge_span_descends() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+
+    let curve = EdgeCurve::NurbsCurve(
+        NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap(),
+    );
+    let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+    assert_eq!(super::edge_pave_span(&curve, a, b), (0.0, 1.0));
+    assert_eq!(super::edge_pave_span(&curve, b, a), (1.0, 0.0));
 }

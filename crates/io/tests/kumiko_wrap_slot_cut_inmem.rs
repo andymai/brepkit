@@ -22,6 +22,12 @@ use brepkit_topology::solid::SolidId;
 
 const BOXES: [usize; 7] = [4, 8, 9, 13, 14, 18, 19];
 
+/// Each box's cut volume, from a band of 384.936; a cut that removed nothing
+/// or the wrong region would miss it.
+const CUT_VOLUMES: [f64; 7] = [
+    381.053, 380.861, 384.626, 380.875, 384.626, 380.848, 384.623,
+];
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/data")
@@ -91,7 +97,7 @@ fn kumiko_wrap_slot_fixture_is_faithful() {
 #[test]
 fn kumiko_wrap_slot_cuts_stay_exact() {
     let mut failures = Vec::new();
-    for i in BOXES {
+    for (i, expected) in BOXES.into_iter().zip(CUT_VOLUMES) {
         let mut topo = Topology::new();
         let band = load(&mut topo, "kumiko_wrap_exact_band.bin");
         let b = load(&mut topo, &format!("kumiko_wrap_slot_box_{i}.bin"));
@@ -104,6 +110,12 @@ fn kumiko_wrap_slot_cuts_stay_exact() {
             ));
         } else if bad_edge_uses(&topo, result) != 0 {
             failures.push(format!("box {i}: open or over-shared edges"));
+        } else {
+            let vol =
+                brepkit_operations::measure::oriented_solid_volume(&topo, result, 0.05).unwrap();
+            if (vol - expected).abs() > 0.01 {
+                failures.push(format!("box {i}: volume {vol:.3}, expected {expected:.3}"));
+            }
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

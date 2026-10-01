@@ -457,7 +457,7 @@ pub fn perform(
                 for raw in raw_curves {
                     if let (Some(ea), Some(eb)) = (&ext_a, &ext_b)
                         && let Some(arcs) = trim_ellipse_to_boundary_crossings(
-                            topo, fa, fb, surf_a, surf_b, &raw, ea, eb,
+                            topo, fa, fb, surf_a, surf_b, &raw, ea, eb, tol,
                         )
                     {
                         exact.extend(arcs);
@@ -2431,6 +2431,7 @@ fn trim_ellipse_to_boundary_crossings(
     raw: &RawCurve,
     ext_a: &FaceExtent,
     ext_b: &FaceExtent,
+    tol: Tolerance,
 ) -> Option<Vec<RawCurve>> {
     type Sources = Vec<brepkit_topology::edge::EdgeId>;
     use brepkit_math::curves::{Circle3D, Ellipse3D};
@@ -2588,14 +2589,7 @@ fn trim_ellipse_to_boundary_crossings(
                     let (sp, ep) = (sv.point(), ev.point());
                     let (t0, t1) = curve.domain_with_endpoints(sp, ep);
                     for (_, p) in super::phase_ef::find_edge_plane_crossings(
-                        curve,
-                        sp,
-                        ep,
-                        t0,
-                        t1,
-                        *plane_n,
-                        *plane_d,
-                        Tolerance::new(),
+                        curve, sp, ep, t0, t1, *plane_n, *plane_d, tol,
                     ) {
                         push_crossing(p, None, &mut crossings);
                     }
@@ -3440,12 +3434,20 @@ fn trim_open_curve_to_plane_face_lines(
             }
         }
     }
+    // A section riding the partner's boundary keeps a midpoint within the
+    // sampled polygon's chord sag of it.
+    let partner_band = partner_poly.as_ref().map_or(0.0, |poly| {
+        crate::builder::classify_2d::boundary_eps(poly) * 1e3
+    });
     let inside_partner = |p: Point3| -> bool {
         match &partner_poly {
-            Some(poly) if !snaps.is_empty() => other_surf
-                .project_point(p)
-                .is_none_or(|(u, v)| point_in_polygon_2d(Point2::new(u, v), poly)),
-            _ => true,
+            Some(poly) => other_surf.project_point(p).is_none_or(|(u, v)| {
+                let q = Point2::new(u, v);
+                point_in_polygon_2d(q, poly)
+                    || crate::builder::classify_2d::distance_to_polygon_boundary(q, poly)
+                        <= partner_band
+            }),
+            None => true,
         }
     };
     let at = |t: f64| -> Point3 {
@@ -3551,11 +3553,9 @@ fn nurbs_face_uv_polygon(
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        let n = if matches!(edge.curve(), EdgeCurve::Line) {
-            1
-        } else {
-            16
-        };
+        // Every edge is sampled: a straight edge need not be straight in
+        // (u, v), and the seam test below reads the steps between samples.
+        let n = 16;
         // A whole-curve NURBS edge stored against its curve still reports
         // the curve's own domain, so `t0` can sit at the edge's end: orient
         // the samples by the wire's start vertex instead.
@@ -3576,7 +3576,16 @@ fn nurbs_face_uv_polygon(
             poly.push(brepkit_math::vec::Point2::new(u, v));
         }
     }
-    (poly.len() >= 3).then_some(poly)
+    // A boundary that crosses a closed surface's seam jumps across the
+    // parameter domain and is no polygon in (u, v).
+    let FaceSurface::Nurbs(n) = surface else {
+        return None;
+    };
+    let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
+    let seamless = poly.iter().zip(poly.iter().cycle().skip(1)).all(|(a, b)| {
+        (a.x() - b.x()).abs() < 0.5 * (u1 - u0) && (a.y() - b.y()).abs() < 0.5 * (v1 - v0)
+    });
+    (poly.len() >= 3 && seamless).then_some(poly)
 }
 
 /// Extract the `[t0, t1]` sub-curve of a NURBS curve, preserving the original

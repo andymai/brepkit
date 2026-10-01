@@ -226,8 +226,8 @@ fn find_edge_edge_crossings(
         })
         .collect();
 
-    let domain_a = (ea.t0 - tol.linear)..=(ea.t1 + tol.linear);
-    let domain_b = (eb.t0 - tol.linear)..=(eb.t1 + tol.linear);
+    let domain_a = (ea.t0.min(ea.t1) - tol.linear)..=(ea.t0.max(ea.t1) + tol.linear);
+    let domain_b = (eb.t0.min(eb.t1) - tol.linear)..=(eb.t0.max(eb.t1) + tol.linear);
 
     for i in 0..n {
         for j in 0..n {

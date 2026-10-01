@@ -140,10 +140,11 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
     // cone (the snapClip deepened-notch walls) has its own calibrated
     // machinery that expansion breaks, and it is never a circle: sample five
     // points, fit the circle through three, and require the rest to sit on it
-    // within 1e-6. On a cylinder or NURBS face, an earlier cut's free-form
-    // trace (a helical strut's groove edge on a band's wall, or on the strut
-    // wall beside it) expands like a circle: the slot box that cuts the band
-    // ends its sections on that trace's EF junctions.
+    // within 1e-6. On a cylinder or NURBS face, an earlier cut's open
+    // free-form trace (a helical strut's groove edge on a band's wall, or on
+    // the strut wall beside it) expands like a circle: the slot box that cuts
+    // the band ends its sections on that trace's EF junctions. A closed rim
+    // stays whole, as the closed-rim machinery expects.
     let nurbs_is_circular = |eid: brepkit_topology::edge::EdgeId| -> bool {
         let Ok(edge) = topo.edge(eid) else {
             return false;
@@ -206,10 +207,13 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
                 if imgs.len() > 1
                     && ((is_line && expand_lines && junction_near_anchor(imgs))
                         || (is_nurbs
-                            && (matches!(
+                            && ((matches!(
                                 surface,
                                 FaceSurface::Cylinder(_) | FaceSurface::Nurbs(_)
-                            ) || nurbs_is_circular(oe.edge()))
+                            ) && topo
+                                .edge(oe.edge())
+                                .is_ok_and(|e| e.start() != e.end()))
+                                || nurbs_is_circular(oe.edge()))
                             && junction_in_band_nurbs(imgs))) =>
             {
                 if oe.is_forward() {
