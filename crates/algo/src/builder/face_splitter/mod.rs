@@ -1031,18 +1031,46 @@ fn is_periodic_face_outside(lp: &[OrientedPCurveEdge], surface: &FaceSurface) ->
 /// 2-arc closed loop whose pcurve-sampled polygon folds to ~zero area while
 /// the true disc is πr² (the blind-recess cap the result must keep).
 fn wire_loops_have_degenerate_area(loops: &[Vec<OrientedPCurveEdge>], tol: f64) -> bool {
-    loops.iter().any(|wl| {
-        let pts = sample_wire_loop_uv(wl);
-        if pts.len() < 3 {
-            return true;
-        }
-        let area = signed_area_2d(&pts);
-        let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
-        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
-            perimeter += (*last - *first).length();
-        }
-        area.abs() <= perimeter * tol
-    })
+    loops
+        .iter()
+        .any(|wl| loop_has_degenerate_area(wl, tol, None))
+}
+
+/// Whether one loop encloses no area. On a plane face the loop is sampled
+/// arc-true through its frame, as the loop classification does: the pcurve
+/// sampler can fold a reversed boundary arc.
+fn loop_has_degenerate_area(
+    wl: &[OrientedPCurveEdge],
+    tol: f64,
+    plane: Option<&PlaneFrame>,
+) -> bool {
+    let pts = plane.map_or_else(
+        || sample_wire_loop_uv(wl),
+        |frame| sampling::sample_wire_loop_uv_via_frame(wl, frame),
+    );
+    if pts.len() < 3 {
+        return true;
+    }
+    let area = signed_area_2d(&pts);
+    let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+    if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+        perimeter += (*last - *first).length();
+    }
+    area.abs() <= perimeter * tol
+}
+
+/// Greedy loops that enclose area. A zero-area loop (a section paired with
+/// its own reverse, where a smooth boundary split at the section's end read as
+/// a turn) is no region, so it must not count against a DCEL trace.
+fn greedy_region_count(
+    loops: &[Vec<OrientedPCurveEdge>],
+    tol: f64,
+    plane: Option<&PlaneFrame>,
+) -> usize {
+    loops
+        .iter()
+        .filter(|lp| !loop_has_degenerate_area(lp, tol, plane))
+        .count()
 }
 
 /// Split a wire loop at UV vertices it visits more than once (a "pinch"): a
@@ -7676,7 +7704,7 @@ fn split_face_2d_impl(
         // is clean by EVERY absolute loop-health signature (no seam on a
         // non-periodic face, so no periodic-aware relaxation applies).
         let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
-        if dcel.len() > loops.len()
+        if dcel.len() > greedy_region_count(&loops, tol.linear, None)
             && !wire_loops_have_degenerate_area(&dcel, tol.linear)
             && !wire_loops_self_cross(&dcel, tol.linear)
             && (!greedy_outer_loops_nested(&dcel, cw_loops)
@@ -7688,18 +7716,23 @@ fn split_face_2d_impl(
 
     // A greedy plane trace that revisits a vertex toured several regions as
     // one loop (a section run out and back, or a smooth section passing a
-    // junction where another branches off). The DCEL face trace partitions
-    // the arrangement itself; adopt it when it strictly refines the greedy
-    // partition and is clean by every loop-health signature.
+    // junction where another branches off), and one that closed a section
+    // on its own reverse left the region it bounds unsplit. The DCEL face
+    // trace partitions the arrangement itself; adopt it when it strictly
+    // refines the greedy partition and is clean by every loop-health
+    // signature.
     if is_plane
         && !sections.is_empty()
         && original_inner_wires.is_empty()
-        && loops
+        && (loops
             .iter()
             .any(|lp| split_loop_at_pinch_vertices(lp, tol.linear).len() != 1)
+            || loops
+                .iter()
+                .any(|lp| loop_has_degenerate_area(lp, tol.linear, Some(frame))))
     {
         let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
-        if dcel.len() > loops.len()
+        if dcel.len() > greedy_region_count(&loops, tol.linear, Some(frame))
             && !wire_loops_have_degenerate_area(&dcel, tol.linear)
             && !wire_loops_self_cross(&dcel, tol.linear)
             && (!greedy_outer_loops_nested(&dcel, cw_loops)

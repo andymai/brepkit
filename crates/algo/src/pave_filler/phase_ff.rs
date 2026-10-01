@@ -320,6 +320,11 @@ pub fn perform(
             ) {
                 raw_curves
                     .into_iter()
+                    .flat_map(|raw| {
+                        split_plane_line_at_curved_boundaries(
+                            topo, fa, fb, surf_a, surf_b, raw, tol,
+                        )
+                    })
                     .filter_map(|raw| {
                         if !matches!(raw.curve, EdgeCurve::Line) {
                             return Some(raw);
@@ -2594,7 +2599,22 @@ fn trim_ellipse_to_boundary_crossings(
                         push_crossing(p, None, &mut crossings);
                     }
                 }
-                EdgeCurve::Ellipse(_) => {}
+                // A rim left by an earlier plane cut (that plane's section of
+                // this cylinder) ends the face as well: a later plane's arc
+                // across the corner it makes lies on the face only between
+                // the two rims.
+                EdgeCurve::Ellipse(e) => {
+                    for p in conic_arc_plane_crossings(
+                        |t| e.evaluate(t),
+                        |q| e.project(q),
+                        sv.point(),
+                        ev.point(),
+                        *plane_n,
+                        *plane_d,
+                    ) {
+                        push_crossing(p, None, &mut crossings);
+                    }
+                }
             }
         }
     }
@@ -2765,15 +2785,35 @@ fn trim_ellipse_to_boundary_crossings(
 }
 
 /// Crossings of a circular boundary ARC with the plane `normal·p = d`.
+fn circle_arc_plane_crossings(
+    circle: &brepkit_math::curves::Circle3D,
+    sp: Point3,
+    ep: Point3,
+    normal: Vec3,
+    d: f64,
+) -> Vec<Point3> {
+    conic_arc_plane_crossings(
+        |t| circle.evaluate(t),
+        |p| circle.project(p),
+        sp,
+        ep,
+        normal,
+        d,
+    )
+}
+
+/// Crossings of a circular or elliptical boundary ARC with the plane
+/// `normal·p = d`.
 ///
-/// `normal·evaluate(t)` is a sinusoid in the circle's own parameter, so three
+/// `normal·evaluate(t)` is a sinusoid in the conic's own angle, so three
 /// evaluations pin it exactly and the crossings are a closed-form
 /// `a cos t + b sin t = c` solve. Points outside the arc actually spanned by
 /// `[sp, ep]` are discarded; a closed edge (coincident endpoints) spans all of
 /// it. The caller re-validates every point against the section curve, so a
 /// spurious root cannot survive.
-fn circle_arc_plane_crossings(
-    circle: &brepkit_math::curves::Circle3D,
+fn conic_arc_plane_crossings(
+    evaluate: impl Fn(f64) -> Point3,
+    project: impl Fn(Point3) -> f64,
     sp: Point3,
     ep: Point3,
     normal: Vec3,
@@ -2782,7 +2822,7 @@ fn circle_arc_plane_crossings(
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
     let f = |t: f64| -> f64 {
-        let p = circle.evaluate(t);
+        let p = evaluate(t);
         normal
             .x()
             .mul_add(p.x(), normal.y().mul_add(p.y(), normal.z() * p.z()))
@@ -2812,9 +2852,9 @@ fn circle_arc_plane_crossings(
     // real crossings on the arc AND invents them on the complement, and an
     // invented crossing splits a section where no face boundary exists.
     let closed = (sp - ep).length() < 1e-9;
-    let ts = circle.project(sp);
+    let ts = project(sp);
     let span = {
-        let fwd = (circle.project(ep) - ts).rem_euclid(TAU);
+        let fwd = (project(ep) - ts).rem_euclid(TAU);
         if fwd < 1e-12 { TAU } else { fwd }
     };
 
@@ -2824,7 +2864,7 @@ fn circle_arc_plane_crossings(
         if !closed && (t - ts).rem_euclid(TAU) > span + 1e-9 {
             continue;
         }
-        out.push(circle.evaluate(t));
+        out.push(evaluate(t));
     }
     out
 }
@@ -6189,6 +6229,155 @@ fn clip_trimmed_line_to_planes(
     }
 }
 
+/// A plane x plane section line, split where it crosses the outer boundary
+/// of either face when that boundary carries an elliptical or NURBS edge,
+/// with the pieces outside that face dropped. The polygon clips cannot
+/// represent such a boundary (`clip_line_to_face` is indeterminate there), so
+/// the line otherwise runs on past the face (a band's end plane, bounded by
+/// its bore and strut grooves) and splits its partner where no face meets it.
+/// A boundary edge lies in its face's plane, so it crosses the section line
+/// exactly where it crosses the partner plane. Outlines of lines and circular
+/// arcs, which the face splitter trims against on the true arc, and holes
+/// keep the whole-line paths those splits are calibrated on.
+fn split_plane_line_at_curved_boundaries(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    surf_a: &FaceSurface,
+    surf_b: &FaceSurface,
+    raw: RawCurve,
+    tol: Tolerance,
+) -> Vec<RawCurve> {
+    let (
+        EdgeCurve::Line,
+        FaceSurface::Plane {
+            normal: na, d: da, ..
+        },
+        FaceSurface::Plane {
+            normal: nb, d: db, ..
+        },
+    ) = (&raw.curve, surf_a, surf_b)
+    else {
+        return vec![raw];
+    };
+    let seg = raw.p_end - raw.p_start;
+    let len2 = seg.dot(seg);
+    if len2 < tol.linear * tol.linear {
+        return vec![raw];
+    }
+    let mut cuts: Vec<f64> = Vec::new();
+    let mut extents: Vec<(
+        crate::builder::plane_frame::PlaneFrame,
+        Vec<brepkit_math::vec::Point2>,
+        f64,
+    )> = Vec::new();
+    for (face_id, surf, partner_n, partner_d) in [(fa, surf_a, *nb, *db), (fb, surf_b, *na, *da)] {
+        let Ok(face) = topo.face(face_id) else {
+            return vec![raw];
+        };
+        let Ok(outer) = topo.wire(face.outer_wire()) else {
+            return vec![raw];
+        };
+        let curved = outer.edges().iter().any(|oe| {
+            topo.edge(oe.edge()).is_ok_and(|e| {
+                matches!(e.curve(), EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_))
+            })
+        });
+        if !curved {
+            continue;
+        }
+        let mut hits: Vec<Point3> = Vec::new();
+        {
+            for oe in outer.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    return vec![raw];
+                };
+                let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                    return vec![raw];
+                };
+                let (sp, ep) = (sv.point(), ev.point());
+                match edge.curve() {
+                    EdgeCurve::Line => {
+                        hits.extend(line_segment_plane_crossing(sp, ep, partner_n, partner_d));
+                    }
+                    EdgeCurve::Circle(c) => {
+                        hits.extend(circle_arc_plane_crossings(c, sp, ep, partner_n, partner_d));
+                    }
+                    EdgeCurve::Ellipse(e) => {
+                        hits.extend(conic_arc_plane_crossings(
+                            |t| e.evaluate(t),
+                            |q| e.project(q),
+                            sp,
+                            ep,
+                            partner_n,
+                            partner_d,
+                        ));
+                    }
+                    curve @ EdgeCurve::NurbsCurve(_) => {
+                        let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                        hits.extend(
+                            super::phase_ef::find_edge_plane_crossings(
+                                curve, sp, ep, t0, t1, partner_n, partner_d, tol,
+                            )
+                            .into_iter()
+                            .map(|(_, p)| p),
+                        );
+                    }
+                }
+            }
+        }
+        let Some(FaceExtent::Plane {
+            frame,
+            poly,
+            margin,
+            ..
+        }) = FaceExtent::new(topo, face_id, surf, None, tol)
+        else {
+            return vec![raw];
+        };
+        extents.push((frame, poly, margin));
+        for p in hits {
+            let f = (p - raw.p_start).dot(seg) / len2;
+            let foot = raw.p_start + seg * f;
+            // A fitted NURBS boundary sits up to its fit error off the face
+            // plane, so its crossing sits that far off the line.
+            if (p - foot).length() <= 1e-4 && f > 0.0 && f < 1.0 {
+                cuts.push(f);
+            }
+        }
+    }
+    if extents.is_empty() {
+        return vec![raw];
+    }
+    cuts.sort_by(f64::total_cmp);
+    cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    let mut bounds = vec![0.0];
+    bounds.extend(cuts);
+    bounds.push(1.0);
+    let mut kept: Vec<(f64, f64)> = Vec::new();
+    for w in bounds.windows(2) {
+        let mid = raw.p_start + seg * f64::midpoint(w[0], w[1]);
+        let inside = extents.iter().all(|(frame, poly, margin)| {
+            let uv = frame.project(mid);
+            crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
+                || point_to_polygon_dist(uv, poly) <= *margin
+        });
+        if !inside {
+            continue;
+        }
+        match kept.last_mut() {
+            Some(last) if (last.1 - w[0]).abs() < 1e-12 => last.1 = w[1],
+            _ => kept.push((w[0], w[1])),
+        }
+    }
+    if kept == [(0.0, 1.0)] {
+        return vec![raw];
+    }
+    kept.into_iter()
+        .filter_map(|(f0, f1)| trim_raw_line(&raw, f0, f1, tol))
+        .collect()
+}
+
 /// Shrink a `Line` raw curve to the fractional sub-range `[f0, f1]` of its
 /// current extent, recomputing endpoints, parameter range, and bbox.
 ///
@@ -6569,6 +6758,33 @@ mod tests {
             -0.5,
         );
         assert!(hits.is_empty(), "got {hits:?}");
+    }
+
+    #[test]
+    fn elliptical_rim_arc_crosses_a_plane_within_its_span() {
+        // An earlier plane cut leaves an elliptical rim on a cylinder; a later
+        // plane crossing that rim must end its section there. x = 1 meets the
+        // ellipse x^2/4 + y^2 = 1 at t = +-60 degrees, and a CCW edge from
+        // t = 0 to t = 90 degrees spans only the first.
+        let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let hits = conic_arc_plane_crossings(
+            |t| ellipse.evaluate(t),
+            |q| ellipse.project(q),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            1.0,
+        );
+        assert_eq!(hits.len(), 1, "got {hits:?}");
+        let expected = Point3::new(1.0, 3.0_f64.sqrt() / 2.0, 0.0);
+        assert!((hits[0] - expected).length() < 1e-9, "got {:?}", hits[0]);
     }
 
     #[test]
