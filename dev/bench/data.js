@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790822846507,
+  "lastUpdate": 1790834647251,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48491,6 +48491,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42162447,
             "range": "± 89879",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8b2626b79925db95b0641dd1e1de6fa92ed178a0",
+          "message": "fix(algo): keep kumiko slot-box cuts exact on the strut-cut band (#1924)\n\nThe seven tilted slot-box cuts in\n`crates/io/tests/kumiko_wrap_slot_cut_inmem.rs` are now exact, with no\nmesh fallback and no free or over-shared edges. The fixture, added in\n#1923 from the gridfinity tool's kumiko corner wrap, cuts a 138-face\nband already cut exactly by its helical struts, comprising 126 NURBS\nstrut-wall pieces, 5 cylinders, and 7 planes. Boxes 4, 8, 9, 13, 14, 18,\nand 19 previously fell back individually to planar meshes of 16,583 to\n19,532 faces after raw cuts left 5 to 36 free edges.\n\n## What was wrong and what this does\n\n- **Plane x NURBS sections extended past trimmed patches.** For box 9,\nthe section between box face 142 and strut-wall patch 110 ran past the\nedge left by an earlier strut cut along band face 6, ending at `(-0.011,\n2.138, 10.961)` and dangling. For box 8, a groove-wall section on box\nface 143 continued past the band's end plane to a point inside the box\nface. The FF helper `trim_open_curve_to_plane_face_lines` now ends these\nsections where the NURBS partner's boundary edges cross the plane, using\nthe EF phase's `find_edge_plane_crossings`, now `pub(super)`, so the\nretained piece ends at the same points EF paved. Every retained midpoint\nmust also lie inside the partner's `(u, v)` boundary polygon or within a\nband of `1e-3` times the polygon's diagonal. This drops sections wholly\noutside a patch while retaining sections riding its edge. The new\n`nurbs_face_uv_polygon` samples every boundary edge at 16 points and\norients samples from the wire's start vertex, since a whole-curve NURBS\nedge stored against its curve reports the curve's domain. It returns no\npolygon when consecutive samples jump by more than half the surface\nparameter range, as with a boundary crossing a closed-surface seam.\nReverting this fix fails boxes 8, 9, 13, 14, 18, and 19.\n\n- **Descending pave spans were treated as ascending.** The band's inner\nfloor rim from `(0.247, 1.530, 2.7)` to `(1.550, 0, 2.7)` is a circle\nstored as a NURBS curve against its parameterization, giving a pave span\nof `(0.8903, 0.0)`. `add_pave_to_edge` and the VE phase therefore\nrejected box 4's crossing at `t = 0.6469`, leaving the rim unsplit.\n`PaveBlock::spans_interior` now tests spans in either direction,\n`make_blocks` sorts paves along the span direction, and\n`fill_edge_images` orders descending pieces by falling parameter.\nEquivalent ascending assumptions were removed from the VE range check\nand projection window, EE parameter domains, and EF duplicate-crossing\ndistance. Because `domain_with_endpoints` reports the curve's own domain\nfor a whole NURBS edge in either orientation, an edge stored against its\nwhole curve began its pave block at the wrong end and chained two paves\nbackwards; the new `edge_pave_span` starts that block at the curve's far\nend, so it descends. Box 4 pins the behavior.\n`descending_pave_span_splits_along_the_edge` covers two interior paves\non a synthetic descending span and fails if any of the three ordering\nchanges is reverted. `reversed_whole_nurbs_edge_span_descends` pins the\nwhole-curve orientation.\n\n- **Plane x cylinder trimming ignored NURBS rims.**\n`trim_ellipse_to_boundary_crossings` collected cylinder-face rim\ncrossings only from line and circle edges, while the band's rims are\nNURBS. Box 4's outer-cylinder section consequently retained an arc\nbeginning at the box corner at `z = 1.900`, below the band floor at `z =\n2.7`. Its inner-cylinder section used the generic window and ended about\n`0.007` beyond the box-face edge. NURBS rim plane crossings are now\ncollected through the same EF helper. Reverting this change fails boxes\n4, 8, 13, and 18.\n\n- **Boundary expansion excluded open non-circular NURBS edges.** Earlier\nstrut cuts leave helical NURBS groove edges on the band's outer\ncylinder. Expansion at section junctions applied only to circle-like\nNURBS boundary edges, so box 8's outer-cylinder sections dangled and the\ncylinder returned unsplit with 6 sections and 1 sub-face. Open\nnon-circular NURBS boundary edges now expand on cylinder and NURBS\nfaces. Closed rims remain whole for the closed-rim machinery. Planes and\ncones retain the circle gate because expanding them fails\n`snapclip_deepened_notch_inmem`. Reverting this fix fails boxes 8, 13,\nand 18.\n\n## Verification\n\n- `kumiko_wrap_slot_cuts_stay_exact` is active and checks all seven cuts\nfor no mesh fallback, no open or over-shared edges, and volume within\n`0.01` of the recorded result. From a band volume of `384.936`, the\nresults are `381.053` for box 4, `380.861` for box 8, `384.626` for box\n9, `380.875` for box 13, `384.626` for box 14, `380.848` for box 18, and\n`384.623` for box 19. A cut that removes nothing or removes the wrong\nregion therefore fails.\n\n- On the final head, `brepkit-math`, `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` pass 2,446 tests with 0 failures\nand 15 ignored. All 236 `brepkit-wasm` library tests pass with 3\nignored.\n\n- The pose sweep and `truth_audit` are identical to main.\n`approx_census` matches apart from timings and the face pair named in\nthe offset nurbs-loft error, which also differs between runs on main.\nThe kumiko strut pose sweep, covering 120 cut, fuse, and intersect\ncases, remains at 102 exact with identical operation results. Its only\nchanged lines are the raw pre-fallback results of two cases that also\nfall back on main.\n\n## Still open\n\n- Cutting the band by the compound of all 19 boxes still falls back\nnatively in 113 seconds to a 7,227-face planar mesh. With sequential raw\ncuts, the first break is box 2 after box 1, producing 4 free edges. Box\n2 alone is exact, and the boxes overlap. Box 2's top face meets the face\nleft by box 1 along a straight section clipped to that face's chord of\nits elliptical edge against the inner cylinder, ending `0.07` inside the\nbore. The roadmap records this as the next dig.\n\n- The roadmap closes the slot-box cuts in one line and reduces the\ndeferred-pin inventory to three.",
+          "timestamp": "2026-09-30T23:01:15-07:00",
+          "tree_id": "a70926503d6ffdae1b6ccf98ceb366c4f7419519",
+          "url": "https://github.com/andymai/brepkit/commit/8b2626b79925db95b0641dd1e1de6fa92ed178a0"
+        },
+        "date": 1790834640034,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1026056,
+            "range": "± 7325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1111586,
+            "range": "± 9182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13208,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 791462,
+            "range": "± 2907",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42550886,
+            "range": "± 176572",
             "unit": "ns/iter"
           }
         ]
