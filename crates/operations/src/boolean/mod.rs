@@ -54,6 +54,18 @@ thread_local! {
     /// fallbacks whose output actually reaches a caller, keeping its
     /// monotonic snapshot-and-diff contract exact (#1445).
     static LAST_USED_MESH_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a batching probe runs: the mesh fallback declines (returns
+    /// an error) instead of building a mesh the probe would discard, so a
+    /// batch that cannot stay exact fails in the time its GFA attempt takes.
+    static DECLINE_MESH_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with the mesh fallback declined, restoring the previous setting.
+fn without_mesh_fallback<T>(f: impl FnOnce() -> T) -> T {
+    let prev = DECLINE_MESH_FALLBACK.with(|d| d.replace(true));
+    let out = f();
+    DECLINE_MESH_FALLBACK.with(|d| d.set(prev));
+    out
 }
 
 /// Perform a boolean operation on two solids.
@@ -849,6 +861,12 @@ fn boolean_inner(
         }
     }
 
+    if DECLINE_MESH_FALLBACK.with(std::cell::Cell::get) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "boolean needs the mesh fallback, declined for a batching probe".into(),
+        });
+    }
+
     // Mesh boolean fallback (no recursion).
     log::debug!(
         target: "brepkit_approx",
@@ -955,8 +973,10 @@ pub fn compound_cut(
         // multi-component tool with overlapping components breaks parity
         // classification, so those take the fuse ladder.
         if tools_at_most_touch(&boxes) {
-            let shortcut = crate::compound_ops::merge_disjoint_solids(topo, tools)
-                .and_then(|tool| boolean_inner(topo, BooleanOp::Cut, target, tool));
+            let shortcut =
+                crate::compound_ops::merge_disjoint_solids(topo, tools).and_then(|tool| {
+                    without_mesh_fallback(|| boolean_inner(topo, BooleanOp::Cut, target, tool))
+                });
             match shortcut {
                 Ok(cut) if !LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) => {
                     result = cut;
@@ -991,8 +1011,13 @@ pub fn compound_cut(
                     }
                 }
             });
+            // The batched cut is a probe as well: a mesh-degraded result is
+            // discarded for the sequential per-tool cuts, which stay exact
+            // where the one cut against the merged tool cannot (the kumiko
+            // band against its 19 overlapping slot boxes).
             if let Ok(Some(tool)) = merged
-                && let Ok(cut) = boolean(topo, BooleanOp::Cut, target, tool)
+                && let Ok(cut) =
+                    without_mesh_fallback(|| boolean_inner(topo, BooleanOp::Cut, target, tool))
             {
                 result = cut;
                 batched = true;
