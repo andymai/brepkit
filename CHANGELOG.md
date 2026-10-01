@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.10](https://github.com/andymai/brepkit/compare/v4.1.9...v4.1.10) (2026-10-01)
+
+
+### Bug Fixes
+
+* **operations:** cut a compound batch once when its box-by-box cuts cannot stay exact ([#1931](https://github.com/andymai/brepkit/issues/1931)) ([5286d70](https://github.com/andymai/brepkit/commit/5286d70956286b80881bee9f75c53dccc9a30d62))
+
 ## [4.1.9](https://github.com/andymai/brepkit/compare/v4.1.8...v4.1.9) (2026-10-01)
 
 
