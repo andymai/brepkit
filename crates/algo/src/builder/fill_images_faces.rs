@@ -974,11 +974,24 @@ fn expand_edge<S: BuildHasher>(
     if real_imgs.len() < 2 {
         return vec![OrientedEdge::new(eid, fwd)];
     }
-    // Orient each image by endpoint chaining instead of assuming it is minted
-    // in the parent's direction: a CommonBlock split_edge is shared with the
-    // coincident partner solid and keeps THAT solid's direction, so a parent
-    // whose common span runs opposite gets a backwards sub-edge (unclosed
-    // wire + same-direction shared edges on the #1538 deep-cutout pocket).
+    chain_images(topo, eid, fwd, real_imgs)
+        .into_iter()
+        .map(|(img, img_fwd)| OrientedEdge::new(img, img_fwd))
+        .collect()
+}
+
+/// `parent`'s images in walk order when the parent is traversed `fwd`, each
+/// oriented by endpoint chaining instead of assuming it is minted in the
+/// parent's direction: a CommonBlock split_edge is shared with the coincident
+/// partner solid and keeps THAT solid's direction, so a parent whose common
+/// span runs opposite gets a backwards sub-edge (unclosed wire + same-direction
+/// shared edges on the #1538 deep-cutout pocket).
+pub(in crate::builder) fn chain_images(
+    topo: &Topology,
+    parent: EdgeId,
+    fwd: bool,
+    images: Vec<EdgeId>,
+) -> Vec<(EdgeId, bool)> {
     let ends = |id: EdgeId| -> Option<(Point3, Point3)> {
         let e = topo.edge(id).ok()?;
         Some((
@@ -986,14 +999,14 @@ fn expand_edge<S: BuildHasher>(
             topo.vertex(e.end()).ok()?.point(),
         ))
     };
-    let Some((p_start, p_end)) = ends(eid) else {
-        return vec![OrientedEdge::new(eid, fwd)];
+    let Some((p_start, p_end)) = ends(parent) else {
+        return images.into_iter().map(|img| (img, fwd)).collect();
     };
     let mut cursor = if fwd { p_start } else { p_end };
     let ordered: Vec<EdgeId> = if fwd {
-        real_imgs
+        images
     } else {
-        real_imgs.into_iter().rev().collect()
+        images.into_iter().rev().collect()
     };
     // The images need not come in walk order (a curve stored against its
     // edge sorts its pieces by its own parameter): take next the one that
@@ -1014,14 +1027,10 @@ fn expand_edge<S: BuildHasher>(
             }
         }
         let Some((_, k, img_fwd, next)) = best else {
-            out.extend(
-                std::mem::take(&mut left)
-                    .into_iter()
-                    .map(|img| OrientedEdge::new(img, fwd)),
-            );
+            out.extend(std::mem::take(&mut left).into_iter().map(|img| (img, fwd)));
             break;
         };
-        out.push(OrientedEdge::new(left.remove(k), img_fwd));
+        out.push((left.remove(k), img_fwd));
         cursor = next;
     }
     out

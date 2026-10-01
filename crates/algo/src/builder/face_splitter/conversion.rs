@@ -216,11 +216,12 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
                                 || nurbs_is_circular(oe.edge()))
                             && junction_in_band_nurbs(imgs))) =>
             {
-                if oe.is_forward() {
-                    pieces.extend(imgs.iter().map(|&i| (i, true)));
-                } else {
-                    pieces.extend(imgs.iter().rev().map(|&i| (i, false)));
-                }
+                pieces.extend(super::super::fill_images_faces::chain_images(
+                    topo,
+                    oe.edge(),
+                    oe.is_forward(),
+                    imgs.clone(),
+                ));
             }
             _ => pieces.push((oe.edge(), oe.is_forward())),
         }

@@ -5540,24 +5540,23 @@ fn split_face_2d_impl(
                 }
                 let mut out: Vec<OrientedPCurveEdge> = Vec::new();
                 for oe in wire.edges() {
-                    let pieces: Vec<brepkit_topology::edge::EdgeId> =
+                    let pieces: Vec<(brepkit_topology::edge::EdgeId, bool)> =
                         match edge_images.get(&oe.edge()) {
-                            Some(imgs) if imgs.len() > 1 => {
-                                let mut v = imgs.clone();
-                                if !oe.is_forward() {
-                                    v.reverse();
-                                }
-                                v
-                            }
-                            _ => vec![oe.edge()],
+                            Some(imgs) if imgs.len() > 1 => super::fill_images_faces::chain_images(
+                                topo,
+                                oe.edge(),
+                                oe.is_forward(),
+                                imgs.clone(),
+                            ),
+                            _ => vec![(oe.edge(), oe.is_forward())],
                         };
-                    for pid in pieces {
+                    for (pid, piece_fwd) in pieces {
                         let Ok(e) = topo.edge(pid) else { continue };
                         let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end()))
                         else {
                             continue;
                         };
-                        let (s3, e3) = if oe.is_forward() {
+                        let (s3, e3) = if piece_fwd {
                             (vs.point(), ve.point())
                         } else {
                             (ve.point(), vs.point())
@@ -5580,7 +5579,7 @@ fn split_face_2d_impl(
                             end_uv: frame.project(e3),
                             start_3d: s3,
                             end_3d: e3,
-                            forward: oe.is_forward(),
+                            forward: piece_fwd,
                             source_edge_idx: None,
                             pave_block_id: None,
                         });
