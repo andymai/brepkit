@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790859890074,
+  "lastUpdate": 1790869002911,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48923,6 +48923,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26938597,
             "range": "± 215403",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "620e2a898c534d80490a0cbf74aa191b855307db",
+          "message": "fix(algo): keep the first kumiko band's compound cut exact (#1933)\n\nThe gridfinity tool’s compound cut of its first kumiko corner band, 194\nfaces comprising 14 cylinders, 160 NURBS and 20 planes, by 19 slot boxes\nnow returns an exact B-Rep natively in 1.26 s: 284 faces, every edge\nused exactly twice, with no mesh fallback. After #1931, the same call\nused one batched mesh fallback, took 21 s natively and returned 28 free\nand 74 over-shared edges. On a wasm built before #1931, the tool test\ntrapped in this call after 1,698 s. At deflection 0.002, the result\nvolume is 267.526, versus 267.538 for the band less its intersection\nwith the fused boxes, whose intersection calculation takes a mesh\nfallback. On a wasm built from this branch's kernel changes before root\n4 was narrowed, all four corner-band slot-box compound cuts, ops 1988,\n3252, 4669 and 5801, take 2.2 to 14.4 s. Op 1988 is this call. These\nresults come from replay runs, the volume probe and the per-op capture\nlog.\n\n## What was wrong\n\n- **Root 1, box 1, NURBS faces:** The plane clips a corner from a\nstrongly anisotropic bilinear strut-wall patch. Its section ends where\nthe band boundary, split by the plane, continues smoothly. Nearby\ntangent sampling made that continuation appear as a 0.0012 rad right\nturn, outranking the section’s left turn. The greedy walker closed the\nsection onto its reverse as a zero-area loop, leaving the whole patch\nboundary. The non-periodic DCEL rescue traced both regions, but adoption\nrequired more DCEL loops than greedy loops, whose count of 2 included\nthe zero-area loop. Adoption now compares against `greedy_region_count`,\nwhich counts only greedy loops enclosing area. This was identified\nthrough STRACE, WTRACE and the gate trace.\n\n- **Root 2, box 2, plane faces:** Box 1’s planar face has the same\nsignature at the end of box 2’s section. The plane-face DCEL consult\npreviously fired only when a loop revisited a vertex. It now also fires\nfor a zero-area greedy loop and uses the same region count. STRACE\nisolated this case.\n\n- **Root 3, box 2, elliptical rims:** Box 2’s plane crosses the bore\ncylinder’s corner, where box 1’s elliptical rim meets a groove, along a\n1 degree arc about 0.027 long. `trim_ellipse_to_boundary_crossings`\nskipped ellipse boundary edges, so the crossing on box 1’s rim was\nabsent. The containing interval then had its midpoint off the face, and\nphase FF dropped the arc. Ellipse rims now intersect the plane in closed\nform through `conic_arc_plane_crossings`, which generalizes the circle\nhelper to any conic. TRIM_ELL traced the missing crossing.\n\n- **Root 4, box 17, curved plane boundaries:** Box 17 meets the band’s\nradial end plane, whose boundary contains the bore and strut grooves.\n`clip_line_to_face` is indeterminate when a plane face has any non-line\nboundary edge, so the plane x plane section was trimmed only to the box\nface. It continued through the end plane into the bore, from radius\n1.854 to 0.953 with the bore at 1.55, and crossed the box’s bore section\nwithout a shared vertex. The box-face walker then toured a stray quad\nwith its main region. A new `split_plane_line_at_curved_boundaries`\npre-pass splits a plane x plane line where outer boundary edges cross\nthe partner plane. Lines, circles and ellipses use closed forms, while\nNURBS use the EF helper. It retains pieces whose midpoints lie inside\nthe outer boundary. The pre-pass applies only when the outer wire\ncontains an elliptical or NURBS edge, covering the end plane’s NURBS\ngrooves and the inclined band face’s elliptical rims. Line and\ncircular-arc outlines, already trimmed on the true arc by the face\nsplitter, and holes retain whole-line behavior. Extending the split to\nevery curved outline and holes failed seven existing tests: the\ncircle-insert socket fuse, fit-offset groove chain, honeycomb wall-cut\nstep, two lip fuses, snapclip deepened notch and tangent-wall fuses.\nSECEDGE, STRACE, code inspection and test runs establish this root.\n\n## Verification\n\nAll 19 box fixtures and the primary regressions are in\n`crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs`. Volumes use\ndeflection 0.002 because coarser values lose tenths of a unit on the\nband’s NURBS walls.\n\n- `kumiko_wrap_first_band_chain_stays_exact` cuts boxes 1 and 2\nsequentially. Both cuts avoid fallback and bad edges, with volumes\n337.043 and 334.799 within 0.01. Each agrees within 0.001 with the\nprevious volume less the exact intersection.\n- `kumiko_wrap_first_band_compound_cut_stays_exact` applies the 19-box\n`compound_cut`, requires no fallback or bad edges, and checks volume\nwithin 0.01 of 267.526.\n- Both tests require points inside the band and boxes 1, 2 and 17 to\nclassify outside, and two unreached band-material points to classify\ninside. A probe counts only when the ray cast and a generalized winding\nnumber over the solid's tessellation agree.\n- Reverting root 1 fails box 1 in the chain and the compound cut.\nReverting root 2 or root 3 fails box 2. Reverting root 4 fails the\ncompound cut.\n- `elliptical_rim_arc_crosses_a_plane_within_its_span` pins the conic\ncrossing. Plane-face zero-area detection samples loops arc-true through\nthe plane frame, matching loop classification. A NURBS boundary crossing\ncounts within `1e-4` of the section line, accommodating fitted-boundary\nerror.\n- The file completes in 24 s in the debug test profile. #1931’s two-box\nfallback test is replaced because those boxes now remain exact. Its\nprimitive test continues to pin batching policy.\n\nOn the branch head, `brepkit-math`, `brepkit-algo`, `brepkit-operations`\nand `brepkit-io` pass 2,454 tests with 0 failures and 15 ignored. All\n236 `brepkit-wasm` library tests pass, with 3 ignored. The pose sweep\nand `truth_audit` match main. `approx_census` differs only in timings\nand the face pair named in the offset nurbs-loft error, which also\nvaries between main runs.\n\nThe 120-case kumiko strut pose sweep changes two lines, both\ndiagonal-strut fuses at one pose. The ruled strut remains exact and\nclosed with the same volume and 65 rather than 66 faces. The other strut\nfalls back to a mesh as on main, delivers an identical result, and has 3\nrather than 7 bad edges in the raw cut.\n\n## Next\n\nThe tool next cuts the first-band result with a slab at op 5898 using\n`cutWithEvolution`. That operation falls back in 6.2 s to a 17,059-face\nplanar mesh. The mesh becomes one of eight tools for op 5928, where the\ntest then runs for over 25 minutes. The raw slab cut emits one cap\nregion twice: the plane x cylinder circle on the band’s outer cylinder\nretains an arc across a strut groove mouth where the cylinder face does\nnot exist, joining two cap regions. The roadmap’s kumiko row records\nthis issue. Separately from the tool path, applying box 3 sequentially\nafter boxes 1 and 2 leaves a 6-edge hole.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the first kumiko corner band's 19-box compound cut so it returns\nan exact B-Rep in 1.26 s instead of a mesh fallback with free and\nover-shared edges (or trapping on wasm). The cut previously produced a\nmesh with 28 free and 74 over-shared edges in 21 s; it now yields 284\nfaces with every edge used exactly twice and no fallback.\n\n**What changed**\n\n- Greedy walker regions now count only loops that enclose area, so a\nsection closed on its own reverse at a smooth boundary split no longer\ncounts as a region against the DCEL trace, on both NURBS and plane\nfaces; plane loops are sampled arc-true through their frame.\n- The plane-face DCEL consult also fires for zero-area greedy loops, not\njust loops that revisit a vertex.\n- Elliptical rim boundary arcs now end plane x cylinder sections where\nthey cross the plane, via `conic_arc_plane_crossings` generalizing the\ncircle helper.\n- A `split_plane_line_at_curved_boundaries` pre-pass ends plane x plane\nsection lines at curved (elliptical or NURBS) outer boundaries instead\nof letting them run into the bore; it applies only to outlines with such\nedges, since applying it to line/circle outlines broke seven existing\ntests.\n\n**Notes**\n\n- Adds 17 box fixtures (3–19), a sequential-cut test for boxes 1–2, the\nfull 19-box compound-cut test, and a unit test pinning the ellipse\ncrossing. The tests probe regions only when the ray cast and an\nindependent generalized winding number over the tessellation agree, and\nadmit fitted-NURBS crossings within 1e-4 of the section line.\n- The kumiko strut pose sweep changes on two diagonal-strut fuses: one\nstays exact and closed with the same volume (65 faces instead of 66),\nthe other falls back to a mesh as on main with 3 bad edges instead of 7\nin the raw cut.\n- Out of scope: the following slab cut (op 5898) still falls back to a\n17,059-face mesh, and box 3 applied individually after boxes 1–2 leaves\na 6-edge hole; the compound cut is unaffected.\n\n<sup>Written for commit 202a844664483c012d161785978a8a032d406a2c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1933?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T08:33:28-07:00",
+          "tree_id": "e6943253a78e65d852c56d37ee8353a4f44df919",
+          "url": "https://github.com/andymai/brepkit/commit/620e2a898c534d80490a0cbf74aa191b855307db"
+        },
+        "date": 1790868996533,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1037279,
+            "range": "± 887",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1120396,
+            "range": "± 2771",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13114,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 788850,
+            "range": "± 1139",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43093539,
+            "range": "± 61764",
             "unit": "ns/iter"
           }
         ]
