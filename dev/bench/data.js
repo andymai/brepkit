@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790811707313,
+  "lastUpdate": 1790815312710,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48329,6 +48329,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43336019,
             "range": "± 936646",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "143680ca8b776cb01afc4071270e35b255550399",
+          "message": "fix(math): march a surface section to the patch edge and keep its trace order (#1921)\n\nThe kumiko corner wrap band cut is now exact: the 6-face band cuts the\n64-patch helical-sweep strut into 50 faces with no free or over-shared\nedges, instead of falling back to a 150-face planar mesh.\n\n## What was wrong\n\nFixture `crates/io/tests/kumiko_wrap_strut_cut_inmem.rs` captures a\n6-face corner band (2 cylinders and 4 planes) cut by one helical-sweep\nstrut (64 NURBS wall patches, 16 per wall, plus 2 planar caps). On main,\nwith the plane x NURBS trim from #1919, the raw cut assembled 47 faces\nwith 38 free edges, then fell back to a 150-face planar mesh measuring\n433.469.\n\nThe free edges followed sections between the strut and the band’s inner\nradius 1.55 and outer radius 4.75 cylinders. These sections must chain\nacross wall patches. On the inner cylinder, patch 22 returned five\ntwo-point fragments, each about 0.0007 long and about 0.019 apart. The\nlower chain therefore never crossed the cylinder, which split only along\nthe other chain. `crates/io/examples/kumiko_pair_probe.rs` reproduced\nthe problem for outer-cylinder patches 28 and 56, which returned 3 and 4\ncurves.\n\n- Root 1, `march_direction`: a step past a domain edge was clamped back\nby `constrain_state`, then either Newton-refined onto the point it had\nleft, producing “did not move,” or failed to refine. The march stopped.\nFor patch 22, the seed was at wall u 0.0043, the section exited through\nu = 0, and the march toward that edge stopped at the seed.\n\n- Root 2, `finish_chain`: only the last marched point was snapped to the\nexact domain edge. A march taking no step from a seed already within the\nboundary band ended at the unsnapped seed. On patch 22, that seed was at\nwall v 0.999, while the neighboring section began 0.00046 away at v = 1.\n\n- Root 3, seeding and chaining: `intersect_nurbs_nurbs` flattened traced\nsegments and re-chained their points by proximity. Its threshold was\nthree times the average nearest-neighbor spacing, which collapsed around\nshort boundary-refinement steps and interleaved retraces. Patch 22’s\nsecond seed began 0.0053 from the first trace, just beyond the 0.005\ndeduplication distance, then retraced the same curve. Widening the\nthreshold made the nearest-neighbor walk leave curve order, producing a\nfitted curve 5.37e-3 off the surfaces.\n\n## What this does\n\n- Boundary stalls now distinguish retries from true curve ends. The new\n`in_clamp_band` helper tests whether the state lies in the band\n`refine_onto_boundary` snaps (1.5 times the clamp margin of a\nnon-periodic edge). Outside it, a stalled or failed step is retried at\nhalf the step actually taken, down to the minimum step. The accepted\nstep is used because RKF45 doubles `h` after a small-error step. A stall\ninside the band remains the curve end.\n\n- `finish_chain` now receives the seed. If no marching step was taken,\nit appends the seed’s refined edge point.\n\n- `chain_traced_segments` preserves traced order. Points in a later\nsegment that lie within the seed deduplication distance of an earlier\nsegment are dropped, splitting the later segment where necessary.\nSegment ends are joined within the deduplication distance plus the\nlongest marched step. `build_curves_from_chains` fits each resulting\nchain. The proximity fitter and threshold estimator are removed.\n\n- Closed sections now trace once. `march_direction` reports closure, and\n`march_with_branches` skips the backward march when the forward\ndirection closed. Closure also fires when a step chord passes within 5%\nof its length of the seed. At the marcher’s 10 degree turn limit, chord\nsag is under 2% of chord length. `closed_sections_are_traced_once` pins\none lap for a drilled-cylinder circle and a dome section.\n\n- Closed chains cannot participate on either side of an end-to-end join.\n`an_open_section_never_absorbs_a_closed_loop` checks both ordering\ncases.\n\n- `kumiko_pair_probe` accepts `PAIR=<cylinder>,<wall>` to run one pair\nand print its section points with math-crate logs. The roadmap closes\nthe band cut, reduces the deferred-pin inventory to three, and retains\nrows for re-measuring the wrap export and the slowest seeding pairs,\nwhich take 0.4 to 0.55 s.\n\n## Verification\n\n- Every band-cylinder x strut-wall pair returns one curve within 3.05e-6\nof both surfaces. Pair 2 x 28 was 1.64e-5 on main. The exact cut\ncontains 50 faces (3 cylinders, 42 NURBS, and 5 planes), has no free or\nover-shared edges, and measures 434.092.\n`kumiko_corner_strut_cut_stays_exact` is active.\n\n- Reverting either the boundary retry or seed snap fails\n`kumiko_corner_strut_cut_stays_exact`. Reverting traced-order chaining\nfails `kumiko_diagonal_strut_cut_and_intersect_are_exact`.\n\n- Across 120 cut, fuse, and intersect cases from 10 poses of the\nvertical strut against four captures, exact results increased from 99 to\n102. The three gains are the ruled diagonal strut at one pose. No\npreviously exact case regressed.\n\n- On the head rebased onto main with #1917 and #1919, before the\nclosed-chain join fix, `brepkit-math`, `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` pass 2,441 tests with 0 failures.\nAll 236 `brepkit-wasm` library tests pass, with 3 ignored. The pose\nsweep and `truth_audit` match main, `approx_census` matches apart from\ntimings, and the kumiko strut sweep remains 102 of 120 exact.\n\n- End joining can still connect nearby parallel sections across a patch\nedge at separations from 0.02 to 0.04. Main joins them at every tested\nseparation, so this behavior is narrower than before.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the kumiko corner band cut so it stays exact, replacing the\n47-face raw result (with 38 free edges) that fell back to a 150-face\nplanar mesh with an exact 50-face cut.\n\nThe strut's sections with the band's cylinders fragmented across its 16\nNURBS wall patches; three marcher roots caused it:\n\n- A step past a domain edge was clamped back and the march stopped short\nof the edge; it now retries at half the step outside the clamp band.\n- A march taking no step from a seed already in the clamp band ended\nunsnapped; `finish_chain` now appends the seed's refined edge point.\n- Traced segments were re-chained by a proximity threshold that\ncollapsed around short refinement steps; segments are now assembled in\ntraced order instead.\n\nKeeping traced order made closed loops wind several times (a circle\ntraced 2.52 laps), so the forward march now reports closure, skips the\nbackward march, and closes when a step's chord passes within 5% of its\nlength of the seed. `closed_sections_are_traced_once` pins the\nsingle-lap behavior.\n\n- Every band-cylinder and strut-wall pair returns one curve within\n3.05e-6 of both surfaces; the fixture test\n`kumiko_corner_strut_cut_stays_exact` is now active.\n- Exact results across the 120-case pose sweep increase from 99 to 102,\nwith no exact case made worse.\n- Adds a `PAIR=<cylinder>,<wall>` filter to `kumiko_pair_probe` for\nre-measuring slow seeding pairs.\n\n<sup>Written for commit 810519fa4bb37f9ed23448fbdb0e4ba415aa4080.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1921?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T00:39:02Z",
+          "tree_id": "fd2469ec8328d25c9abe4d8dbab632dddba6906d",
+          "url": "https://github.com/andymai/brepkit/commit/143680ca8b776cb01afc4071270e35b255550399"
+        },
+        "date": 1790815307477,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1030728,
+            "range": "± 32667",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1113241,
+            "range": "± 3579",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13635,
+            "range": "± 53",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 809233,
+            "range": "± 7588",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42468721,
+            "range": "± 136419",
             "unit": "ns/iter"
           }
         ]
