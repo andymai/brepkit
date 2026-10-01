@@ -349,6 +349,7 @@ fn build_sd_grouping(
         // O(near). Candidate pairs come back in ascending (i, j) order — the
         // same order the nested loop visited — so the union-find sequence (and
         // hence representative selection) is unchanged.
+        let planar_samples_cache = PlanarSampleCache::new(n);
         for (i, j) in overlap_candidate_pairs(&planar_aabbs, tol.linear) {
             // Cheap surface-match guard first.
             let same_dir = match (surfaces[i], surfaces[j]) {
@@ -386,7 +387,7 @@ fn build_sd_grouping(
             if uf.find(i) == uf.find(j) {
                 continue; // already grouped
             }
-            if planar_faces_overlap(topo, sub_faces, i, j, tol) {
+            if planar_faces_overlap(topo, sub_faces, &planar_samples_cache, i, j, tol) {
                 uf.union(i, j);
                 let key = (i.min(j), i.max(j));
                 pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
@@ -1033,9 +1034,91 @@ fn planar_member_uncovered_by_opposite(
     !covered
 }
 
+/// A planar sub-face's wires sampled for [`planar_faces_overlap`]: its outer
+/// wire, then each inner wire.
+struct PlanarSamples {
+    outer: Vec<brepkit_math::vec::Point3>,
+    holes: Vec<Vec<brepkit_math::vec::Point3>>,
+}
+
+/// Sample a wire into several points along each edge's curve, not just the
+/// start vertex. A closed wire built from a single circular edge (a circular
+/// hole left by an earlier cut) has one start vertex, so a vertex-only polygon
+/// collapses to a single point and the hole containment test silently treats
+/// the hole as absent, letting a coincident coplanar face be wrongly cancelled
+/// through the hole.
+fn sample_sd_wire(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Vec<brepkit_math::vec::Point3> {
+    let mut pts = Vec::new();
+    let Ok(wire) = topo.wire(wire_id) else {
+        return pts;
+    };
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        // Sample the edge's NATIVE arc (counter-clockwise in the circle's
+        // own parameter from stored start to end): a rim split at two
+        // paves leaves a major-arc piece (a disc's 276 degree remainder
+        // beside a flush slot bar), and the shorter-arc evaluator traced
+        // its short complement, so the remainder's polygon became the
+        // bar's rectangle, the remainder paired with the bar's overlap
+        // piece and the real overlap piece was dropped as an unpaired
+        // On face.
+        super::pcurve_compute::sample_edge_uniform_native(
+            edge.curve(),
+            sp,
+            ep,
+            SD_EDGE_SAMPLES,
+            oe.is_forward(),
+            &mut pts,
+        );
+    }
+    pts
+}
+
+fn planar_samples(topo: &Topology, face_id: brepkit_topology::face::FaceId) -> PlanarSamples {
+    let Ok(face) = topo.face(face_id) else {
+        return PlanarSamples {
+            outer: Vec::new(),
+            holes: Vec::new(),
+        };
+    };
+    PlanarSamples {
+        outer: sample_sd_wire(topo, face.outer_wire()),
+        holes: face
+            .inner_wires()
+            .iter()
+            .map(|&w| sample_sd_wire(topo, w))
+            .collect(),
+    }
+}
+
+/// Planar faces' wire samples, computed once per sub-face: a coplanar
+/// lattice or mesh puts hundreds of thousands of candidate pairs through
+/// [`planar_faces_overlap`], each of which would otherwise resample both.
+struct PlanarSampleCache(Vec<std::cell::OnceCell<PlanarSamples>>);
+
+impl PlanarSampleCache {
+    fn new(n: usize) -> Self {
+        Self((0..n).map(|_| std::cell::OnceCell::new()).collect())
+    }
+
+    fn get(&self, topo: &Topology, sub_faces: &[SubFace], idx: usize) -> &PlanarSamples {
+        self.0[idx].get_or_init(|| planar_samples(topo, sub_faces[idx].face_id))
+    }
+}
+
 fn planar_faces_overlap(
     topo: &Topology,
     sub_faces: &[SubFace],
+    samples: &PlanarSampleCache,
     i: usize,
     j: usize,
     tol: Tolerance,
@@ -1053,54 +1136,20 @@ fn planar_faces_overlap(
         return false;
     };
 
-    // Sample each edge into several points along its curve, not just the
-    // start vertex. A closed wire built from a single circular edge (a
-    // circular hole left by an earlier cut) has one start vertex, so a
-    // vertex-only polygon collapses to a single point and the hole
-    // containment test silently treats the hole as absent — letting a
-    // coincident coplanar face be wrongly cancelled through the hole.
-    let wire_points = |wire_id: brepkit_topology::wire::WireId| -> Vec<brepkit_math::vec::Point3> {
-        let samples_per_edge: usize = SD_EDGE_SAMPLES;
-        let mut pts = Vec::new();
-        let Ok(wire) = topo.wire(wire_id) else {
-            return pts;
-        };
-        for oe in wire.edges() {
-            let Ok(edge) = topo.edge(oe.edge()) else {
-                continue;
-            };
-            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-                continue;
-            };
-            let (sp, ep) = (sv.point(), ev.point());
-            // Sample the edge's NATIVE arc (counter-clockwise in the circle's
-            // own parameter from stored start to end): a rim split at two
-            // paves leaves a major-arc piece (a disc's 276 degree remainder
-            // beside a flush slot bar), and the shorter-arc evaluator traced
-            // its short complement, so the remainder's polygon became the
-            // bar's rectangle, the remainder paired with the bar's overlap
-            // piece and the real overlap piece was dropped as an unpaired
-            // On face.
-            super::pcurve_compute::sample_edge_uniform_native(
-                edge.curve(),
-                sp,
-                ep,
-                samples_per_edge,
-                oe.is_forward(),
-                &mut pts,
-            );
-        }
-        pts
-    };
-
-    let pts_i = wire_points(face_i.outer_wire());
-    let pts_j = wire_points(face_j.outer_wire());
+    let (samples_i, samples_j) = (
+        samples.get(topo, sub_faces, i),
+        samples.get(topo, sub_faces, j),
+    );
+    let (pts_i, pts_j) = (&samples_i.outer, &samples_j.outer);
     if pts_i.len() < 3 || pts_j.len() < 3 {
         return false;
     }
-    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal_i, &pts_i);
+    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal_i, pts_i);
     let poly_i: Vec<_> = pts_i.iter().map(|&p| frame.project(p)).collect();
     let poly_j: Vec<_> = pts_j.iter().map(|&p| frame.project(p)).collect();
+    if convex_outlines_apart(&poly_i, &poly_j, tol.linear) {
+        return false;
+    }
 
     // Passthrough faces arrive without a pre-computed interior point;
     // derive one from the projected outer polygon so coincident-outline
@@ -1154,9 +1203,8 @@ fn planar_faces_overlap(
     // A point landing inside one of the container's inner wires sits in a
     // hole, not on the face — e.g. a frame face whose hole exactly hosts
     // the candidate. Containment through a hole is not overlap.
-    let in_hole = |p: brepkit_math::vec::Point2, face: &brepkit_topology::face::Face| -> bool {
-        face.inner_wires().iter().any(|&wid| {
-            let pts = wire_points(wid);
+    let in_hole = |p: brepkit_math::vec::Point2, face: &PlanarSamples| -> bool {
+        face.holes.iter().any(|pts| {
             if pts.len() < 3 {
                 return false;
             }
@@ -1176,9 +1224,9 @@ fn planar_faces_overlap(
     let footprint_in_holes = |sample: brepkit_math::vec::Point2,
                               verts: &[brepkit_math::vec::Point2],
                               outer: &[brepkit_math::vec::Point2],
-                              face: &brepkit_topology::face::Face|
+                              face: &PlanarSamples|
      -> bool {
-        if face.inner_wires().is_empty() {
+        if face.holes.is_empty() {
             return false;
         }
         std::iter::once(sample)
@@ -1191,16 +1239,16 @@ fn planar_faces_overlap(
     // is inside j's polygon.
     if ip_i_in_j
         && all_inside(&poly_i, &poly_j)
-        && !in_hole(p_i_2d, face_j)
-        && !footprint_in_holes(p_i_2d, &poly_i, &poly_j, face_j)
+        && !in_hole(p_i_2d, samples_j)
+        && !footprint_in_holes(p_i_2d, &poly_i, &poly_j, samples_j)
     {
         return true;
     }
     // j fully contained in i.
     if ip_j_in_i
         && all_inside(&poly_j, &poly_i)
-        && !in_hole(p_j_2d, face_i)
-        && !footprint_in_holes(p_j_2d, &poly_j, &poly_i, face_i)
+        && !in_hole(p_j_2d, samples_i)
+        && !footprint_in_holes(p_j_2d, &poly_j, &poly_i, samples_i)
     {
         return true;
     }
@@ -1248,6 +1296,95 @@ fn planar_faces_overlap(
                 );
             }
             if inter.area().abs() > smaller * 0.5 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether two convex outlines provably share no area that
+/// [`planar_faces_overlap`] would count: an edge of either separates them to
+/// within `tol`, each spans more than `tol` across it (so neither can lie
+/// inside the other), and the band they can share is under half the smaller
+/// area. Adjacent coplanar triangles of a meshed solid, which only touch
+/// along an edge, are the common case.
+fn convex_outlines_apart(
+    a: &[brepkit_math::vec::Point2],
+    b: &[brepkit_math::vec::Point2],
+    tol: f64,
+) -> bool {
+    use brepkit_math::vec::Point2;
+    // The outlines carry every edge sampled at several points, so straight
+    // edges arrive as runs of collinear points; keep only the corners. A
+    // point counts as collinear only within `slack` of its neighbours' line
+    // in LINEAR distance (an angular cutoff can drop a real apex on a long
+    // edge), and the separation below allows for that slack on both sides.
+    let slack = tol * 1e-3;
+    let corners = |poly: &[Point2]| -> Vec<Point2> {
+        let n = poly.len();
+        (0..n)
+            .filter(|&k| {
+                let (p, q, r) = (poly[(k + n - 1) % n], poly[k], poly[(k + 1) % n]);
+                let (u, w) = (r - p, q - p);
+                let len = u.length();
+                len <= slack || u.x().mul_add(w.y(), -(u.y() * w.x())).abs() > slack * len
+            })
+            .map(|k| poly[k])
+            .collect()
+    };
+    let (a, b) = (corners(a), corners(b));
+    let convex = |poly: &[Point2]| -> bool {
+        let n = poly.len();
+        n >= 3
+            && (0..n)
+                .map(|k| {
+                    let (p, q, r) = (poly[k], poly[(k + 1) % n], poly[(k + 2) % n]);
+                    let cross = (q.x() - p.x())
+                        .mul_add(r.y() - q.y(), -((q.y() - p.y()) * (r.x() - q.x())));
+                    cross > 0.0
+                })
+                .try_fold(None, |turn: Option<bool>, left| {
+                    (turn.is_none() || turn == Some(left)).then_some(Some(left))
+                })
+                .is_some()
+    };
+    if !convex(&a) || !convex(&b) {
+        return false;
+    }
+    let (a, b) = (a.as_slice(), b.as_slice());
+    let area = |poly: &[Point2]| super::classify_2d::signed_area_2d(poly).abs();
+    let smaller = area(a).min(area(b));
+    let diameter = |poly: &[Point2]| {
+        poly.iter()
+            .flat_map(|p| poly.iter().map(move |q| (*p - *q).length()))
+            .fold(0.0_f64, f64::max)
+    };
+    let reach = diameter(a).max(diameter(b));
+    let range = |poly: &[Point2], ax: f64, ay: f64| {
+        poly.iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| {
+            let d = p.x().mul_add(ax, p.y() * ay);
+            (lo.min(d), hi.max(d))
+        })
+    };
+    for poly in [a, b] {
+        let n = poly.len();
+        for k in 0..n {
+            let (p, q) = (poly[k], poly[(k + 1) % n]);
+            let (ex, ey) = (q.x() - p.x(), q.y() - p.y());
+            let len = ex.hypot(ey);
+            if len <= tol {
+                continue;
+            }
+            let (ax, ay) = (-ey / len, ex / len);
+            let (alo, ahi) = range(a, ax, ay);
+            let (blo, bhi) = range(b, ax, ay);
+            let shared = ahi.min(bhi) - alo.max(blo);
+            if shared + 2.0 * slack <= tol
+                && ahi - alo > tol
+                && bhi - blo > tol
+                && shared.max(0.0) * reach < 0.5 * smaller
+            {
                 return true;
             }
         }
