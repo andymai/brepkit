@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790870866335,
+  "lastUpdate": 1790897781358,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49031,6 +49031,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27955217,
             "range": "± 454671",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1dc92ea1583430c5593312cd2138317951eb9a3f",
+          "message": "perf(algo): skip same-domain overlap tests for coplanar outlines that only touch (#1936)\n\nSame-domain detection on a 15,751-face planar mesh drops from 26.1 s to\n4.3 s per GFA pass, with an identical result. This case comes from the\ngridfinity tool's kumiko wrap: fusing a 645-face planar lattice with a\ncorner band (two disjoint pieces) folds through\n`fuse_multi_component_tool`. The first fold falls back to a mesh, and\nthe second runs GFA against it. That fuse drops from 65.5 s to 20.8 s\nnatively and returns the same 17,756-face result, with the same volume\nand the same 4 over-shared edges.\n\n## Why it was slow\n\nThe geometric containment pass sent 746,618 coplanar candidate pairs\nthrough `planar_faces_overlap`, from 20.2 million AABB candidates and\n3.1 million same-surface pairs. These calls took 22.7 s in total.\n\nEach call re-sampled both faces' wires at 8 points per edge, including\nstraight edges. A mesh triangle therefore became a 24-vertex polygon,\nand the containment checks operated on products averaging 576 vertex\npairs per call.\n\n## What changes\n\n- `PlanarSampleCache` samples each planar sub-face's outer and inner\nwires once per grouping. The cache is filled lazily, and the samples are\nreused across candidate pairs.\n\n- `convex_outlines_apart` returns early from `planar_faces_overlap` when\nboth simplified outlines are convex and can be proven unable to satisfy\neither containment or partial overlap. Collinear samples are dropped\nonly when they are within 1e-3 of the linear tolerance of their\nneighbours' line, measured in linear distance, so a shallow apex on a\nlong edge remains. Separation allows for this slack on both sides.\n\nAn edge of either outline must separate the outlines to within the\nlinear tolerance, and each outline must span more than the tolerance\nacross that edge. This prevents either outline from lying inside the\nother, including under the boundary-tolerant containment test. The band\nthey can share, multiplied by the larger diameter, must also be less\nthan half the smaller area, while the partial-overlap test requires more\nthan half. Under these conditions, returning `false` preserves the\nresult. Adjacent coplanar triangles in a meshed solid, touching only\nalong an edge, are the common case.\n\n## Verification\n\n- `convex_outlines_apart_reads_through_sampled_edges` samples outlines\nas the overlap test does. It verifies that neighbours across an edge and\noutlines sharing only a corner are apart, while overlapping triangles\nand containment are not. A sliver no wider than the tolerance on the\nshared edge and a non-convex outline are left to the full test.\n\n- `convex_outlines_apart_keeps_a_shallow_apex` verifies that an apex\n1e-6 above a 10000-long edge survives simplification, preventing a thin\nslab beneath it from being reported apart.\n\n- On the head before the linear-slack commit (which only makes the\nearly-out more conservative and adds the shallow-apex test),\n`brepkit-math`, `brepkit-algo`, `brepkit-operations`, and `brepkit-io`\npass 2,455 tests with 0 failures and 15 ignored. All 236 `brepkit-wasm`\nlibrary tests pass, with 3 ignored.\n\n- The pose sweep, `truth_audit`, and the 120-case kumiko strut pose\nsweep are identical to main. `approx_census` matches apart from timings\nand the face pair named in the offset nurbs-loft error, which also\ndiffers between runs on main.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSame-domain overlap detection on coplanar outlines that only touch along\nan edge is sped up: on a 15,751-face planar mesh the same-domain pass\ndrops from 26.1s to 4.3s per GFA pass with an identical result, and the\ngridfinity kumiko fuse drops from 65.5s to 21.3s.\n\n- `PlanarSampleCache` samples each planar sub-face's wires once per\ngrouping instead of per candidate pair.\n- `convex_outlines_apart` early-exits `planar_faces_overlap` when both\noutlines are convex and a separating edge keeps them apart within the\nlinear tolerance; area and span guards preserve the exact containment\nand partial-overlap results, so the output, volume, and over-shared\nedges are unchanged. Collinear samples are dropped with a linear slack\nso a shallow apex on a long edge isn't lost.\n- Tests cover edge-touching, corner-touching, overlapping, contained,\ntolerance-wide sliver, non-convex outlines, and a shallow-apex slab; the\nfull 2,455 algo and 236 wasm lib tests pass.\n\n<sup>Written for commit 3e7bfaed15cadf2880018bc2b9c37d142fc7f471.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1936?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T16:33:26-07:00",
+          "tree_id": "9d9956ce97dfff6b1cc39c142cb75d1c450c7c7d",
+          "url": "https://github.com/andymai/brepkit/commit/1dc92ea1583430c5593312cd2138317951eb9a3f"
+        },
+        "date": 1790897775934,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1037133,
+            "range": "± 15629",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1121095,
+            "range": "± 1351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13121,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 792714,
+            "range": "± 2636",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43239242,
+            "range": "± 141811",
             "unit": "ns/iter"
           }
         ]
