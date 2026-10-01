@@ -1315,3 +1315,25 @@ fn convex_outlines_apart_reads_through_sampled_edges() {
     let notch = sampled(&[(2.0, 0.0), (4.0, 0.0), (4.0, 2.0), (3.0, 0.5), (2.0, 2.0)]);
     assert!(!convex_outlines_apart(&tri, &notch, tol));
 }
+
+#[test]
+fn convex_outlines_apart_keeps_a_shallow_apex() {
+    // The apex sits 1e-6 above a 10000-long edge: an angle cutoff would drop
+    // it, turning the outline into a rectangle that the thin slab inside the
+    // apex's bump appears to clear.
+    let tol = Tolerance::new().linear;
+    let roof = sampled(&[
+        (0.0, 0.0),
+        (10000.0, 0.0),
+        (10000.0, 1.0),
+        (5000.0, 1.0 + 1e-6),
+        (0.0, 1.0),
+    ]);
+    let slab = sampled(&[
+        (4950.0, 1.0 + 4e-7),
+        (5050.0, 1.0 + 4e-7),
+        (5050.0, 1.0 + 6e-7),
+        (4950.0, 1.0 + 6e-7),
+    ]);
+    assert!(!convex_outlines_apart(&roof, &slab, tol));
+}

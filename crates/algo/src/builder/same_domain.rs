@@ -1316,15 +1316,19 @@ fn convex_outlines_apart(
 ) -> bool {
     use brepkit_math::vec::Point2;
     // The outlines carry every edge sampled at several points, so straight
-    // edges arrive as runs of collinear points; keep only the corners.
+    // edges arrive as runs of collinear points; keep only the corners. A
+    // point counts as collinear only within `slack` of its neighbours' line
+    // in LINEAR distance (an angular cutoff can drop a real apex on a long
+    // edge), and the separation below allows for that slack on both sides.
+    let slack = tol * 1e-3;
     let corners = |poly: &[Point2]| -> Vec<Point2> {
         let n = poly.len();
         (0..n)
             .filter(|&k| {
                 let (p, q, r) = (poly[(k + n - 1) % n], poly[k], poly[(k + 1) % n]);
-                let (u, v) = (q - p, r - q);
-                let cross = u.x().mul_add(v.y(), -(u.y() * v.x()));
-                cross.abs() > 1e-9 * u.length() * v.length()
+                let (u, w) = (r - p, q - p);
+                let len = u.length();
+                len <= slack || u.x().mul_add(w.y(), -(u.y() * w.x())).abs() > slack * len
             })
             .map(|k| poly[k])
             .collect()
@@ -1376,7 +1380,7 @@ fn convex_outlines_apart(
             let (alo, ahi) = range(a, ax, ay);
             let (blo, bhi) = range(b, ax, ay);
             let shared = ahi.min(bhi) - alo.max(blo);
-            if shared <= tol
+            if shared + 2.0 * slack <= tol
                 && ahi - alo > tol
                 && bhi - blo > tol
                 && shared.max(0.0) * reach < 0.5 * smaller
