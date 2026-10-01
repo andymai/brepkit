@@ -47,6 +47,21 @@ fn census(topo: &Topology, solid: SolidId) -> HashMap<&'static str, usize> {
     counts
 }
 
+/// Edges used other than twice across the solid's faces (zero for a closed
+/// manifold operand).
+fn bad_edge_uses(topo: &Topology, solid: SolidId) -> usize {
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                *uses.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    uses.values().filter(|&&n| n != 2).count()
+}
+
 #[test]
 fn kumiko_wrap_slot_fixture_is_faithful() {
     let mut topo = Topology::new();
@@ -56,9 +71,19 @@ fn kumiko_wrap_slot_fixture_is_faithful() {
         (c.get("nurbs"), c.get("cylinder"), c.get("plane")),
         (Some(&126), Some(&5), Some(&7))
     );
+    assert_eq!(
+        bad_edge_uses(&topo, band),
+        0,
+        "the band is not a closed manifold"
+    );
     for i in BOXES {
         let b = load(&mut topo, &format!("kumiko_wrap_slot_box_{i}.bin"));
         assert_eq!(census(&topo, b).get("plane"), Some(&6), "box {i}");
+        assert_eq!(
+            bad_edge_uses(&topo, b),
+            0,
+            "box {i} is not a closed manifold"
+        );
     }
 }
 
