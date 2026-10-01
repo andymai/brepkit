@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790816322616,
+  "lastUpdate": 1790822846507,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -48437,6 +48437,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42653700,
             "range": "± 373876",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2dd46d7317656cfd9a1adba87b667564689adb88",
+          "message": "test(io): pin the kumiko slot-box cuts that fall back on the exact band (#1923)\n\nThis PR adds no code fix. It records a tool-side measurement and pins\nthe failing kumiko wrap cuts as ready repro fixtures.\n\n## What was measured\n\n- In gridfinity on brepjs 18.124.8, `slideRailBuilder.test.ts` `\"is not\ncarved away by a kumiko wrap either\"` takes 508 s on brepkit-wasm 3.3.9,\nthe tool's pin, and fails its 180 s timeout. A local build of main at\n4.1.5, after #1919 and #1921, overlaid into a separate tool worktree,\ntakes 1,826 s. The wasm kernel panics with `\"Hash table capacity\noverflow\"` during a compound cut whose tools are 8,638 to 51,260-face\nmesh blobs. Every later kernel call then fails.\n- Boolean inputs captured from the tool show the blobs begin at the\ncorner band, cut exactly by its helical struts. The band has 138 faces:\n126 NURBS, 5 cylinders, and 7 planes. Compound-cutting it by 19 tilted\nslot boxes takes 113 s natively and falls back to a 7,227-face mesh.\n- Cut individually, 12 boxes stay exact and 7 fall back to planar meshes\nof 16,583 to 19,532 faces. Their raw cuts leave 5 to 36 free edges where\na box meets the strut walls. On 3.3.9, the band cut falls back to a\n150-face mesh, so these box cuts do not meet the NURBS walls.\n\n## Box 9\n\n- Strut-wall patch 110 is trimmed by the earlier strut cut, bounded by\nband face 6's edge from `(0.391, 2.422, 11.472)` to `(0.328, 2.032,\n10.675)`. The box face 142 section reaches the patch past that edge, to\n`(-0.011, 2.138, 10.961)`.\n- The NURBS face splitter trims open sections only on plane faces.\n`clip_sections_to_outer_region`, limited to cylinder and cone faces,\ndrops only sections wholly off the face. The section therefore dangles,\nand both patch sections are dropped.\n- Disabling #1919's plane x NURBS trim leaves the same 7 fallbacks. The\ngap predates that trim and surfaces because the band is exact. The next\nstep is trimming open sections at a non-plane face's outer boundary.\n\n## What this adds\n\n- `crates/io/tests/data/kumiko_wrap_exact_band.bin` at 513 KB, plus\n`kumiko_wrap_slot_box_{4,8,9,13,14,18,19}.bin` at about 3 KB each.\n- `crates/io/tests/kumiko_wrap_slot_cut_inmem.rs`, with active\n`kumiko_wrap_slot_fixture_is_faithful` checks for the band's 126/5/7\nface mix, six planes per box, and closed manifolds with every edge used\nexactly twice.\n- Ignored ready repro `kumiko_wrap_slot_cuts_stay_exact`, which\ncurrently fails with all 7 boxes falling back to 16,583 to 19,532 faces.\n- The roadmap's kumiko row records this measurement and the box 9 root.\nThe deferred-pin inventory increases from three to four.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins the failing kumiko wrap slot-box cuts on the exact band as a ready\nrepro, without changing code.\n\n- Adds the 138-face exact band and the 7 failing slot boxes as fixtures,\nplus `kumiko_wrap_slot_cut_inmem.rs` with an active fixture check and\nthe ignored repro `kumiko_wrap_slot_cuts_stay_exact`.\n- Records the tool-side measurement and box 9's root in the roadmap: on\nbrepkit-wasm 4.1.5 the export panics with a hash table capacity overflow\nat 1,826 s, where 3.3.9 timed out at 508 s; cut alone, 7 of 19 boxes\nfall back to 16,583 to 19,532-face meshes.\n- Box 9 falls back deep enough to attribute: on the strut-wall patch 110\nthe section of box face 142 dangles past its boundary edge because the\nNURBS splitter trims open sections only on plane faces, and\n`clip_sections_to_outer_region` drops only wholly-off sections; the same\n7 boxes fail with plane x NURBS trimming off.\n\n<sup>Written for commit d1671337af09ff125d2b8d83752f052535c7150a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1923?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T02:44:29Z",
+          "tree_id": "363ac323875c556df5fa1d2acedd9d53e5866453",
+          "url": "https://github.com/andymai/brepkit/commit/2dd46d7317656cfd9a1adba87b667564689adb88"
+        },
+        "date": 1790822840884,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 993628,
+            "range": "± 1473",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1083221,
+            "range": "± 1566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13126,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 754174,
+            "range": "± 2986",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42162447,
+            "range": "± 89879",
             "unit": "ns/iter"
           }
         ]
