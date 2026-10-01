@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.7](https://github.com/andymai/brepkit/compare/v4.1.6...v4.1.7) (2026-10-01)
+
+
+### Bug Fixes
+
+* **algo:** keep kumiko slot-box cuts exact on the strut-cut band ([#1924](https://github.com/andymai/brepkit/issues/1924)) ([8b2626b](https://github.com/andymai/brepkit/commit/8b2626b79925db95b0641dd1e1de6fa92ed178a0))
+
 ## [4.1.6](https://github.com/andymai/brepkit/compare/v4.1.5...v4.1.6) (2026-10-01)
 
 
