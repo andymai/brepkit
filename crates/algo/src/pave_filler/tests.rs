@@ -1879,3 +1879,39 @@ fn build_fuse_n_three_axis_aligned_row_watertight() {
         "three-box row watertight; two={two} other={other}"
     );
 }
+
+/// A NURBS edge stored against its curve has a descending pave span (its
+/// start vertex sits at the larger curve parameter). Its crossing paves are
+/// kept, it splits into pieces running from its start to its end, and its
+/// images list those pieces in that order.
+#[test]
+fn descending_pave_span_splits_along_the_edge() {
+    use crate::ds::Pave;
+
+    let mut topo = Topology::new();
+    let mut vertex = |x: f64| topo.add_vertex(Vertex::new(Point3::new(x, 0.0, 0.0), 1e-7));
+    let (start, end, at_06, at_03) = (vertex(0.9), vertex(0.0), vertex(0.6), vertex(0.3));
+    let edge = topo.add_edge(Edge::new(start, end, EdgeCurve::Line));
+    let mut arena = GfaArena::new();
+    arena.init_edge_pave_block(edge, start, 0.9, end, 0.0);
+    super::helpers::add_pave_to_edge(&mut arena, edge, Pave::new(at_03, 0.3));
+    super::helpers::add_pave_to_edge(&mut arena, edge, Pave::new(at_06, 0.6));
+    super::make_blocks::perform(&mut topo, &mut arena).unwrap();
+
+    let leaves = arena.collect_leaf_pave_blocks(&arena.edge_pave_blocks[&edge]);
+    let spans: Vec<(f64, f64)> = leaves
+        .iter()
+        .map(|&id| arena.pave_blocks.get(id).unwrap().parameter_range())
+        .collect();
+    assert_eq!(spans, vec![(0.9, 0.6), (0.6, 0.3), (0.3, 0.0)]);
+
+    let pieces: Vec<_> = leaves
+        .iter()
+        .map(|_| topo.add_edge(Edge::new(start, end, EdgeCurve::Line)))
+        .collect();
+    for (&id, &piece) in leaves.iter().zip(&pieces) {
+        arena.pave_blocks.get_mut(id).unwrap().split_edge = Some(piece);
+    }
+    let images = crate::builder::fill_images::fill_edge_images(&arena);
+    assert_eq!(images[&edge], pieces);
+}

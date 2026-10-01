@@ -1,19 +1,14 @@
 //! The gridfinity tool's kumiko corner wrap (`slideRailBuilder.test.ts`, "is
 //! not carved away by a kumiko wrap either"), captured on brepkit-wasm 4.1.5
 //! with the kernel's calls wrapped to save each boolean's operands: the
-//! corner band, now cut exactly by its helical struts (138 faces, 126 of them
-//! NURBS strut-wall pieces), is compound-cut by 19 tilted slot boxes. Cut
-//! alone, 12 boxes stay exact and 7 fall back to planar meshes of 16,583 to
-//! 19,532 faces, the raw cut leaving 5 to 36 free edges where a box meets the
-//! strut walls; natively the compound cut takes 113 s and returns a
-//! 7,227-face blob. Later compound cuts in the export consume such blobs,
-//! and in the tool the wasm kernel panics with a hash table capacity
-//! overflow after 1,826 s, where 3.3.9 (whose band cut already fell back to
-//! a 150-face mesh) timed out at 508 s.
+//! corner band, cut exactly by its helical struts (138 faces, 126 of them
+//! NURBS strut-wall pieces), is compound-cut by 19 tilted slot boxes. These
+//! are the seven boxes whose cuts meet the struts' grooves and the band's
+//! rims; each must stay an exact B-Rep cut. A fallback here hands a 16k to
+//! 19k-face planar mesh to every later compound cut in the export.
 //!
 //! Data: `kumiko_wrap_exact_band.bin` (cut base), `kumiko_wrap_slot_box_<i>.bin`
-//! for the seven boxes whose cut falls back (indices into the captured tool
-//! list).
+//! for the seven boxes (indices into the captured tool list).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -87,8 +82,13 @@ fn kumiko_wrap_slot_fixture_is_faithful() {
     }
 }
 
+/// Each box cut stays exact. A box face's section ran on past a strut-wall
+/// patch's trimmed boundary (8, 9, 13, 14, 18, 19); the band's floor rim, a
+/// circle stored as a NURBS edge running against its curve, dropped the
+/// box's crossing (4); the plane x cylinder arc never ended at the band's
+/// NURBS rim (4, 8, 13, 18); and a groove edge on the outer cylinder was
+/// never split where the box's sections end on it (8, 13, 18).
 #[test]
-#[ignore = "ready repro: each slot box cut from the exact kumiko band must stay exact (7 fall back today)"]
 fn kumiko_wrap_slot_cuts_stay_exact() {
     let mut failures = Vec::new();
     for i in BOXES {
@@ -102,6 +102,8 @@ fn kumiko_wrap_slot_cuts_stay_exact() {
                 "box {i}: mesh fallback ({} faces)",
                 census(&topo, result).values().sum::<usize>()
             ));
+        } else if bad_edge_uses(&topo, result) != 0 {
+            failures.push(format!("box {i}: open or over-shared edges"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

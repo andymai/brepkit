@@ -75,7 +75,15 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                 }
 
                 let mut sorted_paves = extra_paves;
-                sorted_paves.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
+                let descending = start.parameter > end.parameter;
+                let along = |a: &Pave, b: &Pave| {
+                    if descending {
+                        b.parameter.total_cmp(&a.parameter)
+                    } else {
+                        a.parameter.total_cmp(&b.parameter)
+                    }
+                };
+                sorted_paves.sort_by(along);
                 sorted_paves.dedup_by(|a, b| (a.parameter - b.parameter).abs() < 1e-10);
                 let interior: Vec<Pave> = sorted_paves
                     .iter()
@@ -96,7 +104,7 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                     );
                     if !mids.is_empty() {
                         sorted_paves.extend(mids);
-                        sorted_paves.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
+                        sorted_paves.sort_by(along);
                     }
                 }
 

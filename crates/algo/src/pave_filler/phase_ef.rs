@@ -522,7 +522,7 @@ fn check_edge_face_pairs(
 
 /// Find edge-plane crossings using algebraic ray-plane intersection.
 #[allow(clippy::too_many_arguments)]
-fn find_edge_plane_crossings(
+pub(super) fn find_edge_plane_crossings(
     curve: &EdgeCurve,
     start_pos: Point3,
     end_pos: Point3,
