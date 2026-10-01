@@ -6229,11 +6229,6 @@ fn clip_trimmed_line_to_planes(
     }
 }
 
-/// Shrink a `Line` raw curve to the fractional sub-range `[f0, f1]` of its
-/// current extent, recomputing endpoints, parameter range, and bbox.
-///
-/// Returns `None` when the trimmed segment is shorter than `tol.linear`
-/// (touching or disjoint clip ranges — no real overlap).
 /// A plane x plane section line, split where it crosses the outer boundary
 /// of either face when that boundary carries an elliptical or NURBS edge,
 /// with the pieces outside that face dropped. The polygon clips cannot
@@ -6344,7 +6339,9 @@ fn split_plane_line_at_curved_boundaries(
         for p in hits {
             let f = (p - raw.p_start).dot(seg) / len2;
             let foot = raw.p_start + seg * f;
-            if (p - foot).length() <= 1e-6 && f > 0.0 && f < 1.0 {
+            // A fitted NURBS boundary sits up to its fit error off the face
+            // plane, so its crossing sits that far off the line.
+            if (p - foot).length() <= 1e-4 && f > 0.0 && f < 1.0 {
                 cuts.push(f);
             }
         }
@@ -6381,6 +6378,11 @@ fn split_plane_line_at_curved_boundaries(
         .collect()
 }
 
+/// Shrink a `Line` raw curve to the fractional sub-range `[f0, f1]` of its
+/// current extent, recomputing endpoints, parameter range, and bbox.
+///
+/// Returns `None` when the trimmed segment is shorter than `tol.linear`
+/// (touching or disjoint clip ranges — no real overlap).
 fn trim_raw_line(raw: &RawCurve, f0: f64, f1: f64, tol: Tolerance) -> Option<RawCurve> {
     let span = raw.t_range.1 - raw.t_range.0;
     let t0 = raw.t_range.0 + f0 * span;

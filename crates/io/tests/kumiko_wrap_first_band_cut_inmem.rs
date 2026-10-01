@@ -17,21 +17,49 @@ use brepkit_operations::boolean::{self, BooleanOp, BooleanOptions};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
+/// Volumes are measured at this deflection: the band's NURBS walls lose
+/// tenths of a unit at coarser ones.
+const DEFLECTION: f64 = 0.002;
+
 /// The boxes cut from the band one after another, and the volume after each;
 /// each agrees within 0.001 with the previous volume less the exact
-/// intersection of the band with the next box, measured at deflection 0.002.
+/// intersection of the band with the next box.
 const CHAIN: [usize; 2] = [1, 2];
-const CHAIN_VOLUMES: [f64; CHAIN.len()] = [336.335, 334.100];
+const CHAIN_VOLUMES: [f64; CHAIN.len()] = [337.043, 334.799];
 
-/// The band less all 19 boxes; at deflection 0.002 it agrees within 0.012
-/// with the band less its intersection with the fused boxes.
-const COMPOUND_VOLUME: f64 = 267.267;
+/// The band less all 19 boxes; it agrees within 0.012 with the band less its
+/// intersection with the fused boxes.
+const COMPOUND_VOLUME: f64 = 267.526;
+
+/// A point inside the band and inside each box (1, 2 and 17), which the cut
+/// must remove, and points of band material that no box reaches.
+const REMOVED: [(usize, [f64; 3]); 3] = [
+    (1, [2.4191, 0.0573, 8.0013]),
+    (2, [3.0923, 1.5415, 6.6517]),
+    (17, [2.5138, 2.2473, 33.4310]),
+];
+const KEPT: [[f64; 3]; 2] = [[-0.3310, 2.2636, 8.9978], [0.1529, 1.8115, 6.4787]];
 
 fn load(topo: &mut Topology, name: &str) -> SolidId {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/data")
         .join(name);
     deserialize_solid(&std::fs::read(path).unwrap(), topo).unwrap()
+}
+
+/// Whether `p` is inside `solid`, when the ray and winding classifiers agree.
+fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> Option<bool> {
+    use brepkit_operations::classify::{
+        PointClassification as P, classify_point, classify_point_winding,
+    };
+    let p = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
+    let ray = classify_point(topo, solid, p, 0.05, 1e-7).ok()?;
+    let wind = classify_point_winding(topo, solid, p, 0.05, 1e-7).ok()?;
+    match (ray, wind) {
+        (P::Inside, P::Inside) => Some(true),
+        (P::Outside, P::Outside) => Some(false),
+        _ => None,
+    }
 }
 
 /// Edges used other than twice across the solid's faces.
@@ -89,11 +117,15 @@ fn kumiko_wrap_first_band_chain_stays_exact() {
             0,
             "box {i}: open or over-shared edges"
         );
-        let vol = brepkit_operations::measure::oriented_solid_volume(&topo, cur, 0.05).unwrap();
+        let vol =
+            brepkit_operations::measure::oriented_solid_volume(&topo, cur, DEFLECTION).unwrap();
         assert!(
             (vol - expected).abs() <= 0.01,
             "box {i}: volume {vol:.3}, expected {expected:.3}"
         );
+        for (b, p) in REMOVED.into_iter().filter(|&(b, _)| b == i) {
+            assert_eq!(inside(&topo, cur, p), Some(false), "box {b}: material left");
+        }
     }
 }
 
@@ -112,9 +144,29 @@ fn kumiko_wrap_first_band_compound_cut_stays_exact() {
     let cut = boolean::compound_cut(&mut topo, band, &tools, BooleanOptions::default()).unwrap();
     assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
     assert_eq!(bad_edge_uses(&topo, cut), 0, "open or over-shared edges");
-    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, cut, 0.05).unwrap();
+    let vol = brepkit_operations::measure::oriented_solid_volume(&topo, cut, DEFLECTION).unwrap();
     assert!(
         (vol - COMPOUND_VOLUME).abs() <= 0.01,
         "volume {vol:.3}, expected {COMPOUND_VOLUME:.3}"
     );
+    for (b, p) in REMOVED {
+        assert_eq!(
+            inside(&topo, band, p),
+            Some(true),
+            "box {b}: probe off the band"
+        );
+        assert_eq!(inside(&topo, cut, p), Some(false), "box {b}: material left");
+    }
+    for p in KEPT {
+        assert_eq!(
+            inside(&topo, band, p),
+            Some(true),
+            "probe {p:?} off the band"
+        );
+        assert_eq!(
+            inside(&topo, cut, p),
+            Some(true),
+            "material at {p:?} removed"
+        );
+    }
 }
