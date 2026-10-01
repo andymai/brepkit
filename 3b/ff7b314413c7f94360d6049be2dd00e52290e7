@@ -1,0 +1,81 @@
+crates/io/tests/data/kumiko_wrap_first_band_box_13.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_9.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_19.bin
+  s_a13d2397d068b4::t_28729a04fe8edd 1
+crates/io/tests/data/kumiko_wrap_first_band_box_17.bin
+  s_a13d2397d068b4::t_28729a04fe8edd 1
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_a3ae3203cd49a9 195
+  s_a13d2397d068b4::t_75eef221eded54 141,194
+crates/io/tests/data/kumiko_wrap_first_band_box_5.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_15.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_6.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_14.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_11.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_7.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_8.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_18.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_10.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_16.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_12.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_cbba2127598ecc 323-327,6254-6280,6286-6289,6301,6304-6340,6348-6349,6351-6354,6358-6371,6378-6392
+  s_a13d2397d068b4::t_d6eb90946103e2 2602-2617,2801-2819,2821,2827-2829,2838,2868,2870,2880
+  s_a13d2397d068b4::t_0e4635a8d01d93 6294-6296
+  s_a13d2397d068b4::t_a37493ced2f338 6393,6802
+  s_a13d2397d068b4::t_e4a75861cb8699 6776-6801
+  s_a13d2397d068b4::t_25106a1999034d 6293,6298
+  s_a13d2397d068b4::t_0cb9263f69ba47 6245-6253,6281-6285,6290-6292,6302-6303,6341-6347,6350,6372-6377
+  s_a13d2397d068b4::t_e8ef363050fd2e 6297,6299-6300
+  h_b755e1950659f4 2727-2733,2747-2753
+crates/io/tests/data/kumiko_wrap_first_band_box_3.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_a13d2397d068b4::t_15ad2b17abc989 4-5,18,27,48,161-172,174-176,179-180
+  s_a13d2397d068b4::t_3a7ba347bef008 26,29,35,90-103,105,119-144,147-150,159
+  s_a13d2397d068b4::t_b78eb2033dd9e9 160
+  s_a13d2397d068b4::t_af98fe9f7b79fe 222-223
+  s_a13d2397d068b4::t_4c8c6401587120 8-10,45-48,204-221
+crates/io/tests/data/kumiko_wrap_first_band_box_4.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a13d2397d068b4::t_59275fdeafe62b 1062-1064,1070-1071,1073-1075,7719-7723,7727
+crates/io/tests/data/kumiko_wrap_first_band_slab_base.bin
+  s_a13d2397d068b4::t_4c8c6401587120 1
+crates/io/tests/data/kumiko_wrap_first_band_slab.bin
+  s_a13d2397d068b4::t_4c8c6401587120 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3bff7b314413c7f94360d6049be2dd00e52290e7",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  },
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
