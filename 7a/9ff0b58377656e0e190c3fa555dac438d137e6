@@ -1,0 +1,18 @@
+crates/algo/src/builder/face_splitter/conversion.rs
+  h_b755e1950659f4 219-224
+crates/algo/src/builder/face_splitter/mod.rs
+  h_b755e1950659f4 5543,5545-5551,5553,5559,5582
+crates/algo/src/builder/fill_images_faces.rs
+  h_b755e1950659f4 977-994,1002-1003,1007,1009,1030,1033
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7a9ff0b58377656e0e190c3fa555dac438d137e6",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
