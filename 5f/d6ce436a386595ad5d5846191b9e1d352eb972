@@ -1,0 +1,68 @@
+crates/io/tests/data/kumiko_wrap_first_band_box_13.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_9.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_19.bin
+  s_a13d2397d068b4::t_28729a04fe8edd 1
+crates/io/tests/data/kumiko_wrap_first_band_box_17.bin
+  s_a13d2397d068b4::t_28729a04fe8edd 1
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_a3ae3203cd49a9 141,194
+crates/io/tests/data/kumiko_wrap_first_band_box_5.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_15.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_6.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_14.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_11.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_7.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_8.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_18.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_10.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_16.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_12.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_cbba2127598ecc 323-327,6246-6272,6278-6281,6293,6296-6332,6340-6341,6343-6361,6368-6382
+  s_a13d2397d068b4::t_d6eb90946103e2 2602-2617,2788-2806,2808,2814-2816,2825,2855,2857,2867
+  s_a13d2397d068b4::t_0e4635a8d01d93 6286-6288
+  s_a13d2397d068b4::t_a37493ced2f338 6383,6787
+  s_a13d2397d068b4::t_e4a75861cb8699 6761-6786
+  s_a13d2397d068b4::t_25106a1999034d 6285,6290
+  s_a13d2397d068b4::t_0cb9263f69ba47 6237-6245,6273-6277,6282-6284,6294-6295,6333-6339,6342,6362-6367
+  s_a13d2397d068b4::t_e8ef363050fd2e 6289,6291-6292
+crates/io/tests/data/kumiko_wrap_first_band_box_3.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_a13d2397d068b4::t_15ad2b17abc989 4-5,8,16,21-22,26-29,99-110,112-115,117-118
+  s_a13d2397d068b4::t_3a7ba347bef008 20,23-25,37-50,52,66-97
+  s_a13d2397d068b4::t_b78eb2033dd9e9 98
+crates/io/tests/data/kumiko_wrap_first_band_box_4.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a13d2397d068b4::t_59275fdeafe62b 1048-1057,7689,7701-7705,7709,7712,7715
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5fd6ce436a386595ad5d5846191b9e1d352eb972",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
