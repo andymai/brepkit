@@ -355,7 +355,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         if *TRACE_SECEDGE {
             for (i, s) in sections.iter().enumerate() {
                 log::debug!(
-                    "SECEDGE face={face_id:?} #{i} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                    "SECEDGE face={face_id:?} #{i} {} ({:.3},{:.3},{:.3})->({:.3},{:.3},{:.3})",
+                    s.curve_3d.type_tag(),
                     s.start.x(),
                     s.start.y(),
                     s.start.z(),
@@ -2943,6 +2944,18 @@ fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
 
             let si = &sections[i];
             let sj = &sections[j];
+            // An arc is no segment between its ends: a chord across a keyhole
+            // pin's rim reads as part of the rim arc beside it otherwise.
+            let curved = |s: &SectionEdge| {
+                matches!(
+                    s.curve_3d,
+                    brepkit_topology::edge::EdgeCurve::Circle(_)
+                        | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                )
+            };
+            if curved(si) || curved(sj) {
+                continue;
+            }
 
             // Check collinearity: direction vectors must be parallel
             let di = sj.end - sj.start;

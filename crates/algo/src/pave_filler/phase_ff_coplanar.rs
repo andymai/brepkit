@@ -208,6 +208,13 @@ fn has_existing_section_at(
         if curve.face_a != target && curve.face_b != target {
             continue;
         }
+        // Only a straight section can be this straight piece: an arc between
+        // the same two points within one quadrant has the chord's midpoint
+        // for its box centre (a keyhole pin's cap rim beside the chord its
+        // tail cuts across it).
+        if !matches!(curve.curve, brepkit_topology::edge::EdgeCurve::Line) {
+            continue;
+        }
 
         let edge_min = Point3::new(
             p_start.x().min(p_end.x()),
