@@ -978,6 +978,7 @@ pub fn compound_cut(
     // Any failure falls back to the sequential loop.
     let mut result = target;
     let mut batched = false;
+    let mut batch_tool = None;
     if tools.len() >= 2
         && let Some(boxes) = tool_bounding_boxes(topo, tools)
         && let clusters = cluster_tools_by_aabb(&boxes, tools)
@@ -1036,20 +1037,43 @@ pub fn compound_cut(
             // discarded for the sequential per-tool cuts, which stay exact
             // where the one cut against the merged tool cannot (the kumiko
             // band against its 19 overlapping slot boxes).
-            if let Ok(Some(tool)) = merged
-                && let (Ok(cut), false) =
-                    without_mesh_fallback(|| boolean_inner(topo, BooleanOp::Cut, target, tool))
-            {
-                result = cut;
-                batched = true;
-            } else {
+            if let Ok(Some(tool)) = merged {
+                match without_mesh_fallback(|| boolean_inner(topo, BooleanOp::Cut, target, tool)) {
+                    (Ok(cut), false) => {
+                        result = cut;
+                        batched = true;
+                    }
+                    _ => batch_tool = Some(tool),
+                }
+            }
+            if !batched {
                 log::debug!("compound_cut: batched tool path failed, using sequential cuts");
             }
         }
     }
     if !batched {
-        for &tool in tools {
-            result = boolean(topo, BooleanOp::Cut, result, tool)?;
+        if let Some(tool) = batch_tool {
+            // The sequential cuts are only worth it while every one stays
+            // exact: once one degrades to a mesh, each later cut grinds
+            // against that mesh (a 34,692-face blob after the first of 19
+            // slot boxes on the kumiko wall), where the one batched cut
+            // takes a single mesh fallback.
+            let (seq, declined) = without_mesh_fallback(|| {
+                tools.iter().try_fold(target, |cur, &t| {
+                    boolean_inner(topo, BooleanOp::Cut, cur, t)
+                })
+            });
+            result = match seq {
+                Ok(cut) if !declined => cut,
+                _ => {
+                    log::debug!("compound_cut: sequential cuts not exact, cutting the batch once");
+                    boolean(topo, BooleanOp::Cut, target, tool)?
+                }
+            };
+        } else {
+            for &tool in tools {
+                result = boolean(topo, BooleanOp::Cut, result, tool)?;
+            }
         }
     }
     if opts.unify_faces {
