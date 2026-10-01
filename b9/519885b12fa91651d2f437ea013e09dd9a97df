@@ -1,0 +1,25 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a13d2397d068b4::t_d350d1b7248aa7 1048-1070,1074-1078,1081,7716,7739-7741,7744
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_d350d1b7248aa7 6342-6344,6381-6385
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_767f9ccc3ebb9b 197
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_a13d2397d068b4::t_0de88d225470d7 20-23,26,28-32,34-41,50-64,120-121,126-128,147,152-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b9519885b12fa91651d2f437ea013e09dd9a97df",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
