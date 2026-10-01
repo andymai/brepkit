@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.8](https://github.com/andymai/brepkit/compare/v4.1.7...v4.1.8) (2026-10-01)
+
+
+### Bug Fixes
+
+* **algo:** keep the kumiko slot boxes exact when cut one after another ([#1926](https://github.com/andymai/brepkit/issues/1926)) ([bbac432](https://github.com/andymai/brepkit/commit/bbac4323b46588eba7ac3972f746fa81d3ceeed4))
+
 ## [4.1.7](https://github.com/andymai/brepkit/compare/v4.1.6...v4.1.7) (2026-10-01)
 
 
