@@ -1,0 +1,31 @@
+.claude/skills/roadmap/SKILL.md
+  s_a13d2397d068b4::t_10e4cfffda267d 141
+crates/io/tests/data/kumiko_wrap_slot_box_10.bin
+  s_a13d2397d068b4::t_c02e3ffaf51b8b 1
+crates/io/tests/data/kumiko_wrap_slot_box_11.bin
+  s_a13d2397d068b4::t_1d094e2e6fd2b8 1
+crates/io/tests/data/kumiko_wrap_slot_box_12.bin
+  s_a13d2397d068b4::t_c7d89f2c2ddd26 1
+crates/io/tests/data/kumiko_wrap_slot_box_15.bin
+  s_a13d2397d068b4::t_5b9c9ec006fa7a 1
+crates/io/tests/data/kumiko_wrap_slot_box_16.bin
+  s_a13d2397d068b4::t_7bba15032a0011 1
+crates/io/tests/data/kumiko_wrap_slot_box_17.bin
+  s_a13d2397d068b4::t_75da7745034c5b 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bca75a127638a2da82d76c13cbb8da08bc04b236",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
