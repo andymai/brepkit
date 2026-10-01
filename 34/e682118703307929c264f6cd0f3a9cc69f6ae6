@@ -1,0 +1,53 @@
+crates/io/tests/data/kumiko_wrap_first_band_box_16.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_10.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_4.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_14.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_7.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_9.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_15.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_18.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_12.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_a13d2397d068b4::t_15ad2b17abc989 4-5,8,16,21-22,26-29,62-63,99-119
+  s_a13d2397d068b4::t_603969c5c54b9b 120
+crates/io/tests/data/kumiko_wrap_first_band_box_11.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_13.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_6.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_5.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/io/tests/data/kumiko_wrap_first_band_box_8.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a13d2397d068b4::t_cbba2127598ecc 323-327,6237-6276,6291,6293-6372
+  s_a13d2397d068b4::t_e8ef363050fd2e 6277-6290,6292
+crates/io/tests/data/kumiko_wrap_first_band_box_3.bin
+  s_a13d2397d068b4::t_d08350297ce11f 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "34e682118703307929c264f6cd0f3a9cc69f6ae6",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
