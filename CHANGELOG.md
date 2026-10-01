@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.9](https://github.com/andymai/brepkit/compare/v4.1.8...v4.1.9) (2026-10-01)
+
+
+### Bug Fixes
+
+* **algo:** keep the kumiko compound cut exact by cutting box by box ([#1929](https://github.com/andymai/brepkit/issues/1929)) ([fbb3f69](https://github.com/andymai/brepkit/commit/fbb3f69dd873d84a83586d8562a75a73b858259b))
+
 ## [4.1.8](https://github.com/andymai/brepkit/compare/v4.1.7...v4.1.8) (2026-10-01)
 
 
