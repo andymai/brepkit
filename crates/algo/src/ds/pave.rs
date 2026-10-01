@@ -71,6 +71,16 @@ impl PaveBlock {
     pub fn parameter_range(&self) -> (f64, f64) {
         (self.start.parameter, self.end.parameter)
     }
+
+    /// Whether `t` lies strictly inside this block's span.
+    ///
+    /// A NURBS edge that runs against its curve's parameterization has a
+    /// descending span (`start.parameter > end.parameter`).
+    #[must_use]
+    pub fn spans_interior(&self, t: f64) -> bool {
+        let (a, b) = self.parameter_range();
+        t > a.min(b) + 1e-10 && t < a.max(b) - 1e-10
+    }
 }
 
 /// Typed handle for a [`CommonBlock`] in the GFA arena.

@@ -1879,3 +1879,59 @@ fn build_fuse_n_three_axis_aligned_row_watertight() {
         "three-box row watertight; two={two} other={other}"
     );
 }
+
+/// A descending pave span (as on a NURBS edge stored against its curve, whose
+/// start vertex sits at the larger curve parameter), built here on a
+/// synthetic span: its crossing paves are kept, it splits into pieces running
+/// from its start to its end, and its images list those pieces in that order.
+#[test]
+fn descending_pave_span_splits_along_the_edge() {
+    use crate::ds::Pave;
+
+    let mut topo = Topology::new();
+    let mut vertex = |x: f64| topo.add_vertex(Vertex::new(Point3::new(x, 0.0, 0.0), 1e-7));
+    let (start, end, at_06, at_03) = (vertex(0.9), vertex(0.0), vertex(0.6), vertex(0.3));
+    let edge = topo.add_edge(Edge::new(start, end, EdgeCurve::Line));
+    let mut arena = GfaArena::new();
+    arena.init_edge_pave_block(edge, start, 0.9, end, 0.0);
+    super::helpers::add_pave_to_edge(&mut arena, edge, Pave::new(at_03, 0.3));
+    super::helpers::add_pave_to_edge(&mut arena, edge, Pave::new(at_06, 0.6));
+    super::make_blocks::perform(&mut topo, &mut arena).unwrap();
+
+    let leaves = arena.collect_leaf_pave_blocks(&arena.edge_pave_blocks[&edge]);
+    let spans: Vec<(f64, f64)> = leaves
+        .iter()
+        .map(|&id| arena.pave_blocks.get(id).unwrap().parameter_range())
+        .collect();
+    assert_eq!(spans, vec![(0.9, 0.6), (0.6, 0.3), (0.3, 0.0)]);
+
+    let pieces: Vec<_> = leaves
+        .iter()
+        .map(|_| topo.add_edge(Edge::new(start, end, EdgeCurve::Line)))
+        .collect();
+    for (&id, &piece) in leaves.iter().zip(&pieces) {
+        arena.pave_blocks.get_mut(id).unwrap().split_edge = Some(piece);
+    }
+    let images = crate::builder::fill_images::fill_edge_images(&arena);
+    assert_eq!(images[&edge], pieces);
+}
+
+/// A NURBS edge on its whole curve, stored against the curve, gets a pave
+/// span that starts at the curve's far end.
+#[test]
+fn reversed_whole_nurbs_edge_span_descends() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+
+    let curve = EdgeCurve::NurbsCurve(
+        NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap(),
+    );
+    let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+    assert_eq!(super::edge_pave_span(&curve, a, b), (0.0, 1.0));
+    assert_eq!(super::edge_pave_span(&curve, b, a), (1.0, 0.0));
+}

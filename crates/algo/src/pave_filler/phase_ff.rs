@@ -457,7 +457,7 @@ pub fn perform(
                 for raw in raw_curves {
                     if let (Some(ea), Some(eb)) = (&ext_a, &ext_b)
                         && let Some(arcs) = trim_ellipse_to_boundary_crossings(
-                            topo, fa, fb, surf_a, surf_b, &raw, ea, eb,
+                            topo, fa, fb, surf_a, surf_b, &raw, ea, eb, tol,
                         )
                     {
                         exact.extend(arcs);
@@ -1502,15 +1502,15 @@ fn restrict_curves_to_faces(
         // `split_boundary_edges_at_3d_points` anchors them, and the same
         // crossing points chain with the adjacent faces' sections (a point on
         // the shared edge and on the cone lies on BOTH faces' conics).
-        if let Some(pieces) =
-            trim_open_curve_to_plane_face_lines(topo, fa, surf_a, surf_b, &raw, &ext_a, &ext_b, tol)
-        {
+        if let Some(pieces) = trim_open_curve_to_plane_face_lines(
+            topo, fa, surf_a, fb, surf_b, &raw, &ext_a, &ext_b, tol,
+        ) {
             out.extend(pieces);
             continue;
         }
-        if let Some(pieces) =
-            trim_open_curve_to_plane_face_lines(topo, fb, surf_b, surf_a, &raw, &ext_b, &ext_a, tol)
-        {
+        if let Some(pieces) = trim_open_curve_to_plane_face_lines(
+            topo, fb, surf_b, fa, surf_a, &raw, &ext_b, &ext_a, tol,
+        ) {
             out.extend(pieces);
             continue;
         }
@@ -2431,6 +2431,7 @@ fn trim_ellipse_to_boundary_crossings(
     raw: &RawCurve,
     ext_a: &FaceExtent,
     ext_b: &FaceExtent,
+    tol: Tolerance,
 ) -> Option<Vec<RawCurve>> {
     type Sources = Vec<brepkit_topology::edge::EdgeId>;
     use brepkit_math::curves::{Circle3D, Ellipse3D};
@@ -2582,7 +2583,18 @@ fn trim_ellipse_to_boundary_crossings(
                         push_crossing(p, None, &mut crossings);
                     }
                 }
-                _ => {}
+                // A rim circle stored as NURBS (a band carried through a
+                // transform refit) ends the face just the same.
+                curve @ EdgeCurve::NurbsCurve(_) => {
+                    let (sp, ep) = (sv.point(), ev.point());
+                    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                    for (_, p) in super::phase_ef::find_edge_plane_crossings(
+                        curve, sp, ep, t0, t1, *plane_n, *plane_d, tol,
+                    ) {
+                        push_crossing(p, None, &mut crossings);
+                    }
+                }
+                EdgeCurve::Ellipse(_) => {}
             }
         }
     }
@@ -3076,6 +3088,7 @@ fn trim_open_curve_to_plane_face_lines(
     topo: &Topology,
     plane_face: FaceId,
     plane_surf: &FaceSurface,
+    other_face: FaceId,
     other_surf: &FaceSurface,
     raw: &RawCurve,
     ext_plane: &FaceExtent,
@@ -3344,6 +3357,106 @@ fn trim_open_curve_to_plane_face_lines(
         }
     }
 
+    // Crossings of the NURBS partner's own boundary. A patch an earlier cut
+    // trimmed (a strut wall ending on a band's end plane) carries a section
+    // that runs on past that boundary over the rest of its surface; the
+    // overhang dangles on this plane face and on the patch. Each boundary
+    // edge's crossing with the plane is found exactly as the EF phase finds
+    // it, so the kept piece ends on the EF vertex the edge was paved at.
+    let mut snaps: Vec<(f64, Point3)> = Vec::new();
+    let partner_poly = if partner_is_cone {
+        None
+    } else {
+        nurbs_face_uv_polygon(topo, other_face, other_surf)
+    };
+    if let (Some(_), FaceSurface::Plane { normal, d }) = (&partner_poly, plane_surf) {
+        let near_t = |x: Point3| -> Option<f64> {
+            let (mut best_i, mut best_d) = (0usize, f64::INFINITY);
+            for i in 0..=n_samples {
+                let dist = (eval_at(sample_t(i)) - x).length();
+                if dist < best_d {
+                    best_d = dist;
+                    best_i = i;
+                }
+            }
+            let (mut lo, mut hi) = (
+                sample_t(best_i.saturating_sub(1)),
+                sample_t((best_i + 1).min(n_samples)),
+            );
+            for _ in 0..80 {
+                let m1 = (hi - lo).mul_add(1.0 / 3.0, lo);
+                let m2 = (hi - lo).mul_add(2.0 / 3.0, lo);
+                if (eval_at(m1) - x).length() < (eval_at(m2) - x).length() {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let t = f64::midpoint(lo, hi);
+            ((eval_at(t) - x).length() <= 1e-4).then_some(t)
+        };
+        let on_plane = |p: Point3| (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs();
+        let pface = topo.face(other_face).ok()?;
+        for oe in topo.wire(pface.outer_wire()).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let sp = topo.vertex(edge.start()).ok()?.point();
+            let ep = topo.vertex(edge.end()).ok()?.point();
+            let (e0, e1) = edge.curve().domain_with_endpoints(sp, ep);
+            // An edge lying in the plane is the section itself, not a
+            // crossing of it.
+            let in_plane = (0..=8).all(|k| {
+                let t = (e1 - e0).mul_add(f64::from(k) / 8.0, e0);
+                on_plane(edge.curve().evaluate_with_endpoints(t, sp, ep)) < tol.linear
+            });
+            if in_plane {
+                continue;
+            }
+            for (_, x) in super::phase_ef::find_edge_plane_crossings(
+                edge.curve(),
+                sp,
+                ep,
+                e0,
+                e1,
+                *normal,
+                *d,
+                tol,
+            ) {
+                let Some(t) = near_t(x) else { continue };
+                if t <= raw.t_range.0.min(raw.t_range.1) || t >= raw.t_range.0.max(raw.t_range.1) {
+                    continue;
+                }
+                if !snaps.iter().any(|&(s, _)| (s - t).abs() < 1e-9) {
+                    snaps.push((t, x));
+                }
+                if !crossings.iter().any(|&c| (c - t).abs() < 1e-9) {
+                    crossings.push(t);
+                }
+            }
+        }
+    }
+    // A section riding the partner's boundary keeps a midpoint within the
+    // sampled polygon's chord sag of it.
+    let partner_band = partner_poly.as_ref().map_or(0.0, |(poly, sag)| {
+        sag.mul_add(2.0, crate::builder::classify_2d::boundary_eps(poly))
+    });
+    let inside_partner = |p: Point3| -> bool {
+        match &partner_poly {
+            Some((poly, _)) => other_surf.project_point(p).is_none_or(|(u, v)| {
+                let q = Point2::new(u, v);
+                point_in_polygon_2d(q, poly)
+                    || crate::builder::classify_2d::distance_to_polygon_boundary(q, poly)
+                        <= partner_band
+            }),
+            None => true,
+        }
+    };
+    let at = |t: f64| -> Point3 {
+        snaps
+            .iter()
+            .find(|&&(s, _)| (s - t).abs() < 1e-9)
+            .map_or_else(|| eval_at(t), |&(_, x)| x)
+    };
+
     // Whole curve inside (or outside) the face: no crossings — keep or drop
     // by a single interior test; deferring (None) would hand the generic
     // sample-clip a curve this path has already proven in-plane, so decide
@@ -3370,10 +3483,13 @@ fn trim_open_curve_to_plane_face_lines(
         }
         let t_mid = f64::midpoint(t0, t1);
         let p_mid = eval_at(t_mid);
-        if !inside_face(frame.project(p_mid)) || (partner_is_cone && !ext_other.contains(p_mid)) {
+        if !inside_face(frame.project(p_mid))
+            || (partner_is_cone && !ext_other.contains(p_mid))
+            || !inside_partner(p_mid)
+        {
             continue;
         }
-        let (p0, p1) = (eval_at(t0), eval_at(t1));
+        let (p0, p1) = (at(t0), at(t1));
         let sub_pts: Vec<Point3> = (0..=8)
             .map(|k| eval_at(t0 + (t1 - t0) * (f64::from(k) / 8.0)))
             .collect();
@@ -3415,6 +3531,77 @@ fn trim_open_curve_to_plane_face_lines(
         });
     }
     Some(pieces)
+}
+
+/// A NURBS face's outer boundary sampled into its surface's `(u, v)`, with the
+/// largest distance between the boundary and the polygon's chords (measured at
+/// each chord's mid-parameter), or `None` for a face with holes or a boundary
+/// point the surface cannot project.
+fn nurbs_face_uv_polygon(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+) -> Option<(Vec<brepkit_math::vec::Point2>, f64)> {
+    if !matches!(surface, FaceSurface::Nurbs(_)) {
+        return None;
+    }
+    let face = topo.face(face_id).ok()?;
+    if !face.inner_wires().is_empty() {
+        return None;
+    }
+    let mut poly = Vec::new();
+    let mut sag: f64 = 0.0;
+    for oe in topo.wire(face.outer_wire()).ok()?.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        // Every edge is sampled: a straight edge need not be straight in
+        // (u, v), and the seam test below reads the steps between samples.
+        // Odd samples sit at the chords' mid-parameters and measure the sag.
+        let n = 32;
+        // A whole-curve NURBS edge stored against its curve still reports
+        // the curve's own domain, so `t0` can sit at the edge's end: orient
+        // the samples by the wire's start vertex instead.
+        #[allow(clippy::cast_precision_loss)]
+        let mut pts: Vec<Point3> = (0..=n)
+            .map(|k| {
+                let f = k as f64 / n as f64;
+                edge.curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+            })
+            .collect();
+        let start = if oe.is_forward() { sp } else { ep };
+        if (pts[0] - start).length() > (pts[n] - start).length() {
+            pts.reverse();
+        }
+        let uv: Vec<brepkit_math::vec::Point2> = pts
+            .iter()
+            .map(|p| {
+                surface
+                    .project_point(*p)
+                    .map(|(u, v)| brepkit_math::vec::Point2::new(u, v))
+            })
+            .collect::<Option<_>>()?;
+        for k in (0..n).step_by(2) {
+            let (a, m, b) = (uv[k], uv[k + 1], uv[k + 2]);
+            sag = sag.max(crate::builder::classify_2d::distance_to_polygon_boundary(
+                m,
+                &[a, b],
+            ));
+            poly.push(a);
+        }
+    }
+    // A boundary that crosses a closed surface's seam jumps across the
+    // parameter domain and is no polygon in (u, v).
+    let FaceSurface::Nurbs(n) = surface else {
+        return None;
+    };
+    let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
+    let seamless = poly.iter().zip(poly.iter().cycle().skip(1)).all(|(a, b)| {
+        (a.x() - b.x()).abs() < 0.5 * (u1 - u0) && (a.y() - b.y()).abs() < 0.5 * (v1 - v0)
+    });
+    (poly.len() >= 3 && seamless).then_some((poly, sag))
 }
 
 /// Extract the `[t0, t1]` sub-curve of a NURBS curve, preserving the original

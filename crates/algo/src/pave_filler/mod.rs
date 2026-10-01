@@ -139,7 +139,7 @@ impl<'a> PaveFiller<'a> {
                 let edge = self.topo.edge(edge_id)?;
                 let start_pos = self.topo.vertex(edge.start())?.point();
                 let end_pos = self.topo.vertex(edge.end())?.point();
-                let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+                let (t0, t1) = edge_pave_span(edge.curve(), start_pos, end_pos);
                 arena.init_edge_pave_block(edge_id, edge.start(), t0, edge.end(), t1);
             }
         }
@@ -360,11 +360,35 @@ fn init_pave_blocks_n(
             let edge = topo.edge(edge_id)?;
             let start_pos = topo.vertex(edge.start())?.point();
             let end_pos = topo.vertex(edge.end())?.point();
-            let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+            let (t0, t1) = edge_pave_span(edge.curve(), start_pos, end_pos);
             arena.init_edge_pave_block(edge_id, edge.start(), t0, edge.end(), t1);
         }
     }
     Ok(())
+}
+
+/// An edge's pave span, start vertex first. A NURBS edge on its whole curve
+/// reports the curve's own domain in either orientation, so one stored
+/// against its curve starts at the domain's far end and its span descends.
+fn edge_pave_span(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    start: brepkit_math::vec::Point3,
+    end: brepkit_math::vec::Point3,
+) -> (f64, f64) {
+    // The weld band within which an edge's vertices sit on its curve's ends:
+    // `EdgeCurve::domain_with_endpoints` (topology's edge.rs) accepts on-curve
+    // endpoints within the same `WELD_EPS`, and reports the whole domain for
+    // ends within its tighter `END_EPS`, which this band contains.
+    const ON_END: f64 = 1e-5;
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    if matches!(curve, brepkit_topology::edge::EdgeCurve::NurbsCurve(_))
+        && (start - end).length() > 1e-9
+        && (curve.evaluate_with_endpoints(t1, start, end) - start).length() < ON_END
+        && (curve.evaluate_with_endpoints(t0, start, end) - end).length() < ON_END
+    {
+        return (t1, t0);
+    }
+    (t0, t1)
 }
 
 /// Axis-aligned bounding box of a solid, curved edges included: a cylinder's

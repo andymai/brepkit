@@ -522,7 +522,7 @@ fn check_edge_face_pairs(
 
 /// Find edge-plane crossings using algebraic ray-plane intersection.
 #[allow(clippy::too_many_arguments)]
-fn find_edge_plane_crossings(
+pub(super) fn find_edge_plane_crossings(
     curve: &EdgeCurve,
     start_pos: Point3,
     end_pos: Point3,
@@ -592,9 +592,9 @@ fn find_edge_surface_crossings(
         let dist = distance_to_surface_near(pt, surface, hull, tol);
 
         if i > 0 && dist < tol.linear {
-            let is_dup = crossings
-                .iter()
-                .any(|&(ct, _): &(f64, Point3)| (t - ct).abs() < (t1 - t0) / (n as f64) * 2.0);
+            let is_dup = crossings.iter().any(|&(ct, _): &(f64, Point3)| {
+                (t - ct).abs() < ((t1 - t0) / (n as f64) * 2.0).abs()
+            });
             if !is_dup {
                 let refined = refine_crossing(curve, start_pos, end_pos, prev_t, t, surface, tol);
                 crossings.push(refined);
@@ -636,7 +636,7 @@ fn find_edge_surface_crossings(
                 let pt_min = curve.evaluate_with_endpoints(t_min, start_pos, end_pos);
                 if distance_to_surface(pt_min, surface) < tol.linear {
                     let is_dup = crossings.iter().any(|&(ct, _): &(f64, Point3)| {
-                        (t_min - ct).abs() < (t1 - t0) / (n as f64) * 2.0
+                        (t_min - ct).abs() < ((t1 - t0) / (n as f64) * 2.0).abs()
                     });
                     if !is_dup {
                         let refined =
@@ -722,7 +722,7 @@ fn find_crossings_by_sampling(
             let d_min = signed_dist(pt_min).abs();
             if d_min < tol_linear {
                 let is_dup = crossings.iter().any(|&(ct, _): &(f64, Point3)| {
-                    (t_min - ct).abs() < (t1 - t0) / (n as f64) * 2.0
+                    (t_min - ct).abs() < ((t1 - t0) / (n as f64) * 2.0).abs()
                 });
                 if !is_dup {
                     crossings.push((t_min, pt_min));

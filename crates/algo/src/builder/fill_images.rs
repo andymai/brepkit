@@ -24,13 +24,20 @@ pub fn fill_edge_images(arena: &GfaArena) -> HashMap<EdgeId, Vec<EdgeId>> {
     for (&original_edge, pb_ids) in &arena.edge_pave_blocks {
         let leaves = arena.collect_leaf_pave_blocks(pb_ids);
 
+        // A descending block (an edge running against its curve's
+        // parameterization) orders its pieces by falling parameter.
+        let descending = pb_ids
+            .first()
+            .and_then(|&id| arena.pave_blocks.get(id))
+            .is_some_and(|pb| pb.start.parameter > pb.end.parameter);
         let mut split_with_param: Vec<(f64, EdgeId)> = Vec::new();
 
         for leaf_id in leaves {
             if let Some(pb) = arena.pave_blocks.get(leaf_id)
                 && let Some(se) = pb.split_edge
             {
-                split_with_param.push((pb.start.parameter, se));
+                let t = pb.start.parameter;
+                split_with_param.push((if descending { -t } else { t }, se));
             }
         }
 

@@ -120,7 +120,7 @@ fn check_vertex_edge_pairs(
 
             let param = project_point_on_edge(topo, eid, pos)?;
 
-            if param < t0 - 1e-10 || param > t1 + 1e-10 {
+            if param < t0.min(t1) - 1e-10 || param > t0.max(t1) + 1e-10 {
                 continue;
             }
 
@@ -135,11 +135,10 @@ fn check_vertex_edge_pairs(
                 if let Some(pb_ids) = arena.edge_pave_blocks.get(&eid) {
                     let pb_ids_copy: Vec<_> = pb_ids.clone();
                     for pb_id in pb_ids_copy {
-                        if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {
-                            let (pb_start, pb_end) = pb.parameter_range();
-                            if param > pb_start + 1e-10 && param < pb_end - 1e-10 {
-                                pb.add_extra_pave(pave);
-                            }
+                        if let Some(pb) = arena.pave_blocks.get_mut(pb_id)
+                            && pb.spans_interior(param)
+                        {
+                            pb.add_extra_pave(pave);
                         }
                     }
                 }
@@ -188,9 +187,9 @@ fn project_point_on_edge(
         }
     }
 
-    let dt = (t1 - t0) / n_samples as f64;
-    let mut lo = (best_t - dt).max(t0);
-    let mut hi = (best_t + dt).min(t1);
+    let dt = ((t1 - t0) / n_samples as f64).abs();
+    let mut lo = (best_t - dt).max(t0.min(t1));
+    let mut hi = (best_t + dt).min(t0.max(t1));
 
     for _ in 0..20 {
         let m1 = lo + (hi - lo) / 3.0;
