@@ -3,10 +3,10 @@
 //! from main: the first corner band the export compound-cuts by its 19 slot
 //! boxes (194 faces, 160 of them NURBS), with the first two boxes. Neither the
 //! batched cut nor the first box's own cut stays exact, so the compound cut
-//! must take one mesh fallback for the batch. Cutting box by box after the
-//! first box degrades sends every later box against a mesh of tens of
-//! thousands of faces: two fallbacks and 50 s natively for these two boxes,
-//! and a tool test past its 40-minute cap for all 19.
+//! must take one mesh fallback for the batch. Once the first box's cut
+//! degrades to a mesh, cutting box by box sends every later box against a
+//! mesh of tens of thousands of faces: two fallbacks and 50 s natively for
+//! these two boxes, and for all 19 a tool test that trapped after 1,715 s.
 //!
 //! Data: `kumiko_wrap_first_band.bin` (cut base),
 //! `kumiko_wrap_first_band_box_<1..2>.bin` (the first two captured boxes).
@@ -39,8 +39,8 @@ fn kumiko_wrap_first_band_compound_cut_takes_one_fallback() {
             .or_insert(0) += 1;
     }
     assert_eq!(
-        (census["cylinder"], census["nurbs"], census["plane"]),
-        (14, 160, 20),
+        ["cylinder", "nurbs", "plane"].map(|k| census.get(k).copied().unwrap_or(0)),
+        [14, 160, 20],
         "fixture drifted: {census:?}"
     );
     let boxes = [

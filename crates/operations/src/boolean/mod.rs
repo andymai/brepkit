@@ -1056,15 +1056,23 @@ pub fn compound_cut(
             // The sequential cuts are only worth it while every one stays
             // exact: once one degrades to a mesh, each later cut grinds
             // against that mesh (a 34,692-face blob after the first of 19
-            // slot boxes on the kumiko wall), where the one batched cut
-            // takes a single mesh fallback.
+            // slot boxes on a kumiko corner band), where the one batched cut
+            // takes a single mesh fallback. A helper can swallow the decline
+            // and return `Ok`, so the flag is read after every cut.
             let (seq, declined) = without_mesh_fallback(|| {
                 tools.iter().try_fold(target, |cur, &t| {
-                    boolean_inner(topo, BooleanOp::Cut, cur, t)
+                    let cut = boolean_inner(topo, BooleanOp::Cut, cur, t)?;
+                    if MESH_FALLBACK_DECLINED.with(std::cell::Cell::get) {
+                        return Err(crate::OperationsError::InvalidInput {
+                            reason: "a sequential cut declined the mesh fallback".into(),
+                        });
+                    }
+                    Ok(cut)
                 })
             });
-            result = match seq {
-                Ok(cut) if !declined => cut,
+            result = match (seq, declined) {
+                (Ok(cut), false) => cut,
+                (Err(e), false) => return Err(e),
                 _ => {
                     log::debug!("compound_cut: sequential cuts not exact, cutting the batch once");
                     boolean(topo, BooleanOp::Cut, target, tool)?

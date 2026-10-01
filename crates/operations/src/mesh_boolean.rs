@@ -1472,7 +1472,13 @@ fn classify_split_triangles(
     }
 
     // A missed intersection would let one side leak across the region, so
-    // three spread probes must agree before the region shares a state.
+    // three spread probes must agree before the region shares a state: the
+    // largest piece, the piece farthest from it, and the piece farthest from
+    // both.
+    let centroid = |i: usize| {
+        let (v0, v1, v2) = corners(i);
+        triangle_centroid(v0, v1, v2)
+    };
     let mut roots: Vec<usize> = regions.keys().copied().collect();
     roots.sort_unstable();
     for root in roots {
@@ -1488,12 +1494,24 @@ fn classify_split_triangles(
                 area(x).total_cmp(&area(y))
             })
             .unwrap_or(root);
+        let farthest = |from: &[Point3]| {
+            let gap = |i: usize| {
+                from.iter()
+                    .map(|&c| dist_sq(centroid(i), c))
+                    .fold(f64::INFINITY, f64::min)
+            };
+            members
+                .iter()
+                .copied()
+                .max_by(|&x, &y| gap(x).total_cmp(&gap(y)))
+                .unwrap_or(root)
+        };
         let shared = (members.len() >= 3)
             .then(|| side(largest))
             .filter(|&first| {
-                [members[members.len() / 3], members[2 * members.len() / 3]]
-                    .iter()
-                    .all(|&p| side(p) == first)
+                let second = farthest(&[centroid(largest)]);
+                let third = farthest(&[centroid(largest), centroid(second)]);
+                side(second) == first && side(third) == first
             });
         for &i in members {
             states[i] = Some(shared.unwrap_or_else(|| side(i)));
