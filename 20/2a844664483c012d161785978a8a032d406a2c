@@ -1,0 +1,23 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a13d2397d068b4::t_584f860486fae1 1034-1036
+crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs
+  s_a13d2397d068b4::t_1407f774dbcd12 50-80,146,176,179,183,187,192
+  s_a13d2397d068b4::t_ec8c8c89f0e596 41
+  s_a13d2397d068b4::t_16d5c6c9f74096 147-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "202a844664483c012d161785978a8a032d406a2c",
+  "prompts": {},
+  "sessions": {
+    "s_a13d2397d068b4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
