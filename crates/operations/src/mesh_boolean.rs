@@ -1348,6 +1348,11 @@ fn dist_sq(a: Point3, b: Point3) -> f64 {
     d.dot(d)
 }
 
+#[cfg(test)]
+thread_local! {
+    static WINDING_EVALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Classification of a sub-triangle against the other mesh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TriState {
@@ -1367,7 +1372,9 @@ enum TriState {
 /// small epsilon, with near-parallel normals) is classified `OnSame`/`OnOpp`
 /// — the winding number is exactly ½ there and must not be used as an
 /// inside/outside coin flip. All other centroids use the generalized winding
-/// number.
+/// number, evaluated once per region: the split conforms to the intersection,
+/// so two sub-triangles sharing an edge that does not lie on the other mesh
+/// are on the same side of it.
 fn classify_split_triangles(
     split: &SplitMesh,
     other_mesh: &TriangleMesh,
@@ -1378,38 +1385,141 @@ fn classify_split_triangles(
     // apart than `tolerance` are never co-refined, so classifying them
     // OnSame/OnOpp would drop them in assembly and open the result.
     let eps_on = tolerance.max(1e-9);
-    split
-        .triangles
-        .iter()
-        .map(|tri| {
-            let v0 = split.positions[tri[0] as usize];
-            let v1 = split.positions[tri[1] as usize];
-            let v2 = split.positions[tri[2] as usize];
-            let centroid = triangle_centroid(v0, v1, v2);
+    let corners = |i: usize| {
+        let t = split.triangles[i];
+        (
+            split.positions[t[0] as usize],
+            split.positions[t[1] as usize],
+            split.positions[t[2] as usize],
+        )
+    };
+    let side = |i: usize| {
+        #[cfg(test)]
+        WINDING_EVALS.with(|n| n.set(n.get() + 1));
+        let (v0, v1, v2) = corners(i);
+        if winding_number_at_point(triangle_centroid(v0, v1, v2), other_mesh).abs() > 0.5 {
+            TriState::Inside
+        } else {
+            TriState::Outside
+        }
+    };
+    let count = split.triangles.len();
+    // A sub-triangle whose centroid is on the other surface keeps its own
+    // test: the winding number is ill-conditioned there, and a region's
+    // state would override whatever its own centroid reads.
+    let mut states: Vec<Option<TriState>> = (0..count)
+        .map(|i| {
+            let (v0, v1, v2) = corners(i);
             let host_n = (v1 - v0).cross(v2 - v0);
             let host_n_len = host_n.length();
-
-            if host_n_len > 1e-30
-                && let Some((dist, other_n)) =
-                    closest_surface_normal(centroid, other_mesh, other_bvh, eps_on)
-                && dist < eps_on
-            {
-                let cos = host_n.dot(other_n) / (host_n_len * other_n.length().max(1e-30));
-                if cos > 0.9 {
-                    return TriState::OnSame;
-                }
-                if cos < -0.9 {
-                    return TriState::OnOpp;
-                }
-            }
-
-            let wn = winding_number_at_point(centroid, other_mesh);
-            if wn.abs() > 0.5 {
-                TriState::Inside
+            let near = if host_n_len > 1e-30 {
+                closest_surface_normal(triangle_centroid(v0, v1, v2), other_mesh, other_bvh, eps_on)
+                    .filter(|&(dist, _)| dist < eps_on)
             } else {
-                TriState::Outside
-            }
+                None
+            };
+            let (_, other_n) = near?;
+            let cos = host_n.dot(other_n) / (host_n_len * other_n.length().max(1e-30));
+            Some(if cos > 0.9 {
+                TriState::OnSame
+            } else if cos < -0.9 {
+                TriState::OnOpp
+            } else {
+                side(i)
+            })
         })
+        .collect();
+
+    let mut edge_tris: DetHashMap<EdgeKey, (Point3, Vec<usize>)> = DetHashMap::default();
+    for (i, state) in states.iter().enumerate() {
+        if state.is_some() {
+            continue;
+        }
+        let (v0, v1, v2) = corners(i);
+        for (a, b) in [(v0, v1), (v1, v2), (v2, v0)] {
+            edge_tris
+                .entry(edge_key(a, b))
+                .or_insert_with(|| (lerp_point(a, b, 0.5), Vec::new()))
+                .1
+                .push(i);
+        }
+    }
+    let mut parent: Vec<usize> = (0..count).collect();
+    let find = |parent: &mut Vec<usize>, mut i: usize| {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    };
+    for (mid, tris) in edge_tris.values() {
+        if let [t0, t1] = tris[..]
+            && closest_surface_normal(*mid, other_mesh, other_bvh, eps_on)
+                .is_none_or(|(dist, _)| dist >= eps_on)
+        {
+            let (r0, r1) = (find(&mut parent, t0), find(&mut parent, t1));
+            if r0 != r1 {
+                parent[r0.max(r1)] = r0.min(r1);
+            }
+        }
+    }
+    let mut regions: DetHashMap<usize, Vec<usize>> = DetHashMap::default();
+    for (i, state) in states.iter().enumerate() {
+        if state.is_none() {
+            let root = find(&mut parent, i);
+            regions.entry(root).or_default().push(i);
+        }
+    }
+
+    // A missed intersection would let one side leak across the region, so
+    // three spread probes must agree before the region shares a state: the
+    // largest piece, the piece farthest from it, and the piece farthest from
+    // both.
+    let centroid = |i: usize| {
+        let (v0, v1, v2) = corners(i);
+        triangle_centroid(v0, v1, v2)
+    };
+    let mut roots: Vec<usize> = regions.keys().copied().collect();
+    roots.sort_unstable();
+    for root in roots {
+        let members = &regions[&root];
+        let largest = members
+            .iter()
+            .copied()
+            .max_by(|&x, &y| {
+                let area = |i: usize| {
+                    let (v0, v1, v2) = corners(i);
+                    (v1 - v0).cross(v2 - v0).length()
+                };
+                area(x).total_cmp(&area(y))
+            })
+            .unwrap_or(root);
+        let farthest = |from: &[Point3]| {
+            let gap = |i: usize| {
+                from.iter()
+                    .map(|&c| dist_sq(centroid(i), c))
+                    .fold(f64::INFINITY, f64::min)
+            };
+            members
+                .iter()
+                .copied()
+                .max_by(|&x, &y| gap(x).total_cmp(&gap(y)))
+                .unwrap_or(root)
+        };
+        let shared = (members.len() >= 3)
+            .then(|| side(largest))
+            .filter(|&first| {
+                let second = farthest(&[centroid(largest)]);
+                let third = farthest(&[centroid(largest), centroid(second)]);
+                side(second) == first && side(third) == first
+            });
+        for &i in members {
+            states[i] = Some(shared.unwrap_or_else(|| side(i)));
+        }
+    }
+    states
+        .into_iter()
+        .map(|s| s.unwrap_or(TriState::Outside))
         .collect()
 }
 
@@ -2013,6 +2123,85 @@ mod tests {
             "winding number outside box should be ~0, got {}",
             outside
         );
+    }
+
+    /// Each sub-triangle classified on its own, which the region pass must
+    /// reproduce.
+    fn classify_each(
+        split: &SplitMesh,
+        other: &TriangleMesh,
+        bvh: &Bvh,
+        tolerance: f64,
+    ) -> Vec<TriState> {
+        let eps_on = tolerance.max(1e-9);
+        split
+            .triangles
+            .iter()
+            .map(|tri| {
+                let v0 = split.positions[tri[0] as usize];
+                let v1 = split.positions[tri[1] as usize];
+                let v2 = split.positions[tri[2] as usize];
+                let centroid = triangle_centroid(v0, v1, v2);
+                let host_n = (v1 - v0).cross(v2 - v0);
+                let host_n_len = host_n.length();
+                if host_n_len > 1e-30
+                    && let Some((dist, other_n)) =
+                        closest_surface_normal(centroid, other, bvh, eps_on)
+                    && dist < eps_on
+                {
+                    let cos = host_n.dot(other_n) / (host_n_len * other_n.length().max(1e-30));
+                    if cos > 0.9 {
+                        return TriState::OnSame;
+                    }
+                    if cos < -0.9 {
+                        return TriState::OnOpp;
+                    }
+                }
+                if winding_number_at_point(centroid, other).abs() > 0.5 {
+                    TriState::Inside
+                } else {
+                    TriState::Outside
+                }
+            })
+            .collect()
+    }
+
+    /// A box cut against a faceted sphere splits into thousands of pieces
+    /// along the facets. Classifying them by region gives each piece the
+    /// state its own centroid reads, with a small fraction of the winding
+    /// number evaluations.
+    #[test]
+    fn region_classification_matches_each_triangle() {
+        let mut topo = brepkit_topology::Topology::new();
+        let sphere = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+        let dense =
+            crate::tessellate::tessellate_solid_for_boolean(&topo, sphere, 0.02, 0.0).unwrap();
+        let tol = 1e-7;
+        for tool in [
+            box_mesh(Point3::new(0.7, 0.2, 0.1), 0.5),
+            box_mesh_half_extents(Point3::new(0.1, 0.0, 0.0), Vec3::new(0.3, 0.3, 2.0)),
+            box_mesh_half_extents(Point3::new(0.0, 0.0, 1.0), Vec3::new(2.0, 2.0, 0.2)),
+        ] {
+            let bvh_a = build_triangle_bvh(&dense);
+            let bvh_b = build_triangle_bvh(&tool);
+            let pairs = find_intersecting_pairs(&dense, &bvh_b, tol);
+            let segments = compute_all_intersections(&dense, &tool, &pairs, tol);
+            let split_a = split_mesh_conforming(&dense, &segments, true, tol);
+            let split_b = split_mesh_conforming(&tool, &segments, false, tol);
+            assert_eq!(
+                classify_split_triangles(&split_a, &tool, &bvh_b, tol),
+                classify_each(&split_a, &tool, &bvh_b, tol)
+            );
+            WINDING_EVALS.with(|n| n.set(0));
+            let by_region = classify_split_triangles(&split_b, &dense, &bvh_a, tol);
+            let evals = WINDING_EVALS.with(std::cell::Cell::get);
+            assert_eq!(by_region, classify_each(&split_b, &dense, &bvh_a, tol));
+            let pieces = split_b.triangles.len();
+            assert!(
+                evals * 10 < pieces,
+                "{evals} winding evaluations for {pieces} tool pieces"
+            );
+        }
     }
 
     #[test]
