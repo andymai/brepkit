@@ -404,6 +404,12 @@ impl Builder {
         );
         log_subfaces_in_box(&self.topo, &self.sub_faces, &selected);
         log_source_face_partition(&self.topo, &self.sub_faces, &selected);
+        // No face of either solid lies inside the other and no coincident pair
+        // bounds a shared region: the solids only touch.
+        if op == BooleanOp::Intersect && selected.is_empty() {
+            let solid_id = self.topo.add_empty_solid();
+            return Ok((self.topo, solid_id));
+        }
         let cap_planes = self.partial_overlap_cap_planes(&selected);
         let solid_id = gfa_time!(
             "assemble_solid",
@@ -428,6 +434,10 @@ impl Builder {
         );
         log_subfaces_in_box(&self.topo, &self.sub_faces, &selected);
         log_source_face_partition(&self.topo, &self.sub_faces, &selected);
+        if op == BooleanOp::Intersect && selected.is_empty() {
+            let solid_id = self.topo.add_empty_solid();
+            return Ok((self.topo, solid_id, Vec::new()));
+        }
         let cap_planes = self.partial_overlap_cap_planes(&selected);
         let (solid_id, origins) =
             assemble::assemble_solid_with_origins(&mut self.topo, &selected, &cap_planes)?;

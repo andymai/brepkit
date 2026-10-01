@@ -16,7 +16,9 @@
 //! knuckle the tool fuses onto the cut lid), `hinge_lid_knuckled.bin` (the lid
 //! with its knuckles) with `hinge_lid_pin_short.bin` and
 //! `hinge_lid_pin_long.bin` (the two keyhole pins), `hinge_bin.bin` and
-//! `hinge_bin_clearance_<1..5>.bin`.
+//! `hinge_bin_clearance_<1..5>.bin`, and the finished bin and lid the tool
+//! swings against each other, `hinge_swing_bin.bin` and
+//! `hinge_swing_lid_closed.bin` (the lid shut).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -304,6 +306,49 @@ fn hinge_lid_long_pin_cut_is_exact() {
         }
     }
     assert_eq!((kept_seen, removed_seen), (20, 20));
+}
+
+/// The lid shut on the bin: the knuckles meet end to end and each keyhole pin
+/// sits in a bore of its own radius, so the two only touch. Neither keeps a
+/// face inside the other, so the intersect selects nothing: their common
+/// region is empty. The tool reads this intersect's volume as the swing's
+/// interference.
+#[test]
+fn hinge_closed_lid_only_touches_the_bin() {
+    use brepkit_math::vec::Point3;
+    use brepkit_operations::classify::{PointClassification, classify_point};
+
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_swing_bin.bin");
+    let lid = load(&mut topo, "hinge_swing_lid_closed.bin");
+    let before = boolean::mesh_fallback_count();
+    let common = boolean::boolean(&mut topo, BooleanOp::Intersect, bin, lid).unwrap();
+    assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
+    assert!(topo.is_empty_solid(common));
+    // No point of the hinge strip lies in both, though many lie in each.
+    let (mut in_bin, mut in_lid) = (0, 0);
+    for i in 0..48 {
+        for j in 0..10 {
+            for k in 0..10 {
+                let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
+                let p = Point3::new(
+                    -62.75 + 125.5 * f(i, 48),
+                    37.0 + 5.0 * f(j, 10),
+                    42.7 + 7.2 * f(k, 10),
+                );
+                let a = classify_point(&topo, bin, p, 0.001, 1e-6).unwrap();
+                let b = classify_point(&topo, lid, p, 0.001, 1e-6).unwrap();
+                let (a, b) = (
+                    a == PointClassification::Inside,
+                    b == PointClassification::Inside,
+                );
+                assert!(!(a && b), "point {p:?} inside both");
+                in_bin += usize::from(a);
+                in_lid += usize::from(b);
+            }
+        }
+    }
+    assert!(in_bin > 0 && in_lid > 0);
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on
