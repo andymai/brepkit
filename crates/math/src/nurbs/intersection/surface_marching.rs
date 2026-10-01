@@ -25,14 +25,21 @@ pub(super) fn march_with_branches(
     let mut branch_seeds: Vec<IntersectionPoint> = Vec::new();
 
     // March forward, collecting branch points.
-    let (forward, fwd_branches) =
+    let (forward, fwd_branches, closed) =
         march_direction_with_branches(s1, s2, seed, true, step_size, tolerance, max_steps);
     branch_seeds.extend(fwd_branches);
 
-    // March backward, collecting branch points.
-    let (backward, bwd_branches) =
-        march_direction_with_branches(s1, s2, seed, false, step_size, tolerance, max_steps);
-    branch_seeds.extend(bwd_branches);
+    // March backward, collecting branch points, unless the forward march
+    // already closed the loop back onto the seed: marching it again the
+    // other way would trace the same loop a second time.
+    let backward = if closed {
+        Vec::new()
+    } else {
+        let (backward, bwd_branches, _) =
+            march_direction_with_branches(s1, s2, seed, false, step_size, tolerance, max_steps);
+        branch_seeds.extend(bwd_branches);
+        backward
+    };
 
     // Combine: backward (reversed) + seed + forward.
     let mut result: Vec<IntersectionPoint> = backward.into_iter().rev().collect();
@@ -110,8 +117,8 @@ fn march_direction_with_branches(
     step_size: f64,
     tolerance: f64,
     max_steps: usize,
-) -> (Vec<IntersectionPoint>, Vec<IntersectionPoint>) {
-    let traced = march_direction(s1, s2, seed, forward, step_size, tolerance, max_steps);
+) -> (Vec<IntersectionPoint>, Vec<IntersectionPoint>, bool) {
+    let (traced, closed) = march_direction(s1, s2, seed, forward, step_size, tolerance, max_steps);
     let mut branch_seeds: Vec<IntersectionPoint> = Vec::new();
 
     // Post-process: scan traced points for near-tangential locations.
@@ -204,7 +211,7 @@ fn march_direction_with_branches(
         branch_seeds.extend(new_seeds);
     }
 
-    (traced, branch_seeds)
+    (traced, branch_seeds, closed)
 }
 
 /// March along an intersection curve from a seed point.
@@ -227,9 +234,13 @@ pub(super) fn march_intersection(
     let max_steps = 200;
 
     // March forward.
-    let forward = march_direction(s1, s2, seed, true, step_size, tolerance, max_steps);
-    // March backward.
-    let backward = march_direction(s1, s2, seed, false, step_size, tolerance, max_steps);
+    let (forward, closed) = march_direction(s1, s2, seed, true, step_size, tolerance, max_steps);
+    // March backward, unless the forward march closed the loop.
+    let backward = if closed {
+        Vec::new()
+    } else {
+        march_direction(s1, s2, seed, false, step_size, tolerance, max_steps).0
+    };
 
     // Combine: backward (reversed) + seed + forward.
     let mut result: Vec<IntersectionPoint> = backward.into_iter().rev().collect();
@@ -545,6 +556,23 @@ fn at_boundary(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> bool {
         .any(|((&s, &c), &is_per)| !is_per && (s - c).abs() > f64::EPSILON)
 }
 
+/// Whether a state lies in the band `refine_onto_boundary` snaps: within
+/// 1.5x the clamp margin of a non-periodic domain edge of either surface.
+fn in_clamp_band(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> bool {
+    let domains = [s1.domain_u(), s1.domain_v(), s2.domain_u(), s2.domain_v()];
+    let periodic = [
+        s1.is_periodic_u(),
+        s1.is_periodic_v(),
+        s2.is_periodic_u(),
+        s2.is_periodic_v(),
+    ];
+    (0..4).any(|i| {
+        let (min, max) = domains[i];
+        let band = 1.5 * NONPERIODIC_CLAMP_MARGIN * (max - min);
+        !periodic[i] && (state[i] <= min + band || state[i] >= max - band)
+    })
+}
+
 /// March in one direction along the intersection curve using RKF45
 /// adaptive stepping with closed-loop detection and curvature-based
 /// step adaptation.
@@ -564,7 +592,7 @@ fn march_direction(
     step_size: f64,
     tolerance: f64,
     max_steps: usize,
-) -> Vec<IntersectionPoint> {
+) -> (Vec<IntersectionPoint>, bool) {
     // Maximum number of turning points (tangent reversals) to traverse.
     // Realistic SSI curves have at most 2-3 turning points; the limit
     // prevents infinite loops on degenerate near-tangential cases.
@@ -617,11 +645,11 @@ fn march_direction(
         let (y4, accepted_h) = loop {
             total_evals += 1;
             if total_evals > max_evals {
-                return finish_chain(points, s1, s2, tolerance, false);
+                return (finish_chain(points, seed, s1, s2, tolerance, false), false);
             }
 
             let Some(result) = rkf45_step(s1, s2, &y, h, sign) else {
-                return finish_chain(points, s1, s2, tolerance, false);
+                return (finish_chain(points, seed, s1, s2, tolerance, false), false);
             };
 
             let (y4, y5) = result;
@@ -649,7 +677,6 @@ fn march_direction(
 
             break (y4, accepted);
         };
-        let _ = accepted_h;
 
         // Accept the 4th-order solution (more conservative).
         let next = constrain_state(&y4, s1, s2);
@@ -659,7 +686,15 @@ fn march_direction(
             refine_ssi_point(s1, s2, next[0], next[1], next[2], next[3], tolerance)
         {
             // Check that we actually moved.
+            // A step past a domain edge is clamped back and refines onto the
+            // point it left, or fails to refine: short of the edge that is an
+            // overshoot, so retry shorter until the march reaches the band
+            // `finish_chain` snaps; in the band it is the curve's end.
             if (refined.point - current.point).length() < tolerance {
+                if accepted_h > h_min && !in_clamp_band(&y, s1, s2) {
+                    h = (accepted_h * 0.5).max(h_min);
+                    continue;
+                }
                 break;
             }
 
@@ -753,8 +788,17 @@ fn march_direction(
                 } else {
                     false
                 };
+                // A step can stride past the seed on a curved loop without
+                // landing within the fixed radius of it, and the march then
+                // winds the loop again until its step budget runs out. The
+                // step's chord sags from the curve by under 2% of its length
+                // (the tangent turns at most 10 degrees a step), so a chord
+                // passing within 5% of its length of the seed crossed it.
+                let step_len = (refined.point - current.point).length();
+                let passes_seed = point_to_segment_dist(seed.point, current.point, refined.point)
+                    < (0.05 * step_len).max(tolerance * 100.0);
 
-                if near_seed || near_first_seg {
+                if near_seed || near_first_seg || passes_seed {
                     // Close the loop by adding the seed point.
                     points.push(*seed);
                     closed_loop = true;
@@ -764,12 +808,17 @@ fn march_direction(
 
             points.push(refined);
             current = refined;
+        } else if accepted_h > h_min && !in_clamp_band(&y, s1, s2) {
+            h = (accepted_h * 0.5).max(h_min);
         } else {
             break;
         }
     }
 
-    finish_chain(points, s1, s2, tolerance, closed_loop)
+    (
+        finish_chain(points, seed, s1, s2, tolerance, closed_loop),
+        closed_loop,
+    )
 }
 
 /// Finalize a marched chain: if the march terminated inside the domain-clamp
@@ -783,20 +832,27 @@ fn march_direction(
 /// sections miss each other by twice the margin — a gap that scales with
 /// patch size and defeats every downstream junction weld (the kumiko strut
 /// fuse chains). Point evaluation AT a boundary is safe (`find_span` clamps),
-/// so the endpoint itself may sit exactly on the edge.
+/// so the endpoint itself may sit exactly on the edge. A march that takes no
+/// step from a seed already in that band ends at the seed, so the refined
+/// point is appended after it instead.
 fn finish_chain(
     mut points: Vec<IntersectionPoint>,
+    seed: &IntersectionPoint,
     s1: &NurbsSurface,
     s2: &NurbsSurface,
     tolerance: f64,
     closed_loop: bool,
 ) -> Vec<IntersectionPoint> {
-    if !closed_loop
-        && let Some(&last) = points.last()
-        && let Some(end) = refine_onto_boundary(s1, s2, &last, tolerance)
-        && let Some(slot) = points.last_mut()
-    {
-        *slot = end;
+    if closed_loop {
+        return points;
+    }
+    let last = points.last().copied().unwrap_or(*seed);
+    if let Some(end) = refine_onto_boundary(s1, s2, &last, tolerance) {
+        match points.last_mut() {
+            Some(slot) => *slot = end,
+            None if (end.point - seed.point).length() > tolerance => points.push(end),
+            None => {}
+        }
     }
     points
 }

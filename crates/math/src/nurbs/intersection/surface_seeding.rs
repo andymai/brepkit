@@ -12,7 +12,7 @@ use crate::nurbs::projection::project_point_to_surface;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
-use super::chaining::build_curves_from_points;
+use super::chaining::{build_curves_from_chains, chain_traced_segments};
 use super::surface_marching::{
     constrain_param, constrain_state, march_with_branches, near_existing_segment,
     surface_newton_step,
@@ -118,14 +118,20 @@ pub fn intersect_nurbs_nurbs(
         }
     }
 
-    let all_points: Vec<IntersectionPoint> = traced_segments.into_iter().flatten().collect();
-
-    if all_points.is_empty() {
+    // Phase 3: Assemble the traced segments into ordered chains and fit a
+    // curve through each. A segment re-tracing another from a later seed is
+    // trimmed where it overlaps (within the seed dedup distance), and the
+    // pieces left meet the chains they continue within one marched step.
+    let longest_step = traced_segments
+        .iter()
+        .flat_map(|seg| seg.windows(2))
+        .map(|w| (w[1].point - w[0].point).length())
+        .fold(0.0_f64, f64::max);
+    let chains = chain_traced_segments(traced_segments, dedup_dist, dedup_dist + longest_step);
+    if chains.is_empty() {
         return Ok(Vec::new());
     }
-
-    // Phase 3: Build curves from collected points.
-    let curves = build_curves_from_points(&all_points)?;
+    let curves = build_curves_from_chains(&chains)?;
 
     // Phase 4: Validate fitted curves against both surfaces.
     // Reject or refit curves whose NURBS approximation deviates too far

@@ -278,7 +278,7 @@ fn tilted_intersects_flat() {
 /// each on an interior horizontal edge) must come back as ONE curve. The
 /// scan used to visit every interior cell edge from both adjacent cells, so
 /// every crossing refined to an identical duplicate; each point's nearest
-/// neighbor was its own twin, `estimate_chain_threshold`'s average-spacing
+/// neighbor was its own twin, the proximity chainer's average-spacing
 /// statistic collapsed to ~0, and the threshold degenerated to its floor —
 /// below the real row pitch, so the crossing chained as dashes (the kumiko
 /// strut end-patch x wedge plane).
@@ -1340,5 +1340,87 @@ fn grid_seeder_budget_keeps_a_crossing_confined_to_one_corner() {
             "seed away from the corner: {:?}",
             seed.point
         );
+    }
+}
+
+/// How many times a section's points turn about their centroid in `xy`.
+fn xy_winding(points: &[IntersectionPoint]) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let n = points.len() as f64;
+    let (cx, cy) = points.iter().fold((0.0, 0.0), |(x, y), p| {
+        (x + p.point.x() / n, y + p.point.y() / n)
+    });
+    let angle = |p: &IntersectionPoint| (p.point.y() - cy).atan2(p.point.x() - cx);
+    let turned: f64 = points
+        .windows(2)
+        .map(|w| {
+            let d = angle(&w[1]) - angle(&w[0]);
+            d - (d / std::f64::consts::TAU).round() * std::f64::consts::TAU
+        })
+        .sum();
+    turned.abs() / std::f64::consts::TAU
+}
+
+/// A closed section is traced once: a plane through a drilled cylinder cuts
+/// one circle, and the forward march closing it onto its seed must not be
+/// followed by a backward march tracing it again, nor may a step striding
+/// past the seed keep winding it.
+#[test]
+fn closed_sections_are_traced_once() {
+    let hole = intersect_nurbs_nurbs(
+        &flat_plane_at_z(0.0),
+        &cylinder_at(0.5, 0.5, 0.2, -1.0, 1.0),
+        32,
+        0.01,
+    )
+    .unwrap();
+    assert_eq!(hole.len(), 1, "one circle");
+    let pts = &hole[0].points;
+    let length: f64 = pts
+        .windows(2)
+        .map(|w| (w[1].point - w[0].point).length())
+        .sum();
+    let circumference = std::f64::consts::TAU * 0.2;
+    assert!(
+        (length - circumference).abs() < 0.02 * circumference,
+        "traced length {length}, circumference {circumference}"
+    );
+    assert!(
+        (xy_winding(pts) - 1.0).abs() < 0.05,
+        "winding {}",
+        xy_winding(pts)
+    );
+
+    let peak = dome_surface().evaluate(0.5, 0.5).z();
+    let dome =
+        intersect_nurbs_nurbs(&dome_surface(), &flat_plane_at_z(peak - 0.3), 32, 0.01).unwrap();
+    assert_eq!(dome.len(), 1, "one loop round the dome");
+    let winding = xy_winding(&dome[0].points);
+    assert!(
+        (winding - 1.0).abs() < 0.05,
+        "dome section winds {winding} times"
+    );
+}
+
+/// An open section whose end lies within the join distance of a closed
+/// loop's start stays apart from the loop, whichever of the two was traced
+/// first.
+#[test]
+fn an_open_section_never_absorbs_a_closed_loop() {
+    let at = |x: f64, y: f64| IntersectionPoint {
+        point: Point3::new(x, y, 0.0),
+        param1: (0.0, 0.0),
+        param2: (0.0, 0.0),
+    };
+    let open = vec![at(-1.0, 0.0), at(-0.5, 0.0), at(0.99, 0.0)];
+    let loop_: Vec<IntersectionPoint> = (0..=8)
+        .map(|k| {
+            let a = std::f64::consts::TAU * f64::from(k % 8) / 8.0;
+            at(2.0 - a.cos(), a.sin())
+        })
+        .collect();
+    for segments in [vec![open.clone(), loop_.clone()], vec![loop_, open]] {
+        let chains = super::chaining::chain_traced_segments(segments, 1e-3, 0.05);
+        assert_eq!(chains.len(), 2, "the loop and the open section stay apart");
     }
 }
