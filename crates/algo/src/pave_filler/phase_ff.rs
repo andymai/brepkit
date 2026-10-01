@@ -5822,20 +5822,84 @@ fn circle_face_hits(
                     }
                 }
             }
-            // A NURBS boundary edge ending on the circle and leaving it: the
-            // face leaves the circle at that vertex, as a wall strip's corner
-            // under a lip cone does where the cone's plane section starts. An
-            // edge running along the circle (a fillet's contact curve) adds no
-            // crossing, as a coincident arc does not.
+            // A NURBS boundary edge crossing the circle, or ending on it and
+            // leaving it: the face leaves the circle there, as a wall strip's
+            // corner under a lip cone does where the cone's plane section
+            // starts, or a strut groove left on a cap does where the circle
+            // meets it. An edge running along the circle (a fillet's contact
+            // curve) adds no crossing, as a coincident arc does not.
             curve @ EdgeCurve::NurbsCurve(_) => {
+                const NS: usize = 64;
+                let (sp, ep) = (sv.point(), ev.point());
                 let off_circle = |p: Point3| (circle.evaluate(circle.project(p)) - p).length();
-                let (t0, t1) = curve.domain_with_endpoints(sv.point(), ev.point());
-                let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), sv.point(), ev.point());
-                if off_circle(mid) > tol.linear * 10.0 {
-                    for p in [sv.point(), ev.point()] {
-                        if off_circle(p) < tol.linear * 10.0 {
-                            let t = circle.project(p).rem_euclid(std::f64::consts::TAU);
-                            edge_hits.push((t, p, Some(oe.edge())));
+                let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+                let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
+                if off_circle(at(0.5 * (t0 + t1))) <= tol.linear * 10.0 {
+                    continue;
+                }
+                for p in [sp, ep] {
+                    if off_circle(p) < tol.linear * 10.0 {
+                        let t = circle.project(p).rem_euclid(std::f64::consts::TAU);
+                        edge_hits.push((t, p, Some(oe.edge())));
+                    }
+                }
+                // In the circle's plane the edge meets the circle where its
+                // distance from the centre reaches the radius; off it, where
+                // it crosses the plane on the circle.
+                let (c, r, n) = (circle.center(), circle.radius(), circle.normal());
+                let d = n.dot(c - Point3::new(0.0, 0.0, 0.0));
+                #[allow(clippy::cast_precision_loss)]
+                let ts: Vec<f64> = (0..=NS)
+                    .map(|i| t0 + (t1 - t0) * (i as f64) / (NS as f64))
+                    .collect();
+                let in_plane = ts.iter().all(|&t| {
+                    let q = at(t);
+                    (n.dot(q - Point3::new(0.0, 0.0, 0.0)) - d).abs() <= tol.linear * 10.0
+                });
+                if in_plane {
+                    let radial = |t: f64| (at(t) - c).length() - r;
+                    for w in ts.windows(2) {
+                        let (mut lo, mut hi) = (w[0], w[1]);
+                        let (mut glo, ghi) = (radial(lo), radial(hi));
+                        if glo.abs() <= tol.linear * 1e-3 {
+                            let p = at(lo);
+                            edge_hits.push((
+                                circle.project(p).rem_euclid(std::f64::consts::TAU),
+                                p,
+                                Some(oe.edge()),
+                            ));
+                            continue;
+                        }
+                        if glo * ghi > 0.0 {
+                            continue;
+                        }
+                        for _ in 0..60 {
+                            let mid = f64::midpoint(lo, hi);
+                            let gm = radial(mid);
+                            if gm * glo < 0.0 {
+                                hi = mid;
+                            } else {
+                                lo = mid;
+                                glo = gm;
+                            }
+                        }
+                        let p = at(f64::midpoint(lo, hi));
+                        edge_hits.push((
+                            circle.project(p).rem_euclid(std::f64::consts::TAU),
+                            p,
+                            Some(oe.edge()),
+                        ));
+                    }
+                } else {
+                    for (_, p) in
+                        super::phase_ef::find_edge_plane_crossings(curve, sp, ep, t0, t1, n, d, tol)
+                    {
+                        if ((p - c).length() - r).abs() <= 1e-4 {
+                            edge_hits.push((
+                                circle.project(p).rem_euclid(std::f64::consts::TAU),
+                                p,
+                                Some(oe.edge()),
+                            ));
                         }
                     }
                 }
