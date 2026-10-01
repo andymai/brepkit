@@ -1,5 +1,6 @@
-//! The gridfinity tool's hinged lid and bin (`hingeSwing.scenario.test.ts`):
-//! each test makes one of the tool's calls on operands captured from them.
+//! The gridfinity tool's hinged lid and bin (`hingeSwing.scenario.test.ts`),
+//! from operands captured from its calls: the tests check the captured lid,
+//! one of its bores alone, and the tool's own calls on them.
 //!
 //! The lid is compound-cut by its clearance bevel and four knuckle bores. Each
 //! bore (radius 2.45 along `y`) has its axis on the lid's pocket ceiling
