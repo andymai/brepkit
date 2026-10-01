@@ -2919,6 +2919,40 @@ fn arrangement_regions_from_inputs(
         out
     };
 
+    // Whether `uv` lies on the TRUE curve of arc input `ai` (not just near its
+    // chord): the nearest sample is refined on the arc's native parameter.
+    let on_true_arc = |ai: usize, uv: Point2, band: f64| -> bool {
+        let Some(poly) = arc_polys[ai].as_ref() else {
+            return false;
+        };
+        let e = &inputs[ai].edge;
+        let Some(k) = (0..poly.len()).min_by(|&x, &y| {
+            (poly[x].1 - uv)
+                .length()
+                .total_cmp(&(poly[y].1 - uv).length())
+        }) else {
+            return false;
+        };
+        let (mut lo, mut hi) = (
+            poly[k.saturating_sub(1)].0,
+            poly[(k + 1).min(poly.len() - 1)].0,
+        );
+        let off = |t: f64| {
+            (frame.project(e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d)) - uv)
+                .length()
+        };
+        for _ in 0..60 {
+            let m1 = lo + (hi - lo) / 3.0;
+            let m2 = hi - (hi - lo) / 3.0;
+            if off(m1) < off(m2) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        off(f64::midpoint(lo, hi)) <= band
+    };
+
     let mut sub_edges: Vec<ArrSubEdge> = Vec::new();
     for i in 0..inputs.len() {
         let (a0, a1) = (inputs[i].a, inputs[i].b);
@@ -3042,11 +3076,27 @@ fn arrangement_regions_from_inputs(
             // endpoint (curve-fit error ~1e-6) landing on a boundary or
             // section chord is a REAL T-junction; at 1e-7 it is missed, the
             // chord dangles as a pendant, and the face tracer walks it twice.
+            // A section ending on a SECTION arc's true curve (an earlier cut's
+            // trace meeting a cylinder's section where it runs through) sits a
+            // sagitta off the chord; it breaks the arc at that exact point. A
+            // circle section (a rim that faceted sections of an exactly
+            // coincident lip fan into) and a chord whose far end also lies
+            // within fit error of the arc (a faceted copy of the same curve)
+            // keep the chord path.
             for bp in [b0, b1] {
                 let w = (bp - a0).dot(d) / (len * len);
                 if w > 1e-6 && w < 1.0 - 1e-6 {
                     let on = a0 + d * w;
-                    if (on - bp).length() < tol * 100.0 && (!i_is_arc || chord_break_on_arc(i, bp))
+                    let on_chord = (on - bp).length() < tol * 100.0;
+                    if (on_chord && (!i_is_arc || chord_break_on_arc(i, bp)))
+                        || (i_is_arc
+                            && !matches!(inputs[i].edge.curve_3d, EdgeCurve::Circle(_))
+                            && inputs[i].is_section
+                            && !on_chord
+                            && (bp - a0).length() > tol * 100.0
+                            && (bp - a1).length() > tol * 100.0
+                            && on_true_arc(i, bp, tol * 100.0)
+                            && !on_true_arc(i, if bp == b0 { b1 } else { b0 }, 1e-3))
                     {
                         ts.push((w, Some(bp)));
                     }
@@ -4393,16 +4443,25 @@ fn clip_sections_to_outer_region(
             let eval = |t: f64| e.curve_3d.evaluate_with_endpoints(t, e.start_3d, e.end_3d);
             let n = 32usize;
             let (mut bi, mut bd) = (0usize, f64::MAX);
+            let mut spacing = 0.0_f64;
+            let mut last: Option<Point3> = None;
             for k in 0..=n {
                 #[allow(clippy::cast_precision_loss)]
                 let t = (t1 - t0).mul_add(k as f64 / n as f64, t0);
-                let d = (eval(t) - p).length();
+                let q = eval(t);
+                let d = (q - p).length();
                 if d < bd {
                     bd = d;
                     bi = k;
                 }
+                if let Some(l) = last {
+                    spacing = spacing.max((q - l).length());
+                }
+                last = Some(q);
             }
-            if bd > FIT_BAND * 4.0 {
+            // The nearest sample can sit half a sample step from a point on
+            // the curve itself.
+            if bd > FIT_BAND.mul_add(4.0, spacing) {
                 continue;
             }
             #[allow(clippy::cast_precision_loss)]
@@ -4506,9 +4565,40 @@ fn clip_sections_to_outer_region(
                     hi = m;
                 }
             }
-            let tc = f64::midpoint(lo, hi);
+            let mut tc = f64::midpoint(lo, hi);
             let pc = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, tc);
-            let j = snap_to_boundary(pc).unwrap_or(pc);
+            let mut j = snap_to_boundary(pc).unwrap_or(pc);
+            // The sampled polygon puts the crossing off the boundary arc by
+            // its chord sag; alternate projections between the section and
+            // the boundary curve to land on the crossing itself, where the
+            // boundary edge was split for the other operand.
+            #[allow(clippy::cast_precision_loss)]
+            let reach = 1.0 / SEC_SAMPLES as f64;
+            for _ in 0..40 {
+                let (mut a, mut b) = ((tc - reach).max(0.0), (tc + reach).min(1.0));
+                for _ in 0..48 {
+                    let m1 = a + (b - a) / 3.0;
+                    let m2 = b - (b - a) / 3.0;
+                    let d1 = (evaluate_edge_at_t(&s.curve_3d, s.start, s.end, m1) - j).length();
+                    let d2 = (evaluate_edge_at_t(&s.curve_3d, s.start, s.end, m2) - j).length();
+                    if d1 < d2 {
+                        b = m2;
+                    } else {
+                        a = m1;
+                    }
+                }
+                tc = f64::midpoint(a, b);
+                let Some(next) =
+                    snap_to_boundary(evaluate_edge_at_t(&s.curve_3d, s.start, s.end, tc))
+                else {
+                    break;
+                };
+                let moved = (next - j).length();
+                j = next;
+                if moved < 1e-12 {
+                    break;
+                }
+            }
             cuts.push((tc, j));
         }
         if cuts.is_empty() {
@@ -5157,21 +5247,25 @@ fn split_face_2d_impl(
     // one seam piece); NURBS expansion also serves non-planar hole-free
     // faces, whose boundary arcs never split in their own machinery either
     // (the coaxial wedge's cylinder patches refused their axial sections
-    // for the same reason its z-planes did).
-    let mut boundary_edges = if face.inner_wires().is_empty() {
-        super::face_splitter::conversion::boundary_edges_to_pcurve_with_images(
-            topo,
-            face.outer_wire(),
-            &surface,
-            &wire_pts,
-            if is_plane { Some(frame) } else { None },
-            edge_images,
-            &section_anchor_pts,
-            is_plane,
-        )
-    } else {
-        boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
-    };
+    // for the same reason its z-planes did). A holed plane keeps its outer
+    // wire whole for the integrate-holes weave; a holed cylinder (a band
+    // pierced by earlier slot boxes) has no such weave and expands its NURBS
+    // boundary like a hole-free one.
+    let mut boundary_edges =
+        if face.inner_wires().is_empty() || matches!(surface, FaceSurface::Cylinder(_)) {
+            super::face_splitter::conversion::boundary_edges_to_pcurve_with_images(
+                topo,
+                face.outer_wire(),
+                &surface,
+                &wire_pts,
+                if is_plane { Some(frame) } else { None },
+                edge_images,
+                &section_anchor_pts,
+                is_plane,
+            )
+        } else {
+            boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
+        };
 
     // Convert original inner wires (holes) to OrientedPCurveEdge.
     let original_inner_wires: Vec<Vec<OrientedPCurveEdge>> = face

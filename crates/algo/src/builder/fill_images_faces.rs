@@ -3055,7 +3055,8 @@ fn arc_segment_crossings(
     let circle = match curve {
         EdgeCurve::Circle(c) => c,
         // A NURBS boundary edge (e.g. a revolve's arc, which serializes as
-        // NurbsCurve rather than Circle) is intersected with the section line
+        // NurbsCurve rather than Circle) or an ellipse arc (a tilted earlier
+        // cut's trace on a cylinder) is intersected with the section line
         // by sampled sign-change bisection in the face plane: the signed side
         // function s(t) = ((C(t) - S) x D) . n has a root at each crossing.
         // Bounded cost (33 evaluations plus ~48 bisection steps per root);
@@ -3065,7 +3066,7 @@ fn arc_segment_crossings(
         // put a coaxial revolve cut's section endpoints 0.75 mm inside the
         // face, where the splitter could not anchor them and declined every
         // split.
-        EdgeCurve::NurbsCurve(_) => {
+        EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_) => {
             let Some(n) = plane_normal else {
                 return Vec::new();
             };
@@ -3114,11 +3115,9 @@ fn arc_segment_crossings(
             }
             return hits;
         }
-        // Only circular arcs and NURBS are handled here. Ellipse arcs are not
-        // produced on the corner-straddle path, and a Line has no true-arc
-        // geometry — both fall back to the chord (handled by the line-line
-        // crossing in the caller).
-        EdgeCurve::Ellipse(_) | EdgeCurve::Line => return Vec::new(),
+        // A Line has no true-arc geometry and falls back to the chord
+        // (handled by the line-line crossing in the caller).
+        EdgeCurve::Line => return Vec::new(),
     };
     let hits = circle.intersect_segment(line_start, line_end, tol);
     if hits.is_empty() {

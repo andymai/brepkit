@@ -8,7 +8,7 @@
 //! 19k-face planar mesh to every later compound cut in the export.
 //!
 //! Data: `kumiko_wrap_exact_band.bin` (cut base), `kumiko_wrap_slot_box_<i>.bin`
-//! for the seven boxes (indices into the captured tool list).
+//! for boxes 1 to 9, 13, 14, 18 and 19 (indices into the captured tool list).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -24,6 +24,13 @@ const BOXES: [usize; 7] = [4, 8, 9, 13, 14, 18, 19];
 
 /// Each box's cut volume, from a band of 384.936; a cut that removed nothing
 /// or the wrong region would miss it.
+/// The first seven boxes, cut from the band one after another as the
+/// tool's compound cut would, and the volume after each.
+const CHAIN: [usize; 7] = [1, 2, 3, 4, 5, 6, 7];
+const CHAIN_VOLUMES: [f64; CHAIN.len()] = [
+    382.976, 374.964, 366.873, 364.164, 362.705, 355.274, 347.612,
+];
+
 const CUT_VOLUMES: [f64; BOXES.len()] = [
     381.053, 380.861, 384.626, 380.875, 384.626, 380.848, 384.623,
 ];
@@ -77,7 +84,7 @@ fn kumiko_wrap_slot_fixture_is_faithful() {
         0,
         "the band is not a closed manifold"
     );
-    for i in BOXES {
+    for i in BOXES.into_iter().chain(CHAIN) {
         let b = load(&mut topo, &format!("kumiko_wrap_slot_box_{i}.bin"));
         assert_eq!(census(&topo, b).get("plane"), Some(&6), "box {i}");
         assert_eq!(
@@ -119,4 +126,35 @@ fn kumiko_wrap_slot_cuts_stay_exact() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Each box cut from what the earlier ones left stays exact. Box 1 grazes the
+/// inner cylinder and leaves an elliptical edge on its face against it, which
+/// box 2's top face then meets inside that edge's span; later boxes overlap
+/// their neighbours, pierce the outer cylinder (so it carries holes) and end
+/// their sections on arcs another box's section runs along.
+#[test]
+fn kumiko_wrap_slot_chain_stays_exact() {
+    let mut topo = Topology::new();
+    let mut cur = load(&mut topo, "kumiko_wrap_exact_band.bin");
+    for (i, expected) in CHAIN.into_iter().zip(CHAIN_VOLUMES) {
+        let b = load(&mut topo, &format!("kumiko_wrap_slot_box_{i}.bin"));
+        let before = boolean::mesh_fallback_count();
+        cur = boolean::boolean(&mut topo, BooleanOp::Cut, cur, b).unwrap();
+        assert_eq!(
+            boolean::mesh_fallback_count(),
+            before,
+            "box {i}: mesh fallback"
+        );
+        assert_eq!(
+            bad_edge_uses(&topo, cur),
+            0,
+            "box {i}: open or over-shared edges"
+        );
+        let vol = brepkit_operations::measure::oriented_solid_volume(&topo, cur, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() <= 0.01,
+            "box {i}: volume {vol:.3}, expected {expected:.3}"
+        );
+    }
 }
