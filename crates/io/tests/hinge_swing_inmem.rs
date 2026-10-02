@@ -18,9 +18,11 @@
 //! `hinge_lid_pin_long.bin` (the two keyhole pins), `hinge_bin.bin` and
 //! `hinge_bin_clearance_<1..5>.bin`, and the finished bin and lid the tool
 //! swings against each other, `hinge_swing_bin.bin` and
-//! `hinge_swing_lid_closed.bin` (the lid shut), and the same hinge on the
-//! left wall, `hinge_left_bin.bin` with `hinge_left_lid_18.bin` (swung 18
-//! degrees open).
+//! `hinge_swing_lid_closed.bin` (the lid shut) and `hinge_swing_lid_40.bin`
+//! (swung 40 degrees open), and the same hinge on the left wall,
+//! `hinge_left_bin.bin` with `hinge_left_lid_18.bin` (swung 18 degrees open),
+//! and that bin with its knuckles, `hinge_left_bin_knuckled.bin`, with its two
+//! keyhole pins, `hinge_left_pin_short.bin` and `hinge_left_pin_long.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -326,6 +328,22 @@ fn hinge_closed_lid_only_touches_the_bin() {
     );
 }
 
+/// Swung 40 degrees about the hinge axis, the lid's knuckle ends still lie in
+/// the bin's knuckle end planes, but the lid's pieces of each end face no
+/// longer match the bin's, so the same-domain pass leaves the bin's piece
+/// unpaired. The lid's material lies in front of it: a contact, not a shared
+/// boundary.
+#[test]
+fn hinge_lid_swung_40_degrees_only_touches_the_bin() {
+    only_touches(
+        "hinge_swing_bin.bin",
+        "hinge_swing_lid_40.bin",
+        [-62.75, 37.0, 42.7],
+        [125.5, 5.0, 7.2],
+        [48, 10, 10],
+    );
+}
+
 /// The left-wall hinge swung 18 degrees, a pose of the tool's corner sweep:
 /// the lid's knuckle ends still lie in the bin's knuckle end planes, and the
 /// circle where the lid's wider keyhole bore meets a bin knuckle end runs
@@ -393,6 +411,48 @@ fn only_touches(bin_file: &str, lid_file: &str, lo: [f64; 3], size: [f64; 3], co
         }
     }
     assert!(in_bin > 0 && in_lid > 0);
+}
+
+/// The left-wall bin's two keyhole pins meet end to end on a knuckle's end
+/// face: the short pin (keyhole 0.925) bored into that knuckle, the long one
+/// (keyhole 1.0) running on through the others. The end face's ring between
+/// the two keyholes coincides with the long pin's cap, the pin in front of
+/// it, so the cut keeps it. Read that way, the face's split must also see the
+/// short pin's rulings end on its rim circle.
+#[test]
+fn hinge_left_bin_pin_cut_matches_its_tools() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_left_bin_knuckled.bin");
+    let short = load(&mut topo, "hinge_left_pin_short.bin");
+    let long = load(&mut topo, "hinge_left_pin_long.bin");
+    let cut = exact(&mut topo, |t| {
+        boolean::compound_cut(t, bin, &[short, long], BooleanOptions::default()).unwrap()
+    });
+    let probes = [bin, short, long, cut].map(|s| Probe::new(&topo, s));
+    let mut checked = 0;
+    for i in 0..10 {
+        for j in 0..20 {
+            for k in 0..10 {
+                let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
+                let p = [
+                    3.3f64.mul_add(f(i, 10), -62.0),
+                    20.0f64.mul_add(f(j, 20), -40.0),
+                    4.6f64.mul_add(f(k, 10), 45.0),
+                ];
+                let Some([in_bin, in_short, in_long, in_cut]) = probes
+                    .iter()
+                    .map(|probe| probe.inside(&topo, p))
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(|v| <[bool; 4]>::try_from(v).ok())
+                else {
+                    continue;
+                };
+                assert_eq!(in_cut, in_bin && !in_short && !in_long, "at {p:?}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 1900, "only {checked} points classified");
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on

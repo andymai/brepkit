@@ -106,18 +106,26 @@ pub(crate) fn select_faces(
                 return None;
             }
 
+            // A coincident face the same-domain pass left unpaired follows
+            // `apply_sd_selection`: A's face stands for the region, kept
+            // when the orientations suit the operation.
             let keep = match op {
                 BooleanOp::Fuse => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A | Rank::B, FaceClass::Outside) | (Rank::A, FaceClass::On)
+                    (Rank::A | Rank::B, FaceClass::Outside)
+                        | (Rank::A, FaceClass::On | FaceClass::CoplanarSame)
                 ),
                 BooleanOp::Cut => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A, FaceClass::Outside | FaceClass::On) | (Rank::B, FaceClass::Inside)
+                    (
+                        Rank::A,
+                        FaceClass::Outside | FaceClass::On | FaceClass::CoplanarOpposite
+                    ) | (Rank::B, FaceClass::Inside)
                 ),
                 BooleanOp::Intersect => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A | Rank::B, FaceClass::Inside) | (Rank::A, FaceClass::On)
+                    (Rank::A | Rank::B, FaceClass::Inside)
+                        | (Rank::A, FaceClass::On | FaceClass::CoplanarSame)
                 ),
             };
 

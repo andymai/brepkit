@@ -144,6 +144,18 @@ fn circle_intersect_segment_polygon_vertex_on_circle() {
 }
 
 #[test]
+fn circle_intersect_segment_long_ruling_ending_on_the_circle() {
+    // A cylinder's ruling ending on its rim circle, the end rounded 2e-15 to
+    // the far end's side of the circle's plane: the product of the two ends'
+    // plane distances (about 2e-14) exceeds tol^2 though the end is on it.
+    let c = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 0.925).unwrap();
+    let end = Point3::new(0.925, 2e-15, 0.0);
+    let hits = c.intersect_segment(Point3::new(0.925, 10.74, 0.0), end, 1e-7);
+    assert_eq!(hits.len(), 1, "the ruling meets the circle at its end");
+    assert!((hits[0].0 - end).length() < 1e-9);
+}
+
+#[test]
 fn circle_intersect_segment_no_crossing() {
     // Segment fully on one side of circle's plane, no crossing.
     let c = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
