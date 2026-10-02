@@ -1,0 +1,25 @@
+crates/io/tests/hinge_swing_inmem.rs
+  s_a8677c67f85a06::t_a3b35dd419ec66 232-233,282
+  s_a8677c67f85a06::t_0ca07890230c1d 251
+  s_a8677c67f85a06::t_e98f7b51c293d8 56-66,68-91,230-231,234-250,283,292,296-297,306
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_e1f83c14062b21 1150,1152-1157,1182-1209
+  s_a8677c67f85a06::t_514970aa70b9f5 7951-7953
+  s_a8677c67f85a06::t_1c457d201bded1 1210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2d5d2ef571bd5ecef389ce536abe9c1a4a178418",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
