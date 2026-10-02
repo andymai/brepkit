@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790905636649,
+  "lastUpdate": 1790906897622,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49247,6 +49247,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29514883,
             "range": "± 79871",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0fb7bbc548b20324547ac6adc1e1ad98f7966323",
+          "message": "chore(main): release 4.1.13 (#1942)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.13](https://github.com/andymai/brepkit/compare/v4.1.12...v4.1.13)\n(2026-10-02)\n\n\n### Bug Fixes\n\n* **algo:** keep the hinge lid's keyhole pin cuts exact\n([#1940](https://github.com/andymai/brepkit/issues/1940))\n([588091a](https://github.com/andymai/brepkit/commit/588091a495d888963f97f19c794f6702e1ea8cd7))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` 4.1.13, bumping workspace crate versions and updating\nthe changelog.\n\nIncludes the fix that keeps the hinge lid's keyhole pin cuts exact.\n\n<sup>Written for commit 06bfcb3a33eb0b4ac3ae9a39200d64e9283875ec.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1942?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-02T02:05:42Z",
+          "tree_id": "6df45fc6ae89c15c1aaa5001d4490dd25710fe80",
+          "url": "https://github.com/andymai/brepkit/commit/0fb7bbc548b20324547ac6adc1e1ad98f7966323"
+        },
+        "date": 1790906891958,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 706525,
+            "range": "± 3659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 774780,
+            "range": "± 1704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9097,
+            "range": "± 599",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 551334,
+            "range": "± 23847",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 32193063,
+            "range": "± 1253272",
             "unit": "ns/iter"
           }
         ]
