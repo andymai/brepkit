@@ -95,6 +95,9 @@ pub fn boolean_with_tolerance(
     // Stage 3: BOP selection + assembly
     let (store_topo, store_result) = builder.build_result(op)?;
     store.topo = store_topo;
+    if store.topo.is_empty_solid(store_result) {
+        return Ok(topo.add_empty_solid());
+    }
 
     // Export result solid back to the caller's topology
     let result = store.export_solid(topo, store_result)?;
@@ -190,6 +193,9 @@ pub fn boolean_with_face_origins(
 
     let (store_topo, store_result, store_origins) = builder.build_result_with_origins(op)?;
     store.topo = store_topo;
+    if store.topo.is_empty_solid(store_result) {
+        return Ok((topo.add_empty_solid(), Vec::new()));
+    }
 
     let (result, export_map) = store.export_solid_with_face_map(topo, store_result)?;
 

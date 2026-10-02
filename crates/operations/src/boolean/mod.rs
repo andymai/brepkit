@@ -536,7 +536,7 @@ fn boolean_inner(
                     "GFA intersect empty in {:.1}ms (no common faces)",
                     timer_elapsed_ms(gfa_start)
                 );
-                return Ok(topo.add_empty_solid());
+                return Ok(result);
             }
             if result_faces > 0 {
                 let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
@@ -1269,6 +1269,15 @@ pub fn boolean_with_evolution(
         if let Ok((result, origins)) =
             brepkit_algo::gfa::boolean_with_face_origins(topo, algo_op, a, b)
         {
+            // An intersect of solids that only touch is the empty solid, and
+            // every input face is gone from it.
+            if op == BooleanOp::Intersect && topo.is_empty_solid(result) {
+                let mut evo = crate::evolution::EvolutionMap::new();
+                for &in_idx in &input_indices {
+                    evo.add_deleted(in_idx);
+                }
+                return Ok((result, evo));
+            }
             // Apply the face-id-preserving result heals so the evolution result
             // is as correct as the standard boolean (manifold, no #801 wire
             // spurs). These rewrite wires in place, so the provenance — keyed by
