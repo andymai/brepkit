@@ -1,0 +1,150 @@
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_eaa00774bf0efd 145,152
+  s_a8677c67f85a06::t_6e56d6ff93f2fa 199
+  s_a8677c67f85a06::t_a4b3de56cd0cbb 150
+  s_a8677c67f85a06::t_5e36f2a4066431 198
+  s_a8677c67f85a06::t_ee9a327728a1f1 29,31-35,144,151,197
+crates/math/src/region2d.rs
+  s_a8677c67f85a06::t_d50e6d2fab26ff 91-94,142-146,217-247
+  s_a8677c67f85a06::t_5598acb076b271 248-249
+  s_a8677c67f85a06::t_24879a1a20f6a1 61-69,250-262
+  s_a8677c67f85a06::t_2284aabc6deba4 263-264
+crates/heal/src/upgrade/unify_same_domain.rs
+  s_a8677c67f85a06::t_ecf3e7502a83b7 1294-1305,1315-1319,1323-1324,1330,1339,1346-1351,1357-1360,1366-1368
+  s_a8677c67f85a06::t_4c05e56ab789f2 1306-1314,1320-1321,1325-1329,1331-1338,1340-1345,1352-1356,1361-1365
+  s_a8677c67f85a06::t_30dd5c16dbc785 1322
+  s_a8677c67f85a06::t_727aa85e5d914a 404-435
+  s_a8677c67f85a06::t_91e54861c981dc 376-384
+  s_a8677c67f85a06::t_756b9c8237cd80 702-723
+crates/operations/tests/rod_along_a_box_side.rs
+  s_a8677c67f85a06::t_0fce8d5f1d937f 26-27,29-30,36-37,46-49,97,104
+  s_a8677c67f85a06::t_c296215d2e1834 6-25,28,31-35,38-45,50-66,86-96,98-103,105-107
+  s_a8677c67f85a06::t_994a3e0055325c 1-107
+crates/io/tests/data/hinge_lid_bore_1.bin
+  s_a8677c67f85a06::t_f646fcb75a99b9 1
+crates/io/tests/data/hinge_lid_knuckle.bin
+  s_a8677c67f85a06::t_f646fcb75a99b9 1
+crates/io/tests/data/hinge_lid_bore_4.bin
+  s_a8677c67f85a06::t_f646fcb75a99b9 1
+crates/io/tests/data/hinge_bin_clearance_5.bin
+  s_a8677c67f85a06::t_4cc452e5c14a9c 1
+crates/io/tests/data/hinge_lid_bore_3.bin
+  s_a8677c67f85a06::t_f646fcb75a99b9 1
+crates/io/tests/hinge_swing_inmem.rs
+  s_a8677c67f85a06::t_3720a49ffaf580 4,11,13-15,22-57,96-196,352-372
+  s_a8677c67f85a06::t_898a8c81804be4 69,88,94-95,197-209
+  s_a8677c67f85a06::t_e2d4ee0e25774e 254,263-266,270,275,277,280,309-310,352-353
+  s_a8677c67f85a06::t_8001c1f8615185 256-262,267-269,271-274,276,278-279,281-283,287-293,295-297,305-307
+  s_a8677c67f85a06::t_a8bde2981e3ca7 286,300-304
+  s_a8677c67f85a06::t_3f700f17f9385d 16,212-231
+  s_a8677c67f85a06::t_c3bafda1a943b7 255
+  s_a8677c67f85a06::t_5e36f2a4066431 5-10,12,17-18
+  s_a8677c67f85a06::t_0285280cb41844 1-3
+  s_a8677c67f85a06::t_a3b35dd419ec66 234-235,284
+  s_a8677c67f85a06::t_0ca07890230c1d 253
+  s_a8677c67f85a06::t_e98f7b51c293d8 58-68,70-93,232-233,236-252,285,294,298-299,308
+  s_a8677c67f85a06::t_6e5d3a1c364fdf 19-21,311-351
+  s_a8677c67f85a06::t_3cadbd14c92916 352-353
+crates/io/tests/data/hinge_bin_clearance_4.bin
+  s_a8677c67f85a06::t_4cc452e5c14a9c 1
+crates/io/tests/data/hinge_bin_clearance_1.bin
+  s_a8677c67f85a06::t_4cc452e5c14a9c 1
+crates/io/tests/data/hinge_bin_clearance_3.bin
+  s_a8677c67f85a06::t_4cc452e5c14a9c 1
+crates/io/tests/data/hinge_lid_clearance.bin
+  s_a8677c67f85a06::t_f646fcb75a99b9 1
+crates/io/tests/data/hinge_lid_bore_2.bin
+  s_a8677c67f85a06::t_f646fcb75a99b9 1
+crates/io/tests/data/hinge_bin.bin
+  s_a8677c67f85a06::t_4cc452e5c14a9c 1
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_a8677c67f85a06::t_4c05e56ab789f2 359-360,362
+  s_a8677c67f85a06::t_4c90ab91eefc06 198,199-233,235-237,264-265,267-269,374-382,384-387
+  s_a8677c67f85a06::t_52788cb28d3861 357-358,365-366,388-390
+  s_a8677c67f85a06::t_24879a1a20f6a1 234,270,383
+crates/io/tests/data/hinge_bin_clearance_2.bin
+  s_a8677c67f85a06::t_4cc452e5c14a9c 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_c70bfbea9e4767 583-598
+  s_a8677c67f85a06::t_9e4e6b647cf4eb 6561-6572,6574-6623,6628-6635,6640-6659
+  s_a8677c67f85a06::t_4c05e56ab789f2 6624-6627,6636-6639
+  s_a8677c67f85a06::t_4ee4646e64babf 6573
+  s_a8677c67f85a06::t_aa2ea5ddfc8690 6247-6260,6270,6272,6278-6305,6307-6308,6312-6322,6331-6364,6368-6369,6373,6395-6407
+crates/io/tests/data/hinge_lid.bin
+  s_a8677c67f85a06::t_f646fcb75a99b9 1
+crates/operations/src/boolean/mod.rs
+  s_a8677c67f85a06::t_785dec5d85a54b 2511,2529-2538,2540-2547,2618-2619,2620-2638,2640,2642-2644
+  s_a8677c67f85a06::t_f8cc0aaad1ce13 2645-2646
+  s_a8677c67f85a06::t_cf79ef1d881235 2539,2615-2617,2639,2641
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_a8677c67f85a06::t_4b5ea734ee2f0e 242
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_95334f7c517031 484-545,7018-7032,7034
+  s_a8677c67f85a06::t_4b5ea734ee2f0e 389-394,401,404-407,409-412,415-417,422,425,438-439,446-447,456-460,473
+  s_a8677c67f85a06::t_d118231f9c709d 7033
+  s_a8677c67f85a06::t_d1b9d4216c4937 1158-1162,1183,1211-1212,1221,1223-1224
+  s_a8677c67f85a06::t_50bf7761d8ca58 7674-7677
+  s_a8677c67f85a06::t_c4c10bac2adf5d 1111-1149,7942
+  s_a8677c67f85a06::t_ed4292be42b72b 1171-1173,7683,7948
+  s_a8677c67f85a06::t_bdb0de01e23ddd 1163-1170
+  s_a8677c67f85a06::t_73bb2356d13779 1184,1216-1220
+  s_a8677c67f85a06::t_b81358377d50bb 27-30,7943-7947,7949
+  s_a8677c67f85a06::t_fc031f0dfc7465 1151,1174-1181,1213-1215,1222
+  s_a8677c67f85a06::t_e1f83c14062b21 1150,1152-1157,1182-1209
+  s_a8677c67f85a06::t_514970aa70b9f5 7951-7953
+  s_a8677c67f85a06::t_1c457d201bded1 1210
+crates/algo/src/builder/face_splitter/sampling.rs
+  s_a8677c67f85a06::t_7785247f7e178c 48-56
+crates/io/tests/data/hinge_lid_pin_short.bin
+  s_a8677c67f85a06::t_731cad0282b0f3 1
+crates/io/tests/data/hinge_lid_knuckled.bin
+  s_a8677c67f85a06::t_731cad0282b0f3 1
+crates/algo/src/builder/mod.rs
+  s_a8677c67f85a06::t_d8f3c88bb7a66e 721,734,762-767,770-773
+  s_a8677c67f85a06::t_7f2f16044d11f9 774
+  s_a8677c67f85a06::t_fc031f0dfc7465 722,726,768-769
+  s_a8677c67f85a06::t_6e5d3a1c364fdf 409,437
+  s_a8677c67f85a06::t_6fa37abc99778f 407-408,410-412,438-440
+crates/algo/src/builder/wire_builder.rs
+  s_a8677c67f85a06::t_b81358377d50bb 259-261,266-273,436-438
+  s_a8677c67f85a06::t_931d832b93a242 262-265,274
+  s_a8677c67f85a06::t_6e894ba62e2163 258
+crates/operations/tests/keyhole_pin_on_a_knuckle_end.rs
+  s_a8677c67f85a06::t_01fe53d1e500dc 1-122,124
+  s_a8677c67f85a06::t_ee8bf8ccdc5a20 123
+crates/io/tests/data/hinge_lid_pin_long.bin
+  s_a8677c67f85a06::t_731cad0282b0f3 1
+crates/io/tests/data/hinge_swing_lid_closed.bin
+  s_a8677c67f85a06::t_6e5d3a1c364fdf 1
+crates/algo/src/gfa.rs
+  s_a8677c67f85a06::t_6fa37abc99778f 98-100,196-198
+crates/operations/tests/touching_bored_blocks.rs
+  s_a8677c67f85a06::t_1162d201f13666 1-60,62-68
+  s_a8677c67f85a06::t_93d4e862b688c4 61
+crates/io/tests/data/hinge_swing_bin.bin
+  s_a8677c67f85a06::t_6e5d3a1c364fdf 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9bc7da85058f6e903802af7e5f098dab0642eaf1",
+  "prompts": {},
+  "sessions": {
+    "s_1a88c2dc6f84e1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d56c4ac6-9588-4acd-accc-e6e3407b317d",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
