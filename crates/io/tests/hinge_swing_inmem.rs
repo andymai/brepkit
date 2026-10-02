@@ -428,37 +428,37 @@ fn hinge_left_bin_pin_cut_matches_its_tools() {
     let cut = exact(&mut topo, |t| {
         boolean::compound_cut(t, bin, &[short, long], BooleanOptions::default()).unwrap()
     });
-    // The ray classifier alone: the bore's export mesh fans its walls (the
-    // roadmap's developable-band row), so `Probe`'s winding cross-check
-    // cannot read points inside the short pin's bore.
-    let inside = |s: SolidId, p: brepkit_math::vec::Point3| {
-        use brepkit_operations::classify::{PointClassification, classify_point};
-        match classify_point(&topo, s, p, 0.001, 1e-6).unwrap() {
-            PointClassification::Inside => Some(true),
-            PointClassification::Outside => Some(false),
-            PointClassification::OnBoundary => None,
-        }
-    };
-    let mut checked = 0;
+    // The tools and the bin by `Probe`, so the oracle side is cross-checked;
+    // the cut by the ray classifier alone, because the bore's export mesh
+    // fans its walls (the roadmap's developable-band row) and the winding
+    // cross-check cannot read points inside the short pin's bore.
+    let probes = [bin, short, long].map(|s| Probe::new(&topo, s));
+    let (mut kept, mut bored) = (0, 0);
     for i in 0..10 {
         for j in 0..20 {
             for k in 0..10 {
                 let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
-                let p = brepkit_math::vec::Point3::new(
+                let p = [
                     3.3f64.mul_add(f(i, 10), -62.0),
                     20.0f64.mul_add(f(j, 20), -40.0),
                     4.6f64.mul_add(f(k, 10), 45.0),
-                );
-                let classes = [bin, short, long, cut].map(|s| inside(s, p));
-                let [Some(in_bin), Some(in_short), Some(in_long), Some(in_cut)] = classes else {
-                    continue;
+                ];
+                let [in_bin, in_short, in_long] = probes
+                    .each_ref()
+                    .map(|probe| probe.inside(&topo, p).unwrap());
+                let in_cut = {
+                    use brepkit_operations::classify::{PointClassification, classify_point};
+                    let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
+                    classify_point(&topo, cut, q, 0.001, 1e-6).unwrap()
+                        == PointClassification::Inside
                 };
                 assert_eq!(in_cut, in_bin && !in_short && !in_long, "at {p:?}");
-                checked += 1;
+                kept += usize::from(in_cut);
+                bored += usize::from(in_bin && in_short);
             }
         }
     }
-    assert_eq!(checked, 2000, "points on a boundary");
+    assert!(kept > 0 && bored > 0, "kept {kept}, bored {bored}");
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on

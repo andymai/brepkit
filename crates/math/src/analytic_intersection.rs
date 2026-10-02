@@ -1544,10 +1544,12 @@ pub fn intersect_analytic_analytic_bounded(
     intersect_analytic_analytic_impl(a, b, grid_res, v_range_hint_a, v_range_hint_b, None)
 }
 
-/// [`intersect_analytic_analytic_bounded`] restricted to `region`.
+/// [`intersect_analytic_analytic_bounded`] with its general marcher confined
+/// to `region`.
 ///
 /// The marcher starts only from seeds that converge into the region (with a
-/// margin of about two grid cells) and stops where a curve leaves it. Two
+/// margin of about two grid cells) and stops where a curve leaves it. Pairs
+/// solved in closed form are returned whole, as by the unconfined call. Two
 /// bounded faces meet only inside both their boxes, so their overlap is a
 /// sound region for a face pair.
 ///
@@ -1673,10 +1675,11 @@ fn intersect_analytic_analytic_impl(
 
     // A seed is only near the intersection; settle it onto the curve before
     // asking whether it lies in the region, so a coarse grid point beside a
-    // short in-region span still starts its march.
+    // short in-region span still starts its march, and march from there, so
+    // the march does not begin outside the region and stop at once.
     let region = region.map(|r| r.expanded(2.0 * char_size / grid_res as f64));
     if let Some(r) = region {
-        unique_seeds.retain(|seed| {
+        for seed in &mut unique_seeds {
             let mut p = seed.0;
             for _ in 0..8 {
                 let (ua, va) = project_analytic(&a, p, u_range_a, v_range_a);
@@ -1692,8 +1695,9 @@ fn intersect_analytic_analytic_impl(
                     break;
                 }
             }
-            r.contains_point(p)
-        });
+            seed.0 = p;
+        }
+        unique_seeds.retain(|seed| r.contains_point(seed.0));
     }
 
     // March from each seed.
