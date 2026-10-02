@@ -426,32 +426,38 @@ fn hinge_lid_on_its_bin_overlaps_the_lip_exactly() {
     let common = exact(&mut topo, |t| {
         boolean::boolean(t, BooleanOp::Intersect, bin, lid).unwrap()
     });
-    // One sliver's box, point by point against both operands.
+    // Each sliver's box, point by point against both operands.
     let probes = [bin, lid, common].map(|s| Probe::new(&topo, s));
-    let (mut both, mut total) = (0, 0);
-    for i in 0..12 {
-        for j in 0..8 {
-            for k in 0..8 {
-                let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
-                let p = [
-                    10.95f64.mul_add(f(i, 12), -58.7),
-                    1.0f64.mul_add(f(j, 8), 37.9),
-                    1.2f64.mul_add(f(k, 8), 45.5),
-                ];
-                // The winding cross-check abstains within its mesh's deflection
-                // of the lid's curved faces.
-                let [Some(in_bin), Some(in_lid), Some(in_common)] =
-                    probes.each_ref().map(|probe| probe.inside(&topo, p))
-                else {
-                    continue;
-                };
-                assert_eq!(in_common, in_bin && in_lid, "at {p:?}");
-                both += usize::from(in_common);
-                total += 1;
+    let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
+    for sliver in 0..6 {
+        let x0 = 21.290_909f64.mul_add(f64::from(sliver), -58.7);
+        let (mut both, mut total) = (0, 0);
+        for i in 0..8 {
+            for j in 0..6 {
+                for k in 0..6 {
+                    let p = [
+                        10.95f64.mul_add(f(i, 8), x0),
+                        1.0f64.mul_add(f(j, 6), 37.9),
+                        1.2f64.mul_add(f(k, 6), 45.5),
+                    ];
+                    // The winding cross-check abstains within its mesh's
+                    // deflection of the lid's curved faces.
+                    let [Some(in_bin), Some(in_lid), Some(in_common)] =
+                        probes.each_ref().map(|probe| probe.inside(&topo, p))
+                    else {
+                        continue;
+                    };
+                    assert_eq!(in_common, in_bin && in_lid, "at {p:?}");
+                    both += usize::from(in_common);
+                    total += 1;
+                }
             }
         }
+        assert!(
+            both > 0 && both < total,
+            "sliver {sliver}: {both} of {total}"
+        );
     }
-    assert!(both > 0 && both < total, "{both} of {total}");
 }
 
 /// The left-wall bin's two keyhole pins meet end to end on a knuckle's end

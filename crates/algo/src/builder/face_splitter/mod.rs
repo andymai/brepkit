@@ -275,9 +275,9 @@ fn split_sections_at_t_junctions(
             // matches `evaluate_edge_at_t`, which both twins share.
             // A face boundary piece carried in as a section (a promoted hole's
             // pave-split rim) runs one way only and may span more than half
-            // a turn, so the shorter-arc reading would put its complement's
-            // points on it; such a piece is already split where its own
-            // boundary needs it.
+            // a turn. The shorter-arc reading then covers its complement: it
+            // puts the complement's points on the piece and none of the
+            // piece's own, so it can only mint false splits there.
             EdgeCurve::Circle(c)
                 if edge.source_edge_idx.is_none() && {
                     let (s, e) = if edge.forward {
