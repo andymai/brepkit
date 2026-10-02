@@ -35,9 +35,12 @@ pub enum BooleanOp {
 /// Select sub-faces to keep based on the boolean operation type.
 ///
 /// The base truth table (non-SD faces):
-/// - **Fuse**: A-Outside + B-Outside + A-On
-/// - **Cut**: A-Outside + A-On + B-Inside
-/// - **Intersect**: A-Inside + B-Inside + A-On
+/// - **Fuse**: A-Outside + B-Outside + A-On + A-CoplanarSame
+/// - **Cut**: A-Outside + A-On + A-CoplanarOpposite + B-Inside
+/// - **Intersect**: A-Inside + B-Inside + A-On + A-CoplanarSame
+///
+/// The coplanar classes mark a coincident piece the same-domain pass left
+/// unpaired; A's piece stands for the region and B's is never kept.
 ///
 /// SD faces are handled by [`apply_sd_selection`] which overrides the
 /// base selection for faces involved in same-domain pairs.

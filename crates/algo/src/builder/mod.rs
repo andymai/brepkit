@@ -798,6 +798,7 @@ impl Builder {
                                 point,
                                 opposing_solid,
                                 opposing_geoms,
+                                self.tol,
                             )? {
                                 sf.classification = class;
                             } else if sf.rank == Rank::B {
@@ -1126,6 +1127,7 @@ fn coincident_side(
     sample: Point3,
     opposing: SolidId,
     geoms: Option<&classifier::RayCastGeoms>,
+    tol: Tolerance,
 ) -> Result<Option<FaceClass>, AlgoError> {
     use brepkit_topology::face::FaceSurface;
 
@@ -1144,7 +1146,10 @@ fn coincident_side(
         return Ok(None);
     }
     let sign = if face.is_reversed() { -1.0 } else { 1.0 };
-    let step = raw * (sign * 1e-3 / len);
+    // The coplanar classifier's off-plane probe distance, clear of the
+    // boundary's `On` band at any tolerance.
+    let reach = (100.0 * tol.linear).max(1e-3);
+    let step = raw * (sign * reach / len);
     let front = classifier::classify_point_cached(topo, opposing, geoms, sample + step)?;
     let back = classifier::classify_point_cached(topo, opposing, geoms, sample - step)?;
     Ok(match (front, back) {
