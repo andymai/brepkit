@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790906897622,
+  "lastUpdate": 1790907594997,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49301,6 +49301,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 32193063,
             "range": "± 1253272",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f0540694dbb107fba770f89db2e37c870cda52b",
+          "message": "fix(algo): return the empty solid for an intersect that selects nothing (#1941)\n\nThis change makes exact GFA intersects with an empty face selection\nreturn the empty solid. It fixes the closed pose of the gridfinity\ntool’s `hingeSwing` scenario without using the mesh fallback. The PR is\nstacked on #1940 (`fix/hinge-lid-pin-cuts`).\n\n## What was wrong\n\n- `hingeSwing` intersects the bin with the lid at every swing pose and\nreads the intersect volume as interference, with a 5 mm3 floor in the\nswing tests. With the lid shut, the solids only touch. Their knuckles\nmeet end to end, and each keyhole pin sits in a bore of its own radius.\nA 512,000-point probe over the hinge region found no point inside both\nsolids.\n\n- `Builder::build_result` and `Builder::build_result_with_origins` in\n`crates/algo/src/builder/mod.rs` passed an empty face selection to the\nsolid assembler, which rejected it with `assembly failed: no faces\nselected`. For an intersect, this selection means that no face of either\nsolid lies inside the other and no coincident pair bounds a shared\nregion, so the common region is empty.\n\n- Both builder paths now return the empty solid for this case.\n`gfa::boolean` and `gfa::boolean_with_face_origins` in\n`crates/algo/src/gfa.rs` hand it back as the caller’s empty solid\nbecause exporting a faceless shell fails. The operations layer returns\nthat empty solid itself, and `boolean_with_evolution`, the call the tool\nmakes, returns it directly with every input face deleted instead of\nrerunning the boolean. This applies only to intersect. Cut and fuse\nstill report the assembly error when their face selection is empty.\n\n## Verification\n\n- `hinge_closed_lid_only_touches_the_bin` in\n`crates/io/tests/hinge_swing_inmem.rs` requires an exact, empty\nintersect through both `boolean` and `boolean_with_evolution`. Its\n4,800-point hinge-strip probe finds points inside each solid and none\ninside both. The captured tool inputs are `hinge_swing_bin.bin` and\n`hinge_swing_lid_closed.bin`.\n\n- Without this change, raw GFA fails and the fallback returns an open\n355-face mesh with 34 free edges and volume 5.268 mm3 in 737 ms\nnatively. This branch returns the empty solid without fallback in 353\nms.\n\n- On #1938’s head with this change, `brepkit-math`, `brepkit-algo`,\n`brepkit-heal`, `brepkit-check`, `brepkit-operations`, and `brepkit-io`\npass 2,615 tests with 0 failures and 18 ignored. All 236 `brepkit-wasm`\nlibrary tests pass with 3 ignored. Clippy with `-D warnings`,\n`check-boundaries.sh`, and `check-doc-paths.sh` pass.\n\n- The pose sweep and `approx_census` match #1938’s head, apart from the\nrun-variable face pair named in the offset nurbs-loft error. Ten\ndiagonal-strut intersects in the 120-case kumiko sweep now return empty\non the raw path with unchanged operation results. In `truth_audit`, the\nzero-volume cone corner intersect now reaches the same empty answer\nexactly.\n\n- Against the tool suite, #1938 alone fails 14 of 27 tests with 125 mesh\nfallbacks. This branch fails 4 of 27 in 445 s with 46 fallbacks. The\nreference kernel passes all 27 in 131 s in a same-day run.\n\n## Still open\n\n- The four remaining tool failures report 5.247 mm3 twice against the 5\nmm3 floor, and 5.230 and 3.170 mm3 against the 0.05 mm3 floor. All 46\nfallbacks are swing intersects, and the capture hook's validity check,\nwhich stops after six, flagged five intersects and one compound cut\nreturning invalid solids from valid inputs.\n\n- Ignored repros in `crates/operations/tests/touching_bored_blocks.rs`\ncover bored blocks whose fuse falls back at every rotation and a cut\nthat also falls back. Their intersect is exact and empty. A new roadmap\nrow owns these cases.\n\n- `wip/hole-image-direction` corrects split-edge image direction\nhandling and advances the closed-hinge lid-minus-bin cut past the bin\nknuckle end face. The result still has 22 free edges, so nothing pins\nthat change yet.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes an exact GFA intersect return the empty solid when no face of\neither solid lies inside the other, instead of failing assembly and\nfalling back to the mesh. This fixes the gridfinity `hingeSwing`\nclosed-lid pose, which now reads zero interference instead of 5.27 mm³\nof mesh slivers.\n\nThe builder treated an empty face selection as an assembly error. For an\nintersect, that selection means the solids only touch and their common\nregion is empty, so both builder paths now return the empty solid, and\n`gfa::boolean` hands it back as the caller's empty solid because\nexporting a faceless shell fails. The operations layer keeps GFA's empty\nsolid as the result instead of minting a second one, and the\nevolution-tracking path returns it with every input face marked deleted\ninstead of rerunning the boolean. This applies only to intersect — cut\nand fuse still report the assembly error.\n\n**Tests and repros**\n- `hinge_closed_lid_only_touches_the_bin` asserts the empty intersect\nagainst the captured inputs `hinge_swing_bin.bin` and\n`hinge_swing_lid_closed.bin`, with a 4,800-point hinge-strip probe\nfinding points inside each solid and none inside both; it also checks\nevery input face is marked deleted in the evolution map.\n- New ignored repros in `touching_bored_blocks.rs` cover fuse and cut\nfallbacks whose intersect is exact; the roadmap gains two ownership pins\nand the tool suite's fallback count drops from 125 to 46.\n\n<sup>Written for commit a5fbee2070d66f544aa61b19ccada30a0bd33157.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1941?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T19:17:21-07:00",
+          "tree_id": "80789741f2bf9da5910a23bc937fa0d7f42b5539",
+          "url": "https://github.com/andymai/brepkit/commit/2f0540694dbb107fba770f89db2e37c870cda52b"
+        },
+        "date": 1790907589631,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 726930,
+            "range": "± 30811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 789499,
+            "range": "± 2015",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9186,
+            "range": "± 129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 547819,
+            "range": "± 24477",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 32140799,
+            "range": "± 312249",
             "unit": "ns/iter"
           }
         ]
