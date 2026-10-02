@@ -321,6 +321,52 @@ mod tests {
         }
     }
 
+    /// An unpaired coincident piece follows the same-domain orientation rule:
+    /// the blank's piece carries a same-side region for fuse and intersect and
+    /// a contact for cut; the tool's piece is never emitted.
+    #[test]
+    fn select_faces_unpaired_coplanar_pieces() {
+        let table = [
+            (BooleanOp::Fuse, Rank::A, FaceClass::CoplanarSame, true),
+            (BooleanOp::Fuse, Rank::A, FaceClass::CoplanarOpposite, false),
+            (BooleanOp::Fuse, Rank::B, FaceClass::CoplanarSame, false),
+            (BooleanOp::Fuse, Rank::B, FaceClass::CoplanarOpposite, false),
+            (BooleanOp::Cut, Rank::A, FaceClass::CoplanarSame, false),
+            (BooleanOp::Cut, Rank::A, FaceClass::CoplanarOpposite, true),
+            (BooleanOp::Cut, Rank::B, FaceClass::CoplanarSame, false),
+            (BooleanOp::Cut, Rank::B, FaceClass::CoplanarOpposite, false),
+            (BooleanOp::Intersect, Rank::A, FaceClass::CoplanarSame, true),
+            (
+                BooleanOp::Intersect,
+                Rank::A,
+                FaceClass::CoplanarOpposite,
+                false,
+            ),
+            (
+                BooleanOp::Intersect,
+                Rank::B,
+                FaceClass::CoplanarSame,
+                false,
+            ),
+            (
+                BooleanOp::Intersect,
+                Rank::B,
+                FaceClass::CoplanarOpposite,
+                false,
+            ),
+        ];
+        for (op, rank, class, kept) in table {
+            let mut topo = Topology::new();
+            let sub_faces = vec![make_sub_face(&mut topo, rank, class)];
+            let selected = select_faces(&sub_faces, op, &[], &[]);
+            assert_eq!(
+                selected.len(),
+                usize::from(kept),
+                "{op:?} {rank:?} {class:?}"
+            );
+        }
+    }
+
     #[test]
     fn select_faces_no_sd_pairs() {
         let mut topo = Topology::new();
