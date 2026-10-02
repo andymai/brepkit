@@ -1,0 +1,20 @@
+crates/algo/src/bop.rs
+  s_a8677c67f85a06::t_5d15f1471a2743 324-351,357,360,362
+  s_a8677c67f85a06::t_cb5f247ad99baa 352-356,358-359,361,363-369
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "686049416e1b82dde66a624f49b93dd6a003df02",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
