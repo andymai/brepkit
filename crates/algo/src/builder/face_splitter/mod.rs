@@ -628,6 +628,47 @@ fn integrate_holes_plane(
         .iter()
         .map(|s| (frame.project(s.start), frame.project(s.end)))
         .collect();
+    // Where an arc section ENDS on a hole's straight edge (a ring arc meeting
+    // the opening's wall), as the parameter along that edge. The wall is split
+    // at the foot of the arc's end, so the end must lie within a tenth of the
+    // weld band for the two to meet as one vertex.
+    let ends_on = |p: Point2, h0: Point2, h1: Point2| -> Option<f64> {
+        let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
+        let len2 = dx.mul_add(dx, dy * dy);
+        if len2 < 1e-24 {
+            return None;
+        }
+        let t = (p.x() - h0.x()).mul_add(dx, (p.y() - h0.y()) * dy) / len2;
+        if !(1e-6..=1.0 - 1e-6).contains(&t) {
+            return None;
+        }
+        let q = Point2::new(dx.mul_add(t, h0.x()), dy.mul_add(t, h0.y()));
+        ((q - p).length() < 1e-8).then_some(t)
+    };
+    // The weave reads regions by chords, so an arc whose chord lies along the
+    // wall's own line (a rod's bottom arc between two points of a keyhole's
+    // tail base) bounds nothing it can see; such an arc is left to the
+    // un-woven path. The test is on the line, not the segment: the rod's own
+    // bottom arc splits that base into two walls, one under each end.
+    let chord_on_line = |a: Point2, b: Point2, h0: Point2, h1: Point2| -> bool {
+        let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
+        let len = dx.hypot(dy);
+        let off = |p: Point2| ((p.x() - h0.x()) * dy - (p.y() - h0.y()) * dx).abs() / len;
+        len > 1e-12 && off(a) < 1e-8 && off(b) < 1e-8
+    };
+    let arc_uv: Vec<(Point2, Point2)> = sections
+        .iter()
+        .filter(|s| !matches!(s.curve_3d, EdgeCurve::Line))
+        .map(|s| (frame.project(s.start), frame.project(s.end)))
+        .collect();
+    let arc_ends_on = |h0: Point2, h1: Point2| -> Vec<f64> {
+        arc_uv
+            .iter()
+            .filter(|&&(a, b)| !chord_on_line(a, b, h0, h1))
+            .flat_map(|&(a, b)| [ends_on(a, h0, h1), ends_on(b, h0, h1)])
+            .flatten()
+            .collect()
+    };
     let interacts = |hole: &[OrientedPCurveEdge]| -> bool {
         let poly: Vec<Point2> = hole.iter().map(|e| frame.project(e.start_3d)).collect();
         if poly.len() >= 3 {
@@ -646,6 +687,9 @@ fn integrate_holes_plane(
                 if seg_cross_param(h0, h1, *a, *b).is_some() {
                     return true;
                 }
+            }
+            if edge_curve_is_straight(&e.curve_3d) && !arc_ends_on(h0, h1).is_empty() {
+                return true;
             }
         }
         false
@@ -809,6 +853,12 @@ fn integrate_holes_plane(
                 ts.push(t);
                 any_crossing = true;
             }
+        }
+        // An arc section ending on the wall meets it at a T: the wall is
+        // split there so the arc's end is a vertex of the arrangement.
+        for t in arc_ends_on(*h0, *h1) {
+            ts.push(t);
+            any_crossing = true;
         }
         ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         ts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
@@ -5657,7 +5707,11 @@ fn split_face_2d_impl(
             .into_iter()
             .enumerate()
             .map(|(hi, mut hole)| {
-                let pts = sample_wire_loop_uv(&hole);
+                // Read the same way as the outer wire: the pcurve sampler
+                // walks a hole's reversed arcs backwards too (a keyhole
+                // whose rod arcs all run against their edges reads the
+                // wrong sign and was flipped to wind with the rim).
+                let pts = sampling::sample_wire_loop_uv_via_frame(&hole, frame);
                 if pts.len() < 3 {
                     return hole;
                 }
