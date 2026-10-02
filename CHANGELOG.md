@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.13](https://github.com/andymai/brepkit/compare/v4.1.12...v4.1.13) (2026-10-02)
+
+
+### Bug Fixes
+
+* **algo:** keep the hinge lid's keyhole pin cuts exact ([#1940](https://github.com/andymai/brepkit/issues/1940)) ([588091a](https://github.com/andymai/brepkit/commit/588091a495d888963f97f19c794f6702e1ea8cd7))
+
 ## [4.1.12](https://github.com/andymai/brepkit/compare/v4.1.11...v4.1.12) (2026-10-01)
 
 
