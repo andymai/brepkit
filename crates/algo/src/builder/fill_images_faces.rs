@@ -4715,8 +4715,13 @@ fn cut_across_probes(
                 return None;
             }
             let tangent = s.curve_3d.tangent_with_endpoints(t_mid, s.start, s.end);
-            let (u, v) = surface.project_point(mid)?;
-            let side = surface.normal(u, v).cross(tangent).normalize().ok()?;
+            let normal = if let FaceSurface::Plane { normal, .. } = &surface {
+                *normal
+            } else {
+                let (u, v) = surface.project_point(mid)?;
+                surface.normal(u, v)
+            };
+            let side = normal.cross(tangent).normalize().ok()?;
             Some((mid + side * (0.5 * depth), mid - side * (0.5 * depth)))
         })
         .collect()
