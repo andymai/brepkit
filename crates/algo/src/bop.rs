@@ -35,9 +35,12 @@ pub enum BooleanOp {
 /// Select sub-faces to keep based on the boolean operation type.
 ///
 /// The base truth table (non-SD faces):
-/// - **Fuse**: A-Outside + B-Outside + A-On
-/// - **Cut**: A-Outside + A-On + B-Inside
-/// - **Intersect**: A-Inside + B-Inside + A-On
+/// - **Fuse**: A-Outside + B-Outside + A-On + A-CoplanarSame
+/// - **Cut**: A-Outside + A-On + A-CoplanarOpposite + B-Inside
+/// - **Intersect**: A-Inside + B-Inside + A-On + A-CoplanarSame
+///
+/// The coplanar classes mark a coincident piece the same-domain pass left
+/// unpaired; A's piece stands for the region and B's is never kept.
 ///
 /// SD faces are handled by [`apply_sd_selection`] which overrides the
 /// base selection for faces involved in same-domain pairs.
@@ -106,18 +109,26 @@ pub(crate) fn select_faces(
                 return None;
             }
 
+            // A coincident face the same-domain pass left unpaired follows
+            // `apply_sd_selection`: A's face stands for the region, kept
+            // when the orientations suit the operation.
             let keep = match op {
                 BooleanOp::Fuse => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A | Rank::B, FaceClass::Outside) | (Rank::A, FaceClass::On)
+                    (Rank::A | Rank::B, FaceClass::Outside)
+                        | (Rank::A, FaceClass::On | FaceClass::CoplanarSame)
                 ),
                 BooleanOp::Cut => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A, FaceClass::Outside | FaceClass::On) | (Rank::B, FaceClass::Inside)
+                    (
+                        Rank::A,
+                        FaceClass::Outside | FaceClass::On | FaceClass::CoplanarOpposite
+                    ) | (Rank::B, FaceClass::Inside)
                 ),
                 BooleanOp::Intersect => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A | Rank::B, FaceClass::Inside) | (Rank::A, FaceClass::On)
+                    (Rank::A | Rank::B, FaceClass::Inside)
+                        | (Rank::A, FaceClass::On | FaceClass::CoplanarSame)
                 ),
             };
 
@@ -310,6 +321,52 @@ mod tests {
             classification,
             rank,
             interior_point: None,
+        }
+    }
+
+    /// An unpaired coincident piece follows the same-domain orientation rule:
+    /// the blank's piece carries a same-side region for fuse and intersect and
+    /// a contact for cut; the tool's piece is never emitted.
+    #[test]
+    fn select_faces_unpaired_coplanar_pieces() {
+        let table = [
+            (BooleanOp::Fuse, Rank::A, FaceClass::CoplanarSame, true),
+            (BooleanOp::Fuse, Rank::A, FaceClass::CoplanarOpposite, false),
+            (BooleanOp::Fuse, Rank::B, FaceClass::CoplanarSame, false),
+            (BooleanOp::Fuse, Rank::B, FaceClass::CoplanarOpposite, false),
+            (BooleanOp::Cut, Rank::A, FaceClass::CoplanarSame, false),
+            (BooleanOp::Cut, Rank::A, FaceClass::CoplanarOpposite, true),
+            (BooleanOp::Cut, Rank::B, FaceClass::CoplanarSame, false),
+            (BooleanOp::Cut, Rank::B, FaceClass::CoplanarOpposite, false),
+            (BooleanOp::Intersect, Rank::A, FaceClass::CoplanarSame, true),
+            (
+                BooleanOp::Intersect,
+                Rank::A,
+                FaceClass::CoplanarOpposite,
+                false,
+            ),
+            (
+                BooleanOp::Intersect,
+                Rank::B,
+                FaceClass::CoplanarSame,
+                false,
+            ),
+            (
+                BooleanOp::Intersect,
+                Rank::B,
+                FaceClass::CoplanarOpposite,
+                false,
+            ),
+        ];
+        for (op, rank, class, kept) in table {
+            let mut topo = Topology::new();
+            let sub_faces = vec![make_sub_face(&mut topo, rank, class)];
+            let selected = select_faces(&sub_faces, op, &[], &[]);
+            assert_eq!(
+                selected.len(),
+                usize::from(kept),
+                "{op:?} {rank:?} {class:?}"
+            );
         }
     }
 

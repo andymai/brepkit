@@ -7,11 +7,11 @@ pub enum FaceClass {
     Inside,
     /// Outside the opposing solid.
     Outside,
-    /// On the boundary — coplanar with an opposing face, same normal direction.
-    /// Assigned by the same-domain detection pass.
+    /// On the boundary — coincident with the opposing solid's boundary, whose
+    /// material lies behind it as the sub-face's own does.
     CoplanarSame,
-    /// On the boundary — coplanar with an opposing face, opposite normal direction.
-    /// Assigned by the same-domain detection pass.
+    /// On the boundary — coincident with the opposing solid's boundary, whose
+    /// material lies in front of it (the two solids abut there).
     CoplanarOpposite,
     /// On the boundary of the opposing solid — within geometric tolerance.
     /// Used for faces that touch the opposing solid's surface without

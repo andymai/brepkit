@@ -7,6 +7,7 @@
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::curves::{Circle3D, Ellipse3D};
 use crate::frame::Frame3;
 use crate::nurbs::curve::NurbsCurve;
@@ -1540,6 +1541,40 @@ pub fn intersect_analytic_analytic_bounded(
     v_range_hint_a: Option<(f64, f64)>,
     v_range_hint_b: Option<(f64, f64)>,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
+    intersect_analytic_analytic_impl(a, b, grid_res, v_range_hint_a, v_range_hint_b, None)
+}
+
+/// [`intersect_analytic_analytic_bounded`] with its general marcher confined
+/// to `region`.
+///
+/// The marcher starts only from seeds that converge into the region (with a
+/// margin of about two grid cells) and stops where a curve leaves it. Pairs
+/// solved in closed form are returned whole, as by the unconfined call. Two
+/// bounded faces meet only inside both their boxes, so their overlap is a
+/// sound region for a face pair.
+///
+/// # Errors
+///
+/// Returns `MathError` if algebraic intersection fails or marching diverges.
+pub fn intersect_analytic_analytic_in_region(
+    a: AnalyticSurface<'_>,
+    b: AnalyticSurface<'_>,
+    grid_res: usize,
+    v_range_hint_a: Option<(f64, f64)>,
+    v_range_hint_b: Option<(f64, f64)>,
+    region: Aabb3,
+) -> Result<Vec<IntersectionCurve>, MathError> {
+    intersect_analytic_analytic_impl(a, b, grid_res, v_range_hint_a, v_range_hint_b, Some(region))
+}
+
+fn intersect_analytic_analytic_impl(
+    a: AnalyticSurface<'_>,
+    b: AnalyticSurface<'_>,
+    grid_res: usize,
+    v_range_hint_a: Option<(f64, f64)>,
+    v_range_hint_b: Option<(f64, f64)>,
+    region: Option<Aabb3>,
+) -> Result<Vec<IntersectionCurve>, MathError> {
     // Try algebraic specialization for known surface pairs before falling
     // back to the general marching approach.
     if let Some(result) = try_algebraic_intersection(&a, &b, v_range_hint_a, v_range_hint_b)? {
@@ -1638,6 +1673,33 @@ pub fn intersect_analytic_analytic_bounded(
         }
     }
 
+    // A seed is only near the intersection; settle it onto the curve before
+    // asking whether it lies in the region, so a coarse grid point beside a
+    // short in-region span still starts its march, and march from there, so
+    // the march does not begin outside the region and stop at once.
+    let region = region.map(|r| r.expanded(2.0 * char_size / grid_res as f64));
+    if let Some(r) = region {
+        for seed in &mut unique_seeds {
+            let mut p = seed.0;
+            for _ in 0..8 {
+                let (ua, va) = project_analytic(&a, p, u_range_a, v_range_a);
+                let pa = surf_a(ua, va);
+                let (ub, vb) = project_analytic(&b, pa, u_range_b, v_range_b);
+                let pb = surf_b(ub, vb);
+                p = Point3::new(
+                    (pa.x() + pb.x()) * 0.5,
+                    (pa.y() + pb.y()) * 0.5,
+                    (pa.z() + pb.z()) * 0.5,
+                );
+                if (pa - pb).length() < 1e-9 {
+                    break;
+                }
+            }
+            seed.0 = p;
+        }
+        unique_seeds.retain(|seed| r.contains_point(seed.0));
+    }
+
     // March from each seed.
     let mut curves = Vec::new();
     let mut used_seeds = vec![false; unique_seeds.len()];
@@ -1663,6 +1725,7 @@ pub fn intersect_analytic_analytic_bounded(
             march_step,
             is_u_periodic(&a),
             is_u_periodic(&b),
+            region,
         );
 
         if march_result.len() >= 2 {
@@ -3382,6 +3445,7 @@ fn march_analytic_intersection(
     initial_step: f64,
     u_periodic_a: bool,
     u_periodic_b: bool,
+    region: Option<Aabb3>,
 ) -> Vec<Point3> {
     let max_steps = 500;
     let h_min = 1e-6;
@@ -3454,6 +3518,10 @@ fn march_analytic_intersection(
                 || vb2 >= v_range_b.1;
 
             if out_a || out_b {
+                break;
+            }
+            if region.is_some_and(|r| !r.contains_point(mid)) {
+                points.push(mid);
                 break;
             }
 
@@ -3828,6 +3896,56 @@ mod tests {
         let c2 = ConicalSurface::new(Point3::new(0.25, 0.25, 0.5), Vec3::new(0.0, 0.0, 1.0), 0.6)
             .unwrap();
         assert!(exact_cone_cone(&c1, &c2).unwrap().is_none());
+    }
+
+    /// A 45 degree cone and a radius 0.1 tube tilted 40 degrees that pierces
+    /// both nappes, so the ruling path declines and the general marcher runs:
+    /// the tube's axis meets the near nappe at (0.1, -1.368, 1.370).
+    fn cone_and_tilted_tube() -> (ConicalSurface, CylindricalSurface) {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let (s, c) = 40.0_f64.to_radians().sin_cos();
+        let tube =
+            CylindricalSurface::new(Point3::new(0.1, 0.0, 3.0), Vec3::new(0.0, s, c), 0.1).unwrap();
+        (cone, tube)
+    }
+
+    #[test]
+    fn marcher_keeps_to_its_region() {
+        let (cone, tube) = cone_and_tilted_tube();
+        let run = |region: Option<Aabb3>| {
+            let (a, b) = (
+                AnalyticSurface::Cone(&cone),
+                AnalyticSurface::Cylinder(&tube),
+            );
+            let (va, vb) = (Some((0.5, 4.0)), Some((-5.0, 5.0)));
+            match region {
+                Some(r) => intersect_analytic_analytic_in_region(a, b, 32, va, vb, r),
+                None => intersect_analytic_analytic_bounded(a, b, 32, va, vb),
+            }
+            .unwrap()
+        };
+        assert!(!run(None).is_empty());
+        let near = Aabb3 {
+            min: Point3::new(-0.5, -2.0, 0.8),
+            max: Point3::new(0.7, -0.7, 2.0),
+        };
+        let curves = run(Some(near));
+        assert!(!curves.is_empty(), "the loop through the region is kept");
+        // The region's margin (two grid cells) and one marching step past it.
+        let reach = near.expanded(0.6);
+        for curve in &curves {
+            assert!(curve.points.iter().all(|p| reach.contains_point(p.point)));
+        }
+        let away = Aabb3 {
+            min: Point3::new(5.0, 5.0, 5.0),
+            max: Point3::new(6.0, 6.0, 6.0),
+        };
+        assert!(run(Some(away)).is_empty(), "nothing is marched outside it");
     }
 
     #[test]

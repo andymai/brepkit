@@ -421,10 +421,13 @@ impl Circle3D {
                     push_if_unique(p);
                 }
             }
-        } else if h0 * h1 <= tol * tol {
+        } else if h0.min(h1) <= tol && h0.max(h1) >= -tol {
             // Segment crosses the circle's plane (or touches it). Solve
             // for the unique s where signed-distance = 0:
             //   h0 + s*(h1 - h0) = 0  →  s = h0 / (h0 - h1)
+            // Each end's own distance decides whether it reaches the plane,
+            // not their product: a ruling ending on the circle has `h0 * h1`
+            // of order its length times that end's rounding.
             let denom = h0 - h1;
             if denom.abs() < tol {
                 return out;

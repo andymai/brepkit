@@ -18,7 +18,11 @@
 //! `hinge_lid_pin_long.bin` (the two keyhole pins), `hinge_bin.bin` and
 //! `hinge_bin_clearance_<1..5>.bin`, and the finished bin and lid the tool
 //! swings against each other, `hinge_swing_bin.bin` and
-//! `hinge_swing_lid_closed.bin` (the lid shut).
+//! `hinge_swing_lid_closed.bin` (the lid shut) and `hinge_swing_lid_40.bin`
+//! (swung 40 degrees open), and the same hinge on the left wall,
+//! `hinge_left_bin.bin` with `hinge_left_lid_18.bin` (swung 18 degrees open),
+//! and that bin with its knuckles, `hinge_left_bin_knuckled.bin`, with its two
+//! keyhole pins, `hinge_left_pin_short.bin` and `hinge_left_pin_long.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -315,12 +319,58 @@ fn hinge_lid_long_pin_cut_is_exact() {
 /// interference.
 #[test]
 fn hinge_closed_lid_only_touches_the_bin() {
+    only_touches(
+        "hinge_swing_bin.bin",
+        "hinge_swing_lid_closed.bin",
+        [-62.75, 37.0, 42.7],
+        [125.5, 5.0, 7.2],
+        [48, 10, 10],
+    );
+}
+
+/// Swung 40 degrees about the hinge axis, the lid's knuckle ends still lie in
+/// the bin's knuckle end planes, but the lid's pieces of each end face no
+/// longer match the bin's, so the same-domain pass leaves the bin's piece
+/// unpaired. The lid's material lies in front of it: a contact, not a shared
+/// boundary.
+#[test]
+fn hinge_lid_swung_40_degrees_only_touches_the_bin() {
+    only_touches(
+        "hinge_swing_bin.bin",
+        "hinge_swing_lid_40.bin",
+        [-62.75, 37.0, 42.7],
+        [125.5, 5.0, 7.2],
+        [48, 10, 10],
+    );
+}
+
+/// The left-wall hinge swung 18 degrees, a pose of the tool's corner sweep:
+/// the lid's knuckle ends still lie in the bin's knuckle end planes, and the
+/// circle where the lid's wider keyhole bore meets a bin knuckle end runs
+/// through the bin keyhole's tail, a hole in that face. Split only at the
+/// face's outer rim, the arc kept its span across the hole and the face kept a
+/// piece there that ray cast read inside the lid.
+#[test]
+fn hinge_left_lid_swung_18_degrees_only_touches_the_bin() {
+    only_touches(
+        "hinge_left_bin.bin",
+        "hinge_left_lid_18.bin",
+        [-62.75, -41.75, 42.7],
+        [5.0, 83.5, 7.2],
+        [10, 32, 10],
+    );
+}
+
+/// The intersect of `bin_file` and `lid_file` is exact and empty, and a grid
+/// of `counts` points over the box from `lo` of `size` finds points inside
+/// each and none inside both.
+fn only_touches(bin_file: &str, lid_file: &str, lo: [f64; 3], size: [f64; 3], counts: [i32; 3]) {
     use brepkit_math::vec::Point3;
     use brepkit_operations::classify::{PointClassification, classify_point};
 
     let mut topo = Topology::new();
-    let bin = load(&mut topo, "hinge_swing_bin.bin");
-    let lid = load(&mut topo, "hinge_swing_lid_closed.bin");
+    let bin = load(&mut topo, bin_file);
+    let lid = load(&mut topo, lid_file);
     let before = boolean::mesh_fallback_count();
     let common = boolean::boolean(&mut topo, BooleanOp::Intersect, bin, lid).unwrap();
     assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
@@ -339,14 +389,14 @@ fn hinge_closed_lid_only_touches_the_bin() {
     assert!(inputs.iter().all(|f| evolution.deleted.contains(f)));
     // No point of the hinge strip lies in both, though many lie in each.
     let (mut in_bin, mut in_lid) = (0, 0);
-    for i in 0..48 {
-        for j in 0..10 {
-            for k in 0..10 {
+    for i in 0..counts[0] {
+        for j in 0..counts[1] {
+            for k in 0..counts[2] {
                 let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
                 let p = Point3::new(
-                    -62.75 + 125.5 * f(i, 48),
-                    37.0 + 5.0 * f(j, 10),
-                    42.7 + 7.2 * f(k, 10),
+                    size[0].mul_add(f(i, counts[0]), lo[0]),
+                    size[1].mul_add(f(j, counts[1]), lo[1]),
+                    size[2].mul_add(f(k, counts[2]), lo[2]),
                 );
                 let a = classify_point(&topo, bin, p, 0.001, 1e-6).unwrap();
                 let b = classify_point(&topo, lid, p, 0.001, 1e-6).unwrap();
@@ -361,6 +411,54 @@ fn hinge_closed_lid_only_touches_the_bin() {
         }
     }
     assert!(in_bin > 0 && in_lid > 0);
+}
+
+/// The left-wall bin's two keyhole pins meet end to end on a knuckle's end
+/// face: the short pin (keyhole 0.925) bored into that knuckle, the long one
+/// (keyhole 1.0) running on through the others. The end face's ring between
+/// the two keyholes coincides with the long pin's cap, the pin in front of
+/// it, so the cut keeps it. Read that way, the face's split must also see the
+/// short pin's rulings end on its rim circle.
+#[test]
+fn hinge_left_bin_pin_cut_matches_its_tools() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_left_bin_knuckled.bin");
+    let short = load(&mut topo, "hinge_left_pin_short.bin");
+    let long = load(&mut topo, "hinge_left_pin_long.bin");
+    let cut = exact(&mut topo, |t| {
+        boolean::compound_cut(t, bin, &[short, long], BooleanOptions::default()).unwrap()
+    });
+    // The tools and the bin by `Probe`, so the oracle side is cross-checked;
+    // the cut by the ray classifier alone, because the bore's export mesh
+    // fans its walls (the roadmap's developable-band row) and the winding
+    // cross-check cannot read points inside the short pin's bore.
+    let probes = [bin, short, long].map(|s| Probe::new(&topo, s));
+    let (mut kept, mut bored) = (0, 0);
+    for i in 0..10 {
+        for j in 0..20 {
+            for k in 0..10 {
+                let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
+                let p = [
+                    3.3f64.mul_add(f(i, 10), -62.0),
+                    20.0f64.mul_add(f(j, 20), -40.0),
+                    4.6f64.mul_add(f(k, 10), 45.0),
+                ];
+                let [in_bin, in_short, in_long] = probes
+                    .each_ref()
+                    .map(|probe| probe.inside(&topo, p).unwrap());
+                let in_cut = {
+                    use brepkit_operations::classify::{PointClassification, classify_point};
+                    let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
+                    classify_point(&topo, cut, q, 0.001, 1e-6).unwrap()
+                        == PointClassification::Inside
+                };
+                assert_eq!(in_cut, in_bin && !in_short && !in_long, "at {p:?}");
+                kept += usize::from(in_cut);
+                bored += usize::from(in_bin && in_short);
+            }
+        }
+    }
+    assert!(kept > 0 && bored > 0, "kept {kept}, bored {bored}");
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on

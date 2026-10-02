@@ -4167,7 +4167,9 @@ fn compute_raw_curves(
                 Some(exacts) => Ok(exact_raw_curves(exacts)),
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
-                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
                     } else {
                         Ok(Vec::new())
                     }
@@ -4183,7 +4185,9 @@ fn compute_raw_curves(
                 Some(exacts) => Ok(exact_raw_curves(exacts)),
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
-                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
                     } else {
                         Ok(Vec::new())
                     }
@@ -4199,7 +4203,9 @@ fn compute_raw_curves(
                 Some(exacts) => Ok(exact_raw_curves(exacts)),
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
-                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
                     } else {
                         Ok(Vec::new())
                     }
@@ -4255,7 +4261,9 @@ fn compute_raw_curves(
                 }
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
-                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
                     } else {
                         Ok(Vec::new())
                     }
@@ -4297,7 +4305,9 @@ fn compute_raw_curves(
                 }
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
-                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
                     } else {
                         Ok(Vec::new())
                     }
@@ -4336,7 +4346,9 @@ fn compute_raw_curves(
                 }
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
-                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
                     } else {
                         Ok(Vec::new())
                     }
@@ -4354,7 +4366,9 @@ fn compute_raw_curves(
                 Some(exacts) => Ok(exact_raw_curves(exacts)),
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
-                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
                     } else {
                         Ok(Vec::new())
                     }
@@ -4364,7 +4378,7 @@ fn compute_raw_curves(
 
         (a, b) if a.as_analytic().is_some() && b.as_analytic().is_some() => {
             if let (Some(aa), Some(ab)) = (a.as_analytic(), b.as_analytic()) {
-                analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b)
             } else {
                 Ok(Vec::new())
             }
@@ -4976,9 +4990,44 @@ fn analytic_analytic_intersection(
     b: &analytic_intersection::AnalyticSurface<'_>,
     v_range_a: Option<(f64, f64)>,
     v_range_b: Option<(f64, f64)>,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
 ) -> Result<Vec<RawCurve>, AlgoError> {
-    let isect_curves = analytic_intersection::intersect_analytic_analytic_bounded(
-        *a, *b, 32, v_range_a, v_range_b,
+    // The two faces meet only inside both their boxes; a pair whose boxes
+    // merely touch collapses the overlap to a point on that axis.
+    let span = |lo_a: f64, lo_b: f64, hi_a: f64, hi_b: f64| {
+        let (lo, hi) = (lo_a.max(lo_b), hi_a.min(hi_b));
+        if lo <= hi {
+            (lo, hi)
+        } else {
+            let mid = 0.5 * (lo + hi);
+            (mid, mid)
+        }
+    };
+    let (x0, x1) = span(
+        bbox_a.min.x(),
+        bbox_b.min.x(),
+        bbox_a.max.x(),
+        bbox_b.max.x(),
+    );
+    let (y0, y1) = span(
+        bbox_a.min.y(),
+        bbox_b.min.y(),
+        bbox_a.max.y(),
+        bbox_b.max.y(),
+    );
+    let (z0, z1) = span(
+        bbox_a.min.z(),
+        bbox_b.min.z(),
+        bbox_a.max.z(),
+        bbox_b.max.z(),
+    );
+    let region = Aabb3 {
+        min: Point3::new(x0, y0, z0),
+        max: Point3::new(x1, y1, z1),
+    };
+    let isect_curves = analytic_intersection::intersect_analytic_analytic_in_region(
+        *a, *b, 32, v_range_a, v_range_b, region,
     )?;
 
     let mut results = Vec::new();
@@ -5351,10 +5400,18 @@ fn circle_face_hits(
     let Ok(face) = topo.face(fid) else {
         return hits;
     };
-    let Ok(wire) = topo.wire(face.outer_wire()) else {
-        return hits;
-    };
-    for oe in wire.edges() {
+    // A plane face's holes bound it as its rim does: a circle entering one
+    // (a bore circle through a keyhole's tail) leaves the face there.
+    let mut wire_ids = vec![face.outer_wire()];
+    if matches!(face.surface(), FaceSurface::Plane { .. }) {
+        wire_ids.extend(face.inner_wires().iter().copied());
+    }
+    let edges: Vec<brepkit_topology::wire::OrientedEdge> = wire_ids
+        .iter()
+        .filter_map(|&wid| topo.wire(wid).ok())
+        .flat_map(|w| w.edges().iter().copied())
+        .collect();
+    for oe in &edges {
         let Ok(edge) = topo.edge(oe.edge()) else {
             continue;
         };

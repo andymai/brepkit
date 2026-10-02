@@ -781,18 +781,29 @@ impl Builder {
                                 break;
                             }
                         }
-                        // Every sample lies on the opposing boundary: a tool
-                        // sub-face coinciding with a blank face the same-domain
-                        // pass left unpaired (a coaxial pin's end-cap piece on
-                        // a knuckle's end face, whose one piece covers two cap
-                        // pieces). The blank's face represents that region, so
-                        // the tool's is not emitted as well.
+                        // Every sample lies on the opposing boundary: the
+                        // sub-face coincides with opposing faces the
+                        // same-domain pass left unpaired because the two
+                        // sides fragment differently (a coaxial pin's end-cap
+                        // pieces under one knuckle end-face piece; a swung
+                        // lid's knuckle end against the bin's). Which side the
+                        // opposing material takes decides it, as for a pair.
                         if any_candidate
                             && !any_off_boundary
-                            && sf.rank == Rank::B
                             && opposing_probe.point_on_boundary(point, self.tol.linear)
                         {
-                            sf.classification = FaceClass::On;
+                            if let Some(class) = coincident_side(
+                                &self.topo,
+                                sf.face_id,
+                                point,
+                                opposing_solid,
+                                opposing_geoms,
+                                self.tol,
+                            )? {
+                                sf.classification = class;
+                            } else if sf.rank == Rank::B {
+                                sf.classification = FaceClass::On;
+                            }
                         }
                     }
                     log::trace!(
@@ -1103,6 +1114,49 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
 
     let solid_id = assemble::assemble_solid(&mut topo, &selected, &[])?;
     Ok((topo, solid_id))
+}
+
+/// The class of a sub-face lying on the opposing solid's boundary, from the
+/// side that solid's material takes: behind the face ([`FaceClass::CoplanarSame`],
+/// both bound material on the same side) or in front of it
+/// ([`FaceClass::CoplanarOpposite`], the solids abut there). `None` when the
+/// two steps off the face do not read one of each.
+fn coincident_side(
+    topo: &Topology,
+    face_id: FaceId,
+    sample: Point3,
+    opposing: SolidId,
+    geoms: Option<&classifier::RayCastGeoms>,
+    tol: Tolerance,
+) -> Result<Option<FaceClass>, AlgoError> {
+    use brepkit_topology::face::FaceSurface;
+
+    let face = topo.face(face_id)?;
+    let raw = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        surface => {
+            let Some((u, v)) = surface.project_point(sample) else {
+                return Ok(None);
+            };
+            surface.normal(u, v)
+        }
+    };
+    let len = raw.length();
+    if len < 1e-12 {
+        return Ok(None);
+    }
+    let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+    // The coplanar classifier's off-plane probe distance, clear of the
+    // boundary's `On` band at any tolerance.
+    let reach = (100.0 * tol.linear).max(1e-3);
+    let step = raw * (sign * reach / len);
+    let front = classifier::classify_point_cached(topo, opposing, geoms, sample + step)?;
+    let back = classifier::classify_point_cached(topo, opposing, geoms, sample - step)?;
+    Ok(match (front, back) {
+        (FaceClass::Outside, FaceClass::Inside) => Some(FaceClass::CoplanarSame),
+        (FaceClass::Inside, FaceClass::Outside) => Some(FaceClass::CoplanarOpposite),
+        _ => None,
+    })
 }
 
 /// Alternative interior samples of a face whose first sample landed on the
