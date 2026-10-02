@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790935402891,
+  "lastUpdate": 1790936879172,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49571,6 +49571,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36280581,
             "range": "± 106995",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f952da774a7ea190ab5436396f46e5c8e13c0fb",
+          "message": "chore(main): release 4.1.16 (#1946)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.16](https://github.com/andymai/brepkit/compare/v4.1.15...v4.1.16)\n(2026-10-02)\n\n\n### Bug Fixes\n\n* **algo:** keep the hinge swing's knuckle contacts exact\n([#1945](https://github.com/andymai/brepkit/issues/1945))\n([15d87c1](https://github.com/andymai/brepkit/commit/15d87c13cf9ccc3efd6c766da6563e7e9b059e17))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` 4.1.16. The only functional change keeps the hinge\nswing's knuckle contacts exact in the `algo` crate; the rest of the diff\nbumps the workspace and crate versions in `Cargo.toml`, updates\n`.release-please-manifest.json`, and records the change in\n`CHANGELOG.md`.\n\n<sup>Written for commit c22b399860366f5503ea5fa53da2f05236dee20a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1946?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-02T10:25:25Z",
+          "tree_id": "2ce1adf2d137ce34654650ab6ae2083c3009c56f",
+          "url": "https://github.com/andymai/brepkit/commit/9f952da774a7ea190ab5436396f46e5c8e13c0fb"
+        },
+        "date": 1790936873967,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 842727,
+            "range": "± 939",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 918344,
+            "range": "± 3133",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11360,
+            "range": "± 73",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 628340,
+            "range": "± 2302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36167923,
+            "range": "± 28947",
             "unit": "ns/iter"
           }
         ]
