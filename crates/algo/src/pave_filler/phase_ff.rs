@@ -5351,10 +5351,18 @@ fn circle_face_hits(
     let Ok(face) = topo.face(fid) else {
         return hits;
     };
-    let Ok(wire) = topo.wire(face.outer_wire()) else {
-        return hits;
-    };
-    for oe in wire.edges() {
+    // A plane face's holes bound it as its rim does: a circle entering one
+    // (a bore circle through a keyhole's tail) leaves the face there.
+    let mut wire_ids = vec![face.outer_wire()];
+    if matches!(face.surface(), FaceSurface::Plane { .. }) {
+        wire_ids.extend(face.inner_wires().iter().copied());
+    }
+    let edges: Vec<brepkit_topology::wire::OrientedEdge> = wire_ids
+        .iter()
+        .filter_map(|&wid| topo.wire(wid).ok())
+        .flat_map(|w| w.edges().iter().copied())
+        .collect();
+    for oe in &edges {
         let Ok(edge) = topo.edge(oe.edge()) else {
             continue;
         };
