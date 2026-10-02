@@ -45,7 +45,15 @@ pub(super) fn sample_wire_loop_uv_via_frame(
         } else {
             (e.end_3d, e.start_3d)
         };
-        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+        let (mut t0, mut t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+        // A closed circle's domain starts at its frame's parameter 0, not at
+        // its vertex: run the full turn from the vertex.
+        if let EdgeCurve::Circle(c) = &e.curve_3d
+            && (s3 - e3).length() < 1e-9
+        {
+            t0 = c.project(s3);
+            t1 = t0 + std::f64::consts::TAU;
+        }
         #[allow(clippy::cast_precision_loss)]
         let mut samples: Vec<Point2> = (1..CURVE_SAMPLES)
             .map(|k| {

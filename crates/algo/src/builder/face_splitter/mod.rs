@@ -24,7 +24,10 @@ use super::pcurve_compute::{
 };
 use super::plane_frame::PlaneFrame;
 use super::split_types::{OrientedPCurveEdge, SectionEdge, SplitSubFace, SurfaceInfo};
-use super::wire_builder::{build_wire_loops, build_wire_loops_dcel, build_wire_loops_with_winding};
+use super::wire_builder::{
+    build_wire_loops, build_wire_loops_dcel, build_wire_loops_dcel_measured,
+    build_wire_loops_with_winding,
+};
 
 /// Quantized 3D endpoint pair key for loop-geometry equality tests.
 type QKey3 = ((i64, i64, i64), (i64, i64, i64));
@@ -1103,6 +1106,120 @@ fn wire_loops_have_degenerate_area(loops: &[Vec<OrientedPCurveEdge>], tol: f64) 
     loops
         .iter()
         .any(|wl| loop_has_degenerate_area(wl, tol, None))
+}
+
+/// The signed area a loop on a plane encloses in `frame`: the polygon of its
+/// pieces' ends plus, for each circle or ellipse piece, the segment between it
+/// and its chord, swept on the piece's own span. A NURBS piece contributes
+/// sampled points instead.
+fn loop_area_in_frame(wire: &[OrientedPCurveEdge], frame: &PlaneFrame) -> f64 {
+    let frame_normal = frame.u_axis().cross(frame.v_axis());
+    let mut pts = Vec::with_capacity(wire.len());
+    let mut segments = 0.0;
+    for e in wire {
+        let (axes, normal) = match &e.curve_3d {
+            EdgeCurve::Circle(c) => (c.radius() * c.radius(), c.normal()),
+            EdgeCurve::Ellipse(el) => (el.semi_major() * el.semi_minor(), el.normal()),
+            EdgeCurve::Line => {
+                pts.push(e.start_uv);
+                continue;
+            }
+            EdgeCurve::NurbsCurve(_) => {
+                pts.extend(sampling::sample_wire_loop_uv_via_frame(
+                    std::slice::from_ref(e),
+                    frame,
+                ));
+                continue;
+            }
+        };
+        pts.push(e.start_uv);
+        let (stored_start, stored_end) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(stored_start, stored_end);
+        let sweep = t1 - t0;
+        // The stored span turns counter-clockwise about the conic's normal.
+        let turn = normal.dot(frame_normal).signum() * if e.forward { 1.0 } else { -1.0 };
+        segments += turn * 0.5 * axes * (sweep - sweep.sin());
+    }
+    signed_area_2d(&pts) + segments
+}
+
+/// Whether planar sub-faces tile the area their boundary encloses: every outer
+/// wire winding the same way (the arrangement traces each region
+/// counter-clockwise, whichever way the face itself winds), no region's
+/// interior inside another's, and their areas summing to the boundary's.
+/// Only outlines of lines and conics are measured exactly, so any NURBS piece
+/// passes unmeasured: an arrangement over a NURBS outline can leave out a
+/// region the boolean discards anyway (a lip's ring coincident with the rim
+/// it is fused onto), and sampled areas cannot tell that from a lost one.
+fn subfaces_cover_boundary(
+    subs: &[SplitSubFace],
+    boundary: &[OrientedPCurveEdge],
+    frame: &PlaneFrame,
+) -> bool {
+    let nurbs = |w: &[OrientedPCurveEdge]| {
+        w.iter()
+            .any(|e| matches!(e.curve_3d, EdgeCurve::NurbsCurve(_)))
+    };
+    if nurbs(boundary)
+        || subs
+            .iter()
+            .any(|s| nurbs(&s.outer_wire) || s.inner_wires.iter().any(|h| nurbs(h)))
+    {
+        return true;
+    }
+    let enclosed = loop_area_in_frame(boundary, frame).abs();
+    let outers: Vec<f64> = subs
+        .iter()
+        .map(|s| loop_area_in_frame(&s.outer_wire, frame))
+        .collect();
+    if outers.iter().any(|&a| a > 0.0) && outers.iter().any(|&a| a < 0.0) {
+        return false;
+    }
+    let regions: Vec<(Vec<Point2>, Vec<Vec<Point2>>)> = subs
+        .iter()
+        .map(|s| {
+            (
+                sampling::sample_wire_loop_uv_via_frame(&s.outer_wire, frame),
+                s.inner_wires
+                    .iter()
+                    .map(|h| sampling::sample_wire_loop_uv_via_frame(h, frame))
+                    .collect(),
+            )
+        })
+        .collect();
+    let holds = |(outer, holes): &(Vec<Point2>, Vec<Vec<Point2>>), p: Point2| {
+        super::classify_2d::point_in_polygon_2d(p, outer)
+            && !holes
+                .iter()
+                .any(|h| super::classify_2d::point_in_polygon_2d(p, h))
+    };
+    for (i, region) in regions.iter().enumerate() {
+        let p = super::classify_2d::sample_interior_point(&region.0);
+        if holds(region, p)
+            && regions
+                .iter()
+                .enumerate()
+                .any(|(j, other)| j != i && holds(other, p))
+        {
+            return false;
+        }
+    }
+    let covered: f64 = subs
+        .iter()
+        .zip(&outers)
+        .map(|(s, outer)| {
+            outer.abs()
+                - s.inner_wires
+                    .iter()
+                    .map(|h| loop_area_in_frame(h, frame).abs())
+                    .sum::<f64>()
+        })
+        .sum();
+    (covered - enclosed).abs() <= 1e-6 * enclosed.max(1.0)
 }
 
 /// Whether one loop encloses no area. On a plane face the loop is sampled
@@ -7554,11 +7671,16 @@ fn split_face_2d_impl(
             tol.linear,
             split_registry,
         );
+        // The arrangement traces chords: a section cluster that never meets
+        // the rim (a keyhole cap inside a disc) leaves the ring around it no
+        // cell, and a rim arc whose chord crosses sections (a knuckle's rim
+        // past a pin's cap) has its region traced the wrong way round.
         if let Some(result) = arr
             && (result.len() > loops.len()
                 || wire_loops_self_cross(&loops, tol.linear)
                 || greedy_outer_loops_nested(&loops, cw_loops)
                 || wire_loops_have_degenerate_area(&loops, tol.linear))
+            && subfaces_cover_boundary(&result, boundary, frame)
         {
             return result;
         }
@@ -7817,9 +7939,18 @@ fn split_face_2d_impl(
                 .iter()
                 .any(|lp| loop_has_degenerate_area(lp, tol.linear, Some(frame))))
     {
-        let dcel = build_wire_loops_dcel(&all_edges, tol.linear, u_periodic, v_periodic);
+        let frame_area = |lp: &[OrientedPCurveEdge]| loop_area_in_frame(lp, frame);
+        let dcel = build_wire_loops_dcel_measured(
+            &all_edges,
+            tol.linear,
+            u_periodic,
+            v_periodic,
+            Some(&frame_area),
+        );
         if dcel.len() > greedy_region_count(&loops, tol.linear, Some(frame))
-            && !wire_loops_have_degenerate_area(&dcel, tol.linear)
+            && !dcel
+                .iter()
+                .any(|lp| loop_has_degenerate_area(lp, tol.linear, Some(frame)))
             && !wire_loops_self_cross(&dcel, tol.linear)
             && (!greedy_outer_loops_nested(&dcel, cw_loops)
                 || greedy_outer_loops_nested(&loops, cw_loops))

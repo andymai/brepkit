@@ -708,9 +708,12 @@ impl Builder {
                     let on_boundary = sf.classification == FaceClass::On
                         || opposing_probe.point_on_boundary(point, self.tol.linear);
                     if on_boundary && coincident.is_none() {
+                        let mut any_off_boundary = false;
+                        let mut any_candidate = false;
                         for candidate in
                             face_interior_candidates(&self.topo, sf.face_id, point, self.tol)?
                         {
+                            any_candidate = true;
                             // A candidate that is itself on the opposing
                             // boundary (the whole sub-face coincides with an
                             // opposing face the same-domain pass left
@@ -718,6 +721,7 @@ impl Builder {
                             if opposing_probe.point_on_boundary(candidate, self.tol.linear) {
                                 continue;
                             }
+                            any_off_boundary = true;
                             let class = classifier::classify_point_cached(
                                 &self.topo,
                                 opposing_solid,
@@ -744,6 +748,19 @@ impl Builder {
                                 sf.classification = class;
                                 break;
                             }
+                        }
+                        // Every sample lies on the opposing boundary: a tool
+                        // sub-face coinciding with a blank face the same-domain
+                        // pass left unpaired (a coaxial pin's end-cap piece on
+                        // a knuckle's end face, whose one piece covers two cap
+                        // pieces). The blank's face represents that region, so
+                        // the tool's is not emitted as well.
+                        if any_candidate
+                            && !any_off_boundary
+                            && sf.rank == Rank::B
+                            && opposing_probe.point_on_boundary(point, self.tol.linear)
+                        {
+                            sf.classification = FaceClass::On;
                         }
                     }
                     log::trace!(

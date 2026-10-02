@@ -1,22 +1,21 @@
-//! The gridfinity tool's hinged lid and bin (`hingeSwing.scenario.test.ts`,
-//! "swings clear of the bin on the back wall"), captured on a brepkit-wasm
-//! built from #1935's branch.
+//! The gridfinity tool's hinged lid and bin (`hingeSwing.scenario.test.ts`),
+//! from operands captured from its calls: the tests check the captured lid,
+//! one of its bores alone, and the tool's own calls on them.
 //!
-//! The lid: compound-cut by its clearance bevel and four knuckle bores, the
-//! scenario's first boolean to fall back to a mesh. Every later op then ran
-//! against that blob: the three knuckle fuses fell back in turn and each
-//! swing-pose intersect took 22 s in wasm. Each bore (radius 2.45 along `y`)
-//! has its axis on the lid's pocket ceiling `z = -3.2`, crosses the ceiling's
-//! edge at the pocket wall `x = -59`, and pokes 0.05 past the back face
-//! `x = -62.75`, which the ceiling's plane splits in two.
+//! The lid is compound-cut by its clearance bevel and four knuckle bores. Each
+//! bore (radius 2.45 along `y`) has its axis on the lid's pocket ceiling
+//! `z = -3.2`, crosses the ceiling's edge at the pocket wall `x = -59`, and
+//! pokes 0.05 past the back face `x = -62.75`, which the ceiling's plane splits
+//! in two. The tool then fuses its knuckles on and cuts two keyhole pins from
+//! the knuckled lid.
 //!
-//! The bin: compound-cut by five clearance rods that only touch its lip. The
-//! result came back exact but with one face inside out, which every later
-//! boolean on the bin inherited.
+//! The bin is compound-cut by five clearance rods that only touch its lip.
 //!
 //! Data: `hinge_lid.bin` (the lid), `hinge_lid_clearance.bin` (the bevel's
 //! box), `hinge_lid_bore_<1..4>.bin`, `hinge_lid_knuckle.bin` (the first
-//! knuckle the tool fuses onto the cut lid), `hinge_bin.bin` and
+//! knuckle the tool fuses onto the cut lid), `hinge_lid_knuckled.bin` (the lid
+//! with its knuckles) with `hinge_lid_pin_short.bin` and
+//! `hinge_lid_pin_long.bin` (the two keyhole pins), `hinge_bin.bin` and
 //! `hinge_bin_clearance_<1..5>.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -54,26 +53,42 @@ fn tools(topo: &mut Topology) -> Vec<SolidId> {
         .collect()
 }
 
-/// Whether `p` is inside `solid`, when the ray cast and the generalized
-/// winding number over its tessellation agree.
-fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> Option<bool> {
-    use brepkit_operations::classify::{PointClassification, classify_point};
-    let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
-    let ray = match classify_point(topo, solid, q, 0.01, 1e-7).ok()? {
-        PointClassification::Inside => true,
-        PointClassification::Outside => false,
-        PointClassification::OnBoundary => return None,
-    };
-    let mesh = brepkit_operations::tessellate::tessellate_solid(topo, solid, 0.01).ok()?;
-    let mut solid_angle = 0.0;
-    for tri in mesh.indices.chunks_exact(3) {
-        let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.positions[i as usize] - q);
-        let (la, lb, lc) = (a.length(), b.length(), c.length());
-        let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
-        solid_angle += 2.0 * a.dot(b.cross(c)).atan2(den);
+/// A solid's point classifier: a point counts when the ray cast and the
+/// generalized winding number over its tessellation (taken once) agree.
+struct Probe {
+    solid: SolidId,
+    mesh: brepkit_operations::tessellate::TriangleMesh,
+}
+
+impl Probe {
+    fn new(topo: &Topology, solid: SolidId) -> Self {
+        let mesh = brepkit_operations::tessellate::tessellate_solid(topo, solid, 0.01).unwrap();
+        Self { solid, mesh }
     }
-    let wind = (solid_angle / (4.0 * std::f64::consts::PI)).abs() > 0.5;
-    (ray == wind).then_some(ray)
+
+    fn inside(&self, topo: &Topology, p: [f64; 3]) -> Option<bool> {
+        use brepkit_operations::classify::{PointClassification, classify_point};
+        let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
+        let ray = match classify_point(topo, self.solid, q, 0.01, 1e-7).ok()? {
+            PointClassification::Inside => true,
+            PointClassification::Outside => false,
+            PointClassification::OnBoundary => return None,
+        };
+        let mut solid_angle = 0.0;
+        for tri in self.mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| self.mesh.positions[i as usize] - q);
+            let (la, lb, lc) = (a.length(), b.length(), c.length());
+            let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+            solid_angle += 2.0 * a.dot(b.cross(c)).atan2(den);
+        }
+        let wind = (solid_angle / (4.0 * std::f64::consts::PI)).abs() > 0.5;
+        (ray == wind).then_some(ray)
+    }
+}
+
+/// Whether `p` is inside `solid`, by [`Probe`].
+fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> Option<bool> {
+    Probe::new(topo, solid).inside(topo, p)
 }
 
 fn volume(topo: &Topology, solid: SolidId) -> f64 {
@@ -190,6 +205,105 @@ fn hinge_lid_knuckle_fuse_is_exact() {
     ] {
         assert_eq!(inside(&topo, fused, p), Some(kept), "probe {p:?}");
     }
+}
+
+/// The short keyhole pin sits in a gap between two knuckles, coaxial with
+/// them, its caps flat on their end faces: it only touches the lid, which the
+/// cut leaves whole. Each end face reaches the cut as several coplanar pieces
+/// from the knuckle fuses, so one of them covers more than one piece of the
+/// pin's cap and same-domain pairing leaves a cap piece unpaired, wholly on
+/// the lid's boundary.
+#[test]
+fn hinge_lid_short_pin_cut_is_exact() {
+    let mut topo = Topology::new();
+    let lid = load(&mut topo, "hinge_lid_knuckled.bin");
+    let pin = load(&mut topo, "hinge_lid_pin_short.bin");
+    let before = volume(&topo, lid);
+    let cut = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Cut, lid, pin).unwrap()
+    });
+    let got = volume(&topo, cut);
+    assert!(
+        (got - before).abs() < 1e-6 * before,
+        "cut {got}, lid {before}"
+    );
+    // Either side of both caps, inside the pin's profile and beside it, the
+    // cut holds what the lid holds: the knuckles' material and the gap's air.
+    let lid_ref = load(&mut topo, "hinge_lid_knuckled.bin");
+    let lid_ref = Probe::new(&topo, lid_ref);
+    let cut = Probe::new(&topo, cut);
+    let (mut material, mut air) = (0, 0);
+    for x in [-58.76, -58.36, -48.105, -47.705] {
+        for r in [0.5, 1.3] {
+            for deg in [0.0_f64, 90.0, 180.0, 270.0] {
+                let (s, c) = deg.to_radians().sin_cos();
+                let p = [x, 39.35 + r * c, -3.2 + r * s];
+                let expected = lid_ref.inside(&topo, p).unwrap();
+                assert_eq!(cut.inside(&topo, p), Some(expected), "probe {p:?}");
+                if expected {
+                    material += 1;
+                } else {
+                    air += 1;
+                }
+            }
+        }
+    }
+    assert_eq!((material, air), (8, 24));
+}
+
+/// The long keyhole pin (radius 1, along `x` from -47.905 to 58.56) runs
+/// through the knuckles coaxial with them, its axis in the lid's bevel plane.
+/// The bevel faces meet its wall along a ruling only in the gaps between
+/// knuckles, but each section ran the wall's whole length: one face touching
+/// the wall only at its end, and one reaching across a knuckle around a hole.
+/// The wall split along rulings inside the knuckles and three knuckles lost
+/// its lower quarter. The tool's call cuts both pins at once.
+#[test]
+fn hinge_lid_long_pin_cut_is_exact() {
+    let mut topo = Topology::new();
+    let lid = load(&mut topo, "hinge_lid_knuckled.bin");
+    let short = load(&mut topo, "hinge_lid_pin_short.bin");
+    let long = load(&mut topo, "hinge_lid_pin_long.bin");
+    let lid_copy = brepkit_operations::copy::copy_solid(&mut topo, lid).unwrap();
+    let cut = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Cut, lid_copy, long).unwrap()
+    });
+    let both = exact(&mut topo, |t| {
+        boolean::compound_cut(t, lid, &[short, long], BooleanOptions::default()).unwrap()
+    });
+    let (got, expected) = (volume(&topo, both), volume(&topo, cut));
+    assert!(
+        (got - expected).abs() < 1e-6 * expected,
+        "both pins {got}, the long pin alone {expected}"
+    );
+    // Material stays where the lid had it off the pin: around the axis at
+    // half and 1.3 of the pin's radius, below the tail, in knuckles and gaps.
+    let lid_ref = load(&mut topo, "hinge_lid_knuckled.bin");
+    let lid_ref = Probe::new(&topo, lid_ref);
+    let (cut, both) = (Probe::new(&topo, cut), Probe::new(&topo, both));
+    let (mut kept_seen, mut removed_seen) = (0, 0);
+    for x in [
+        -42.58, -31.94, -21.29, -10.65, 0.0, 10.65, 21.29, 31.94, 42.58, 53.23,
+    ] {
+        for r in [0.5, 1.3] {
+            for deg in [200.0_f64, 250.0, 300.0, 340.0] {
+                let (s, c) = deg.to_radians().sin_cos();
+                let p = [x, 39.35 + r * c, -3.2 + r * s];
+                let Some(in_lid) = lid_ref.inside(&topo, p) else {
+                    continue;
+                };
+                let kept = in_lid && r > 1.0;
+                assert_eq!(cut.inside(&topo, p), Some(kept), "probe {p:?}");
+                assert_eq!(both.inside(&topo, p), Some(kept), "probe {p:?}");
+                if kept {
+                    kept_seen += 1;
+                } else if in_lid {
+                    removed_seen += 1;
+                }
+            }
+        }
+    }
+    assert_eq!((kept_seen, removed_seen), (20, 20));
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on
