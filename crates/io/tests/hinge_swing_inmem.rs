@@ -529,7 +529,8 @@ fn hinge_lid_at_its_stop_overlaps_the_lip_exactly() {
 }
 
 /// Over a grid of `counts` points in the box from `lo` of `size`, the third
-/// solid holds a point exactly when the first two both do, and some do.
+/// solid holds a point exactly when the first two both do, and the grid
+/// reads points both in and out of it.
 fn matches_both(
     topo: &Topology,
     solids: [SolidId; 3],
@@ -539,7 +540,7 @@ fn matches_both(
 ) {
     let probes = solids.map(|s| Probe::new(topo, s));
     let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
-    let mut both = 0;
+    let (mut both, mut total) = (0, 0);
     for i in 0..counts[0] {
         for j in 0..counts[1] {
             for k in 0..counts[2] {
@@ -557,10 +558,11 @@ fn matches_both(
                 };
                 assert_eq!(c, a && b, "at {p:?}");
                 both += usize::from(c);
+                total += 1;
             }
         }
     }
-    assert!(both > 0);
+    assert!(both > 0 && both < total, "{both} of {total}");
 }
 
 /// The left-wall bin's two keyhole pins meet end to end on a knuckle's end
