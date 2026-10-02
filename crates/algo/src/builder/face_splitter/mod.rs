@@ -629,7 +629,9 @@ fn integrate_holes_plane(
         .map(|s| (frame.project(s.start), frame.project(s.end)))
         .collect();
     // Where an arc section ENDS on a hole's straight edge (a ring arc meeting
-    // the opening's wall), as the parameter along that edge.
+    // the opening's wall), as the parameter along that edge. The wall is split
+    // at the foot of the arc's end, so the end must lie within a tenth of the
+    // weld band for the two to meet as one vertex.
     let ends_on = |p: Point2, h0: Point2, h1: Point2| -> Option<f64> {
         let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
         let len2 = dx.mul_add(dx, dy * dy);
@@ -641,17 +643,18 @@ fn integrate_holes_plane(
             return None;
         }
         let q = Point2::new(dx.mul_add(t, h0.x()), dy.mul_add(t, h0.y()));
-        ((q - p).length() < 1e-6).then_some(t)
+        ((q - p).length() < 1e-8).then_some(t)
     };
     // The weave reads regions by chords, so an arc whose chord lies along the
     // wall's own line (a rod's bottom arc between two points of a keyhole's
     // tail base) bounds nothing it can see; such an arc is left to the
-    // un-woven path.
+    // un-woven path. The test is on the line, not the segment: the rod's own
+    // bottom arc splits that base into two walls, one under each end.
     let chord_on_line = |a: Point2, b: Point2, h0: Point2, h1: Point2| -> bool {
         let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
         let len = dx.hypot(dy);
         let off = |p: Point2| ((p.x() - h0.x()) * dy - (p.y() - h0.y()) * dx).abs() / len;
-        len > 1e-12 && off(a) < 1e-6 && off(b) < 1e-6
+        len > 1e-12 && off(a) < 1e-8 && off(b) < 1e-8
     };
     let arc_uv: Vec<(Point2, Point2)> = sections
         .iter()
