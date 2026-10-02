@@ -524,7 +524,7 @@ impl Builder {
             edge_images.len()
         );
 
-        let (sub_faces, unsplit) = fill_images_faces::fill_images_faces(
+        let (sub_faces, unsplit, whole) = fill_images_faces::fill_images_faces(
             &mut self.topo,
             &self.arena,
             &edge_images,
@@ -535,6 +535,26 @@ impl Builder {
             return Err(AlgoError::FaceSplitFailed(format!(
                 "face {face:?} is cut by sections but split into nothing"
             )));
+        }
+        // A face kept whole takes one class: the two sides of a section that
+        // runs across it must agree.
+        if !whole.is_empty() {
+            let probes = [
+                classifier::BoundaryProbe::new(&self.topo, self.solid_a)?,
+                classifier::BoundaryProbe::new(&self.topo, self.solid_b)?,
+            ];
+            for (face, p, q) in whole {
+                let (opposing, probe) = if self.face_ranks.get(&face) == Some(&Rank::A) {
+                    (self.solid_b, &probes[1])
+                } else {
+                    (self.solid_a, &probes[0])
+                };
+                if !sides_agree(&self.topo, opposing, probe, p, q, self.tol.linear) {
+                    return Err(AlgoError::FaceSplitFailed(format!(
+                        "face {face:?} is cut by sections but split into nothing"
+                    )));
+                }
+            }
         }
         self.sub_faces = sub_faces;
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
@@ -913,6 +933,31 @@ impl Builder {
     }
 }
 
+/// Whether the two sides of a section running across a face kept whole take
+/// the same definite class against `opposing`. A side on that solid's
+/// boundary (a face coplanar with one of its faces, where same-domain pairing
+/// decides) says nothing, so the face stands as it would have; an
+/// indeterminate class does not let it stand.
+fn sides_agree(
+    topo: &Topology,
+    opposing: SolidId,
+    probe: &classifier::BoundaryProbe,
+    p: Point3,
+    q: Point3,
+    tol: f64,
+) -> bool {
+    if probe.point_on_boundary(p, tol) || probe.point_on_boundary(q, tol) {
+        return true;
+    }
+    matches!(
+        (
+            classifier::classify_point(topo, opposing, p),
+            classifier::classify_point(topo, opposing, q),
+        ),
+        (Ok(a), Ok(b)) if a == b && matches!(a, FaceClass::Inside | FaceClass::Outside)
+    )
+}
+
 /// Build an N-way FUSE result from the shared arena of an N-way pave filler.
 ///
 /// Reuses the two-solid Builder machinery, generalized to N sources:
@@ -947,12 +992,30 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
     // is correct for all of them (see the doc comment).
     let edge_images = fill_images::fill_edge_images(&arena);
     let all_a_ranks: HashMap<FaceId, Rank> = face_source.keys().map(|&f| (f, Rank::A)).collect();
-    let (sub_faces, unsplit) =
+    let (sub_faces, unsplit, whole) =
         fill_images_faces::fill_images_faces(&mut topo, &arena, &edge_images, &all_a_ranks, tol);
     if let Some(face) = unsplit.first() {
         return Err(AlgoError::FaceSplitFailed(format!(
             "face {face:?} is cut by sections but split into nothing"
         )));
+    }
+    // A face kept whole takes one class against every other source: the two
+    // sides of a section that runs across it must agree for each.
+    if !whole.is_empty() {
+        let probes = sources
+            .iter()
+            .map(|&s| classifier::BoundaryProbe::new(&topo, s))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (face, p, q) in whole {
+            let own = face_source.get(&face).copied();
+            for (j, &other) in sources.iter().enumerate() {
+                if Some(j) != own && !sides_agree(&topo, other, &probes[j], p, q, tol.linear) {
+                    return Err(AlgoError::FaceSplitFailed(format!(
+                        "face {face:?} is cut by sections but split into nothing"
+                    )));
+                }
+            }
+        }
     }
 
     // The global source of each sub-face is its parent input face's source.
