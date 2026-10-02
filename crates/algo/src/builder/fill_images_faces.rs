@@ -3187,6 +3187,8 @@ struct BoundaryArc {
 /// A piece lying on one of the face's boundary edges is dropped unless
 /// `keep_boundary_runs`: clipped to the face it splits, such a piece adds no
 /// split, but clipped to the OPPOSING face it is still where the two meet.
+/// In that opposing mode a line that misses a hole-free plane face, read on
+/// its outline, yields `Some` of no intervals rather than `None`.
 #[allow(clippy::too_many_lines)]
 fn clip_line_to_face_boundary(
     topo: &Topology,
@@ -3490,6 +3492,7 @@ fn clip_line_to_face_boundary(
     // sections — pre-splitting them here breaks its bookkeeping (the groove
     // chain regressed). Hole-free faces have no weave; their concave bites
     // live on the OUTER wire where the outermost-pair heuristic overshoots.
+    let read_on_outline = face.inner_wires().is_empty() && plane_frame.is_some() && poly.is_some();
     let t_intervals: Vec<(f64, f64)> = if face.inner_wires().is_empty()
         && let (Some(frame), Some(poly)) = (plane_frame.as_ref(), poly.as_ref())
     {
@@ -3590,7 +3593,13 @@ fn clip_line_to_face_boundary(
         }
         out.push((clipped_start, clipped_end));
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        // Clipped to the opposing face, a miss read on that face's own
+        // outline is an empty list: the caller keeps a piece whole only when
+        // the opposing face could not be read.
+        return (keep_boundary_runs && read_on_outline).then(Vec::new);
+    }
+    Some(out)
 }
 
 /// The inner wires of a planar `face` as arc-sampled polygons in `frame`,

@@ -23,7 +23,9 @@
 //! `hinge_left_bin.bin` with `hinge_left_lid_18.bin` (swung 18 degrees open),
 //! and that bin with its knuckles, `hinge_left_bin_knuckled.bin`, with its two
 //! keyhole pins, `hinge_left_pin_short.bin` and `hinge_left_pin_long.bin`,
-//! and a lid on its bin, `hinge_seat_bin.bin` with `hinge_seat_lid.bin`.
+//! and a lid on its bin, `hinge_seat_bin.bin` with `hinge_seat_lid.bin`,
+//! and a block in the shape of that bin's bracket under one knuckle,
+//! `hinge_bin_bracket_probe.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -469,6 +471,51 @@ fn hinge_lid_on_its_bin_overlaps_the_lip_exactly() {
             "sliver {sliver}: {both} of {total}"
         );
     }
+}
+
+/// The bin against a block in the shape of the bracket under one of its
+/// knuckles, a box with a cove along the knuckle: five of the block's faces lie
+/// in bin faces. Each knuckle step face has an edge in the block's front plane,
+/// and a section along it must end where the step face does. Between the steps
+/// the cove meets the bin's slot plane along that plane's own edge, and the
+/// cove must still split there.
+#[test]
+fn hinge_bin_against_its_knuckle_bracket_intersects_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_seat_bin.bin");
+    let block = load(&mut topo, "hinge_bin_bracket_probe.bin");
+    faithful(&topo, bin, [12, 40, 90]);
+    faithful(&topo, block, [0, 1, 5]);
+    let common = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Intersect, bin, block).unwrap()
+    });
+    // Point by point over the block's box: the volume measure reads the
+    // split cove band high (the roadmap's developable-band row).
+    let probes = [bin, block, common].map(|s| Probe::new(&topo, s));
+    let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
+    let (mut both, mut total) = (0, 0);
+    for i in 0..12 {
+        for j in 0..8 {
+            for k in 0..8 {
+                let p = [
+                    10.75f64.mul_add(f(i, 12), -58.6),
+                    2.3f64.mul_add(f(j, 8), 39.3),
+                    3.3f64.mul_add(f(k, 8), 44.45),
+                ];
+                // The winding cross-check abstains within its mesh's
+                // deflection of curved faces.
+                let [Some(in_bin), Some(in_block), Some(in_common)] =
+                    probes.each_ref().map(|probe| probe.inside(&topo, p))
+                else {
+                    continue;
+                };
+                assert_eq!(in_common, in_bin && in_block, "at {p:?}");
+                both += usize::from(in_common);
+                total += 1;
+            }
+        }
+    }
+    assert!(both > 0 && both < total, "{both} of {total}");
 }
 
 /// The left-wall bin's two keyhole pins meet end to end on a knuckle's end
