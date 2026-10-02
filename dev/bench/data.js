@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790936879172,
+  "lastUpdate": 1790949759492,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49625,6 +49625,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36167923,
             "range": "± 28947",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "98c616ebfc6291e2ef1d955455f11f95a1a86681",
+          "message": "fix(algo): read a hole's winding by its arcs and weave holes that arcs end on (#1947)\n\nThe GFA boolean engine now keeps the touching keyholed knuckle twin\nexact across every cut, fuse, and intersect in both tested poses and at\nall three turns. The fix makes hole winding sampling consistent in\n`split_face_2d_impl` and extends `integrate_holes_plane` to weave arc\nsection endpoints that land on straight hole edges.\n\n## What was wrong\n\n- In `split_face_2d_impl`, hole winding normalization read the outer\nwire’s sign with `sample_wire_loop_uv_via_frame`, but read each hole\nwith `sample_wire_loop_uv`. That pcurve sampler walks reversed arcs\nbackwards. The first knuckle’s keyhole has all rod arcs reversed in its\nwire, so its sign matched the rim and the correctly wound hole was\nflipped. The walker then traced the region between the keyholes as a\nhole with area -0.53 and their union outline as a face with area 3.32.\nThe end face became a disc covering its own keyhole plus the union\nregion. Hole signs are now also read with\n`sample_wire_loop_uv_via_frame`.\n\n- In `integrate_holes_plane`, a hole was woven into the arrangement only\nwhen a section chord crossed a hole edge or a section endpoint lay\ninside the hole. At turn 0.7, the wider keyhole’s radius 1.0 arcs end on\nthe first keyhole’s straight tail walls. The hole was attached whole,\nboth ends of the arc chain dangled, and `remove_pendant_sections`\nremoved all 14 section pieces. The end face stayed whole, so the fuse\nretained the contact ring as a face and left the rim circle on three\nfaces. An arc section endpoint on a straight hole edge now counts as\ninteracting and splits that edge at the endpoint, as a crossing does. It\ndoes not split the edge when the arc’s chord lies along that edge’s\nline, because the weave reads regions by chords. Without this exception,\n`compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact`\nloses the crescent between the two rods’ bottom arcs and falls back with\n5 free edges. Arc hole edges are still carried whole by the weave.\n\n## Verification\n\n- `crates/operations/tests/keyholed_knuckles_end_to_end.rs` covers two\nradius 1.8 knuckles, each 4 long along x and meeting end to end at x =\n0. Their keyholes use radius 0.925 with tip 1.308 and radius 1.0 with\ntip 1.414, with the latter turned by 0.35, 0.7, or 1.05 rad. Every case\nruns untilted and under `rotation_z(0.7) * rotation_y(0.4)`.\n\n- `keyholed_knuckles_end_to_end_share_nothing`,\n`keyholed_knuckles_end_to_end_fuse_to_both`, and\n`keyholed_knuckle_cut_by_its_neighbour_is_unchanged` verify empty\nintersects, summed fuse volume, and unchanged cut volume against closed\nform keyhole areas within relative 1e-6. Every operation is exact and\nvalid in both poses at all three turns.\n\n- On main, the turn 0.35 untilted cut leaves 8 free edges and the fuse\nleaves 16, with both falling back to meshes. The turn 0.7 tilted\nintersect fails with `face Id(17) is cut by sections but split into\nnothing` and falls back. With only the winding change, the turn 0.7 fuse\nstill fails. With only the weave change, all three tests fail.\n\n- The branch passes 2,627 tests across `brepkit-math`, `brepkit-algo`,\n`brepkit-heal`, `brepkit-check`, `brepkit-operations`, and `brepkit-io`,\nwith 0 failures and 18 ignored. All 236 `brepkit-wasm` library tests\npass with 3 ignored. Clippy with `-D warnings`, `check-boundaries.sh`,\nand `check-doc-paths.sh` pass. The pose sweep, 120 case kumiko strut\npose sweep, `truth_audit`, and `approx_census` are identical to main.\n\n- Against a wasm build from this branch, `hingeSwing.scenario.test.ts`\npasses all 27 tests in 210.05 s, with 28 swing intersects still taking\nthe mesh fallback, the same count as on main.\n\n## Still open\n\n- The 28 swing intersects in the tool’s `hingeSwing` scenario replay\nunchanged. Op 147557’s `split into nothing` has another root.\n\n- The overhang sweep intersects are genuine thin overlaps, not contacts.\nIn op 153467, the lid rim overlaps the bin’s back lip by about 0.29 mm3\nin a 0.4 by 0.4 mm slab, while the mesh fallback reads 5.497 mm3.\n\n- The touching bored block repros with equal round bores still fall\nback.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the GFA boolean engine so keyholed knuckle twins (two end-to-end\nknuckles meeting at a shared end plane) stay exact across cut, fuse, and\nintersect in both tested poses and at all three turns.\n\n- Hole winding in `split_face_2d_impl` now reads via\n`sample_wire_loop_uv_via_frame` (same as the outer wire), so a keyhole\nwhose rod arcs run reversed no longer gets flipped.\n- `integrate_holes_plane` now weaves a hole when an arc section ends on\na straight hole edge, splitting that edge at the endpoint within the\nweld band, unless the arc's chord lies along the edge's line.\n\nAdds `keyholed_knuckles_end_to_end.rs` covering three turns and two\nposes, verifying empty intersects, summed fuse volume, and unchanged cut\nvolume against closed-form keyhole areas. All operations are exact and\nvalid; previously the turn 0.35 cut left 8 free edges and the fuse left\n16, both falling back to meshes, and the turn 0.7 fuse still failed with\nonly one of the two changes applied.\n\n<sup>Written for commit afeb0a1f7fdf474dd7ec410de922c7766ff360d1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1947?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-02T06:59:47-07:00",
+          "tree_id": "76fb7164ef6a226c00c52f272d30ebd8b54144cc",
+          "url": "https://github.com/andymai/brepkit/commit/98c616ebfc6291e2ef1d955455f11f95a1a86681"
+        },
+        "date": 1790949753875,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1005891,
+            "range": "± 3848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1095538,
+            "range": "± 1251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13264,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 754647,
+            "range": "± 1064",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41628974,
+            "range": "± 173578",
             "unit": "ns/iter"
           }
         ]
