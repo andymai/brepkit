@@ -737,6 +737,31 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                         }
                         continue;
                     }
+                    // Residue lies over another piece of its own rank. Pieces
+                    // that tile one face side by side join the group through
+                    // the opposite face covering them all (a pin's end cap
+                    // split into a disc and a lens, flush on a knuckle end), and
+                    // none of them is a copy of another.
+                    let point = sub_faces[idx].interior_point.or_else(|| {
+                        super::sample_face_interior(topo, sub_faces[idx].face_id, tol).ok()
+                    });
+                    let stacked = point.is_none_or(|ip| {
+                        members.iter().any(|&m| {
+                            m != idx
+                                && sub_faces[m].rank == sub_faces[idx].rank
+                                && planar_region_holds(topo, sub_faces[m].face_id, ip)
+                        })
+                    });
+                    if !stacked {
+                        if std::env::var("BK_SD").is_ok() {
+                            log::debug!(
+                                "SD within-rank EXEMPT (beside its rank) face={:?} src={:?}",
+                                sub_faces[idx].face_id,
+                                sub_faces[idx].source_face
+                            );
+                        }
+                        continue;
+                    }
                     within_rank_dups.push(WithinRankDuplicate {
                         representative: rep,
                         duplicate: idx,
@@ -979,6 +1004,18 @@ fn compute_edge_set_quantized(
 /// is the conservative criterion that catches boolean residue (issue #696)
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
+/// Whether `p` lies in a planar face's material region; `true` when the face
+/// is not planar or its polygons cannot be read, which keeps a member that
+/// cannot be tested a duplicate.
+fn planar_region_holds(topo: &Topology, face_id: FaceId, p: brepkit_math::vec::Point3) -> bool {
+    match crate::classifier::planar_face_polygons(topo, face_id) {
+        Ok(Some((outer, holes, normal))) => {
+            crate::classifier::point_in_planar_region(p, &outer, &holes, &normal)
+        }
+        _ => true,
+    }
+}
+
 /// Whether a planar sub-face's interior lies OUTSIDE the opposite-rank
 /// representative's material region (outside its outer polygon or inside one
 /// of its holes). Such a member is not annihilated by the coincident overlap
