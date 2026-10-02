@@ -394,6 +394,31 @@ pub fn perform(
                         }
                         let clip_a = clip_line_to_face(topo, fa, &raw);
                         let clip_b = clip_line_to_face(topo, fb, &raw);
+                        // An outline with arcs still reads exactly on its own
+                        // lines and arcs: a line that runs only along such a
+                        // face's boundary edge past the other face's span (a
+                        // knuckle's step face whose edge lies in a bracket's
+                        // front plane) meets it in a point, not in that span.
+                        let trim_to_arc_face = |arc_face: FaceId, r: (f64, f64)| {
+                            let Some(runs) = line_face_intervals(
+                                topo,
+                                arc_face,
+                                raw.p_start,
+                                raw.p_end,
+                                tol.linear,
+                            ) else {
+                                return trim_raw_line(&raw, r.0, r.1, tol);
+                            };
+                            let len = (raw.p_end - raw.p_start).length();
+                            let overlaps: Vec<(f64, f64)> = runs
+                                .iter()
+                                .map(|&(a, b)| (a.max(r.0), b.min(r.1)))
+                                .filter(|&(a, b)| (b - a) * len > tol.linear)
+                                .collect();
+                            let lo = overlaps.iter().map(|o| o.0).reduce(f64::min)?;
+                            let hi = overlaps.iter().map(|o| o.1).reduce(f64::max)?;
+                            trim_raw_line(&raw, lo, hi, tol)
+                        };
                         match (clip_a, clip_b) {
                             // A face's polygon was built but the line lies
                             // entirely outside it: the mutual overlap is
@@ -426,13 +451,16 @@ pub fn perform(
                             // not build a usable polygon (degenerate wire,
                             // non-line edges such as rounded-rect corner
                             // arcs, or a non-convex outline). The single
-                            // interval is still a superset of the mutual
-                            // overlap, so trim to it — keeping the raw curve
-                            // here produced over-long chords that crossed
-                            // the partner's arc sections mid-edge.
-                            (FaceClip::Range(r), FaceClip::Indeterminate)
-                            | (FaceClip::Indeterminate, FaceClip::Range(r)) => {
-                                trim_raw_line(&raw, r.0, r.1, tol)
+                            // interval is a superset of the mutual overlap,
+                            // so trim to it and then to the other face's own
+                            // runs where those can be read. Keeping the raw
+                            // curve here produced over-long chords that
+                            // crossed the partner's arc sections mid-edge.
+                            (FaceClip::Range(r), FaceClip::Indeterminate) => {
+                                trim_to_arc_face(fb, r)
+                            }
+                            (FaceClip::Indeterminate, FaceClip::Range(r)) => {
+                                trim_to_arc_face(fa, r)
                             }
                             // Neither face could build a usable polygon.
                             // Conservatively keep the raw curve and leave
