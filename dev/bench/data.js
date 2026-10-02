@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790978339590,
+  "lastUpdate": 1790985024677,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49895,6 +49895,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43622397,
             "range": "± 196351",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bbbc5da81a9c01b55e3a2737ee0f8019f521e260",
+          "message": "docs(roadmap): record the hinge pin lens and knuckle-shell findings (#1952)\n\nThis docs-only change records two diagnosed hinge Boolean failure modes\nin `.claude/skills/roadmap/SKILL.md`.\n\n- “Hinge lid ∩ long pin falls back” records its root: the pin's end cap,\nflush on a knuckle end, arrives as two tiles, and same-domain selection\ndrops one (residue demotion, then the intersect's smaller-face pick).\nKeeping tiles out of the residue alone is not enough (branch\n`wip/sd-adjacent-tiles`); the pair must read the tiled side as a whole.\n\n- The generator-suite hangs row records that the bin knuckle end face,\ncoplanar with the lid coaxial knuckle end, gets 13 sections and splits\ninto a pinched loop. Routing these faces to the planar arrangement\ncloses the shells but leaves them as wrong components (7 components in\nall, with inconsistent orientation on 16 edges).\n\nVerification: `check-doc-paths.sh` passes.",
+          "timestamp": "2026-10-02T16:46:48-07:00",
+          "tree_id": "aa156d3fbcd3bf4fd23755501ea5f734c94b4b16",
+          "url": "https://github.com/andymai/brepkit/commit/bbbc5da81a9c01b55e3a2737ee0f8019f521e260"
+        },
+        "date": 1790985018469,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1045319,
+            "range": "± 20389",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1128602,
+            "range": "± 19325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13124,
+            "range": "± 41",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 807096,
+            "range": "± 6687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43799580,
+            "range": "± 124396",
             "unit": "ns/iter"
           }
         ]
