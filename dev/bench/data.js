@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790908969038,
+  "lastUpdate": 1790909997069,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49409,6 +49409,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43375725,
             "range": "± 70429",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "90e86087fdc1385d48fa941f73b3e6d02419bfee",
+          "message": "fix(algo): end plane x cylinder arcs at the cylinder face's own wires (#1935)\n\nThe gridfinity tool’s next call on the first kumiko band now returns an\nexact B-Rep natively. Op 5898 is a `cutWithEvolution` across the middle\nof the band’s 19-box result, with z from 9.25 to 19.25. It produces 228\nfaces, every edge is used exactly twice, and there is no mesh fallback.\nOn a wasm with #1933’s fixes, the call took 6.2 s and fell back to a\n17,059-face planar mesh, which became one of the eight tools in the next\ncompound cut.\n\n## What was wrong\n\n- The raw slab cut used the ring of edges on the slab’s top face twice,\nwith 11 edges used by three faces, because the box face’s splitter\nemitted one cap region twice. The section between the slab’s top face\nand the band’s outer cylinder is a full circle split at crossings with\nthe cylinder face’s boundary edges. The arc between crossings V and W\npasses through the mouth of a strut groove, where the cylinder face does\nnot exist. `trim_ellipse_to_boundary_crossings` tested whether the arc\nmidpoint was inside both faces’ extents. Because the cylinder extent\ncontains only its `v` window and one angular gap, the arc passed that\ntest. It joined two cap regions, after which loop assembly emitted one\nregion twice.\n\n- The midpoint must now also lie on the cylinder face itself, as\ndetermined from its wires through `LateralTrim`, within ten times the\nlinear tolerance. This is the same trim that `emit_split_circle_arcs`\nuses for closed circles. Because `LateralTrim` also reads holes,\ncrossings are now collected from the cylinder face’s inner wires as well\nas its outer wire. An arc entering a hole therefore ends at the hole rim\ninstead of being retained through the hole or dropped as a whole. No\nfixture exercises an arc entering a hole on this exact path. A primitive\nbored cylinder cut through its bore falls back to a mesh both with and\nwithout this change, for another reason.\n\n- Ending the arcs at the cylinder face's own wires leaves one pose of\n`mitred_rod_cut_by_a_slab_across_its_rim` (turned 22.5 degrees, slab at\n4.45) with a single correct arc on the wall, which the splitter splits\ninto nothing. The wall was then kept whole, and on main with #1937 the\ncut came back exact and 0.15 short. A face kept whole after an empty\nsplit now needs a point on either side of each section running across it\nfrom boundary to boundary to take the same definite class against the\nother solid (on planar faces too, and against every other source in the\nN-way fuse; a side lying on the other solid's boundary, where\nsame-domain pairing decides, is not read), so that pose falls back to\nthe mesh as it does on main. An ellipse rim is tested for a section's\nendpoints in 3D, as circles are, so the wall's section no longer reads\nas an internal loop. The wall's exact split is the roadmap's mitred-rod\nrow, with a probe parked on `wip/mitred-ellipse-rim`.\n\n## Verification\n\n- `kumiko_wrap_first_band_slab_cut_stays_exact` in\n`crates/io/tests/kumiko_wrap_first_band_cut_inmem.rs` pins the result\nusing new captured fixtures: `kumiko_wrap_first_band_slab_base.bin`,\ncontaining the 19-box result in place, and\n`kumiko_wrap_first_band_slab.bin`. It requires no mesh fallback, no bad\nedges, and volume within 0.01 of 186.411 at deflection 0.002. The cut\nand its exact intersection with the slab sum to the band within 0.003. A\npoint inside both the band and slab classifies outside the result, while\na point in band material below the slab classifies inside. These probes\ncount when ray casting and a generalized winding number over the\ntessellation agree. Reverting the fix makes the test fall back to a\nmesh.\n\n- On the branch head, based on main with #1933, `brepkit-math`,\n`brepkit-algo`, `brepkit-operations`, and `brepkit-io` pass 2,455 tests\nwith 0 failures and 15 ignored. All 236 `brepkit-wasm` library tests\npass, with 3 ignored. The pose sweep, `truth_audit`, and 120-case kumiko\nstrut pose sweep are identical to main. `approx_census` matches apart\nfrom timings and the face pair named in the offset nurbs-loft error,\nwhich also differs between runs on main.\n\n- Rebased onto main (#1936 and #1937), the six crates pass 2,613 tests\nwith 0 failures and 16 ignored, all 236 `brepkit-wasm` library tests\npass, and clippy, `check-boundaries.sh` and `check-doc-paths.sh` pass.\nThe pose sweep, the kumiko strut pose sweep and `truth_audit` match\nmain's.\n\n## Next\n\nOp 5928 compound-cuts a 94-face base with eight tools, four planar\nlattice pieces and four exact corner bands, and did not finish natively\nwithin 1,200 s. Profiling shows that `fuse_cluster`’s pairwise ladder\ncombines a lattice with a band arriving as two disjoint pieces through\n`fuse_multi_component_tool`, producing a 17,756-face mesh in 65 s. A\nnested boolean resets the fallback taint flag, allowing the ladder to\ncarry that mesh forward. Most of each GFA pass then performs same-domain\ngrouping over 746k coplanar candidate pairs.\n\nCut tool by tool, subtracting the first lattice is exact in 0.34 s,\nwhile subtracting a band fails with an open 12-face growth shell.\nHandling the NURBS groove edges crossed by a section circle on a plane\nface, currently parked on a branch, removes that shell. The cut then\nfails where the band’s end plane passes through the tangent seam between\nthe wall’s flat face and corner cylinder. The roadmap’s kumiko row\nrecords these issues.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the kumiko slab cut so the next call on the 19-box band result\nstays exact, and keeps a face whole after an empty split only when both\nsides of its sections agree.\n\n**Bug Fixes**\n\n- `trim_ellipse_to_boundary_crossings` now reads the cylinder face's own\nwires via `LateralTrim` and collects crossings from the inner wires too,\nso an arc entering a hole ends at the rim instead of being retained\nwhole.\n- A face whose split comes back empty now stands whole only when a point\non either side of each section across it classifies alike; planar faces\nuse the plane's own normal, the check runs against every other N-way\nfuse source, a side on the other solid's boundary is ignored, and an\nindeterminate class fails the split.\n- Ellipse rims are tested for a section's endpoints in 3D, as circles\nare.\n\n**Testing**\n\n- New regression test `kumiko_wrap_first_band_slab_cut_stays_exact` pins\nthe captured operands, requires no mesh fallback and no bad edges, and\nchecks the cut volume (186.411 ± 0.01) and two probe points.\n- The roadmap rows for the kumiko corner-wrap export and the mitred-rod\nfallback reflect the exact slab cut and the whole-face guard; op 5928\nremains slow natively.\n\n<sup>Written for commit c61beab149aa904d8ed0b9e68fc880f711bb94b8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1935?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T19:56:58-07:00",
+          "tree_id": "9a4dde450595a8b18a8e88c9af621023cbed1062",
+          "url": "https://github.com/andymai/brepkit/commit/90e86087fdc1385d48fa941f73b3e6d02419bfee"
+        },
+        "date": 1790909991421,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1086921,
+            "range": "± 3044",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1182120,
+            "range": "± 15659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13985,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 805617,
+            "range": "± 1371",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46751824,
+            "range": "± 507681",
             "unit": "ns/iter"
           }
         ]
