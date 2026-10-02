@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790911551839,
+  "lastUpdate": 1790935402891,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49517,6 +49517,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43279518,
             "range": "± 48750",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "15d87c13cf9ccc3efd6c766da6563e7e9b059e17",
+          "message": "fix(algo): keep the hinge swing's knuckle contacts exact (#1945)\n\nThe gridfinity `hingeSwing` scenario now passes all 27 of its tests. The\nchange fixes three dependent GFA correctness defects in coincident\nsub-face classification, closed section circle splitting, and circle to\nsegment intersection, and bounds analytic marching to the relevant\nface-box overlap. The three correctness changes ship together because\neach one alone regresses an operation the others fix.\n\n## What was wrong\n\n- Root 1, swing intersects at the 40 degree pose, ops 5095 and 9869:\nafter rotation about the hinge axis, the lid and bin knuckle ends remain\ncoplanar, but their face pieces do not match. Same-domain pairing\ntherefore leaves the bin piece unpaired. `classify_coincident_coplanar`\nin `crates/algo/src/classifier/mod.rs` inspected only the first\ncoincident opposing plane face and deferred when the lid material lay\nbehind its probe. Ray casting at the on-plane sample then returned\n`Inside`, `select_faces` kept the face, and assembly failed with `no\nouter shell found (all shells classified as holes)`. On main, op 5095\nfalls back to a 5.247 mm3 mesh even though a 512,000 point grid finds no\npoint inside both solids. `classify_sub_faces` in\n`crates/algo/src/builder/mod.rs` now calls `coincident_side` when every\ninterior sample lies on the opposing boundary. It probes both sides\nalong the outward normal at `(100 * tol.linear).max(1e-3)`, the distance\nalready used by `classify_coincident_coplanar`. A result with one side\ninside and the other outside classifies material in front as\n`CoplanarOpposite` and material behind as `CoplanarSame`. Any other\nreading keeps the earlier behavior. `select_faces` keeps a blank, rank A\n`CoplanarSame` piece for fuse and intersect, keeps a blank\n`CoplanarOpposite` piece for cut, and drops tool coplanar pieces,\nfollowing `apply_sd_selection`.\n\n- Root 2, corner intersects at op 27132 for the front and ops 31030 and\n31062 (the 18 and 25 degree poses) for the left: the lid bore circle of\nradius 1.0 crosses the tail of the bin keyhole hole, whose radius is\n0.925 and whose tip is 1.308 from the axis. `circle_face_hits` in\n`crates/algo/src/pave_filler/phase_ff.rs` collected crossings only from\nthe plane face's outer wire, although `circle_exits_plane_boundary`\nalready counted hole edges. The section arc consequently spanned the\nhole, leaving an end-face piece that ray casting classified inside the\nlid. On main, the raw intersects return two-face planar shells and fall\nback to meshes of 5.230, 3.167, and 3.170 mm3. `circle_face_hits` now\nscans the inner wires of plane faces. Only plane-face holes are added,\nkeeping the change limited to the traced case. On op 27132, the circle\nof lid bore face 328 splits at four points instead of two, and the\nretained arc begins at the hole crossing.\n\n- Root 3, the left-wall bin two-pin compound cut at op 12019: the\ncorrected coplanar selection retains the end-face ring between the short\npin's radius 0.925 keyhole and the long pin's radius 1.0 keyhole,\nexposing an incorrect split. The short pin's quarter-cylinder faces did\nnot trim their section circle on the end face because\n`Circle3D::intersect_segment` in `crates/math/src/curves.rs` used `h0 *\nh1 <= tol * tol`. For a 10.7 long ruling whose endpoint lies on the\ncircle, rounding of about 1e-15 to the far endpoint's side produces a\nproduct near 1e-14 and rejects the segment. The test now uses each\nendpoint's distance: `h0.min(h1) <= tol && h0.max(h1) >= -tol`. The cut\nis exact through `compound_cut`'s merged-tools path on main and through\nthe batched path with all three changes. On both builds, a 46,656 point\noracle grid around the pins finds no mismatch with the bin and neither\npin.\n\n- Performance, op 5095: 5.5 of 5.8 native seconds were spent in phase FF\non two bin lip cone and tilted radius 0.1 lid fillet cylinder pairs\nwhose boxes only touch. `ruling_cone_cylinder` declines these pairs\nbecause the cylinder rulings also meet the cone's far nappe, leaving the\ngeneral marcher to spend 2.73 seconds per pair.\n`analytic_analytic_intersection` now passes the face-box overlap to\n`intersect_analytic_analytic_in_region` in\n`crates/math/src/analytic_intersection.rs`. Seeds are first converged\nonto the curve, must land within about two grid cells of the overlap,\nand march from the converged point until leaving that overlap.\nClosed-form pairs remain whole. The four slowest swing intersects, ops\n5095, 9869, 13751, and 17633, fall from 5.6 to 5.8 seconds to 0.24 to\n0.39 seconds natively with the same exact empty results.\n\n## Verification\n\n- `hingeSwing.scenario.test.ts` passes all 27 tests in 209.8 seconds on\nwasm from this branch, compared with 280.5 seconds without the marching\nbound. 28 swing intersects still take the mesh fallback. The #1941 wasm\nrun used 46 mesh fallbacks and failed 4 tests: the back and front swing\ntests at 5.247 mm3, and the front and left corner tests at 5.230 and\n3.170 mm3. The reference kernel passed all 27 tests in 131 seconds on\n2026-10-01.\n\n- Of the 46 swing intersects captured as mesh fallbacks in the #1941\nrun, raw GFA returns an exact empty result for none on main and for 18\non this branch. With the hole-crossing fix alone, op 22342 changes from\nexact and empty to a two-face shell and a 5.230 mm3 mesh fallback. The\ncoplanar fix restores the exact empty result. The coplanar fix without\nthe segment fix turns op 12019 into a mesh fallback.\n\n- `hinge_lid_swung_40_degrees_only_touches_the_bin` and\n`hinge_left_lid_swung_18_degrees_only_touches_the_bin` share\n`only_touches` with the closed-lid test. Each requires exact, empty\nintersection through `boolean` and `boolean_with_evolution`, plus\nhinge-strip grid points inside each solid and none inside both.\n`hinge_left_bin_pin_cut_matches_its_tools` requires an exact, valid\ncompound cut and checks 2,000 points against the bin and neither pin.\nThe bin and pins use ray cast and winding number together, every point\nmust classify, while the cut uses the B-Rep ray classifier because the\nexported bore mesh leaves 70 short-pin bore points unreadable by the\nwinding cross-check. The test also requires both kept and bored points.\n`circle_intersect_segment_long_ruling_ending_on_the_circle` covers the\nendpoint-distance case. Each test fails when its corresponding fix is\nreverted.\n\n- `select_faces_unpaired_coplanar_pieces` pins all twelve operation,\nrank, and coplanar-class choices. The `select_faces` truth-table\ndocumentation includes the coplanar rows. `marcher_keeps_to_its_region`\nchecks that a 45 degree cone and tilted radius 0.1 tube through both\nnappes retain their loop inside a nearby region and return nothing for a\nregion away from it.\n\n- The new fixtures are `hinge_swing_lid_40.bin`, `hinge_left_bin.bin`,\n`hinge_left_lid_18.bin`, `hinge_left_bin_knuckled.bin`,\n`hinge_left_pin_short.bin`, and `hinge_left_pin_long.bin`.\n\n- The branch passes 2,624 tests across `brepkit-math`, `brepkit-algo`,\n`brepkit-heal`, `brepkit-check`, `brepkit-operations`, and `brepkit-io`,\nwith 0 failures and 18 ignored. All 236 `brepkit-wasm` library tests\npass with 3 ignored. Clippy with `-D warnings`, `check-boundaries.sh`,\nand `check-doc-paths.sh` pass. The pose sweep, 120-case kumiko strut\npose sweep, and `truth_audit` are identical to main. `approx_census`\ndiffers only in the face pair named by the offset nurbs-loft error,\nwhich varies between runs.\n\n- Without the marching bound,\n`hinge_lid_swung_40_degrees_only_touches_the_bin` was still running\nafter 840 seconds in CI when the job was cancelled. With the bound, CI\ncompletes it in 66.4 seconds. Locally, the hinge test file runs in 5.9\nseconds, compared with 17 seconds.\n\n## Still open\n\n- The two-pin cut's merged-tools path leaves 21 free edges, and its\nsequential path leaves 4. The same end-face split joins two rings by\nrunning an arc both ways.\n\n- `face is cut by sections but split into nothing` remains at op 147557,\nreproduced by a primitive twin.\n\n- Open growth shells remain in the overhang test's sweeps.\n\n- A bin intersect with a six-face probe solid keeps 13 faces with 16\nfree edges.",
+          "timestamp": "2026-10-02T03:00:53-07:00",
+          "tree_id": "44398c848dac089a04936000bf35a4dcb7e7b503",
+          "url": "https://github.com/andymai/brepkit/commit/15d87c13cf9ccc3efd6c766da6563e7e9b059e17"
+        },
+        "date": 1790935397307,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 843411,
+            "range": "± 2008",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 912661,
+            "range": "± 925",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11255,
+            "range": "± 56",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 628447,
+            "range": "± 1397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36280581,
+            "range": "± 106995",
             "unit": "ns/iter"
           }
         ]
