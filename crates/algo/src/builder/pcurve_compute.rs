@@ -89,6 +89,33 @@ pub fn compute_boundary_pcurve_on_surface(
     wire_pts: &[Point3],
     frame: Option<&PlaneFrame>,
 ) -> Curve2D {
+    compute_boundary_pcurve_anchored(
+        curve_3d,
+        stored_start,
+        stored_end,
+        forward,
+        surface,
+        wire_pts,
+        frame,
+        None,
+    )
+}
+
+/// [`compute_boundary_pcurve_on_surface`] with the pcurve moved by whole
+/// periods so that it starts at `u_anchor` on a u-periodic surface: a piece
+/// of a closed rim laid out in the rim's unwrapped `u` must trace its own UV
+/// ends, or the wire walker reads it as stale and falls back to its chord.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_boundary_pcurve_anchored(
+    curve_3d: &EdgeCurve,
+    stored_start: Point3,
+    stored_end: Point3,
+    forward: bool,
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
+    frame: Option<&PlaneFrame>,
+    u_anchor: Option<f64>,
+) -> Curve2D {
     let (start, end) = if forward {
         (stored_start, stored_end)
     } else {
@@ -128,6 +155,12 @@ pub fn compute_boundary_pcurve_on_surface(
             .collect();
         let (u_period, v_period) = surface_periods(surface);
         unwrap_periodic_params(&mut uv, u_period, v_period);
+        if let (Some(anchor), Some(period), Some(first)) = (u_anchor, u_period, uv.first()) {
+            let shift = ((anchor - first.x()) / period).round() * period;
+            for p in &mut uv {
+                *p = Point2::new(p.x() + shift, p.y());
+            }
+        }
         uv
     };
     pcurve_through_uv_samples(uv_pts, start, end, surface)

@@ -6010,6 +6010,18 @@ fn split_face_2d_impl(
         });
         if let Some(seam_u) = seam_u_opt {
             for edge in &mut boundary_edges {
+                if std::env::var("ZZ_SEAMSNAP").is_ok()
+                    && matches!(edge.curve_3d, EdgeCurve::Line)
+                    && (edge.start_uv.x() - edge.end_uv.x()).abs() < 1e-9
+                {
+                    let k = ((seam_u - edge.start_uv.x()) / std::f64::consts::TAU).round();
+                    let off = seam_u - edge.start_uv.x() - k * std::f64::consts::TAU;
+                    if k != 0.0 && off.abs() < 1e-6 {
+                        let shift = k * std::f64::consts::TAU;
+                        edge.start_uv = Point2::new(edge.start_uv.x() + shift, edge.start_uv.y());
+                        edge.end_uv = Point2::new(edge.end_uv.x() + shift, edge.end_uv.y());
+                    }
+                }
                 if (edge.start_3d - edge.end_3d).length() < 1e-10 {
                     // Closed edge: shift UV so start_uv.x() == seam_u. One
                     // already starting on a copy of the seam's u was placed
@@ -6058,9 +6070,20 @@ fn split_face_2d_impl(
             if (edge.start_3d - edge.end_3d).length() < 1e-10 {
                 // Closed edge: find the 3D point at u = seam_u + pi on the surface.
                 // Project the boundary vertex to get v, then evaluate surface at (anti_u, v).
-                if let Some((_, v)) = surface.project_point(edge.start_3d)
-                    && let Some(anti_pt) = surface.evaluate(anti_u, v)
-                {
+                // An oblique plane's ellipse rim on a cylinder is not level:
+                // its point half a turn from the seam is half a turn along
+                // its own parameter.
+                let anti = match (&edge.curve_3d, &surface) {
+                    (EdgeCurve::Ellipse(e), FaceSurface::Cylinder(_)) => {
+                        Some(e.evaluate(e.project(edge.start_3d) + std::f64::consts::PI))
+                    }
+                    _ => surface
+                        .project_point(edge.start_3d)
+                        .and_then(|(_, v)| surface.evaluate(anti_u, v).map(|p| (p, v)))
+                        .map(|(p, _)| p),
+                };
+                let v = surface.project_point(edge.start_3d).map_or(0.0, |(_, v)| v);
+                if let Some(anti_pt) = anti {
                     // A section already ending at the antipode (a cone's top
                     // rim touched there) would leave two halves sharing both
                     // ends, which the edge merge welds: quarter them too.

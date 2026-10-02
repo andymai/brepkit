@@ -134,9 +134,14 @@ pub(super) fn split_boundary_edges_at_3d_points(
         // The ring's own samples run the curve's sense in u (`end_uv`
         // follows the curve, not the traversal), which is opposite the
         // surface's u when the circle's normal opposes the axis (an
-        // apex-up cone's rims, a mirrored cylinder's).
-        let closed_ring_dir = (matches!(edge.curve_3d, EdgeCurve::Circle(_))
-            && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+        // apex-up cone's rims, a mirrored cylinder's). An oblique plane's
+        // ellipse rim on a cylinder runs u linearly in its own parameter too,
+        // but its v varies, so each split keeps its point's own v.
+        let closed_ellipse_rim = matches!(edge.curve_3d, EdgeCurve::Ellipse(_))
+            && matches!(surface, FaceSurface::Cylinder(_));
+        let closed_ring_dir = (((matches!(edge.curve_3d, EdgeCurve::Circle(_))
+            && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)))
+            || closed_ellipse_rim)
             && (edge.start_3d - edge.end_3d).length() < tol)
             .then(|| {
                 let native = if edge.end_uv.x() < edge.start_uv.x() {
@@ -166,9 +171,14 @@ pub(super) fn split_boundary_edges_at_3d_points(
             let split_uv = if let Some(f) = frame {
                 f.project(split_3d)
             } else if let Some(dir) = closed_ring_dir {
+                let v = if closed_ellipse_rim {
+                    project_point_on_surface(split_3d, surface, &[], None).y()
+                } else {
+                    edge.start_uv.y()
+                };
                 brepkit_math::vec::Point2::new(
                     std::f64::consts::TAU.mul_add(dir * t, edge.start_uv.x()),
-                    edge.start_uv.y(),
+                    v,
                 )
             } else if circle_iso_v_rim {
                 // Interpolate within the edge's own UV span: an iso-v rim's
@@ -195,7 +205,11 @@ pub(super) fn split_boundary_edges_at_3d_points(
             } else {
                 project_point_on_surface(split_3d, surface, &[], None)
             };
-            let pcurve = boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame);
+            let pcurve = if closed_ellipse_rim && closed_ring_dir.is_some() {
+                rim_piece_pcurve(&edge, prev_3d, split_3d, surface, prev_uv.x())
+            } else {
+                boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame)
+            };
             result.push(OrientedPCurveEdge {
                 curve_3d: edge.curve_3d.clone(),
                 pcurve,
@@ -210,7 +224,11 @@ pub(super) fn split_boundary_edges_at_3d_points(
             prev_uv = split_uv;
             prev_3d = split_3d;
         }
-        let pcurve = boundary_piece_pcurve(&edge, prev_3d, edge.end_3d, surface, frame);
+        let pcurve = if closed_ellipse_rim && closed_ring_dir.is_some() {
+            rim_piece_pcurve(&edge, prev_3d, edge.end_3d, surface, prev_uv.x())
+        } else {
+            boundary_piece_pcurve(&edge, prev_3d, edge.end_3d, surface, frame)
+        };
         // The stored `end_uv` of a closed rim follows the CURVE's direction
         // (`sample_edge_to_uv` ignores orientation), so a reverse-traversed ring
         // would close a period on the wrong side of its own start.
@@ -234,6 +252,28 @@ pub(super) fn split_boundary_edges_at_3d_points(
         });
     }
     result
+}
+
+/// [`boundary_piece_pcurve`] for a piece of a closed rim laid out in the
+/// rim's unwrapped `u`, starting at `u_start`.
+fn rim_piece_pcurve(
+    edge: &OrientedPCurveEdge,
+    from: Point3,
+    to: Point3,
+    surface: &FaceSurface,
+    u_start: f64,
+) -> brepkit_math::curves2d::Curve2D {
+    let (stored_start, stored_end) = if edge.forward { (from, to) } else { (to, from) };
+    super::super::pcurve_compute::compute_boundary_pcurve_anchored(
+        &edge.curve_3d,
+        stored_start,
+        stored_end,
+        edge.forward,
+        surface,
+        &[],
+        None,
+        Some(u_start),
+    )
 }
 
 /// The pcurve of the piece of boundary edge `edge` from `from` to `to`
