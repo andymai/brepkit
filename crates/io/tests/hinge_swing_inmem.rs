@@ -325,6 +325,11 @@ fn hinge_closed_lid_only_touches_the_bin() {
     let common = boolean::boolean(&mut topo, BooleanOp::Intersect, bin, lid).unwrap();
     assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
     assert!(topo.is_empty_solid(common));
+    // The tool's own call, which tracks each face's fate.
+    let (tracked, _) =
+        boolean::boolean_with_evolution(&mut topo, BooleanOp::Intersect, bin, lid).unwrap();
+    assert_eq!(boolean::mesh_fallback_count(), before, "mesh fallback");
+    assert!(topo.is_empty_solid(tracked));
     // No point of the hinge strip lies in both, though many lie in each.
     let (mut in_bin, mut in_lid) = (0, 0);
     for i in 0..48 {
