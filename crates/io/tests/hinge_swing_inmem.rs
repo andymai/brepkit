@@ -53,26 +53,42 @@ fn tools(topo: &mut Topology) -> Vec<SolidId> {
         .collect()
 }
 
-/// Whether `p` is inside `solid`, when the ray cast and the generalized
-/// winding number over its tessellation agree.
-fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> Option<bool> {
-    use brepkit_operations::classify::{PointClassification, classify_point};
-    let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
-    let ray = match classify_point(topo, solid, q, 0.01, 1e-7).ok()? {
-        PointClassification::Inside => true,
-        PointClassification::Outside => false,
-        PointClassification::OnBoundary => return None,
-    };
-    let mesh = brepkit_operations::tessellate::tessellate_solid(topo, solid, 0.01).ok()?;
-    let mut solid_angle = 0.0;
-    for tri in mesh.indices.chunks_exact(3) {
-        let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.positions[i as usize] - q);
-        let (la, lb, lc) = (a.length(), b.length(), c.length());
-        let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
-        solid_angle += 2.0 * a.dot(b.cross(c)).atan2(den);
+/// A solid's point classifier: a point counts when the ray cast and the
+/// generalized winding number over its tessellation (taken once) agree.
+struct Probe {
+    solid: SolidId,
+    mesh: brepkit_operations::tessellate::TriangleMesh,
+}
+
+impl Probe {
+    fn new(topo: &Topology, solid: SolidId) -> Self {
+        let mesh = brepkit_operations::tessellate::tessellate_solid(topo, solid, 0.01).unwrap();
+        Self { solid, mesh }
     }
-    let wind = (solid_angle / (4.0 * std::f64::consts::PI)).abs() > 0.5;
-    (ray == wind).then_some(ray)
+
+    fn inside(&self, topo: &Topology, p: [f64; 3]) -> Option<bool> {
+        use brepkit_operations::classify::{PointClassification, classify_point};
+        let q = brepkit_math::vec::Point3::new(p[0], p[1], p[2]);
+        let ray = match classify_point(topo, self.solid, q, 0.01, 1e-7).ok()? {
+            PointClassification::Inside => true,
+            PointClassification::Outside => false,
+            PointClassification::OnBoundary => return None,
+        };
+        let mut solid_angle = 0.0;
+        for tri in self.mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| self.mesh.positions[i as usize] - q);
+            let (la, lb, lc) = (a.length(), b.length(), c.length());
+            let den = la * lb * lc + a.dot(b) * lc + b.dot(c) * la + c.dot(a) * lb;
+            solid_angle += 2.0 * a.dot(b.cross(c)).atan2(den);
+        }
+        let wind = (solid_angle / (4.0 * std::f64::consts::PI)).abs() > 0.5;
+        (ray == wind).then_some(ray)
+    }
+}
+
+/// Whether `p` is inside `solid`, by [`Probe`].
+fn inside(topo: &Topology, solid: SolidId, p: [f64; 3]) -> Option<bool> {
+    Probe::new(topo, solid).inside(topo, p)
 }
 
 fn volume(topo: &Topology, solid: SolidId) -> f64 {
@@ -211,6 +227,28 @@ fn hinge_lid_short_pin_cut_is_exact() {
         (got - before).abs() < 1e-6 * before,
         "cut {got}, lid {before}"
     );
+    // Either side of both caps, inside the pin's profile and beside it, the
+    // cut holds what the lid holds: the knuckles' material and the gap's air.
+    let lid_ref = load(&mut topo, "hinge_lid_knuckled.bin");
+    let lid_ref = Probe::new(&topo, lid_ref);
+    let cut = Probe::new(&topo, cut);
+    let (mut material, mut air) = (0, 0);
+    for x in [-58.76, -58.36, -48.105, -47.705] {
+        for r in [0.5, 1.3] {
+            for deg in [0.0_f64, 90.0, 180.0, 270.0] {
+                let (s, c) = deg.to_radians().sin_cos();
+                let p = [x, 39.35 + r * c, -3.2 + r * s];
+                let expected = lid_ref.inside(&topo, p).unwrap();
+                assert_eq!(cut.inside(&topo, p), Some(expected), "probe {p:?}");
+                if expected {
+                    material += 1;
+                } else {
+                    air += 1;
+                }
+            }
+        }
+    }
+    assert_eq!((material, air), (8, 24));
 }
 
 /// The long keyhole pin (radius 1, along `x` from -47.905 to 58.56) runs
@@ -241,6 +279,8 @@ fn hinge_lid_long_pin_cut_is_exact() {
     // Material stays where the lid had it off the pin: around the axis at
     // half and 1.3 of the pin's radius, below the tail, in knuckles and gaps.
     let lid_ref = load(&mut topo, "hinge_lid_knuckled.bin");
+    let lid_ref = Probe::new(&topo, lid_ref);
+    let (cut, both) = (Probe::new(&topo, cut), Probe::new(&topo, both));
     let (mut kept_seen, mut removed_seen) = (0, 0);
     for x in [
         -42.58, -31.94, -21.29, -10.65, 0.0, 10.65, 21.29, 31.94, 42.58, 53.23,
@@ -249,12 +289,12 @@ fn hinge_lid_long_pin_cut_is_exact() {
             for deg in [200.0_f64, 250.0, 300.0, 340.0] {
                 let (s, c) = deg.to_radians().sin_cos();
                 let p = [x, 39.35 + r * c, -3.2 + r * s];
-                let Some(in_lid) = inside(&topo, lid_ref, p) else {
+                let Some(in_lid) = lid_ref.inside(&topo, p) else {
                     continue;
                 };
                 let kept = in_lid && r > 1.0;
-                assert_eq!(inside(&topo, cut, p), Some(kept), "probe {p:?}");
-                assert_eq!(inside(&topo, both, p), Some(kept), "probe {p:?}");
+                assert_eq!(cut.inside(&topo, p), Some(kept), "probe {p:?}");
+                assert_eq!(both.inside(&topo, p), Some(kept), "probe {p:?}");
                 if kept {
                     kept_seen += 1;
                 } else if in_lid {
@@ -263,7 +303,7 @@ fn hinge_lid_long_pin_cut_is_exact() {
             }
         }
     }
-    assert!(kept_seen > 0 && removed_seen > 0);
+    assert_eq!((kept_seen, removed_seen), (20, 20));
 }
 
 /// The unify step after the cut merged the two halves of a reversed strip on

@@ -1147,10 +1147,14 @@ fn loop_area_in_frame(wire: &[OrientedPCurveEdge], frame: &PlaneFrame) -> f64 {
     signed_area_2d(&pts) + segments
 }
 
-/// Whether planar sub-faces tile the area their boundary encloses, every outer
+/// Whether planar sub-faces tile the area their boundary encloses: every outer
 /// wire winding the same way (the arrangement traces each region
-/// counter-clockwise, whichever way the face itself winds). Only outlines of
-/// lines and conics are measured exactly; any NURBS piece passes.
+/// counter-clockwise, whichever way the face itself winds), no region's
+/// interior inside another's, and their areas summing to the boundary's.
+/// Only outlines of lines and conics are measured exactly, so any NURBS piece
+/// passes unmeasured: an arrangement over a NURBS outline can leave out a
+/// region the boolean discards anyway (a lip's ring coincident with the rim
+/// it is fused onto), and sampled areas cannot tell that from a lost one.
 fn subfaces_cover_boundary(
     subs: &[SplitSubFace],
     boundary: &[OrientedPCurveEdge],
@@ -1174,6 +1178,35 @@ fn subfaces_cover_boundary(
         .collect();
     if outers.iter().any(|&a| a > 0.0) && outers.iter().any(|&a| a < 0.0) {
         return false;
+    }
+    let regions: Vec<(Vec<Point2>, Vec<Vec<Point2>>)> = subs
+        .iter()
+        .map(|s| {
+            (
+                sampling::sample_wire_loop_uv_via_frame(&s.outer_wire, frame),
+                s.inner_wires
+                    .iter()
+                    .map(|h| sampling::sample_wire_loop_uv_via_frame(h, frame))
+                    .collect(),
+            )
+        })
+        .collect();
+    let holds = |(outer, holes): &(Vec<Point2>, Vec<Vec<Point2>>), p: Point2| {
+        super::classify_2d::point_in_polygon_2d(p, outer)
+            && !holes
+                .iter()
+                .any(|h| super::classify_2d::point_in_polygon_2d(p, h))
+    };
+    for (i, region) in regions.iter().enumerate() {
+        let p = super::classify_2d::sample_interior_point(&region.0);
+        if holds(region, p)
+            && regions
+                .iter()
+                .enumerate()
+                .any(|(j, other)| j != i && holds(other, p))
+        {
+            return false;
+        }
     }
     let covered: f64 = subs
         .iter()
@@ -7915,7 +7948,9 @@ fn split_face_2d_impl(
             Some(&frame_area),
         );
         if dcel.len() > greedy_region_count(&loops, tol.linear, Some(frame))
-            && !wire_loops_have_degenerate_area(&dcel, tol.linear)
+            && !dcel
+                .iter()
+                .any(|lp| loop_has_degenerate_area(lp, tol.linear, Some(frame)))
             && !wire_loops_self_cross(&dcel, tol.linear)
             && (!greedy_outer_loops_nested(&dcel, cw_loops)
                 || greedy_outer_loops_nested(&loops, cw_loops))
