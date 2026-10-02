@@ -1,0 +1,27 @@
+crates/io/tests/data/hinge_left_lid_18.bin
+  s_a8677c67f85a06::t_44417f2cd89639 1
+crates/io/tests/data/hinge_left_bin.bin
+  s_a8677c67f85a06::t_44417f2cd89639 1
+crates/io/tests/hinge_swing_inmem.rs
+  s_a8677c67f85a06::t_44417f2cd89639 21-23,320-349,354-355,374-376,379-381
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_8c04e1a8e51d71 144,197
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_7541ea8ae85a0e 5354-5365
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4e0f2eb5c5c05b8f47fc62423e27aa3244b38577",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
