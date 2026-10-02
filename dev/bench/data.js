@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790968637604,
+  "lastUpdate": 1790978339590,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49841,6 +49841,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43760952,
             "range": "± 484473",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5614fa93b8f1bb1caef19f4579f0770c66bb30b9",
+          "message": "test(io): pin the hinge bracket and stop intersects as ready repros (#1951)\n\nThis PR adds two ignored, roadmap-owned ready-repro tests and their\ncapture data. There is no engine change. Detailed failure analysis and\nfollow-up pointers live in the roadmap.\n\n- `crates/io/tests/hinge_swing_inmem.rs` adds\n`hinge_bin_against_its_knuckle_bracket_intersects_exactly`, covering the\nhinge bin against the bracket-shaped block under one knuckle (ops 108238\nto 132867), and `hinge_lid_at_its_stop_overlaps_the_lip_exactly`,\ncovering the lid at its stop against the bin (ops 158144 on).\n\n- New data includes `hinge_bin_bracket_probe.bin` for the block and\n`hinge_stop_lid.bin` for the lid. Both captures match the existing\n`hinge_seat_bin.bin` byte for byte for the bin.\n\n- Each test checks the operands' face census and validity where pinned,\nrequires an exact valid intersect, and uses the shared `matches_both`\nhelper for point-by-point comparison with both operands over the hinge\nregion. Both fail on main at the mesh-fallback check.\n\n- The generator-suite hangs roadmap row links both repros and records\ntheir roots. The bracket case identifies two section-clipping roots,\nthree refuted fixes, and `wip/arc-face-line-clip`. The stop case\nidentifies end caps lost to an ellipse trimmed past the corner\ncylinder's rim, fixed on `wip/curved-plane-ellipse-trim`, plus six wrong\nknuckle shells that main also assembles. The `#[ignore]` inventory lists\nfive deferred-defect pins.\n\n- The developable-band row records that the hinge seat pair's cut\nmeasures 45158 against the bin's 45117 at 0.001 with\n`oriented_solid_volume`, while a 216,000-point hinge-strip comparison\nmatches bin minus lid exactly.\n\nVerification: `brepkit-io` test Clippy with `-D warnings` and\n`check-doc-paths.sh` pass.",
+          "timestamp": "2026-10-02T14:56:02-07:00",
+          "tree_id": "26d21310fbd158b2e1110d254f39b4b2100df844",
+          "url": "https://github.com/andymai/brepkit/commit/5614fa93b8f1bb1caef19f4579f0770c66bb30b9"
+        },
+        "date": 1790978333030,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1043992,
+            "range": "± 1816",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1123720,
+            "range": "± 1674",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13191,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 798630,
+            "range": "± 2205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43622397,
+            "range": "± 196351",
             "unit": "ns/iter"
           }
         ]
