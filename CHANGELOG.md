@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.16](https://github.com/andymai/brepkit/compare/v4.1.15...v4.1.16) (2026-10-02)
+
+
+### Bug Fixes
+
+* **algo:** keep the hinge swing's knuckle contacts exact ([#1945](https://github.com/andymai/brepkit/issues/1945)) ([15d87c1](https://github.com/andymai/brepkit/commit/15d87c13cf9ccc3efd6c766da6563e7e9b059e17))
+
 ## [4.1.15](https://github.com/andymai/brepkit/compare/v4.1.14...v4.1.15) (2026-10-02)
 
 
