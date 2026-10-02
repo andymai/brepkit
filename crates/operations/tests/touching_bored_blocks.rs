@@ -1,7 +1,8 @@
 //! Two blocks meeting face to face at `x = 0`, each bored along `x` by the
 //! same radius 1 cylinder, the second block's top edge crossing the bore: a
-//! hinge's knuckles end to end with the pin's bore through both. Ready
-//! repros for the roadmap's touching-bored-blocks row.
+//! hinge's knuckles end to end with the pin's bore through both. They only
+//! touch, so the fuse adds their volumes and the cut leaves the first whole,
+//! exactly, in four turns about the bore.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::{FRAC_PI_2, PI};
@@ -56,13 +57,11 @@ fn op_is_exact(op: BooleanOp, ztop: f64, expected: f64) {
 }
 
 #[test]
-#[ignore = "OPEN roadmap row: touching bored blocks"]
 fn touching_bored_blocks_fuse_exactly() {
     op_is_exact(BooleanOp::Fuse, 0.5, bored_volume(3.0) + bored_volume(0.5));
 }
 
 #[test]
-#[ignore = "OPEN roadmap row: touching bored blocks"]
 fn a_bored_block_touching_one_whose_top_is_below_the_bore_axis_cuts_nothing() {
     op_is_exact(BooleanOp::Cut, -0.4, bored_volume(3.0));
 }

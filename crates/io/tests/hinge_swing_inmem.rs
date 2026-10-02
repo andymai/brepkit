@@ -22,7 +22,8 @@
 //! (swung 40 degrees open), and the same hinge on the left wall,
 //! `hinge_left_bin.bin` with `hinge_left_lid_18.bin` (swung 18 degrees open),
 //! and that bin with its knuckles, `hinge_left_bin_knuckled.bin`, with its two
-//! keyhole pins, `hinge_left_pin_short.bin` and `hinge_left_pin_long.bin`.
+//! keyhole pins, `hinge_left_pin_short.bin` and `hinge_left_pin_long.bin`,
+//! and a lid on its bin, `hinge_seat_bin.bin` with `hinge_seat_lid.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -115,18 +116,23 @@ fn exact(topo: &mut Topology, op: impl FnOnce(&mut Topology) -> SolidId) -> Soli
 fn hinge_lid_fixture_is_faithful() {
     let mut topo = Topology::new();
     let lid = load(&mut topo, "hinge_lid.bin");
+    faithful(&topo, lid, [4, 16, 24]);
+}
+
+/// `solid` is valid and has `faces` cone, cylinder and plane faces.
+fn faithful(topo: &Topology, solid: SolidId, faces: [usize; 3]) {
     let mut census: HashMap<&str, usize> = HashMap::new();
-    for fid in brepkit_topology::explorer::solid_faces(&topo, lid).unwrap() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
         *census
             .entry(topo.face(fid).unwrap().surface().type_tag())
             .or_insert(0) += 1;
     }
     assert_eq!(
         ["cone", "cylinder", "plane"].map(|k| census.get(k).copied().unwrap_or(0)),
-        [4, 16, 24],
+        faces,
         "fixture drifted: {census:?}"
     );
-    assert!(validate_solid(&topo, lid).unwrap().is_valid());
+    assert!(validate_solid(topo, solid).unwrap().is_valid());
 }
 
 /// The back face's two halves each took the bore cap's arc past the face as
@@ -411,6 +417,58 @@ fn only_touches(bin_file: &str, lid_file: &str, lo: [f64; 3], size: [f64; 3], co
         }
     }
     assert!(in_bin > 0 && in_lid > 0);
+}
+
+/// The lid on its bin overlaps the bin's lip in six slivers along the hinge
+/// wall. Where the bin's knuckle neck meets a lid knuckle's end face, the
+/// section circle crosses none of that face's straight edges yet runs off it,
+/// so it must be split at the end face's boundary as well as at the neck's.
+#[test]
+fn hinge_lid_on_its_bin_overlaps_the_lip_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_seat_bin.bin");
+    let lid = load(&mut topo, "hinge_seat_lid.bin");
+    faithful(&topo, bin, [12, 40, 90]);
+    faithful(&topo, lid, [4, 49, 143]);
+    let common = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Intersect, bin, lid).unwrap()
+    });
+    // A 216,000-point scan of one sliver's box reads 5.140 mm3 inside both
+    // operands, a sixth of 30.84.
+    let v = volume(&topo, common);
+    assert!((v - 30.881).abs() < 1e-3 * 30.881, "volume {v}");
+    // Each sliver's box, point by point against both operands.
+    let probes = [bin, lid, common].map(|s| Probe::new(&topo, s));
+    let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
+    for sliver in 0..6 {
+        let x0 = 21.290_909f64.mul_add(f64::from(sliver), -58.7);
+        let (mut both, mut total) = (0, 0);
+        for i in 0..8 {
+            for j in 0..6 {
+                for k in 0..6 {
+                    let p = [
+                        10.95f64.mul_add(f(i, 8), x0),
+                        1.0f64.mul_add(f(j, 6), 37.9),
+                        1.2f64.mul_add(f(k, 6), 45.5),
+                    ];
+                    // The winding cross-check abstains within its mesh's
+                    // deflection of the lid's curved faces.
+                    let [Some(in_bin), Some(in_lid), Some(in_common)] =
+                        probes.each_ref().map(|probe| probe.inside(&topo, p))
+                    else {
+                        continue;
+                    };
+                    assert_eq!(in_common, in_bin && in_lid, "at {p:?}");
+                    both += usize::from(in_common);
+                    total += 1;
+                }
+            }
+        }
+        assert!(
+            both > 0 && both < total,
+            "sliver {sliver}: {both} of {total}"
+        );
+    }
 }
 
 /// The left-wall bin's two keyhole pins meet end to end on a knuckle's end

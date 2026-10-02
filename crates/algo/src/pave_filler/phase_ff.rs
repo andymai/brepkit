@@ -5343,8 +5343,9 @@ fn closed_circle_crosses_face_boundaries(
 /// only the non-plane face's crossings are used — those surfaces keep
 /// full closed section circles for the periodic band splitter, and
 /// their seam-line hit must not combine with plane-boundary hits.
-/// Whether a closed section circle crosses any LINE boundary edge of a plane
-/// face at a point interior to that edge (not at a shared endpoint).
+/// Whether a closed section circle leaves a plane face: crosses a LINE
+/// boundary edge at a point interior to that edge (not at a shared endpoint),
+/// or runs off the face elsewhere.
 ///
 /// Used to distinguish a prism-corner section arc that exits a plane face's
 /// boundary (e.g. a notch corner straddling a wall's top edge) from a
@@ -5361,6 +5362,8 @@ fn circle_exits_plane_boundary(
     let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
         .collect();
+    let tau = std::f64::consts::TAU;
+    let mut probes: Vec<f64> = (0..32).map(|k| tau * f64::from(k) / 32.0).collect();
     for wid in wires {
         let Ok(wire) = topo.wire(wid) else {
             continue;
@@ -5376,16 +5379,46 @@ fn circle_exits_plane_boundary(
                 continue;
             };
             let (sp, ep) = (sv.point(), ev.point());
-            for (p, _) in circle.intersect_segment(sp, ep, tol.linear) {
+            for (p, t) in circle.intersect_segment(sp, ep, tol.linear) {
                 let at_endpoint =
                     (p - sp).length() < tol.linear * 10.0 || (p - ep).length() < tol.linear * 10.0;
                 if !at_endpoint {
                     return true;
                 }
+                probes.push(t.rem_euclid(tau));
             }
         }
     }
-    false
+    // A circle through two of the face's corners leaves it without crossing
+    // an edge's interior (a bore's rim through the ends of a notch in the
+    // face's top edge): it exits where any of it lies off the face. Each span
+    // between consecutive corner hits and samples is probed at its middle as
+    // well, so an off-face arc between two corners is read however narrow.
+    let Ok(loops) = crate::classifier::FaceLoops2d::new(topo, plane_face) else {
+        return false;
+    };
+    probes.sort_by(f64::total_cmp);
+    let mut ts = (0..probes.len()).flat_map(|i| {
+        let next = probes.get(i + 1).copied().unwrap_or(probes[0] + tau);
+        [probes[i], 0.5 * (probes[i] + next)]
+    });
+    // The loops are sampled chords, so a sample off them must also be off the
+    // face's true edges: a circle running along a convex rim lies outside
+    // that rim's chords by their sagitta.
+    ts.any(|t| {
+        let p = circle.evaluate(t);
+        loops.to_uv(p).is_some_and(|q| {
+            !loops.contains(q)
+                && std::iter::once(&loops.outer)
+                    .chain(loops.holes.iter())
+                    .filter(|lp| lp.len() >= 3)
+                    .all(|lp| {
+                        crate::builder::classify_2d::distance_to_polygon_boundary(q, lp)
+                            > tol.linear * 100.0
+                    })
+                && !point_on_face_edges(topo, plane_face, p, tol.linear * 100.0)
+        })
+    })
 }
 
 /// Where a closed section circle meets a face's outer boundary: each hit's
@@ -7408,6 +7441,58 @@ mod tests {
                 assert_eq!(kept, crosses, "{} corners: {c:?}", boundary.len());
             }
         }
+    }
+
+    /// A circle leaves a square only through the two bottom corners of a
+    /// narrow notch in its top edge, the arc between them 2 degrees wide and
+    /// centred between two even probes (`TAU / 64` apart). Without the notch
+    /// the circle stays on the square, and one running along a disc's own rim
+    /// stays on the disc.
+    #[test]
+    fn a_circle_through_the_corners_of_a_narrow_notch_leaves_the_face() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::builder::make_planar_face;
+        use brepkit_topology::edge::{Edge, EdgeCurve as EC};
+        use brepkit_topology::face::{Face, FaceSurface as FS};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::{FRAC_PI_2, PI};
+
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let pt = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let circle =
+            Circle3D::new_with_ref(pt(0.0, 0.0), up, 2.0, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let (mid, half) = (FRAC_PI_2 + PI / 64.0, 1f64.to_radians());
+        let [c1, c2] = [mid - half, mid + half].map(|t| circle.evaluate(t));
+        let out = |c: Point3| pt(c.x() * 5.0 / c.y(), 5.0);
+        let notched = [
+            pt(-5.0, -5.0),
+            pt(5.0, -5.0),
+            pt(5.0, 5.0),
+            out(c1),
+            c1,
+            c2,
+            out(c2),
+            pt(-5.0, 5.0),
+        ];
+        let square = [pt(-5.0, -5.0), pt(5.0, -5.0), pt(5.0, 5.0), pt(-5.0, 5.0)];
+        for (boundary, exits) in [(&notched[..], true), (&square[..], false)] {
+            let mut topo = Topology::new();
+            let face = make_planar_face(&mut topo, boundary, 1e-7).unwrap();
+            let got = circle_exits_plane_boundary(&topo, face, &circle, Tolerance::default());
+            assert_eq!(got, exits, "{} corners", boundary.len());
+        }
+        let mut topo = Topology::new();
+        let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EC::Circle(circle.clone())));
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let disc = topo.add_face(Face::new(w, vec![], FS::Plane { normal: up, d: 0.0 }));
+        assert!(!circle_exits_plane_boundary(
+            &topo,
+            disc,
+            &circle,
+            Tolerance::default()
+        ));
     }
 
     /// A disc bounded by one closed rim of radius 3: every point on the rim

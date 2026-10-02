@@ -273,6 +273,24 @@ fn split_sections_at_t_junctions(
             // the arc — see `find_splits_on_section_arc` /
             // `find_splits_on_section_ellipse`). The shorter-arc convention
             // matches `evaluate_edge_at_t`, which both twins share.
+            // A face boundary piece carried in as a section (a promoted hole's
+            // pave-split rim) runs one way only and may span more than half
+            // a turn. The shorter-arc reading then covers its complement: it
+            // puts the complement's points on the piece and none of the
+            // piece's own, so it can only mint false splits there.
+            EdgeCurve::Circle(c)
+                if edge.source_edge_idx.is_none() && {
+                    let (s, e) = if edge.forward {
+                        (edge.start_3d, edge.end_3d)
+                    } else {
+                        (edge.end_3d, edge.start_3d)
+                    };
+                    (c.project(e) - c.project(s)).rem_euclid(std::f64::consts::TAU)
+                        > std::f64::consts::PI + 1e-9
+                } =>
+            {
+                Vec::new()
+            }
             EdgeCurve::Circle(_) => find_splits_on_section_arc(&edge, &endpoints, tol),
             EdgeCurve::Ellipse(_) => find_splits_on_section_ellipse(&edge, &endpoints, tol),
             // A marched-NURBS section (a plane×cone conic) bulges past its
