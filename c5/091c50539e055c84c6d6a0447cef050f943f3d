@@ -6,6 +6,7 @@ crates/io/tests/hinge_swing_inmem.rs
   s_a8677c67f85a06::t_6ce50684537e4c 25-26
 .claude/skills/roadmap/SKILL.md
   s_a8677c67f85a06::t_7809eb4f406709 29,31-33
+  s_a8677c67f85a06::t_c30663fcc09596 142,195
 crates/io/tests/data/hinge_seat_bin.bin
   s_a8677c67f85a06::t_ae7d46d34dcd02 1
 crates/algo/src/pave_filler/phase_ff.rs
