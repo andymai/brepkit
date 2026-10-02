@@ -524,7 +524,7 @@ impl Builder {
             edge_images.len()
         );
 
-        let (sub_faces, unsplit) = fill_images_faces::fill_images_faces(
+        let (sub_faces, unsplit, whole) = fill_images_faces::fill_images_faces(
             &mut self.topo,
             &self.arena,
             &edge_images,
@@ -535,6 +535,28 @@ impl Builder {
             return Err(AlgoError::FaceSplitFailed(format!(
                 "face {face:?} is cut by sections but split into nothing"
             )));
+        }
+        // A face kept whole takes one class: the two sides of a section that
+        // runs across it must agree.
+        for (face, p, q) in whole {
+            let opposing = if self.face_ranks.get(&face) == Some(&Rank::A) {
+                self.solid_b
+            } else {
+                self.solid_a
+            };
+            let sides = (
+                classifier::classify_point(&self.topo, opposing, p),
+                classifier::classify_point(&self.topo, opposing, q),
+            );
+            if matches!(
+                sides,
+                (Ok(FaceClass::Inside), Ok(FaceClass::Outside))
+                    | (Ok(FaceClass::Outside), Ok(FaceClass::Inside))
+            ) {
+                return Err(AlgoError::FaceSplitFailed(format!(
+                    "face {face:?} is cut by sections but split into nothing"
+                )));
+            }
         }
         self.sub_faces = sub_faces;
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
@@ -947,7 +969,7 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
     // is correct for all of them (see the doc comment).
     let edge_images = fill_images::fill_edge_images(&arena);
     let all_a_ranks: HashMap<FaceId, Rank> = face_source.keys().map(|&f| (f, Rank::A)).collect();
-    let (sub_faces, unsplit) =
+    let (sub_faces, unsplit, _) =
         fill_images_faces::fill_images_faces(&mut topo, &arena, &edge_images, &all_a_ranks, tol);
     if let Some(face) = unsplit.first() {
         return Err(AlgoError::FaceSplitFailed(format!(
