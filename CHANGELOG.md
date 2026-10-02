@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.17](https://github.com/andymai/brepkit/compare/v4.1.16...v4.1.17) (2026-10-02)
+
+
+### Bug Fixes
+
+* **algo:** read a hole's winding by its arcs and weave holes that arcs end on ([#1947](https://github.com/andymai/brepkit/issues/1947)) ([98c616e](https://github.com/andymai/brepkit/commit/98c616ebfc6291e2ef1d955455f11f95a1a86681))
+
 ## [4.1.16](https://github.com/andymai/brepkit/compare/v4.1.15...v4.1.16) (2026-10-02)
 
 
