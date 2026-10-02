@@ -2431,12 +2431,13 @@ fn trim_closed_curve_to_inboth_arc(
 
 /// Trim a closed `Ellipse` section (the intersection of a thin planar tread
 /// with a cylinder/cone lateral face) to its in-both arc(s) using the EXACT
-/// points where the planar face's straight boundary edges cross the analytic
-/// surface, rather than uniform-t sampling.
+/// points where the planar face's boundary edges cross the analytic surface
+/// (solved for straight edges, refined by sign change for curved ones),
+/// rather than uniform-t sampling.
 ///
-/// Returns `Some(arcs)` only when the pair is exactly {planar face with
-/// straight boundary edges} × {cylinder or cone}, the curve is a closed
-/// ellipse, and at least one in-both arc with a real angular span is found.
+/// Returns `Some(arcs)` only when the pair is exactly {planar face} ×
+/// {cylinder or cone}, the curve is a closed ellipse, and at least one
+/// in-both arc with a real angular span is found.
 /// Returns `None` for any other configuration so the caller falls back to the
 /// uniform-t restriction. The exact crossings are SHARED between treads that
 /// share a boundary line, so consecutive arcs chain through one vertex (the
@@ -2648,15 +2649,39 @@ fn trim_ellipse_to_boundary_crossings(
     let mut plane_poly: Vec<Point3> = Vec::new();
     for oe in topo.wire(face.outer_wire()).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
-        if !matches!(edge.curve(), EdgeCurve::Line) {
-            // A non-straight boundary edge means this is not a faceted-ramp
-            // tread; bail to the generic path rather than guess.
-            return None;
-        }
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
-        plane_poly.push(if oe.is_forward() { sp } else { ep });
-        for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            plane_poly.push(if oe.is_forward() { sp } else { ep });
+            for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
+                push_crossing(p, Some(oe.edge()), &mut crossings);
+            }
+            continue;
+        }
+        // A curved edge of the plane face (a lid's rounded corner): its
+        // crossings with the analytic surface by the sign of the distance to
+        // it, and the outline sampled along it in wire order. Without them
+        // the arc is left to the sampled in-both restriction, which can run
+        // past the analytic face's rim.
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for k in 0..32 {
+            let f = f64::from(k) / 32.0;
+            let f = if oe.is_forward() { f } else { 1.0 - f };
+            plane_poly.push(
+                edge.curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep),
+            );
+        }
+        let signed = |q: Point3| analytic_signed_distance(analytic_surf, q);
+        for (_, p) in super::phase_ef::find_crossings_by_sampling(
+            edge.curve(),
+            sp,
+            ep,
+            t0,
+            t1,
+            &signed,
+            tol.linear,
+        ) {
             push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
@@ -3054,6 +3079,24 @@ fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> 
 /// (cylinder or cone lateral). Returns the 3D crossing points whose parameter
 /// lies within the segment. Other surface types return an empty vec (the
 /// caller treats "no crossings" as "fall back to uniform-t").
+/// A distance to a cylinder or cone that changes sign across it (both nappes
+/// of a cone), matching the quadratics of the segment crossings below; zero
+/// for any other surface.
+fn analytic_signed_distance(surface: &FaceSurface, p: Point3) -> f64 {
+    match surface {
+        FaceSurface::Cylinder(cyl) => {
+            let w = p - cyl.origin();
+            (w - cyl.axis() * cyl.axis().dot(w)).length() - cyl.radius()
+        }
+        FaceSurface::Cone(cone) => {
+            let w = p - cone.apex();
+            let h = cone.axis().dot(w);
+            cone.half_angle().tan() * (w - cone.axis() * h).length() - h.abs()
+        }
+        _ => 0.0,
+    }
+}
+
 fn line_segment_surface_crossings(sp: Point3, ep: Point3, surface: &FaceSurface) -> Vec<Point3> {
     match surface {
         FaceSurface::Cylinder(cyl) => line_segment_cylinder_crossings(sp, ep, cyl),

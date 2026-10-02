@@ -655,7 +655,7 @@ fn find_edge_surface_crossings(
 }
 
 /// Find crossings by sampling a signed distance function and detecting sign changes.
-fn find_crossings_by_sampling(
+pub(super) fn find_crossings_by_sampling(
     curve: &EdgeCurve,
     start_pos: Point3,
     end_pos: Point3,
