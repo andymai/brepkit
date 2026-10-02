@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790897958457,
+  "lastUpdate": 1790899415361,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49139,6 +49139,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41824582,
             "range": "± 98134",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38fd30e3079266d216047add73a63b51135b674d",
+          "message": "chore(main): release 4.1.12 (#1939)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.12](https://github.com/andymai/brepkit/compare/v4.1.11...v4.1.12)\n(2026-10-01)\n\n\n### Bug Fixes\n\n* **algo:** keep the hinge lid's bores and the bin's clearance cut exact\n([#1937](https://github.com/andymai/brepkit/issues/1937))\n([b2a9d37](https://github.com/andymai/brepkit/commit/b2a9d372e8ad89ea3714f013660f411696e7e565))\n\n\n### Performance\n\n* **algo:** skip same-domain overlap tests for coplanar outlines that\nonly touch ([#1936](https://github.com/andymai/brepkit/issues/1936))\n([1dc92ea](https://github.com/andymai/brepkit/commit/1dc92ea1583430c5593312cd2138317951eb9a3f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-02T00:00:51Z",
+          "tree_id": "ebf6619b22e60cf64e91aa72efc5dc6e8bf58030",
+          "url": "https://github.com/andymai/brepkit/commit/38fd30e3079266d216047add73a63b51135b674d"
+        },
+        "date": 1790899408926,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 848204,
+            "range": "± 2239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 926282,
+            "range": "± 1265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10321,
+            "range": "± 122",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 651625,
+            "range": "± 1917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36749622,
+            "range": "± 78457",
             "unit": "ns/iter"
           }
         ]
