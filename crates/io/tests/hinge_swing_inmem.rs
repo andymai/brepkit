@@ -116,18 +116,23 @@ fn exact(topo: &mut Topology, op: impl FnOnce(&mut Topology) -> SolidId) -> Soli
 fn hinge_lid_fixture_is_faithful() {
     let mut topo = Topology::new();
     let lid = load(&mut topo, "hinge_lid.bin");
+    faithful(&topo, lid, [4, 16, 24]);
+}
+
+/// `solid` is valid and has `faces` cone, cylinder and plane faces.
+fn faithful(topo: &Topology, solid: SolidId, faces: [usize; 3]) {
     let mut census: HashMap<&str, usize> = HashMap::new();
-    for fid in brepkit_topology::explorer::solid_faces(&topo, lid).unwrap() {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
         *census
             .entry(topo.face(fid).unwrap().surface().type_tag())
             .or_insert(0) += 1;
     }
     assert_eq!(
         ["cone", "cylinder", "plane"].map(|k| census.get(k).copied().unwrap_or(0)),
-        [4, 16, 24],
+        faces,
         "fixture drifted: {census:?}"
     );
-    assert!(validate_solid(&topo, lid).unwrap().is_valid());
+    assert!(validate_solid(topo, solid).unwrap().is_valid());
 }
 
 /// The back face's two halves each took the bore cap's arc past the face as
@@ -423,9 +428,15 @@ fn hinge_lid_on_its_bin_overlaps_the_lip_exactly() {
     let mut topo = Topology::new();
     let bin = load(&mut topo, "hinge_seat_bin.bin");
     let lid = load(&mut topo, "hinge_seat_lid.bin");
+    faithful(&topo, bin, [12, 40, 90]);
+    faithful(&topo, lid, [4, 49, 143]);
     let common = exact(&mut topo, |t| {
         boolean::boolean(t, BooleanOp::Intersect, bin, lid).unwrap()
     });
+    // A 216,000-point scan of one sliver's box reads 5.140 mm3 inside both
+    // operands, a sixth of 30.84.
+    let v = volume(&topo, common);
+    assert!((v - 30.881).abs() < 1e-3 * 30.881, "volume {v}");
     // Each sliver's box, point by point against both operands.
     let probes = [bin, lid, common].map(|s| Probe::new(&topo, s));
     let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
