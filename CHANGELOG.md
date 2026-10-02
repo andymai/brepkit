@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.18](https://github.com/andymai/brepkit/compare/v4.1.17...v4.1.18) (2026-10-02)
+
+
+### Bug Fixes
+
+* **algo:** split a section circle that runs off a plane face, and keep promoted rim pieces whole ([#1949](https://github.com/andymai/brepkit/issues/1949)) ([c86eb59](https://github.com/andymai/brepkit/commit/c86eb59e6947ebe213ca4b037004f6cc1d5c786e))
+
 ## [4.1.17](https://github.com/andymai/brepkit/compare/v4.1.16...v4.1.17) (2026-10-02)
 
 
