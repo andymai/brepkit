@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790899415361,
+  "lastUpdate": 1790905636649,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49193,6 +49193,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36749622,
             "range": "± 78457",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "588091a495d888963f97f19c794f6702e1ea8cd7",
+          "message": "fix(algo): keep the hinge lid's keyhole pin cuts exact (#1940)\n\nThis makes the gridfinity `hingeSwing` lid cut exact. The scenario calls\n`compoundCut(lid with knuckles, [short keyhole pin, long keyhole pin])`\nas op 5017. With operands captured from a brepkit-wasm built from #1937,\nthis was the lid's remaining mesh fallback, making every swing-pose\nintersection a mesh boolean at about 5.8 s in wasm and failing the\ninterference floor at 7.45 mm3 against 5.\n\n## What was wrong\n\n- The plane arrangement override in\n`crates/algo/src/builder/face_splitter/mod.rs` accepted incomplete or\noppositely wound results from `split_plane_face_by_arrangement`. On the\nprimitive twin's disc, the keyhole section cluster never meets the rim,\nand the arrangement returned three regions covering 2.80 of the disc's\n10.18, dropping the ring. On the lid, two knuckle end-face pieces at x =\n-47.905 each returned one clockwise region, with area -3.74 inside a\n+5.09 boundary, leaving 12 edges whose faces used them in the same\ndirection. `subfaces_cover_boundary` now accepts an arrangement only\nwhen its regions tile the face area, all wind the same way (the\narrangement traces every region counter-clockwise, whichever way the\nface winds), and none has its interior inside another, with every\nmeasurable outline read exactly by `loop_area_in_frame`. That area\nincludes the chord polygon and every circle or ellipse segment on its\nown span. The guard skips outlines with a NURBS piece because their\nareas are only sampled, and `exact_coincident_lip_fuse_stays_analytic`\nrelies on an arrangement over such an outline.\n\n- The plane DCEL rescue measured each orbit from its vertex polygon. A\ndisc bounded by one closed circle edge has a single vertex, so both its\nregion and unbounded face appeared to enclose nothing and were dropped.\n`build_wire_loops_dcel_measured` in\n`crates/algo/src/builder/wire_builder.rs` now takes an area function,\nand the plane rescue passes `loop_area_in_frame`.\n\n- `sample_wire_loop_uv_via_frame` began samples for a closed circle at\nparameter 0 in the circle frame instead of at the edge vertex. The\ntwin's radius 1.8 disc with eight samples consequently measured 6.87\ninstead of the octagon's 9.16.\n\n- `classify_sub_faces` in `crates/algo/src/builder/mod.rs` ray\nclassified a pin cap piece as Inside even though it lay wholly on the\nlid boundary. Same-domain pairing left it unpaired because one knuckle\nend-face piece covers two cap pieces. A tool sub-face whose every sample\nlies on the blank boundary is now On. It applies only when at least one\ncandidate sample was taken. Reverting this change makes the short pin\ncut fall back.\n\n- Phase FF trimmed a plane x cylinder line only to the cylinder face\nwindow. The lid bevel plane contains the long pin axis. Bevel face 69\nmeets the pin wall only at its end at x = -47.905, while bevel face 112\nspans two gaps and the knuckle between them around a hole. Both produced\na ruling across the wall's full length, splitting its lower quarter\ninside the knuckles and causing three knuckles to lose it.\n`split_plane_line_at_curved_boundaries` in\n`crates/algo/src/pave_filler/phase_ff.rs` now splits plane x cylinder\nand plane x cone lines where curved boundaries of the plane face cross\nthem, then drops pieces outside that face. The ruling split includes\nholes only for plane x cylinder and plane x cone lines, because plane x\nplane lines are calibrated on outer-wire-only splits. Extending plane x\nplane splitting to holes failed seven existing tests in #1933.\n\n## Verification\n\n- On main, the short pin cut falls back to a 2,611-face planar mesh,\nwith raw GFA leaving one free and two over-shared edges. Its volume is\n36835.115 against the lid's 36866.775 even though the pin only touches\nthe lid. The long pin cut falls back to a 2,927-face mesh with 20 free\nedges. The two-pin `compound_cut` falls back to a 2,794-face mesh with\ntwo over-shared edges.\n\n- On this branch, the short pin cut is exact and valid with 220 faces\nand unchanged lid volume. The long pin cut is exact and valid with 242\nfaces. The two-pin `compound_cut` is exact and valid with 196 faces, and\nits `solid_volume` at deflection 0.001 equals the long pin cut's,\n36639.3009 for both.\n\n- `crates/operations/tests/keyhole_pin_on_a_knuckle_end.rs` covers cut\nand fuse of a radius 0.925 keyhole pin ending flat on a radius 1.8\nknuckle end disc, in 3 poses with the pin turned to eighths of a turn.\nOn main, the cut falls back to a 29-face mesh with raw GFA reporting\n`open hole shell with 4 faces would be dropped`. On this branch, cut and\nfuse are exact and valid in every pose and turn. The cut preserves\nknuckle volume, and the fuse adds the keyhole's closed-form area times\nits length.\n\n- `crates/io/tests/hinge_swing_inmem.rs` adds\n`hinge_lid_short_pin_cut_is_exact` and\n`hinge_lid_long_pin_cut_is_exact`. These check exactness, validity,\nunchanged short-cut volume with 32 probes either side of both pin caps\n(8 material, 24 air, each matching the lid's own classification), and\nequal long and compound-cut volumes with 40 point probes against the\nlid's own classification, exactly 20 kept and 20 removed. New inputs are\n`hinge_lid_knuckled.bin`, `hinge_lid_pin_short.bin`, and\n`hinge_lid_pin_long.bin`.\n\n- On #1937's head with this change, `brepkit-math`, `brepkit-algo`,\n`brepkit-heal`, `brepkit-check`, `brepkit-operations`, and `brepkit-io`\npass 2,614 tests with 0 failures and 16 ignored. All 236 `brepkit-wasm`\nlibrary tests pass with 3 ignored. Clippy with `-D warnings`,\n`check-boundaries.sh`, and `check-doc-paths.sh` pass. The pose sweep,\n120-case kumiko strut pose sweep, and `truth_audit` are identical to\n#1937's head. `approx_census` differs only in the face pair named in the\noffset NURBS-loft error, which varies between runs.\n\n## Still open\n\n- The lid intersection with the long pin falls back, with raw GFA\nreporting `open growth shell with 18 faces would be dropped`. This is\noff the tool's path and is recorded as a roadmap row.\n\n- The `hingeSwing` scenario should be recaptured on a wasm built with\nthis change.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nKeeps the hinge lid's keyhole pin cuts exact instead of falling back to\nplanar meshes, so `hingeSwing` no longer fails its interference check.\n\n**What was wrong**\n\n- The plane arrangement override dropped the ring around a section\ncluster that never met the rim, and wound a region backwards where a rim\narc's chord crossed sections; it is now kept only when its regions tile\nthe face area, all wind the face's way, and none holds another's\ninterior.\n- Circles and ellipses are measured on their own spans; a NURBS outline\npasses unmeasured because its areas are only sampled.\n- The plane DCEL rescue measured each orbit from its vertex polygon, so\na disc bounded by one closed circle lost its region; it now reads\narc-true areas, and the frame sampler starts a closed circle at its\nvertex.\n- A tool sub-face lying wholly on the blank boundary, left unpaired by\nsame-domain pairing, now classifies On (only when a candidate sample was\ntaken).\n- A plane x cylinder or cone ruling was split only to the band's whole\nwindow, so a face meeting the wall in part split the wall inside the\nknuckles; rulings now stop at the plane face's curved boundary and\nholes, while plane x plane lines keep their outer-wire-only splits.\n\n**Verification**\n\n- On main both pin cuts and the two-pin `compound_cut` fall back to\nmeshes with free or over-shared edges; here they are exact and valid\nwith unchanged lid volume, and the compound cut's volume equals the long\npin cut's.\n- `crates/operations/tests/keyhole_pin_on_a_knuckle_end.rs` covers cut\nand fuse of a keyhole pin ending flat on a knuckle end disc across poses\nand eighths of a turn; `crates/io/tests/hinge_swing_inmem.rs` adds\nprobes of material and air against the lid's own classification.\n- The lid intersection with the long pin still falls back; it is off the\ntool's path and recorded as a roadmap row.\n\n<sup>Written for commit 2d5d2ef571bd5ecef389ce536abe9c1a4a178418.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1940?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-01T18:44:55-07:00",
+          "tree_id": "41c5d33338924eee3022ad1d1572cdc232d158af",
+          "url": "https://github.com/andymai/brepkit/commit/588091a495d888963f97f19c794f6702e1ea8cd7"
+        },
+        "date": 1790905630691,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 633764,
+            "range": "± 4638",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 686428,
+            "range": "± 3616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8793,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 471096,
+            "range": "± 2593",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29514883,
+            "range": "± 79871",
             "unit": "ns/iter"
           }
         ]
