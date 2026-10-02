@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790951769150,
+  "lastUpdate": 1790966745355,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49733,6 +49733,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36358796,
             "range": "± 91987",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c86eb59e6947ebe213ca4b037004f6cc1d5c786e",
+          "message": "fix(algo): split a section circle that runs off a plane face, and keep promoted rim pieces whole (#1949)\n\nThe GFA boolean engine now handles touching bored blocks exactly across\nfour rotations about the bore axis. Fuse returns the valid sum of both\nblocks’ volumes, and cut correctly leaves the first block unchanged,\neach within relative `1e-6` of the closed form. The same fuse correction\nalso makes gridfinity hinge swing op 147557 exact.\n\n## What was wrong\n\n- Fuse root, `circle_exits_plane_boundary` in\n`crates/algo/src/pave_filler/phase_ff.rs`: the first block’s bore rim\nlies in the second block’s end face plane and passes through its corners\nat `(0, ±0.866, 0.5)`. Only crossings through straight boundary edge\ninteriors counted as exits. The missed corner crossings left the circle\nunsplit, producing a full disc over the bore and an open 1-face growth\nshell during assembly.\n\nThe function now probes 32 even circle angles, corner intersections with\nstraight edge endpoints, and every span midpoint between consecutive\nprobes. An off-face probe must clear the face’s sampled loops by 100\ntimes the linear tolerance and lie off its true edges, so a circle\nrunning along the face’s own boundary does not count as leaving it. Span\nmidpoint probes detect arbitrarily narrow off-face arcs between corner\nhits.\n\n`a_circle_through_the_corners_of_a_narrow_notch_leaves_the_face` covers\na 2 degree notch centered between two even probes, the same square\nwithout the notch, and a disc whose rim is the circle. The notch case\nfails without the corner-hit probes and the disc case without the\ntrue-edge check.\n\n- Cut root, `split_sections_at_t_junctions` in\n`crates/algo/src/builder/face_splitter/mod.rs`: the second block’s top\nat `z = -0.4` divides the first block’s bore rim into two shared bottom\npieces and a 227 degree top piece from `t = 1.1593` to `5.1239`. The\npromoted hole reaches the walker as section edges. The T-junction pass\ninterpreted the open top piece as the shorter arc, found `(0, 0, -1)` on\nit, and split there. This discarded the rim top and left 6 free edges.\n\nA circle piece with no section source index that spans more than half a\nturn in its own direction is now left whole. The guard is limited to\npieces without a section source index, so FF section arcs retain the\nshorter-arc reading shared with `evaluate_edge_at_t`. For the guarded\npiece, that reading places complement points on the piece and none of\nits own points, so it could only create false splits. The piece builder\nalso evaluates and pcurves split pieces using the shorter arc.\n\n- The fuse root also closes gridfinity hinge swing op 147557. The bin\nknuckle neck circle was split only at its own crossings, retaining an\narc outside the lid knuckle end face. Including the end face crossings\nkeeps only the arc inside both faces.\n`hinge_lid_on_its_bin_overlaps_the_lip_exactly` in\n`crates/io/tests/hinge_swing_inmem.rs`, using `hinge_seat_bin.bin` and\n`hinge_seat_lid.bin`, pins the six overlap slivers.\n\n## Verification\n\n- `touching_bored_blocks_fuse_exactly` and\n`a_bored_block_touching_one_whose_top_is_below_the_bore_axis_cuts_nothing`\nin `crates/operations/tests/touching_bored_blocks.rs` pass at `0`,\n`0.7`, `1.4`, and `2.1` radians. Each test fails with only the other\nroot applied. Both are unignored and their roadmap row is closed. On\nmain, both operations fall back at every turn. The untilted raw fuse\nfails assembly, and the raw cut leaves 6 free edges. Intersect remains\nexact and empty.\n\n- Op 147557 is exact with 60 faces, no free edges, and volume `30.908`.\nA 216,000-point scan of one sliver's box finds 81,106 points inside both\noperands and 81,106 inside the result. Its test fails without the fuse\nchange through mesh fallback.\n\n- On the head rebased onto main with #1947, the pose sweep, 120-case\nkumiko strut pose sweep, `truth_audit`, and `approx_census` are\nidentical to main. Release tests for `brepkit-algo`,\n`brepkit-operations`, and `brepkit-io` pass 1,947 tests with 0 failures\nand 15 ignored.\n\n- Before #1947, six native crates pass 2,626 tests with 0 failures and\n16 ignored. All 236 `brepkit-wasm` library tests pass with 3 ignored.\nClippy with `-D warnings`, `check-boundaries.sh`, and\n`check-doc-paths.sh` pass.\n\n- On a wasm build from this branch, `hingeSwing.scenario.test.ts` passes\nall 27 tests in 219.79 seconds. The swing scenario has 27 mesh\nfallbacks, compared with 28 on main.\n\n## Still open\n\n- The remaining 27 swing intersects that fall back, including ops 108238\nto 132867, which retain 13 faces with 16 free edges.\n\n- The left-wall bin two-pin compound cut, whose merged-tools path leaves\n21 free edges and whose sequential path leaves 4.",
+          "timestamp": "2026-10-02T11:42:40-07:00",
+          "tree_id": "dd35553babba77836c462b75f322780895726ca1",
+          "url": "https://github.com/andymai/brepkit/commit/c86eb59e6947ebe213ca4b037004f6cc1d5c786e"
+        },
+        "date": 1790966738820,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1039346,
+            "range": "± 2342",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1123881,
+            "range": "± 5958",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13247,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 810545,
+            "range": "± 1924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42915430,
+            "range": "± 250235",
             "unit": "ns/iter"
           }
         ]
