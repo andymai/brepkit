@@ -441,17 +441,27 @@ pub(super) fn is_point_on_boundary_uv(
         return false;
     };
 
-    // Circle boundary edges are tested against their true 3D arc first. A
-    // boundary arc whose u-span wraps the seam has UV endpoints normalized
-    // into [0, TAU), so its UV chord below covers the COMPLEMENT of the actual
-    // arc — a point on the wrapped span misses the chord by up to the whole
-    // period and the ±TAU candidates cannot recover it. 3D is unambiguous.
+    // Circle and ellipse boundary edges are tested against their true 3D arc
+    // first. A boundary arc whose u-span wraps the seam has UV endpoints
+    // normalized into [0, TAU), so its UV chord below covers the COMPLEMENT of
+    // the actual arc — a point on the wrapped span misses the chord by up to
+    // the whole period and the ±TAU candidates cannot recover it; and an
+    // oblique ellipse rim's chord runs level at its seam's height, missing the
+    // rest of the rim by its rise. 3D is unambiguous.
     for edge in boundary {
-        let brepkit_topology::edge::EdgeCurve::Circle(c) = &edge.curve_3d else {
-            continue;
+        let (foot_t, foot, size) = match &edge.curve_3d {
+            brepkit_topology::edge::EdgeCurve::Circle(c) => {
+                let t = c.project(point);
+                (t, c.evaluate(t), c.radius())
+            }
+            brepkit_topology::edge::EdgeCurve::Ellipse(e) => {
+                let t = e.project(point);
+                (t, e.evaluate(t), e.semi_major())
+            }
+            brepkit_topology::edge::EdgeCurve::Line
+            | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => continue,
         };
-        let foot_t = c.project(point);
-        if (c.evaluate(foot_t) - point).length() > c.radius() * tol {
+        if (foot - point).length() > size * tol {
             continue;
         }
         // `domain_with_endpoints` returns the CCW span between its arguments;
