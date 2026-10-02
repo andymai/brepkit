@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.14](https://github.com/andymai/brepkit/compare/v4.1.13...v4.1.14) (2026-10-02)
+
+
+### Bug Fixes
+
+* **algo:** return the empty solid for an intersect that selects nothing ([#1941](https://github.com/andymai/brepkit/issues/1941)) ([2f05406](https://github.com/andymai/brepkit/commit/2f0540694dbb107fba770f89db2e37c870cda52b))
+
 ## [4.1.13](https://github.com/andymai/brepkit/compare/v4.1.12...v4.1.13) (2026-10-02)
 
 
