@@ -23,7 +23,9 @@
 //! `hinge_left_bin.bin` with `hinge_left_lid_18.bin` (swung 18 degrees open),
 //! and that bin with its knuckles, `hinge_left_bin_knuckled.bin`, with its two
 //! keyhole pins, `hinge_left_pin_short.bin` and `hinge_left_pin_long.bin`,
-//! and a lid on its bin, `hinge_seat_bin.bin` with `hinge_seat_lid.bin`.
+//! and a lid on its bin, `hinge_seat_bin.bin` with `hinge_seat_lid.bin`,
+//! the same lid at its stop, `hinge_stop_lid.bin`, and a block in the shape
+//! of the bin's bracket under one knuckle, `hinge_bin_bracket_probe.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -469,6 +471,98 @@ fn hinge_lid_on_its_bin_overlaps_the_lip_exactly() {
             "sliver {sliver}: {both} of {total}"
         );
     }
+}
+
+/// The bin against a block in the shape of the bracket under one of its
+/// knuckles, a box with a cove along the knuckle: five of the block's faces lie
+/// in bin faces. Each knuckle step face has an edge in the block's front plane,
+/// and a section along it must end where the step face does. Between the steps
+/// the cove meets a tilted bin face along that face's own edge, and the cove
+/// must still split there.
+#[test]
+#[ignore = "OPEN roadmap row: generator-suite hangs (hinge bracket intersects)"]
+fn hinge_bin_against_its_knuckle_bracket_intersects_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_seat_bin.bin");
+    let block = load(&mut topo, "hinge_bin_bracket_probe.bin");
+    faithful(&topo, bin, [12, 40, 90]);
+    faithful(&topo, block, [0, 1, 5]);
+    let common = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Intersect, bin, block).unwrap()
+    });
+    matches_both(
+        &topo,
+        [bin, block, common],
+        [-58.6, 39.3, 44.45],
+        [10.75, 2.3, 3.3],
+        [12, 8, 8],
+    );
+}
+
+/// The lid at its stop overlaps the bin's back lip in a thin strip whose ends
+/// lie on the bin's outer corner cylinders, and only touches the knuckles.
+#[test]
+#[ignore = "OPEN roadmap row: generator-suite hangs (hinge stop intersects)"]
+fn hinge_lid_at_its_stop_overlaps_the_lip_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_seat_bin.bin");
+    let lid = load(&mut topo, "hinge_stop_lid.bin");
+    faithful(&topo, bin, [12, 40, 90]);
+    let common = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Intersect, bin, lid).unwrap()
+    });
+    // The strip along the lip, then the hinge region around it.
+    matches_both(
+        &topo,
+        [bin, lid, common],
+        [-60.8, 41.3, 46.1],
+        [121.6, 0.45, 0.3],
+        [24, 4, 4],
+    );
+    matches_both(
+        &topo,
+        [bin, lid, common],
+        [-62.8, 36.0, 44.0],
+        [125.6, 5.8, 6.6],
+        [32, 10, 10],
+    );
+}
+
+/// Over a grid of `counts` points in the box from `lo` of `size`, the third
+/// solid holds a point exactly when the first two both do, and the grid
+/// reads points both in and out of it.
+fn matches_both(
+    topo: &Topology,
+    solids: [SolidId; 3],
+    lo: [f64; 3],
+    size: [f64; 3],
+    counts: [i32; 3],
+) {
+    let probes = solids.map(|s| Probe::new(topo, s));
+    let f = |n: i32, of: i32| (f64::from(n) + 0.37) / f64::from(of);
+    let (mut both, mut total) = (0, 0);
+    for i in 0..counts[0] {
+        for j in 0..counts[1] {
+            for k in 0..counts[2] {
+                let p = [
+                    size[0].mul_add(f(i, counts[0]), lo[0]),
+                    size[1].mul_add(f(j, counts[1]), lo[1]),
+                    size[2].mul_add(f(k, counts[2]), lo[2]),
+                ];
+                // The winding cross-check abstains within its mesh's
+                // deflection of curved faces.
+                let [Some(a), Some(b), Some(c)] =
+                    probes.each_ref().map(|probe| probe.inside(topo, p))
+                else {
+                    continue;
+                };
+                assert_eq!(c, a && b, "at {p:?}");
+                both += usize::from(c);
+                total += 1;
+            }
+        }
+    }
+    assert!(both > 0 && both < total, "{both} of {total}");
 }
 
 /// The left-wall bin's two keyhole pins meet end to end on a knuckle's end
