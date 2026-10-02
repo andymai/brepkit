@@ -5343,8 +5343,9 @@ fn closed_circle_crosses_face_boundaries(
 /// only the non-plane face's crossings are used — those surfaces keep
 /// full closed section circles for the periodic band splitter, and
 /// their seam-line hit must not combine with plane-boundary hits.
-/// Whether a closed section circle crosses any LINE boundary edge of a plane
-/// face at a point interior to that edge (not at a shared endpoint).
+/// Whether a closed section circle leaves a plane face: crosses a LINE
+/// boundary edge at a point interior to that edge (not at a shared endpoint),
+/// or runs off the face elsewhere.
 ///
 /// Used to distinguish a prism-corner section arc that exits a plane face's
 /// boundary (e.g. a notch corner straddling a wall's top edge) from a
@@ -5385,7 +5386,25 @@ fn circle_exits_plane_boundary(
             }
         }
     }
-    false
+    // A circle through two of the face's corners leaves it without crossing
+    // an edge's interior (a bore's rim through the ends of a notch in the
+    // face's top edge): it exits where any of it lies off the face.
+    let Ok(loops) = crate::classifier::FaceLoops2d::new(topo, plane_face) else {
+        return false;
+    };
+    (0..32).any(|k| {
+        let t = std::f64::consts::TAU * f64::from(k) / 32.0;
+        loops.to_uv(circle.evaluate(t)).is_some_and(|q| {
+            !loops.contains(q)
+                && std::iter::once(&loops.outer)
+                    .chain(loops.holes.iter())
+                    .filter(|lp| lp.len() >= 3)
+                    .all(|lp| {
+                        crate::builder::classify_2d::distance_to_polygon_boundary(q, lp)
+                            > tol.linear * 100.0
+                    })
+        })
+    })
 }
 
 /// Where a closed section circle meets a face's outer boundary: each hit's
