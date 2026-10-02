@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.15](https://github.com/andymai/brepkit/compare/v4.1.14...v4.1.15) (2026-10-02)
+
+
+### Bug Fixes
+
+* **algo:** end plane x cylinder arcs at the cylinder face's own wires ([#1935](https://github.com/andymai/brepkit/issues/1935)) ([90e8608](https://github.com/andymai/brepkit/commit/90e86087fdc1385d48fa941f73b3e6d02419bfee))
+
 ## [4.1.14](https://github.com/andymai/brepkit/compare/v4.1.13...v4.1.14) (2026-10-02)
 
 
