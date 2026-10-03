@@ -1,0 +1,29 @@
+crates/io/tests/data/binsplit_envelope.bin
+  s_a8677c67f85a06::t_577873c25c444f 1
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_48746c526f3218 145-147,198
+crates/io/tests/binsplit_inmem.rs
+  s_a8677c67f85a06::t_2d0ec6ba290a25 45-49
+  s_a8677c67f85a06::t_802c8d7a1fb6e9 1-44,50-120
+crates/io/tests/data/binsplit_scoops.bin
+  s_a8677c67f85a06::t_577873c25c444f 1
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_a8677c67f85a06::t_577873c25c444f 272,278,724-745
+  s_a8677c67f85a06::t_8a1e037351f334 746-747
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "24fb8ff4a35b493dcd4b9498eb77bb7fcb19c3e1",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
