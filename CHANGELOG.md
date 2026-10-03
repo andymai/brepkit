@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.23](https://github.com/andymai/brepkit/compare/v4.1.22...v4.1.23) (2026-10-03)
+
+
+### Bug Fixes
+
+* **algo:** build each hole of a split face once ([#1964](https://github.com/andymai/brepkit/issues/1964)) ([1d1bb87](https://github.com/andymai/brepkit/commit/1d1bb87903d1f4486d4a6d638c862fd9ca8a1f60))
+* **operations:** mesh a solid in the same vertex order whatever the arena held before it ([#1962](https://github.com/andymai/brepkit/issues/1962)) ([6941b69](https://github.com/andymai/brepkit/commit/6941b69733133bfc05c01aab7aebc837bdf8fb24))
+
 ## [4.1.22](https://github.com/andymai/brepkit/compare/v4.1.21...v4.1.22) (2026-10-03)
 
 
