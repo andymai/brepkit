@@ -3138,9 +3138,9 @@ fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> 
 /// Where a plane face's curved edge crosses a cylinder or cone, by the sign
 /// of `analytic_signed_distance`. That distance changes no faster than a fixed
 /// slope per unit of arc length, so an interval whose end distances sum to
-/// more than the slope times its arc length holds no pair of crossings; every
-/// other interval is halved until it does, or brackets one crossing, or
-/// narrows onto a tangency. A circle's or ellipse's arc length is bounded by
+/// more than the slope times its arc length holds no crossing if its ends
+/// share a sign and exactly one if they do not; every other interval is
+/// halved until it does, or narrows onto a tangency. A circle's or ellipse's arc length is bounded by
 /// its parameter span; a NURBS edge's is read from a fine chord path with a
 /// margin.
 fn edge_surface_crossings(
@@ -3169,10 +3169,9 @@ fn edge_surface_crossings(
     };
     let f = |t: f64| analytic_signed_distance(surface, at(t));
     let (t0, t1) = curve.domain_with_endpoints(sp, ep);
-    let mut out = Vec::new();
     // An edge lying on the surface crosses nothing; its distance is noise.
     if (0..=32).all(|k| f((t1 - t0).mul_add(f64::from(k) / 32.0, t0)).abs() <= 4.0 * tol) {
-        return out;
+        return Vec::new();
     }
     let mut budget = 4096_u32;
     // A NURBS edge's intervals start at its knots, so none straddles a
@@ -3193,9 +3192,20 @@ fn edge_surface_crossings(
             stack.push((a, b, f(a), f(b), 0));
         }
     }
+    // Each root: its parameter, and whether the distance changes sign there
+    // (else it is a touch).
+    let mut roots: Vec<(f64, bool)> = Vec::new();
     while let Some((a, b, fa, fb, depth)) = stack.pop() {
-        if fa.abs() <= tol {
-            out.push(at(a));
+        // With room to spare under the slope, the interval could hold more
+        // crossings than its end signs show: halve it.
+        let room = fa.abs() + fb.abs() <= slope * arc_len(a, b);
+        if room && depth < 40 && budget > 0 {
+            budget -= 1;
+            let m = 0.5 * (a + b);
+            let fm = f(m);
+            stack.push((a, m, fa, fm, depth + 1));
+            stack.push((m, b, fm, fb, depth + 1));
+            continue;
         }
         if fa * fb < 0.0 {
             let (mut lo, mut hi, mut flo) = (a, b, fa);
@@ -3209,24 +3219,49 @@ fn edge_surface_crossings(
                     flo = fm;
                 }
             }
-            out.push(at(0.5 * (lo + hi)));
-        } else if fa.abs() + fb.abs() <= slope * arc_len(a, b) {
-            if depth >= 40 || budget == 0 {
-                if fa.abs().min(fb.abs()) <= 4.0 * tol {
-                    out.push(at(if fa.abs() <= fb.abs() { a } else { b }));
-                }
-                continue;
-            }
-            budget -= 1;
-            let m = 0.5 * (a + b);
-            let fm = f(m);
-            stack.push((a, m, fa, fm, depth + 1));
-            stack.push((m, b, fm, fb, depth + 1));
+            roots.push((0.5 * (lo + hi), true));
+        } else if fa.abs().min(fb.abs()) <= 4.0 * tol {
+            roots.push((if fa.abs() <= fb.abs() { a } else { b }, false));
         }
     }
-    if f(t1).abs() <= tol {
-        out.push(at(t1));
+    // A shallow crossing leaves a run of near-zero leaves around its root:
+    // roots closer than 1e-5 apart are one, read from its sign changes, or
+    // from its closest point when it only touches.
+    roots.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out: Vec<Point3> = Vec::new();
+    let flush = |group: &mut Vec<(f64, bool)>, out: &mut Vec<Point3>| {
+        if group.iter().any(|r| r.1) {
+            for &(t, _) in group.iter().filter(|r| r.1) {
+                let p = at(t);
+                if out.last().is_none_or(|q: &Point3| (*q - p).length() > 1e-5) {
+                    out.push(p);
+                }
+            }
+        } else if let Some(&(t, _)) = group
+            .iter()
+            .min_by(|x, y| f(x.0).abs().total_cmp(&f(y.0).abs()))
+        {
+            // A touch is a dip of the distance that keeps its sign, not a
+            // point on the slope down to a crossing.
+            let d = (t1 - t0) * 1e-6;
+            let (fl, fm, fr) = (f(t - d), f(t), f(t + d));
+            if fm.abs() <= fl.abs() && fm.abs() <= fr.abs() && fl * fr > 0.0 {
+                out.push(at(t));
+            }
+        }
+        group.clear();
+    };
+    let mut group: Vec<(f64, bool)> = Vec::new();
+    for r in roots {
+        if group
+            .last()
+            .is_some_and(|g: &(f64, bool)| (at(g.0) - at(r.0)).length() > 1e-5)
+        {
+            flush(&mut group, &mut out);
+        }
+        group.push(r);
     }
+    flush(&mut group, &mut out);
     out
 }
 
