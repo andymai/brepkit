@@ -3126,6 +3126,24 @@ fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> 
         return Some(centre);
     }
     let extent = (max - min).length();
+    // An offset under the ray caster's resolution reads the face itself.
+    let offsets: Vec<f64> = [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+        .map(|step| step * extent)
+        .into_iter()
+        .filter(|&o| o >= 1e-6)
+        .collect();
+    // The deepest held point along `dir` from `base`: halfway to the
+    // farthest held offset when that is held too. A point just inside a
+    // thin piece reads outside the operands' tessellated classifier.
+    let deepest = |base: Point3, dir: Vec3| -> Option<Point3> {
+        let far = offsets
+            .iter()
+            .copied()
+            .rev()
+            .find(|&o| holds(base + dir * o))?;
+        let mid = base + dir * (0.5 * far);
+        Some(if holds(mid) { mid } else { base + dir * far })
+    };
     for &fid in comp {
         let Ok(face) = topo.face(fid) else { continue };
         let FaceSurface::Plane { normal, .. } = face.surface() else {
@@ -3134,14 +3152,37 @@ fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> 
         let Some(c) = planar_face_centroid(topo, fid) else {
             continue;
         };
-        // An offset under the ray caster's resolution reads the face itself.
-        let offsets = [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
-            .map(|step| step * extent)
-            .into_iter()
-            .filter(|&o| o >= 1e-6);
-        for offset in offsets {
-            for p in [c - *normal * offset, c + *normal * offset] {
-                if holds(p) {
+        for dir in [-*normal, *normal] {
+            if let Some(p) = deepest(c, dir) {
+                return Some(p);
+            }
+        }
+    }
+    // A piece with no plane face to step off (a rod's end inside a ball):
+    // step off the middle of each face edge along that face's normal.
+    for &fid in comp {
+        let Ok(face) = topo.face(fid) else { continue };
+        let Ok(wire) = topo.wire(face.outer_wire()) else {
+            continue;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let m = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            let Some((u, v)) = face.surface().project_point(m) else {
+                continue;
+            };
+            let n = face.surface().normal(u, v);
+            for dir in [-n, n] {
+                if let Some(p) = deepest(m, dir) {
                     return Some(p);
                 }
             }
