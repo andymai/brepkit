@@ -1965,13 +1965,13 @@ fn assemble(
 // ── Edge Merging ─────────────────────────────────────────────────────
 
 /// Quantized 3D position key for edge endpoint matching.
-type QPos = (i64, i64, i64);
+pub(super) type QPos = (i64, i64, i64);
 
 /// Quantized position pair (canonical order: min first). Alias for [`VPair`].
 type QPosEdge = VPair;
 
 /// Quantize a 3D point to integer coordinates at tolerance resolution.
-fn quantize_point(p: Point3, tol: f64) -> QPos {
+pub(super) fn quantize_point(p: Point3, tol: f64) -> QPos {
     let scale = 1.0 / tol;
     (
         (p.x() * scale).round() as i64,
@@ -3367,7 +3367,7 @@ fn build_edge_face_map(
 }
 
 /// Tolerance for position quantization (matches system linear tolerance).
-const MERGE_TOL: f64 = 1e-7;
+pub(super) const MERGE_TOL: f64 = 1e-7;
 
 /// Samples per arc when building its broad-phase AABB for the collinear-split
 /// query (its bulge is covered by inflating the query band with the per-step
