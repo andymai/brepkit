@@ -1024,15 +1024,24 @@ fn compute_edge_set_quantized(
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
 /// Whether two coplanar planar faces' material regions share no area. Each
-/// face is probed just inside every boundary segment (and on a 16 x 16 grid
-/// over its box); no probe of either may lie in the other clear of its
-/// boundary, and the two boundaries may not cross. `false` when either
-/// outline cannot be read or yields no probe, which keeps the member a
+/// face is probed just inside every boundary segment and on a 16 x 16 grid
+/// over its box, and no probe of either may lie in the other. Outlines are
+/// sampled 32 times along each curved edge, and a probe counts as inside the
+/// other face only past that face's own chord error, so a tile beside it on a
+/// shared arc split differently does not read as overlapping. `false` when
+/// either outline cannot be read or yields no probe, which keeps the member a
 /// duplicate.
 fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
     use super::classify_2d::{boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d};
-    use brepkit_math::vec::Point2;
-    type Region = (Vec<Point2>, Vec<Vec<Point2>>);
+    use brepkit_math::vec::{Point2, Point3};
+
+    /// A face's outer loop and holes in the plane frame, with the largest
+    /// distance between a sampled chord and its curve.
+    struct Region {
+        outer: Vec<Point2>,
+        holes: Vec<Vec<Point2>>,
+        chord_error: f64,
+    }
 
     let Ok(face_a) = topo.face(a) else {
         return false;
@@ -1040,84 +1049,79 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
     let FaceSurface::Plane { normal, .. } = *face_a.surface() else {
         return false;
     };
-    // Dense along curves: the probes sit 1e-4 of the face's size inside its
-    // boundary, and a tile beside it on a shared arc split differently must
-    // not bulge over them by the chord error.
-    let dense_wire = |wid: brepkit_topology::wire::WireId| -> Vec<brepkit_math::vec::Point3> {
-        let mut pts = Vec::new();
-        let Ok(wire) = topo.wire(wid) else {
-            return pts;
-        };
+    let wire_samples = |wid: brepkit_topology::wire::WireId| -> Option<(Vec<Point3>, f64)> {
+        let wire = topo.wire(wid).ok()?;
+        let (mut pts, mut chord_error) = (Vec::new(), 0.0_f64);
         for oe in wire.edges() {
-            let Ok(edge) = topo.edge(oe.edge()) else {
-                continue;
-            };
-            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-                continue;
-            };
-            let n = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                1
-            } else {
-                512
-            };
-            super::pcurve_compute::sample_edge_uniform_native(
-                edge.curve(),
-                sv.point(),
-                ev.point(),
-                n,
-                oe.is_forward(),
-                &mut pts,
+            let edge = topo.edge(oe.edge()).ok()?;
+            let (sp, ep) = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
             );
+            if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                pts.push(if oe.is_forward() { sp } else { ep });
+                continue;
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let at = |k: f64| {
+                let f = k / 32.0;
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                edge.curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+            };
+            for k in 0..32 {
+                let (p, q, m) = (
+                    at(f64::from(k)),
+                    at(f64::from(k + 1)),
+                    at(f64::from(k) + 0.5),
+                );
+                chord_error = chord_error.max((m - (p + (q - p) * 0.5)).length());
+                pts.push(p);
+            }
         }
-        pts
+        Some((pts, chord_error))
     };
-    let dense = |fid: FaceId| -> Option<PlanarSamples> {
+    let face_samples = |fid: FaceId| -> Option<(Vec<Point3>, Vec<Vec<Point3>>, f64)> {
         let face = topo.face(fid).ok()?;
-        Some(PlanarSamples {
-            outer: dense_wire(face.outer_wire()),
-            holes: face.inner_wires().iter().map(|&w| dense_wire(w)).collect(),
-        })
+        let (outer, mut err) = wire_samples(face.outer_wire())?;
+        let mut holes = Vec::new();
+        for &w in face.inner_wires() {
+            let (h, e) = wire_samples(w)?;
+            err = err.max(e);
+            holes.push(h);
+        }
+        Some((outer, holes, err))
     };
-    let (Some(sa), Some(sb)) = (dense(a), dense(b)) else {
+    let (Some(sa), Some(sb)) = (face_samples(a), face_samples(b)) else {
         return false;
     };
-    if sa.outer.len() < 3 || sb.outer.len() < 3 {
+    if sa.0.len() < 3 || sb.0.len() < 3 {
         return false;
     }
-    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal, &sa.outer);
-    let region = |s: &PlanarSamples| -> Region {
-        (
-            s.outer.iter().map(|&p| frame.project(p)).collect(),
-            s.holes
-                .iter()
-                .filter(|h| h.len() >= 3)
-                .map(|h| h.iter().map(|&p| frame.project(p)).collect())
-                .collect(),
-        )
+    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal, &sa.0);
+    let region = |(outer, holes, chord_error): &(Vec<Point3>, Vec<Vec<Point3>>, f64)| Region {
+        outer: outer.iter().map(|&p| frame.project(p)).collect(),
+        holes: holes
+            .iter()
+            .filter(|h| h.len() >= 3)
+            .map(|h| h.iter().map(|&p| frame.project(p)).collect())
+            .collect(),
+        chord_error: *chord_error,
     };
-    let clear_inside = |q: Point2, (outer, holes): &Region| -> bool {
-        let eps = boundary_eps(outer);
-        point_in_polygon_2d(q, outer)
-            && distance_to_polygon_boundary(q, outer) > eps
-            && holes
+    // Inside a region clear of its boundary by `margin`.
+    let clear_inside = |q: Point2, r: &Region, margin: f64| -> bool {
+        let eps = boundary_eps(&r.outer).max(margin);
+        point_in_polygon_2d(q, &r.outer)
+            && distance_to_polygon_boundary(q, &r.outer) > eps
+            && r.holes
                 .iter()
                 .all(|h| !point_in_polygon_2d(q, h) && distance_to_polygon_boundary(q, h) > eps)
     };
-    let loops = |r: &Region| -> Vec<(Vec<Point2>, bool)> {
-        std::iter::once((r.0.clone(), false))
-            .chain(r.1.iter().map(|h| (h.clone(), true)))
-            .collect()
-    };
-    let segments = |lp: &[Point2]| -> Vec<(Point2, Point2)> {
-        (0..lp.len())
-            .map(|i| (lp[i], lp[(i + 1) % lp.len()]))
-            .collect()
-    };
-    // Probes of a region clear inside it: a step inward from each boundary
+    // Probes clear inside a region: a step inward from each boundary
     // segment's middle (a thin frame round a wide hole has these where a grid
-    // has none), then a grid over its box.
+    // has none), past the region's own chord error, then a grid over its box.
     let probes = |r: &Region| -> Vec<Point2> {
-        let (lo, hi) = r.0.iter().fold(
+        let (lo, hi) = r.outer.iter().fold(
             (
                 Point2::new(f64::INFINITY, f64::INFINITY),
                 Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -1130,28 +1134,36 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
             },
         );
         let diag = (hi.x() - lo.x()).hypot(hi.y() - lo.y());
+        let reach = (1e-4 * diag).max(2.0 * r.chord_error);
         let mut out = Vec::new();
-        for (lp, is_hole) in loops(r) {
-            let twice_area: f64 = segments(&lp)
-                .iter()
-                .map(|(p, q)| p.x().mul_add(q.y(), -(q.x() * p.y())))
+        for (lp, is_hole) in
+            std::iter::once((&r.outer, false)).chain(r.holes.iter().map(|h| (h, true)))
+        {
+            let n = lp.len();
+            let twice_area: f64 = (0..n)
+                .map(|i| {
+                    lp[i]
+                        .x()
+                        .mul_add(lp[(i + 1) % n].y(), -(lp[(i + 1) % n].x() * lp[i].y()))
+                })
                 .sum();
             // Material lies left of a counter-clockwise outer loop and of a
             // clockwise hole.
             let left = (twice_area > 0.0) != is_hole;
-            for (p, q) in segments(&lp) {
+            for i in 0..n {
+                let (p, q) = (lp[i], lp[(i + 1) % n]);
                 let (dx, dy) = (q.x() - p.x(), q.y() - p.y());
                 let len = dx.hypot(dy);
                 if len < 1e-12 {
                     continue;
                 }
-                let step = (1e-4 * diag).min(0.25 * len) / len;
+                let step = reach / len;
                 let (nx, ny) = if left { (-dy, dx) } else { (dy, -dx) };
                 let m = Point2::new(
                     nx.mul_add(step, 0.5 * (p.x() + q.x())),
                     ny.mul_add(step, 0.5 * (p.y() + q.y())),
                 );
-                if clear_inside(m, r) {
+                if clear_inside(m, r, 0.0) {
                     out.push(m);
                 }
             }
@@ -1166,33 +1178,19 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
                         (hi.y() - lo.y()).mul_add(f(j), lo.y()),
                     )
                 })
-                .filter(|&q| clear_inside(q, r)),
+                .filter(|&q| clear_inside(q, r, 0.0)),
         );
         out
-    };
-    let crosses = |(p, q): (Point2, Point2), (u, v): (Point2, Point2)| -> bool {
-        let side = |a: Point2, b: Point2, c: Point2| {
-            (b.x() - a.x()).mul_add(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
-        };
-        let scale = (q.x() - p.x()).hypot(q.y() - p.y()) * (v.x() - u.x()).hypot(v.y() - u.y());
-        let eps = 1e-9 * scale;
-        let (d1, d2) = (side(p, q, u), side(p, q, v));
-        let (d3, d4) = (side(u, v, p), side(u, v, q));
-        ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps))
-            && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))
     };
     let (ra, rb) = (region(&sa), region(&sb));
     for (from, into) in [(&ra, &rb), (&rb, &ra)] {
         let ps = probes(from);
-        if ps.is_empty() || ps.iter().any(|&q| clear_inside(q, into)) {
+        let margin = 1.5 * into.chord_error;
+        if ps.is_empty() || ps.iter().any(|&q| clear_inside(q, into, margin)) {
             return false;
         }
     }
-    let segs_b: Vec<_> = loops(&rb).iter().flat_map(|(lp, _)| segments(lp)).collect();
-    !loops(&ra)
-        .iter()
-        .flat_map(|(lp, _)| segments(lp))
-        .any(|sa| segs_b.iter().any(|&sb| crosses(sa, sb)))
+    true
 }
 
 /// Whether a planar sub-face's interior lies OUTSIDE the opposite-rank
