@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791044765633,
+  "lastUpdate": 1791055239049,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50327,6 +50327,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27883179,
             "range": "± 442158",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a15a56d6606da143c1569c1ef390ce8c904ead3e",
+          "message": "fix(algo): read a line split point's distance from the edge ends as a length (#1960)\n\nThe gridfinity split robustness suite now passes 14 of 14 tests in 29.65\ns on this branch's wasm. On main, it fails `splits bin with compartments\n+ scoop + thick walls + connectors` on its 90 s timeout, with the run\ncompleting in 175.64 s.\n\n## What was wrong\n\nThe failing call intersected four scoop ramps with the bin envelope. The\nramps form a 175-face planar solid, with one ramp per compartment and\nplanar facets along x. The envelope is a rounded box whose sides lie in\nthe ramps' end faces. Its r = 2.63 corner cylinders trim the square\ncorners of the two front ramps.\n\nA facet's 166.15 mm lower edge meets a corner cylinder 12.8 microns\nshort of the ramp end. `find_splits_on_line` compared the parameter\nfraction `t` against the 1e-7 length tolerance:\n\n```text\nt <= tol || t >= 1.0 - tol\n```\n\nOn that edge, this skipped points within 16.6 microns of either end. The\nsection end remained a pendant, and the pendant bridge joined it to the\ncorner vertex along the boundary edge. The sliver beyond the cylinder\ndid not separate.\n\nThe raw intersect had 8 free edges. Mesh fallback produced 27 free\nedges, after which the split chain ran mesh against mesh. One later fuse\ntook 73 s.\n\n## Change\n\nThe endpoint guard now compares physical distances with the tolerance:\n\n```text\nt * len\n(1.0 - t) * len\n```\n\nThis is a units correction only. The guard's threshold remains the\ntolerance, now measured as a length.\n\n`line_splits_read_their_distance_from_the_ends_as_a_length` verifies\nthat a point 12.8 microns short of the end of a 166.15 mm edge splits\nit, while a point 5e-8 from the end does not.\n\n## Verification\n\nThe captured tool call is covered by\n`split_bin_scoops_clip_to_the_envelope_exactly` using\n`binsplit_scoops.bin` and `binsplit_envelope.bin`. It requires exact,\nvalid intersect and cut results, relative volume agreement within 1e-6,\nand matching classifications for over 500 points at both front corners.\nOn main, it fails at the mesh fallback check.\n\nWith the fix, the intersect has 177 faces and no free edges. The volume\nidentity `intersect + cut - ramps` is -0.000281 mm3 on 58874.7 mm3.\n\n`hingeSwing.scenario.test.ts` passes 27 of 27 in 186.44 s with the same\n5 mesh fallbacks as main. The pose sweep and truth audit match main\nexactly. The `approx_census` output differs only in the face IDs a NURBS\noffset error names, which also vary between runs on main.\n\nThe workspace suite passes with 3325 tests passed and 20 skipped.\nClippy, `scripts/check-boundaries.sh`, and `scripts/check-doc-paths.sh`\npass.\n\n## Roadmap\n\nThe generator-hangs row is re-timed on 4.1.21, records no remaining hang\nin either file, and lists the six booleans in the bin split file that\nstill use mesh fallback. A closed entry records this fix.\n\nTwo open rows record that a long-lived kernel's arena reaches the 4 GB\nwasm heap (`featureCacheKeyDiscipline.test.ts`: the test worker reaches\n4.16 GB and a fillet traps at call 1,794,666, poisoning the kernel for\nthe file's 10 later tests), and that the `labelTabs` cache-key test\nreads lid params as moving a bin they cannot reach, with a different set\nflagged on each run (the reference kernel passes it).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `find_splits_on_line` so a split point's distance from an edge's\nends is read as a length instead of a parameter fraction, which\npreviously skipped points within 16.6 microns of an end on a 166 mm edge\nand left a scoop clip's corner-crossing unsplit. The gridfinity split\nrobustness suite now passes all 14 tests instead of timing out.\n\n- The endpoint guard now compares `t * edge_len` and `(1.0 - t) *\nedge_len` against the tolerance; the threshold is unchanged.\n- Adds a regression test with captured operands for the failing clip and\nrecords the re-timed hang row plus two open long-lived-kernel rows in\nthe roadmap.\n\n<sup>Written for commit 24fb8ff4a35b493dcd4b9498eb77bb7fcb19c3e1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1960?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-03T19:17:40Z",
+          "tree_id": "e2aaf3a9517e03afeffd663f3fd84e709bc1d2af",
+          "url": "https://github.com/andymai/brepkit/commit/a15a56d6606da143c1569c1ef390ce8c904ead3e"
+        },
+        "date": 1791055232202,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1038458,
+            "range": "± 12988",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1123026,
+            "range": "± 19777",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12997,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 800531,
+            "range": "± 2627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43297373,
+            "range": "± 1153299",
             "unit": "ns/iter"
           }
         ]
