@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.19](https://github.com/andymai/brepkit/compare/v4.1.18...v4.1.19) (2026-10-03)
+
+
+### Bug Fixes
+
+* **algo:** read same-domain tiles side by side as one side of their pair ([#1953](https://github.com/andymai/brepkit/issues/1953)) ([d03f7a6](https://github.com/andymai/brepkit/commit/d03f7a6185c131971bfceba54a8ad24eb717654b))
+
 ## [4.1.18](https://github.com/andymai/brepkit/compare/v4.1.17...v4.1.18) (2026-10-02)
 
 
