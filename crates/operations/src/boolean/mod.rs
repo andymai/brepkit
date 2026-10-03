@@ -759,30 +759,24 @@ fn boolean_inner(
                 // Intersect's mirror hazard: GFA could emit a piece that is not
                 // part of A∩B at all. Reject unless a point inside each
                 // component (`component_interior_point`) lies inside both
-                // operands, by the exact ray cast on their own faces or by a
-                // fine tessellation: the probe can sit close to an operand's
-                // curved face, where a coarse mesh misreads it, and the ray
-                // caster reads a trimmed torus face as its whole band. A piece
-                // with no such point rejects (this acceptance is purely an
-                // optimization, so unclassifiable geometry keeps the old
-                // fallback behaviour).
-                let intersect_safe = op != BooleanOp::Intersect || {
-                    let operands =
-                        [a, b].map(|s| brepkit_algo::classifier::RayCastGeoms::new(topo, s).ok());
-                    components_vec.iter().all(|comp| {
+                // operands, read on a fine tessellation: the probe can sit close
+                // to an operand's curved face, where a coarse mesh misreads it,
+                // and the ray caster reads a trimmed torus face as its whole
+                // band. A piece with no such point rejects (this acceptance is
+                // purely an optimization, so unclassifiable geometry keeps the
+                // old fallback behaviour). A single piece never reaches the
+                // multi-region gate, so it is not probed.
+                let intersect_safe = op != BooleanOp::Intersect
+                    || components < 2
+                    || components_vec.iter().all(|comp| {
                         if component_aabb(topo, comp).is_none() {
                             return true;
                         }
                         let Some(probe) = component_interior_point(topo, comp) else {
                             return false;
                         };
-                        operands.iter().zip([a, b]).all(|(geoms, operand)| {
-                            geoms.as_ref().is_some_and(|g| {
-                                matches!(
-                                    brepkit_algo::classifier::classify_ray_cast_cached(g, probe),
-                                    Ok(brepkit_algo::FaceClass::Inside)
-                                )
-                            }) || matches!(
+                        [a, b].iter().all(|&operand| {
+                            matches!(
                                 crate::classify::classify_point_robust(
                                     topo, operand, probe, 0.01, tol.linear,
                                 ),
@@ -790,8 +784,7 @@ fn boolean_inner(
                                     | crate::classify::PointClassification::OnBoundary)
                             )
                         })
-                    })
-                };
+                    });
                 // Fuse shares this gate: fusing a tool into ONE piece of a
                 // multi-component operand (the lite base's 16 disjoint feet
                 // before their web joins them) legitimately leaves N disjoint
