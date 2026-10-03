@@ -269,12 +269,13 @@ pub(super) fn find_splits_on_line(
     if edge_len_sq < tol * tol {
         return Vec::new();
     }
+    let edge_len = edge_len_sq.sqrt();
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
         let to_pt = sp - edge.start_3d;
         let t = to_pt.dot(edge_dir) / edge_len_sq;
-        if t <= tol || t >= 1.0 - tol {
+        if t * edge_len <= tol || (1.0 - t) * edge_len <= tol {
             continue;
         }
         let closest = edge.start_3d + edge_dir * t;
@@ -718,6 +719,30 @@ mod tests {
         let splits = find_splits_on_nurbs_section(&edge, &[sp], tol, true);
         assert_eq!(splits.len(), 1, "junction bands must accept the junction");
         assert!((splits[0].1 - sp).length() < 1e-6);
+    }
+
+    /// A split point's distance from the ends is a length: on a 166 mm
+    /// edge, a point 12.8 microns short of the end splits it, and one within
+    /// the tolerance of the end is the end itself.
+    #[test]
+    fn line_splits_read_their_distance_from_the_ends_as_a_length() {
+        let (start_3d, end_3d) = (Point3::new(0.48, 0.0, 0.0), Point3::new(166.63, 0.0, 0.0));
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(166.15, 0.0),
+            start_3d,
+            end_3d,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let near = Point3::new(166.63 - 1.28e-5, 0.0, 0.0);
+        let at = Point3::new(166.63 - 5e-8, 0.0, 0.0);
+        let splits = find_splits_on_line(&edge, &[near, at], 1e-7);
+        assert_eq!(splits.len(), 1, "{splits:?}");
+        assert!((splits[0].1 - near).length() < 1e-9);
     }
 
     #[test]
