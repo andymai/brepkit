@@ -405,7 +405,10 @@ fn tessellate_solid_core(
     let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
     let mut edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
 
-    for (&edge_idx, points) in &edge_points {
+    let mut sampled_edges: Vec<usize> = edge_points.keys().copied().collect();
+    sampled_edges.sort_unstable();
+    for edge_idx in sampled_edges {
+        let points = &edge_points[&edge_idx];
         let mut global_ids = Vec::with_capacity(points.len());
         for &pt in points {
             let key = point_merge_key(pt, MERGE_GRID);
@@ -884,7 +887,9 @@ fn tessellate_solid_core(
             let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
             let mut count = 0_u32;
             if let Some(faces) = vertex_faces.get(&i) {
-                for &fid in faces {
+                let mut faces: Vec<FaceId> = faces.iter().copied().collect();
+                faces.sort_unstable_by_key(|f| f.index());
+                for fid in faces {
                     if let Ok(face_data) = topo.face(fid) {
                         let surf = face_data.surface();
                         if let Some(n) = crate::fillet::face_surface_normal_at(surf, pos) {

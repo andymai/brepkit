@@ -2541,3 +2541,24 @@ fn a_revolved_cone_quarter_meshes_its_own_span() {
         );
     }
 }
+
+/// The same solid meshes in the same vertex and triangle order whatever the
+/// arena held before it: a caller that fingerprints or sums a mesh in order
+/// (a feature cache comparing two builds) must read two builds alike.
+#[test]
+fn a_solid_meshes_in_the_same_order_after_any_history() {
+    let mesh_after = |prior: usize| {
+        let mut topo = Topology::new();
+        for _ in 0..prior {
+            crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        }
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 6.0, 4.0).unwrap();
+        let (mesh, offsets) =
+            tessellate_solid_grouped_with_tolerance(&topo, solid, 0.1, 0.5).unwrap();
+        (mesh.positions, mesh.normals, mesh.indices, offsets)
+    };
+    let first = mesh_after(0);
+    for prior in 1..4 {
+        assert_eq!(mesh_after(prior), first, "after {prior} earlier boxes");
+    }
+}
