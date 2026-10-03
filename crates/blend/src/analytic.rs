@@ -777,7 +777,7 @@ pub fn plane_cylinder_fillet(
     // ring torus (`major > minor`). Post and hole contacts expand away from
     // the axis; retain the existing conservative `r < r_c` analytic bound.
     let inward = rim;
-    let max_radius = if inward { r_c * 0.5 } else { r_c };
+    let max_radius = r_c;
     if radius <= tol_lin || radius >= max_radius {
         return Ok(None);
     }
@@ -951,11 +951,11 @@ pub fn plane_cylinder_fillet(
 /// Is the plane face a bounded disc cap whose rim is the cylinder (radius
 /// `r_c`), as opposed to a larger plate the cylinder stands on?
 ///
-/// True when the face has no inner wires AND every outer-boundary vertex lies
-/// within `r_c` (plus a small tolerance) of the cylinder axis. For a primitive
-/// cylinder's end cap the only boundary is the rim circle of radius `r_c`, so
-/// all its vertices sit exactly on the axis-distance `r_c`; for a plate that a
-/// post stands on, the plate corners lie beyond `r_c`.
+/// True when every boundary vertex, holes included, lies within `r_c` (plus a
+/// small tolerance) of the cylinder axis. For a primitive cylinder's end cap
+/// the only boundary is the rim circle of radius `r_c`, and a tube's mouth
+/// adds its bore inside it; for a plate that a post stands on, the plate
+/// corners lie beyond `r_c`.
 fn plane_is_bounded_disc(
     topo: &Topology,
     face_plane: FaceId,
@@ -963,9 +963,6 @@ fn plane_is_bounded_disc(
     r_c: f64,
 ) -> Result<bool, BlendError> {
     let face = topo.face(face_plane)?;
-    if !face.inner_wires().is_empty() {
-        return Ok(false);
-    }
     let axis = cyl.axis();
     let o_c = cyl.origin();
     // Radial distance from the cylinder axis to a point: |(p − o_c) − ((p − o_c)·axis)·axis|.
@@ -975,13 +972,14 @@ fn plane_is_bounded_disc(
         (d - along).length()
     };
     let tol = r_c * 1e-6 + ANALYTIC_TOL_LIN;
-    let wire = topo.wire(face.outer_wire())?;
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let s = topo.vertex(edge.start())?.point();
-        let e = topo.vertex(edge.end())?.point();
-        if radial(s) > r_c + tol || radial(e) > r_c + tol {
-            return Ok(false);
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let s = topo.vertex(edge.start())?.point();
+            let e = topo.vertex(edge.end())?.point();
+            if radial(s) > r_c + tol || radial(e) > r_c + tol {
+                return Ok(false);
+            }
         }
     }
     Ok(true)

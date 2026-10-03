@@ -282,7 +282,17 @@ impl<'a> FilletBuilder<'a> {
         let mut regular_results: Vec<&StripeResult> = Vec::new();
 
         for (stripe_index, sr) in stripe_results.iter().enumerate() {
-            if let Some(rim) = closed_rim_info(topo, &sr.stripe)? {
+            // The closed-rim rebuild owns its cap: a cap another stripe also
+            // runs along (a hole's rim filleted in the same call) takes the
+            // normal path.
+            let cap_shared = |cap: FaceId| {
+                stripe_results.iter().enumerate().any(|(other, o)| {
+                    other != stripe_index && (o.stripe.face1 == cap || o.stripe.face2 == cap)
+                })
+            };
+            if let Some(rim) =
+                closed_rim_info(topo, &sr.stripe)?.filter(|rim| !cap_shared(rim.plane_face))
+            {
                 let contour_id =
                     plan.as_ref()
                         .and_then(|fillet_plan| {
@@ -2022,20 +2032,18 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     };
 
     // The annular rebuild replaces the cap's whole outer wire with the
-    // plate-contact circle, so it only applies when the cap is a bare disc
-    // whose sole boundary is this rim (no inner wires). A more complex cap
-    // falls back to the normal trim path.
-    {
+    // plate-contact circle, so it only applies when the cap's outer wire is
+    // this rim alone. Its holes are kept, which is checked below once the
+    // contact radius is known.
+    let cap_holes = {
         let cap = topo.face(plane_face)?;
-        if !cap.inner_wires().is_empty() {
-            return Ok(None);
-        }
         let cap_wire = topo.wire(cap.outer_wire())?;
         let edges = cap_wire.edges();
         if edges.len() != 1 || edges[0].edge() != rim_edge {
             return Ok(None);
         }
-    }
+        cap.inner_wires().to_vec()
+    };
 
     // The plane-side contact curve is the one whose face is the plane.
     let (plate_contact, wall_contact) = if plane_face == stripe.face1 {
@@ -2065,8 +2073,36 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     let wall_center = project_onto_axis(wall_pt, axis_origin, axis);
     let wall_radius = radial_distance(wall_pt, axis_origin, axis);
 
-    let plate_circle = Circle3D::new(plate_center, axis, plate_radius)?;
-    let wall_circle = Circle3D::new(wall_center, axis, wall_radius)?;
+    // A hole reaching the plate contact would meet the blend; the normal trim
+    // path handles that.
+    for &hole in &cap_holes {
+        for oe in topo.wire(hole)?.edges() {
+            let e = topo.edge(oe.edge())?;
+            let reach = match e.curve() {
+                EdgeCurve::Circle(c) => radial_distance(c.center(), axis_origin, axis) + c.radius(),
+                EdgeCurve::Ellipse(el) => {
+                    radial_distance(el.center(), axis_origin, axis) + el.semi_major()
+                }
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                    let (a, b) = (
+                        topo.vertex(e.start())?.point(),
+                        topo.vertex(e.end())?.point(),
+                    );
+                    radial_distance(a, axis_origin, axis).max(radial_distance(b, axis_origin, axis))
+                }
+            };
+            if matches!(e.curve(), EdgeCurve::NurbsCurve(_)) || reach >= plate_radius - 1e-7 {
+                return Ok(None);
+            }
+        }
+    }
+
+    // Both contact circles start where the rim's vertex is, so their
+    // vertices sit on the wall's seam.
+    let rim_point = topo.vertex(topo.edge(rim_edge)?.start())?.point();
+    let reference = (rim_point - project_onto_axis(rim_point, axis_origin, axis)).normalize()?;
+    let plate_circle = Circle3D::new_with_ref(plate_center, axis, plate_radius, reference)?;
+    let wall_circle = Circle3D::new_with_ref(wall_center, axis, wall_radius, reference)?;
 
     Ok(Some(ClosedRimInfo {
         plane_face,
@@ -2118,6 +2154,7 @@ fn assemble_closed_rim(
             .unwrap_or(rim.plane_face),
     )?;
     let cap_orig_wire_id = cap_orig_wire.outer_wire();
+    let cap_holes = cap_orig_wire.inner_wires().to_vec();
     let cap_forward = topo
         .wire(cap_orig_wire_id)?
         .edges()
@@ -2181,7 +2218,7 @@ fn assemble_closed_rim(
     let cap_boundary = registry.oriented_edge(topo, plate_handle, 0)?;
     let cap_wire = Wire::new(vec![cap_boundary], true)?;
     let cap_wire_id = topo.add_wire(cap_wire);
-    let mut cap_face = Face::new(cap_wire_id, Vec::new(), plane_surf);
+    let mut cap_face = Face::new(cap_wire_id, cap_holes, plane_surf);
     cap_face.set_reversed(plane_reversed);
     let cap_face_id = topo.add_face(cap_face);
     registry.set_owner_face(plate_handle, 0, cap_face_id)?;
