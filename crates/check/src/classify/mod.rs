@@ -55,15 +55,57 @@ impl Default for ClassifyOptions {
 /// # Errors
 ///
 /// Returns an error if the solid or its faces contain invalid topology references.
-#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
 pub fn classify_point(
     topo: &Topology,
     solid: SolidId,
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    let faces = FaceBvh::of(topo, solid)?;
-    if is_on_boundary(topo, &faces, point, options.tolerance)? {
+    SolidClassifier::new(topo, solid)?.classify(topo, point, options)
+}
+
+/// [`classify_point`] for many points against one solid: the solid's face
+/// bounds and their BVH are built once.
+pub struct SolidClassifier {
+    faces: FaceBvh,
+}
+
+impl SolidClassifier {
+    /// Collect `solid`'s faces, every shell's, with their bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid or its faces contain invalid topology
+    /// references.
+    pub fn new(topo: &Topology, solid: SolidId) -> Result<Self, CheckError> {
+        Ok(Self {
+            faces: FaceBvh::of(topo, solid)?,
+        })
+    }
+
+    /// Classify `point` as [`classify_point`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a face contains invalid topology references.
+    pub fn classify(
+        &self,
+        topo: &Topology,
+        point: Point3,
+        options: &ClassifyOptions,
+    ) -> Result<PointClassification, CheckError> {
+        classify_in(topo, &self.faces, point, options)
+    }
+}
+
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+fn classify_in(
+    topo: &Topology,
+    faces: &FaceBvh,
+    point: Point3,
+    options: &ClassifyOptions,
+) -> Result<PointClassification, CheckError> {
+    if is_on_boundary(topo, faces, point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
 
@@ -91,7 +133,7 @@ pub fn classify_point(
     let mut outside_votes = 0u32;
 
     for &dir in &base_dirs {
-        let crossings = count_ray_crossings(topo, &faces, point, dir)?;
+        let crossings = count_ray_crossings(topo, faces, point, dir)?;
         if crossings % 2 == 1 {
             inside_votes += 1;
         } else {
@@ -114,7 +156,7 @@ pub fn classify_point(
         let phi = (seed * std::f64::consts::E).fract() * std::f64::consts::PI;
         let dir = Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
 
-        let crossings = count_ray_crossings(topo, &faces, point, dir)?;
+        let crossings = count_ray_crossings(topo, faces, point, dir)?;
         if crossings % 2 == 1 {
             inside_votes += 1;
         } else {
