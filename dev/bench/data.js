@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791007744102,
+  "lastUpdate": 1791014725488,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50057,6 +50057,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43682912,
             "range": "± 1685712",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d50c6452048537f3f8232418a907ae16a4ea791c",
+          "message": "fix(algo): keep a section run along an opposing face's edge where the face across it lies on the curved face being split (#1955)\n\nThe gridfinity hinge scenario now computes the four bracket intersects\nat ops 108238, 117257, 125435, and 132867 exactly, without mesh\nfallback. Op 108238 produces 15 faces with no free edges and contains\nexactly the 50,700 of 125,000 sampled grid points over the block box\nthat lie inside both operands.\n\n## What was wrong\n\nThe bracket cove is a radius 2.2 cylinder face on the same surface as\nthe bin knuckle cylinder. Between the knuckle step faces, it meets a\ntilted bin face only along the edge shared by that face and the knuckle\ncylinder.\n\n`clip_line_to_face_boundary` dropped section pieces lying on the\nclipping face's boundary edge. Because `fill_images_faces` also clips\neach piece to the opposing FF face, the cove received only the two\ndangling end pieces of its section with the tilted face and never split.\nOn main, raw op 108238 retains 15 faces with 6 free edges, causing mesh\nfallback.\n\n## The change\n\n- In `crates/algo/src/builder/fill_images_faces.rs`, a run along an\nopposing face edge remains a section when the face across that edge lies\non the same surface as the curved face being split, as determined by\n`surfaces_same_domain`.\n\n- The adjacent face is found through an `AdjacencyIndex` covering both\nsolids' input faces. The index is built once per `fill_images_faces`.\n\n- `clip_line_to_face_boundary` now accepts the rule as an optional edge\npredicate and retains each boundary segment's edge ID. Clipping to the\nface being split passes no predicate.\n\n- Plane pairs retain the prior behavior because the coplanar FF phase\nalready traces where coincident planes part. Keeping these runs for\nplanes leaves 6 unpaired edges in\n`deepened_notch_cut_pairs_every_brep_edge`, where cutter walls coincide\nwith earlier pocket walls.\n\n- Same-domain tiles from #1953 keep the block front face whole when the\nknuckle step faces divide it into adjacent pieces on one bin face.\n\n## Verification\n\n- `hinge_bin_against_its_knuckle_bracket_intersects_exactly` is enabled\nin `crates/io/tests/hinge_swing_inmem.rs`. It checks both operand face\ncensuses and validity, requires an exact valid intersect, and compares\nthe result point by point with both operands over the block box. It\nfails on main at the mesh-fallback check.\n\n- `brepkit-math`, `brepkit-algo`, `brepkit-heal`, `brepkit-check`,\n`brepkit-operations`, and `brepkit-io` pass 2,637 tests with 0 failures\nand 17 ignored. All 236 `brepkit-wasm` library tests pass with 3\nignored. Clippy with `-D warnings`, `check-boundaries.sh`, and\n`check-doc-paths.sh` pass.\n\n- The pose sweep, 120-case kumiko strut pose sweep, `truth_audit`, and\n`approx_census` are identical to main. The fixtures that keeping these\nruns for every face broke (the snap-clip deepened notch cut, and the\ncircle-insert, honeycomb, lip fuse, tangent wall, keyholed knuckle, and\nhinge fixtures) all pass, and the snap-clip cut reads 26822.479 with no\nfree edges, as on main.\n\n- With this branch's wasm, `hingeSwing.scenario.test.ts` passes all 27\ntests in 219.05 s, compared with 219.79 s on main. Mesh fallbacks\ndecrease from 27 to 23.\n\n## Still open\n\n- The remaining fallbacks are seven overhang intersects and sixteen stop\nintersects, recorded in the roadmap.\n\n- `hinge_lid_at_its_stop_overlaps_the_lip_exactly` remains an ignored\nrepro for the stop intersects.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nMakes the hinge scenario's four bracket intersects exact (no mesh\nfallback) by keeping a section run that lies along an opposing face's\nedge when the face across that edge lies on the curved face being split.\n\n**Bug Fixes**\n- `clip_line_to_face_boundary` dropped pieces lying on the clipping\nface's boundary, and the bracket cove's section with the tilted bin face\nran along that face's own edge, so the cove never split.\n- The adjacent face is found through an `AdjacencyIndex` built once per\n`fill_images_faces`, lazily only when a curved face needs it; the rule\nis passed as an optional edge predicate, the face being split passes\nnone, and coincidence is read at the boolean's tolerance, so plane pairs\nkeep the earlier boundary-dropping behavior.\n- Enables `hinge_bin_against_its_knuckle_bracket_intersects_exactly`,\nwhich validates both operand face censuses and compares the intersect\npoint by point with both operands over the block box.\n- All kernel and wasm tests pass, clippy runs with `-D warnings`, the\npose, kumiko, `truth_audit`, and `approx_census` sweeps are identical to\nmain, and `hingeSwing.scenario.test.ts` passes all 27 tests in 219.05 s\nwith mesh fallbacks down from 27 to 23.\n- The remaining fallbacks are seven overhang and sixteen stop\nintersects; `hinge_lid_at_its_stop_overlaps_the_lip_exactly` stays an\nignored repro.\n\n<sup>Written for commit 2f8ae936a74268ca546250117601a5f515c29a22.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1955?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-03T08:02:30Z",
+          "tree_id": "2796e7e7e7f9de49a181b8426713c11cf68e98fd",
+          "url": "https://github.com/andymai/brepkit/commit/d50c6452048537f3f8232418a907ae16a4ea791c"
+        },
+        "date": 1791014719833,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1048759,
+            "range": "± 6099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1132421,
+            "range": "± 9987",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13048,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 809926,
+            "range": "± 5182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43554038,
+            "range": "± 788772",
             "unit": "ns/iter"
           }
         ]
