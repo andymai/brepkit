@@ -1361,4 +1361,31 @@ fn planar_regions_apart_reads_area_not_a_point() {
     assert!(!super::planar_regions_apart(&topo, a, overlapping));
     assert!(!super::planar_regions_apart(&topo, a, inside));
     assert!(!super::planar_regions_apart(&topo, inside, a));
+    // Two copies of a thin frame round a wide hole: no grid point lands on
+    // the frame, so the copies are not read as apart.
+    let frame = |topo: &mut Topology| {
+        let p = |u: f64, v: f64| brepkit_math::vec::Point3::new(u, v, 0.0);
+        let outer = make_polygon_wire(
+            topo,
+            &[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)],
+            1e-7,
+        )
+        .unwrap();
+        let hole = make_polygon_wire(
+            topo,
+            &[p(0.01, 0.01), p(0.01, 0.99), p(0.99, 0.99), p(0.99, 0.01)],
+            1e-7,
+        )
+        .unwrap();
+        topo.add_face(brepkit_topology::face::Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    let (f1, f2) = (frame(&mut topo), frame(&mut topo));
+    assert!(!super::planar_regions_apart(&topo, f1, f2));
 }

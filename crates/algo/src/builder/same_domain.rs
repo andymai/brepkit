@@ -726,11 +726,12 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     let beside = members.iter().all(|&m| {
                         m == idx
                             || sub_faces[m].rank != sub_faces[idx].rank
-                            || planar_regions_apart(
-                                topo,
-                                sub_faces[idx].face_id,
-                                sub_faces[m].face_id,
-                            )
+                            || (edge_sets[idx].is_none() || edge_sets[idx] != edge_sets[m])
+                                && planar_regions_apart(
+                                    topo,
+                                    sub_faces[idx].face_id,
+                                    sub_faces[m].face_id,
+                                )
                     });
                     if beside {
                         if std::env::var("BK_SD").is_ok() {
@@ -1060,6 +1061,9 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
                 .iter()
                 .all(|h| !point_in_polygon_2d(q, h) && distance_to_polygon_boundary(q, h) > eps)
     };
+    // Whether `from`'s grid meets its own material and, there, `into`'s; a
+    // face the grid never samples (a thin frame round a wide hole) reads as
+    // overlapping, which keeps it a duplicate.
     let enters = |from: &Region, into: &Region| -> bool {
         let (lo, hi) = from.0.iter().fold(
             (
@@ -1073,16 +1077,18 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
                 )
             },
         );
-        (0..16).any(|i| {
-            (0..16).any(|j| {
-                let f = |k: i32| (f64::from(k) + 0.5) / 16.0;
-                let q = Point2::new(
+        let f = |k: i32| (f64::from(k) + 0.5) / 16.0;
+        let own: Vec<Point2> = (0..16)
+            .flat_map(|i| (0..16).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                Point2::new(
                     (hi.x() - lo.x()).mul_add(f(i), lo.x()),
                     (hi.y() - lo.y()).mul_add(f(j), lo.y()),
-                );
-                clear_inside(q, from) && clear_inside(q, into)
+                )
             })
-        })
+            .filter(|&q| clear_inside(q, from))
+            .collect();
+        own.is_empty() || own.iter().any(|&q| clear_inside(q, into))
     };
     let (ra, rb) = (region(&sa), region(&sb));
     !enters(&ra, &rb) && !enters(&rb, &ra)
