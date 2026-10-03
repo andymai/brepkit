@@ -3487,6 +3487,8 @@ fn cap_partial_overlap_free_loops(
     // endpoints so we can walk loops by quantized position.
     let mut free_edges: Vec<(EdgeId, QPos, QPos)> = Vec::new();
     let mut seen_keys: HashSet<VPair> = HashSet::new();
+    // The sense in which the one face on each free edge runs it.
+    let mut neighbour_sense: HashMap<EdgeId, bool> = HashMap::new();
     for &fid in face_ids.iter() {
         let face = topo.face(fid)?;
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
@@ -3500,6 +3502,7 @@ fn cap_partial_overlap_free_loops(
                 let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
                 if free_keys.contains(&key) && seen_keys.insert(key) {
                     free_edges.push((oe.edge(), qs, qe));
+                    neighbour_sense.insert(oe.edge(), oe.is_forward() != face.is_reversed());
                 }
             }
         }
@@ -3544,7 +3547,7 @@ fn cap_partial_overlap_free_loops(
     // ring and the kept disc's outline. Capping the inner loop separately
     // double-covers the disc same-sense).
     let cap_trace = std::env::var("BK_CAP_TRACE").is_ok();
-    let mut cap_loops: Vec<(usize, Vec<OrientedEdge>, Vec<Point3>)> = Vec::new();
+    let mut cap_loops: Vec<(usize, Vec<OrientedEdge>, Vec<Point3>, bool)> = Vec::new();
 
     for start in 0..free_edges.len() {
         if used_edge[start] {
@@ -3680,7 +3683,14 @@ fn cap_partial_overlap_free_loops(
                 samples.extend(pts);
             }
         }
-        cap_loops.push((cap_idx, oriented, samples));
+        // Wound about the discarded face's normal, the loop can run every
+        // edge the same way as the face already on it: the cap of an
+        // intersect's piece ending on a plane where the operands only touch
+        // faces the other way.
+        let against = oriented
+            .iter()
+            .all(|oe| neighbour_sense.get(&oe.edge()) == Some(&oe.is_forward()));
+        cap_loops.push((cap_idx, oriented, samples, against));
     }
 
     // Containment-nest loops sharing a cap plane: a loop whose vertices all
@@ -3738,7 +3748,7 @@ fn cap_partial_overlap_free_loops(
     };
 
     if cap_trace {
-        for (i, (ci, oes, verts)) in cap_loops.iter().enumerate() {
+        for (i, (ci, oes, verts, _)) in cap_loops.iter().enumerate() {
             log::debug!(
                 "CAP loop {i}: plane#{ci} edges={} verts={} first=({:.2},{:.2},{:.2})",
                 oes.len(),
@@ -3808,9 +3818,20 @@ fn cap_partial_overlap_free_loops(
         if depth_of(i) % 2 == 1 {
             continue; // odd depth: becomes a hole of its parent below
         }
-        let (cap_idx, oriented, verts3d) = &cap_loops[i];
+        let (cap_idx, oriented, verts3d, against) = &cap_loops[i];
         let cap = cap_planes[*cap_idx];
-        let Ok(wire) = Wire::new(oriented.clone(), true) else {
+        let reversed = |oes: &[OrientedEdge]| -> Vec<OrientedEdge> {
+            oes.iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect()
+        };
+        let outer = if *against {
+            reversed(oriented)
+        } else {
+            oriented.clone()
+        };
+        let Ok(wire) = Wire::new(outer, true) else {
             continue;
         };
         let wid = topo.add_wire(wire);
@@ -3819,24 +3840,28 @@ fn cap_partial_overlap_free_loops(
             if parent[j] != Some(i) {
                 continue;
             }
-            // Hole winding: opposite the outer's CCW normalization.
-            let hole: Vec<OrientedEdge> = cap_loops[j]
-                .1
-                .iter()
-                .rev()
-                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
-                .collect();
+            // Hole winding: opposite the outer's.
+            let hole = if *against {
+                cap_loops[j].1.clone()
+            } else {
+                reversed(&cap_loops[j].1)
+            };
             if let Ok(w) = Wire::new(hole, true) {
                 inner_wids.push(topo.add_wire(w));
             }
         }
         let origin = Point3::new(0.0, 0.0, 0.0);
+        let normal = if *against {
+            -cap.out_normal
+        } else {
+            cap.out_normal
+        };
         let fid = topo.add_face(Face::new(
             wid,
             inner_wids,
             FaceSurface::Plane {
-                normal: cap.out_normal,
-                d: cap.out_normal.dot(verts3d[0] - origin),
+                normal,
+                d: normal.dot(verts3d[0] - origin),
             },
         ));
         face_ids.push(fid);
@@ -3862,6 +3887,55 @@ mod tests {
             Some(true),
             "a standard outward cube shell must read outward (growth)"
         );
+    }
+
+    /// A unit cube missing its top, capped from a discarded face that faced
+    /// down: the cap faces up anyway and runs every rim edge against the side
+    /// face already on it.
+    #[test]
+    fn a_cap_runs_its_loop_against_the_faces_on_it() {
+        let mut topo = Topology::new();
+        let solid = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+        let all = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let is_top = |fid: FaceId| {
+            let face = topo.face(fid).unwrap();
+            let FaceSurface::Plane { normal, d } = face.surface() else {
+                return false;
+            };
+            normal.dot(up).abs() > 0.5 && (d.abs() - 1.0).abs() < 1e-9
+        };
+        let mut face_ids: Vec<FaceId> = all.iter().copied().filter(|&f| !is_top(f)).collect();
+        assert_eq!(face_ids.len(), 5);
+        let mut sources = vec![None; face_ids.len()];
+        let plane = CapPlane {
+            normal: up,
+            d: 1.0,
+            out_normal: -up,
+        };
+        cap_partial_overlap_free_loops(&mut topo, &mut face_ids, &mut sources, &[plane]).unwrap();
+        assert_eq!(face_ids.len(), 6);
+        let cap = topo.face(face_ids[5]).unwrap();
+        let normal = match cap.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            other => unreachable!("the cap is a plane, not {}", other.type_tag()),
+        };
+        assert!(normal.dot(up) > 0.99, "the cap faces up: {normal:?}");
+        let mut senses: HashMap<EdgeId, Vec<bool>> = HashMap::new();
+        for &fid in &face_ids {
+            let face = topo.face(fid).unwrap();
+            for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+                senses
+                    .entry(oe.edge())
+                    .or_default()
+                    .push(oe.is_forward() != face.is_reversed());
+            }
+        }
+        for oe in topo.wire(cap.outer_wire()).unwrap().edges() {
+            let uses = &senses[&oe.edge()];
+            assert_eq!(uses.len(), 2);
+            assert_ne!(uses[0], uses[1], "edge {:?} runs one way twice", oe.edge());
+        }
     }
 
     #[test]

@@ -436,8 +436,12 @@ pub fn perform(
                             }
                             // Neither face could build a usable polygon.
                             // Conservatively keep the raw curve and leave
-                            // trimming to a later phase.
-                            (FaceClip::Indeterminate, FaceClip::Indeterminate) => Some(raw),
+                            // trimming to a later phase, unless the faces'
+                            // own lines and arcs show they never meet on it.
+                            (FaceClip::Indeterminate, FaceClip::Indeterminate) => {
+                                (!exact_runs_disjoint(topo, fa, fb, &raw, tol.linear))
+                                    .then_some(raw)
+                            }
                         }
                     })
                     .collect()
@@ -2431,12 +2435,13 @@ fn trim_closed_curve_to_inboth_arc(
 
 /// Trim a closed `Ellipse` section (the intersection of a thin planar tread
 /// with a cylinder/cone lateral face) to its in-both arc(s) using the EXACT
-/// points where the planar face's straight boundary edges cross the analytic
-/// surface, rather than uniform-t sampling.
+/// points where the planar face's boundary edges cross the analytic surface
+/// (solved for straight edges, refined by sign change for curved ones),
+/// rather than uniform-t sampling.
 ///
-/// Returns `Some(arcs)` only when the pair is exactly {planar face with
-/// straight boundary edges} × {cylinder or cone}, the curve is a closed
-/// ellipse, and at least one in-both arc with a real angular span is found.
+/// Returns `Some(arcs)` only when the pair is exactly {planar face} ×
+/// {cylinder or cone}, the curve is a closed ellipse, and at least one
+/// in-both arc with a real angular span is found.
 /// Returns `None` for any other configuration so the caller falls back to the
 /// uniform-t restriction. The exact crossings are SHARED between treads that
 /// share a boundary line, so consecutive arcs chain through one vertex (the
@@ -2648,15 +2653,45 @@ fn trim_ellipse_to_boundary_crossings(
     let mut plane_poly: Vec<Point3> = Vec::new();
     for oe in topo.wire(face.outer_wire()).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
-        if !matches!(edge.curve(), EdgeCurve::Line) {
-            // A non-straight boundary edge means this is not a faceted-ramp
-            // tread; bail to the generic path rather than guess.
-            return None;
-        }
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
-        plane_poly.push(if oe.is_forward() { sp } else { ep });
-        for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            plane_poly.push(if oe.is_forward() { sp } else { ep });
+            for p in line_segment_surface_crossings(sp, ep, analytic_surf) {
+                push_crossing(p, Some(oe.edge()), &mut crossings);
+            }
+            continue;
+        }
+        // A plane square to the axis (a circle section: knuckle ends,
+        // rounded floors across corner cylinders) is left to the sampled
+        // restriction, which those faces' coaxial rims are calibrated to.
+        if matches!(sec, SecCurve::Circ(_)) {
+            return None;
+        }
+        // A curved edge of the plane face (a lid's rounded corner): its
+        // crossings with the analytic surface by the sign of the distance to
+        // it, and the outline sampled along it in wire order. Without them
+        // the arc is left to the sampled in-both restriction, which can run
+        // past the analytic face's rim.
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for k in 0..32 {
+            let f = f64::from(k) / 32.0;
+            let f = if oe.is_forward() { f } else { 1.0 - f };
+            plane_poly.push(
+                edge.curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep),
+            );
+        }
+        let signed = |q: Point3| analytic_signed_distance(analytic_surf, q);
+        for (_, p) in super::phase_ef::find_crossings_by_sampling(
+            edge.curve(),
+            sp,
+            ep,
+            t0,
+            t1,
+            &signed,
+            tol.linear,
+        ) {
             push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
@@ -3048,6 +3083,24 @@ fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> 
         return None;
     }
     Some(sp + dir * s.clamp(0.0, 1.0))
+}
+
+/// A distance to a cylinder or cone that changes sign across it (both nappes
+/// of a cone), matching the quadratics of the segment crossings below; zero
+/// for any other surface.
+fn analytic_signed_distance(surface: &FaceSurface, p: Point3) -> f64 {
+    match surface {
+        FaceSurface::Cylinder(cyl) => {
+            let w = p - cyl.origin();
+            (w - cyl.axis() * cyl.axis().dot(w)).length() - cyl.radius()
+        }
+        FaceSurface::Cone(cone) => {
+            let w = p - cone.apex();
+            let h = cone.axis().dot(w);
+            cone.half_angle().tan() * (w - cone.axis() * h).length() - h.abs()
+        }
+        _ => 0.0,
+    }
 }
 
 /// Exact crossings of a line SEGMENT `[sp, ep]` with an analytic surface
@@ -6354,7 +6407,9 @@ fn clip_trimmed_line_to_planes(
         }
         (FaceClip::Range(r), FaceClip::Indeterminate)
         | (FaceClip::Indeterminate, FaceClip::Range(r)) => trim_raw_line(&raw, r.0, r.1, tol),
-        (FaceClip::Indeterminate, FaceClip::Indeterminate) => Some(raw),
+        (FaceClip::Indeterminate, FaceClip::Indeterminate) => {
+            (!exact_runs_disjoint(topo, fa, fb, &raw, tol.linear)).then_some(raw)
+        }
     }
 }
 
@@ -6769,6 +6824,27 @@ fn line_face_intervals(
         }
     }
     Some(runs)
+}
+
+/// Whether two plane faces, both read on their own lines and arcs, run along
+/// a line section at no common point: a face across a knuckle's end, say,
+/// whose plane passes through the hinge axis but whose material stops short
+/// of the knuckle's rim. `false` when either face cannot be read.
+fn exact_runs_disjoint(topo: &Topology, fa: FaceId, fb: FaceId, raw: &RawCurve, tol: f64) -> bool {
+    let len = (raw.p_end - raw.p_start).length();
+    if len <= tol {
+        return false;
+    }
+    let slack = tol / len;
+    match (
+        line_face_intervals(topo, fa, raw.p_start, raw.p_end, tol),
+        line_face_intervals(topo, fb, raw.p_start, raw.p_end, tol),
+    ) {
+        (Some(ia), Some(ib)) => !ia
+            .iter()
+            .any(|a| ib.iter().any(|b| a.0.max(b.0) <= a.1.min(b.1) + slack)),
+        _ => false,
+    }
 }
 
 /// Test whether a simple polygon is convex via a signed-cross-product
@@ -7493,6 +7569,62 @@ mod tests {
             &circle,
             Tolerance::default()
         ));
+    }
+
+    /// Two discs in crossing planes along the z axis: apart, overlapping, and
+    /// touching at a point. Only the first reads as two faces that never meet
+    /// on their common line.
+    #[test]
+    fn exact_runs_disjoint_reads_faces_apart_on_their_common_line() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve as EC};
+        use brepkit_topology::face::{Face, FaceSurface as FS};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let disc = |topo: &mut Topology, centre: Point3, normal: Vec3, r: f64| {
+            let circle =
+                Circle3D::new_with_ref(centre, normal, r, Vec3::new(0.0, 0.0, 1.0)).unwrap();
+            let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(v, v, EC::Circle(circle)));
+            let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+            topo.add_face(Face::new(
+                w,
+                vec![],
+                FS::Plane {
+                    normal,
+                    d: normal.dot(centre - Point3::new(0.0, 0.0, 0.0)),
+                },
+            ))
+        };
+        let (p0, p1) = (Point3::new(0.0, 0.0, -10.0), Point3::new(0.0, 0.0, 10.0));
+        let raw = RawCurve {
+            curve: EdgeCurve::Line,
+            bbox: brepkit_math::aabb::Aabb3::from_points([p0, p1]),
+            t_range: (0.0, 1.0),
+            p_start: p0,
+            p_end: p1,
+        };
+        for (z, apart) in [(4.0, true), (2.0, false), (2.8, false)] {
+            let mut topo = Topology::new();
+            let a = disc(
+                &mut topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                1.8,
+            );
+            let b = disc(
+                &mut topo,
+                Point3::new(0.0, 0.0, z),
+                Vec3::new(0.0, 1.0, 0.0),
+                1.0,
+            );
+            assert_eq!(
+                exact_runs_disjoint(&topo, a, b, &raw, 1e-7),
+                apart,
+                "z = {z}"
+            );
+        }
     }
 
     /// A disc bounded by one closed rim of radius 3: every point on the rim

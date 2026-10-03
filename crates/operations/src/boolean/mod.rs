@@ -757,21 +757,18 @@ fn boolean_inner(
                             all_component_centers_outside(topo, result, &components_vec, cls_b, tol)
                         });
                 // Intersect's mirror hazard: GFA could emit a piece that is not
-                // part of A∩B at all. Reject when any component's AABB-centre
-                // sample classifies OUTSIDE either operand — an intersection
-                // piece must lie inside both. The ray-cast classifier (unlike
-                // the analytic one) handles multi-piece operands, the very
-                // case this acceptance exists for; a classification error
-                // rejects (this acceptance is purely an optimization, so
-                // unclassifiable geometry keeps the old fallback behaviour).
-                // `OnBoundary` passes — thin clip pieces legitimately touch
-                // the operand boundaries. The centre need not be interior to a
-                // concave piece, but that failure direction only REJECTS a
-                // valid result into the mesh fallback (the status quo), the
-                // same posture `cut_safe` already accepts.
+                // part of A∩B at all. Reject when a point inside any component
+                // (`component_interior_point`) classifies OUTSIDE either
+                // operand — an intersection piece must lie inside both. The
+                // ray-cast classifier (unlike the analytic one) handles
+                // multi-piece operands, the very case this acceptance exists
+                // for; a classification error rejects (this acceptance is
+                // purely an optimization, so unclassifiable geometry keeps the
+                // old fallback behaviour). `OnBoundary` passes — thin clip
+                // pieces legitimately touch the operand boundaries.
                 let intersect_safe = op != BooleanOp::Intersect
                     || components_vec.iter().all(|comp| {
-                        let Some(centre) = component_aabb_centre(topo, comp) else {
+                        let Some(centre) = component_interior_point(topo, comp) else {
                             return true;
                         };
                         [a, b].iter().all(|&operand| {
@@ -3106,8 +3103,49 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
         .then_some(centroid)
 }
 
-/// Centre of a face component's vertex AABB, or `None` for an empty component.
-fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
+/// A point inside a face component: its box centre when the component holds
+/// it, else the first point it holds stepped off one of its plane faces'
+/// centroids. A thin strip bent along a lip holds no point near its box
+/// centre, so the centre alone says nothing about where the strip lies. The
+/// box centre when no point is found.
+fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
+    use brepkit_algo::FaceClass;
+    use brepkit_algo::classifier::{RayCastGeoms, classify_ray_cast_cached};
+    let (min, max) = component_aabb(topo, comp)?;
+    let centre = Point3::new(
+        (min.x() + max.x()) * 0.5,
+        (min.y() + max.y()) * 0.5,
+        (min.z() + max.z()) * 0.5,
+    );
+    let Ok(geoms) = RayCastGeoms::of_faces(topo, comp) else {
+        return Some(centre);
+    };
+    let holds = |p: Point3| matches!(classify_ray_cast_cached(&geoms, p), Ok(FaceClass::Inside));
+    if holds(centre) {
+        return Some(centre);
+    }
+    let extent = (max - min).length();
+    for &fid in comp {
+        let Ok(face) = topo.face(fid) else { continue };
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            continue;
+        };
+        let Some(c) = planar_face_centroid(topo, fid) else {
+            continue;
+        };
+        for step in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1] {
+            for p in [c - *normal * (step * extent), c + *normal * (step * extent)] {
+                if holds(p) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    Some(centre)
+}
+
+/// A face component's vertex AABB, or `None` for an empty component.
+fn component_aabb(topo: &Topology, comp: &[FaceId]) -> Option<(Point3, Point3)> {
     let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for &fid in comp {
@@ -3133,11 +3171,7 @@ fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
     if min.x() > max.x() {
         return None;
     }
-    Some(Point3::new(
-        (min.x() + max.x()) * 0.5,
-        (min.y() + max.y()) * 0.5,
-        (min.z() + max.z()) * 0.5,
-    ))
+    Some((min, max))
 }
 
 /// Does the closed surface made of `faces` enclose `p`?
