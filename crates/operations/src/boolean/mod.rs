@@ -757,32 +757,41 @@ fn boolean_inner(
                             all_component_centers_outside(topo, result, &components_vec, cls_b, tol)
                         });
                 // Intersect's mirror hazard: GFA could emit a piece that is not
-                // part of A∩B at all. Reject when a point inside any component
-                // (`component_interior_point`) classifies OUTSIDE either
-                // operand — an intersection piece must lie inside both. The
-                // ray-cast classifier (unlike the analytic one) handles
-                // multi-piece operands, the very case this acceptance exists
-                // for; a classification error rejects (this acceptance is
-                // purely an optimization, so unclassifiable geometry keeps the
-                // old fallback behaviour). `OnBoundary` passes — thin clip
-                // pieces legitimately touch the operand boundaries.
-                let intersect_safe = op != BooleanOp::Intersect
-                    || components_vec.iter().all(|comp| {
+                // part of A∩B at all. Reject unless a point inside each
+                // component (`component_interior_point`) lies inside both
+                // operands, by the exact ray cast on their own faces or by a
+                // fine tessellation: the probe can sit close to an operand's
+                // curved face, where a coarse mesh misreads it, and the ray
+                // caster reads a trimmed torus face as its whole band. A piece
+                // with no such point rejects (this acceptance is purely an
+                // optimization, so unclassifiable geometry keeps the old
+                // fallback behaviour).
+                let intersect_safe = op != BooleanOp::Intersect || {
+                    let operands =
+                        [a, b].map(|s| brepkit_algo::classifier::RayCastGeoms::new(topo, s).ok());
+                    components_vec.iter().all(|comp| {
                         if component_aabb(topo, comp).is_none() {
                             return true;
                         }
-                        let Some(centre) = component_interior_point(topo, comp) else {
+                        let Some(probe) = component_interior_point(topo, comp) else {
                             return false;
                         };
-                        [a, b].iter().all(|&operand| {
-                            !matches!(
+                        operands.iter().zip([a, b]).all(|(geoms, operand)| {
+                            geoms.as_ref().is_some_and(|g| {
+                                matches!(
+                                    brepkit_algo::classifier::classify_ray_cast_cached(g, probe),
+                                    Ok(brepkit_algo::FaceClass::Inside)
+                                )
+                            }) || matches!(
                                 crate::classify::classify_point_robust(
-                                    topo, operand, centre, 0.1, tol.linear,
+                                    topo, operand, probe, 0.01, tol.linear,
                                 ),
-                                Ok(crate::classify::PointClassification::Outside) | Err(_)
+                                Ok(crate::classify::PointClassification::Inside
+                                    | crate::classify::PointClassification::OnBoundary)
                             )
                         })
-                    });
+                    })
+                };
                 // Fuse shares this gate: fusing a tool into ONE piece of a
                 // multi-component operand (the lite base's 16 disjoint feet
                 // before their web joins them) legitimately leaves N disjoint
@@ -3107,25 +3116,52 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
 }
 
 /// A point inside a face component: its box centre when the component holds
-/// it, else the first point it holds stepped off one of its plane faces'
-/// centroids. A thin strip bent along a lip holds no point near its box
-/// centre, so the centre alone says nothing about where the strip lies.
-/// `None` when no point is found.
+/// it, else the deepest point it holds stepped off one of its plane faces'
+/// centroids or the middle of one of its face edges. A thin strip bent along
+/// a lip holds no point near its box centre, so the centre alone says
+/// nothing about where the strip lies. Whether the component holds a point is
+/// read by ray parity on its own surface, tessellated once: the ray caster
+/// reads a trimmed torus face as its whole band. `None` when no point is
+/// found.
 fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
-    use brepkit_algo::FaceClass;
-    use brepkit_algo::classifier::{RayCastGeoms, classify_ray_cast_cached};
     let (min, max) = component_aabb(topo, comp)?;
     let centre = Point3::new(
         (min.x() + max.x()) * 0.5,
         (min.y() + max.y()) * 0.5,
         (min.z() + max.z()) * 0.5,
     );
-    let geoms = RayCastGeoms::of_faces(topo, comp).ok()?;
-    let holds = |p: Point3| matches!(classify_ray_cast_cached(&geoms, p), Ok(FaceClass::Inside));
+    let extent = (max - min).length();
+    let deflection = (extent * 1e-3).min(0.01);
+    let mut triangles: Vec<[Point3; 3]> = Vec::new();
+    for &fid in comp {
+        let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
+        let pos = &mesh.mesh.positions;
+        for tri in mesh.mesh.indices.chunks_exact(3) {
+            triangles.push([
+                pos[tri[0] as usize],
+                pos[tri[1] as usize],
+                pos[tri[2] as usize],
+            ]);
+        }
+    }
+    // A sqrt-prime direction cannot lie in a face plane or run along an edge.
+    let dir = Vec3::new(2.0_f64.sqrt(), 3.0_f64.sqrt(), 5.0_f64.sqrt())
+        .normalize()
+        .ok()?;
+    let holds = |p: Point3| {
+        triangles
+            .iter()
+            .filter(|&&[a, b, c]| {
+                brepkit_math::ray_triangle::watertight_ray_triangle_intersect(p, dir, a, b, c)
+                    .is_some_and(|hit| hit.t > 1e-9)
+            })
+            .count()
+            % 2
+            == 1
+    };
     if holds(centre) {
         return Some(centre);
     }
-    let extent = (max - min).length();
     // An offset under the ray caster's resolution reads the face itself.
     let offsets: Vec<f64> = [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
         .map(|step| step * extent)
