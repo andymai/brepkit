@@ -3175,13 +3175,24 @@ fn edge_surface_crossings(
         return out;
     }
     let mut budget = 4096_u32;
-    let mut stack: Vec<(f64, f64, f64, f64, u32)> = (0..32)
-        .map(|k| {
-            let a = (t1 - t0).mul_add(f64::from(k) / 32.0, t0);
-            let b = (t1 - t0).mul_add(f64::from(k + 1) / 32.0, t0);
-            (a, b, f(a), f(b), 0)
-        })
-        .collect();
+    // A NURBS edge's intervals start at its knots, so none straddles a
+    // span's bend.
+    let mut breaks = vec![t0, t1];
+    if let EdgeCurve::NurbsCurve(n) = curve {
+        breaks.extend(n.knots().iter().copied().filter(|&k| k > t0 && k < t1));
+    }
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|x, y| (*x - *y).abs() <= f64::EPSILON * (1.0 + y.abs()));
+    let per_span = u32::try_from(32 / (breaks.len() - 1)).unwrap_or(1).max(4);
+    let mut stack: Vec<(f64, f64, f64, f64, u32)> = Vec::new();
+    for w in breaks.windows(2) {
+        let (s0, s1) = (w[0], w[1]);
+        for k in 0..per_span {
+            let a = (s1 - s0).mul_add(f64::from(k) / f64::from(per_span), s0);
+            let b = (s1 - s0).mul_add(f64::from(k + 1) / f64::from(per_span), s0);
+            stack.push((a, b, f(a), f(b), 0));
+        }
+    }
     while let Some((a, b, fa, fb, depth)) = stack.pop() {
         if fa.abs() <= tol {
             out.push(at(a));
