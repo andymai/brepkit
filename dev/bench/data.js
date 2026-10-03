@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791039916927,
+  "lastUpdate": 1791044765633,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50273,6 +50273,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46623719,
             "range": "± 75106",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ddacc46d5789836053657dc4aa4e8116f4c751d1",
+          "message": "test(io): pin the hinge lid past its stop as ready repros and record the boundary-section root (#1959)\n\nThe gridfinity hinge scenario has five swing intersects left on the mesh\nfallback, all with the lid pushed past its stop. This test-only PR pins\nthem with two ignored ready repros, one per bin. Each requires an exact\nvalid intersect, compares the result point by point with both operands,\nand currently fails on main at the mesh-fallback check.\n\n## Root\n\nEach knuckle bracket's sliver runs along the lid's radius 2.45 cove. The\nsection cut by the bin's knuckle end face duplicates the cove's boundary\narc at the knuckle end. Rim arcs on the knuckle end faces behave\nlikewise. Both loop tracers merge the sliver into the unbounded face, so\nit is never split out.\n\n## Tried and parked\n\n- Dropping every curved section that runs along its own face's boundary\nin `fill_images_faces` makes all five intersects exact. Point scans on\ntwo results find no disagreement with either operand across 13,734 and\n8,041 points.\n- The drop breaks coincident-rim fuses in the same scenario. Op 103114,\nwith corner cylinder rims on coplanar bottoms, produces 12 non-manifold\nedges, and 7 of the scenario's 27 tests fail. The partner face keeps the\nsection edge while this face keeps its boundary edge. This work is\nparked on `wip/boundary-section-drop`.\n- Gating the drop by face type, plane only or curved only, or applying\nit only as a retry on a curved face with a broken trace does not\nseparate the hinge from the fuse. The hinge needs the drop on both plane\nand curved faces, while the fuse breaks when it is applied on curved\nfaces.\n\n## Changes\n\n- Adds `hinge_lid_past_its_stop_overlaps_the_lip_exactly`, covering the\n142-face seat bin with `hinge_past_stop_lid.bin`.\n- Adds `hinge_left_lid_past_its_stop_overlaps_the_lip_exactly`, covering\nthe 114-face left-wall bin with `hinge_left_seat_bin.bin` and\n`hinge_left_past_stop_lid.bin`.\n- Updates the roadmap's generator-hangs row with the root and parked\nbranch. Its inventory now lists five deferred-defect pins.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nPins the five mesh-fallback hinge swing intersects — all with the lid\npushed past its stop — as two ignored repro tests, one per bin, and\nrecords the root cause in the roadmap. Each test compares the boolean\nintersect result point-by-point against both operands; both currently\nfail on main at the mesh-fallback check. The tool's overhang test ends\non the same seat-bin pair.\n\n**Root cause and parked fix**\n\n- Each knuckle bracket's sliver runs along the lid's r = 2.45 cove; the\nsection the bin's knuckle end face cuts on that cove duplicates the\ncove's own boundary arc, so the loop tracers merge the sliver into the\nunbounded face and never split it out.\n- Dropping every curved section that runs along its own face's boundary\nmakes all five intersects exact but breaks coincident-rim fuses in the\nsame scenario (op 103114 yields 12 non-manifold edges, 7 of 27 tests\nfail); the work is parked on `wip/boundary-section-drop`.\n\n<sup>Written for commit 382b5c2e124b96d42b1c65e1110b515650dc6aed.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1959?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-03T16:23:47Z",
+          "tree_id": "2fff0fd6a022fb5b2cf3924f2c8b45bb1d56a31a",
+          "url": "https://github.com/andymai/brepkit/commit/ddacc46d5789836053657dc4aa4e8116f4c751d1"
+        },
+        "date": 1791044759903,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 579035,
+            "range": "± 8878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 627684,
+            "range": "± 9164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8186,
+            "range": "± 218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 438758,
+            "range": "± 5310",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27883179,
+            "range": "± 442158",
             "unit": "ns/iter"
           }
         ]
