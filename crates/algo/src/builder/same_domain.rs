@@ -62,6 +62,11 @@ pub struct SameDomainPair {
     /// most boundary) and the *other* (smaller) face for Intersect (whose
     /// footprint is bounded by both solids).
     pub representative: usize,
+    /// Same-rank members of the group lying beside the pair's member of
+    /// their rank rather than over it: pieces that tile one face. The
+    /// selector's kept side carries its tiles, and the dropped side's go with
+    /// it.
+    pub tiles: Vec<usize>,
 }
 
 /// A within-rank duplicate sub-face: same edge set, same surface, same input
@@ -677,33 +682,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                 let key = (idx_a.min(idx_b), idx_a.max(idx_b));
                 let same_orientation = pair_data.get(&key).copied().unwrap_or(true);
 
-                // Record the LARGER face (by projected area) as the
-                // representative, so the choice is geometry-based not rank-based.
-                // Coextensive (edge-set) pairs share the same domain (area ties),
-                // so A is a fine representative and matches historical behaviour.
-                // A geometric-overlap pair has two faces of different extent;
-                // tagging the larger lets the BOP selector keep it for Fuse and
-                // the smaller for Intersect. Which face is A flips with operand
-                // order, so deferring to area keeps the result order-independent.
-                let representative = if geometric_overlap {
-                    let area_a = repr_face_area(topo, sub_faces[idx_a].face_id);
-                    let area_b = repr_face_area(topo, sub_faces[idx_b].face_id);
-                    match (area_a, area_b) {
-                        (Some(aa), Some(ab)) if ab > aa => idx_b,
-                        _ => idx_a,
-                    }
-                } else {
-                    idx_a
-                };
-
-                pairs.push(SameDomainPair {
-                    idx_a,
-                    idx_b,
-                    same_orientation,
-                    geometric_overlap,
-                    representative,
-                });
-
+                let mut tiles: Vec<usize> = Vec::new();
                 // The group may also contain additional same-rank members
                 // (rare — a 3+ member group spanning both ranks). Treat those
                 // as within-rank duplicates against the matching-rank repr.
@@ -737,11 +716,76 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                         }
                         continue;
                     }
+                    // Residue lies over another piece of its own rank. Pieces
+                    // that tile one face side by side join the group through
+                    // the opposite face covering them all (a pin's end cap
+                    // split into a disc and a lens, flush on a knuckle end), and
+                    // none of them is a copy of another. Only a member whose
+                    // region shares no area with any other member of its rank
+                    // is a tile; a partial overlap stays a duplicate.
+                    let beside = members.iter().all(|&m| {
+                        m == idx
+                            || sub_faces[m].rank != sub_faces[idx].rank
+                            || (edge_sets[idx].is_none() || edge_sets[idx] != edge_sets[m])
+                                && planar_regions_apart(
+                                    topo,
+                                    sub_faces[idx].face_id,
+                                    sub_faces[m].face_id,
+                                )
+                    });
+                    if beside {
+                        if std::env::var("BK_SD").is_ok() {
+                            log::debug!(
+                                "SD within-rank TILE (beside its rank) face={:?} src={:?}",
+                                sub_faces[idx].face_id,
+                                sub_faces[idx].source_face
+                            );
+                        }
+                        tiles.push(idx);
+                        continue;
+                    }
                     within_rank_dups.push(WithinRankDuplicate {
                         representative: rep,
                         duplicate: idx,
                     });
                 }
+
+                // Record the LARGER side (by projected area) as the
+                // representative, so the choice is geometry-based not rank-based.
+                // Coextensive (edge-set) pairs share the same domain (area ties),
+                // so A is a fine representative and matches historical behaviour.
+                // A geometric-overlap pair has two faces of different extent;
+                // tagging the larger lets the BOP selector keep it for Fuse and
+                // the smaller for Intersect. Which face is A flips with operand
+                // order, so deferring to area keeps the result order-independent.
+                // A side is its pair member and the tiles of its rank, which
+                // stand for the region together.
+                let representative = if geometric_overlap || !tiles.is_empty() {
+                    let side = |rank: Rank, member: usize| -> Option<f64> {
+                        tiles
+                            .iter()
+                            .filter(|&&t| sub_faces[t].rank == rank)
+                            .try_fold(
+                                repr_face_area(topo, sub_faces[member].face_id)?,
+                                |sum, &t| Some(sum + repr_face_area(topo, sub_faces[t].face_id)?),
+                            )
+                    };
+                    match (side(Rank::A, idx_a), side(Rank::B, idx_b)) {
+                        (Some(aa), Some(ab)) if ab > aa => idx_b,
+                        _ => idx_a,
+                    }
+                } else {
+                    idx_a
+                };
+
+                pairs.push(SameDomainPair {
+                    idx_a,
+                    idx_b,
+                    same_orientation,
+                    geometric_overlap,
+                    representative,
+                    tiles,
+                });
             }
             // Within-rank only (A-only or B-only): cumulative boolean residue.
             // Keep the lowest-indexed face as representative; mark the rest
@@ -979,6 +1023,306 @@ fn compute_edge_set_quantized(
 /// is the conservative criterion that catches boolean residue (issue #696)
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
+/// A planar face's outer loop and holes in a plane frame, with the largest
+/// distance between a sampled chord and its curve.
+struct PlanarRegion {
+    outer: Vec<brepkit_math::vec::Point2>,
+    holes: Vec<Vec<brepkit_math::vec::Point2>>,
+    chord_error: f64,
+}
+
+/// Whether two coplanar planar faces' material regions share no area. Each
+/// face is probed just inside every boundary segment and on a 16 x 16 grid
+/// over its box, no probe of either may lie in the other, and their
+/// boundaries may not cross where both faces' material meets. Outlines are
+/// sampled 32 times along each curved edge, and a probe counts as inside the
+/// other face only past that face's own chord error, so a tile beside it on a
+/// shared arc split differently does not read as overlapping. `false` when
+/// either outline cannot be read or yields no probe, which keeps the member a
+/// duplicate.
+fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
+    use super::classify_2d::{boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d};
+    use brepkit_math::vec::{Point2, Point3};
+
+    type Region = PlanarRegion;
+
+    let Ok(face_a) = topo.face(a) else {
+        return false;
+    };
+    let FaceSurface::Plane { normal, .. } = *face_a.surface() else {
+        return false;
+    };
+    let wire_samples = |wid: brepkit_topology::wire::WireId| -> Option<(Vec<Point3>, f64)> {
+        let wire = topo.wire(wid).ok()?;
+        let (mut pts, mut chord_error) = (Vec::new(), 0.0_f64);
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let (sp, ep) = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
+            );
+            if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                pts.push(if oe.is_forward() { sp } else { ep });
+                continue;
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let at = |k: f64| {
+                let f = k / 32.0;
+                let f = if oe.is_forward() { f } else { 1.0 - f };
+                edge.curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+            };
+            for k in 0..32 {
+                let (p, q, m) = (
+                    at(f64::from(k)),
+                    at(f64::from(k + 1)),
+                    at(f64::from(k) + 0.5),
+                );
+                chord_error = chord_error.max((m - (p + (q - p) * 0.5)).length());
+                pts.push(p);
+            }
+        }
+        Some((pts, chord_error))
+    };
+    let face_samples = |fid: FaceId| -> Option<(Vec<Point3>, Vec<Vec<Point3>>, f64)> {
+        let face = topo.face(fid).ok()?;
+        let (outer, mut err) = wire_samples(face.outer_wire())?;
+        let mut holes = Vec::new();
+        for &w in face.inner_wires() {
+            let (h, e) = wire_samples(w)?;
+            err = err.max(e);
+            holes.push(h);
+        }
+        Some((outer, holes, err))
+    };
+    let (Some(sa), Some(sb)) = (face_samples(a), face_samples(b)) else {
+        return false;
+    };
+    if sa.0.len() < 3 || sb.0.len() < 3 {
+        return false;
+    }
+    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal, &sa.0);
+    let region =
+        |(outer, holes, chord_error): &(Vec<Point3>, Vec<Vec<Point3>>, f64)| PlanarRegion {
+            outer: outer.iter().map(|&p| frame.project(p)).collect(),
+            holes: holes
+                .iter()
+                .filter(|h| h.len() >= 3)
+                .map(|h| h.iter().map(|&p| frame.project(p)).collect())
+                .collect(),
+            chord_error: *chord_error,
+        };
+    // Inside a region clear of its boundary by `margin`.
+    let clear_inside = |q: Point2, r: &Region, margin: f64| -> bool {
+        let eps = boundary_eps(&r.outer).max(margin);
+        point_in_polygon_2d(q, &r.outer)
+            && distance_to_polygon_boundary(q, &r.outer) > eps
+            && r.holes
+                .iter()
+                .all(|h| !point_in_polygon_2d(q, h) && distance_to_polygon_boundary(q, h) > eps)
+    };
+    // Probes clear inside a region: a step inward from each boundary
+    // segment's middle (a thin frame round a wide hole has these where a grid
+    // has none), past the region's own chord error, then a grid over its box.
+    let probes = |r: &Region| -> Vec<Point2> {
+        let (lo, hi) = r.outer.iter().fold(
+            (
+                Point2::new(f64::INFINITY, f64::INFINITY),
+                Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+            ),
+            |(lo, hi), p| {
+                (
+                    Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                    Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+                )
+            },
+        );
+        let diag = (hi.x() - lo.x()).hypot(hi.y() - lo.y());
+        let reach = (1e-4 * diag).max(2.0 * r.chord_error);
+        let mut out = Vec::new();
+        for (lp, is_hole) in
+            std::iter::once((&r.outer, false)).chain(r.holes.iter().map(|h| (h, true)))
+        {
+            let n = lp.len();
+            let twice_area: f64 = (0..n)
+                .map(|i| {
+                    lp[i]
+                        .x()
+                        .mul_add(lp[(i + 1) % n].y(), -(lp[(i + 1) % n].x() * lp[i].y()))
+                })
+                .sum();
+            // Material lies left of a counter-clockwise outer loop and of a
+            // clockwise hole.
+            let left = (twice_area > 0.0) != is_hole;
+            for i in 0..n {
+                let (p, q) = (lp[i], lp[(i + 1) % n]);
+                let (dx, dy) = (q.x() - p.x(), q.y() - p.y());
+                let len = dx.hypot(dy);
+                if len < 1e-12 {
+                    continue;
+                }
+                let step = reach / len;
+                let (nx, ny) = if left { (-dy, dx) } else { (dy, -dx) };
+                let m = Point2::new(
+                    nx.mul_add(step, 0.5 * (p.x() + q.x())),
+                    ny.mul_add(step, 0.5 * (p.y() + q.y())),
+                );
+                if clear_inside(m, r, 0.0) {
+                    out.push(m);
+                }
+            }
+        }
+        let f = |k: i32| (f64::from(k) + 0.5) / 16.0;
+        out.extend(
+            (0..16)
+                .flat_map(|i| (0..16).map(move |j| (i, j)))
+                .map(|(i, j)| {
+                    Point2::new(
+                        (hi.x() - lo.x()).mul_add(f(i), lo.x()),
+                        (hi.y() - lo.y()).mul_add(f(j), lo.y()),
+                    )
+                })
+                .filter(|&q| clear_inside(q, r, 0.0)),
+        );
+        out
+    };
+    let (ra, rb) = (region(&sa), region(&sb));
+    let bounds = |r: &Region| {
+        r.outer.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(x0, y0, x1, y1), p| (x0.min(p.x()), y0.min(p.y()), x1.max(p.x()), y1.max(p.y())),
+        )
+    };
+    let (ba, bb) = (bounds(&ra), bounds(&rb));
+    let (x0, y0, x1, y1) = (
+        ba.0.max(bb.0),
+        ba.1.max(bb.1),
+        ba.2.min(bb.2),
+        ba.3.min(bb.3),
+    );
+    let pad = boundary_eps(&ra.outer).max(boundary_eps(&rb.outer));
+    if x0 > x1 + pad || y0 > y1 + pad {
+        return true;
+    }
+    for (from, into) in [(&ra, &rb), (&rb, &ra)] {
+        let ps = probes(from);
+        let margin = 1.5 * into.chord_error;
+        if ps.is_empty() || ps.iter().any(|&q| clear_inside(q, into, margin)) {
+            return false;
+        }
+    }
+    !boundaries_cross(&ra, &rb, (x0 - pad, y0 - pad, x1 + pad, y1 + pad), &|q| {
+        clear_inside(q, &ra, 1.5 * ra.chord_error) && clear_inside(q, &rb, 1.5 * rb.chord_error)
+    })
+}
+
+/// Whether two regions' boundaries cross where both regions' material
+/// meets: a proper crossing of two boundary segments inside `window`, beside
+/// which one of four points a short step off along the segments lies in
+/// both (`in_both`). Two differently sampled copies of one shared arc cross
+/// each other back and forth, but their faces lie on opposite sides of it.
+/// Segments are bucketed on a 32 x 32 grid over the window.
+fn boundaries_cross(
+    ra: &PlanarRegion,
+    rb: &PlanarRegion,
+    (x0, y0, x1, y1): (f64, f64, f64, f64),
+    in_both: &dyn Fn(brepkit_math::vec::Point2) -> bool,
+) -> bool {
+    use brepkit_math::vec::Point2;
+    const CELLS: usize = 32;
+    let segments = |r: &PlanarRegion| -> Vec<(Point2, Point2)> {
+        std::iter::once(&r.outer)
+            .chain(r.holes.iter())
+            .flat_map(|lp| (0..lp.len()).map(move |i| (lp[i], lp[(i + 1) % lp.len()])))
+            .filter(|(p, q)| {
+                p.x().max(q.x()) >= x0
+                    && p.x().min(q.x()) <= x1
+                    && p.y().max(q.y()) >= y0
+                    && p.y().min(q.y()) <= y1
+            })
+            .collect()
+    };
+    let (sa, sb) = (segments(ra), segments(rb));
+    if sa.is_empty() || sb.is_empty() {
+        return false;
+    }
+    let (w, h) = ((x1 - x0).max(1e-12), (y1 - y0).max(1e-12));
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    let cell = |x: f64, y: f64| -> (usize, usize) {
+        let cx = (((x - x0) / w) * CELLS as f64).clamp(0.0, (CELLS - 1) as f64) as usize;
+        let cy = (((y - y0) / h) * CELLS as f64).clamp(0.0, (CELLS - 1) as f64) as usize;
+        (cx, cy)
+    };
+    let mut grid: Vec<Vec<usize>> = vec![Vec::new(); CELLS * CELLS];
+    for (k, (p, q)) in sb.iter().enumerate() {
+        let (a, b) = (
+            cell(p.x().min(q.x()), p.y().min(q.y())),
+            cell(p.x().max(q.x()), p.y().max(q.y())),
+        );
+        for cx in a.0..=b.0 {
+            for cy in a.1..=b.1 {
+                grid[cy * CELLS + cx].push(k);
+            }
+        }
+    }
+    let side = |a: Point2, b: Point2, c: Point2| {
+        (b.x() - a.x()).mul_add(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
+    };
+    let mut seen: Vec<usize> = Vec::new();
+    for &(p, q) in &sa {
+        let (a, b) = (
+            cell(p.x().min(q.x()), p.y().min(q.y())),
+            cell(p.x().max(q.x()), p.y().max(q.y())),
+        );
+        seen.clear();
+        for cx in a.0..=b.0 {
+            for cy in a.1..=b.1 {
+                seen.extend_from_slice(&grid[cy * CELLS + cx]);
+            }
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        for &k in &seen {
+            let (u, v) = sb[k];
+            let (d1, d2, d3, d4) = (side(p, q, u), side(p, q, v), side(u, v, p), side(u, v, q));
+            if !(d1 * d2 < 0.0 && d3 * d4 < 0.0) {
+                continue;
+            }
+            let t = d3 / (d3 - d4);
+            let x = Point2::new(
+                (q.x() - p.x()).mul_add(t, p.x()),
+                (q.y() - p.y()).mul_add(t, p.y()),
+            );
+            let unit = |a: Point2, b: Point2| {
+                let (dx, dy) = (b.x() - a.x(), b.y() - a.y());
+                let l = dx.hypot(dy).max(1e-300);
+                (dx / l, dy / l)
+            };
+            let ((ax, ay), (bx, by)) = (unit(p, q), unit(u, v));
+            let step = 1e-4 * w.hypot(h);
+            for (sa_, sb_) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                let m = Point2::new(
+                    (sa_ * ax + sb_ * bx).mul_add(step, x.x()),
+                    (sa_ * ay + sb_ * by).mul_add(step, x.y()),
+                );
+                if in_both(m) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Whether a planar sub-face's interior lies OUTSIDE the opposite-rank
 /// representative's material region (outside its outer polygon or inside one
 /// of its holes). Such a member is not annihilated by the coincident overlap

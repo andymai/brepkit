@@ -1337,3 +1337,163 @@ fn convex_outlines_apart_keeps_a_shallow_apex() {
     ]);
     assert!(!convex_outlines_apart(&roof, &slab, tol));
 }
+
+/// Squares side by side share no area; squares overlapping by a quarter of
+/// their area, one inside the other, or two copies of a thin frame do,
+/// whichever points of them are read. A thin frame among other tiles of one
+/// cap is still apart from them.
+#[test]
+fn planar_regions_apart_reads_area_not_a_point() {
+    use brepkit_topology::builder::make_planar_face;
+    let square = |topo: &mut Topology, x: f64, y: f64, s: f64| {
+        let p = |u: f64, v: f64| brepkit_math::vec::Point3::new(u, v, 0.0);
+        make_planar_face(
+            topo,
+            &[p(x, y), p(x + s, y), p(x + s, y + s), p(x, y + s)],
+            1e-7,
+        )
+        .unwrap()
+    };
+    let mut topo = Topology::new();
+    let a = square(&mut topo, 0.0, 0.0, 2.0);
+    let beside = square(&mut topo, 2.0, 0.0, 2.0);
+    let overlapping = square(&mut topo, 1.0, 1.0, 2.0);
+    let inside = square(&mut topo, 0.5, 0.5, 1.0);
+    assert!(super::planar_regions_apart(&topo, a, beside));
+    assert!(!super::planar_regions_apart(&topo, a, overlapping));
+    assert!(!super::planar_regions_apart(&topo, a, inside));
+    assert!(!super::planar_regions_apart(&topo, inside, a));
+    // Two copies of a thin frame round a wide hole: no grid point lands on
+    // the frame, so the copies are not read as apart.
+    let frame = |topo: &mut Topology| {
+        let p = |u: f64, v: f64| brepkit_math::vec::Point3::new(u, v, 0.0);
+        let outer = make_polygon_wire(
+            topo,
+            &[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)],
+            1e-7,
+        )
+        .unwrap();
+        let hole = make_polygon_wire(
+            topo,
+            &[p(0.01, 0.01), p(0.01, 0.99), p(0.99, 0.99), p(0.99, 0.01)],
+            1e-7,
+        )
+        .unwrap();
+        topo.add_face(brepkit_topology::face::Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    let (f1, f2) = (frame(&mut topo), frame(&mut topo));
+    assert!(!super::planar_regions_apart(&topo, f1, f2));
+    // That thin frame as a tile of a cap split into a centre square, the
+    // frame, and a frame round it: apart from both neighbours.
+    let centre = square(&mut topo, 0.01, 0.01, 0.98);
+    let surround = {
+        let p = |u: f64, v: f64| brepkit_math::vec::Point3::new(u, v, 0.0);
+        let outer = make_polygon_wire(
+            &mut topo,
+            &[p(-1.0, -1.0), p(2.0, -1.0), p(2.0, 2.0), p(-1.0, 2.0)],
+            1e-7,
+        )
+        .unwrap();
+        let hole = make_polygon_wire(
+            &mut topo,
+            &[p(0.0, 0.0), p(0.0, 1.0), p(1.0, 1.0), p(1.0, 0.0)],
+            1e-7,
+        )
+        .unwrap();
+        topo.add_face(brepkit_topology::face::Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    assert!(super::planar_regions_apart(&topo, f1, centre));
+    assert!(super::planar_regions_apart(&topo, centre, f1));
+    assert!(super::planar_regions_apart(&topo, f1, surround));
+    assert!(super::planar_regions_apart(&topo, surround, f1));
+}
+
+/// Two tiles sharing a curved boundary split differently: a half disc whose
+/// arc is two edges, and the half annulus round it whose inner arc is one. The
+/// coarser side's chords bulge over the finer side's, so only outlines dense
+/// along the arc read the two as apart.
+#[test]
+fn planar_regions_apart_reads_a_shared_arc_split_differently() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    let o = Point3::new(0.0, 0.0, 0.0);
+    let ring = |r: f64| EdgeCurve::Circle(Circle3D::new(o, up, r).unwrap());
+    let v = |topo: &mut Topology, x: f64, y: f64| {
+        topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7))
+    };
+    let (e1, w1, n1) = (
+        v(&mut topo, 1.0, 0.0),
+        v(&mut topo, -1.0, 0.0),
+        v(&mut topo, 0.0, 1.0),
+    );
+    let (e2, w2) = (v(&mut topo, 2.0, 0.0), v(&mut topo, -2.0, 0.0));
+    let half_a = topo.add_edge(Edge::new(e1, n1, ring(1.0)));
+    let half_b = topo.add_edge(Edge::new(n1, w1, ring(1.0)));
+    let diameter = topo.add_edge(Edge::new(w1, e1, EdgeCurve::Line));
+    let inner = topo.add_edge(Edge::new(e1, w1, ring(1.0)));
+    let outer = topo.add_edge(Edge::new(e2, w2, ring(2.0)));
+    let right = topo.add_edge(Edge::new(e1, e2, EdgeCurve::Line));
+    let left = topo.add_edge(Edge::new(w2, w1, EdgeCurve::Line));
+    let plane = FaceSurface::Plane { normal: up, d: 0.0 };
+    let disc_wire = Wire::new(
+        vec![
+            OrientedEdge::new(half_a, true),
+            OrientedEdge::new(half_b, true),
+            OrientedEdge::new(diameter, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let ring_wire = Wire::new(
+        vec![
+            OrientedEdge::new(right, true),
+            OrientedEdge::new(outer, true),
+            OrientedEdge::new(left, true),
+            OrientedEdge::new(inner, false),
+        ],
+        true,
+    )
+    .unwrap();
+    let disc_w = topo.add_wire(disc_wire);
+    let ring_w = topo.add_wire(ring_wire);
+    let disc = topo.add_face(Face::new(disc_w, vec![], plane.clone()));
+    let annulus = topo.add_face(Face::new(ring_w, vec![], plane));
+    assert!(super::planar_regions_apart(&topo, disc, annulus));
+    assert!(super::planar_regions_apart(&topo, annulus, disc));
+}
+
+/// Two long narrow strips crossing in an X away from every probe: their
+/// boundaries cross where both strips' material meets, so they overlap.
+#[test]
+fn planar_regions_apart_sees_strips_crossing_between_probes() {
+    use brepkit_topology::builder::make_planar_face;
+    let rect = |topo: &mut Topology, (x0, y0): (f64, f64), (x1, y1): (f64, f64)| {
+        let p = |u: f64, v: f64| Point3::new(u, v, 0.0);
+        make_planar_face(topo, &[p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)], 1e-7).unwrap()
+    };
+    let mut topo = Topology::new();
+    let along = rect(&mut topo, (-5.0, -0.05), (3.0, 0.05));
+    let across = rect(&mut topo, (1.95, -5.0), (2.05, 3.0));
+    assert!(!super::planar_regions_apart(&topo, along, across));
+    assert!(!super::planar_regions_apart(&topo, across, along));
+}

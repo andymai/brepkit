@@ -90,7 +90,11 @@ pub(crate) fn select_faces(
     // Step 2: Identify which sub-face indices are part of valid SD pairs
     let sd_indices: HashSet<usize> = valid_sd_pairs
         .iter()
-        .flat_map(|p| [p.idx_a, p.idx_b])
+        .flat_map(|p| {
+            [p.idx_a, p.idx_b]
+                .into_iter()
+                .chain(p.tiles.iter().copied())
+        })
         .collect();
 
     // Step 3: Select non-SD faces via the standard truth table
@@ -171,7 +175,22 @@ fn apply_sd_selection(
     };
 
     for pair in sd_pairs {
-        let sf_a = &sub_faces[pair.idx_a];
+        // A kept face stands for its side with the tiles of its rank.
+        let push_side = |member: usize, selected: &mut Vec<SelectedFace>| {
+            let rank = &sub_faces[member].rank;
+            for idx in std::iter::once(member).chain(
+                pair.tiles
+                    .iter()
+                    .copied()
+                    .filter(|&t| t < sub_faces.len() && &sub_faces[t].rank == rank),
+            ) {
+                selected.push(SelectedFace {
+                    face_id: sub_faces[idx].face_id,
+                    source_face: sub_faces[idx].source_face,
+                    reversed: false,
+                });
+            }
+        };
 
         if std::env::var("BK_SD_SEL").is_ok() {
             log::debug!(
@@ -210,11 +229,7 @@ fn apply_sd_selection(
             //   exterior of the combined cut and must survive. Discarding it
             //   leaves that boundary open (a free-edged, non-watertight shell).
             if op == BooleanOp::Cut {
-                selected.push(SelectedFace {
-                    face_id: sf_a.face_id,
-                    source_face: sf_a.source_face,
-                    reversed: false,
-                });
+                push_side(pair.idx_a, selected);
                 continue;
             }
             // Fuse/Intersect with matching orientation: a same-oriented
@@ -245,11 +260,7 @@ fn apply_sd_selection(
             } else {
                 pair.representative
             };
-            selected.push(SelectedFace {
-                face_id: sub_faces[keep].face_id,
-                source_face: sub_faces[keep].source_face,
-                reversed: false,
-            });
+            push_side(keep, selected);
         } else {
             // Orientations DON'T match what the operation needs:
             // - Fuse + opposite-ori: internal faces — discard both
@@ -370,6 +381,49 @@ mod tests {
         }
     }
 
+    /// A pair's tiles ride with their side: the kept side brings every tile of
+    /// its rank, the dropped side's tiles go with it, and no tile reaches the
+    /// truth-table selection on its own (each tile carries a class that table
+    /// would keep).
+    #[test]
+    fn sd_pair_tiles_follow_their_side() {
+        // 0: A member, 1: B member, 2: A tile, 3 and 4: B tiles.
+        let ranks = [Rank::A, Rank::B, Rank::A, Rank::B, Rank::B];
+        let class_for = |op: BooleanOp, rank: Rank| match (op, rank) {
+            (BooleanOp::Fuse, _) | (BooleanOp::Cut, Rank::A) => FaceClass::Outside,
+            (BooleanOp::Intersect, _) | (BooleanOp::Cut, Rank::B) => FaceClass::Inside,
+        };
+        let table: [(BooleanOp, usize, bool, &[usize]); 6] = [
+            (BooleanOp::Fuse, 0, true, &[0, 2]),
+            (BooleanOp::Fuse, 1, true, &[1, 3, 4]),
+            (BooleanOp::Intersect, 0, true, &[1, 3, 4]),
+            (BooleanOp::Intersect, 1, true, &[0, 2]),
+            (BooleanOp::Cut, 1, false, &[0, 2]),
+            (BooleanOp::Cut, 0, true, &[]),
+        ];
+        for (op, representative, same_orientation, kept) in table {
+            let mut topo = Topology::new();
+            let sub_faces: Vec<SubFace> = ranks
+                .iter()
+                .map(|&rank| make_sub_face(&mut topo, rank, class_for(op, rank)))
+                .collect();
+            let pair = SameDomainPair {
+                idx_a: 0,
+                idx_b: 1,
+                same_orientation,
+                geometric_overlap: true,
+                representative,
+                tiles: vec![2, 3, 4],
+            };
+            let selected = select_faces(&sub_faces, op, &[pair], &[]);
+            let mut got: Vec<_> = selected.iter().map(|s| s.face_id).collect();
+            let mut want: Vec<_> = kept.iter().map(|&i| sub_faces[i].face_id).collect();
+            got.sort_by_key(|f| f.index());
+            want.sort_by_key(|f| f.index());
+            assert_eq!(got, want, "{op:?} representative {representative}");
+        }
+    }
+
     #[test]
     fn select_faces_no_sd_pairs() {
         let mut topo = Topology::new();
@@ -392,6 +446,7 @@ mod tests {
             same_orientation: true,
             geometric_overlap: false,
             representative: 5,
+            tiles: Vec::new(),
         }];
         // Should not panic — out-of-bounds pairs are skipped
         let selected = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
@@ -464,6 +519,7 @@ mod tests {
             same_orientation: true,
             geometric_overlap: true,
             representative: 0,
+            tiles: Vec::new(),
         }];
 
         let fused = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
@@ -503,6 +559,7 @@ mod tests {
             same_orientation: true,
             geometric_overlap: true,
             representative: 1,
+            tiles: Vec::new(),
         }];
 
         let fused = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
