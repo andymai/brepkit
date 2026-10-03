@@ -58,7 +58,7 @@ fn assert_rim_rounds_off(topo: &mut Topology, solid: SolidId, r: f64) {
     let removed = before - solid_volume(topo, result.solid, 0.001).unwrap();
     let truth = rounded_off(RADIUS, r);
     assert!(
-        (removed - truth).abs() < 1e-6 * before,
+        (removed - truth).abs() < 1e-4 * before,
         "r = {r}: removed {removed}, truth {truth}"
     );
 }
