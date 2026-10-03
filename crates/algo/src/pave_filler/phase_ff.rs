@@ -3244,11 +3244,13 @@ fn edge_surface_crossings(
             .iter()
             .min_by(|x, y| f(x.0).abs().total_cmp(&f(y.0).abs()))
         {
-            // A touch is a dip of the distance that keeps its sign, not a
-            // point on the slope down to a crossing.
+            // A near-zero point counts where the distance changes sign across
+            // it, at the edge's end, or where it dips without changing sign;
+            // not on the slope down to a crossing found elsewhere.
             let d = (t1 - t0) * 1e-6;
+            let at_end = (t - t0).abs() <= d || (t1 - t).abs() <= d;
             let (fl, fm, fr) = (f(t - d), f(t), f(t + d));
-            if fm.abs() <= fl.abs() && fm.abs() <= fr.abs() && fl * fr > 0.0 {
+            if at_end || fl * fr < 0.0 || fm.abs() <= fl.abs() && fm.abs() <= fr.abs() {
                 out.push(at(t));
             }
         }
@@ -7852,6 +7854,36 @@ mod tests {
         for (p, y) in hits.iter().zip([0.009_783_49, 0.016_111_86]) {
             assert!((p.y() - y).abs() < 1e-5, "{p:?}");
         }
+    }
+
+    /// A unit circle arc ending exactly on a cylinder it crosses there, and
+    /// crossing another exactly at one of its first samples: both crossings
+    /// are kept.
+    #[test]
+    fn edge_crossings_keep_a_crossing_on_a_sample_or_an_end() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle =
+            Circle3D::new_with_ref(Point3::new(0.0, 0.0, 0.0), z, 1.0, Vec3::new(1.0, 0.0, 0.0))
+                .unwrap();
+        let (sp, ep) = (circle.evaluate(0.0), circle.evaluate(1.6));
+        // Through the arc's start, crossing it there.
+        let at_start = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(1.0, -1.0, -1.0), z, 1.0).unwrap(),
+        );
+        let hits =
+            edge_surface_crossings(&EdgeCurve::Circle(circle.clone()), sp, ep, &at_start, 1e-7);
+        assert!(hits.iter().any(|p| (*p - sp).length() < 1e-6), "{hits:?}");
+        // Through the point at angle 0.05 (the first sample of 32 over 1.6).
+        let q = circle.evaluate(0.05);
+        let r = 0.5;
+        let through = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(q.x() + r, q.y(), -1.0), z, r).unwrap(),
+        );
+        let hits = edge_surface_crossings(&EdgeCurve::Circle(circle), sp, ep, &through, 1e-7);
+        assert!(hits.iter().any(|p| (*p - q).length() < 1e-6), "{hits:?}");
     }
 
     /// Two discs in crossing planes along the z axis: apart, overlapping, and
