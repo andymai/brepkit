@@ -768,8 +768,11 @@ fn boolean_inner(
                 // pieces legitimately touch the operand boundaries.
                 let intersect_safe = op != BooleanOp::Intersect
                     || components_vec.iter().all(|comp| {
-                        let Some(centre) = component_interior_point(topo, comp) else {
+                        if component_aabb(topo, comp).is_none() {
                             return true;
+                        }
+                        let Some(centre) = component_interior_point(topo, comp) else {
+                            return false;
                         };
                         [a, b].iter().all(|&operand| {
                             !matches!(
@@ -3106,8 +3109,8 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
 /// A point inside a face component: its box centre when the component holds
 /// it, else the first point it holds stepped off one of its plane faces'
 /// centroids. A thin strip bent along a lip holds no point near its box
-/// centre, so the centre alone says nothing about where the strip lies. The
-/// box centre when no point is found.
+/// centre, so the centre alone says nothing about where the strip lies.
+/// `None` when no point is found.
 fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
     use brepkit_algo::FaceClass;
     use brepkit_algo::classifier::{RayCastGeoms, classify_ray_cast_cached};
@@ -3117,9 +3120,7 @@ fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> 
         (min.y() + max.y()) * 0.5,
         (min.z() + max.z()) * 0.5,
     );
-    let Ok(geoms) = RayCastGeoms::of_faces(topo, comp) else {
-        return Some(centre);
-    };
+    let geoms = RayCastGeoms::of_faces(topo, comp).ok()?;
     let holds = |p: Point3| matches!(classify_ray_cast_cached(&geoms, p), Ok(FaceClass::Inside));
     if holds(centre) {
         return Some(centre);
@@ -3141,7 +3142,7 @@ fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> 
             }
         }
     }
-    Some(centre)
+    None
 }
 
 /// A face component's vertex AABB, or `None` for an empty component.

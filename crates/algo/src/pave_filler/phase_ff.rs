@@ -2651,6 +2651,7 @@ fn trim_ellipse_to_boundary_crossings(
     }
 
     let mut plane_poly: Vec<Point3> = Vec::new();
+    let mut curved = false;
     for oe in topo.wire(face.outer_wire()).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(edge.start()).ok()?.point();
@@ -2669,10 +2670,11 @@ fn trim_ellipse_to_boundary_crossings(
             return None;
         }
         // A curved edge of the plane face (a lid's rounded corner): its
-        // crossings with the analytic surface by the sign of the distance to
-        // it, and the outline sampled along it in wire order. Without them
-        // the arc is left to the sampled in-both restriction, which can run
-        // past the analytic face's rim.
+        // crossings with the analytic surface, and the outline sampled
+        // along it in wire order. Without them the arc is left to the
+        // sampled in-both restriction, which can run past the analytic
+        // face's rim.
+        curved = true;
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
         for k in 0..32 {
             let f = f64::from(k) / 32.0;
@@ -2682,19 +2684,38 @@ fn trim_ellipse_to_boundary_crossings(
                     .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep),
             );
         }
-        let signed = |q: Point3| analytic_signed_distance(analytic_surf, q);
-        for (_, p) in super::phase_ef::find_crossings_by_sampling(
-            edge.curve(),
-            sp,
-            ep,
-            t0,
-            t1,
-            &signed,
-            tol.linear,
-        ) {
+        for p in conic_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)? {
             push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
+    // With curved edges the face is read on its own lines and arcs, holes
+    // included: an arc kept by the chord outline could run through a hole,
+    // or be lost in the gap between an arc and its chords.
+    let exact_region = if curved {
+        for &wid in face.inner_wires() {
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let sp = topo.vertex(edge.start()).ok()?.point();
+                let ep = topo.vertex(edge.end()).ok()?.point();
+                let points = if matches!(edge.curve(), EdgeCurve::Line) {
+                    line_segment_surface_crossings(sp, ep, analytic_surf)
+                } else {
+                    conic_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)?
+                };
+                for p in points {
+                    push_crossing(p, Some(oe.edge()), &mut crossings);
+                }
+            }
+        }
+        let origin = raw.p_start;
+        let frame = brepkit_math::frame::Frame3::from_normal(origin, *plane_n).ok()?;
+        let pieces =
+            brepkit_topology::planar::face_boundary_2d(topo, plane_face, origin, frame.x, frame.y)
+                .ok()??;
+        Some((pieces, origin, frame))
+    } else {
+        None
+    };
 
     // Exact containment on the PLANE face: its boundary is all straight
     // edges (guaranteed above), so its outer polygon decides whether an arc
@@ -2708,6 +2729,11 @@ fn trim_ellipse_to_boundary_crossings(
     // a point within weld distance of the boundary counts as inside so a
     // legitimate arc ending exactly on an edge is never rejected.
     let plane_contains = |p: Point3| -> bool {
+        if let Some((pieces, origin, frame)) = &exact_region {
+            let d = p - *origin;
+            let q = brepkit_math::vec::Point2::new(d.dot(frame.x), d.dot(frame.y));
+            return brepkit_math::region2d::point_in_region(pieces, q, tol.linear) != Some(false);
+        }
         if plane_poly.len() < 3 {
             return true;
         }
@@ -3083,6 +3109,81 @@ fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> 
         return None;
     }
     Some(sp + dir * s.clamp(0.0, 1.0))
+}
+
+/// Where a plane face's circle or ellipse edge crosses a cylinder or cone,
+/// by the sign of `analytic_signed_distance`. That distance changes no faster
+/// than `slope` per unit of arc length, so an interval whose end distances
+/// sum to more than `slope` times its arc length holds no pair of crossings;
+/// every other interval is halved until it does, or brackets one crossing,
+/// or narrows onto a tangency. `None` for any other curve.
+fn conic_edge_surface_crossings(
+    curve: &EdgeCurve,
+    sp: Point3,
+    ep: Point3,
+    surface: &FaceSurface,
+    tol: f64,
+) -> Option<Vec<Point3>> {
+    let speed = match curve {
+        EdgeCurve::Circle(c) => c.radius(),
+        EdgeCurve::Ellipse(e) => e.semi_major().max(e.semi_minor()),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+    };
+    let slope = match surface {
+        FaceSurface::Cone(cone) => 1.0 / cone.half_angle().cos(),
+        _ => 1.0,
+    } * speed;
+    let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
+    let f = |t: f64| analytic_signed_distance(surface, at(t));
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let mut out = Vec::new();
+    // An edge lying on the surface crosses nothing; its distance is noise.
+    if (0..=32).all(|k| f((t1 - t0).mul_add(f64::from(k) / 32.0, t0)).abs() <= 4.0 * tol) {
+        return Some(out);
+    }
+    let mut budget = 4096_u32;
+    let mut stack: Vec<(f64, f64, f64, f64, u32)> = (0..32)
+        .map(|k| {
+            let a = (t1 - t0).mul_add(f64::from(k) / 32.0, t0);
+            let b = (t1 - t0).mul_add(f64::from(k + 1) / 32.0, t0);
+            (a, b, f(a), f(b), 0)
+        })
+        .collect();
+    while let Some((a, b, fa, fb, depth)) = stack.pop() {
+        if fa == 0.0 {
+            out.push(at(a));
+        }
+        if fa * fb < 0.0 {
+            let (mut lo, mut hi, mut flo) = (a, b, fa);
+            for _ in 0..60 {
+                let m = 0.5 * (lo + hi);
+                let fm = f(m);
+                if fm * flo < 0.0 {
+                    hi = m;
+                } else {
+                    lo = m;
+                    flo = fm;
+                }
+            }
+            out.push(at(0.5 * (lo + hi)));
+        } else if fa.abs() + fb.abs() <= slope * (b - a) {
+            if depth >= 40 || budget == 0 {
+                if fa.abs().min(fb.abs()) <= 4.0 * tol {
+                    out.push(at(if fa.abs() <= fb.abs() { a } else { b }));
+                }
+                continue;
+            }
+            budget -= 1;
+            let m = 0.5 * (a + b);
+            let fm = f(m);
+            stack.push((a, m, fa, fm, depth + 1));
+            stack.push((m, b, fm, fb, depth + 1));
+        }
+    }
+    if f(t1) == 0.0 {
+        out.push(at(t1));
+    }
+    Some(out)
 }
 
 /// A distance to a cylinder or cone that changes sign across it (both nappes
@@ -7569,6 +7670,31 @@ mod tests {
             &circle,
             Tolerance::default()
         ));
+    }
+
+    /// A unit circle meeting a cylinder twice 0.06 rad apart, closer than one
+    /// sampling interval: both crossings are found.
+    #[test]
+    fn conic_edge_crossings_find_a_close_pair() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let circle =
+            Circle3D::new_with_ref(Point3::new(0.0, 0.0, 0.0), z, 1.0, Vec3::new(1.0, 0.0, 0.0))
+                .unwrap();
+        let cylinder = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(1.999, 0.0, -1.0), z, 1.0).unwrap(),
+        );
+        let (sp, ep) = (circle.evaluate(-1.0), circle.evaluate(1.0));
+        let hits =
+            conic_edge_surface_crossings(&EdgeCurve::Circle(circle), sp, ep, &cylinder, 1e-7)
+                .unwrap();
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        for p in hits {
+            assert!((p.x() - 0.9995).abs() < 1e-6, "{p:?}");
+            assert!((p.y().abs() - 0.031_61).abs() < 1e-4, "{p:?}");
+        }
     }
 
     /// Two discs in crossing planes along the z axis: apart, overlapping, and

@@ -3441,6 +3441,12 @@ pub struct CapPlane {
     pub out_normal: Vec3,
 }
 
+/// A free loop on a cap plane: the plane's index, the loop wound about its
+/// discarded face's normal, arc-true samples, and how the faces already on
+/// the loop run its edges (`Some(true)` all with it, `Some(false)` all
+/// against it).
+type CapLoop = (usize, Vec<OrientedEdge>, Vec<Point3>, Option<bool>);
+
 /// Synthesise the missing floor/ceiling cap face(s) of a partial coplanar
 /// same-domain overlap.
 ///
@@ -3547,7 +3553,7 @@ fn cap_partial_overlap_free_loops(
     // ring and the kept disc's outline. Capping the inner loop separately
     // double-covers the disc same-sense).
     let cap_trace = std::env::var("BK_CAP_TRACE").is_ok();
-    let mut cap_loops: Vec<(usize, Vec<OrientedEdge>, Vec<Point3>, bool)> = Vec::new();
+    let mut cap_loops: Vec<CapLoop> = Vec::new();
 
     for start in 0..free_edges.len() {
         if used_edge[start] {
@@ -3686,11 +3692,17 @@ fn cap_partial_overlap_free_loops(
         // Wound about the discarded face's normal, the loop can run every
         // edge the same way as the face already on it: the cap of an
         // intersect's piece ending on a plane where the operands only touch
-        // faces the other way.
-        let against = oriented
-            .iter()
-            .all(|oe| neighbour_sense.get(&oe.edge()) == Some(&oe.is_forward()));
-        cap_loops.push((cap_idx, oriented, samples, against));
+        // faces the other way. `Some(true)` when every edge runs with the
+        // face on it, `Some(false)` when every edge runs against it.
+        let with = |oe: &OrientedEdge| neighbour_sense.get(&oe.edge()) == Some(&oe.is_forward());
+        let sense = if oriented.iter().all(with) {
+            Some(true)
+        } else if oriented.iter().all(|oe| !with(oe)) {
+            Some(false)
+        } else {
+            None
+        };
+        cap_loops.push((cap_idx, oriented, samples, sense));
     }
 
     // Containment-nest loops sharing a cap plane: a loop whose vertices all
@@ -3818,7 +3830,8 @@ fn cap_partial_overlap_free_loops(
         if depth_of(i) % 2 == 1 {
             continue; // odd depth: becomes a hole of its parent below
         }
-        let (cap_idx, oriented, verts3d, against) = &cap_loops[i];
+        let (cap_idx, oriented, verts3d, sense) = &cap_loops[i];
+        let against = *sense == Some(true);
         let cap = cap_planes[*cap_idx];
         let reversed = |oes: &[OrientedEdge]| -> Vec<OrientedEdge> {
             oes.iter()
@@ -3826,7 +3839,7 @@ fn cap_partial_overlap_free_loops(
                 .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
                 .collect()
         };
-        let outer = if *against {
+        let outer = if against {
             reversed(oriented)
         } else {
             oriented.clone()
@@ -3840,18 +3853,20 @@ fn cap_partial_overlap_free_loops(
             if parent[j] != Some(i) {
                 continue;
             }
-            // Hole winding: opposite the outer's.
-            let hole = if *against {
-                cap_loops[j].1.clone()
-            } else {
-                reversed(&cap_loops[j].1)
+            // Each hole runs against the faces on its own edges; one whose
+            // edges disagree winds opposite the outer.
+            let hole = match cap_loops[j].3 {
+                Some(true) => reversed(&cap_loops[j].1),
+                Some(false) => cap_loops[j].1.clone(),
+                None if against => cap_loops[j].1.clone(),
+                None => reversed(&cap_loops[j].1),
             };
             if let Ok(w) = Wire::new(hole, true) {
                 inner_wids.push(topo.add_wire(w));
             }
         }
         let origin = Point3::new(0.0, 0.0, 0.0);
-        let normal = if *against {
+        let normal = if against {
             -cap.out_normal
         } else {
             cap.out_normal
@@ -3935,6 +3950,99 @@ mod tests {
             let uses = &senses[&oe.edge()];
             assert_eq!(uses.len(), 2);
             assert_ne!(uses[0], uses[1], "edge {:?} runs one way twice", oe.edge());
+        }
+    }
+
+    /// A square wall missing its top, with a pillar standing in its middle
+    /// whose top is missing too, capped from a discarded face that faced
+    /// down: the ring between them runs its outer loop and its hole each
+    /// against the walls already on them, though both sets of walls face out.
+    #[test]
+    fn a_capped_ring_runs_its_hole_against_the_pillar_walls() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::Wire;
+
+        let mut topo = Topology::new();
+        let square = |lo: f64, hi: f64| [(lo, lo), (hi, lo), (hi, hi), (lo, hi)];
+        let mut face_ids: Vec<FaceId> = Vec::new();
+        for corners in [square(0.0, 4.0), square(1.0, 3.0)] {
+            let bottom: Vec<_> = corners
+                .iter()
+                .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+                .collect();
+            let top: Vec<_> = corners
+                .iter()
+                .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 1.0), 1e-7)))
+                .collect();
+            let mut edge = |a, b| topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+            let lower: Vec<EdgeId> = (0..4)
+                .map(|i| edge(bottom[i], bottom[(i + 1) % 4]))
+                .collect();
+            let upper: Vec<EdgeId> = (0..4).map(|i| edge(top[i], top[(i + 1) % 4])).collect();
+            let rise: Vec<EdgeId> = (0..4).map(|i| edge(bottom[i], top[i])).collect();
+            for i in 0..4 {
+                let j = (i + 1) % 4;
+                let oes = [
+                    (lower[i], true),
+                    (rise[j], true),
+                    (upper[i], false),
+                    (rise[i], false),
+                ];
+                let wire = topo.add_wire(
+                    Wire::new(
+                        oes.iter().map(|&(e, f)| OrientedEdge::new(e, f)).collect(),
+                        true,
+                    )
+                    .unwrap(),
+                );
+                let (a, b) = (corners[i], corners[j]);
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let len = dx.hypot(dy);
+                let normal = Vec3::new(dy / len, -dx / len, 0.0);
+                let d = normal.dot(Vec3::new(a.0, a.1, 0.0));
+                face_ids.push(topo.add_face(Face::new(
+                    wire,
+                    vec![],
+                    FaceSurface::Plane { normal, d },
+                )));
+            }
+        }
+        let mut sources = vec![None; face_ids.len()];
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let plane = CapPlane {
+            normal: up,
+            d: 1.0,
+            out_normal: -up,
+        };
+        cap_partial_overlap_free_loops(&mut topo, &mut face_ids, &mut sources, &[plane]).unwrap();
+        assert_eq!(face_ids.len(), 9, "one ring cap");
+        let cap = topo.face(face_ids[8]).unwrap();
+        assert_eq!(cap.inner_wires().len(), 1);
+        let normal = match cap.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            other => unreachable!("the cap is a plane, not {}", other.type_tag()),
+        };
+        assert!(normal.dot(up) > 0.99, "the cap faces up: {normal:?}");
+        let mut senses: HashMap<EdgeId, Vec<bool>> = HashMap::new();
+        for &fid in &face_ids {
+            let face = topo.face(fid).unwrap();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid).unwrap().edges() {
+                    senses
+                        .entry(oe.edge())
+                        .or_default()
+                        .push(oe.is_forward() != face.is_reversed());
+                }
+            }
+        }
+        for wid in std::iter::once(cap.outer_wire()).chain(cap.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                let uses = &senses[&oe.edge()];
+                assert_eq!(uses.len(), 2);
+                assert_ne!(uses[0], uses[1], "edge {:?} runs one way twice", oe.edge());
+            }
         }
     }
 
