@@ -2675,48 +2675,34 @@ fn trim_ellipse_to_boundary_crossings(
         // sampled in-both restriction, which can run past the analytic
         // face's rim.
         curved = true;
-        plane_poly.extend(sample_edge_to_tolerance(
-            edge.curve(),
-            sp,
-            ep,
-            oe.is_forward(),
-        ));
         for p in edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear) {
             push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
     // With curved edges the face's holes bound it too, and it is read on its
-    // own lines and arcs where it has no NURBS edge: an arc kept by the chord
-    // outline could run through a hole, or be lost in the gap between an arc
-    // and its chords.
+    // own lines and arcs: an arc kept by the chord outline could run through
+    // a hole, or be lost in the gap between an arc and its chords. A face
+    // with a NURBS edge is read on its outline and hole outlines instead,
+    // sampled to tolerance.
     let mut hole_polys: Vec<Vec<Point3>> = Vec::new();
     let exact_region = if curved {
         for &wid in face.inner_wires() {
-            let mut ring = Vec::new();
             for oe in topo.wire(wid).ok()?.edges() {
                 let edge = topo.edge(oe.edge()).ok()?;
                 let sp = topo.vertex(edge.start()).ok()?.point();
                 let ep = topo.vertex(edge.end()).ok()?.point();
                 let points = if matches!(edge.curve(), EdgeCurve::Line) {
-                    ring.push(if oe.is_forward() { sp } else { ep });
                     line_segment_surface_crossings(sp, ep, analytic_surf)
                 } else {
-                    ring.extend(sample_edge_to_tolerance(
-                        edge.curve(),
-                        sp,
-                        ep,
-                        oe.is_forward(),
-                    ));
                     edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)
                 };
                 for p in points {
                     push_crossing(p, Some(oe.edge()), &mut crossings);
                 }
             }
-            hole_polys.push(ring);
         }
         let origin = raw.p_start;
-        brepkit_math::frame::Frame3::from_normal(origin, *plane_n)
+        let exact = brepkit_math::frame::Frame3::from_normal(origin, *plane_n)
             .ok()
             .and_then(|frame| {
                 brepkit_topology::planar::face_boundary_2d(
@@ -2725,7 +2711,33 @@ fn trim_ellipse_to_boundary_crossings(
                 .ok()
                 .flatten()
                 .map(|pieces| (pieces, origin, frame))
-            })
+            });
+        if exact.is_none() {
+            let ring = |wid: brepkit_topology::wire::WireId| -> Option<Vec<Point3>> {
+                let mut pts = Vec::new();
+                for oe in topo.wire(wid).ok()?.edges() {
+                    let edge = topo.edge(oe.edge()).ok()?;
+                    let sp = topo.vertex(edge.start()).ok()?.point();
+                    let ep = topo.vertex(edge.end()).ok()?.point();
+                    if matches!(edge.curve(), EdgeCurve::Line) {
+                        pts.push(if oe.is_forward() { sp } else { ep });
+                    } else {
+                        pts.extend(sample_edge_to_tolerance(
+                            edge.curve(),
+                            sp,
+                            ep,
+                            oe.is_forward(),
+                        ));
+                    }
+                }
+                Some(pts)
+            };
+            plane_poly = ring(face.outer_wire())?;
+            for &wid in face.inner_wires() {
+                hole_polys.push(ring(wid)?);
+            }
+        }
+        exact
     } else {
         None
     };
