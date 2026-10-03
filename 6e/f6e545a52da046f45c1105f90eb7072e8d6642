@@ -1,0 +1,19 @@
+crates/operations/src/boolean/mod.rs
+  s_a8677c67f85a06::t_a14e9763d4860e 762-771,778-779,787
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6ef6e545a52da046f45c1105f90eb7072e8d6642",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
