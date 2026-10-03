@@ -3245,12 +3245,16 @@ fn edge_surface_crossings(
             .min_by(|x, y| f(x.0).abs().total_cmp(&f(y.0).abs()))
         {
             // A near-zero point counts where the distance changes sign across
-            // it, at the edge's end, or where it dips without changing sign;
-            // not on the slope down to a crossing found elsewhere.
+            // it, at the edge's end when it lies on the surface, or where it
+            // dips without changing sign; not on the slope down to a crossing
+            // found elsewhere.
             let d = (t1 - t0) * 1e-6;
             let at_end = (t - t0).abs() <= d || (t1 - t).abs() <= d;
             let (fl, fm, fr) = (f(t - d), f(t), f(t + d));
-            if at_end || fl * fr < 0.0 || fm.abs() <= fl.abs() && fm.abs() <= fr.abs() {
+            if at_end && fm.abs() <= tol
+                || fl * fr < 0.0
+                || fm.abs() <= fl.abs() && fm.abs() <= fr.abs()
+            {
                 out.push(at(t));
             }
         }
