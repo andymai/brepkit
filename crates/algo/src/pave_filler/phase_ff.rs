@@ -3182,6 +3182,9 @@ fn edge_surface_crossings(
     }
     breaks.sort_by(f64::total_cmp);
     breaks.dedup_by(|x, y| (*x - *y).abs() <= f64::EPSILON * (1.0 + y.abs()));
+    if breaks.len() < 2 {
+        return Vec::new();
+    }
     let per_span = u32::try_from(32 / (breaks.len() - 1)).unwrap_or(1).max(4);
     let mut stack: Vec<(f64, f64, f64, f64, u32)> = Vec::new();
     for w in breaks.windows(2) {
