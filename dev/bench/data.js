@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791057258323,
+  "lastUpdate": 1791058561703,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50435,6 +50435,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36572137,
             "range": "± 266067",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6941b69733133bfc05c01aab7aebc837bdf8fb24",
+          "message": "fix(operations): mesh a solid in the same vertex order whatever the arena held before it (#1962)\n\nMesh output is now deterministic across arena histories. The gridfinity\ncache-key suite passes all 17 tests in 58.70 s on this branch’s wasm\nbuild, compared with 11 of 17 failures in 413.7 s before the change.\n\n## What was wrong\n\nThe solid mesher in `crates/operations/src/tessellate/solid.rs` numbered\nshared vertices by iterating `edge_points`, a hash map keyed by arena\nedge index. Vertex and triangle order therefore followed hashes of edge\nIDs, which shift with the arena’s prior contents.\n\nFour builds of the same label tab in one kernel produced the same vertex\nset in a different order each time. The cache-key test fingerprints\nmeshes in vertex order and compares whole-bin mesh volumes at `1e-6`. It\ninterpreted identical builds as different and confirmed each result with\nwhole-bin rebuilds.\n\nConsequently, `labelTabs` reported 13 lid parameters as “same cacheKey,\ndifferent bin.” Later, a fillet trapped at call 1,794,666 after the\nworker reached 4.16 GB, and every subsequent test failed on the poisoned\nkernel.\n\n## Change\n\nThe mesher now walks sampled edges in ID order. Fallback vertex normals\nalso sum their faces in ID order.\n\nThe fix makes mesh output depend only on the solid and the build\nsequence, not on hash order.\n\n## Verification\n\nThe new test `a_solid_meshes_in_the_same_order_after_any_history` meshes\na box and a cylinder, each turned off the axes, after zero to three\nearlier boxes in the arena, then requires identical positions, normals\n(bit for bit), indices, and face offsets. It fails on main, and it fails\nif only the normal sort is removed.\n\nThe four label tab builds now produce the same vertex order.\n`featureCacheKeyDiscipline.test.ts` passes 17 of 17 tests in 58.70 s.\n\n`hingeSwing.scenario.test.ts` passes 27 of 27 tests in 185.79 s. The\npose sweep and truth audit match main exactly. The `approx_census`\noutput differs only in the face IDs a NURBS offset error names, which\nvary between runs on main.\n\nThe local workspace suite passes with 3324 tests passed and 20 skipped.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` now contains a closed entry for this\nfix, and the generator-hangs row records the cache-key file passing.\n\nThe arena row records that nothing removes entities from the arena.\n`brepjs`’s `dispose` is a no-op, so a long-lived kernel still grows\nuntil the 4 GB wasm heap. The cache-key file’s trap is the measured\ninstance.",
+          "timestamp": "2026-10-03T20:13:38Z",
+          "tree_id": "b09b226b3ed7f6fa94ab350bfe6dc365fc0228cc",
+          "url": "https://github.com/andymai/brepkit/commit/6941b69733133bfc05c01aab7aebc837bdf8fb24"
+        },
+        "date": 1791058555764,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 573940,
+            "range": "± 7576",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 643606,
+            "range": "± 10839",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7898,
+            "range": "± 368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 449947,
+            "range": "± 21022",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28295236,
+            "range": "± 498961",
             "unit": "ns/iter"
           }
         ]
