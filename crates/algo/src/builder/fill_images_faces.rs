@@ -4257,20 +4257,12 @@ fn build_topology_face(
     // (woven into the arrangement and attached whole) is one opening: a second
     // copy would put each of its edges on three faces.
     let mut inner_wire_ids = Vec::new();
-    let mut hole_keys: Vec<Vec<CbEdgeKey>> = Vec::new();
+    let mut hole_keys: std::collections::HashSet<Vec<HoleEdgeKey>> =
+        std::collections::HashSet::new();
     for inner in &split.inner_wires {
-        let mut key: Vec<CbEdgeKey> = inner
-            .iter()
-            .map(|e| {
-                let (a, b) = (quantize(e.start_3d), quantize(e.end_3d));
-                if a <= b { (a, b) } else { (b, a) }
-            })
-            .collect();
-        key.sort_unstable();
-        if hole_keys.contains(&key) {
+        if !hole_keys.insert(hole_key(inner)) {
             continue;
         }
-        hole_keys.push(key);
         let mut inner_oriented = Vec::with_capacity(inner.len());
         for pcurve_edge in inner {
             let (start_vid, end_vid) = resolve_edge_vertices(
@@ -4301,6 +4293,48 @@ fn build_topology_face(
     let face_id = topo.add_face(face);
 
     Some(face_id)
+}
+
+/// One hole edge: its unordered endpoints and its curve's type and geometry.
+type HoleEdgeKey = (
+    super::builder_solid::QPos,
+    super::builder_solid::QPos,
+    (u8, super::builder_solid::QPos, i64, i64),
+);
+
+/// An inner wire's edges, read at the duplicate-edge merge's own quantization
+/// so a copy that merge would collapse keys alike, with each curve's geometry
+/// so two closed circles sharing a seam point stay apart.
+fn hole_key(inner: &[super::split_types::OrientedPCurveEdge]) -> Vec<HoleEdgeKey> {
+    use super::builder_solid::{MERGE_TOL, quantize_point};
+    let q = |p: Point3| quantize_point(p, MERGE_TOL);
+    #[allow(clippy::cast_possible_truncation)]
+    let len = |x: f64| (x / MERGE_TOL).round() as i64;
+    let mut key: Vec<HoleEdgeKey> = inner
+        .iter()
+        .map(|e| {
+            let (a, b) = (q(e.start_3d), q(e.end_3d));
+            let (a, b) = if a <= b { (a, b) } else { (b, a) };
+            let curve = match &e.curve_3d {
+                EdgeCurve::Line => (0, (0, 0, 0), 0, 0),
+                EdgeCurve::Circle(c) => (1, q(c.center()), len(c.radius()), 0),
+                EdgeCurve::Ellipse(el) => (
+                    2,
+                    q(el.center()),
+                    len(el.semi_major()),
+                    len(el.semi_minor()),
+                ),
+                EdgeCurve::NurbsCurve(n) => {
+                    let cps = n.control_points();
+                    let mid = cps.get(cps.len() / 2).map_or((0, 0, 0), |&p| q(p));
+                    (3, mid, i64::try_from(cps.len()).unwrap_or(i64::MAX), 0)
+                }
+            };
+            (a, b, curve)
+        })
+        .collect();
+    key.sort_unstable();
+    key
 }
 
 /// Create a topology edge for a wire's pcurve edge, returning the edge id
@@ -4550,7 +4584,9 @@ mod tests {
     use brepkit_math::vec::Vec3;
 
     /// A plane sub-face whose hole the splitter reached twice (woven into
-    /// the arrangement and attached whole) builds with that hole once.
+    /// the arrangement and attached whole) builds with that hole once, also
+    /// when the copy is off by sub-tolerance noise, while two different holes
+    /// through one point both stay.
     #[test]
     fn a_hole_reached_twice_is_built_once() {
         use super::super::split_types::{OrientedPCurveEdge, SplitSubFace};
@@ -4607,34 +4643,73 @@ mod tests {
                 d: 0.0,
             },
         ));
-        let hole = square(4.0, 6.0, false);
-        let split = SplitSubFace {
-            surface: FaceSurface::Plane {
-                normal: Vec3::new(0.0, 0.0, 1.0),
-                d: 0.0,
-            },
-            outer_wire: square(0.0, 10.0, true),
-            inner_wires: vec![hole.clone(), hole],
-            reversed: false,
-            parent,
-            rank: Rank::A,
-            precomputed_interior: None,
+        let mut holes_built = |inner_wires: Vec<Vec<OrientedPCurveEdge>>| -> usize {
+            let split = SplitSubFace {
+                surface: FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+                outer_wire: square(0.0, 10.0, true),
+                inner_wires,
+                reversed: false,
+                parent,
+                rank: Rank::A,
+                precomputed_interior: None,
+            };
+            let face = build_topology_face(
+                &mut topo,
+                &split,
+                Tolerance::new(),
+                parent,
+                &mut HashMap::new(),
+                &HashMap::new(),
+                &BTreeMap::new(),
+                None,
+                &mut BTreeMap::new(),
+                &mut Vec::new(),
+                &crate::ds::GfaArena::new(),
+            )
+            .unwrap();
+            topo.face(face).unwrap().inner_wires().len()
         };
-        let face = build_topology_face(
-            &mut topo,
-            &split,
-            Tolerance::new(),
-            parent,
-            &mut HashMap::new(),
-            &HashMap::new(),
-            &BTreeMap::new(),
-            None,
-            &mut BTreeMap::new(),
-            &mut Vec::new(),
-            &crate::ds::GfaArena::new(),
-        )
-        .unwrap();
-        assert_eq!(topo.face(face).unwrap().inner_wires().len(), 1);
+        let hole = square(4.0, 6.0, false);
+        assert_eq!(holes_built(vec![hole.clone(), hole.clone()]), 1);
+        // A copy off by sub-tolerance noise is the same opening.
+        let nudged: Vec<OrientedPCurveEdge> = hole
+            .iter()
+            .map(|e| {
+                let mut e = e.clone();
+                e.start_3d = e.start_3d + Vec3::new(1e-9, 0.0, 0.0);
+                e.end_3d = e.end_3d + Vec3::new(1e-9, 0.0, 0.0);
+                e
+            })
+            .collect();
+        assert_eq!(holes_built(vec![hole, nudged]), 1);
+        // Two closed circles through one seam point are two openings.
+        let circle = |cx: f64, toward: f64| -> Vec<OrientedPCurveEdge> {
+            let c = brepkit_math::curves::Circle3D::new_with_ref(
+                Point3::new(cx, 5.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                Vec3::new(toward, 0.0, 0.0),
+            )
+            .unwrap();
+            let seam = Point3::new(5.0, 5.0, 0.0);
+            vec![OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Circle(c),
+                pcurve: Curve2D::Circle(
+                    brepkit_math::curves2d::Circle2D::new(Point2::new(cx, 5.0), 1.0).unwrap(),
+                ),
+                start_uv: Point2::new(5.0, 5.0),
+                end_uv: Point2::new(5.0, 5.0),
+                start_3d: seam,
+                end_3d: seam,
+                forward: true,
+                source_edge_idx: None,
+                pave_block_id: None,
+            }]
+        };
+        assert_eq!(holes_built(vec![circle(4.0, 1.0), circle(6.0, -1.0)]), 2);
     }
 
     #[test]
