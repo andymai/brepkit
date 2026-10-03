@@ -722,8 +722,9 @@ fn plane_plane_chamfer(
 ///
 /// Returns `None` (walker fallback) when the cylinder axis is not parallel to
 /// the plane normal, the spine is too short or degenerate, or the requested
-/// radius exceeds the conservative analytic bound. A bounded rim additionally
-/// rejects the spindle-torus regime `r >= r_c / 2`.
+/// radius reaches `r_c`. A bounded rim at `r >= r_c / 2` is a spindle torus;
+/// the quarter tube the blend uses lies outside the major radius, clear of
+/// the self-intersection.
 ///
 /// # Errors
 ///
@@ -768,14 +769,14 @@ pub fn plane_cylinder_fillet(
     //     "rim of a bare disc cap bounded BY the cylinder" (e.g. a primitive
     //     cylinder's bottom/top rim — the cap *is* the circle of radius `r_c`,
     //     so the fillet rounds INWARD with plate contact at `r_c - r`). The
-    //     discriminator: a bounded disc cap has no inner wires and every
-    //     boundary vertex lies within `r_c` of the cylinder axis; a plate that
-    //     the post stands on has boundary vertices beyond `r_c`.
+    //     discriminator: every boundary vertex of a bounded cap, its holes'
+    //     included, lies within `r_c` of the cylinder axis; a plate that the
+    //     post stands on has boundary vertices beyond `r_c`.
     let rim = !concave && plane_is_bounded_disc(topo, face_plane, cyl, r_c)?;
 
-    // 3) Only a bounded disc rim contracts toward the axis. It must remain a
-    // ring torus (`major > minor`). Post and hole contacts expand away from
-    // the axis; retain the existing conservative `r < r_c` analytic bound.
+    // 3) Only a bounded disc rim contracts toward the axis, to a spindle
+    // torus once `r >= r_c / 2`. Post and hole contacts expand away from the
+    // axis. Every case keeps `r < r_c`.
     let inward = rim;
     let max_radius = r_c;
     if radius <= tol_lin || radius >= max_radius {
