@@ -1339,7 +1339,9 @@ fn convex_outlines_apart_keeps_a_shallow_apex() {
 }
 
 /// Squares side by side share no area; squares overlapping by a quarter of
-/// their area, or one inside the other, do, whichever point of them is read.
+/// their area, one inside the other, or two copies of a thin frame do,
+/// whichever points of them are read. A thin frame among other tiles of one
+/// cap is still apart from them.
 #[test]
 fn planar_regions_apart_reads_area_not_a_point() {
     use brepkit_topology::builder::make_planar_face;
@@ -1388,4 +1390,34 @@ fn planar_regions_apart_reads_area_not_a_point() {
     };
     let (f1, f2) = (frame(&mut topo), frame(&mut topo));
     assert!(!super::planar_regions_apart(&topo, f1, f2));
+    // That thin frame as a tile of a cap split into a centre square, the
+    // frame, and a frame round it: apart from both neighbours.
+    let centre = square(&mut topo, 0.01, 0.01, 0.98);
+    let surround = {
+        let p = |u: f64, v: f64| brepkit_math::vec::Point3::new(u, v, 0.0);
+        let outer = make_polygon_wire(
+            &mut topo,
+            &[p(-1.0, -1.0), p(2.0, -1.0), p(2.0, 2.0), p(-1.0, 2.0)],
+            1e-7,
+        )
+        .unwrap();
+        let hole = make_polygon_wire(
+            &mut topo,
+            &[p(0.0, 0.0), p(0.0, 1.0), p(1.0, 1.0), p(1.0, 0.0)],
+            1e-7,
+        )
+        .unwrap();
+        topo.add_face(brepkit_topology::face::Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    };
+    assert!(super::planar_regions_apart(&topo, f1, centre));
+    assert!(super::planar_regions_apart(&topo, centre, f1));
+    assert!(super::planar_regions_apart(&topo, f1, surround));
+    assert!(super::planar_regions_apart(&topo, surround, f1));
 }

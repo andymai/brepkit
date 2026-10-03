@@ -1023,10 +1023,12 @@ fn compute_edge_set_quantized(
 /// is the conservative criterion that catches boolean residue (issue #696)
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
-/// Whether two coplanar planar faces' material regions share no area, read
-/// on a 16 x 16 grid over each face's box: no point of either, clear of its
-/// own boundary, lies in the other clear of the other's. `false` when either
-/// outline cannot be read, which keeps the member a duplicate.
+/// Whether two coplanar planar faces' material regions share no area. Each
+/// face is probed just inside every boundary segment (and on a 16 x 16 grid
+/// over its box); no probe of either may lie in the other clear of its
+/// boundary, and the two boundaries may not cross. `false` when either
+/// outline cannot be read or yields no probe, which keeps the member a
+/// duplicate.
 fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
     use super::classify_2d::{boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d};
     use brepkit_math::vec::Point2;
@@ -1061,11 +1063,21 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
                 .iter()
                 .all(|h| !point_in_polygon_2d(q, h) && distance_to_polygon_boundary(q, h) > eps)
     };
-    // Whether `from`'s grid meets its own material and, there, `into`'s; a
-    // face the grid never samples (a thin frame round a wide hole) reads as
-    // overlapping, which keeps it a duplicate.
-    let enters = |from: &Region, into: &Region| -> bool {
-        let (lo, hi) = from.0.iter().fold(
+    let loops = |r: &Region| -> Vec<(Vec<Point2>, bool)> {
+        std::iter::once((r.0.clone(), false))
+            .chain(r.1.iter().map(|h| (h.clone(), true)))
+            .collect()
+    };
+    let segments = |lp: &[Point2]| -> Vec<(Point2, Point2)> {
+        (0..lp.len())
+            .map(|i| (lp[i], lp[(i + 1) % lp.len()]))
+            .collect()
+    };
+    // Probes of a region clear inside it: a step inward from each boundary
+    // segment's middle (a thin frame round a wide hole has these where a grid
+    // has none), then a grid over its box.
+    let probes = |r: &Region| -> Vec<Point2> {
+        let (lo, hi) = r.0.iter().fold(
             (
                 Point2::new(f64::INFINITY, f64::INFINITY),
                 Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -1077,21 +1089,70 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
                 )
             },
         );
+        let diag = (hi.x() - lo.x()).hypot(hi.y() - lo.y());
+        let mut out = Vec::new();
+        for (lp, is_hole) in loops(r) {
+            let twice_area: f64 = segments(&lp)
+                .iter()
+                .map(|(p, q)| p.x().mul_add(q.y(), -(q.x() * p.y())))
+                .sum();
+            // Material lies left of a counter-clockwise outer loop and of a
+            // clockwise hole.
+            let left = (twice_area > 0.0) != is_hole;
+            for (p, q) in segments(&lp) {
+                let (dx, dy) = (q.x() - p.x(), q.y() - p.y());
+                let len = dx.hypot(dy);
+                if len < 1e-12 {
+                    continue;
+                }
+                let step = (1e-4 * diag).min(0.25 * len) / len;
+                let (nx, ny) = if left { (-dy, dx) } else { (dy, -dx) };
+                let m = Point2::new(
+                    nx.mul_add(step, 0.5 * (p.x() + q.x())),
+                    ny.mul_add(step, 0.5 * (p.y() + q.y())),
+                );
+                if clear_inside(m, r) {
+                    out.push(m);
+                }
+            }
+        }
         let f = |k: i32| (f64::from(k) + 0.5) / 16.0;
-        let own: Vec<Point2> = (0..16)
-            .flat_map(|i| (0..16).map(move |j| (i, j)))
-            .map(|(i, j)| {
-                Point2::new(
-                    (hi.x() - lo.x()).mul_add(f(i), lo.x()),
-                    (hi.y() - lo.y()).mul_add(f(j), lo.y()),
-                )
-            })
-            .filter(|&q| clear_inside(q, from))
-            .collect();
-        own.is_empty() || own.iter().any(|&q| clear_inside(q, into))
+        out.extend(
+            (0..16)
+                .flat_map(|i| (0..16).map(move |j| (i, j)))
+                .map(|(i, j)| {
+                    Point2::new(
+                        (hi.x() - lo.x()).mul_add(f(i), lo.x()),
+                        (hi.y() - lo.y()).mul_add(f(j), lo.y()),
+                    )
+                })
+                .filter(|&q| clear_inside(q, r)),
+        );
+        out
+    };
+    let crosses = |(p, q): (Point2, Point2), (u, v): (Point2, Point2)| -> bool {
+        let side = |a: Point2, b: Point2, c: Point2| {
+            (b.x() - a.x()).mul_add(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
+        };
+        let scale = (q.x() - p.x()).hypot(q.y() - p.y()) * (v.x() - u.x()).hypot(v.y() - u.y());
+        let eps = 1e-9 * scale;
+        let (d1, d2) = (side(p, q, u), side(p, q, v));
+        let (d3, d4) = (side(u, v, p), side(u, v, q));
+        ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps))
+            && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))
     };
     let (ra, rb) = (region(&sa), region(&sb));
-    !enters(&ra, &rb) && !enters(&rb, &ra)
+    for (from, into) in [(&ra, &rb), (&rb, &ra)] {
+        let ps = probes(from);
+        if ps.is_empty() || ps.iter().any(|&q| clear_inside(q, into)) {
+            return false;
+        }
+    }
+    let segs_b: Vec<_> = loops(&rb).iter().flat_map(|(lp, _)| segments(lp)).collect();
+    !loops(&ra)
+        .iter()
+        .flat_map(|(lp, _)| segments(lp))
+        .any(|sa| segs_b.iter().any(|&sb| crosses(sa, sb)))
 }
 
 /// Whether a planar sub-face's interior lies OUTSIDE the opposite-rank
