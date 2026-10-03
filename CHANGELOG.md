@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.20](https://github.com/andymai/brepkit/compare/v4.1.19...v4.1.20) (2026-10-03)
+
+
+### Bug Fixes
+
+* **algo:** keep a section run along an opposing face's edge where the face across it lies on the curved face being split ([#1955](https://github.com/andymai/brepkit/issues/1955)) ([d50c645](https://github.com/andymai/brepkit/commit/d50c6452048537f3f8232418a907ae16a4ea791c))
+
 ## [4.1.19](https://github.com/andymai/brepkit/compare/v4.1.18...v4.1.19) (2026-10-03)
 
 
