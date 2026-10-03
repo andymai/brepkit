@@ -757,32 +757,40 @@ fn boolean_inner(
                             all_component_centers_outside(topo, result, &components_vec, cls_b, tol)
                         });
                 // Intersect's mirror hazard: GFA could emit a piece that is not
-                // part of A∩B at all. Reject when any component's AABB-centre
-                // sample classifies OUTSIDE either operand — an intersection
-                // piece must lie inside both. The ray-cast classifier (unlike
-                // the analytic one) handles multi-piece operands, the very
-                // case this acceptance exists for; a classification error
-                // rejects (this acceptance is purely an optimization, so
-                // unclassifiable geometry keeps the old fallback behaviour).
-                // `OnBoundary` passes — thin clip pieces legitimately touch
-                // the operand boundaries. The centre need not be interior to a
-                // concave piece, but that failure direction only REJECTS a
-                // valid result into the mesh fallback (the status quo), the
-                // same posture `cut_safe` already accepts.
-                let intersect_safe = op != BooleanOp::Intersect
-                    || components_vec.iter().all(|comp| {
-                        let Some(centre) = component_aabb_centre(topo, comp) else {
+                // part of A∩B at all. Reject unless a point inside each
+                // component (`component_interior_point`) lies inside both
+                // operands, or on their boundary, by the check crate's ray cast
+                // on each operand's trimmed faces (built once per operand); an
+                // Outside vetoes the piece. A piece with no such point rejects
+                // (this acceptance is purely an optimization, so
+                // unclassifiable geometry keeps the old fallback behaviour). A
+                // single piece never reaches the multi-region gate, so it is
+                // not probed.
+                let intersect_safe = op != BooleanOp::Intersect || components < 2 || {
+                    let classifiers =
+                        [a, b].map(|s| brepkit_check::classify::SolidClassifier::new(topo, s).ok());
+                    let options = brepkit_check::classify::ClassifyOptions {
+                        tolerance: tol.linear,
+                        ..brepkit_check::classify::ClassifyOptions::default()
+                    };
+                    components_vec.iter().all(|comp| {
+                        if component_aabb(topo, comp).is_none() {
                             return true;
+                        }
+                        let Some(probe) = component_interior_point(topo, comp) else {
+                            return false;
                         };
-                        [a, b].iter().all(|&operand| {
-                            !matches!(
-                                crate::classify::classify_point_robust(
-                                    topo, operand, centre, 0.1, tol.linear,
-                                ),
-                                Ok(crate::classify::PointClassification::Outside) | Err(_)
-                            )
+                        classifiers.iter().all(|classifier| {
+                            classifier.as_ref().is_some_and(|c| {
+                                matches!(
+                                    c.classify(probe, &options),
+                                    Ok(brepkit_check::classify::PointClassification::Inside
+                                        | brepkit_check::classify::PointClassification::OnBoundary)
+                                )
+                            })
                         })
-                    });
+                    })
+                };
                 // Fuse shares this gate: fusing a tool into ONE piece of a
                 // multi-component operand (the lite base's 16 disjoint feet
                 // before their web joins them) legitimately leaves N disjoint
@@ -3106,8 +3114,120 @@ fn planar_face_centroid(topo: &Topology, fid: FaceId) -> Option<Point3> {
         .then_some(centroid)
 }
 
-/// Centre of a face component's vertex AABB, or `None` for an empty component.
-fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
+/// A point inside a face component: its box centre when the component holds
+/// it, else the deepest point it holds stepped off one of its plane faces'
+/// centroids or the middle of one of its face edges. A thin strip bent along
+/// a lip holds no point near its box centre, so the centre alone says
+/// nothing about where the strip lies. Whether the component holds a point is
+/// read by ray parity on its own surface, tessellated once: the ray caster
+/// reads a trimmed torus face as its whole band. `None` when no point is
+/// found.
+fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
+    let (min, max) = component_aabb(topo, comp)?;
+    let centre = Point3::new(
+        (min.x() + max.x()) * 0.5,
+        (min.y() + max.y()) * 0.5,
+        (min.z() + max.z()) * 0.5,
+    );
+    let extent = (max - min).length();
+    let deflection = (extent * 1e-3).min(0.01);
+    let mut triangles: Vec<[Point3; 3]> = Vec::new();
+    for &fid in comp {
+        let mesh = crate::tessellate::tessellate_with_uvs(topo, fid, deflection).ok()?;
+        let pos = &mesh.mesh.positions;
+        for tri in mesh.mesh.indices.chunks_exact(3) {
+            triangles.push([
+                pos[tri[0] as usize],
+                pos[tri[1] as usize],
+                pos[tri[2] as usize],
+            ]);
+        }
+    }
+    // A sqrt-prime direction cannot lie in a face plane or run along an edge.
+    let dir = Vec3::new(2.0_f64.sqrt(), 3.0_f64.sqrt(), 5.0_f64.sqrt())
+        .normalize()
+        .ok()?;
+    let holds = |p: Point3| {
+        triangles
+            .iter()
+            .filter(|&&[a, b, c]| {
+                brepkit_math::ray_triangle::watertight_ray_triangle_intersect(p, dir, a, b, c)
+                    .is_some_and(|hit| hit.t > 1e-9)
+            })
+            .count()
+            % 2
+            == 1
+    };
+    if holds(centre) {
+        return Some(centre);
+    }
+    // An offset under the ray caster's resolution reads the face itself.
+    let offsets: Vec<f64> = [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+        .map(|step| step * extent)
+        .into_iter()
+        .filter(|&o| o >= 1e-6)
+        .collect();
+    // The deepest held point along `dir` from `base`: halfway to the
+    // farthest held offset when that is held too. A point just inside a
+    // thin piece reads outside the operands' tessellated classifier.
+    let deepest = |base: Point3, dir: Vec3| -> Option<Point3> {
+        let far = offsets
+            .iter()
+            .copied()
+            .rev()
+            .find(|&o| holds(base + dir * o))?;
+        let mid = base + dir * (0.5 * far);
+        Some(if holds(mid) { mid } else { base + dir * far })
+    };
+    for &fid in comp {
+        let Ok(face) = topo.face(fid) else { continue };
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            continue;
+        };
+        let Some(c) = planar_face_centroid(topo, fid) else {
+            continue;
+        };
+        for dir in [-*normal, *normal] {
+            if let Some(p) = deepest(c, dir) {
+                return Some(p);
+            }
+        }
+    }
+    // A piece with no plane face to step off (a rod's end inside a ball):
+    // step off the middle of each face edge along that face's normal.
+    for &fid in comp {
+        let Ok(face) = topo.face(fid) else { continue };
+        let Ok(wire) = topo.wire(face.outer_wire()) else {
+            continue;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (sp, ep) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let m = edge
+                .curve()
+                .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+            let Some((u, v)) = face.surface().project_point(m) else {
+                continue;
+            };
+            let n = face.surface().normal(u, v);
+            for dir in [-n, n] {
+                if let Some(p) = deepest(m, dir) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A face component's vertex AABB, or `None` for an empty component.
+fn component_aabb(topo: &Topology, comp: &[FaceId]) -> Option<(Point3, Point3)> {
     let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for &fid in comp {
@@ -3133,11 +3253,7 @@ fn component_aabb_centre(topo: &Topology, comp: &[FaceId]) -> Option<Point3> {
     if min.x() > max.x() {
         return None;
     }
-    Some(Point3::new(
-        (min.x() + max.x()) * 0.5,
-        (min.y() + max.y()) * 0.5,
-        (min.z() + max.z()) * 0.5,
-    ))
+    Some((min, max))
 }
 
 /// Does the closed surface made of `faces` enclose `p`?

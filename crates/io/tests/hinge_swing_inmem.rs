@@ -522,9 +522,11 @@ fn hinge_bin_against_its_knuckle_bracket_intersects_exactly() {
 }
 
 /// The lid at its stop overlaps the bin's back lip in a thin strip whose ends
-/// lie on the bin's outer corner cylinders, and only touches the knuckles.
+/// lie on the bin's outer corner cylinders, and each knuckle's bracket in a
+/// sliver that ends on the knuckle's end faces, where the lid's knuckles only
+/// touch. The lid's plate runs in a plane through the hinge axis but stops
+/// short of the knuckles' rims, so it crosses no knuckle end face.
 #[test]
-#[ignore = "OPEN roadmap row: generator-suite hangs (hinge stop intersects)"]
 fn hinge_lid_at_its_stop_overlaps_the_lip_exactly() {
     let mut topo = Topology::new();
     let bin = load(&mut topo, "hinge_seat_bin.bin");
@@ -533,7 +535,8 @@ fn hinge_lid_at_its_stop_overlaps_the_lip_exactly() {
     let common = exact(&mut topo, |t| {
         boolean::boolean(t, BooleanOp::Intersect, bin, lid).unwrap()
     });
-    // The strip along the lip, then the hinge region around it.
+    // The strip along the lip, the sliver under one knuckle, then the hinge
+    // region around them.
     matches_both(
         &topo,
         [bin, lid, common],
@@ -544,7 +547,14 @@ fn hinge_lid_at_its_stop_overlaps_the_lip_exactly() {
     matches_both(
         &topo,
         [bin, lid, common],
-        [-62.8, 36.0, 44.0],
+        [-58.6, 41.35, 46.2],
+        [10.75, 0.25, 0.4],
+        [6, 10, 10],
+    );
+    matches_both(
+        &topo,
+        [bin, lid, common],
+        [-62.8, 36.2, 44.0],
         [125.6, 5.8, 6.6],
         [32, 10, 10],
     );
