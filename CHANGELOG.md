@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.22](https://github.com/andymai/brepkit/compare/v4.1.21...v4.1.22) (2026-10-03)
+
+
+### Bug Fixes
+
+* **algo:** read a line split point's distance from the edge ends as a length ([#1960](https://github.com/andymai/brepkit/issues/1960)) ([a15a56d](https://github.com/andymai/brepkit/commit/a15a56d6606da143c1569c1ef390ce8c904ead3e))
+
 ## [4.1.21](https://github.com/andymai/brepkit/compare/v4.1.20...v4.1.21) (2026-10-03)
 
 
