@@ -2542,23 +2542,48 @@ fn a_revolved_cone_quarter_meshes_its_own_span() {
     }
 }
 
-/// The same solid meshes in the same vertex and triangle order whatever the
-/// arena held before it: a caller that fingerprints or sums a mesh in order
-/// (a feature cache comparing two builds) must read two builds alike.
+/// The same solid meshes in the same vertex and triangle order, and with the
+/// same normals bit for bit, whatever the arena held before it: a caller that
+/// fingerprints or sums a mesh in order (a feature cache comparing two builds)
+/// must read two builds alike. The solids are turned off the axes so their
+/// shared vertices' normals are sums whose rounding depends on the order.
 #[test]
 fn a_solid_meshes_in_the_same_order_after_any_history() {
-    let mesh_after = |prior: usize| {
+    type Bits = (Vec<[u64; 3]>, Vec<[u64; 3]>, Vec<u32>, Vec<u32>);
+    let bits = |p: &[Point3], n: &[Vec3]| {
+        (
+            p.iter()
+                .map(|q| [q.x().to_bits(), q.y().to_bits(), q.z().to_bits()])
+                .collect::<Vec<_>>(),
+            n.iter()
+                .map(|v| [v.x().to_bits(), v.y().to_bits(), v.z().to_bits()])
+                .collect::<Vec<_>>(),
+        )
+    };
+    let turn = brepkit_math::mat::Mat4::rotation_x(0.37) * brepkit_math::mat::Mat4::rotation_z(1.1);
+    let mesh_after = |prior: usize, cylinder: bool| -> Bits {
         let mut topo = Topology::new();
         for _ in 0..prior {
             crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         }
-        let solid = crate::primitives::make_box(&mut topo, 10.0, 6.0, 4.0).unwrap();
+        let solid = if cylinder {
+            crate::primitives::make_cylinder(&mut topo, 2.0, 5.0).unwrap()
+        } else {
+            crate::primitives::make_box(&mut topo, 10.0, 6.0, 4.0).unwrap()
+        };
+        crate::transform::transform_solid(&mut topo, solid, &turn).unwrap();
         let (mesh, offsets) =
             tessellate_solid_grouped_with_tolerance(&topo, solid, 0.1, 0.5).unwrap();
-        (mesh.positions, mesh.normals, mesh.indices, offsets)
+        let (p, n) = bits(&mesh.positions, &mesh.normals);
+        (p, n, mesh.indices, offsets)
     };
-    let first = mesh_after(0);
-    for prior in 1..4 {
-        assert_eq!(mesh_after(prior), first, "after {prior} earlier boxes");
+    for cylinder in [false, true] {
+        let first = mesh_after(0, cylinder);
+        for prior in 1..4 {
+            assert!(
+                mesh_after(prior, cylinder) == first,
+                "after {prior} earlier boxes, cylinder = {cylinder}"
+            );
+        }
     }
 }
