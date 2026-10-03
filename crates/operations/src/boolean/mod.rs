@@ -783,7 +783,7 @@ fn boolean_inner(
                         classifiers.iter().all(|classifier| {
                             classifier.as_ref().is_some_and(|c| {
                                 matches!(
-                                    c.classify(topo, probe, &options),
+                                    c.classify(probe, &options),
                                     Ok(brepkit_check::classify::PointClassification::Inside
                                         | brepkit_check::classify::PointClassification::OnBoundary)
                                 )

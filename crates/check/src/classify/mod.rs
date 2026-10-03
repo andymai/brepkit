@@ -61,24 +61,27 @@ pub fn classify_point(
     point: Point3,
     options: &ClassifyOptions,
 ) -> Result<PointClassification, CheckError> {
-    SolidClassifier::new(topo, solid)?.classify(topo, point, options)
+    SolidClassifier::new(topo, solid)?.classify(point, options)
 }
 
 /// [`classify_point`] for many points against one solid: the solid's face
-/// bounds and their BVH are built once.
-pub struct SolidClassifier {
+/// bounds and their BVH are built once, and the topology stays borrowed so
+/// they cannot go stale.
+pub struct SolidClassifier<'a> {
+    topo: &'a Topology,
     faces: FaceBvh,
 }
 
-impl SolidClassifier {
+impl<'a> SolidClassifier<'a> {
     /// Collect `solid`'s faces, every shell's, with their bounds.
     ///
     /// # Errors
     ///
     /// Returns an error if the solid or its faces contain invalid topology
     /// references.
-    pub fn new(topo: &Topology, solid: SolidId) -> Result<Self, CheckError> {
+    pub fn new(topo: &'a Topology, solid: SolidId) -> Result<Self, CheckError> {
         Ok(Self {
+            topo,
             faces: FaceBvh::of(topo, solid)?,
         })
     }
@@ -90,11 +93,10 @@ impl SolidClassifier {
     /// Returns an error if a face contains invalid topology references.
     pub fn classify(
         &self,
-        topo: &Topology,
         point: Point3,
         options: &ClassifyOptions,
     ) -> Result<PointClassification, CheckError> {
-        classify_in(topo, &self.faces, point, options)
+        classify_in(self.topo, &self.faces, point, options)
     }
 }
 
