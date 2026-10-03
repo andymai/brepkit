@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791037858155,
+  "lastUpdate": 1791039916927,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50219,6 +50219,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42812614,
             "range": "± 61754",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cd43009d1e2596c7cae5ffce44398a652805b0b4",
+          "message": "chore(main): release 4.1.21 (#1958)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.21](https://github.com/andymai/brepkit/compare/v4.1.20...v4.1.21)\n(2026-10-03)\n\n\n### Bug Fixes\n\n* **algo:** close the hinge lid's stop intersect: trim its lip strip at\ncurved plane edges, drop plane lines the faces never share, and cap\nagainst the faces on the loop\n([#1957](https://github.com/andymai/brepkit/issues/1957))\n([e5d5861](https://github.com/andymai/brepkit/commit/e5d5861b5515a42ac2418af75cf82b4d0d9cac7e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.1.21: bumps the workspace version in `Cargo.toml` and\nthe manifest, and adds the changelog entry for a bug fix in\n`brepkit-algo` that closes the hinge lid's stop intersect.\n\n<sup>Written for commit 50d05ea3e00c46145e553b178ffbbc7080d139d3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1958?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-03T15:02:22Z",
+          "tree_id": "6486eb0aaf6602a5aac1de23a12472c9024eea80",
+          "url": "https://github.com/andymai/brepkit/commit/cd43009d1e2596c7cae5ffce44398a652805b0b4"
+        },
+        "date": 1791039912971,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1085040,
+            "range": "± 1454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1179900,
+            "range": "± 1991",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14144,
+            "range": "± 410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 827872,
+            "range": "± 15916",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46623719,
+            "range": "± 75106",
             "unit": "ns/iter"
           }
         ]
