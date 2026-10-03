@@ -4253,9 +4253,24 @@ fn build_topology_face(
         topo.add_wire(Wire::new(oriented_edges, true).ok()?)
     };
 
-    // Step 4: Build inner wires (holes).
+    // Step 4: Build inner wires (holes). A hole the splitter reaches twice
+    // (woven into the arrangement and attached whole) is one opening: a second
+    // copy would put each of its edges on three faces.
     let mut inner_wire_ids = Vec::new();
+    let mut hole_keys: Vec<Vec<CbEdgeKey>> = Vec::new();
     for inner in &split.inner_wires {
+        let mut key: Vec<CbEdgeKey> = inner
+            .iter()
+            .map(|e| {
+                let (a, b) = (quantize(e.start_3d), quantize(e.end_3d));
+                if a <= b { (a, b) } else { (b, a) }
+            })
+            .collect();
+        key.sort_unstable();
+        if hole_keys.contains(&key) {
+            continue;
+        }
+        hole_keys.push(key);
         let mut inner_oriented = Vec::with_capacity(inner.len());
         for pcurve_edge in inner {
             let (start_vid, end_vid) = resolve_edge_vertices(
@@ -4533,6 +4548,94 @@ mod tests {
     use super::*;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::Vec3;
+
+    /// A plane sub-face whose hole the splitter reached twice (woven into
+    /// the arrangement and attached whole) builds with that hole once.
+    #[test]
+    fn a_hole_reached_twice_is_built_once() {
+        use super::super::split_types::{OrientedPCurveEdge, SplitSubFace};
+        use crate::ds::Rank;
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+
+        let square = |lo: f64, hi: f64, ccw: bool| -> Vec<OrientedPCurveEdge> {
+            let mut corners = [(lo, lo), (hi, lo), (hi, hi), (lo, hi)];
+            if !ccw {
+                corners.reverse();
+            }
+            (0..4)
+                .map(|k| {
+                    let (a, b) = (corners[k], corners[(k + 1) % 4]);
+                    let (sa, sb) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+                    let d = Vec2::new(b.0 - a.0, b.1 - a.1);
+                    OrientedPCurveEdge {
+                        curve_3d: EdgeCurve::Line,
+                        pcurve: Curve2D::Line(Line2D::new(sa, d * (1.0 / d.length())).unwrap()),
+                        start_uv: sa,
+                        end_uv: sb,
+                        start_3d: Point3::new(a.0, a.1, 0.0),
+                        end_3d: Point3::new(b.0, b.1, 0.0),
+                        forward: true,
+                        source_edge_idx: None,
+                        pave_block_id: None,
+                    }
+                })
+                .collect()
+        };
+        let mut topo = Topology::new();
+        let v0 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            Point3::new(0.0, 0.0, 0.0),
+            1e-7,
+        ));
+        let v1 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+            Point3::new(1.0, 0.0, 0.0),
+            1e-7,
+        ));
+        let e = topo.add_edge(brepkit_topology::edge::Edge::new(v0, v1, EdgeCurve::Line));
+        let w = topo.add_wire(
+            brepkit_topology::wire::Wire::new(
+                vec![brepkit_topology::wire::OrientedEdge::new(e, true)],
+                false,
+            )
+            .unwrap(),
+        );
+        let parent = topo.add_face(brepkit_topology::face::Face::new(
+            w,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let hole = square(4.0, 6.0, false);
+        let split = SplitSubFace {
+            surface: FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+            outer_wire: square(0.0, 10.0, true),
+            inner_wires: vec![hole.clone(), hole],
+            reversed: false,
+            parent,
+            rank: Rank::A,
+            precomputed_interior: None,
+        };
+        let face = build_topology_face(
+            &mut topo,
+            &split,
+            Tolerance::new(),
+            parent,
+            &mut HashMap::new(),
+            &HashMap::new(),
+            &BTreeMap::new(),
+            None,
+            &mut BTreeMap::new(),
+            &mut Vec::new(),
+            &crate::ds::GfaArena::new(),
+        )
+        .unwrap();
+        assert_eq!(topo.face(face).unwrap().inner_wires().len(), 1);
+    }
 
     #[test]
     fn closed_rim_chord_crossing_keeps_seam_angle_hit() {
