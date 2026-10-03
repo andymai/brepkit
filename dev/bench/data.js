@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791058561703,
+  "lastUpdate": 1791062521676,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50489,6 +50489,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28295236,
             "range": "± 498961",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d1bb87903d1f4486d4a6d638c862fd9ca8a1f60",
+          "message": "fix(algo): build each hole of a split face once (#1964)\n\nThe gridfinity split robustness scenario now passes all 14 tests in\n23.51 s with three mesh fallbacks, compared with 29.65 s and six\nfallbacks on main. The fix prevents duplicate inner wires from producing\nnon-manifold topology during boolean face construction.\n\n## What was wrong\n\nTwo removed fallbacks were fuses at ops 6447 and 6827 between a bin\npiece and a wedge-shaped connector on the bin floor plane at z = 4.75.\nFresh wasm replays fell back, while native replays were exact.\n\nThe engine logs matched line for line until `merge_duplicate_edges`,\nwhich merged 108 edges in wasm and 98 natively. The selected wasm floor\nsub-face contained one cell opening twice: five inner wires instead of\nfour, with two identical outlines. After merging, each edge in that\noutline belonged to three faces, splitting the result into two shells.\n\nTwo other removed fallbacks were intersects at ops 4442 and 4477. Their\nearlier wasm-produced input had a top face at z = 28 with one\nrectangular hole listed twice where a divider meets the wall.\n\n## Change\n\n`build_topology_face` in `crates/algo/src/builder/fill_images_faces.rs`\nnow keys each inner wire by its edges' unordered endpoints, read with\n`merge_duplicate_edges`' own quantization (`MERGE_TOL`), plus each\ncurve's geometry (circle centre and radius, ellipse axes, a NURBS\ncurve's middle control point and count). It skips an inner wire whose\nkey it already built for the same face. A face carrying the same hole\ntwice is never valid.\n\nThe guard sits where sub-faces become topology faces, so every splitter\npath that can attach a hole is covered. This includes holes woven into a\nholed plane's arrangement and holes attached whole afterwards.\n\n## Verification\n\nThe new unit test, `a_hole_reached_twice_is_built_once`, verifies that a\nplane sub-face carrying the same square hole twice produces one inner\nwire, that a copy off by 1e-9 does too, and that two closed circles\nthrough one seam point stay two holes. It fails without the guard.\n\nFresh wasm replays of ops 6447 and 6827 now return 272 and 276 faces\nwithout fallback, matching native replay counts.\n\n`hingeSwing.scenario.test.ts` passes 27 of 27 in 186.16 s with the same\nfive fallbacks as main. The pose sweep and truth audit match main\nexactly. `approx_census` differs only in face IDs reported by a NURBS\noffset error, which vary between main runs. The local workspace suite\npasses with 3326 tests passed and 20 skipped.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` records this fix as closed. The\ngenerator-hangs row lists three remaining bin split fallbacks: the lip\nfuse parked on `wip/plane-line-common-run`, the wasm-only fuse at op\n4412, and the 8.6 s feet-grid fuse at op 7242, where 36 foot cones\nretain a closed free circle along their own quarter-arc rim.",
+          "timestamp": "2026-10-03T14:18:50-07:00",
+          "tree_id": "c22ea8e9a7890b770b0dea8617ad67a56305723f",
+          "url": "https://github.com/andymai/brepkit/commit/1d1bb87903d1f4486d4a6d638c862fd9ca8a1f60"
+        },
+        "date": 1791062516305,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1027433,
+            "range": "± 3982",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1116169,
+            "range": "± 3365",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12295,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 790573,
+            "range": "± 2424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44362704,
+            "range": "± 150213",
             "unit": "ns/iter"
           }
         ]
