@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791016379012,
+  "lastUpdate": 1791037858155,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50165,6 +50165,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42551838,
             "range": "± 901965",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e5d5861b5515a42ac2418af75cf82b4d0d9cac7e",
+          "message": "fix(algo): close the hinge lid's stop intersect: trim its lip strip at curved plane edges, drop plane lines the faces never share, and cap against the faces on the loop (#1957)\n\nThe gridfinity hinge scenario now keeps twelve of its sixteen stop\nintersects exact. In particular, intersecting `hinge_seat_bin.bin` with\n`hinge_stop_lid.bin` passes the multi-region acceptance gate in 521 ms\nwith 112 faces across seven pieces: the strip where the lid rim overlaps\nthe bin back lip, plus one sliver beneath each of the six knuckle\nbrackets. The boolean returns 44 faces (2 cones, 8 cylinders, and 34\nplanes) with no free edges. On main, the raw intersect fails with `open\ngrowth shell with 61 faces would be dropped` and falls back to a mesh.\n\n## What was wrong\n\n- Root 1 was in `trim_ellipse_to_boundary_crossings` in\n`crates/algo/src/pave_filler/phase_ff.rs`. It returned `None` for a\nplane face with any curved boundary edge. The sampled restriction then\nextended the lid face ellipse past the bin corner cylinder rim, leaving\nthe strip without end caps. Ellipse sections now read curved plane\nedges. `edge_surface_crossings` obtains cylinder and cone crossings by\nbisecting sign changes of `analytic_signed_distance`, and also halves\nevery interval that could contain a pair of crossings. The bound uses a\nfixed distance slope per unit of arc length, with circle and ellipse\nlength bounded by parameter span and NURBS length read from a fine chord\npath with a margin. Holes contribute crossings. Containment uses\n`face_boundary_2d` and `point_in_region` for native lines and arcs,\nincluding holes. Faces containing a NURBS edge use outlines and hole\noutlines refined by `sample_edge_to_tolerance` until every chord stays\nwithin `5e-7` of its curve. Circle sections retain the sampled\nrestriction because exact handling regressed\n`keyholed_knuckles_end_to_end`, `kumiko_wedge_strut_pair_fuse_is_exact`,\nand a hinge scenario fuse. The crossing search is covered by\n`conic_edge_crossings_find_a_close_pair`,\n`nurbs_edge_crossings_find_a_pair_between_samples`, and\n`edge_crossings_keep_a_crossing_on_a_sample_or_an_end`.\n\n- Root 2 was plane by plane line clipping in the same file. When both\nfaces contained arcs, both `clip_line_to_face` calls returned\n`Indeterminate`, so the untrimmed line was retained. At a knuckle end,\nthe lid plate stays at least 2.45 from the hinge axis while the bin end\nface reaches 1.8. Their common line through the axis was therefore kept\nthrough the bin bore and pinched the split. The line is now discarded\nwhen `exact_runs_disjoint` finds no shared point between the faces'\nexact runs from `line_face_intervals`. A run along a boundary counts as\ninside. Other indeterminate cases remain untrimmed.\n`exact_runs_disjoint_reads_faces_apart_on_their_common_line` covers\nseparated, overlapping, and point-touching discs in crossing planes.\n\n- Root 3 was `cap_partial_overlap_free_loops` in\n`crates/algo/src/builder/builder_solid.rs`. On four knuckle ends, hole\npromotion placed the bore in a weave that carries only straight\nsections. The sliver arc was dropped, leaving its end uncovered for the\ncap pass. The cap was wound counter-clockwise around the larger\ndiscarded face normal, which faced the wrong way for this intersect. All\n16 cap edges then had the same sense as their adjacent faces. A cap now\nreverses its loop when every edge would otherwise run with those faces,\nand each cap hole is oriented against the faces on its own edges.\nExisting opposing windings are unchanged.\n`a_cap_runs_its_loop_against_the_faces_on_it` checks the outer loop, and\n`a_capped_ring_runs_its_hole_against_the_pillar_walls` checks the\nindependent hole rule.\n\n- Root 4 was the multi-region intersect gate in\n`crates/operations/src/boolean/mod.rs`. It classified each piece box\ncentre against both operands, but the lip strip bends enough that its\nbox centre lies outside the bin. `component_interior_point` now finds a\npoint held by the piece, using its box centre or the deepest candidate\nstepped from a plane face centroid or edge midpoint along the face\nnormal. Offsets begin at `1e-8` of the piece diagonal, with none below\n`1e-6`. Piece containment uses ray parity over its own surface\ntessellated once, avoiding the ray caster treatment of a trimmed torus\nas its full band. Operand classification uses the new\n`brepkit_check::classify::SolidClassifier`, which builds face bounds and\na BVH once per operand. The candidate must be inside or on both\noperands. An `Outside` result vetoes the piece, and failure to find a\ncandidate rejects the exact result. Probing applies only to results with\nat least two pieces. `a_column_and_rod_against_a_ball_are_exact`,\n`a_rod_through_a_rings_tube_is_exact`,\n`trimmed_torus_faces_mesh_their_own_region`, and `bar_through_the_ring`\ncover pieces without plane faces and torus pieces.\n\n## Verification\n\n- `hinge_lid_at_its_stop_overlaps_the_lip_exactly` in\n`crates/io/tests/hinge_swing_inmem.rs` is enabled. It requires an exact,\nvalid intersect and compares the result point by point with both\noperands over the strip, the first knuckle sliver, and the hinge region.\nShifted grids ensure each region contains result points. It fails on\nmain at the mesh fallback check.\n\n- The roots were found in order on the same operand pair, each with the\nearlier fixes in place. Without root 1 the strip is open. Without root 2\nthe knuckle shells are open. Without root 3 the result has 16 same-sense\nedges. Without root 4 the closed result is rejected.\n\n- CI passes 3323 workspace tests with 18 skipped. Clippy, layer\nboundaries, and documentation paths also pass. The local pose sweep,\n120-case kumiko strut pose sweep, `truth_audit`, and `approx_census` are\nidentical to main.\n\n- On a wasm build from this branch, `hingeSwing.scenario.test.ts` passes\nall 27 tests in 186.42 s. Five swing intersects use the mesh fallback,\ncompared with 23 on main in 219.05 s. The stop fixes also close six of\nthe seven overhang sweeps.\n\n## Still open\n\n- Five intersects remain recorded in the roadmap: the final overhang\nsweep and the final stop intersect from each of the four stop tests.\nThree fail natively with `no outer shell found (all shells classified as\nholes)`. The other two, using a 114-face bin and 136-face lid, leave 84\nfree edges and report `open 1-face growth shell spans the result`.\n\n- A promoted hole weave still carries straight sections only. The cap\npass covers that condition here. The roadmap records twelve of sixteen\nstop intersects as closed and lists three deferred-defect pins.",
+          "timestamp": "2026-10-03T07:27:53-07:00",
+          "tree_id": "c6133cb951c70163c2d2fc709a1548bc30d5fa3a",
+          "url": "https://github.com/andymai/brepkit/commit/e5d5861b5515a42ac2418af75cf82b4d0d9cac7e"
+        },
+        "date": 1791037852431,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1044542,
+            "range": "± 5103",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1126280,
+            "range": "± 22948",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13206,
+            "range": "± 193",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 824653,
+            "range": "± 14751",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 42812614,
+            "range": "± 61754",
             "unit": "ns/iter"
           }
         ]
