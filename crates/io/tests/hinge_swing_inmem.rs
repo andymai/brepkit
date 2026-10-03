@@ -498,11 +498,11 @@ fn hinge_lid_long_pin_intersect_is_exact() {
 /// The bin against a block in the shape of the bracket under one of its
 /// knuckles, a box with a cove along the knuckle: five of the block's faces lie
 /// in bin faces. Each knuckle step face has an edge in the block's front plane,
-/// and a section along it must end where the step face does. Between the steps
-/// the cove meets a tilted bin face along that face's own edge, and the cove
-/// must still split there.
+/// which splits that face into pieces lying side by side on one bin face.
+/// Between the steps the cove meets a tilted bin face only along that face's
+/// own edge, where the knuckle's cylinder lies on the cove, and the cove must
+/// still split there.
 #[test]
-#[ignore = "OPEN roadmap row: generator-suite hangs (hinge bracket intersects)"]
 fn hinge_bin_against_its_knuckle_bracket_intersects_exactly() {
     let mut topo = Topology::new();
     let bin = load(&mut topo, "hinge_seat_bin.bin");
