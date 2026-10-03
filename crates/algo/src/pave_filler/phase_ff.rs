@@ -2675,16 +2675,13 @@ fn trim_ellipse_to_boundary_crossings(
         // sampled in-both restriction, which can run past the analytic
         // face's rim.
         curved = true;
-        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        for k in 0..32 {
-            let f = f64::from(k) / 32.0;
-            let f = if oe.is_forward() { f } else { 1.0 - f };
-            plane_poly.push(
-                edge.curve()
-                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep),
-            );
-        }
-        for p in curved_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear) {
+        plane_poly.extend(sample_edge_to_tolerance(
+            edge.curve(),
+            sp,
+            ep,
+            oe.is_forward(),
+        ));
+        for p in edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear) {
             push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
@@ -2704,17 +2701,13 @@ fn trim_ellipse_to_boundary_crossings(
                     ring.push(if oe.is_forward() { sp } else { ep });
                     line_segment_surface_crossings(sp, ep, analytic_surf)
                 } else {
-                    let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-                    for k in 0..32 {
-                        let f = f64::from(k) / 32.0;
-                        let f = if oe.is_forward() { f } else { 1.0 - f };
-                        ring.push(edge.curve().evaluate_with_endpoints(
-                            (t1 - t0).mul_add(f, t0),
-                            sp,
-                            ep,
-                        ));
-                    }
-                    curved_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)
+                    ring.extend(sample_edge_to_tolerance(
+                        edge.curve(),
+                        sp,
+                        ep,
+                        oe.is_forward(),
+                    ));
+                    edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)
                 };
                 for p in points {
                     push_crossing(p, Some(oe.edge()), &mut crossings);
@@ -3130,55 +3123,44 @@ fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> 
     Some(sp + dir * s.clamp(0.0, 1.0))
 }
 
-/// Where a plane face's curved edge crosses a cylinder or cone: a circle or
-/// ellipse by `conic_edge_surface_crossings`, a NURBS edge by sign changes
-/// over its samples.
-fn curved_edge_surface_crossings(
+/// Where a plane face's curved edge crosses a cylinder or cone, by the sign
+/// of `analytic_signed_distance`. That distance changes no faster than a fixed
+/// slope per unit of arc length, so an interval whose end distances sum to
+/// more than the slope times its arc length holds no pair of crossings; every
+/// other interval is halved until it does, or brackets one crossing, or
+/// narrows onto a tangency. A circle's or ellipse's arc length is bounded by
+/// its parameter span; a NURBS edge's is read from a fine chord path with a
+/// margin.
+fn edge_surface_crossings(
     curve: &EdgeCurve,
     sp: Point3,
     ep: Point3,
     surface: &FaceSurface,
     tol: f64,
 ) -> Vec<Point3> {
-    conic_edge_surface_crossings(curve, sp, ep, surface, tol).unwrap_or_else(|| {
-        let (t0, t1) = curve.domain_with_endpoints(sp, ep);
-        let signed = |q: Point3| analytic_signed_distance(surface, q);
-        super::phase_ef::find_crossings_by_sampling(curve, sp, ep, t0, t1, &signed, tol)
-            .into_iter()
-            .map(|(_, p)| p)
-            .collect()
-    })
-}
-
-/// Where a plane face's circle or ellipse edge crosses a cylinder or cone,
-/// by the sign of `analytic_signed_distance`. That distance changes no faster
-/// than `slope` per unit of arc length, so an interval whose end distances
-/// sum to more than `slope` times its arc length holds no pair of crossings;
-/// every other interval is halved until it does, or brackets one crossing,
-/// or narrows onto a tangency. `None` for any other curve.
-fn conic_edge_surface_crossings(
-    curve: &EdgeCurve,
-    sp: Point3,
-    ep: Point3,
-    surface: &FaceSurface,
-    tol: f64,
-) -> Option<Vec<Point3>> {
-    let speed = match curve {
-        EdgeCurve::Circle(c) => c.radius(),
-        EdgeCurve::Ellipse(e) => e.semi_major().max(e.semi_minor()),
-        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+    let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
+    let arc_len = |a: f64, b: f64| -> f64 {
+        match curve {
+            EdgeCurve::Circle(c) => c.radius() * (b - a),
+            EdgeCurve::Ellipse(e) => e.semi_major().max(e.semi_minor()) * (b - a),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                let pts: Vec<Point3> = (0..=8)
+                    .map(|k| at((b - a).mul_add(f64::from(k) / 8.0, a)))
+                    .collect();
+                1.5 * pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>()
+            }
+        }
     };
     let slope = match surface {
         FaceSurface::Cone(cone) => 1.0 / cone.half_angle().cos(),
         _ => 1.0,
-    } * speed;
-    let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
+    };
     let f = |t: f64| analytic_signed_distance(surface, at(t));
     let (t0, t1) = curve.domain_with_endpoints(sp, ep);
     let mut out = Vec::new();
     // An edge lying on the surface crosses nothing; its distance is noise.
     if (0..=32).all(|k| f((t1 - t0).mul_add(f64::from(k) / 32.0, t0)).abs() <= 4.0 * tol) {
-        return Some(out);
+        return out;
     }
     let mut budget = 4096_u32;
     let mut stack: Vec<(f64, f64, f64, f64, u32)> = (0..32)
@@ -3205,7 +3187,7 @@ fn conic_edge_surface_crossings(
                 }
             }
             out.push(at(0.5 * (lo + hi)));
-        } else if fa.abs() + fb.abs() <= slope * (b - a) {
+        } else if fa.abs() + fb.abs() <= slope * arc_len(a, b) {
             if depth >= 40 || budget == 0 {
                 if fa.abs().min(fb.abs()) <= 4.0 * tol {
                     out.push(at(if fa.abs() <= fb.abs() { a } else { b }));
@@ -3222,7 +3204,47 @@ fn conic_edge_surface_crossings(
     if f(t1).abs() <= tol {
         out.push(at(t1));
     }
-    Some(out)
+    out
+}
+
+/// Points along a curved edge in wire order, its end left out, no chord
+/// straying more than 5e-7 from the curve: an outline that close reads a
+/// point between an arc and its chord as on the boundary.
+fn sample_edge_to_tolerance(
+    curve: &EdgeCurve,
+    sp: Point3,
+    ep: Point3,
+    forward: bool,
+) -> Vec<Point3> {
+    let at = |t: f64| curve.evaluate_with_endpoints(t, sp, ep);
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let mut ts: Vec<f64> = Vec::new();
+    let mut stack: Vec<(f64, f64, u32)> = (0..8)
+        .rev()
+        .map(|k| {
+            let a = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+            let b = (t1 - t0).mul_add(f64::from(k + 1) / 8.0, t0);
+            (a, b, 0)
+        })
+        .collect();
+    while let Some((a, b, depth)) = stack.pop() {
+        let (pa, pb, pm) = (at(a), at(b), at(0.5 * (a + b)));
+        let chord_mid = pa + (pb - pa) * 0.5;
+        if depth < 14 && (pm - chord_mid).length() > 5e-7 {
+            let m = 0.5 * (a + b);
+            stack.push((m, b, depth + 1));
+            stack.push((a, m, depth + 1));
+        } else {
+            ts.push(a);
+        }
+    }
+    let mut pts: Vec<Point3> = ts.into_iter().map(at).collect();
+    if !forward {
+        pts.push(at(t1));
+        pts.reverse();
+        pts.pop();
+    }
+    pts
 }
 
 /// A distance to a cylinder or cone that changes sign across it (both nappes
@@ -7726,13 +7748,48 @@ mod tests {
             CylindricalSurface::new(Point3::new(1.999, 0.0, -1.0), z, 1.0).unwrap(),
         );
         let (sp, ep) = (circle.evaluate(-1.0), circle.evaluate(1.0));
-        let hits =
-            conic_edge_surface_crossings(&EdgeCurve::Circle(circle), sp, ep, &cylinder, 1e-7)
-                .unwrap();
+        let hits = edge_surface_crossings(&EdgeCurve::Circle(circle), sp, ep, &cylinder, 1e-7);
         assert_eq!(hits.len(), 2, "{hits:?}");
         for p in hits {
             assert!((p.x() - 0.9995).abs() < 1e-6, "{p:?}");
             assert!((p.y().abs() - 0.031_61).abs() < 1e-4, "{p:?}");
+        }
+    }
+
+    /// A quarter of a unit circle stored as a rational NURBS arc, meeting a
+    /// cylinder twice between two neighbouring samples whose distances share
+    /// a sign: both crossings are found.
+    #[test]
+    fn nurbs_edge_crossings_find_a_pair_between_samples() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let arc = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(h, -h, 0.0),
+                Point3::new(2.0f64.sqrt(), 0.0, 0.0),
+                Point3::new(h, h, 0.0),
+            ],
+            vec![1.0, h, 1.0],
+        )
+        .unwrap();
+        let cylinder = FaceSurface::Cylinder(
+            CylindricalSurface::new(
+                Point3::new(1.999_822_456_219_826_6, 0.025_887_133_848_673_357, -1.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+            )
+            .unwrap(),
+        );
+        let (sp, ep) = (Point3::new(h, -h, 0.0), Point3::new(h, h, 0.0));
+        let mut hits = edge_surface_crossings(&EdgeCurve::NurbsCurve(arc), sp, ep, &cylinder, 1e-7);
+        hits.sort_by(|a, b| a.y().total_cmp(&b.y()));
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        for (p, y) in hits.iter().zip([0.009_783_49, 0.016_111_86]) {
+            assert!((p.y() - y).abs() < 1e-5, "{p:?}");
         }
     }
 

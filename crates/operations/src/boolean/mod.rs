@@ -3134,7 +3134,7 @@ fn component_interior_point(topo: &Topology, comp: &[FaceId]) -> Option<Point3> 
         let Some(c) = planar_face_centroid(topo, fid) else {
             continue;
         };
-        for step in [1e-5, 1e-4, 1e-3, 1e-2, 1e-1] {
+        for step in [1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1] {
             for p in [c - *normal * (step * extent), c + *normal * (step * extent)] {
                 if holds(p) {
                     return Some(p);
