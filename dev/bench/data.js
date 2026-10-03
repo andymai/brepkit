@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791055239049,
+  "lastUpdate": 1791057258323,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50381,6 +50381,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43297373,
             "range": "± 1153299",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2c3433b41b084640354346fba0d5b967fe21254b",
+          "message": "chore(main): release 4.1.22 (#1961)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.22](https://github.com/andymai/brepkit/compare/v4.1.21...v4.1.22)\n(2026-10-03)\n\n\n### Bug Fixes\n\n* **algo:** read a line split point's distance from the edge ends as a\nlength ([#1960](https://github.com/andymai/brepkit/issues/1960))\n([a15a56d](https://github.com/andymai/brepkit/commit/a15a56d6606da143c1569c1ef390ce8c904ead3e))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRelease 4.1.22, which bumps the workspace version and updates the\nchangelog.\n\nThe release includes a fix in `brepkit-algo` that reads a line split\npoint's distance from the edge ends as a length.\n\n<sup>Written for commit 745198f2cb1c9db8c61c68f9054602dc5b295169.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1961?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-03T19:51:47Z",
+          "tree_id": "551ee0e0ad25e13e1003e420170b158429ffb368",
+          "url": "https://github.com/andymai/brepkit/commit/2c3433b41b084640354346fba0d5b967fe21254b"
+        },
+        "date": 1791057252624,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 850645,
+            "range": "± 14368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 918587,
+            "range": "± 1110",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11013,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 639259,
+            "range": "± 1656",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36572137,
+            "range": "± 266067",
             "unit": "ns/iter"
           }
         ]
