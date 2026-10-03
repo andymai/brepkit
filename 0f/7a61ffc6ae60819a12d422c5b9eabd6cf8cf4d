@@ -1,0 +1,22 @@
+crates/algo/src/builder/same_domain/tests.rs
+  s_a8677c67f85a06::t_c6121031261563 1484-1499
+crates/algo/src/builder/same_domain.rs
+  s_a8677c67f85a06::t_c6121031261563 1036-1037
+  s_a8677c67f85a06::t_73401a63fb9d49 1026-1033,1047,1105-1114,1190-1211,1219-1323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0f7a61ffc6ae60819a12d422c5b9eabd6cf8cf4d",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
