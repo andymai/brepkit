@@ -1,0 +1,19 @@
+crates/operations/src/tessellate/tests.rs
+  s_a8677c67f85a06::t_51236e277ee084 2545-2549,2552-2564,2569-2574,2577-2578,2580-2587
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "92472e317dfc5fe249396cf1dbae1a932b2f3362",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
