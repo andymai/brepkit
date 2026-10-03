@@ -2238,9 +2238,9 @@ fn build_section_edges(
 
                 let intervals: Vec<(Point3, Point3)> =
                     if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                        let Some(clipped_list) =
-                            clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol)
-                        else {
+                        let Some(clipped_list) = clip_line_to_face_boundary(
+                            topo, face_id, raw_start, raw_end, tol, false,
+                        ) else {
                             continue;
                         };
                         // Also clip each piece to the OPPOSING FF face so a wide
@@ -2256,9 +2256,9 @@ fn build_section_edges(
                         // as-is.
                         let mut finals = Vec::new();
                         for (cs, ce) in clipped_list {
-                            match opposing_face
-                                .and_then(|of| clip_line_to_face_boundary(topo, of, cs, ce, tol))
-                            {
+                            match opposing_face.and_then(|of| {
+                                clip_line_to_face_boundary(topo, of, cs, ce, tol, true)
+                            }) {
                                 Some(subs) => {
                                     let n = subs.len();
                                     for (i, (ss, ee)) in subs.into_iter().enumerate() {
@@ -3184,6 +3184,9 @@ struct BoundaryArc {
 /// the section line enters and exits the polygon. Returns the trimmed
 /// Every in-face `(start, end)` interval of the line (a section can cross a
 /// face in multiple material windows), or `None` when nothing lies inside.
+/// A piece lying on one of the face's boundary edges is dropped unless
+/// `keep_boundary_runs`: clipped to the face it splits, such a piece adds no
+/// split, but clipped to the OPPOSING face it is still where the two meet.
 #[allow(clippy::too_many_lines)]
 fn clip_line_to_face_boundary(
     topo: &Topology,
@@ -3191,6 +3194,7 @@ fn clip_line_to_face_boundary(
     line_start: Point3,
     line_end: Point3,
     tol: f64,
+    keep_boundary_runs: bool,
 ) -> Option<Vec<(Point3, Point3)>> {
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
@@ -3568,7 +3572,7 @@ fn clip_line_to_face_boundary(
 
     let t_tol = tol / line_len;
     let mut out: Vec<(Point3, Point3)> = Vec::new();
-    'interval: for (t0, t1) in t_intervals {
+    for (t0, t1) in t_intervals {
         if (t1 - t0).abs() < t_tol {
             continue;
         }
@@ -3577,12 +3581,12 @@ fn clip_line_to_face_boundary(
         // Discard pieces that lie entirely ON a single face boundary edge
         // (an adjacent coplanar face's FF section coinciding with a boundary
         // edge contributes no split).
-        for (seg_start, seg_end) in &boundary_segments {
-            let start_dist = point_to_segment_dist_3d(clipped_start, *seg_start, *seg_end);
-            let end_dist = point_to_segment_dist_3d(clipped_end, *seg_start, *seg_end);
-            if start_dist < tol && end_dist < tol {
-                continue 'interval;
-            }
+        let on_boundary_edge = boundary_segments.iter().any(|(seg_start, seg_end)| {
+            point_to_segment_dist_3d(clipped_start, *seg_start, *seg_end) < tol
+                && point_to_segment_dist_3d(clipped_end, *seg_start, *seg_end) < tol
+        });
+        if on_boundary_edge && !keep_boundary_runs {
+            continue;
         }
         out.push((clipped_start, clipped_end));
     }
@@ -4389,6 +4393,7 @@ mod clip_tests {
             Point3::new(-20.0, 4.4, 0.0),
             Point3::new(20.0, 4.4, 0.0),
             1e-7,
+            false,
         );
         let segs = out.expect("a through-chord far from the seam must be kept");
         assert_eq!(segs.len(), 1);
@@ -4414,6 +4419,7 @@ mod clip_tests {
             Point3::new(5.0, 5.0, 0.0),
             Point3::new(12.0, 5.0, 0.0),
             1e-7,
+            false,
         );
         let segs = out.expect("single-crossing interior→rim chord must be kept");
         assert_eq!(segs.len(), 1);
@@ -4439,6 +4445,7 @@ mod clip_tests {
             Point3::new(20.0, 20.0, 0.0),
             Point3::new(20.0, -20.0, 0.0),
             1e-7,
+            false,
         );
         assert!(out.is_none());
     }
