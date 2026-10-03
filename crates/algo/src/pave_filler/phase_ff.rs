@@ -3150,7 +3150,7 @@ fn conic_edge_surface_crossings(
         })
         .collect();
     while let Some((a, b, fa, fb, depth)) = stack.pop() {
-        if fa == 0.0 {
+        if fa.abs() <= tol {
             out.push(at(a));
         }
         if fa * fb < 0.0 {
@@ -3180,7 +3180,7 @@ fn conic_edge_surface_crossings(
             stack.push((m, b, fm, fb, depth + 1));
         }
     }
-    if f(t1) == 0.0 {
+    if f(t1).abs() <= tol {
         out.push(at(t1));
     }
     Some(out)
