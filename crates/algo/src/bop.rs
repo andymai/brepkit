@@ -381,6 +381,49 @@ mod tests {
         }
     }
 
+    /// A pair's tiles ride with their side: the kept side brings every tile of
+    /// its rank, the dropped side's tiles go with it, and no tile reaches the
+    /// truth-table selection on its own (each tile carries a class that table
+    /// would keep).
+    #[test]
+    fn sd_pair_tiles_follow_their_side() {
+        // 0: A member, 1: B member, 2: A tile, 3 and 4: B tiles.
+        let ranks = [Rank::A, Rank::B, Rank::A, Rank::B, Rank::B];
+        let class_for = |op: BooleanOp, rank: Rank| match (op, rank) {
+            (BooleanOp::Fuse, _) | (BooleanOp::Cut, Rank::A) => FaceClass::Outside,
+            (BooleanOp::Intersect, _) | (BooleanOp::Cut, Rank::B) => FaceClass::Inside,
+        };
+        let table: [(BooleanOp, usize, bool, &[usize]); 6] = [
+            (BooleanOp::Fuse, 0, true, &[0, 2]),
+            (BooleanOp::Fuse, 1, true, &[1, 3, 4]),
+            (BooleanOp::Intersect, 0, true, &[1, 3, 4]),
+            (BooleanOp::Intersect, 1, true, &[0, 2]),
+            (BooleanOp::Cut, 1, false, &[0, 2]),
+            (BooleanOp::Cut, 0, true, &[]),
+        ];
+        for (op, representative, same_orientation, kept) in table {
+            let mut topo = Topology::new();
+            let sub_faces: Vec<SubFace> = ranks
+                .iter()
+                .map(|&rank| make_sub_face(&mut topo, rank, class_for(op, rank)))
+                .collect();
+            let pair = SameDomainPair {
+                idx_a: 0,
+                idx_b: 1,
+                same_orientation,
+                geometric_overlap: true,
+                representative,
+                tiles: vec![2, 3, 4],
+            };
+            let selected = select_faces(&sub_faces, op, &[pair], &[]);
+            let mut got: Vec<_> = selected.iter().map(|s| s.face_id).collect();
+            let mut want: Vec<_> = kept.iter().map(|&i| sub_faces[i].face_id).collect();
+            got.sort_by_key(|f| f.index());
+            want.sort_by_key(|f| f.index());
+            assert_eq!(got, want, "{op:?} representative {representative}");
+        }
+    }
+
     #[test]
     fn select_faces_no_sd_pairs() {
         let mut topo = Topology::new();

@@ -1337,3 +1337,28 @@ fn convex_outlines_apart_keeps_a_shallow_apex() {
     ]);
     assert!(!convex_outlines_apart(&roof, &slab, tol));
 }
+
+/// Squares side by side share no area; squares overlapping by a quarter of
+/// their area, or one inside the other, do, whichever point of them is read.
+#[test]
+fn planar_regions_apart_reads_area_not_a_point() {
+    use brepkit_topology::builder::make_planar_face;
+    let square = |topo: &mut Topology, x: f64, y: f64, s: f64| {
+        let p = |u: f64, v: f64| brepkit_math::vec::Point3::new(u, v, 0.0);
+        make_planar_face(
+            topo,
+            &[p(x, y), p(x + s, y), p(x + s, y + s), p(x, y + s)],
+            1e-7,
+        )
+        .unwrap()
+    };
+    let mut topo = Topology::new();
+    let a = square(&mut topo, 0.0, 0.0, 2.0);
+    let beside = square(&mut topo, 2.0, 0.0, 2.0);
+    let overlapping = square(&mut topo, 1.0, 1.0, 2.0);
+    let inside = square(&mut topo, 0.5, 0.5, 1.0);
+    assert!(super::planar_regions_apart(&topo, a, beside));
+    assert!(!super::planar_regions_apart(&topo, a, overlapping));
+    assert!(!super::planar_regions_apart(&topo, a, inside));
+    assert!(!super::planar_regions_apart(&topo, inside, a));
+}

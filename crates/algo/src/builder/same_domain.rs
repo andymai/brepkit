@@ -63,9 +63,9 @@ pub struct SameDomainPair {
     /// footprint is bounded by both solids).
     pub representative: usize,
     /// Same-rank members of the group lying beside the pair's member of
-    /// their rank rather than over it: pieces that tile one face. The side
-    /// the selector keeps keeps its tiles with it, and the other side's are
-    /// dropped with it.
+    /// their rank rather than over it: pieces that tile one face. The
+    /// selector's kept side carries its tiles, and the dropped side's go with
+    /// it.
     pub tiles: Vec<usize>,
 }
 
@@ -720,18 +720,19 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     // that tile one face side by side join the group through
                     // the opposite face covering them all (a pin's end cap
                     // split into a disc and a lens, flush on a knuckle end), and
-                    // none of them is a copy of another.
-                    let point = sub_faces[idx].interior_point.or_else(|| {
-                        super::sample_face_interior(topo, sub_faces[idx].face_id, tol).ok()
+                    // none of them is a copy of another. Only a member whose
+                    // region shares no area with any other member of its rank
+                    // is a tile; a partial overlap stays a duplicate.
+                    let beside = members.iter().all(|&m| {
+                        m == idx
+                            || sub_faces[m].rank != sub_faces[idx].rank
+                            || planar_regions_apart(
+                                topo,
+                                sub_faces[idx].face_id,
+                                sub_faces[m].face_id,
+                            )
                     });
-                    let stacked = point.is_none_or(|ip| {
-                        members.iter().any(|&m| {
-                            m != idx
-                                && sub_faces[m].rank == sub_faces[idx].rank
-                                && planar_region_holds(topo, sub_faces[m].face_id, ip)
-                        })
-                    });
-                    if !stacked {
+                    if beside {
                         if std::env::var("BK_SD").is_ok() {
                             log::debug!(
                                 "SD within-rank TILE (beside its rank) face={:?} src={:?}",
@@ -1021,16 +1022,70 @@ fn compute_edge_set_quantized(
 /// is the conservative criterion that catches boolean residue (issue #696)
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
-/// Whether `p` lies in a planar face's material region; `true` when the face
-/// is not planar or its polygons cannot be read, which keeps a member that
-/// cannot be tested a duplicate.
-fn planar_region_holds(topo: &Topology, face_id: FaceId, p: brepkit_math::vec::Point3) -> bool {
-    match crate::classifier::planar_face_polygons(topo, face_id) {
-        Ok(Some((outer, holes, normal))) => {
-            crate::classifier::point_in_planar_region(p, &outer, &holes, &normal)
-        }
-        _ => true,
+/// Whether two coplanar planar faces' material regions share no area, read
+/// on a 16 x 16 grid over each face's box: no point of either, clear of its
+/// own boundary, lies in the other clear of the other's. `false` when either
+/// outline cannot be read, which keeps the member a duplicate.
+fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
+    use super::classify_2d::{boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d};
+    use brepkit_math::vec::Point2;
+    type Region = (Vec<Point2>, Vec<Vec<Point2>>);
+
+    let Ok(face_a) = topo.face(a) else {
+        return false;
+    };
+    let FaceSurface::Plane { normal, .. } = *face_a.surface() else {
+        return false;
+    };
+    let (sa, sb) = (planar_samples(topo, a), planar_samples(topo, b));
+    if sa.outer.len() < 3 || sb.outer.len() < 3 {
+        return false;
     }
+    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal, &sa.outer);
+    let region = |s: &PlanarSamples| -> Region {
+        (
+            s.outer.iter().map(|&p| frame.project(p)).collect(),
+            s.holes
+                .iter()
+                .filter(|h| h.len() >= 3)
+                .map(|h| h.iter().map(|&p| frame.project(p)).collect())
+                .collect(),
+        )
+    };
+    let clear_inside = |q: Point2, (outer, holes): &Region| -> bool {
+        let eps = boundary_eps(outer);
+        point_in_polygon_2d(q, outer)
+            && distance_to_polygon_boundary(q, outer) > eps
+            && holes
+                .iter()
+                .all(|h| !point_in_polygon_2d(q, h) && distance_to_polygon_boundary(q, h) > eps)
+    };
+    let enters = |from: &Region, into: &Region| -> bool {
+        let (lo, hi) = from.0.iter().fold(
+            (
+                Point2::new(f64::INFINITY, f64::INFINITY),
+                Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+            ),
+            |(lo, hi), p| {
+                (
+                    Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                    Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+                )
+            },
+        );
+        (0..16).any(|i| {
+            (0..16).any(|j| {
+                let f = |k: i32| (f64::from(k) + 0.5) / 16.0;
+                let q = Point2::new(
+                    (hi.x() - lo.x()).mul_add(f(i), lo.x()),
+                    (hi.y() - lo.y()).mul_add(f(j), lo.y()),
+                );
+                clear_inside(q, from) && clear_inside(q, into)
+            })
+        })
+    };
+    let (ra, rb) = (region(&sa), region(&sb));
+    !enters(&ra, &rb) && !enters(&rb, &ra)
 }
 
 /// Whether a planar sub-face's interior lies OUTSIDE the opposite-rank
