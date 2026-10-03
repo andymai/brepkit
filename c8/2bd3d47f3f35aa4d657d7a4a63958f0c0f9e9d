@@ -1,0 +1,22 @@
+crates/algo/src/builder/fill_images_faces.rs
+  s_a8677c67f85a06::t_fcc9384a822caf 4586-4601,4603
+  s_a8677c67f85a06::t_d79d2f0313685b 4552-4561,4563-4585,4602,4604-4639
+  s_a8677c67f85a06::t_4a2b3b827f0d90 4562
+  s_a8677c67f85a06::t_a062dac2587e8d 4256-4258,4260,4262-4273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c82bd3d47f3f35aa4d657d7a4a63958f0c0f9e9d",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
