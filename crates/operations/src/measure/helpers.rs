@@ -373,7 +373,7 @@ pub(super) fn compute_angular_range(u_vals: &mut Vec<f64>) -> (f64, f64) {
 /// the `(ex, ey)` frame, plus its circular- and elliptic-arc edge count.
 /// `Ok(None)` when an edge is neither a line nor a conic arc, so the caller
 /// falls back to tessellation.
-pub(super) fn planar_wire_signed_area2(
+pub fn planar_wire_signed_area2(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
     ex: Vec3,

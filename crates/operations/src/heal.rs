@@ -440,12 +440,14 @@ fn pointed_cone_seam(
     Ok(None)
 }
 
-/// Fix face orientations so normals point outward from the solid.
+/// Fix plane faces whose normal disagrees with their outer wire.
 ///
-/// Uses the signed volume test: for each face, computes the signed volume
-/// contribution. If the total signed volume is negative, the overall
-/// orientation is flipped. Then checks individual faces against the
-/// expected outward direction.
+/// A face's stored outer wire runs counterclockwise about its surface
+/// normal, reversed flag or not, so a plane whose outer wire winds clockwise
+/// about its normal carries a flipped normal, which is negated. The winding is
+/// read arc-true. Where the material lies is not consulted: a cavity's floor
+/// faces toward the solid's middle. Curved faces and planes bounded by a NURBS
+/// edge are left alone.
 ///
 /// Returns the number of faces whose orientation was fixed.
 ///
@@ -455,95 +457,40 @@ pub fn fix_face_orientations(
     topo: &mut Topology,
     solid: SolidId,
 ) -> Result<usize, crate::OperationsError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<_> = shell.faces().to_vec();
-
-    let mut center = Vec3::new(0.0, 0.0, 0.0);
-    let mut total_faces: usize = 0;
-
-    for &fid in &face_ids {
-        let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        let mut face_center = Vec3::new(0.0, 0.0, 0.0);
-        let edges = wire.edges();
-        for oe in edges {
-            let edge = topo.edge(oe.edge())?;
-            let pos = topo.vertex(edge.start())?.point();
-            face_center += Vec3::new(pos.x(), pos.y(), pos.z());
-        }
-
-        let vert_count = edges.len();
-        if vert_count > 0 {
-            #[allow(clippy::cast_precision_loss)]
-            let inv = 1.0 / vert_count as f64;
-            center += face_center * inv;
-            total_faces += 1;
-        }
-    }
-
-    if total_faces == 0 {
-        return Ok(0);
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    let inv_faces = 1.0 / total_faces as f64;
-    let center_pt = Point3::new(
-        center.x() * inv_faces,
-        center.y() * inv_faces,
-        center.z() * inv_faces,
-    );
-
-    let mut fixed_count = 0;
     let mut faces_to_flip = Vec::new();
-
-    for &fid in &face_ids {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        let first_oe = match wire.edges().first() {
-            Some(oe) => oe,
-            None => continue,
+        let FaceSurface::Plane { normal, d } = face.surface() else {
+            continue;
         };
-        let edge = topo.edge(first_oe.edge())?;
-        let face_point = topo.vertex(edge.start())?.point();
-        let to_face = face_point - center_pt;
-
-        match face.surface() {
-            FaceSurface::Plane { normal, d } => {
-                if normal.dot(to_face) < 0.0 {
-                    faces_to_flip.push((fid, *normal, *d));
-                    fixed_count += 1;
-                }
-            }
-            FaceSurface::Cylinder(cyl) => {
-                // For cylinders, the outward radial direction should point away from center.
-                let to_pt = Vec3::new(
-                    face_point.x() - cyl.origin().x(),
-                    face_point.y() - cyl.origin().y(),
-                    face_point.z() - cyl.origin().z(),
-                );
-                let h = to_pt.dot(cyl.axis());
-                let radial = to_pt - cyl.axis() * h;
-                if radial.dot(to_face) < 0.0 {
-                    // Cylinder orientation is wrong — but we can only flip planar faces.
-                    // For analytic surfaces, orientation is inherent; skip.
-                }
-            }
-            // Non-planar faces: orientation is determined by surface parameterization,
-            // not a flippable normal. Skip for now.
-            _ => {}
+        let (normal, d) = (*normal, *d);
+        let Ok(frame) =
+            brepkit_math::frame::Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), normal)
+        else {
+            continue;
+        };
+        let Some((area2, _)) = crate::measure::helpers::planar_wire_signed_area2(
+            topo,
+            face.outer_wire(),
+            frame.x,
+            frame.y,
+        )?
+        else {
+            continue;
+        };
+        if area2 < 0.0 {
+            faces_to_flip.push((fid, normal, d));
         }
     }
 
-    for (fid, normal, d) in faces_to_flip {
-        let face = topo.face_mut(fid)?;
-        face.set_surface(FaceSurface::Plane {
+    for &(fid, normal, d) in &faces_to_flip {
+        topo.face_mut(fid)?.set_surface(FaceSurface::Plane {
             normal: -normal,
             d: -d,
         });
     }
 
-    Ok(fixed_count)
+    Ok(faces_to_flip.len())
 }
 
 /// Close gaps between consecutive edges in face wires.

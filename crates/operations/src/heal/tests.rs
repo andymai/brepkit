@@ -57,6 +57,54 @@ fn fix_orientations_on_clean_box() {
     assert_eq!(count, 0);
 }
 
+/// A cup's floor and walls inside face toward the middle of the solid, and
+/// each is still wound counterclockwise about its normal.
+#[test]
+fn fix_orientations_leaves_a_cups_cavity_alone() {
+    let mut topo = Topology::new();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let top = brepkit_topology::explorer::solid_faces(&topo, block)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(topo.face(f).unwrap().surface(),
+                FaceSurface::Plane { normal, d } if normal.z() > 0.5 && (d - 10.0).abs() < 1e-9)
+        })
+        .unwrap();
+    let cup = crate::shell_op::shell(&mut topo, block, 1.0, &[top]).unwrap();
+
+    let report = heal_solid(&mut topo, cup, 1e-7).unwrap();
+    assert_eq!(report.orientations_fixed, 0);
+    let mesh = crate::tessellate::tessellate_solid(&topo, cup, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+}
+
+#[test]
+fn fix_orientations_restores_a_flipped_plane() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let face = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap()[0];
+    let FaceSurface::Plane { normal, d } = topo.face(face).unwrap().surface().clone() else {
+        panic!("box faces are planes");
+    };
+    topo.face_mut(face)
+        .unwrap()
+        .set_surface(FaceSurface::Plane {
+            normal: -normal,
+            d: -d,
+        });
+
+    assert_eq!(fix_face_orientations(&mut topo, solid).unwrap(), 1);
+    let FaceSurface::Plane {
+        normal: fixed,
+        d: fixed_d,
+    } = topo.face(face).unwrap().surface()
+    else {
+        panic!("box faces are planes");
+    };
+    assert!((*fixed - normal).length() < 1e-12 && (fixed_d - d).abs() < 1e-12);
+}
+
 // ── Wire gap closure tests ──────────────────────────
 
 #[test]
