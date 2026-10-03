@@ -65,11 +65,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     tol: Tolerance,
 ) -> (Vec<SubFace>, Vec<FaceId>, Vec<(FaceId, Point3, Point3)>) {
     let mut sub_faces = Vec::new();
-    // Which input faces share each input edge, for reading a section that
-    // runs along an opposing face's edge.
     let input_faces: Vec<FaceId> = face_ranks.keys().copied().collect();
-    let adjacency =
-        brepkit_topology::adjacency::AdjacencyIndex::build_from_faces(topo, &input_faces).ok();
+    let adjacency = InputAdjacency {
+        faces: &input_faces,
+        index: std::cell::OnceCell::new(),
+    };
     // Faces whose sections the splitter could not lay out.
     let mut unsplit: Vec<FaceId> = Vec::new();
     // Faces kept whole although a section runs across them from boundary to
@@ -352,8 +352,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             face_id,
             &section_map,
             &seam_anchors,
-            adjacency.as_ref(),
-            tol.linear,
+            &adjacency,
+            tol,
         );
 
         log::debug!(
@@ -1962,10 +1962,11 @@ fn build_section_edges(
     face_id: FaceId,
     section_map: &HashMap<FaceId, Vec<SectionSource>>,
     seam_anchors: &BTreeMap<usize, SeamAnchor>,
-    adjacency: Option<&brepkit_topology::adjacency::AdjacencyIndex>,
-    tol: f64,
+    adjacency: &InputAdjacency<'_>,
+    op_tol: Tolerance,
 ) -> Vec<SectionEdge> {
     use brepkit_math::vec::Point3;
+    let tol = op_tol.linear;
 
     let sources = match section_map.get(&face_id) {
         Some(s) => s,
@@ -2275,8 +2276,15 @@ fn build_section_edges(
                                 let curved = !matches!(face.surface(), FaceSurface::Plane { .. });
                                 let across_on_this = |e: EdgeId| {
                                     curved
-                                        && adjacency.is_some_and(|adj| {
-                                            face_across_lies_on(topo, adj, e, of, face.surface())
+                                        && adjacency.get(topo).is_some_and(|adj| {
+                                            face_across_lies_on(
+                                                topo,
+                                                adj,
+                                                e,
+                                                of,
+                                                face.surface(),
+                                                op_tol,
+                                            )
                                         })
                                 };
                                 clip_line_to_face_boundary(
@@ -3196,6 +3204,23 @@ fn arc_segment_crossings(
     hits.into_iter().filter(|(_, t)| on_arc(*t)).collect()
 }
 
+/// Which input faces share each input edge, built the first time a section
+/// needs it.
+struct InputAdjacency<'a> {
+    faces: &'a [FaceId],
+    index: std::cell::OnceCell<Option<brepkit_topology::adjacency::AdjacencyIndex>>,
+}
+
+impl InputAdjacency<'_> {
+    fn get(&self, topo: &Topology) -> Option<&brepkit_topology::adjacency::AdjacencyIndex> {
+        self.index
+            .get_or_init(|| {
+                brepkit_topology::adjacency::AdjacencyIndex::build_from_faces(topo, self.faces).ok()
+            })
+            .as_ref()
+    }
+}
+
 /// Whether a face other than `of` that shares edge `e` lies on `surface`.
 fn face_across_lies_on(
     topo: &Topology,
@@ -3203,16 +3228,13 @@ fn face_across_lies_on(
     e: EdgeId,
     of: FaceId,
     surface: &FaceSurface,
+    tol: Tolerance,
 ) -> bool {
     adjacency.faces_for_edge(e).iter().any(|&g| {
         g != of
             && topo.face(g).is_ok_and(|gf| {
-                crate::builder::same_domain::surfaces_same_domain(
-                    gf.surface(),
-                    surface,
-                    Tolerance::default(),
-                )
-                .is_some()
+                crate::builder::same_domain::surfaces_same_domain(gf.surface(), surface, tol)
+                    .is_some()
             })
     })
 }
