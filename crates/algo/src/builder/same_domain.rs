@@ -62,6 +62,11 @@ pub struct SameDomainPair {
     /// most boundary) and the *other* (smaller) face for Intersect (whose
     /// footprint is bounded by both solids).
     pub representative: usize,
+    /// Same-rank members of the group lying beside the pair's member of
+    /// their rank rather than over it: pieces that tile one face. The side
+    /// the selector keeps keeps its tiles with it, and the other side's are
+    /// dropped with it.
+    pub tiles: Vec<usize>,
 }
 
 /// A within-rank duplicate sub-face: same edge set, same surface, same input
@@ -677,33 +682,7 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                 let key = (idx_a.min(idx_b), idx_a.max(idx_b));
                 let same_orientation = pair_data.get(&key).copied().unwrap_or(true);
 
-                // Record the LARGER face (by projected area) as the
-                // representative, so the choice is geometry-based not rank-based.
-                // Coextensive (edge-set) pairs share the same domain (area ties),
-                // so A is a fine representative and matches historical behaviour.
-                // A geometric-overlap pair has two faces of different extent;
-                // tagging the larger lets the BOP selector keep it for Fuse and
-                // the smaller for Intersect. Which face is A flips with operand
-                // order, so deferring to area keeps the result order-independent.
-                let representative = if geometric_overlap {
-                    let area_a = repr_face_area(topo, sub_faces[idx_a].face_id);
-                    let area_b = repr_face_area(topo, sub_faces[idx_b].face_id);
-                    match (area_a, area_b) {
-                        (Some(aa), Some(ab)) if ab > aa => idx_b,
-                        _ => idx_a,
-                    }
-                } else {
-                    idx_a
-                };
-
-                pairs.push(SameDomainPair {
-                    idx_a,
-                    idx_b,
-                    same_orientation,
-                    geometric_overlap,
-                    representative,
-                });
-
+                let mut tiles: Vec<usize> = Vec::new();
                 // The group may also contain additional same-rank members
                 // (rare — a 3+ member group spanning both ranks). Treat those
                 // as within-rank duplicates against the matching-rank repr.
@@ -755,11 +734,12 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     if !stacked {
                         if std::env::var("BK_SD").is_ok() {
                             log::debug!(
-                                "SD within-rank EXEMPT (beside its rank) face={:?} src={:?}",
+                                "SD within-rank TILE (beside its rank) face={:?} src={:?}",
                                 sub_faces[idx].face_id,
                                 sub_faces[idx].source_face
                             );
                         }
+                        tiles.push(idx);
                         continue;
                     }
                     within_rank_dups.push(WithinRankDuplicate {
@@ -767,6 +747,43 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                         duplicate: idx,
                     });
                 }
+
+                // Record the LARGER side (by projected area) as the
+                // representative, so the choice is geometry-based not rank-based.
+                // Coextensive (edge-set) pairs share the same domain (area ties),
+                // so A is a fine representative and matches historical behaviour.
+                // A geometric-overlap pair has two faces of different extent;
+                // tagging the larger lets the BOP selector keep it for Fuse and
+                // the smaller for Intersect. Which face is A flips with operand
+                // order, so deferring to area keeps the result order-independent.
+                // A side is its pair member and the tiles of its rank, which
+                // stand for the region together.
+                let representative = if geometric_overlap || !tiles.is_empty() {
+                    let side = |rank: Rank, member: usize| -> Option<f64> {
+                        tiles
+                            .iter()
+                            .filter(|&&t| sub_faces[t].rank == rank)
+                            .try_fold(
+                                repr_face_area(topo, sub_faces[member].face_id)?,
+                                |sum, &t| Some(sum + repr_face_area(topo, sub_faces[t].face_id)?),
+                            )
+                    };
+                    match (side(Rank::A, idx_a), side(Rank::B, idx_b)) {
+                        (Some(aa), Some(ab)) if ab > aa => idx_b,
+                        _ => idx_a,
+                    }
+                } else {
+                    idx_a
+                };
+
+                pairs.push(SameDomainPair {
+                    idx_a,
+                    idx_b,
+                    same_orientation,
+                    geometric_overlap,
+                    representative,
+                    tiles,
+                });
             }
             // Within-rank only (A-only or B-only): cumulative boolean residue.
             // Keep the lowest-indexed face as representative; mark the rest

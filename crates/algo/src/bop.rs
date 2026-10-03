@@ -90,7 +90,11 @@ pub(crate) fn select_faces(
     // Step 2: Identify which sub-face indices are part of valid SD pairs
     let sd_indices: HashSet<usize> = valid_sd_pairs
         .iter()
-        .flat_map(|p| [p.idx_a, p.idx_b])
+        .flat_map(|p| {
+            [p.idx_a, p.idx_b]
+                .into_iter()
+                .chain(p.tiles.iter().copied())
+        })
         .collect();
 
     // Step 3: Select non-SD faces via the standard truth table
@@ -171,7 +175,22 @@ fn apply_sd_selection(
     };
 
     for pair in sd_pairs {
-        let sf_a = &sub_faces[pair.idx_a];
+        // A kept face stands for its side with the tiles of its rank.
+        let push_side = |member: usize, selected: &mut Vec<SelectedFace>| {
+            let rank = &sub_faces[member].rank;
+            for idx in std::iter::once(member).chain(
+                pair.tiles
+                    .iter()
+                    .copied()
+                    .filter(|&t| t < sub_faces.len() && &sub_faces[t].rank == rank),
+            ) {
+                selected.push(SelectedFace {
+                    face_id: sub_faces[idx].face_id,
+                    source_face: sub_faces[idx].source_face,
+                    reversed: false,
+                });
+            }
+        };
 
         if std::env::var("BK_SD_SEL").is_ok() {
             log::debug!(
@@ -210,11 +229,7 @@ fn apply_sd_selection(
             //   exterior of the combined cut and must survive. Discarding it
             //   leaves that boundary open (a free-edged, non-watertight shell).
             if op == BooleanOp::Cut {
-                selected.push(SelectedFace {
-                    face_id: sf_a.face_id,
-                    source_face: sf_a.source_face,
-                    reversed: false,
-                });
+                push_side(pair.idx_a, selected);
                 continue;
             }
             // Fuse/Intersect with matching orientation: a same-oriented
@@ -245,11 +260,7 @@ fn apply_sd_selection(
             } else {
                 pair.representative
             };
-            selected.push(SelectedFace {
-                face_id: sub_faces[keep].face_id,
-                source_face: sub_faces[keep].source_face,
-                reversed: false,
-            });
+            push_side(keep, selected);
         } else {
             // Orientations DON'T match what the operation needs:
             // - Fuse + opposite-ori: internal faces — discard both
@@ -392,6 +403,7 @@ mod tests {
             same_orientation: true,
             geometric_overlap: false,
             representative: 5,
+            tiles: Vec::new(),
         }];
         // Should not panic — out-of-bounds pairs are skipped
         let selected = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
@@ -464,6 +476,7 @@ mod tests {
             same_orientation: true,
             geometric_overlap: true,
             representative: 0,
+            tiles: Vec::new(),
         }];
 
         let fused = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
@@ -503,6 +516,7 @@ mod tests {
             same_orientation: true,
             geometric_overlap: true,
             representative: 1,
+            tiles: Vec::new(),
         }];
 
         let fused = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);

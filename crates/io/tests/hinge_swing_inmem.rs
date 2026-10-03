@@ -473,6 +473,28 @@ fn hinge_lid_on_its_bin_overlaps_the_lip_exactly() {
     }
 }
 
+/// The knuckled lid against its long keyhole pin: the pin's end cap lies
+/// flush on a knuckle's end and arrives as two tiles, a disc part and a lens,
+/// both over the one knuckle end face. The intersect keeps the whole cap.
+#[test]
+fn hinge_lid_long_pin_intersect_is_exact() {
+    let mut topo = Topology::new();
+    let lid = load(&mut topo, "hinge_lid_knuckled.bin");
+    let pin = load(&mut topo, "hinge_lid_pin_long.bin");
+    faithful(&topo, lid, [4, 65, 143]);
+    faithful(&topo, pin, [0, 4, 12]);
+    let common = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Intersect, lid, pin).unwrap()
+    });
+    matches_both(
+        &topo,
+        [lid, pin, common],
+        [-47.95, 38.3, -4.25],
+        [106.55, 2.1, 2.5],
+        [40, 8, 8],
+    );
+}
+
 /// The bin against a block in the shape of the bracket under one of its
 /// knuckles, a box with a cove along the knuckle: five of the block's faces lie
 /// in bin faces. Each knuckle step face has an edge in the block's front plane,
