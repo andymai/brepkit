@@ -1,0 +1,38 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_26771486844f18 442,446,6646,6650,7100-7106,7108
+  s_a8677c67f85a06::t_db210ed36baef0 7082-7088,7107,7980,7982-7985
+  s_a8677c67f85a06::t_64cac6c3952f5b 7928-7929,7931,7961-7966,7981,7986-7988
+  s_a8677c67f85a06::t_cfb2a22f05f6be 443-445,6647-6649,7068-7081,7091,7094,7097-7099,7110
+crates/io/tests/data/binsplit_piece_lips.bin
+  s_a8677c67f85a06::t_03460bc5dc0a08 1
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_a8677c67f85a06::t_22bbcac4e210b9 272,278,724-745
+  s_a8677c67f85a06::t_702fe20e9b1b47 746-747
+crates/io/tests/data/binsplit_scoops.bin
+  s_a8677c67f85a06::t_06904f06ab6912 1
+crates/io/tests/binsplit_inmem.rs
+  s_a8677c67f85a06::t_00f26270b2ae4c 1-17,22-35,54,68,76-169
+  s_a8677c67f85a06::t_6a85f69877708d 18-21
+  s_a8677c67f85a06::t_92bde4fd7a4d48 60-64
+  s_a8677c67f85a06::t_c39e72b911a51b 36-53,55-59,65-67,69-75
+crates/io/tests/data/binsplit_envelope.bin
+  s_a8677c67f85a06::t_06904f06ab6912 1
+crates/io/tests/data/binsplit_piece.bin
+  s_a8677c67f85a06::t_03460bc5dc0a08 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "511d2b8cfc26ab106bf3287c3565eab5e6700cdd",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
