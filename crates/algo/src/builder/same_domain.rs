@@ -1040,7 +1040,47 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
     let FaceSurface::Plane { normal, .. } = *face_a.surface() else {
         return false;
     };
-    let (sa, sb) = (planar_samples(topo, a), planar_samples(topo, b));
+    // Dense along curves: the probes sit 1e-4 of the face's size inside its
+    // boundary, and a tile beside it on a shared arc split differently must
+    // not bulge over them by the chord error.
+    let dense_wire = |wid: brepkit_topology::wire::WireId| -> Vec<brepkit_math::vec::Point3> {
+        let mut pts = Vec::new();
+        let Ok(wire) = topo.wire(wid) else {
+            return pts;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let n = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                1
+            } else {
+                512
+            };
+            super::pcurve_compute::sample_edge_uniform_native(
+                edge.curve(),
+                sv.point(),
+                ev.point(),
+                n,
+                oe.is_forward(),
+                &mut pts,
+            );
+        }
+        pts
+    };
+    let dense = |fid: FaceId| -> Option<PlanarSamples> {
+        let face = topo.face(fid).ok()?;
+        Some(PlanarSamples {
+            outer: dense_wire(face.outer_wire()),
+            holes: face.inner_wires().iter().map(|&w| dense_wire(w)).collect(),
+        })
+    };
+    let (Some(sa), Some(sb)) = (dense(a), dense(b)) else {
+        return false;
+    };
     if sa.outer.len() < 3 || sb.outer.len() < 3 {
         return false;
     }
