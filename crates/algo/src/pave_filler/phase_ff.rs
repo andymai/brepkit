@@ -3228,7 +3228,7 @@ fn edge_surface_crossings(
         }
     }
     // A shallow crossing leaves a run of near-zero leaves around its root:
-    // roots closer than 1e-5 apart are one, read from its sign changes, or
+    // roots within ten tolerances are one, read from its sign changes, or
     // from its closest point when it only touches.
     roots.sort_by(|x, y| x.0.total_cmp(&y.0));
     let mut out: Vec<Point3> = Vec::new();
@@ -3236,7 +3236,10 @@ fn edge_surface_crossings(
         if group.iter().any(|r| r.1) {
             for &(t, _) in group.iter().filter(|r| r.1) {
                 let p = at(t);
-                if out.last().is_none_or(|q: &Point3| (*q - p).length() > 1e-5) {
+                if out
+                    .last()
+                    .is_none_or(|q: &Point3| (*q - p).length() > 10.0 * tol)
+                {
                     out.push(p);
                 }
             }
@@ -3264,7 +3267,7 @@ fn edge_surface_crossings(
     for r in roots {
         if group
             .last()
-            .is_some_and(|g: &(f64, bool)| (at(g.0) - at(r.0)).length() > 1e-5)
+            .is_some_and(|g: &(f64, bool)| (at(g.0) - at(r.0)).length() > 10.0 * tol)
         {
             flush(&mut group, &mut out);
         }
