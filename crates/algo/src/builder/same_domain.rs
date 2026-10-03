@@ -1023,9 +1023,18 @@ fn compute_edge_set_quantized(
 /// is the conservative criterion that catches boolean residue (issue #696)
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
+/// A planar face's outer loop and holes in a plane frame, with the largest
+/// distance between a sampled chord and its curve.
+struct PlanarRegion {
+    outer: Vec<brepkit_math::vec::Point2>,
+    holes: Vec<Vec<brepkit_math::vec::Point2>>,
+    chord_error: f64,
+}
+
 /// Whether two coplanar planar faces' material regions share no area. Each
 /// face is probed just inside every boundary segment and on a 16 x 16 grid
-/// over its box, and no probe of either may lie in the other. Outlines are
+/// over its box, no probe of either may lie in the other, and their
+/// boundaries may not cross where both faces' material meets. Outlines are
 /// sampled 32 times along each curved edge, and a probe counts as inside the
 /// other face only past that face's own chord error, so a tile beside it on a
 /// shared arc split differently does not read as overlapping. `false` when
@@ -1035,13 +1044,7 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
     use super::classify_2d::{boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d};
     use brepkit_math::vec::{Point2, Point3};
 
-    /// A face's outer loop and holes in the plane frame, with the largest
-    /// distance between a sampled chord and its curve.
-    struct Region {
-        outer: Vec<Point2>,
-        holes: Vec<Vec<Point2>>,
-        chord_error: f64,
-    }
+    type Region = PlanarRegion;
 
     let Ok(face_a) = topo.face(a) else {
         return false;
@@ -1099,15 +1102,16 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
         return false;
     }
     let frame = super::plane_frame::PlaneFrame::from_plane_face(normal, &sa.0);
-    let region = |(outer, holes, chord_error): &(Vec<Point3>, Vec<Vec<Point3>>, f64)| Region {
-        outer: outer.iter().map(|&p| frame.project(p)).collect(),
-        holes: holes
-            .iter()
-            .filter(|h| h.len() >= 3)
-            .map(|h| h.iter().map(|&p| frame.project(p)).collect())
-            .collect(),
-        chord_error: *chord_error,
-    };
+    let region =
+        |(outer, holes, chord_error): &(Vec<Point3>, Vec<Vec<Point3>>, f64)| PlanarRegion {
+            outer: outer.iter().map(|&p| frame.project(p)).collect(),
+            holes: holes
+                .iter()
+                .filter(|h| h.len() >= 3)
+                .map(|h| h.iter().map(|&p| frame.project(p)).collect())
+                .collect(),
+            chord_error: *chord_error,
+        };
     // Inside a region clear of its boundary by `margin`.
     let clear_inside = |q: Point2, r: &Region, margin: f64| -> bool {
         let eps = boundary_eps(&r.outer).max(margin);
@@ -1183,6 +1187,28 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
         out
     };
     let (ra, rb) = (region(&sa), region(&sb));
+    let bounds = |r: &Region| {
+        r.outer.iter().fold(
+            (
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ),
+            |(x0, y0, x1, y1), p| (x0.min(p.x()), y0.min(p.y()), x1.max(p.x()), y1.max(p.y())),
+        )
+    };
+    let (ba, bb) = (bounds(&ra), bounds(&rb));
+    let (x0, y0, x1, y1) = (
+        ba.0.max(bb.0),
+        ba.1.max(bb.1),
+        ba.2.min(bb.2),
+        ba.3.min(bb.3),
+    );
+    let pad = boundary_eps(&ra.outer).max(boundary_eps(&rb.outer));
+    if x0 > x1 + pad || y0 > y1 + pad {
+        return true;
+    }
     for (from, into) in [(&ra, &rb), (&rb, &ra)] {
         let ps = probes(from);
         let margin = 1.5 * into.chord_error;
@@ -1190,7 +1216,111 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
             return false;
         }
     }
-    true
+    !boundaries_cross(&ra, &rb, (x0 - pad, y0 - pad, x1 + pad, y1 + pad), &|q| {
+        clear_inside(q, &ra, 1.5 * ra.chord_error) && clear_inside(q, &rb, 1.5 * rb.chord_error)
+    })
+}
+
+/// Whether two regions' boundaries cross where both regions' material
+/// meets: a proper crossing of two boundary segments inside `window`, beside
+/// which one of four points a short step off along the segments lies in
+/// both (`in_both`). Two differently sampled copies of one shared arc cross
+/// each other back and forth, but their faces lie on opposite sides of it.
+/// Segments are bucketed on a 32 x 32 grid over the window.
+fn boundaries_cross(
+    ra: &PlanarRegion,
+    rb: &PlanarRegion,
+    (x0, y0, x1, y1): (f64, f64, f64, f64),
+    in_both: &dyn Fn(brepkit_math::vec::Point2) -> bool,
+) -> bool {
+    use brepkit_math::vec::Point2;
+    const CELLS: usize = 32;
+    let segments = |r: &PlanarRegion| -> Vec<(Point2, Point2)> {
+        std::iter::once(&r.outer)
+            .chain(r.holes.iter())
+            .flat_map(|lp| (0..lp.len()).map(move |i| (lp[i], lp[(i + 1) % lp.len()])))
+            .filter(|(p, q)| {
+                p.x().max(q.x()) >= x0
+                    && p.x().min(q.x()) <= x1
+                    && p.y().max(q.y()) >= y0
+                    && p.y().min(q.y()) <= y1
+            })
+            .collect()
+    };
+    let (sa, sb) = (segments(ra), segments(rb));
+    if sa.is_empty() || sb.is_empty() {
+        return false;
+    }
+    let (w, h) = ((x1 - x0).max(1e-12), (y1 - y0).max(1e-12));
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    let cell = |x: f64, y: f64| -> (usize, usize) {
+        let cx = (((x - x0) / w) * CELLS as f64).clamp(0.0, (CELLS - 1) as f64) as usize;
+        let cy = (((y - y0) / h) * CELLS as f64).clamp(0.0, (CELLS - 1) as f64) as usize;
+        (cx, cy)
+    };
+    let mut grid: Vec<Vec<usize>> = vec![Vec::new(); CELLS * CELLS];
+    for (k, (p, q)) in sb.iter().enumerate() {
+        let (a, b) = (
+            cell(p.x().min(q.x()), p.y().min(q.y())),
+            cell(p.x().max(q.x()), p.y().max(q.y())),
+        );
+        for cx in a.0..=b.0 {
+            for cy in a.1..=b.1 {
+                grid[cy * CELLS + cx].push(k);
+            }
+        }
+    }
+    let side = |a: Point2, b: Point2, c: Point2| {
+        (b.x() - a.x()).mul_add(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
+    };
+    let mut seen: Vec<usize> = Vec::new();
+    for &(p, q) in &sa {
+        let (a, b) = (
+            cell(p.x().min(q.x()), p.y().min(q.y())),
+            cell(p.x().max(q.x()), p.y().max(q.y())),
+        );
+        seen.clear();
+        for cx in a.0..=b.0 {
+            for cy in a.1..=b.1 {
+                seen.extend_from_slice(&grid[cy * CELLS + cx]);
+            }
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        for &k in &seen {
+            let (u, v) = sb[k];
+            let (d1, d2, d3, d4) = (side(p, q, u), side(p, q, v), side(u, v, p), side(u, v, q));
+            if !(d1 * d2 < 0.0 && d3 * d4 < 0.0) {
+                continue;
+            }
+            let t = d3 / (d3 - d4);
+            let x = Point2::new(
+                (q.x() - p.x()).mul_add(t, p.x()),
+                (q.y() - p.y()).mul_add(t, p.y()),
+            );
+            let unit = |a: Point2, b: Point2| {
+                let (dx, dy) = (b.x() - a.x(), b.y() - a.y());
+                let l = dx.hypot(dy).max(1e-300);
+                (dx / l, dy / l)
+            };
+            let ((ax, ay), (bx, by)) = (unit(p, q), unit(u, v));
+            let step = 1e-4 * w.hypot(h);
+            for (sa_, sb_) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                let m = Point2::new(
+                    (sa_ * ax + sb_ * bx).mul_add(step, x.x()),
+                    (sa_ * ay + sb_ * by).mul_add(step, x.y()),
+                );
+                if in_both(m) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Whether a planar sub-face's interior lies OUTSIDE the opposite-rank

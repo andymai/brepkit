@@ -1481,3 +1481,19 @@ fn planar_regions_apart_reads_a_shared_arc_split_differently() {
     assert!(super::planar_regions_apart(&topo, disc, annulus));
     assert!(super::planar_regions_apart(&topo, annulus, disc));
 }
+
+/// Two long narrow strips crossing in an X away from every probe: their
+/// boundaries cross where both strips' material meets, so they overlap.
+#[test]
+fn planar_regions_apart_sees_strips_crossing_between_probes() {
+    use brepkit_topology::builder::make_planar_face;
+    let rect = |topo: &mut Topology, (x0, y0): (f64, f64), (x1, y1): (f64, f64)| {
+        let p = |u: f64, v: f64| Point3::new(u, v, 0.0);
+        make_planar_face(topo, &[p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)], 1e-7).unwrap()
+    };
+    let mut topo = Topology::new();
+    let along = rect(&mut topo, (-5.0, -0.05), (3.0, 0.05));
+    let across = rect(&mut topo, (1.95, -5.0), (2.05, 3.0));
+    assert!(!super::planar_regions_apart(&topo, along, across));
+    assert!(!super::planar_regions_apart(&topo, across, along));
+}
