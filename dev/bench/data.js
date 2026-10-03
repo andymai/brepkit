@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790985024677,
+  "lastUpdate": 1791005287477,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -49949,6 +49949,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43799580,
             "range": "± 124396",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d03f7a6185c131971bfceba54a8ad24eb717654b",
+          "message": "fix(algo): read same-domain tiles side by side as one side of their pair (#1953)\n\nThe hinge lid with knuckles, `hinge_lid_knuckled.bin`, now intersects\nits long keyhole pin, `hinge_lid_pin_long.bin`, exactly with 62 faces\nand no free edges. On main, the raw intersect fails with `open growth\nshell with 18 faces would be dropped` and falls back to a mesh. A\n216,000 point scan of the pin box finds 73,230 points inside both\noperands and 73,230 inside the result.\n\n## What was wrong\n\nThe pin end cap lies flush against a lid knuckle end face, coplanar and\nfacing the same way. It arrives as two side by side tiles of one face: a\ndisc part and a lens between a chord and the radius 1.0 arc. Same-domain\ngrouping joins both tiles with the lid covering piece.\n\n`detect_same_domain_with_shells` demoted the lens as a within-rank\nduplicate of the other tile. Its residue gate reads shells, coextensive\nedge sets, and edges shared outside the group, but not whether the tiles\noverlap. For an intersect, `apply_sd_selection` kept the smaller face of\nthe pair, which was the other tile, and dropped the lid piece. Nothing\ncovered the lens.\n\n## The change\n\n- In `crates/algo/src/builder/same_domain.rs`, a same-rank member of a\ncross-rank group is a tile only when its region shares no area with any\nother member of its rank.\n\n- `planar_regions_apart` probes clear inside each face, a step inward\nfrom the middle of every boundary segment plus a 16 x 16 grid over the\nface box, neither face may have a probe inside the other, and their\nboundaries may not cross where both faces' material meets (a proper\ncrossing counts when a point a short step off along both segments lies\ninside both; segments are bucketed on a 32 x 32 grid over the shared\nbox). Curved edges are sampled 32 times each. A probe steps inward at\nleast twice its own face's chord error, and counts as inside the other\nface only past 1.5 times that face's chord error, so a tile beside it on\na shared arc split differently does not read as overlapping.\n\n- Partial overlaps, unreadable outlines, faces yielding no probe, and\nfaces with the same edge set remain within-rank duplicates. Tiles are\nstored on `SameDomainPair` as `tiles`.\n\n- Representative selection compares side areas. Each side includes its\npair member and all tiles of its rank.\n\n- In `crates/algo/src/bop.rs`, `apply_sd_selection` keeps the chosen\nmember with its rank tiles. `select_faces` excludes tiles from normal\ntruth-table selection. Operation choices remain unchanged: larger side\nfor fuse, smaller side for intersect, and A for cut.\n\n- The roadmap moves “Hinge lid ∩ long pin falls back” to Closed.\n\n## Verification\n\n- `hinge_lid_long_pin_intersect_is_exact` checks operand face census and\nvalidity, requires an exact valid intersect, and compares the result\npoint by point with both operands across the pin box. It fails on main\nat the mesh fallback check.\n\n- `sd_pair_tiles_follow_their_side` covers fuse, intersect, and cut with\ntiles on both ranks. `planar_regions_apart_reads_area_not_a_point`\ncovers adjacent, partially overlapping, nested, duplicate thin-frame,\ncap-tile, and surrounding-frame regions.\n`planar_regions_apart_reads_a_shared_arc_split_differently` covers a\nhalf disc whose arc is two edges beside the half annulus whose inner arc\nis one; it fails with both chord-error allowances removed.\n`planar_regions_apart_sees_strips_crossing_between_probes` covers two\nnarrow strips crossing in an X away from every probe; it fails without\nthe crossing check.\n\n- The first version passed 2,632 tests across six native crates with 0\nfailures and 18 ignored, plus all 236 `brepkit-wasm` library tests with\n3 ignored. Clippy with `-D warnings`, `check-boundaries.sh`, and\n`check-doc-paths.sh` passed.\n\n- On the head, the hinge fixtures and all 245 `brepkit-algo` library\ntests pass, clippy is clean,\n`sweep::tests::exact_coincident_lip_fuse_stays_analytic` runs in 7.9 s\nunoptimized, and CI's test job passes the full suite.\n\n- The pose sweep, 120-case kumiko strut pose sweep, `truth_audit`, and\n`approx_census` are identical to main across all six tile-test versions.\n\n- The first-version wasm passes all 27 `hingeSwing.scenario.test.ts`\ntests in 219.56 s. Its 27 mesh fallbacks match main: four bracket, seven\noverhang, and sixteen stop intersects.\n\n## Still open\n\n- The bracket and stop repros,\n`hinge_bin_against_its_knuckle_bracket_intersects_exactly` and\n`hinge_lid_at_its_stop_overlaps_the_lip_exactly`, remain ignored and\nstill fall back. Their other roots are recorded in the roadmap.",
+          "timestamp": "2026-10-02T22:25:17-07:00",
+          "tree_id": "587d326ce9e5cc3a75717fe92fb5b530b0c144b6",
+          "url": "https://github.com/andymai/brepkit/commit/d03f7a6185c131971bfceba54a8ad24eb717654b"
+        },
+        "date": 1791005281878,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1040485,
+            "range": "± 1827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1125202,
+            "range": "± 10185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13093,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 803557,
+            "range": "± 3047",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43450235,
+            "range": "± 71094",
             "unit": "ns/iter"
           }
         ]
