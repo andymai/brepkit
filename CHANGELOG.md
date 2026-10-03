@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.21](https://github.com/andymai/brepkit/compare/v4.1.20...v4.1.21) (2026-10-03)
+
+
+### Bug Fixes
+
+* **algo:** close the hinge lid's stop intersect: trim its lip strip at curved plane edges, drop plane lines the faces never share, and cap against the faces on the loop ([#1957](https://github.com/andymai/brepkit/issues/1957)) ([e5d5861](https://github.com/andymai/brepkit/commit/e5d5861b5515a42ac2418af75cf82b4d0d9cac7e))
+
 ## [4.1.20](https://github.com/andymai/brepkit/compare/v4.1.19...v4.1.20) (2026-10-03)
 
 
