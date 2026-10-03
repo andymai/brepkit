@@ -560,6 +560,59 @@ fn hinge_lid_at_its_stop_overlaps_the_lip_exactly() {
     );
 }
 
+/// The lid pushed past its stop overlaps the bin's back lip and each
+/// knuckle's bracket more deeply, so each sliver's side runs along the lid's
+/// cove, whose own edge at the knuckle's end is the arc that closes the
+/// sliver there.
+#[test]
+#[ignore = "OPEN roadmap row: generator-suite hangs (hinge past-stop intersects)"]
+fn hinge_lid_past_its_stop_overlaps_the_lip_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_seat_bin.bin");
+    let lid = load(&mut topo, "hinge_past_stop_lid.bin");
+    faithful(&topo, bin, [12, 40, 90]);
+    faithful(&topo, lid, [4, 49, 143]);
+    let common = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Intersect, bin, lid).unwrap()
+    });
+    // The strip along the lip, then the sliver under one knuckle.
+    matches_both(
+        &topo,
+        [bin, lid, common],
+        [-62.0, 40.2, 45.0],
+        [124.0, 1.6, 1.6],
+        [62, 10, 10],
+    );
+    matches_both(
+        &topo,
+        [bin, lid, common],
+        [-58.6, 40.7, 45.6],
+        [10.8, 0.9, 1.0],
+        [11, 12, 12],
+    );
+}
+
+/// The same past the stop on the left-wall bin, its lip along the wall.
+#[test]
+#[ignore = "OPEN roadmap row: generator-suite hangs (hinge past-stop intersects)"]
+fn hinge_left_lid_past_its_stop_overlaps_the_lip_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "hinge_left_seat_bin.bin");
+    let lid = load(&mut topo, "hinge_left_past_stop_lid.bin");
+    faithful(&topo, bin, [12, 32, 70]);
+    faithful(&topo, lid, [4, 35, 97]);
+    let common = exact(&mut topo, |t| {
+        boolean::boolean(t, BooleanOp::Intersect, bin, lid).unwrap()
+    });
+    matches_both(
+        &topo,
+        [bin, lid, common],
+        [-62.8, -41.0, 45.0],
+        [1.6, 82.0, 1.6],
+        [10, 82, 10],
+    );
+}
+
 /// Over a grid of `counts` points in the box from `lo` of `size`, the third
 /// solid holds a point exactly when the first two both do, and the grid
 /// reads points both in and out of it.
