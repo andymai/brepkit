@@ -2464,6 +2464,21 @@ fn build_section_edges(
     // region only. Keeping both creates degenerate face splits.
     dedup_collinear_sections(&mut sections, tol);
 
+    // A curved section running along this face's own boundary splits
+    // nothing, and as a twin of the boundary edge it leaves the loop tracers
+    // two edges in one direction between the same vertices.
+    sections.retain(|s| {
+        matches!(s.curve_3d, EdgeCurve::Line) || {
+            let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+            ![0.25, 0.5, 0.75].iter().all(|&f| {
+                let p =
+                    s.curve_3d
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), s.start, s.end);
+                crate::pave_filler::phase_ff::point_on_face_edges(topo, face_id, p, 1e-6)
+            })
+        }
+    });
+
     sections
 }
 

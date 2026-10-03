@@ -1402,7 +1402,7 @@ fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool 
 /// Whether `p` lies within `near` of one of a face's edges, each read as
 /// 256 chords widened by their own sagitta (a closed rim's chords run up to
 /// `7.5e-5 R` inside it).
-fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> bool {
+pub fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> bool {
     let Ok(f) = topo.face(face) else {
         return false;
     };
