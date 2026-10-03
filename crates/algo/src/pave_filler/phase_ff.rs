@@ -2684,35 +2684,55 @@ fn trim_ellipse_to_boundary_crossings(
                     .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep),
             );
         }
-        for p in conic_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)? {
+        for p in curved_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear) {
             push_crossing(p, Some(oe.edge()), &mut crossings);
         }
     }
-    // With curved edges the face is read on its own lines and arcs, holes
-    // included: an arc kept by the chord outline could run through a hole,
-    // or be lost in the gap between an arc and its chords.
+    // With curved edges the face's holes bound it too, and it is read on its
+    // own lines and arcs where it has no NURBS edge: an arc kept by the chord
+    // outline could run through a hole, or be lost in the gap between an arc
+    // and its chords.
+    let mut hole_polys: Vec<Vec<Point3>> = Vec::new();
     let exact_region = if curved {
         for &wid in face.inner_wires() {
+            let mut ring = Vec::new();
             for oe in topo.wire(wid).ok()?.edges() {
                 let edge = topo.edge(oe.edge()).ok()?;
                 let sp = topo.vertex(edge.start()).ok()?.point();
                 let ep = topo.vertex(edge.end()).ok()?.point();
                 let points = if matches!(edge.curve(), EdgeCurve::Line) {
+                    ring.push(if oe.is_forward() { sp } else { ep });
                     line_segment_surface_crossings(sp, ep, analytic_surf)
                 } else {
-                    conic_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)?
+                    let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                    for k in 0..32 {
+                        let f = f64::from(k) / 32.0;
+                        let f = if oe.is_forward() { f } else { 1.0 - f };
+                        ring.push(edge.curve().evaluate_with_endpoints(
+                            (t1 - t0).mul_add(f, t0),
+                            sp,
+                            ep,
+                        ));
+                    }
+                    curved_edge_surface_crossings(edge.curve(), sp, ep, analytic_surf, tol.linear)
                 };
                 for p in points {
                     push_crossing(p, Some(oe.edge()), &mut crossings);
                 }
             }
+            hole_polys.push(ring);
         }
         let origin = raw.p_start;
-        let frame = brepkit_math::frame::Frame3::from_normal(origin, *plane_n).ok()?;
-        let pieces =
-            brepkit_topology::planar::face_boundary_2d(topo, plane_face, origin, frame.x, frame.y)
-                .ok()??;
-        Some((pieces, origin, frame))
+        brepkit_math::frame::Frame3::from_normal(origin, *plane_n)
+            .ok()
+            .and_then(|frame| {
+                brepkit_topology::planar::face_boundary_2d(
+                    topo, plane_face, origin, frame.x, frame.y,
+                )
+                .ok()
+                .flatten()
+                .map(|pieces| (pieces, origin, frame))
+            })
     } else {
         None
     };
@@ -2751,28 +2771,27 @@ fn trim_ellipse_to_boundary_crossings(
         let (px, py) = (c(p, ax0), c(p, ax1));
         let mut inside = false;
         let mut min_d2 = f64::MAX;
-        let n = plane_poly.len();
-        for i in 0..n {
-            let (x0, y0) = (c(plane_poly[i], ax0), c(plane_poly[i], ax1));
-            let (x1, y1) = (
-                c(plane_poly[(i + 1) % n], ax0),
-                c(plane_poly[(i + 1) % n], ax1),
-            );
-            if (y0 > py) != (y1 > py) {
-                let t = (py - y0) / (y1 - y0);
-                if px < (x1 - x0).mul_add(t, x0) {
-                    inside = !inside;
+        for ring in std::iter::once(&plane_poly).chain(&hole_polys) {
+            let n = ring.len();
+            for i in 0..n {
+                let (x0, y0) = (c(ring[i], ax0), c(ring[i], ax1));
+                let (x1, y1) = (c(ring[(i + 1) % n], ax0), c(ring[(i + 1) % n], ax1));
+                if (y0 > py) != (y1 > py) {
+                    let t = (py - y0) / (y1 - y0);
+                    if px < (x1 - x0).mul_add(t, x0) {
+                        inside = !inside;
+                    }
                 }
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len2 = dx.mul_add(dx, dy * dy);
+                let t = if len2 > 1e-18 {
+                    ((px - x0).mul_add(dx, (py - y0) * dy) / len2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let (ex, ey) = (dx.mul_add(t, x0) - px, dy.mul_add(t, y0) - py);
+                min_d2 = min_d2.min(ex.mul_add(ex, ey * ey));
             }
-            let (dx, dy) = (x1 - x0, y1 - y0);
-            let len2 = dx.mul_add(dx, dy * dy);
-            let t = if len2 > 1e-18 {
-                ((px - x0).mul_add(dx, (py - y0) * dy) / len2).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let (ex, ey) = (dx.mul_add(t, x0) - px, dy.mul_add(t, y0) - py);
-            min_d2 = min_d2.min(ex.mul_add(ex, ey * ey));
         }
         inside || min_d2 < 1e-12
     };
@@ -3109,6 +3128,26 @@ fn line_segment_plane_crossing(sp: Point3, ep: Point3, normal: Vec3, d: f64) -> 
         return None;
     }
     Some(sp + dir * s.clamp(0.0, 1.0))
+}
+
+/// Where a plane face's curved edge crosses a cylinder or cone: a circle or
+/// ellipse by `conic_edge_surface_crossings`, a NURBS edge by sign changes
+/// over its samples.
+fn curved_edge_surface_crossings(
+    curve: &EdgeCurve,
+    sp: Point3,
+    ep: Point3,
+    surface: &FaceSurface,
+    tol: f64,
+) -> Vec<Point3> {
+    conic_edge_surface_crossings(curve, sp, ep, surface, tol).unwrap_or_else(|| {
+        let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+        let signed = |q: Point3| analytic_signed_distance(surface, q);
+        super::phase_ef::find_crossings_by_sampling(curve, sp, ep, t0, t1, &signed, tol)
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect()
+    })
 }
 
 /// Where a plane face's circle or ellipse edge crosses a cylinder or cone,
