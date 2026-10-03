@@ -439,8 +439,11 @@ pub fn perform(
                             // trimming to a later phase, unless the faces'
                             // own lines and arcs show they never meet on it.
                             (FaceClip::Indeterminate, FaceClip::Indeterminate) => {
-                                (!exact_runs_disjoint(topo, fa, fb, &raw, tol.linear))
-                                    .then_some(raw)
+                                match exact_common_run(topo, fa, fb, &raw, tol.linear) {
+                                    CommonRun::Unread => Some(raw),
+                                    CommonRun::Apart => None,
+                                    CommonRun::Span(f0, f1) => trim_raw_line(&raw, f0, f1, tol),
+                                }
                             }
                         }
                     })
@@ -6640,7 +6643,11 @@ fn clip_trimmed_line_to_planes(
         (FaceClip::Range(r), FaceClip::Indeterminate)
         | (FaceClip::Indeterminate, FaceClip::Range(r)) => trim_raw_line(&raw, r.0, r.1, tol),
         (FaceClip::Indeterminate, FaceClip::Indeterminate) => {
-            (!exact_runs_disjoint(topo, fa, fb, &raw, tol.linear)).then_some(raw)
+            match exact_common_run(topo, fa, fb, &raw, tol.linear) {
+                CommonRun::Unread => Some(raw),
+                CommonRun::Apart => None,
+                CommonRun::Span(f0, f1) => trim_raw_line(&raw, f0, f1, tol),
+            }
         }
     }
 }
@@ -7058,25 +7065,49 @@ fn line_face_intervals(
     Some(runs)
 }
 
-/// Whether two plane faces, both read on their own lines and arcs, run along
-/// a line section at no common point: a face across a knuckle's end, say,
-/// whose plane passes through the hinge axis but whose material stops short
-/// of the knuckle's rim. `false` when either face cannot be read.
-fn exact_runs_disjoint(topo: &Topology, fa: FaceId, fb: FaceId, raw: &RawCurve, tol: f64) -> bool {
+/// How two plane faces, both read on their own lines and arcs, share a line
+/// section.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CommonRun {
+    /// One face cannot be read.
+    Unread,
+    /// The faces hold no common point on the line: a face across a knuckle's
+    /// end, say, whose plane passes through the hinge axis but whose material
+    /// stops short of the knuckle's rim.
+    Apart,
+    /// The fractions of the line from the first to the last point both hold.
+    Span(f64, f64),
+}
+
+fn exact_common_run(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    raw: &RawCurve,
+    tol: f64,
+) -> CommonRun {
     let len = (raw.p_end - raw.p_start).length();
     if len <= tol {
-        return false;
+        return CommonRun::Unread;
     }
     let slack = tol / len;
-    match (
+    let (Some(ia), Some(ib)) = (
         line_face_intervals(topo, fa, raw.p_start, raw.p_end, tol),
         line_face_intervals(topo, fb, raw.p_start, raw.p_end, tol),
-    ) {
-        (Some(ia), Some(ib)) => !ia
-            .iter()
-            .any(|a| ib.iter().any(|b| a.0.max(b.0) <= a.1.min(b.1) + slack)),
-        _ => false,
+    ) else {
+        return CommonRun::Unread;
+    };
+    let mut span: Option<(f64, f64)> = None;
+    for a in &ia {
+        for b in &ib {
+            let (lo, hi) = (a.0.max(b.0), a.1.min(b.1));
+            if lo > hi + slack {
+                continue;
+            }
+            span = Some(span.map_or_else(|| (lo, hi.max(lo)), |(s0, s1)| (s0.min(lo), s1.max(hi))));
+        }
     }
+    span.map_or(CommonRun::Apart, |(s0, s1)| CommonRun::Span(s0, s1))
 }
 
 /// Test whether a simple polygon is convex via a signed-cross-product
@@ -7894,10 +7925,10 @@ mod tests {
     }
 
     /// Two discs in crossing planes along the z axis: apart, overlapping, and
-    /// touching at a point. Only the first reads as two faces that never meet
-    /// on their common line.
+    /// touching at a point. The first holds no common point, the second
+    /// shares z in [1, 1.8], and the third shares only z = 1.8.
     #[test]
-    fn exact_runs_disjoint_reads_faces_apart_on_their_common_line() {
+    fn exact_common_run_reads_where_faces_meet_on_their_common_line() {
         use brepkit_math::curves::Circle3D;
         use brepkit_topology::edge::{Edge, EdgeCurve as EC};
         use brepkit_topology::face::{Face, FaceSurface as FS};
@@ -7927,7 +7958,12 @@ mod tests {
             p_start: p0,
             p_end: p1,
         };
-        for (z, apart) in [(4.0, true), (2.0, false), (2.8, false)] {
+        let at = |z: f64| (z + 10.0) / 20.0;
+        for (z, common) in [
+            (4.0, None),
+            (2.0, Some((at(1.0), at(1.8)))),
+            (2.8, Some((at(1.8), at(1.8)))),
+        ] {
             let mut topo = Topology::new();
             let a = disc(
                 &mut topo,
@@ -7941,11 +7977,15 @@ mod tests {
                 Vec3::new(0.0, 1.0, 0.0),
                 1.0,
             );
-            assert_eq!(
-                exact_runs_disjoint(&topo, a, b, &raw, 1e-7),
-                apart,
-                "z = {z}"
-            );
+            let run = exact_common_run(&topo, a, b, &raw, 1e-7);
+            match (run, common) {
+                (CommonRun::Apart, None) => {}
+                (CommonRun::Span(r0, r1), Some(c)) => assert!(
+                    (r0 - c.0).abs() < 1e-7 && (r1 - c.1).abs() < 1e-7,
+                    "z = {z}: {run:?} vs {c:?}"
+                ),
+                _ => unreachable!("z = {z}: {run:?} vs {common:?}"),
+            }
         }
     }
 
