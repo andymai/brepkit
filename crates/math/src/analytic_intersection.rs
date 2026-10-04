@@ -1990,10 +1990,12 @@ pub fn exact_torus_torus(
 /// Exact intersection of a torus with a cylinder sharing its axis.
 ///
 /// The wall line and the tube's cross-section in a half-plane through the
-/// axis cross in up to two points, each sweeping a circle about the axis.
+/// axis cross in up to two points, each sweeping a circle about the axis. A
+/// wall touching the tube's outer or inner equator meets it along the one
+/// circle at the torus's centre, ring or spindle.
 ///
 /// `None` (defer to the marcher) unless the axes lie on one line, or when
-/// the wall touches the tube.
+/// the wall reaches the part of a spindle torus's tube across the axis.
 ///
 /// # Errors
 ///
@@ -2005,17 +2007,20 @@ pub fn exact_cylinder_torus(
     let axis = torus.z_axis();
     let scale = torus.major_radius() + cylinder.radius();
     let offset = cylinder.origin() - torus.center();
-    // A spindle torus's tube also crosses the far side of the axis.
-    if torus.minor_radius() >= torus.major_radius()
-        || axis.cross(cylinder.axis()).length() > 1e-9
+    let linear = crate::tolerance::Tolerance::default().linear;
+    if axis.cross(cylinder.axis()).length() > 1e-9
         || offset.cross(axis).length() > 1e-9 * scale
+        || cylinder.radius() + torus.major_radius() <= torus.minor_radius() + linear
     {
         return Ok(None);
     }
     let gap = cylinder.radius() - torus.major_radius();
     let small = torus.minor_radius();
-    if (gap.abs() - small).abs() < 1e-9 * scale {
-        return Ok(None);
+    // The equator circle lies on the torus within the wall's distance from
+    // the tube, so it stands for the section while that distance is within
+    // the linear tolerance, whatever the scale.
+    if (gap.abs() - small).abs() <= linear {
+        return circles_about_axis(torus.center(), axis, &[(cylinder.radius(), 0.0)]).map(Some);
     }
     if gap.abs() > small {
         return Ok(Some(Vec::new()));
@@ -5044,9 +5049,28 @@ mod tests {
                 .is_empty(),
             "a rod clear in the hole misses"
         );
+        for (wall, label) in [(5.5, "outer"), (2.5, "inner")] {
+            let curves = exact_cylinder_torus(&rod(wall), &torus).unwrap().unwrap();
+            let circles = circles_of(&curves);
+            assert_eq!(circles.len(), 1, "a wall touching the {label} equator");
+            assert!(circles[0].center().z().abs() < 1e-12, "{label}");
+            let worst = worst_off(&circles, &torus, |p| p.x().hypot(p.y()) - wall);
+            assert!(worst < 1e-9, "{label}: {worst}");
+        }
         assert!(
-            exact_cylinder_torus(&rod(5.5), &torus).unwrap().is_none(),
-            "a wall touching the outer equator defers"
+            exact_cylinder_torus(&rod(5.5 + 1e-6), &torus)
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a wall clear of the tube by more than the tolerance misses it"
+        );
+        assert_eq!(
+            exact_cylinder_torus(&rod(5.5 - 1e-6), &torus)
+                .unwrap()
+                .unwrap()
+                .len(),
+            2,
+            "a wall into the tube by more than the tolerance crosses it twice"
         );
         let tilted =
             CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.1, 1.0), 4.2)
@@ -5066,6 +5090,27 @@ mod tests {
             exact_cylinder_torus(&rod(0.5), &spindle).unwrap().is_none(),
             "a spindle torus's inner lemon also meets the rod"
         );
+        // The rounded air wall of a fillet whose radius nearly fills its
+        // corner: the spindle's outer equator rests on the wall.
+        let spindle = ToroidalSurface::with_axis_and_ref_dir(
+            Point3::new(0.0, 0.0, 4.7),
+            0.1,
+            2.45,
+            z,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let curves = exact_cylinder_torus(&rod(2.55), &spindle).unwrap().unwrap();
+        let circles = circles_of(&curves);
+        assert_eq!(circles.len(), 1);
+        assert!((circles[0].center().z() - 4.7).abs() < 1e-12);
+        let worst = worst_off(&circles, &spindle, |p| p.x().hypot(p.y()) - 2.55);
+        assert!(worst < 1e-9, "{worst}");
+        let curves = exact_cylinder_torus(&rod(2.4), &spindle).unwrap().unwrap();
+        let circles = circles_of(&curves);
+        assert_eq!(circles.len(), 2, "a wall into the spindle's outer tube");
+        let worst = worst_off(&circles, &spindle, |p| p.x().hypot(p.y()) - 2.4);
+        assert!(worst < 1e-9, "{worst}");
     }
 
     /// Loops of an off-axis sphere-cylinder pair: `(count, worst distance
