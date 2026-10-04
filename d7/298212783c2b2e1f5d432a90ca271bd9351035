@@ -1,0 +1,24 @@
+crates/operations/src/measure/helpers.rs
+  s_a8677c67f85a06::t_a446d72357fb3a 467-478
+crates/operations/src/heal.rs
+  s_a8677c67f85a06::t_4b385f754d6c21 627-629,663-671
+  s_a8677c67f85a06::t_9cac025429e007 620-621
+crates/operations/src/heal/tests.rs
+  s_a8677c67f85a06::t_9cac025429e007 108-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d7298212783c2b2e1f5d432a90ca271bd9351035",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
