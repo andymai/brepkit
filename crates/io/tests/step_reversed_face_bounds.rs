@@ -164,6 +164,7 @@ fn reversed_face_bounds_as_other_systems_write_them() {
 fn reversed_face_bounds_from_an_earlier_export() {
     let step = dimpled_box_step()
         .replace(", 'face bounds per ISO 10303-42'", "")
+        .replace(", 'cone semi-angles per ISO 10303-42'", "")
         .lines()
         .map(|l| {
             if l.contains("BOUND(") {
