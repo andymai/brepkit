@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_fa6b9e9523c528 198
+crates/math/src/analytic_intersection.rs
+  s_a8677c67f85a06::t_0c4a29ff4585c5 123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "919c043a1d1d9961df37e2cb549e882bd3512493",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
