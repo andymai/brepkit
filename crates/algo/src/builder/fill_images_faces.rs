@@ -268,6 +268,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // Pre-registering the anchor vertices makes the periodic face's band
     // wires and the opposing plane faces' hole wires resolve to the same
     // VertexId, so merge_duplicate_edges can share the circle edge.
+    if let Some(face) = seam_through_a_crossing(topo, arena) {
+        return (Vec::new(), vec![face], Vec::new());
+    }
     let seam_anchors = compute_seam_anchors(topo, arena);
     for seam in seam_anchors.values() {
         let cuts = seam.pieces.iter().map(|&(_, _, end)| end);
@@ -1346,7 +1349,7 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Se
                 }
                 continue;
             }
-            if loop_nearly_meets_a_sibling(arena, idx, nurbs) {
+            if loop_meets_a_sibling_twice(arena, idx, nurbs) {
                 continue;
             }
             let winding = faces.iter().find_map(|&fid| {
@@ -1467,12 +1470,14 @@ fn seam_anchor_on_winding_loop(
 }
 
 /// Whether another closed NURBS section of the same face pair comes within
-/// a tenth of this closed loop's extent. Equal crossing cylinders meet along
-/// two loops that touch where the rulings are tangent (the lens fuse's
-/// self-touching seam); those stay unanchored and uncut, for the
-/// internal-loops path. A bore's entry and exit loops lie a tube's chord
-/// apart.
-fn loop_nearly_meets_a_sibling(
+/// a tenth of this closed loop's extent along two separate stretches of it.
+/// Equal crossing cylinders meet along two loops that touch at two rulings
+/// (the lens fuse's self-touching seam), which split the band between them
+/// in two; those stay unanchored and uncut, for the internal-loops path. A
+/// bore's entry and exit loops lie a tube's chord apart, and a rod whose
+/// side touches a wall leaves loops that meet at one point: the band
+/// between them stays whole, and they are anchored like any other.
+fn loop_meets_a_sibling_twice(
     arena: &GfaArena,
     idx: usize,
     nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
@@ -1504,10 +1509,64 @@ fn loop_nearly_meets_a_sibling(
             return false;
         }
         let theirs = samples(other_nurbs);
-        own.iter()
-            .flat_map(|p| theirs.iter().map(move |q| (*p - *q).length()))
-            .any(|gap| gap < 0.1 * extent)
+        let near: Vec<bool> = own
+            .iter()
+            .map(|p| theirs.iter().any(|q| (*p - *q).length() < 0.1 * extent))
+            .collect();
+        let stretches = (0..near.len())
+            .filter(|&k| near[k] && !near[(k + near.len() - 1) % near.len()])
+            .count();
+        stretches >= 2
     })
+}
+
+/// A face whose seam runs through the point where two closed sections of
+/// one face pair meet, both winding the face: the two halves of a curve
+/// crossing itself there (a rod whose side touches a wall, the rod's seam on
+/// the touching ruling). Both would be anchored at that one seam point and
+/// pinch the band between them to it, which the band splitter does not lay
+/// out.
+fn seam_through_a_crossing(topo: &Topology, arena: &GfaArena) -> Option<FaceId> {
+    let closed_start = |curve: &EdgeCurve| -> Option<Point3> {
+        let EdgeCurve::NurbsCurve(nurbs) = curve else {
+            return None;
+        };
+        let (t0, t1) = nurbs.domain();
+        let start = nurbs.evaluate(t0);
+        ((start - nurbs.evaluate(t1)).length() <= SEAM_ON_CIRCLE_TOL).then_some(start)
+    };
+    for (idx, this) in arena.curves.iter().enumerate() {
+        let (EdgeCurve::NurbsCurve(nurbs), Some(start)) = (&this.curve, closed_start(&this.curve))
+        else {
+            continue;
+        };
+        let shared = arena.curves.iter().enumerate().any(|(other_idx, other)| {
+            let same_pair = (other.face_a == this.face_a && other.face_b == this.face_b)
+                || (other.face_a == this.face_b && other.face_b == this.face_a);
+            other_idx != idx
+                && same_pair
+                && closed_start(&other.curve)
+                    .is_some_and(|p| (p - start).length() <= SEAM_ON_CIRCLE_TOL)
+        });
+        if !shared {
+            continue;
+        }
+        for fid in [this.face_a, this.face_b] {
+            let Ok(face) = topo.face(fid) else { continue };
+            let Some(seam_u) = face_seam_u(topo, face) else {
+                continue;
+            };
+            let on_seam = face.surface().project_point(start).is_some_and(|(_, v)| {
+                face.surface()
+                    .evaluate(seam_u, v)
+                    .is_some_and(|p| (p - start).length() <= SEAM_ON_CIRCLE_TOL)
+            });
+            if on_seam && seam_anchor_on_winding_loop(topo, face, nurbs).is_some() {
+                return Some(fid);
+            }
+        }
+    }
+    None
 }
 
 /// The parameters where a closed NURBS section crosses `face`'s seam
