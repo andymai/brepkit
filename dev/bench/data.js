@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791092246629,
+  "lastUpdate": 1791097467903,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50975,6 +50975,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43510515,
             "range": "± 68551",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9a1a06e394e4ecda6a00390d39312a4578718447",
+          "message": "fix(operations): unify faces without leaving filled holes open or closing seamless bands (#1972)\n\n`unify_faces` now merges the gridfinity tool's nesting floor bodies into\nvalid, watertight solids. A merged face no longer keeps a hole that\nanother merged face fills, and a merge that would close a curved wall\ninto a band without a seam is skipped.\n\n## What was wrong\n\nOn three native replays, `unify_faces` previously produced invalid or\nopen results. One body went from 112 valid faces to 83 faces with a\nwrong Euler characteristic and 24 open mesh edges. Another gained 32\nboundary edges. A third validated but meshed with 624 open edges.\n\nThe first defect occurred when a merge group contained both a ring and\nthe face filling its hole, such as the floor in a bed opening. The\nring's hole wire was copied unchanged while the filling face was\nabsorbed, leaving the hole with nothing on its other side.\n\nThe second defect affected two half-cylinders sharing both seam lines.\nThey merged into a face whose outer wire was one full circle and whose\nhole was the other. This created a band without a seam, which the mesher\ndoes not cover. Every magnet pocket wall in the 6 mm pocket body had\nthis topology.\n\n## Change\n\nAn inner wire sharing an edge with another face in the merge group is no\nlonger retained as a hole. Its shared edges are dropped, together with\nthe filling face's matching edges, and the remaining edges join the\nmerged boundary. Edges match by entity or by position, keyed on both\nends and the midpoint so a chord and an arc between the same ends stay\napart.\n\nCylinder and cone merges are skipped when their boundary loops, kept\nholes included, include one traversal around the axis. Torus and NURBS\nmerges with more than one boundary loop are also skipped; sphere merges\nare unchanged, since the mesher covers the merged sphere faces the pose\nsweep produces (a ball cut by a column and a rod keeps two holes and\nmeshes watertight). Closed circle and ellipse edges are read over their\nwhole turn for this check.\n\n## Verification\n\nTwo regression tests cover the defects:\n\n- `unify_fills_a_ring_whose_hole_another_face_closes` produces a valid,\nwatertight six-face box with no holes and volume 128.\n- `unify_keeps_a_seam_in_a_merged_cylinder_wall` remains valid and\nwatertight with volume 36 pi.\n\nBoth construct their inputs through the evolution boolean. Each fails\nwithout its corresponding change.\n\nAll 1384 operations tests pass. The pose sweep and truth audit match\nmain. `approx_census` differs only in a NURBS offset line that also\nvaries between runs on main.\n\nWith this branch's wasm and brepjs `simplify` patched locally to call\n`unifyFaces`, `nestingFloor.geometry` passes 19 of 19 tests. Stock\n`simplify` fails the same two seam tests as main. Before these fixes,\nthe local patch produced seven nesting failures from open meshes.\n\nIn the full generator suite with stock `simplify`, 223 files had\nfinished. Compared with a full main run earlier that day, only the\nnesting floor file had a different failure count. Its reduction from\neight failures to two came from #1968, merged between the runs.\n\n## Next\n\nAfter a kernel release includes these fixes, brepjs `simplify` in\n`src/kernel/brepkit/modifierOps.ts` should run `unifyFaces` in addition\nto `healSolid`.\n\n## Roadmap\n\nA closed roadmap entry records both defects. The open `simplify` row\nnames only the brepjs change and its dependency on this release.",
+          "timestamp": "2026-10-04T07:01:25Z",
+          "tree_id": "9461bb94047a8dac0e50d556deb9a0af183bf812",
+          "url": "https://github.com/andymai/brepkit/commit/9a1a06e394e4ecda6a00390d39312a4578718447"
+        },
+        "date": 1791097462003,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1087532,
+            "range": "± 1651",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1182248,
+            "range": "± 4253",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14516,
+            "range": "± 104",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 825985,
+            "range": "± 1543",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46469545,
+            "range": "± 146500",
             "unit": "ns/iter"
           }
         ]
