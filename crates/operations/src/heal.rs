@@ -1715,9 +1715,9 @@ fn edge_position_key(
 }
 
 /// Whether boundary loops on a curved surface leave a band with no seam the
-/// mesher cannot cover: a loop goes once around a cylinder's or cone's axis.
-/// On a torus or NURBS surface any face with several loops counts, which errs
-/// toward keeping faces apart.
+/// mesher cannot cover: a loop goes once around a cylinder's or cone's axis,
+/// or a sphere keeps more than one hole. On a torus or NURBS surface any face
+/// with several loops counts, which errs toward keeping faces apart.
 fn seamless_band(
     topo: &Topology,
     surface: &FaceSurface,
@@ -1726,8 +1726,9 @@ fn seamless_band(
     let (origin, axis) = match surface {
         FaceSurface::Cylinder(c) => (c.origin(), c.axis()),
         FaceSurface::Cone(c) => (c.apex(), c.axis()),
-        // The mesher covers a sphere's latitude band.
-        FaceSurface::Plane { .. } | FaceSurface::Sphere(_) => return Ok(false),
+        FaceSurface::Plane { .. } => return Ok(false),
+        // The mesher covers a sphere's latitude band with one hole.
+        FaceSurface::Sphere(_) => return Ok(loops.len() > 2),
         FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => return Ok(true),
     };
     let Ok(frame) = brepkit_math::frame::Frame3::from_normal(origin, axis) else {
