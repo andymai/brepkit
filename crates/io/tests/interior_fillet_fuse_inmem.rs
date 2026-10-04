@@ -88,4 +88,10 @@ fn interior_fillet_material_fuses_into_its_bin_exactly() {
         (through_fuse - through_cut).abs() < 1e-6 * v_bin,
         "overlap {through_fuse} through the fuse, {through_cut} through the cut"
     );
+    // The overlap both readings agree on, pinned so that a classification
+    // error they share also fails.
+    assert!(
+        (through_fuse - 12_957.832_253_1).abs() < 1e-6 * v_bin,
+        "overlap {through_fuse}"
+    );
 }

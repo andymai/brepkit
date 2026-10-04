@@ -1991,8 +1991,8 @@ pub fn exact_torus_torus(
 ///
 /// The wall line and the tube's cross-section in a half-plane through the
 /// axis cross in up to two points, each sweeping a circle about the axis. A
-/// wall touching the tube's outer or inner equator meets it along the one
-/// circle at the torus's centre, ring or spindle.
+/// wall touching the tube's outer equator, ring or spindle, or a ring torus's
+/// inner equator meets it along the one circle at the torus's centre.
 ///
 /// `None` (defer to the marcher) unless the axes lie on one line, or when
 /// the wall reaches the part of a spindle torus's tube across the axis.
@@ -5072,6 +5072,13 @@ mod tests {
             2,
             "a wall into the tube by more than the tolerance crosses it twice"
         );
+        // Within the linear tolerance of the tube the wall reads as touching
+        // it: the two crossings lie under 1e-3 apart on a band the wall
+        // never leaves by more than that tolerance.
+        for wall in [5.5 - 5e-8, 5.5 + 5e-8] {
+            let curves = exact_cylinder_torus(&rod(wall), &torus).unwrap().unwrap();
+            assert_eq!(circles_of(&curves).len(), 1, "a wall at {wall}");
+        }
         let tilted =
             CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.1, 1.0), 4.2)
                 .unwrap();
