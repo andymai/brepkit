@@ -91,10 +91,11 @@ pub fn exact_plane_analytic_reaching(
 ///   `R` either side of the axis.
 ///
 /// A plane across the axis tangent to the tube's top or bottom touches it
-/// along the one circle of radius `R`.
+/// along the one circle of radius `R`, ring or spindle.
 ///
 /// `Some` of no curves for a plane across the axis that misses the tube;
-/// `None` for any other plane, or a torus whose tube reaches its axis.
+/// `None` for any other plane, and for a section across the axis whose inner
+/// circle would reach the axis.
 fn exact_plane_torus(
     torus: &ToroidalSurface,
     normal: Vec3,
@@ -114,8 +115,13 @@ fn exact_plane_torus(
                 return Ok(Some(Vec::new()));
             }
             // Tangent to the tube's top or bottom: the two circles meet in
-            // the one of the torus's own radius.
-            if big <= 1e-10 * small {
+            // the one of the torus's own radius, where they lie within the
+            // linear tolerance of it. A tilted plane's section is no circle.
+            let reach = small.mul_add(small, -(height * height)).max(0.0).sqrt();
+            if big <= 1e-10 * small
+                || axis.cross(n).length() > 1e-12
+                || reach > 1e-7 * small.max(1.0)
+            {
                 return Ok(None);
             }
             let middle = center + n * height;
@@ -4039,6 +4045,21 @@ mod tests {
                 let sampled = intersect_plane_torus(&torus, Vec3::new(0.0, 0.0, 1.0), z).unwrap();
                 assert_eq!(sampled.len(), 1, "R={major} r={minor} z={z}");
             }
+            // A tilted plane and one just inside the tube's top cut no
+            // single circle of radius R.
+            let single = |normal: Vec3, d: f64| {
+                matches!(
+                    exact_plane_analytic(AnalyticSurface::Torus(&torus), normal, d)
+                        .unwrap()
+                        .as_slice(),
+                    [ExactIntersectionCurve::Circle(_)]
+                )
+            };
+            assert!(!single(Vec3::new(1e-6, 0.0, 1.0), 3.0 + minor));
+            assert!(!single(
+                Vec3::new(0.0, 0.0, 1.0),
+                minor.mul_add(1.0 - 1e-11, 3.0)
+            ));
         }
     }
 
