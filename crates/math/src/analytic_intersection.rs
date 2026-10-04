@@ -120,7 +120,7 @@ fn exact_plane_torus(
             let reach = small.mul_add(small, -(height * height)).max(0.0).sqrt();
             if big <= 1e-10 * small
                 || axis.cross(n).length() > 1e-12
-                || reach > 1e-7 * small.max(1.0)
+                || reach > crate::tolerance::Tolerance::default().linear
             {
                 return Ok(None);
             }
