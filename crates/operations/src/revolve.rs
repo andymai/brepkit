@@ -249,9 +249,15 @@ fn profile_band_curve(
         EdgeCurve::Line => return Ok(None),
         EdgeCurve::Circle(c) => brepkit_geometry::convert::circle_to_nurbs(c, t0, t1)?,
         EdgeCurve::Ellipse(e) => brepkit_geometry::convert::ellipse_to_nurbs(e, t0, t1)?,
-        // A NURBS edge may run its curve backward (`t0 > t1`).
-        EdgeCurve::NurbsCurve(n) if t1 < t0 => reversed_nurbs(&nurbs_span(n, t1, t0)?)?,
-        EdgeCurve::NurbsCurve(n) => nurbs_span(n, t0, t1)?,
+        EdgeCurve::NurbsCurve(n) => nurbs_span(n, t0.min(t1), t0.max(t1))?,
+    };
+    // A NURBS edge may run its curve backward: from its stored end, whether
+    // the domain comes back reversed (a sub-span) or whole and increasing.
+    let first = natural.evaluate(natural.domain().0);
+    let natural = if (first - start).length() > (first - end).length() {
+        reversed_nurbs(&natural)?
+    } else {
+        natural
     };
     let along = if forward {
         natural
@@ -1327,11 +1333,17 @@ fn profile_chart_is_ccw(
             let (t0, t1) = curve.domain_with_endpoints(ns, ne);
             // Sample in the curve's NATURAL direction, then reverse to traversal
             // order — sampling from traversal endpoints picks the CCW complement
-            // of a reversed arc.
+            // of a reversed arc. A NURBS edge may store its curve end first
+            // (its domain still comes back increasing), so the samples are
+            // first put in the edge's own order.
             let mut interior: Vec<Point3> = [0.25, 0.5, 0.75]
                 .iter()
                 .map(|f| curve.evaluate_with_endpoints((t1 - t0).mul_add(*f, t0), ns, ne))
                 .collect();
+            let head = curve.evaluate_with_endpoints(t0, ns, ne);
+            if (head - ns).length() > (head - ne).length() {
+                interior.reverse();
+            }
             if !oe.is_forward() {
                 interior.reverse();
             }

@@ -8,7 +8,7 @@ use brepkit_geometry::convert::ellipse_to_nurbs;
 use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::classify::{PointClassification, classify_point};
-use brepkit_operations::measure::solid_volume;
+use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
@@ -62,6 +62,13 @@ fn assert_solid(
         (measured - volume).abs() < 1e-4 * volume,
         "{label}: {measured} against {volume}"
     );
+    // The signed volume of the oriented mesh: a face turned inward would
+    // subtract its share.
+    let oriented = oriented_solid_volume(topo, solid, 0.001).unwrap();
+    assert!(
+        (oriented - volume).abs() < 1e-3 * volume,
+        "{label}: oriented {oriented} against {volume}"
+    );
     for &(point, inside) in points {
         let expected = if inside {
             PointClassification::Inside
@@ -101,7 +108,9 @@ fn a_half_ellipse_revolves_to_a_spheroid() {
     } else {
         t_north + TAU
     };
-    for as_nurbs in [false, true] {
+    // The NURBS also as an edge stored north to south, its curve running
+    // from the edge's end, used reversed.
+    for (as_nurbs, stored_backward) in [(false, false), (true, false), (true, true)] {
         let mut topo = Topology::new();
         let vs = topo.add_vertex(Vertex::new(south, 1e-7));
         let vn = topo.add_vertex(Vertex::new(north, 1e-7));
@@ -110,15 +119,14 @@ fn a_half_ellipse_revolves_to_a_spheroid() {
         } else {
             EdgeCurve::Ellipse(ellipse.clone())
         };
-        let arc = topo.add_edge(Edge::new(vs, vn, curve));
+        let arc = if stored_backward {
+            OrientedEdge::new(topo.add_edge(Edge::new(vn, vs, curve)), false)
+        } else {
+            OrientedEdge::new(topo.add_edge(Edge::new(vs, vn, curve)), true)
+        };
         let axis = topo.add_edge(Edge::new(vn, vs, EdgeCurve::Line));
-        let wire = topo.add_wire(
-            Wire::new(
-                vec![OrientedEdge::new(arc, true), OrientedEdge::new(axis, true)],
-                true,
-            )
-            .unwrap(),
-        );
+        let wire =
+            topo.add_wire(Wire::new(vec![arc, OrientedEdge::new(axis, true)], true).unwrap());
         let face = make_face_from_wire(&mut topo, wire).unwrap();
         let solid = revolve(&mut topo, face, Point3::new(0.0, 0.0, 0.0), Z, TAU).unwrap();
         assert_solid(
@@ -127,7 +135,7 @@ fn a_half_ellipse_revolves_to_a_spheroid() {
             4.0 / 3.0 * PI * 4.0,
             |p| (p.x().hypot(p.y()) / 2.0).hypot(p.z()) - 1.0,
             &[],
-            &format!("spheroid, NURBS {as_nurbs}"),
+            &format!("spheroid, NURBS {as_nurbs}, stored backward {stored_backward}"),
         );
     }
 }
