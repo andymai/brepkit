@@ -1413,7 +1413,24 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
                 representative_surface = Some(face.surface().clone());
                 representative_reversed = face.is_reversed();
             }
-            all_inner_wires.extend_from_slice(face.inner_wires());
+            // A hole another face of the group fills (a ring and the floor
+            // in its opening) is no longer a hole: its shared edges go, and
+            // any others join the boundary loops.
+            for &hole in face.inner_wires() {
+                let hole_edges = topo.wire(hole)?.edges();
+                if hole_edges
+                    .iter()
+                    .any(|oe| internal_edges.contains(&oe.edge().index()))
+                {
+                    boundary_edges.extend(
+                        hole_edges
+                            .iter()
+                            .filter(|oe| !internal_edges.contains(&oe.edge().index())),
+                    );
+                } else {
+                    all_inner_wires.push(hole);
+                }
+            }
 
             let wire = topo.wire(face.outer_wire())?;
             for oe in wire.edges() {
