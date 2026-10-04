@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791097467903,
+  "lastUpdate": 1791099498990,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51029,6 +51029,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46469545,
             "range": "± 146500",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37c5cf4f5d688371b01d13085f79a42215cfa937",
+          "message": "chore(main): release 4.1.27 (#1974)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.27](https://github.com/andymai/brepkit/compare/v4.1.26...v4.1.27)\n(2026-10-04)\n\n\n### Bug Fixes\n\n* **operations:** unify faces without leaving filled holes open or\nclosing seamless bands\n([#1972](https://github.com/andymai/brepkit/issues/1972))\n([9a1a06e](https://github.com/andymai/brepkit/commit/9a1a06e394e4ecda6a00390d39312a4578718447))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` 4.1.27, which fixes the face-unification operation so\nit no longer leaves filled holes open or closes seamless bands.\n\n<sup>Written for commit ca72f7603bf09d2fa90a812d89c959203542a8fd.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1974?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-04T07:35:24Z",
+          "tree_id": "4d92db46e1f6d0a0d549781e84756697e176fa57",
+          "url": "https://github.com/andymai/brepkit/commit/37c5cf4f5d688371b01d13085f79a42215cfa937"
+        },
+        "date": 1791099492617,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1049056,
+            "range": "± 1681",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1133089,
+            "range": "± 3031",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13171,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 810383,
+            "range": "± 1839",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43524152,
+            "range": "± 122507",
             "unit": "ns/iter"
           }
         ]
