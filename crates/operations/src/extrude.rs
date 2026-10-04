@@ -53,31 +53,48 @@ pub fn maybe_split_closed_wire(
     deflection: f64,
 ) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
     maybe_split_closed_wire_with(
-        topo, oriented, tol, deflection, /*pass_through_circles=*/ false,
+        topo, oriented, tol, deflection, /*exact_closed=*/ false,
     )
 }
 
-/// Internal variant that lets the caller opt in to passing closed circle /
-/// ellipse / NURBS-recognized-as-circle edges through unsplit. The basic
-/// extrude path uses this so the side face can be built as a true analytic
-/// cylinder (matching the exact π·r²·h), while sweep / complexExtrude /
-/// twist still split — they apply per-edge profiles that don't work on a
-/// single closed-curve edge.
+/// Internal variant for the basic extrude path, whose side faces are exact
+/// sweeps of the edges: a closed circle (or a NURBS recognized as one) passes
+/// through whole, for one true cylinder matching the exact π·r²·h, and any
+/// other closed curve is cut into [`EXACT_CLOSED_PIECES`] exact pieces, each
+/// sweeping a ruled face between distinct edges (one face closed on itself
+/// along a seam would have to be meshed and cut as such). Sweep /
+/// complexExtrude / twist still split into chords — they apply per-edge
+/// profiles that don't work on a single closed-curve edge.
 pub(crate) fn maybe_split_closed_wire_with(
     topo: &mut Topology,
     oriented: &[OrientedEdge],
     tol: f64,
     deflection: f64,
-    pass_through_circles: bool,
+    exact_closed: bool,
 ) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
     let mut result = Vec::with_capacity(oriented.len() * 4);
     for oe in oriented {
         let edge = topo.edge(oe.edge())?;
-        if edge.start() == edge.end()
-            && !(pass_through_circles && curve_is_analytic_circle(edge.curve()))
-        {
+        if edge.start() == edge.end() && exact_closed {
+            if curve_is_circle(edge.curve()) {
+                result.push(*oe);
+            } else {
+                let mut pieces = split_closed_edge_exact(topo, oe.edge(), tol)?;
+                if !oe.is_forward() {
+                    pieces.reverse();
+                }
+                result.extend(
+                    pieces
+                        .into_iter()
+                        .map(|piece| OrientedEdge::new(piece, oe.is_forward())),
+                );
+            }
+        } else if edge.start() == edge.end() {
             let n = closed_edge_segments(edge.curve(), deflection);
-            let split_edges = split_closed_edge(topo, oe.edge(), n, tol)?;
+            let mut split_edges = split_closed_edge(topo, oe.edge(), n, tol)?;
+            if !oe.is_forward() {
+                split_edges.reverse();
+            }
             for se in split_edges {
                 result.push(OrientedEdge::new(se, oe.is_forward()));
             }
@@ -88,54 +105,95 @@ pub(crate) fn maybe_split_closed_wire_with(
     Ok(result)
 }
 
-/// Whether a closed edge's curve is a Circle, Ellipse, or a rational
-/// NURBS recognized as one of those — i.e., something the extrude path
-/// can convert into an exact analytic cylinder/NURBS-of-revolution side
-/// face without polyline-ing.
-fn curve_is_analytic_circle(curve: &EdgeCurve) -> bool {
+/// Pieces a closed non-circular curve is cut into for extrusion: three is the
+/// fewest with no two sharing both endpoints (the edge merge would weld those).
+const EXACT_CLOSED_PIECES: usize = 4;
+
+/// Whether a closed edge's curve is a circle, or a rational NURBS recognized
+/// as one, which extrudes to one exact cylinder.
+fn curve_is_circle(curve: &EdgeCurve) -> bool {
     let tol = Tolerance::new().linear;
     match curve {
-        EdgeCurve::Line => false,
-        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => true,
+        EdgeCurve::Circle(_) => true,
+        EdgeCurve::Line | EdgeCurve::Ellipse(_) => false,
         EdgeCurve::NurbsCurve(nc) => matches!(
             brepkit_geometry::convert::recognize_curve(nc, tol * 100.0),
             brepkit_geometry::convert::RecognizedCurve::Circle { .. }
-                | brepkit_geometry::convert::RecognizedCurve::Ellipse { .. }
         ),
     }
 }
 
-/// Whether an inner (hole) wire is a single closed *circle* — a true circle or
-/// a rational NURBS recognized as one. This is the only hole the extrude path
-/// turns into a single exact cylinder wall (with a known inward orientation).
+/// Cut a closed edge into [`EXACT_CLOSED_PIECES`] edges along its own curve,
+/// evenly in its parameter: a NURBS into its sub-curves, a conic into arcs.
+/// The first piece starts and the last ends on the edge's vertex.
 ///
-/// Ellipses and generic closed curves are deliberately excluded: their
-/// single-face pass-through wall is a ruled NURBS whose orientation can't be
-/// derived from the degenerate `start==end` endpoints, so they keep the
-/// chord-split path, which stays correct (if faceted).
-fn inner_wire_is_single_circle(topo: &Topology, wire_id: WireId) -> bool {
+/// # Errors
+///
+/// Returns an error if the edge lookup or a NURBS split fails.
+fn split_closed_edge_exact(
+    topo: &mut Topology,
+    edge_id: EdgeId,
+    tol: f64,
+) -> Result<Vec<EdgeId>, crate::OperationsError> {
+    let edge = topo.edge(edge_id)?;
+    let vertex = edge.start();
+    let curve = edge.curve().clone();
+    let start = topo.vertex(vertex)?.point();
+    let (u0, u1) = match &curve {
+        EdgeCurve::NurbsCurve(nc) => nc.domain(),
+        EdgeCurve::Circle(c) => {
+            let t = c.project(start);
+            (t, t + std::f64::consts::TAU)
+        }
+        EdgeCurve::Ellipse(e) => {
+            let t = e.project(start);
+            (t, t + std::f64::consts::TAU)
+        }
+        EdgeCurve::Line => return Ok(vec![edge_id]),
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let at = |i: usize| u0 + (u1 - u0) * i as f64 / EXACT_CLOSED_PIECES as f64;
+    let mut vertices = vec![vertex];
+    for i in 1..EXACT_CLOSED_PIECES {
+        let point = match &curve {
+            EdgeCurve::NurbsCurve(nc) => nc.evaluate(at(i)),
+            EdgeCurve::Circle(c) => c.evaluate(at(i)),
+            EdgeCurve::Ellipse(e) => e.evaluate(at(i)),
+            EdgeCurve::Line => start,
+        };
+        vertices.push(topo.add_vertex(Vertex::new(point, tol)));
+    }
+    vertices.push(vertex);
+    let mut rest = curve;
+    let mut pieces = Vec::with_capacity(EXACT_CLOSED_PIECES);
+    for i in 0..EXACT_CLOSED_PIECES {
+        let piece = match &rest {
+            EdgeCurve::NurbsCurve(nc) if i + 1 < EXACT_CLOSED_PIECES => {
+                let (head, tail) = brepkit_math::nurbs::knot_ops::curve_split(nc, at(i + 1))
+                    .map_err(crate::OperationsError::Math)?;
+                rest = EdgeCurve::NurbsCurve(tail);
+                EdgeCurve::NurbsCurve(head)
+            }
+            other => other.clone(),
+        };
+        pieces.push(topo.add_edge(Edge::new(vertices[i], vertices[i + 1], piece)));
+    }
+    Ok(pieces)
+}
+
+/// Whether an inner (hole) wire is one closed edge, which the extrude path
+/// keeps exact like the outer wire's: a circle (or a rational NURBS recognized
+/// as one) as one cylinder wall, any other curve as exact pieces, each wall
+/// oriented by its own distinct ends.
+fn inner_wire_is_single_closed_edge(topo: &Topology, wire_id: WireId) -> bool {
     let Ok(wire) = topo.wire(wire_id) else {
         return false;
     };
-    let edges = wire.edges();
-    if edges.len() != 1 {
-        return false;
-    }
-    let Ok(edge) = topo.edge(edges[0].edge()) else {
+    let [only] = wire.edges() else {
         return false;
     };
-    if edge.start() != edge.end() {
-        return false; // not a closed loop
-    }
-    let tol = Tolerance::new().linear;
-    match edge.curve() {
-        EdgeCurve::Circle(_) => true,
-        EdgeCurve::NurbsCurve(nc) => matches!(
-            brepkit_geometry::convert::recognize_curve(nc, tol * 100.0),
-            brepkit_geometry::convert::RecognizedCurve::Circle { .. }
-        ),
-        _ => false,
-    }
+    topo.edge(only.edge())
+        .is_ok_and(|edge| edge.start() == edge.end())
 }
 
 /// Compute the number of segments for splitting a closed edge based on
@@ -305,7 +363,7 @@ fn extrude_wire_vertices_with(
     topo: &mut Topology,
     wire_id: WireId,
     offset: Vec3,
-    pass_through_circles: bool,
+    exact_closed: bool,
 ) -> Result<
     (
         Vec<VertexId>,
@@ -324,16 +382,16 @@ fn extrude_wire_vertices_with(
 
     // Check for closed single-edge wires (e.g. a full circle) and split them
     // into multiple edges so that the extrusion can create proper side faces.
-    // Closed circles/ellipses (incl. NURBS-recognized ones) optionally pass
-    // through unsplit when the caller can build analytic side faces: the outer
-    // wire always does, and a single-circle inner (hole) wire does too (one
-    // exact cylinder wall — see `inner_wire_is_single_circle`).
+    // The outer wire's closed edges, and an inner (hole) wire of one closed
+    // edge, stay exact: a circle passes through whole for one cylinder wall,
+    // any other closed curve is cut into exact pieces (see
+    // `maybe_split_closed_wire_with` and `inner_wire_is_single_closed_edge`).
     let oriented = maybe_split_closed_wire_with(
         topo,
         &original_oriented,
         tol.linear,
         DEFAULT_DEFLECTION,
-        pass_through_circles,
+        exact_closed,
     )?;
 
     let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
@@ -804,12 +862,7 @@ pub fn extrude(
         _top_verts,
         top_edge_ids,
         vertical_edge_ids,
-    ) = extrude_wire_vertices_with(
-        topo,
-        input_wire_id,
-        offset,
-        /*pass_through_circles=*/ true,
-    )?;
+    ) = extrude_wire_vertices_with(topo, input_wire_id, offset, /*exact_closed=*/ true)?;
     let n = input_verts.len();
 
     // Detect CW-wound outer wire (e.g. from brepjs polygon approximations).
@@ -873,7 +926,7 @@ pub fn extrude(
             topo,
             iw_id,
             offset,
-            inner_wire_is_single_circle(topo, iw_id),
+            inner_wire_is_single_closed_edge(topo, iw_id),
         )?;
 
         // Bottom inner wire: reversed winding (same as outer wire reversal).

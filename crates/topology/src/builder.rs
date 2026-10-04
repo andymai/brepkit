@@ -14,7 +14,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use crate::Topology;
 use crate::edge::{Edge, EdgeCurve, EdgeId};
 use crate::face::{Face, FaceId, FaceSurface};
-use crate::vertex::Vertex;
+use crate::vertex::{Vertex, VertexId};
 use crate::wire::{OrientedEdge, Wire, WireId};
 
 /// Create a straight-line edge between two points.
@@ -691,8 +691,9 @@ pub fn make_planar_face(
 
 /// Create an edge from explicit start/end points and a NURBS curve.
 ///
-/// Allocates vertices at `start` and `end` with the given `tolerance`,
-/// then creates an edge with the provided `NurbsCurve` geometry.
+/// Allocates a vertex at `start`, and one at `end` unless the curve closes
+/// on its start, with the given `tolerance`, then creates an edge with the
+/// provided `NurbsCurve` geometry.
 pub fn make_nurbs_edge(
     topo: &mut Topology,
     start: Point3,
@@ -701,8 +702,24 @@ pub fn make_nurbs_edge(
     tolerance: f64,
 ) -> EdgeId {
     let v_start = topo.add_vertex(Vertex::new(start, tolerance));
-    let v_end = topo.add_vertex(Vertex::new(end, tolerance));
+    let v_end = end_vertex(topo, v_start, start, end, tolerance);
     topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)))
+}
+
+/// The vertex a curve from `start` ends on: `v_start` itself when the curve
+/// closes, so a closed edge has one vertex and a wire around it closes.
+fn end_vertex(
+    topo: &mut Topology,
+    v_start: VertexId,
+    start: Point3,
+    end: Point3,
+    tolerance: f64,
+) -> VertexId {
+    if (end - start).length() <= tolerance {
+        v_start
+    } else {
+        topo.add_vertex(Vertex::new(end, tolerance))
+    }
 }
 
 /// Create an edge from a NURBS curve, evaluating its endpoints.
@@ -718,7 +735,7 @@ pub fn make_nurbs_edge_from_curve(
     let start = curve.evaluate(knots[0]);
     let end = curve.evaluate(knots[knots.len() - 1]);
     let v_start = topo.add_vertex(Vertex::new(start, tolerance));
-    let v_end = topo.add_vertex(Vertex::new(end, tolerance));
+    let v_end = end_vertex(topo, v_start, start, end, tolerance);
     topo.add_edge(Edge::new(
         v_start,
         v_end,
