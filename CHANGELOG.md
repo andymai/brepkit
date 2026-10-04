@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.26](https://github.com/andymai/brepkit/compare/v4.1.25...v4.1.26) (2026-10-04)
+
+
+### Bug Fixes
+
+* **io:** read a STEP edge's curve through a curve on surfaces ([#1970](https://github.com/andymai/brepkit/issues/1970)) ([2010764](https://github.com/andymai/brepkit/commit/20107644eaf27b4e6b7bfc4e338dd379192ca747))
+
 ## [4.1.25](https://github.com/andymai/brepkit/compare/v4.1.24...v4.1.25) (2026-10-04)
 
 
