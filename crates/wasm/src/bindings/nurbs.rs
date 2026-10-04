@@ -7,12 +7,10 @@ use wasm_bindgen::prelude::*;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;
-use brepkit_topology::edge::{Edge, EdgeCurve};
-use brepkit_topology::vertex::Vertex;
 
 use crate::error::WasmError;
 use crate::handles::{edge_id_to_u32, face_id_to_u32};
-use crate::helpers::{TOL, parse_point_grid, parse_points};
+use crate::helpers::{parse_point_grid, parse_points};
 use crate::kernel::BrepKernel;
 
 /// Weights within this absolute distance of `1.0` are treated as unit.
@@ -205,15 +203,7 @@ impl BrepKernel {
 
         let deg = std::cmp::min(degree as usize, points.len() - 1);
         let curve = brepkit_math::nurbs::fitting::interpolate(&points, deg)?;
-
-        let start = points[0];
-        let end = points[points.len() - 1];
-        let v_start = self.topo_mut().add_vertex(Vertex::new(start, TOL));
-        let v_end = self.topo_mut().add_vertex(Vertex::new(end, TOL));
-        let eid = self
-            .topo_mut()
-            .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
-        Ok(edge_id_to_u32(eid))
+        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)))
     }
 
     /// Approximate a curve through points (least-squares).
@@ -450,6 +440,8 @@ mod tests {
     use brepkit_math::nurbs::surface_fitting::interpolate_surface;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_topology::builder::{make_nurbs_edge_from_curve, make_nurbs_face};
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
 
     use crate::handles::{edge_id_to_u32, face_id_to_u32};
     use crate::helpers::TOL;
