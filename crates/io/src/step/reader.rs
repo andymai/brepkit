@@ -235,7 +235,12 @@ impl<'a> StepBuilder<'a> {
                 reason: format!("ADVANCED_FACE #{face_ref} missing surface reference"),
             })?;
 
-        let surface = self.build_surface(surface_ref)?;
+        let (surface, inverted) =
+            if self.get_entity(surface_ref)?.entity_type == "SURFACE_OF_LINEAR_EXTRUSION" {
+                self.read_extrusion(surface_ref)?
+            } else {
+                (Extrusion::Surface(self.build_surface(surface_ref)?), false)
+            };
 
         let mut outer_wire = None;
         let mut inner_wires = Vec::new();
@@ -249,7 +254,7 @@ impl<'a> StepBuilder<'a> {
             let bound_reversed = bound_tail.ends_with(".F.") || bound_tail.ends_with(".FALSE.");
             // A bound runs about the face's normal (reversed when its flag is
             // false); brepkit stores every loop about the surface's normal.
-            let reverse = !self.legacy_bounds && bound_reversed != face_reversed;
+            let reverse = (!self.legacy_bounds && bound_reversed != face_reversed) != inverted;
 
             if let Some(&loop_ref) = bound_refs.first() {
                 let wire_id = self.build_edge_loop(loop_ref, reverse)?;
@@ -274,9 +279,38 @@ impl<'a> StepBuilder<'a> {
             reason: format!("ADVANCED_FACE #{face_ref} has no bounds"),
         })?;
 
+        let surface = match surface {
+            Extrusion::Surface(surface) => surface,
+            Extrusion::Spline(curve, along) => {
+                let mut span = (f64::INFINITY, f64::NEG_INFINITY);
+                for wire in std::iter::once(outer).chain(inner_wires.iter().copied()) {
+                    for oe in self.topo.wire(wire)?.edges() {
+                        let edge = self.topo.edge(oe.edge())?;
+                        let (lo, hi) = edge_height_span(
+                            edge.curve(),
+                            self.topo.vertex(edge.start())?.point(),
+                            self.topo.vertex(edge.end())?.point(),
+                            along,
+                        );
+                        span = (span.0.min(lo), span.1.max(hi));
+                    }
+                }
+                if !(span.0.is_finite() && span.1.is_finite()) {
+                    return Err(IoError::ParseError {
+                        reason: format!(
+                            "SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: face has no extent"
+                        ),
+                    });
+                }
+                spline_extrusion(&curve, along, span).map_err(|e| IoError::ParseError {
+                    reason: format!("SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: {e}"),
+                })?
+            }
+        };
+
         // Turning a face over flips its normal, not the side of its surface
         // its loops wind about.
-        let face_id = if face_reversed == flip {
+        let face_id = if (face_reversed != inverted) == flip {
             self.topo.add_face(Face::new(outer, inner_wires, surface))
         } else {
             self.topo
@@ -495,11 +529,8 @@ impl<'a> StepBuilder<'a> {
 
         // In a complex record the name belongs to another component, so the
         // curve on surfaces' own attributes start at its 3D curve.
-        if entity_type.is_empty()
-            && let Some(body) = curve_on_surfaces_component(&attrs)
-        {
-            return self
-                .curve_through_curve_on_surfaces(curve_ref, parse_refs(body).first().copied());
+        if entity_type.is_empty() && curve_on_surfaces_component(&attrs).is_some() {
+            return self.build_curve_geometry(self.plain_curve_ref(curve_ref)?);
         }
 
         match entity_type.as_str() {
@@ -550,7 +581,7 @@ impl<'a> StepBuilder<'a> {
             }
             "B_SPLINE_CURVE_WITH_KNOTS" => self.build_bspline_curve(curve_ref, &attrs, None),
             kind if CURVES_ON_SURFACES.contains(&kind) => {
-                self.curve_through_curve_on_surfaces(curve_ref, ref_after_name(&attrs))
+                self.build_curve_geometry(self.plain_curve_ref(curve_ref)?)
             }
             _ if entity_type.is_empty() || attrs.contains("B_SPLINE_CURVE_WITH_KNOTS") => {
                 let (combined, rational) =
@@ -563,35 +594,32 @@ impl<'a> StepBuilder<'a> {
         }
     }
 
-    /// A curve on surfaces lists its 3D curve, then that curve's images on
-    /// the faces it bounds; the edge needs only the 3D curve. A chain of them
-    /// is followed to its plain curve, and a reference cycle is an error.
-    fn curve_through_curve_on_surfaces(
-        &self,
-        curve_ref: u64,
-        curve_3d: Option<u64>,
-    ) -> Result<EdgeCurve, IoError> {
-        let mut visited = std::collections::HashSet::from([curve_ref]);
-        let mut next = curve_3d;
+    /// The plain curve under `curve_ref`. A curve on surfaces lists its 3D
+    /// curve, then that curve's images on the faces it bounds, and only the
+    /// 3D curve matters here; a chain of them is followed to its end, and a
+    /// reference cycle is an error. Any other curve is its own plain curve.
+    fn plain_curve_ref(&self, curve_ref: u64) -> Result<u64, IoError> {
+        let mut visited = std::collections::HashSet::new();
+        let mut at = curve_ref;
         loop {
-            let at = next.ok_or_else(|| IoError::ParseError {
-                reason: format!("curve on surfaces #{curve_ref} missing its 3D curve"),
-            })?;
             if !visited.insert(at) {
                 return Err(IoError::ParseError {
                     reason: format!("curve on surfaces #{curve_ref} reaches #{at} again"),
                 });
             }
-            let target = self.get_entity(at)?;
-            next = if CURVES_ON_SURFACES.contains(&target.entity_type.as_str()) {
-                ref_after_name(&target.attrs)
-            } else if target.entity_type.is_empty()
-                && let Some(body) = curve_on_surfaces_component(&target.attrs)
+            let entity = self.get_entity(at)?;
+            let next = if CURVES_ON_SURFACES.contains(&entity.entity_type.as_str()) {
+                ref_after_name(&entity.attrs)
+            } else if entity.entity_type.is_empty()
+                && let Some(body) = curve_on_surfaces_component(&entity.attrs)
             {
                 parse_refs(body).first().copied()
             } else {
-                return self.build_curve_geometry(at);
+                return Ok(at);
             };
+            at = next.ok_or_else(|| IoError::ParseError {
+                reason: format!("curve on surfaces #{curve_ref} missing its 3D curve"),
+            })?;
         }
     }
 
@@ -634,6 +662,80 @@ impl<'a> StepBuilder<'a> {
                 reason: format!("B_SPLINE_CURVE #{curve_ref}: {e}"),
             })?;
         Ok(EdgeCurve::NurbsCurve(nurbs))
+    }
+
+    /// A surface of linear extrusion: its swept curve moved along a vector.
+    /// A line sweeps a plane, a circle swept along its axis a cylinder, and a
+    /// B-spline curve the B-spline surface that is linear across the sweep.
+    /// The flag is set when the brepkit surface's normal opposes the
+    /// extrusion's (the swept curve's tangent crossed with the vector): a
+    /// circle swept against its own normal sweeps a cylinder whose normal
+    /// points at the axis, while brepkit's cylinder faces away from it.
+    fn read_extrusion(&self, surface_ref: u64) -> Result<(Extrusion, bool), IoError> {
+        let attrs = self.get_entity(surface_ref)?.attrs.clone();
+        let refs = refs_after_name(&attrs);
+        let (Some(&swept), Some(&vector)) = (refs.first(), refs.get(1)) else {
+            return Err(IoError::ParseError {
+                reason: format!(
+                    "SURFACE_OF_LINEAR_EXTRUSION #{surface_ref} needs a curve and a vector"
+                ),
+            });
+        };
+        let along = self.build_vector_direction(vector)?;
+        let swept = self.plain_curve_ref(swept)?;
+        let swept_entity = self.get_entity(swept)?;
+        if swept_entity.entity_type == "LINE" {
+            let line_refs = refs_after_name(&swept_entity.attrs);
+            let (Some(&point), Some(&line_vector)) = (line_refs.first(), line_refs.get(1)) else {
+                return Err(IoError::ParseError {
+                    reason: format!("LINE #{swept} needs a point and a vector"),
+                });
+            };
+            let point = self.build_cartesian_point(point)?;
+            let normal = self
+                .build_vector_direction(line_vector)?
+                .cross(along)
+                .normalize()
+                .map_err(|e| IoError::ParseError {
+                    reason: format!("SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: {e}"),
+                })?;
+            let d = normal.dot(Vec3::new(point.x(), point.y(), point.z()));
+            return Ok((Extrusion::Surface(FaceSurface::Plane { normal, d }), false));
+        }
+        match self.build_curve_geometry(swept)? {
+            EdgeCurve::Circle(c) if c.normal().cross(along).length() < 1e-12 => {
+                let cyl =
+                    brepkit_math::surfaces::CylindricalSurface::new(c.center(), along, c.radius())
+                        .map_err(|e| IoError::ParseError {
+                            reason: format!("SURFACE_OF_LINEAR_EXTRUSION #{surface_ref}: {e}"),
+                        })?;
+                Ok((
+                    Extrusion::Surface(FaceSurface::Cylinder(cyl)),
+                    c.normal().dot(along) < 0.0,
+                ))
+            }
+            EdgeCurve::NurbsCurve(curve) => Ok((Extrusion::Spline(curve, along), false)),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                Err(IoError::UnsupportedEntity {
+                    entity: format!(
+                        "SURFACE_OF_LINEAR_EXTRUSION #{surface_ref} of this curve and direction"
+                    ),
+                })
+            }
+        }
+    }
+
+    /// The unit direction of a VECTOR entity.
+    fn build_vector_direction(&self, vector_ref: u64) -> Result<Vec3, IoError> {
+        let refs = refs_after_name(&self.get_entity(vector_ref)?.attrs);
+        let dir = refs.first().copied().ok_or_else(|| IoError::ParseError {
+            reason: format!("VECTOR #{vector_ref} missing its direction"),
+        })?;
+        self.build_direction(dir)?
+            .normalize()
+            .map_err(|e| IoError::ParseError {
+                reason: format!("VECTOR #{vector_ref}: {e}"),
+            })
     }
 
     /// Build a B-spline surface from parsed attributes.
@@ -783,6 +885,114 @@ fn parse_refs(attrs: &str) -> Vec<u64> {
 
 /// The entity kinds that wrap a 3D curve together with its images on faces.
 const CURVES_ON_SURFACES: [&str; 3] = ["SURFACE_CURVE", "SEAM_CURVE", "INTERSECTION_CURVE"];
+
+/// The `#NNN` references past a record's leading quoted name.
+fn refs_after_name(attrs: &str) -> Vec<u64> {
+    let mut quoted = false;
+    for (i, ch) in attrs.char_indices() {
+        if ch == '\'' {
+            quoted = !quoted;
+        }
+        if !quoted && ch == ',' {
+            return parse_refs(&attrs[i + 1..]);
+        }
+    }
+    Vec::new()
+}
+
+/// A surface of linear extrusion as brepkit reads it: a surface its curve
+/// and direction fix on their own, or a B-spline curve and its unit
+/// direction, whose sweep must span the face that lies on it.
+enum Extrusion {
+    Surface(FaceSurface),
+    Spline(brepkit_math::nurbs::NurbsCurve, Vec3),
+}
+
+/// The lowest and highest heights along unit `along` that an edge from
+/// `start` to `end` reaches: a line's ends, a conic arc's ends and any
+/// extreme inside it, and a B-spline curve's control points, whose hull
+/// holds the whole curve.
+fn edge_height_span(curve: &EdgeCurve, start: Point3, end: Point3, along: Vec3) -> (f64, f64) {
+    let height = |p: Point3| along.dot(Vec3::new(p.x(), p.y(), p.z()));
+    let ends = (
+        height(start).min(height(end)),
+        height(start).max(height(end)),
+    );
+    match curve {
+        EdgeCurve::Line => ends,
+        EdgeCurve::Circle(c) => {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            conic_height_span(
+                height(c.center()),
+                c.radius() * along.dot(c.u_axis()),
+                c.radius() * along.dot(c.v_axis()),
+                (t0, t1),
+            )
+        }
+        EdgeCurve::Ellipse(e) => {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            conic_height_span(
+                height(e.center()),
+                e.semi_major() * along.dot(e.u_axis()),
+                e.semi_minor() * along.dot(e.v_axis()),
+                (t0, t1),
+            )
+        }
+        EdgeCurve::NurbsCurve(n) => n
+            .control_points()
+            .iter()
+            .fold(ends, |(lo, hi), &p| (lo.min(height(p)), hi.max(height(p)))),
+    }
+}
+
+/// The span of `h0 + a cos t + b sin t` over `t0..=t1`: its ends, and its
+/// peak at `atan2(b, a)` and trough half a turn on wherever they fall inside.
+fn conic_height_span(h0: f64, a: f64, b: f64, (t0, t1): (f64, f64)) -> (f64, f64) {
+    use std::f64::consts::{PI, TAU};
+    let at = |t: f64| b.mul_add(t.sin(), a.mul_add(t.cos(), h0));
+    let mut span = (at(t0).min(at(t1)), at(t0).max(at(t1)));
+    let (peak, reach) = (b.atan2(a), a.hypot(b));
+    for (t, h) in [(peak, h0 + reach), (peak + PI, h0 - reach)] {
+        if t0 + (t - t0).rem_euclid(TAU) <= t1 {
+            span = (span.0.min(h), span.1.max(h));
+        }
+    }
+    span
+}
+
+/// `curve` swept along unit `along` far enough to cover heights `lo..=hi`
+/// from every point of the curve: the B-spline surface of the curve's
+/// degree across and degree one along, whose normal is the curve's tangent
+/// crossed with `along`, as the extrusion's is.
+fn spline_extrusion(
+    curve: &brepkit_math::nurbs::NurbsCurve,
+    along: Vec3,
+    (lo, hi): (f64, f64),
+) -> Result<FaceSurface, brepkit_math::MathError> {
+    let height = |p: &Point3| along.dot(Vec3::new(p.x(), p.y(), p.z()));
+    let (curve_lo, curve_hi) = curve
+        .control_points()
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), p| {
+            (l.min(height(p)), h.max(height(p)))
+        });
+    let (v0, v1) = (lo - curve_hi, hi - curve_lo);
+    let control_points = curve
+        .control_points()
+        .iter()
+        .map(|&p| vec![p + along * v0, p + along * v1])
+        .collect();
+    let weights = curve.weights().iter().map(|&w| vec![w, w]).collect();
+    brepkit_math::nurbs::NurbsSurface::new(
+        curve.degree(),
+        1,
+        curve.knots().to_vec(),
+        vec![0.0, 0.0, 1.0, 1.0],
+        control_points,
+        weights,
+    )
+    .map(FaceSurface::Nurbs)
+}
 
 /// The first `#NNN` reference past a record's leading quoted name.
 fn ref_after_name(attrs: &str) -> Option<u64> {
@@ -1475,6 +1685,203 @@ mod tests {
             format!("#{id} = SURFACE_CURVE('', #{id}, ({surface}), .CURVE_3D.);")
         });
         assert!(read_step(&looped, &mut Topology::new()).is_err());
+    }
+
+    /// `plain` with every PLANE rewritten as a surface of linear extrusion:
+    /// a curve along the placement's reference direction, written by `curve`
+    /// from its first free id, the location and that direction, swept along
+    /// the in-plane direction normal to it.
+    fn planes_as_extrusions(
+        plain: &str,
+        curve: impl Fn(u64, Point3, Vec3) -> (u64, Vec<String>),
+    ) -> String {
+        let record = |id: &str| {
+            plain
+                .lines()
+                .find(|l| l.starts_with(&format!("{id} =")))
+                .unwrap()
+                .to_string()
+        };
+        let coords = |line: &str| {
+            let inner = &line[line.rfind('(').unwrap() + 1..line.find(')').unwrap()];
+            let v: Vec<f64> = inner
+                .split(',')
+                .map(|x| x.trim().parse().unwrap())
+                .collect();
+            (v[0], v[1], v[2])
+        };
+        let mut next = plain
+            .lines()
+            .filter_map(|l| l.strip_prefix('#')?.split_once(' ')?.0.parse::<u64>().ok())
+            .max()
+            .unwrap()
+            + 1;
+        let mut out = Vec::new();
+        let mut extra = Vec::new();
+        for line in plain.lines() {
+            if !line.contains("= PLANE(") {
+                out.push(line.to_string());
+                continue;
+            }
+            let axis = &line[line.rfind('#').unwrap()..line.rfind(')').unwrap()];
+            let parts: Vec<String> = record(axis)
+                .split('#')
+                .skip(2)
+                .map(|p| format!("#{}", p.trim_end_matches(|c: char| !c.is_ascii_digit())))
+                .collect();
+            let (lx, ly, lz) = coords(&record(&parts[0]));
+            let (nx, ny, nz) = coords(&record(&parts[1]));
+            let (rx, ry, rz) = coords(&record(&parts[2]));
+            let normal = Vec3::new(nx, ny, nz);
+            let reference = Vec3::new(rx, ry, rz);
+            let sweep = normal.cross(reference);
+            let (curve_id, mut records) = curve(next, Point3::new(lx, ly, lz), reference);
+            next = curve_id + 1;
+            let (dir, vec) = (next, next + 1);
+            next += 2;
+            records.push(format!(
+                "#{dir} = DIRECTION('', ({:.17}, {:.17}, {:.17}));",
+                sweep.x(),
+                sweep.y(),
+                sweep.z()
+            ));
+            records.push(format!("#{vec} = VECTOR('', #{dir}, 1.);"));
+            let id = line.split(' ').next().unwrap();
+            out.push(format!(
+                "{id} = SURFACE_OF_LINEAR_EXTRUSION('', #{curve_id}, #{vec});"
+            ));
+            extra.extend(records);
+        }
+        let out = out.join("\n");
+        out.replacen(
+            "ENDSEC;\nEND-ISO",
+            &format!("{}\nENDSEC;\nEND-ISO", extra.join("\n")),
+            1,
+        )
+    }
+
+    /// A LINE through `at` along `along`, written from id `id`: its id and
+    /// records.
+    fn line_records(id: u64, at: Point3, along: Vec3) -> (u64, Vec<String>) {
+        let (point, dir, vec, line) = (id, id + 1, id + 2, id + 3);
+        (
+            line,
+            vec![
+                format!(
+                    "#{point} = CARTESIAN_POINT('', ({}, {}, {}));",
+                    at.x(),
+                    at.y(),
+                    at.z()
+                ),
+                format!(
+                    "#{dir} = DIRECTION('', ({}, {}, {}));",
+                    along.x(),
+                    along.y(),
+                    along.z()
+                ),
+                format!("#{vec} = VECTOR('', #{dir}, 1.);"),
+                format!("#{line} = LINE('', #{point}, #{vec});"),
+            ],
+        )
+    }
+
+    /// A box whose planes are written as lines swept along the plane (plain,
+    /// and as the 3D curve of a curve on surfaces), and as straight B-spline
+    /// curves swept the same way, reads back as the box on planes and on
+    /// B-spline surfaces.
+    #[test]
+    fn linear_extrusions_read_as_their_surfaces() {
+        let mut topo = Topology::new();
+        let block = brepkit_operations::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+        let plain = writer::write_step(&topo, &[block]).unwrap();
+
+        let lines = planes_as_extrusions(&plain, line_records);
+        let wrapped = planes_as_extrusions(&plain, |id, at, along| {
+            let (line, mut records) = line_records(id, at, along);
+            let wrap = line + 1;
+            records.push(format!(
+                "#{wrap} = SURFACE_CURVE('', #{line}, (), .CURVE_3D.);"
+            ));
+            (wrap, records)
+        });
+        let splines = planes_as_extrusions(&plain, |id, at, along| {
+            let (p0, p1, curve) = (id, id + 1, id + 2);
+            let (a, b) = (at + along * -10.0, at + along * 10.0);
+            (
+                curve,
+                vec![
+                    format!(
+                        "#{p0} = CARTESIAN_POINT('', ({}, {}, {}));",
+                        a.x(),
+                        a.y(),
+                        a.z()
+                    ),
+                    format!(
+                        "#{p1} = CARTESIAN_POINT('', ({}, {}, {}));",
+                        b.x(),
+                        b.y(),
+                        b.z()
+                    ),
+                    format!(
+                        "#{curve} = B_SPLINE_CURVE_WITH_KNOTS('', 1, (#{p0}, #{p1}), \
+                         .POLYLINE_FORM., .F., .F., (2, 2), (0., 1.), .UNSPECIFIED.);"
+                    ),
+                ],
+            )
+        });
+        for (step, surface) in [(lines, "plane"), (wrapped, "plane"), (splines, "nurbs")] {
+            assert!(step.contains("SURFACE_OF_LINEAR_EXTRUSION") && !step.contains("= PLANE("));
+            let mut read = Topology::new();
+            let solids = read_step(&step, &mut read).unwrap();
+            assert_eq!(solids.len(), 1);
+            let faces = brepkit_topology::explorer::solid_faces(&read, solids[0]).unwrap();
+            assert_eq!(faces.len(), 6);
+            for face in faces {
+                assert_eq!(read.face(face).unwrap().surface().type_tag(), surface);
+            }
+            let report = brepkit_operations::validate::validate_solid(&read, solids[0]).unwrap();
+            assert!(report.is_valid(), "{surface}: {report:?}");
+            let volume =
+                brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
+            assert!((volume - 24.0).abs() < 1e-6 * 24.0, "{volume}");
+        }
+    }
+
+    /// The span along a sweep that a face's edge reaches covers the whole
+    /// edge: a cubic whose height peaks between its ends, away from evenly
+    /// spaced samples, and an arc whose peak lies inside it.
+    #[test]
+    fn edge_height_spans_cover_the_whole_edge() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let at = |x: f64, z: f64| Point3::new(x, 0.0, z);
+        let cubic = brepkit_math::nurbs::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 100.0), at(3.0, 0.0)],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        // The curve's height 300 t^2 (1 - t) peaks at 400/9 at t = 2/3.
+        let (lo, hi) = edge_height_span(
+            &EdgeCurve::NurbsCurve(cubic),
+            at(0.0, 0.0),
+            at(3.0, 0.0),
+            up,
+        );
+        assert!(lo <= 0.0 && hi >= 400.0 / 9.0, "{lo} {hi}");
+
+        let circle = brepkit_math::curves::Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            1.0,
+            up,
+        )
+        .unwrap();
+        let quarter = std::f64::consts::FRAC_PI_4;
+        let (start, end) = (circle.evaluate(-quarter), circle.evaluate(quarter));
+        let (lo, hi) = edge_height_span(&EdgeCurve::Circle(circle), start, end, up);
+        assert!((hi - 1.0).abs() < 1e-12, "{hi}");
+        assert!((lo - quarter.cos()).abs() < 1e-12, "{lo}");
     }
 
     /// The largest distance from a cone face's boundary to its surface, read
