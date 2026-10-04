@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791099498990,
+  "lastUpdate": 1791105780035,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51083,6 +51083,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43524152,
             "range": "± 122507",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b9c910c73c5c4fde03c5868087f9eb0a2b455214",
+          "message": "fix(io): read a STEP face on a surface of linear extrusion (#1973)\n\n`read_step` now reads faces whose surface is a\n`SURFACE_OF_LINEAR_EXTRUSION`, including the three swept cubic B-spline\nwalls in the captured bin cut export.\n\n## What failed\n\nThe reader had no corresponding surface, so files using one failed with\n`unsupported STEP entity: SURFACE_OF_LINEAR_EXTRUSION`. One reference\nkernel export contains three such entities, each sweeping a cubic\nB-spline curve straight down.\n\n## Change\n\nA swept LINE reads as a plane, including when referenced through a curve\non surfaces such as `SURFACE_CURVE`. A CIRCLE swept along or against its\naxis reads as a cylinder. Against the axis, the extrusion normal points\ninward while brepkit's cylinder points outward, so the face and its\nloops are turned over during reading.\n\nA B-spline curve reads as a B-spline surface with the curve's degree\nalong it and linear degree across the sweep. An off-axis circle or an\nellipse reports an unsupported entity.\n\nSTEP provides no sweep end for that surface. The face is therefore built\nafter its loops, and the surface spans every height reached by its\nboundary edges: line endpoints, conic arc endpoints and internal\nextrema, and B-spline edge control points, whose hull contains the edge.\n\n## Verification\n\nThe neutralized fixture `crates/io/tests/data/swept_wall_cut.step` reads\nas one 16-face solid with three B-spline surfaces.\n`swept_spline_walls_from_the_reference_kernel_read_at_its_volume`\nvalidates it, meshes it watertight, and checks volume within `1e-9`\nrelative of `3596.3787629512553`, the reference kernel's measurement.\n\n`a_circle_swept_along_its_axis_or_against_it_reads_as_the_cylinder`\nrewrites a radius 2, height 5 cylinder wall in both directions. Both\nresults are valid, watertight three-face solids with one cylinder and\nvolume `20π`. With the turnover disabled, the against-axis case reads\nwith an open mesh.\n\n`linear_extrusions_read_as_their_surfaces` rewrites every plane of a 2 x\n3 x 4 box using a LINE, a LINE in `SURFACE_CURVE`, and a straight\ndegree-1 B-spline. Each reads as six faces, validates, and has volume 24\nwithin `1e-6` relative. The line cases contain planes, while the spline\ncase contains B-spline surfaces.\n\n`edge_height_spans_cover_the_whole_edge` covers an arc's internal peak\nand the cubic height `300 t^2 (1 - t)`, whose peak is `400/9` at `t =\n2/3`.\n\nAll 339 `brepkit-io` tests pass.\n\n## Roadmap\n\nThe roadmap closes this fix and points to the new test file and fixture.\nThe curves-on-surfaces entry no longer lists the extrusion gap. Volume\ncomparisons of other reference kernel exports also exposed a separate\ncone reading and writing defect, which gets its own change.",
+          "timestamp": "2026-10-04T02:20:35-07:00",
+          "tree_id": "6c21caa3a84af0c99b61227c5df2ef9a10b0fda4",
+          "url": "https://github.com/andymai/brepkit/commit/b9c910c73c5c4fde03c5868087f9eb0a2b455214"
+        },
+        "date": 1791105775093,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 850748,
+            "range": "± 2230",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 924167,
+            "range": "± 2728",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11129,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635197,
+            "range": "± 1181",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36236254,
+            "range": "± 34284",
             "unit": "ns/iter"
           }
         ]
