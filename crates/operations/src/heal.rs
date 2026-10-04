@@ -1413,7 +1413,24 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
                 representative_surface = Some(face.surface().clone());
                 representative_reversed = face.is_reversed();
             }
-            all_inner_wires.extend_from_slice(face.inner_wires());
+            // A hole another face of the group fills (a ring and the floor
+            // in its opening) is no longer a hole: its shared edges go, and
+            // any others join the boundary loops.
+            for &hole in face.inner_wires() {
+                let hole_edges = topo.wire(hole)?.edges();
+                if hole_edges
+                    .iter()
+                    .any(|oe| internal_edges.contains(&oe.edge().index()))
+                {
+                    boundary_edges.extend(
+                        hole_edges
+                            .iter()
+                            .filter(|oe| !internal_edges.contains(&oe.edge().index())),
+                    );
+                } else {
+                    all_inner_wires.push(hole);
+                }
+            }
 
             let wire = topo.wire(face.outer_wire())?;
             for oe in wire.edges() {
@@ -1438,6 +1455,16 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         let Some(surface) = representative_surface else {
             continue;
         };
+
+        // A merged face whose boundary goes once around a revolved surface's
+        // axis would be a band with no seam, which the mesher cannot cover.
+        if !matches!(surface, FaceSurface::Plane { .. }) {
+            let loops = order_edges_into_loops(topo, &boundary_edges)?;
+            if loops.len() > 1 && seamless_band(topo, &surface, &loops)? {
+                log::debug!("unify_faces: skipping merge group that would close a band");
+                continue;
+            }
+        }
 
         group_data.push(MergeGroupData {
             face_ids: group_face_ids,
@@ -1637,6 +1664,76 @@ struct EdgeInfo {
 /// Returns a `Vec<Vec<OrientedEdge>>` where each inner vec is a closed
 /// loop with edges chained end-to-start. Empty if edges can't form any
 /// valid loop.
+/// Whether boundary loops on a curved surface leave a band with no seam: a
+/// loop goes once around a cylinder's or cone's axis. On a sphere or torus
+/// any face with several loops counts, which errs toward keeping faces apart.
+fn seamless_band(
+    topo: &Topology,
+    surface: &FaceSurface,
+    loops: &[Vec<OrientedEdge>],
+) -> Result<bool, crate::OperationsError> {
+    let (origin, axis) = match surface {
+        FaceSurface::Cylinder(c) => (c.origin(), c.axis()),
+        FaceSurface::Cone(c) => (c.apex(), c.axis()),
+        FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => {
+            return Ok(true);
+        }
+        FaceSurface::Plane { .. } => return Ok(false),
+    };
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(origin, axis) else {
+        return Ok(true);
+    };
+    let angle = |p: Point3| {
+        let d = p - origin;
+        d.dot(frame.y).atan2(d.dot(frame.x))
+    };
+    for lp in loops {
+        let mut points = Vec::new();
+        for oe in lp {
+            let e = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(e.start())?.point(),
+                topo.vertex(e.end())?.point(),
+            );
+            // A closed circle or ellipse runs its whole turn.
+            let (t0, t1) = if e.start() == e.end()
+                && matches!(e.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+            {
+                (0.0, std::f64::consts::TAU)
+            } else {
+                e.curve().domain_with_endpoints(a, b)
+            };
+            let mut samples: Vec<Point3> = (0..8)
+                .map(|k| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                    e.curve().evaluate_with_endpoints(t, a, b)
+                })
+                .collect();
+            if !oe.is_forward() {
+                samples.push(e.curve().evaluate_with_endpoints(t1, a, b));
+                samples.reverse();
+                samples.pop();
+            }
+            points.extend(samples);
+        }
+        let mut turn = 0.0;
+        for (i, &p) in points.iter().enumerate() {
+            let q = points[(i + 1) % points.len()];
+            let mut step = angle(q) - angle(p);
+            if step > std::f64::consts::PI {
+                step -= std::f64::consts::TAU;
+            } else if step < -std::f64::consts::PI {
+                step += std::f64::consts::TAU;
+            }
+            turn += step;
+        }
+        if turn.abs() > std::f64::consts::PI {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn order_edges_into_loops(
     topo: &Topology,
     edges: &[OrientedEdge],
