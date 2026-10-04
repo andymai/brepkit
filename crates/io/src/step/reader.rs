@@ -455,12 +455,21 @@ impl<'a> StepBuilder<'a> {
     /// Build the curve geometry for an edge from a curve entity reference.
     ///
     /// Dispatches on the entity type: LINE, CIRCLE, ELLIPSE,
-    /// `B_SPLINE_CURVE_WITH_KNOTS`, and a curve on surfaces through its 3D
-    /// curve.
+    /// `B_SPLINE_CURVE_WITH_KNOTS`, and a curve on surfaces (simple or complex
+    /// record) through its 3D curve.
     fn build_curve_geometry(&self, curve_ref: u64) -> Result<EdgeCurve, IoError> {
         let entity = self.get_entity(curve_ref)?;
         let entity_type = entity.entity_type.clone();
         let attrs = entity.attrs.clone();
+
+        // In a complex record the name belongs to another component, so the
+        // curve on surfaces' own attributes start at its 3D curve.
+        if entity_type.is_empty()
+            && let Some(body) = curve_on_surfaces_component(&attrs)
+        {
+            return self
+                .curve_through_curve_on_surfaces(curve_ref, parse_refs(body).first().copied());
+        }
 
         match entity_type.as_str() {
             "LINE" => Ok(EdgeCurve::Line),
@@ -509,17 +518,8 @@ impl<'a> StepBuilder<'a> {
                 Ok(EdgeCurve::Ellipse(ellipse))
             }
             "B_SPLINE_CURVE_WITH_KNOTS" => self.build_bspline_curve(curve_ref, &attrs, None),
-            // A curve on surfaces names its 3D curve first, then its images on
-            // the faces it bounds; the edge needs only the 3D curve.
-            "SURFACE_CURVE" | "SEAM_CURVE" | "INTERSECTION_CURVE" => {
-                let curve_3d =
-                    parse_refs(&attrs)
-                        .first()
-                        .copied()
-                        .ok_or_else(|| IoError::ParseError {
-                            reason: format!("{entity_type} #{curve_ref} missing its 3D curve"),
-                        })?;
-                self.build_curve_geometry(curve_3d)
+            kind if CURVES_ON_SURFACES.contains(&kind) => {
+                self.curve_through_curve_on_surfaces(curve_ref, ref_after_name(&attrs))
             }
             _ if entity_type.is_empty() || attrs.contains("B_SPLINE_CURVE_WITH_KNOTS") => {
                 let (combined, rational) =
@@ -530,6 +530,31 @@ impl<'a> StepBuilder<'a> {
                 entity: format!("{entity_type} (curve #{curve_ref})"),
             }),
         }
+    }
+
+    /// A curve on surfaces lists its 3D curve, then that curve's images on
+    /// the faces it bounds; the edge needs only the 3D curve, which may not be
+    /// another curve on surfaces.
+    fn curve_through_curve_on_surfaces(
+        &self,
+        curve_ref: u64,
+        curve_3d: Option<u64>,
+    ) -> Result<EdgeCurve, IoError> {
+        let curve_3d = curve_3d.ok_or_else(|| IoError::ParseError {
+            reason: format!("curve on surfaces #{curve_ref} missing its 3D curve"),
+        })?;
+        let target = self.get_entity(curve_3d)?;
+        if CURVES_ON_SURFACES.contains(&target.entity_type.as_str())
+            || (target.entity_type.is_empty()
+                && curve_on_surfaces_component(&target.attrs).is_some())
+        {
+            return Err(IoError::ParseError {
+                reason: format!(
+                    "curve on surfaces #{curve_ref} names another (#{curve_3d}) as its 3D curve"
+                ),
+            });
+        }
+        self.build_curve_geometry(curve_3d)
     }
 
     /// Build a B-spline curve from parsed attributes.
@@ -716,6 +741,32 @@ fn parse_refs(attrs: &str) -> Vec<u64> {
         }
     }
     refs
+}
+
+/// The entity kinds that wrap a 3D curve together with its images on faces.
+const CURVES_ON_SURFACES: [&str; 3] = ["SURFACE_CURVE", "SEAM_CURVE", "INTERSECTION_CURVE"];
+
+/// The first `#NNN` reference past a record's leading quoted name.
+fn ref_after_name(attrs: &str) -> Option<u64> {
+    let mut quoted = false;
+    for (i, ch) in attrs.char_indices() {
+        if ch == '\'' {
+            quoted = !quoted;
+        }
+        if !quoted && ch == ',' {
+            return parse_refs(&attrs[i + 1..]).first().copied();
+        }
+    }
+    None
+}
+
+/// The attributes of a complex record's curve-on-surfaces component: the one
+/// that carries them, since a subtype such as `SEAM_CURVE()` adds none.
+fn curve_on_surfaces_component(attrs: &str) -> Option<&str> {
+    composite_components(attrs)?
+        .into_iter()
+        .find(|(kind, body)| CURVES_ON_SURFACES.contains(kind) && !parse_refs(body).is_empty())
+        .map(|(_, body)| body)
 }
 
 /// Extract `#NNN` references from the first parenthesized list in attrs.
@@ -1307,56 +1358,75 @@ mod tests {
         }
     }
 
-    /// Each edge's curve wrapped in a SURFACE_CURVE, the form many writers
-    /// use: the 3D curve comes first, then its images on the faces.
-    #[test]
-    fn surface_curves_read_through_their_3d_curve() {
-        let mut topo = Topology::new();
-        let rod = brepkit_operations::primitives::make_cylinder(&mut topo, 2.0, 3.0).unwrap();
-        let plain = writer::write_step(&topo, &[rod]).unwrap();
-
+    /// `plain` with each edge's curve reference moved onto a new entity that
+    /// `wrap` writes from its id and the original curve reference.
+    fn wrap_edge_curves(plain: &str, wrap: impl Fn(u64, &str) -> String) -> String {
         let mut next = plain
             .lines()
             .filter_map(|l| l.strip_prefix('#')?.split_once(' ')?.0.parse::<u64>().ok())
             .max()
             .unwrap()
             + 1;
-        let mut wrapped = String::new();
+        let mut out = String::new();
         let mut extra = Vec::new();
         for line in plain.lines() {
             let Some(at) = line.find("EDGE_CURVE(") else {
-                wrapped.push_str(line);
-                wrapped.push('\n');
+                out.push_str(line);
+                out.push('\n');
                 continue;
             };
             let (head, args) = line.split_at(at + "EDGE_CURVE(".len());
             let mut parts: Vec<String> = args.split(',').map(str::to_string).collect();
-            let curve = parts[3].trim().to_string();
-            extra.push(format!(
-                "#{next} = SURFACE_CURVE('', {curve}, (), .CURVE_3D.);"
-            ));
+            extra.push(wrap(next, parts[3].trim()));
             parts[3] = format!(" #{next}");
             next += 1;
-            wrapped.push_str(head);
-            wrapped.push_str(&parts.join(","));
-            wrapped.push('\n');
+            out.push_str(head);
+            out.push_str(&parts.join(","));
+            out.push('\n');
         }
-        let wrapped = wrapped.replacen(
+        out.replacen(
             "ENDSEC;\nEND-ISO",
             &format!("{}\nENDSEC;\nEND-ISO", extra.join("\n")),
             1,
-        );
-        assert!(wrapped.contains("SURFACE_CURVE"));
+        )
+    }
 
-        let mut read = Topology::new();
-        let solids = read_step(&wrapped, &mut read).unwrap();
-        assert_eq!(solids.len(), 1);
+    /// Each edge's curve wrapped in a curve on surfaces, the form many
+    /// writers use: the 3D curve first, then its images on the faces. A
+    /// quoted name may hold `#` references of its own, and a complex record
+    /// gives the name to another component.
+    #[test]
+    fn surface_curves_read_through_their_3d_curve() {
+        let mut topo = Topology::new();
+        let rod = brepkit_operations::primitives::make_cylinder(&mut topo, 2.0, 3.0).unwrap();
+        let plain = writer::write_step(&topo, &[rod]).unwrap();
         let expected = brepkit_operations::measure::solid_volume(&topo, rod, 0.001).unwrap();
-        let volume = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
-        assert!(
-            (volume - expected).abs() < 1e-6 * expected,
-            "{volume} against {expected}"
-        );
+
+        let simple = wrap_edge_curves(&plain, |id, curve| {
+            format!("#{id} = SURFACE_CURVE('edge #1 of #2', {curve}, (), .CURVE_3D.);")
+        });
+        let complex = wrap_edge_curves(&plain, |id, curve| {
+            format!(
+                "#{id} = ( CURVE() GEOMETRIC_REPRESENTATION_ITEM() REPRESENTATION_ITEM('') \
+                 SEAM_CURVE() SURFACE_CURVE({curve}, (), .CURVE_3D.) );"
+            )
+        });
+        for step in [simple, complex] {
+            let mut read = Topology::new();
+            let solids = read_step(&step, &mut read).unwrap();
+            assert_eq!(solids.len(), 1);
+            let volume =
+                brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-6 * expected,
+                "{volume} against {expected}"
+            );
+        }
+
+        let looped = wrap_edge_curves(&plain, |id, _| {
+            format!("#{id} = SURFACE_CURVE('', #{id}, (), .CURVE_3D.);")
+        });
+        assert!(read_step(&looped, &mut Topology::new()).is_err());
     }
 
     #[test]
