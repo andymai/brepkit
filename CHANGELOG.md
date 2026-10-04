@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.28](https://github.com/andymai/brepkit/compare/v4.1.27...v4.1.28) (2026-10-04)
+
+
+### Bug Fixes
+
+* **io:** read a STEP face on a surface of linear extrusion ([#1973](https://github.com/andymai/brepkit/issues/1973)) ([b9c910c](https://github.com/andymai/brepkit/commit/b9c910c73c5c4fde03c5868087f9eb0a2b455214))
+* **io:** read and write a STEP cone's apex and semi-angle as ISO 10303-42 defines them ([#1975](https://github.com/andymai/brepkit/issues/1975)) ([05bf1d1](https://github.com/andymai/brepkit/commit/05bf1d1212a4784456af3d422dd73c0e54acb26c))
+
 ## [4.1.27](https://github.com/andymai/brepkit/compare/v4.1.26...v4.1.27) (2026-10-04)
 
 
