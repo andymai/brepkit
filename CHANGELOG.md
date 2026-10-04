@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.27](https://github.com/andymai/brepkit/compare/v4.1.26...v4.1.27) (2026-10-04)
+
+
+### Bug Fixes
+
+* **operations:** unify faces without leaving filled holes open or closing seamless bands ([#1972](https://github.com/andymai/brepkit/issues/1972)) ([9a1a06e](https://github.com/andymai/brepkit/commit/9a1a06e394e4ecda6a00390d39312a4578718447))
+
 ## [4.1.26](https://github.com/andymai/brepkit/compare/v4.1.25...v4.1.26) (2026-10-04)
 
 
