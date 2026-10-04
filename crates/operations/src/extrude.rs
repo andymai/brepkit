@@ -105,6 +105,38 @@ pub(crate) fn maybe_split_closed_wire_with(
     Ok(result)
 }
 
+/// Cut every closed edge of a wire into exact pieces along its own curve
+/// (see [`split_closed_edge_exact`]), in traversal order: revolve sweeps each
+/// piece into an exact band, where a chord would sweep a cone.
+///
+/// # Errors
+///
+/// Returns an error if an edge lookup or a NURBS split fails.
+pub(crate) fn split_closed_wire_exact(
+    topo: &mut Topology,
+    oriented: &[OrientedEdge],
+    tol: f64,
+) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
+    let mut result = Vec::with_capacity(oriented.len() + EXACT_CLOSED_PIECES);
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() == edge.end() {
+            let mut pieces = split_closed_edge_exact(topo, oe.edge(), tol)?;
+            if !oe.is_forward() {
+                pieces.reverse();
+            }
+            result.extend(
+                pieces
+                    .into_iter()
+                    .map(|piece| OrientedEdge::new(piece, oe.is_forward())),
+            );
+        } else {
+            result.push(*oe);
+        }
+    }
+    Ok(result)
+}
+
 /// Pieces a closed non-circular curve is cut into for extrusion: three is the
 /// fewest with no two sharing both endpoints (the edge merge would weld those).
 const EXACT_CLOSED_PIECES: usize = 4;

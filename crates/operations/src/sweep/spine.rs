@@ -433,8 +433,7 @@ pub fn try_analytic_spine_sweep(
                     *axis,
                     *angle,
                     0.0,
-                )
-                .map_err(crate::OperationsError::Math)?,
+                )?,
             };
 
             // A reversed face flips every edge's effective traversal, so its

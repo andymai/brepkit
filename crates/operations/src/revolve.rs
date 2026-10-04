@@ -157,6 +157,120 @@ fn make_revolution_surface(
     )
 }
 
+/// The NURBS surface of revolution of `profile` over one arc segment: each
+/// control point sweeps the segment's rational quadratic arc, so the band
+/// holds the profile curve itself at every angle (the chord band above holds
+/// only its ends).
+///
+/// - u-direction: the profile curve (its own degree and knots)
+/// - v-direction: circular arc (degree 2, 3 control points)
+fn curve_revolution_surface(
+    profile: &NurbsCurve,
+    origin: Point3,
+    axis: Vec3,
+    seg_angle: f64,
+) -> Result<NurbsSurface, brepkit_math::MathError> {
+    let half = seg_angle / 2.0;
+    let w_mid = half.cos();
+    let rows = profile
+        .control_points()
+        .iter()
+        .map(|&p| {
+            vec![
+                p,
+                arc_mid_control_point(p, origin, axis, half, w_mid),
+                rotate_point(p, origin, axis, seg_angle),
+            ]
+        })
+        .collect();
+    let weights = profile
+        .weights()
+        .iter()
+        .map(|&w| vec![w, w * w_mid, w])
+        .collect();
+    NurbsSurface::new(
+        profile.degree(),
+        2,
+        profile.knots().to_vec(),
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        rows,
+        weights,
+    )
+}
+
+/// `curve` between parameters `t0 < t1`.
+fn nurbs_span(curve: &NurbsCurve, t0: f64, t1: f64) -> Result<NurbsCurve, brepkit_math::MathError> {
+    let (d0, d1) = curve.domain();
+    let eps = 1e-12 * (d1 - d0);
+    let mut span = curve.clone();
+    if t0 > d0 + eps {
+        span = brepkit_math::nurbs::knot_ops::curve_split(&span, t0)?.1;
+    }
+    if t1 < d1 - eps {
+        span = brepkit_math::nurbs::knot_ops::curve_split(&span, t1)?.0;
+    }
+    Ok(span)
+}
+
+/// `curve` traced the other way.
+fn reversed_nurbs(curve: &NurbsCurve) -> Result<NurbsCurve, brepkit_math::MathError> {
+    let knots = curve.knots();
+    let (lo, hi) = (knots[0], knots[knots.len() - 1]);
+    let mut points = curve.control_points().to_vec();
+    points.reverse();
+    let mut weights = curve.weights().to_vec();
+    weights.reverse();
+    NurbsCurve::new(
+        curve.degree(),
+        knots.iter().rev().map(|k| lo + hi - k).collect(),
+        points,
+        weights,
+    )
+}
+
+/// The profile edge's own curve over the stretch one band sweeps, as a NURBS
+/// running `from` to `to` (the band's ring vertices, the profile turned
+/// `turn` about the axis). `None` for a line, whose chord is itself.
+fn profile_band_curve(
+    curve: &EdgeCurve,
+    forward: bool,
+    (from, to): (Point3, Point3),
+    axis_origin: Point3,
+    axis: Vec3,
+    turn: f64,
+) -> Result<Option<NurbsCurve>, crate::OperationsError> {
+    let (a, b) = (
+        rotate_point(from, axis_origin, axis, -turn),
+        rotate_point(to, axis_origin, axis, -turn),
+    );
+    let (start, end) = if forward { (a, b) } else { (b, a) };
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let natural = match curve {
+        EdgeCurve::Line => return Ok(None),
+        EdgeCurve::Circle(c) => brepkit_geometry::convert::circle_to_nurbs(c, t0, t1)?,
+        EdgeCurve::Ellipse(e) => brepkit_geometry::convert::ellipse_to_nurbs(e, t0, t1)?,
+        // A NURBS edge may run its curve backward (`t0 > t1`).
+        EdgeCurve::NurbsCurve(n) if t1 < t0 => reversed_nurbs(&nurbs_span(n, t1, t0)?)?,
+        EdgeCurve::NurbsCurve(n) => nurbs_span(n, t0, t1)?,
+    };
+    let along = if forward {
+        natural
+    } else {
+        reversed_nurbs(&natural)?
+    };
+    let points = along
+        .control_points()
+        .iter()
+        .map(|&p| rotate_point(p, axis_origin, axis, turn))
+        .collect();
+    Ok(Some(NurbsCurve::new(
+        along.degree(),
+        along.knots().to_vec(),
+        points,
+        along.weights().to_vec(),
+    )?))
+}
+
 /// Decompose a point into `(radial_distance, axial_coordinate)` relative to the
 /// revolution axis (a line through `axis_origin` with unit direction `axis`).
 fn radial_axial(p: Point3, axis_origin: Point3, axis: Vec3) -> (f64, f64) {
@@ -196,7 +310,27 @@ pub(crate) fn revolution_band_surface(
     axis: Vec3,
     seg_angle: f64,
     seg_start: f64,
-) -> Result<(FaceSurface, bool), brepkit_math::MathError> {
+) -> Result<(FaceSurface, bool), crate::OperationsError> {
+    // The band of the profile curve itself, for every edge but a line.
+    let exact = |curve: &EdgeCurve| -> Result<FaceSurface, crate::OperationsError> {
+        let profile = profile_band_curve(
+            curve,
+            profile_forward,
+            (p0_start, p1_start),
+            axis_origin,
+            axis,
+            seg_start,
+        )?
+        .ok_or_else(|| crate::OperationsError::InvalidInput {
+            reason: "a line band has no curve to revolve".into(),
+        })?;
+        Ok(FaceSurface::Nurbs(curve_revolution_surface(
+            &profile,
+            axis_origin,
+            axis,
+            seg_angle,
+        )?))
+    };
     let nurbs = make_revolution_surface(
         p0_start,
         p0_end,
@@ -240,11 +374,11 @@ pub(crate) fn revolution_band_surface(
         {
             return Ok(result);
         }
-        return Ok((FaceSurface::Nurbs(nurbs), false));
+        return Ok((exact(profile_curve)?, false));
     }
 
     if !matches!(profile_curve, EdgeCurve::Line) {
-        return Ok((FaceSurface::Nurbs(nurbs), false));
+        return Ok((exact(profile_curve)?, false));
     }
 
     let tol = 1e-9;
@@ -1412,13 +1546,10 @@ pub fn revolve(
         let wire = topo.wire(wire_id)?;
         let original_oriented: Vec<_> = wire.edges().to_vec();
 
-        // Split closed edges (e.g. full circles) into line segments.
-        let split_oriented = crate::extrude::maybe_split_closed_wire(
-            topo,
-            &original_oriented,
-            tol.linear,
-            crate::extrude::DEFAULT_DEFLECTION,
-        )?;
+        // Cut closed edges (a full circle, an ellipse, a closed spline) into
+        // exact pieces, each sweeping its own band.
+        let split_oriented =
+            crate::extrude::split_closed_wire_exact(topo, &original_oriented, tol.linear)?;
         let input_oriented: Vec<OrientedEdge> = if flip_traversal {
             split_oriented
                 .iter()
@@ -1735,15 +1866,30 @@ pub fn revolve(
                 let p1_start = topo.vertex(iwd.ring_verts[seg][next_i])?.point();
                 let p1_end = topo.vertex(iwd.ring_verts[next][next_i])?.point();
 
-                let surface = make_revolution_surface(
-                    p0_start,
-                    p0_end,
-                    p1_start,
-                    p1_end,
+                let profile_curve = topo.edge(iwd.input_oriented[i].edge())?.curve().clone();
+                #[allow(clippy::cast_precision_loss)]
+                let seg_start = seg_angle * seg as f64;
+                let surface = match profile_band_curve(
+                    &profile_curve,
+                    fwd_seg,
+                    (p0_start, p1_start),
                     axis_origin,
                     axis,
-                    seg_angle,
-                )?;
+                    seg_start,
+                )? {
+                    Some(profile) => {
+                        curve_revolution_surface(&profile, axis_origin, axis, seg_angle)?
+                    }
+                    None => make_revolution_surface(
+                        p0_start,
+                        p0_end,
+                        p1_start,
+                        p1_end,
+                        axis_origin,
+                        axis,
+                        seg_angle,
+                    )?,
+                };
 
                 let fid =
                     topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
