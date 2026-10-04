@@ -1,0 +1,21 @@
+crates/math/src/analytic_intersection.rs
+  s_a8677c67f85a06::t_8b637fd6bb37ca 1994-1995,5075-5081
+crates/io/tests/interior_fillet_fuse_inmem.rs
+  s_a8677c67f85a06::t_9d7aef3a2575ad 91-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b431e86c9489e84215d0c1cac02e98b25d7120fa",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
