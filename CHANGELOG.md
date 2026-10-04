@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.25](https://github.com/andymai/brepkit/compare/v4.1.24...v4.1.25) (2026-10-04)
+
+
+### Bug Fixes
+
+* **operations:** heal closed bodies without flipping cavity planes or deleting circle discs ([#1968](https://github.com/andymai/brepkit/issues/1968)) ([4bbcd32](https://github.com/andymai/brepkit/commit/4bbcd322689f43c112d0916b8096f6e0107e1b09))
+
 ## [4.1.24](https://github.com/andymai/brepkit/compare/v4.1.23...v4.1.24) (2026-10-04)
 
 
