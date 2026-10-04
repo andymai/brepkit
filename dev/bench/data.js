@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791072628894,
+  "lastUpdate": 1791079147352,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50651,6 +50651,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43622260,
             "range": "± 91555",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2382bd1f3e7a74b575a89c331d4a6cc351cf7603",
+          "message": "fix(math): meet a plane resting on a torus's tube in its one exact circle (#1967)\n\nA rod of radius 5 and height 6, bottom rim filleted, now fuses exactly\nonto a 20 x 20 x 4 box at fillet radii 1, 2, and 3. Each result avoids\nmesh fallback, is a valid solid, and has the summed rod and box volume.\n\n## What was wrong\n\nThe fillet torus rests on the box top along the rod cap rim, with the\nplane tangent to the torus tube. Radius 1 produces a ring torus and\nradius 3 a spindle torus.\n\n`exact_plane_torus` returned no exact curve for this tangency, so the\nsection was sampled and fitted close to, but not on, the exact cap rim.\nThis left a box-top sliver, observed at radius 3.946 inside the rim.\n\nThe sampled `plane_torus_loops` path also emitted the bottom contact\ncircle twice. It skipped the mirror circle only when the tube angles\nwere equal. At the bottom they are `-pi/2` and `3pi/2`, one full turn\napart.\n\nOn main, the raw boolean failed with `assembly failed: open 1-face\ngrowth shell spans the result`. The box top was split by three cap-rim\narcs and by the duplicated tangent circle. All three probe cases used\nmesh fallback. At radius 1, the resulting volume was 2062.5335 against\n2064.7982.\n\n## Change\n\nA plane perpendicular to the axis and tangent to the tube top or bottom\nnow intersects a ring or spindle torus as one exact circle with the\ntorus major radius. The exact circle is used only when the plane is\nlevel to the axis within the angular tolerance and lies within the\nlinear tolerance of the tube's top or bottom, where that circle is on\nboth surfaces within tolerance whatever the torus's size; a tilted\nplane, a plane further inside the tube, and a torus whose major radius\nis effectively zero keep the sampled path.\n`plane_tangent_to_a_large_tube_is_read_through_rounding` checks that an\nexactly tangent plane on a torus of minor radius 100.1 still gets the\ncircle and that a plane 4e-7 inside does not.\n\nThe sampled path now compares its two tube angles modulo a full turn.\n\n## Verification\n\n`plane_tangent_to_a_tube_touches_it_along_one_circle` covers ring `(R 5,\nr 1)` and spindle `(R 0.1, r 2.45)` tori at both tube extrema. The exact\nsolver returns one radius `R` circle, and the sampled path returns one\nloop.\n\n`a_rod_rounded_at_its_foot_fuses_onto_a_box_exactly` covers fillet radii\n1 and 3. It requires no mesh fallback, a valid solid, a watertight mesh,\nand the volume sum within `1e-6`. It fails on main.\n\nOn a wasm built from this branch, the gridfinity tool's\n`binGenerator.scenario.interiorFilletScoops` (17 failures),\n`binGenerator.export.interiorFillet` (2),\n`binGenerator.export.interiorFilletScoops` (2) and\n`assemblyGenerator.scenario` (1) fail the same counts as on main, and\n`hingeSwing.scenario` passes 27 of 27.\n\nThe math and algo suites pass locally, 789 tests. The pose sweep and\ntruth audit match main exactly. `approx_census` differs only in a NURBS\noffset line that varies between runs on main.\n\nThe gridfinity interior-fillet fuse reaches a raw result of 199 analytic\nfaces with 18 free edges. Its operands contain 27 tori tangent to the\nfloor and require the parked cap-side fillet branch. The operations path\nstill falls back.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` contains a closed entry for this fix.\nThe rounded-prism rim ease row records the current interior-fillet fuse\nresult.",
+          "timestamp": "2026-10-03T18:56:11-07:00",
+          "tree_id": "04f8391ac6ec4147920c9e667fd822bbfe3c190b",
+          "url": "https://github.com/andymai/brepkit/commit/2382bd1f3e7a74b575a89c331d4a6cc351cf7603"
+        },
+        "date": 1791079141021,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1049404,
+            "range": "± 12460",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1132438,
+            "range": "± 848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13453,
+            "range": "± 409",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 806173,
+            "range": "± 3446",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43517585,
+            "range": "± 314651",
             "unit": "ns/iter"
           }
         ]
