@@ -410,10 +410,12 @@ fn plane_cylinder_fillet_rim_emits_torus_with_smaller_major() {
 }
 
 /// A hole fillet expands to `major = r_c + r`, so it has no spindle-torus
-/// threshold at `r_c / 2`. The bounded-disc rim still contracts to
-/// `major = r_c - r` and must reject that regime.
+/// threshold at `r_c / 2`. A rim contracts to `major = r_c - r` and keeps a
+/// spindle torus past that threshold: the patch it uses stays between
+/// `r_c - r` and `r_c` from the axis, clear of the self-crossing, and only a
+/// radius of `r_c` or more leaves no torus.
 #[test]
-fn plane_cylinder_fillet_hole_avoids_rim_spindle_bound() {
+fn plane_cylinder_fillet_takes_spindle_tori_up_to_the_cylinder_radius() {
     use brepkit_math::curves::Circle3D;
     use brepkit_math::surfaces::CylindricalSurface;
     use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -492,8 +494,7 @@ fn plane_cylinder_fillet_hole_avoids_rim_spindle_bound() {
 
     // The non-reversed cylinder face here borders a bare disc cap (the rim
     // circle is the plate's only boundary), so it is an INWARD rim, not a
-    // post-on-a-plate. The rim shares the concave `major = r_c − r` formula, so
-    // it must reject r ≥ r_c/2 (spindle) too…
+    // post-on-a-plate, with `major = r_c − r`.
     let mut topo_rim = Topology::new();
     let (spine_rim, cyl_rim, fp_rim, fc_rim) = setup(&mut topo_rim, false);
     let n_p_inward_rim = Vec3::new(0.0, 0.0, 1.0);
@@ -509,11 +510,26 @@ fn plane_cylinder_fillet_hole_avoids_rim_spindle_bound() {
     )
     .unwrap();
     assert!(
-        result_rim_spindle.is_none(),
-        "rim fillet must reject r > r_c/2 (spindle-torus regime)"
+        result_rim_spindle.is_some(),
+        "rim fillet should keep a spindle torus for r_c/2 < r < r_c"
+    );
+    let result_rim_full = plane_cylinder_fillet(
+        n_p_inward_rim,
+        0.0,
+        &cyl_rim,
+        &spine_rim,
+        &topo_rim,
+        2.0,
+        fp_rim,
+        fc_rim,
+    )
+    .unwrap();
+    assert!(
+        result_rim_full.is_none(),
+        "rim fillet must reject r >= r_c (no torus left)"
     );
 
-    // …and accept a small radius (major = r_c − r > minor = r).
+    // A small radius keeps a ring torus (major = r_c − r > minor = r).
     let result_rim_ok = plane_cylinder_fillet(
         n_p_inward_rim,
         0.0,

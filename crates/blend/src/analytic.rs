@@ -722,8 +722,9 @@ fn plane_plane_chamfer(
 ///
 /// Returns `None` (walker fallback) when the cylinder axis is not parallel to
 /// the plane normal, the spine is too short or degenerate, or the requested
-/// radius exceeds the conservative analytic bound. A bounded rim additionally
-/// rejects the spindle-torus regime `r >= r_c / 2`.
+/// radius reaches `r_c`. A bounded rim at `r >= r_c / 2` is a spindle torus;
+/// the quarter tube the blend uses lies outside the major radius, clear of
+/// the self-intersection.
 ///
 /// # Errors
 ///
@@ -768,16 +769,16 @@ pub fn plane_cylinder_fillet(
     //     "rim of a bare disc cap bounded BY the cylinder" (e.g. a primitive
     //     cylinder's bottom/top rim — the cap *is* the circle of radius `r_c`,
     //     so the fillet rounds INWARD with plate contact at `r_c - r`). The
-    //     discriminator: a bounded disc cap has no inner wires and every
-    //     boundary vertex lies within `r_c` of the cylinder axis; a plate that
-    //     the post stands on has boundary vertices beyond `r_c`.
+    //     discriminator: every boundary vertex of a bounded cap, its holes'
+    //     included, lies within `r_c` of the cylinder axis; a plate that the
+    //     post stands on has boundary vertices beyond `r_c`.
     let rim = !concave && plane_is_bounded_disc(topo, face_plane, cyl, r_c)?;
 
-    // 3) Only a bounded disc rim contracts toward the axis. It must remain a
-    // ring torus (`major > minor`). Post and hole contacts expand away from
-    // the axis; retain the existing conservative `r < r_c` analytic bound.
+    // 3) Only a bounded disc rim contracts toward the axis, to a spindle
+    // torus once `r >= r_c / 2`. Post and hole contacts expand away from the
+    // axis. Every case keeps `r < r_c`.
     let inward = rim;
-    let max_radius = if inward { r_c * 0.5 } else { r_c };
+    let max_radius = r_c;
     if radius <= tol_lin || radius >= max_radius {
         return Ok(None);
     }
@@ -951,11 +952,11 @@ pub fn plane_cylinder_fillet(
 /// Is the plane face a bounded disc cap whose rim is the cylinder (radius
 /// `r_c`), as opposed to a larger plate the cylinder stands on?
 ///
-/// True when the face has no inner wires AND every outer-boundary vertex lies
-/// within `r_c` (plus a small tolerance) of the cylinder axis. For a primitive
-/// cylinder's end cap the only boundary is the rim circle of radius `r_c`, so
-/// all its vertices sit exactly on the axis-distance `r_c`; for a plate that a
-/// post stands on, the plate corners lie beyond `r_c`.
+/// True when every boundary vertex, holes included, lies within `r_c` (plus a
+/// small tolerance) of the cylinder axis. For a primitive cylinder's end cap
+/// the only boundary is the rim circle of radius `r_c`, and a tube's mouth
+/// adds its bore inside it; for a plate that a post stands on, the plate
+/// corners lie beyond `r_c`.
 fn plane_is_bounded_disc(
     topo: &Topology,
     face_plane: FaceId,
@@ -963,9 +964,6 @@ fn plane_is_bounded_disc(
     r_c: f64,
 ) -> Result<bool, BlendError> {
     let face = topo.face(face_plane)?;
-    if !face.inner_wires().is_empty() {
-        return Ok(false);
-    }
     let axis = cyl.axis();
     let o_c = cyl.origin();
     // Radial distance from the cylinder axis to a point: |(p − o_c) − ((p − o_c)·axis)·axis|.
@@ -975,13 +973,14 @@ fn plane_is_bounded_disc(
         (d - along).length()
     };
     let tol = r_c * 1e-6 + ANALYTIC_TOL_LIN;
-    let wire = topo.wire(face.outer_wire())?;
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let s = topo.vertex(edge.start())?.point();
-        let e = topo.vertex(edge.end())?.point();
-        if radial(s) > r_c + tol || radial(e) > r_c + tol {
-            return Ok(false);
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let s = topo.vertex(edge.start())?.point();
+            let e = topo.vertex(edge.end())?.point();
+            if radial(s) > r_c + tol || radial(e) > r_c + tol {
+                return Ok(false);
+            }
         }
     }
     Ok(true)
