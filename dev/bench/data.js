@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791105780035,
+  "lastUpdate": 1791108334123,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51137,6 +51137,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36236254,
             "range": "± 34284",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "05bf1d1212a4784456af3d422dd73c0e54acb26c",
+          "message": "fix(io): read and write a STEP cone's apex and semi-angle as ISO 10303-42 defines them (#1975)\n\nSTEP cone import and export now follow ISO 10303-42:\n`CONICAL_SURFACE('', position, radius, semi_angle)` uses the cone radius\nat the position and measures the semi-angle from the axis. Earlier\nbrepkit exports still read as written, through a header marker.\n\n## What was wrong\n\nThe reader treated the position as the cone apex and passed the STEP\nsemi-angle directly to `ConicalSurface`, whose angle is measured from\nthe plane across the axis. The writer placed the surface at the apex,\nwrote radius 0, and stored brepkit's angle as the semi-angle. This made\nbrepkit's own files round-trip.\n\nA reference kernel export of a nesting body cut, containing 12 cone\nfaces with radius 2.55 at their positions, read at volume 4838.48, with\nmesh volume 4095.87, instead of 4039.83. A fused nesting body read at\n51120.70 instead of 50453.998.\n\nFor writing, a frustum from `make_cone(2, 1, 3)`, with volume 7 pi or\n21.9911, exported with semi-angle 1.249 rad. The reference kernel read\nit at 53.6584.\n\n## Change\n\nThe reader normalizes the placement axis, moves the apex `radius /\ntan(semi_angle)` back along that axis from the position, and converts\nthe semi-angle to brepkit's angle. A negative semi-angle opens against\nthe placement axis, so it becomes a brepkit cone along the reversed axis\nusing the angle's magnitude.\n\nSTEP requires a positive radius. The writer therefore places the surface\none unit along the axis from the apex, where the radius equals the\ntangent of the semi-angle. The written semi-angle is 90 degrees less\nthan brepkit's angle.\n\nThe affected nesting bodies now read at 4039.8291 and 50453.9984. The\nfrustum export now contains radius 0.3333 and semi-angle 0.3218 rad, and\nthe reference kernel measures it at 21.99114857512854.\n\n## Earlier exports\n\nThe writer adds `cone semi-angles per ISO 10303-42` to the header beside\nthe existing face-bounds marker. Files carrying brepkit's export\ndescription without this marker use the earlier cone interpretation. The\nthree cone test data files carry brepkit headers and continue to read as\nbefore.\n\n## Verification\n\n`cones_read_from_their_placement_radius` rewrites a frustum cone record\nat radius 1.5 using a unit axis, an axis of length 2, and a reversed\naxis with a negative semi-angle. Each case preserves the original volume\nand keeps the face boundary on the cone within `1e-9`. The unit case\nfails with the earlier reading, the length-2 case without the\nnormalization, and the negative case without the reversal.\n\n`brepkit_cones_round_trip` verifies a current export.\n`earlier_brepkit_cones_read_as_written` verifies the apex placement,\nradius 0, earlier angle convention, and absent marker. Both preserve the\nfrustum volume and boundary placement. `step_exports_cone` checks for a\npositive written radius. `reversed_face_bounds_from_an_earlier_export`\nstrips both markers because exports of that age carry neither. All 338\nIO tests pass.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` records this fix as a closed entry.",
+          "timestamp": "2026-10-04T10:02:32Z",
+          "tree_id": "3b408ca4f9e9baedefffcc181800d400c881172d",
+          "url": "https://github.com/andymai/brepkit/commit/05bf1d1212a4784456af3d422dd73c0e54acb26c"
+        },
+        "date": 1791108328184,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1046703,
+            "range": "± 1117",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1133690,
+            "range": "± 18276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13210,
+            "range": "± 69",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 800677,
+            "range": "± 5651",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43565022,
+            "range": "± 157672",
             "unit": "ns/iter"
           }
         ]
