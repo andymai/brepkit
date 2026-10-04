@@ -475,13 +475,18 @@ impl StepWriteContext {
                 id
             }
             FaceSurface::Cone(cone) => {
+                // STEP places a cone where its radius is positive: one unit
+                // along the axis from the apex, the radius there is the
+                // tangent of the semi-angle.
+                let semi_angle = std::f64::consts::FRAC_PI_2 - cone.half_angle();
                 let ref_dir = compute_ref_direction(cone.axis());
-                let axis = self.write_axis2_placement(cone.apex(), cone.axis(), ref_dir);
+                let axis =
+                    self.write_axis2_placement(cone.apex() + cone.axis(), cone.axis(), ref_dir);
                 let id = self.next_id();
                 self.write_entity(
                     id,
                     "CONICAL_SURFACE",
-                    &format!("'', #{axis}, 0.0E0, {:.15E})", cone.half_angle()),
+                    &format!("'', #{axis}, {:.15E}, {semi_angle:.15E})", semi_angle.tan()),
                 );
                 id
             }
@@ -662,9 +667,10 @@ impl StepWriteContext {
         let _ = writeln!(out, "HEADER;");
         let _ = writeln!(
             out,
-            "FILE_DESCRIPTION(('{}', '{}'), '2;1');",
+            "FILE_DESCRIPTION(('{}', '{}', '{}'), '2;1');",
             super::EXPORT_DESCRIPTION,
-            super::ISO_FACE_BOUNDS
+            super::ISO_FACE_BOUNDS,
+            super::ISO_CONE_ANGLES
         );
         let _ = writeln!(
             out,
@@ -1001,10 +1007,12 @@ mod tests {
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
-        assert!(
-            step_str.contains("CONICAL_SURFACE"),
-            "STEP export should contain CONICAL_SURFACE entity"
-        );
+        let cone = step_str
+            .lines()
+            .find(|l| l.contains("= CONICAL_SURFACE("))
+            .expect("STEP export should contain CONICAL_SURFACE entity");
+        let radius: f64 = cone.split(',').nth(2).unwrap().trim().parse().unwrap();
+        assert!(radius > 0.0, "STEP requires a positive cone radius: {cone}");
     }
 
     #[test]
