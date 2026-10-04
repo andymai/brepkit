@@ -198,6 +198,86 @@ fn heal_keeps_a_face_filling_a_coplanar_hole() {
     assert!(crate::tessellate::is_watertight(&mesh));
 }
 
+/// A ring and the face filling its hole, merged, leave no hole behind.
+#[test]
+fn unify_fills_a_ring_whose_hole_another_face_closes() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let plate = crate::primitives::make_box(&mut topo, 8.0, 8.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, plate, &Mat4::translation(-4.0, -4.0, 0.0))
+        .unwrap();
+    let cutter = crate::primitives::make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+    crate::transform::transform_solid(&mut topo, cutter, &Mat4::translation(-1.0, -1.0, -1.0))
+        .unwrap();
+    let ring =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, plate, cutter).unwrap();
+    let plug = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, plug, &Mat4::translation(-1.0, -1.0, 0.0))
+        .unwrap();
+    let (filled, _) = crate::boolean::boolean_with_evolution(
+        &mut topo,
+        crate::boolean::BooleanOp::Fuse,
+        ring,
+        plug,
+    )
+    .unwrap();
+
+    while unify_faces(&mut topo, filled).unwrap() > 0 {}
+    let faces = brepkit_topology::explorer::solid_faces(&topo, filled).unwrap();
+    assert_eq!(faces.len(), 6);
+    for &f in &faces {
+        assert!(topo.face(f).unwrap().inner_wires().is_empty());
+    }
+    assert!(
+        crate::validate::validate_solid(&topo, filled)
+            .unwrap()
+            .is_valid()
+    );
+    let mesh = crate::tessellate::tessellate_solid(&topo, filled, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+    let volume = crate::measure::solid_volume(&topo, filled, 0.001).unwrap();
+    assert!((volume - 128.0).abs() < 1e-6, "{volume}");
+}
+
+/// Two half-cylinders fused share both seam lines; merging their walls
+/// would leave a band with no seam, so they stay apart and the solid stays
+/// meshable.
+#[test]
+fn unify_keeps_a_seam_in_a_merged_cylinder_wall() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let half = |topo: &mut Topology, keep_positive: bool| {
+        let rod = crate::primitives::make_cylinder(topo, 3.0, 4.0).unwrap();
+        let cutter = crate::primitives::make_box(topo, 10.0, 10.0, 10.0).unwrap();
+        let x = if keep_positive { -10.0 } else { 0.0 };
+        crate::transform::transform_solid(topo, cutter, &Mat4::translation(x, -5.0, -3.0)).unwrap();
+        crate::boolean::boolean(topo, crate::boolean::BooleanOp::Cut, rod, cutter).unwrap()
+    };
+    let right = half(&mut topo, true);
+    let left = half(&mut topo, false);
+    let (rod, _) = crate::boolean::boolean_with_evolution(
+        &mut topo,
+        crate::boolean::BooleanOp::Fuse,
+        right,
+        left,
+    )
+    .unwrap();
+
+    while unify_faces(&mut topo, rod).unwrap() > 0 {}
+    assert!(
+        crate::validate::validate_solid(&topo, rod)
+            .unwrap()
+            .is_valid()
+    );
+    let mesh = crate::tessellate::tessellate_solid(&topo, rod, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+    let volume = crate::measure::solid_volume(&topo, rod, 0.001).unwrap();
+    let expected = std::f64::consts::PI * 9.0 * 4.0;
+    assert!((volume - expected).abs() < 1e-6 * expected, "{volume}");
+}
+
 // ── Wire gap closure tests ──────────────────────────
 
 #[test]
