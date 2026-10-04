@@ -325,8 +325,9 @@ impl<'a> StepBuilder<'a> {
                 // CONICAL_SURFACE('', #position, radius, semi_angle): the
                 // radius is the cone's at the position, and the semi-angle runs
                 // from the axis, so the apex lies `radius / tan(semi_angle)`
-                // back along it. brepkit measures a cone's angle from the
-                // plane across the axis.
+                // back along it; a negative semi-angle opens the cone against
+                // the axis. brepkit measures a cone's angle from the plane
+                // across its axis, which points the way the cone opens.
                 let (Some(&radius), Some(&semi_angle)) = (floats.first(), floats.last()) else {
                     return Err(IoError::ParseError {
                         reason: format!(
@@ -335,11 +336,20 @@ impl<'a> StepBuilder<'a> {
                     });
                 };
                 let (position, axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
-                let (apex, half_angle) = if self.legacy_cones {
-                    (position, semi_angle)
+                let axis = axis.normalize().map_err(|e| IoError::ParseError {
+                    reason: format!("CONICAL_SURFACE #{surface_ref}: {e}"),
+                })?;
+                let (apex, axis, half_angle) = if self.legacy_cones {
+                    (position, axis, semi_angle)
                 } else {
+                    let (axis, semi_angle) = if semi_angle < 0.0 {
+                        (axis * -1.0, -semi_angle)
+                    } else {
+                        (axis, semi_angle)
+                    };
                     (
                         position - axis * (radius / semi_angle.tan()),
+                        axis,
                         std::f64::consts::FRAC_PI_2 - semi_angle,
                     )
                 };
@@ -1504,10 +1514,10 @@ mod tests {
     }
 
     /// A frustum's cone written by brepkit, with the cone record rewritten by
-    /// `cone` from the record's id, its placement's point, axis and reference
-    /// ids, and its semi-angle.
+    /// `cone` from the record's id, the cone's apex and unit axis, its
+    /// placement's reference id, and its semi-angle.
     fn frustum_with_cone(
-        cone: impl Fn(&str, Point3, Vec3, &str, &str, f64, &mut u64) -> Vec<String>,
+        cone: impl Fn(&str, Point3, Vec3, &str, f64, &mut u64) -> Vec<String>,
     ) -> (f64, String) {
         let mut topo = Topology::new();
         let frustum = brepkit_operations::primitives::make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
@@ -1555,19 +1565,14 @@ mod tests {
             let parts = refs(&record(placement));
             let at = coords(&record(&parts[0]));
             let axis = coords(&record(&parts[1]));
-            let semi: f64 = line[line.rfind(',').unwrap() + 1..line.rfind(')').unwrap()]
-                .trim()
-                .parse()
-                .unwrap();
-            let rewritten = cone(
-                id,
-                Point3::new(at.x(), at.y(), at.z()),
-                axis,
-                &parts[1],
-                &parts[2],
-                semi,
-                &mut next,
-            );
+            let numbers: Vec<f64> = line[..line.rfind(')').unwrap()]
+                .split(',')
+                .skip(2)
+                .map(|x| x.trim().parse().unwrap())
+                .collect();
+            let (radius, semi) = (numbers[0], numbers[1]);
+            let apex = Point3::new(at.x(), at.y(), at.z()) - axis * (radius / semi.tan());
+            let rewritten = cone(id, apex, axis, &parts[2], semi, &mut next);
             out.push(rewritten[0].clone());
             extra.extend(rewritten[1..].iter().cloned());
         }
@@ -1579,25 +1584,59 @@ mod tests {
         (volume, step)
     }
 
-    /// A cone placed where its radius is not zero, as other writers place
-    /// it, with its semi-angle from the axis.
+    /// A cone placed where its radius is 1.5, with its semi-angle from the
+    /// axis: along a unit axis, along an axis of length 2, and along the
+    /// reversed axis with a negative semi-angle, which opens the cone the
+    /// other way.
     #[test]
     fn cones_read_from_their_placement_radius() {
-        let (volume, step) = frustum_with_cone(|id, apex, axis, axis_ref, ref_ref, semi, next| {
-            let (point, placement) = (*next, *next + 1);
-            *next += 2;
-            let at = apex + axis * (1.5 / semi.tan());
-            vec![
-                format!("{id} = CONICAL_SURFACE('', #{placement}, 1.5, {semi:.17});"),
-                format!(
-                    "#{point} = CARTESIAN_POINT('', ({}, {}, {}));",
-                    at.x(),
-                    at.y(),
-                    at.z()
-                ),
-                format!("#{placement} = AXIS2_PLACEMENT_3D('', #{point}, {axis_ref}, {ref_ref});"),
-            ]
-        });
+        for (scale, sign) in [(1.0, 1.0), (2.0, 1.0), (1.0, -1.0)] {
+            let (volume, step) = frustum_with_cone(|id, apex, axis, ref_ref, semi, next| {
+                let (point, direction, placement) = (*next, *next + 1, *next + 2);
+                *next += 3;
+                let at = apex + axis * (1.5 / semi.tan());
+                let written = axis * (scale * sign);
+                let written_semi = sign * semi;
+                vec![
+                    format!("{id} = CONICAL_SURFACE('', #{placement}, 1.5, {written_semi:.17});"),
+                    format!(
+                        "#{point} = CARTESIAN_POINT('', ({}, {}, {}));",
+                        at.x(),
+                        at.y(),
+                        at.z()
+                    ),
+                    format!(
+                        "#{direction} = DIRECTION('', ({}, {}, {}));",
+                        written.x(),
+                        written.y(),
+                        written.z()
+                    ),
+                    format!(
+                        "#{placement} = AXIS2_PLACEMENT_3D('', #{point}, #{direction}, {ref_ref});"
+                    ),
+                ]
+            });
+            let mut read = Topology::new();
+            let solids = read_step(&step, &mut read).unwrap();
+            let got = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
+            assert!(
+                (got - volume).abs() < 1e-6 * volume,
+                "axis x{scale}, sign {sign}: {got} against {volume}"
+            );
+            assert!(
+                cone_boundary_gap(&step) < 1e-9,
+                "axis x{scale}, sign {sign}"
+            );
+        }
+    }
+
+    /// A frustum's cone written by brepkit reads back on its boundary.
+    #[test]
+    fn brepkit_cones_round_trip() {
+        let mut topo = Topology::new();
+        let frustum = brepkit_operations::primitives::make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, frustum, 0.001).unwrap();
+        let step = writer::write_step(&topo, &[frustum]).unwrap();
         let mut read = Topology::new();
         let solids = read_step(&step, &mut read).unwrap();
         let got = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
@@ -1608,34 +1647,37 @@ mod tests {
         assert!(cone_boundary_gap(&step) < 1e-9);
     }
 
-    /// An earlier brepkit export wrote a cone's angle from the plane across its
-    /// axis and has no cone marker; it still reads as written.
+    /// An earlier brepkit export placed a cone at its apex with its angle
+    /// from the plane across its axis and has no cone marker; it still reads
+    /// as written.
     #[test]
     fn earlier_brepkit_cones_read_as_written() {
-        let mut topo = Topology::new();
-        let frustum = brepkit_operations::primitives::make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
-        let volume = brepkit_operations::measure::solid_volume(&topo, frustum, 0.001).unwrap();
-        let current = writer::write_step(&topo, &[frustum]).unwrap();
-        let legacy: String = current
-            .lines()
-            .map(|line| {
-                if line.contains("= CONICAL_SURFACE(") {
-                    let at = line.rfind(',').unwrap();
-                    let semi: f64 = line[at + 1..line.rfind(')').unwrap()]
-                        .trim()
-                        .parse()
-                        .unwrap();
-                    format!(
-                        "{}, {:.15E});",
-                        &line[..at],
-                        std::f64::consts::FRAC_PI_2 - semi
-                    )
-                } else {
-                    line.replace(&format!(", '{}'", super::super::ISO_CONE_ANGLES), "")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let (volume, current) = frustum_with_cone(|id, apex, axis, ref_ref, semi, next| {
+            let (point, direction, placement) = (*next, *next + 1, *next + 2);
+            *next += 3;
+            vec![
+                format!(
+                    "{id} = CONICAL_SURFACE('', #{placement}, 0.0E0, {:.15E});",
+                    std::f64::consts::FRAC_PI_2 - semi
+                ),
+                format!(
+                    "#{point} = CARTESIAN_POINT('', ({}, {}, {}));",
+                    apex.x(),
+                    apex.y(),
+                    apex.z()
+                ),
+                format!(
+                    "#{direction} = DIRECTION('', ({}, {}, {}));",
+                    axis.x(),
+                    axis.y(),
+                    axis.z()
+                ),
+                format!(
+                    "#{placement} = AXIS2_PLACEMENT_3D('', #{point}, #{direction}, {ref_ref});"
+                ),
+            ]
+        });
+        let legacy = current.replace(&format!(", '{}'", super::super::ISO_CONE_ANGLES), "");
         assert!(!legacy.contains(super::super::ISO_CONE_ANGLES));
         let mut read = Topology::new();
         let solids = read_step(&legacy, &mut read).unwrap();
@@ -1645,7 +1687,6 @@ mod tests {
             "{got} against {volume}"
         );
         assert!(cone_boundary_gap(&legacy) < 1e-9);
-        assert!(cone_boundary_gap(&current) < 1e-9);
     }
 
     #[test]
