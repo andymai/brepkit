@@ -479,7 +479,8 @@ pub fn fix_face_orientations(
         else {
             continue;
         };
-        if area2 != 0.0 {
+        let lin = Tolerance::new().linear;
+        if area2.abs() > lin * lin {
             planes.push((fid, normal, d, area2 > 0.0));
         }
     }
@@ -624,6 +625,33 @@ pub fn close_wire_gaps(
     Ok(gaps_closed)
 }
 
+/// The control hull of a NURBS curve over `[t0, t1]` alone: the curve is
+/// split to that span, and the span lies inside its control points.
+fn nurbs_span_hull(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+) -> brepkit_math::aabb::Aabb3 {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    let (d0, d1) = curve.domain();
+    let eps = 1e-9 * (d1 - d0).abs();
+    let (lo, hi) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+    let mut span = curve.clone();
+    if lo > d0 + eps
+        && lo < d1 - eps
+        && let Ok((_, right)) = curve_split(&span, lo)
+    {
+        span = right;
+    }
+    if hi > d0 + eps
+        && hi < d1 - eps
+        && let Ok((left, _)) = curve_split(&span, hi)
+    {
+        span = left;
+    }
+    span.aabb()
+}
+
 /// Remove faces smaller than a minimum area threshold.
 ///
 /// Faces with a bounding-box diagonal smaller than `tolerance` are
@@ -674,7 +702,7 @@ pub fn remove_small_faces(
                 EdgeCurve::Line => brepkit_math::aabb::Aabb3::from_points([start, end]),
                 EdgeCurve::Circle(c) => c.arc_aabb(t0, t1),
                 EdgeCurve::Ellipse(e) => e.arc_aabb(t0, t1),
-                EdgeCurve::NurbsCurve(n) => n.aabb(),
+                EdgeCurve::NurbsCurve(n) => nurbs_span_hull(n, t0, t1),
             };
             for pos in [bounds.min, bounds.max] {
                 min_pt = Vec3::new(

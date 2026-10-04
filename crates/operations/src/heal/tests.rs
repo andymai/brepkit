@@ -147,6 +147,26 @@ fn heal_keeps_a_cylinders_disc_caps() {
     assert!(crate::tessellate::is_watertight(&mesh));
 }
 
+/// A short span of a long curve is bounded by the span, not the curve.
+#[test]
+fn nurbs_span_hull_bounds_only_the_span() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_math::vec::Point3;
+
+    let points: Vec<Point3> = (0..5)
+        .map(|i| Point3::new(2.5 * f64::from(i), 0.0, 0.0))
+        .collect();
+    let curve = NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+        points,
+        vec![1.0; 5],
+    )
+    .unwrap();
+    let hull = nurbs_span_hull(&curve, 0.45, 0.55);
+    assert!(hull.max.x() - hull.min.x() < 2.0, "{hull:?}");
+}
+
 // ── Wire gap closure tests ──────────────────────────
 
 #[test]
