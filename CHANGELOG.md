@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.30](https://github.com/andymai/brepkit/compare/v4.1.29...v4.1.30) (2026-10-04)
+
+
+### Bug Fixes
+
+* **operations:** extrude a closed curve other than a circle to exact faces ([#1979](https://github.com/andymai/brepkit/issues/1979)) ([288e45b](https://github.com/andymai/brepkit/commit/288e45b79ecd7efd15622c061d21bfa6e492e906))
+
 ## [4.1.29](https://github.com/andymai/brepkit/compare/v4.1.28...v4.1.29) (2026-10-04)
 
 
