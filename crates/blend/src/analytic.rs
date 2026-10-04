@@ -771,10 +771,15 @@ pub fn plane_cylinder_fillet(
     //     so the fillet rounds INWARD with plate contact at `r_c - r`). The
     //     discriminator: every boundary vertex of a bounded cap, its holes'
     //     included, lies within `r_c` of the cylinder axis; a plate that the
-    //     post stands on has boundary vertices beyond `r_c`.
-    let rim = !concave && plane_is_bounded_disc(topo, face_plane, cyl, r_c)?;
+    //     post stands on has boundary vertices beyond `r_c`. A rounded
+    //     prism's cap reaches past `r_c` at its far corners, so its side is
+    //     read at the spine: its material lies toward the cylinder's axis.
+    let rim = !concave
+        && (plane_is_bounded_disc(topo, face_plane, cyl, r_c)?
+            || plane_material_inside_cylinder(topo, face_plane, cyl, spine, n_p_inward)?
+                .unwrap_or(false));
 
-    // 3) Only a bounded disc rim contracts toward the axis, to a spindle
+    // 3) Only a cap's rim contracts toward the axis, to a spindle
     // torus once `r >= r_c / 2`. Post and hole contacts expand away from the
     // axis. Every case keeps `r < r_c`.
     let inward = rim;
@@ -840,13 +845,10 @@ pub fn plane_cylinder_fillet(
     let u_end = if is_closed_spine {
         u_start + 2.0 * std::f64::consts::PI
     } else {
-        let p_spine_end = spine.evaluate(topo, spine_len)?;
-        let u_end_raw = ParametricSurface::project_point(cyl, p_spine_end).0;
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * std::f64::consts::PI
-        }
+        let u_at = |s: f64| -> Result<f64, BlendError> {
+            Ok(ParametricSurface::project_point(cyl, spine.evaluate(topo, s)?).0)
+        };
+        unwrap_sweep_end(u_start, u_at(0.5 * spine_len)?, u_at(spine_len)?)
     };
 
     // 9) 3D contact curves.
@@ -984,6 +986,77 @@ fn plane_is_bounded_disc(
         }
     }
     Ok(true)
+}
+
+/// Whether the planar face's material next to the spine lies inside the
+/// cylinder: the cap of a rounded prism (its corner is one quarter of the
+/// cylinder and the cap continues toward the axis), as opposed to a plate a
+/// post stands on. A bounded disc cap is the special case where the whole
+/// boundary lies within the cylinder; a rounded rectangle's cap has far
+/// corners and needs this local test. The face interior lies to the left of
+/// the wire's effective traversal of the spine edge.
+///
+/// Returns `None` when the spine edge is not in the face's wires.
+fn plane_material_inside_cylinder(
+    topo: &Topology,
+    face_plane: FaceId,
+    cyl: &CylindricalSurface,
+    spine: &Spine,
+    n_p_inward: Vec3,
+) -> Result<Option<bool>, BlendError> {
+    let Some(&spine_edge) = spine.edges().first() else {
+        return Ok(None);
+    };
+    let face = topo.face(face_plane)?;
+    let reversed = face.is_reversed();
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    let mut traversal = None;
+    for wire_id in wires {
+        if let Some(oriented) = topo
+            .wire(wire_id)?
+            .edges()
+            .iter()
+            .find(|oriented| oriented.edge() == spine_edge)
+        {
+            traversal = Some(oriented.is_forward() ^ reversed);
+            break;
+        }
+    }
+    let Some(forward) = traversal else {
+        return Ok(None);
+    };
+    let edge = topo.edge(spine_edge)?;
+    let start = topo.vertex(edge.start())?.point();
+    let end = topo.vertex(edge.end())?.point();
+    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+    let mid = 0.5 * (t0 + t1);
+    let point = edge.curve().evaluate_with_endpoints(mid, start, end);
+    let mut tangent = edge.curve().tangent_with_endpoints(mid, start, end);
+    if !forward {
+        tangent = -tangent;
+    }
+    let into_face = (-n_p_inward).cross(tangent);
+    let d = point - cyl.origin();
+    let axis = cyl.axis();
+    let to_axis = axis * axis.dot(d) - d;
+    if into_face.length() <= ANALYTIC_TOL_LIN || to_axis.length() <= ANALYTIC_TOL_LIN {
+        return Ok(None);
+    }
+    Ok(Some(into_face.dot(to_axis) > 0.0))
+}
+
+/// The angle where a spine's sweep about an axis ends, unwrapped from
+/// `u_start` through `u_mid`, the angle of the spine's midpoint. A spine that
+/// turns clockwise about the axis ends below `u_start`; always unwrapping
+/// upward would take the complementary arc.
+fn unwrap_sweep_end(u_start: f64, u_mid: f64, u_end: f64) -> f64 {
+    let tau = 2.0 * std::f64::consts::PI;
+    let ahead = |u: f64| (u - u_start).rem_euclid(tau);
+    if ahead(u_mid) <= ahead(u_end) {
+        u_start + ahead(u_end)
+    } else {
+        u_start + ahead(u_end) - tau
+    }
 }
 
 /// Recover the cylinder's axial v-parameter for a 3D point known to lie on

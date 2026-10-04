@@ -344,6 +344,65 @@ fn prism_vertical_corner_fillets_are_watertight() {
     );
 }
 
+/// Easing either rim of a rounded prism: the cap's material at each corner
+/// arc lies toward the corner cylinder's axis, and half the arcs turn
+/// clockwise about it.
+#[test]
+fn rounded_prism_rim_ease_is_watertight() {
+    let (width, depth, height) = (70.0_f64, 14.0_f64, 35.0_f64);
+    let (corner, ease) = (CORNER_FILLET_MM, TOP_EASE_MM);
+    for rim_z in [height, -SINK] {
+        let mut topo = Topology::new();
+        let body = box_at(
+            &mut topo,
+            [width, depth, height + SINK],
+            [-width / 2.0, -depth / 2.0, -SINK],
+        );
+        let verticals = vertical_edges(&topo, body);
+        let rounded = try_fillet(&mut topo, body, &verticals, corner).unwrap();
+        let before = solid_volume(&topo, rounded, 0.01).unwrap();
+        let rim = edges_near_plane(&topo, rounded, rim_z);
+        assert_eq!(rim.len(), 8);
+        let eased = try_fillet(&mut topo, rounded, &rim, ease).unwrap();
+
+        let mut mix: HashMap<&'static str, usize> = HashMap::new();
+        for fid in brepkit_topology::explorer::solid_faces(&topo, eased).unwrap() {
+            *mix.entry(topo.face(fid).unwrap().surface().type_tag())
+                .or_insert(0) += 1;
+        }
+        assert_eq!(
+            mix,
+            HashMap::from([("plane", 6), ("cylinder", 8), ("torus", 4)]),
+            "rim at z={rim_z}"
+        );
+        let mesh =
+            tessellate_solid_with_tolerance(&topo, eased, 0.01, 5.0_f64.to_radians()).unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "rim at z={rim_z}");
+
+        // The ease removes `(1 - pi/4) r²` of cross-section along the four
+        // straight runs, and around each corner (Pappus) that section turns a
+        // quarter circle with its centroid `r (5/6 - pi/4) / (1 - pi/4)` in
+        // from the corner cylinder's wall.
+        let section = (1.0 - std::f64::consts::FRAC_PI_4) * ease.powi(2);
+        let centroid =
+            ease * (5.0 / 6.0 - std::f64::consts::FRAC_PI_4) / (1.0 - std::f64::consts::FRAC_PI_4);
+        let straight = 2.0 * (width - 2.0 * corner) + 2.0 * (depth - 2.0 * corner);
+        let truth = before
+            - section * straight
+            - 2.0 * std::f64::consts::PI * section * (corner - centroid);
+        let volume = solid_volume(&topo, eased, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-6 * truth,
+            "rim at z={rim_z}: volume {volume}, truth {truth}"
+        );
+        let residue = volume - oriented_solid_volume(&topo, eased, 0.01).unwrap();
+        assert!(
+            residue >= 0.0 && residue < 1e-3 * volume,
+            "rim at z={rim_z}: oriented volume {residue} short: a face is inverted"
+        );
+    }
+}
+
 /// The assembly base's floor plate (`assemblyGenerator.ts`): a 2x1 deck,
 /// 83.5 x 41.5 x 2.01 with r=4 corners, whose top rim the junction pass
 /// eases at r=1.5. Reports the mesh at the export settings and at the
