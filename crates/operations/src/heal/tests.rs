@@ -57,6 +57,147 @@ fn fix_orientations_on_clean_box() {
     assert_eq!(count, 0);
 }
 
+/// A cup's floor and walls inside face toward the middle of the solid, and
+/// each is still wound counterclockwise about its normal.
+#[test]
+fn fix_orientations_leaves_a_cups_cavity_alone() {
+    let mut topo = Topology::new();
+    let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let top = brepkit_topology::explorer::solid_faces(&topo, block)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(topo.face(f).unwrap().surface(),
+                FaceSurface::Plane { normal, d } if normal.z() > 0.5 && (d - 10.0).abs() < 1e-9)
+        })
+        .unwrap();
+    let cup = crate::shell_op::shell(&mut topo, block, 1.0, &[top]).unwrap();
+
+    let report = heal_solid(&mut topo, cup, 1e-7).unwrap();
+    assert_eq!(report.orientations_fixed, 0);
+    let mesh = crate::tessellate::tessellate_solid(&topo, cup, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+}
+
+/// A solid whose faces all wind their wires the other way about their
+/// normals, each with its reversed flag toggled, is still a correct solid:
+/// its planes agree with each other, so none is flipped.
+#[test]
+fn fix_orientations_reads_the_solids_own_winding() {
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let reversed = face.is_reversed();
+        let edges: Vec<OrientedEdge> = topo
+            .wire(face.outer_wire())
+            .unwrap()
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.face_mut(fid).unwrap();
+        face.set_outer_wire(wire);
+        face.set_reversed(!reversed);
+    }
+
+    assert_eq!(fix_face_orientations(&mut topo, solid).unwrap(), 0);
+}
+
+#[test]
+fn fix_orientations_restores_a_flipped_plane() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let face = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap()[0];
+    let FaceSurface::Plane { normal, d } = topo.face(face).unwrap().surface().clone() else {
+        panic!("box faces are planes");
+    };
+    topo.face_mut(face)
+        .unwrap()
+        .set_surface(FaceSurface::Plane {
+            normal: -normal,
+            d: -d,
+        });
+
+    assert_eq!(fix_face_orientations(&mut topo, solid).unwrap(), 1);
+    let FaceSurface::Plane {
+        normal: fixed,
+        d: fixed_d,
+    } = topo.face(face).unwrap().surface()
+    else {
+        panic!("box faces are planes");
+    };
+    assert!((*fixed - normal).length() < 1e-12 && (fixed_d - d).abs() < 1e-12);
+}
+
+/// A cylinder's caps are discs bounded by one closed circle, so their only
+/// vertex says nothing about their size.
+#[test]
+fn heal_keeps_a_cylinders_disc_caps() {
+    let mut topo = Topology::new();
+    let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 2.0).unwrap();
+
+    let report = heal_solid(&mut topo, rod, 1e-7).unwrap();
+    assert_eq!(report.small_faces_removed, 0);
+    let mesh = crate::tessellate::tessellate_solid(&topo, rod, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+}
+
+/// A short span of a long curve is bounded by the span, not the curve.
+#[test]
+fn nurbs_span_hull_bounds_only_the_span() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_math::vec::Point3;
+
+    let points: Vec<Point3> = (0..5)
+        .map(|i| Point3::new(2.5 * f64::from(i), 0.0, 0.0))
+        .collect();
+    let curve = NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+        points,
+        vec![1.0; 5],
+    )
+    .unwrap();
+    let hull = nurbs_span_hull(&curve, 0.45, 0.55);
+    assert!(hull.max.x() - hull.min.x() < 2.0, "{hull:?}");
+}
+
+/// A ring and the square that fills its hole lie in one plane, both centred
+/// on the axis with four outer corners, yet cover different regions.
+#[test]
+fn heal_keeps_a_face_filling_a_coplanar_hole() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let plate = crate::primitives::make_box(&mut topo, 8.0, 8.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, plate, &Mat4::translation(-4.0, -4.0, 0.0))
+        .unwrap();
+    let cutter = crate::primitives::make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+    crate::transform::transform_solid(&mut topo, cutter, &Mat4::translation(-1.0, -1.0, -1.0))
+        .unwrap();
+    let ring =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, plate, cutter).unwrap();
+    let plug = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, plug, &Mat4::translation(-1.0, -1.0, 0.0))
+        .unwrap();
+    let (filled, _) = crate::boolean::boolean_with_evolution(
+        &mut topo,
+        crate::boolean::BooleanOp::Fuse,
+        ring,
+        plug,
+    )
+    .unwrap();
+
+    assert_eq!(remove_duplicate_faces(&mut topo, filled, 1e-7).unwrap(), 0);
+    let mesh = crate::tessellate::tessellate_solid(&topo, filled, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+}
+
 // ── Wire gap closure tests ──────────────────────────
 
 #[test]

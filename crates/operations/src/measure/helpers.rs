@@ -373,7 +373,7 @@ pub(super) fn compute_angular_range(u_vals: &mut Vec<f64>) -> (f64, f64) {
 /// the `(ex, ey)` frame, plus its circular- and elliptic-arc edge count.
 /// `Ok(None)` when an edge is neither a line nor a conic arc, so the caller
 /// falls back to tessellation.
-pub(super) fn planar_wire_signed_area2(
+pub fn planar_wire_signed_area2(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
     ex: Vec3,
@@ -464,11 +464,20 @@ pub(super) fn planar_wire_signed_area2(
                 // flip, a reversed inner rim of an annulus ADDS its segment instead
                 // of subtracting it (inflated area).
                 let nat_alpha = if is_closed_circle {
-                    // A full circle sweeps 2π in its natural (CCW) direction → the
-                    // bulge gives the disc area πρ². (The seam endpoint's antipode is
-                    // NOT the domain midpoint, so the open-arc disambiguation below
-                    // does not apply.)
-                    std::f64::consts::TAU
+                    // A full circle sweeps 2π counterclockwise about its own axis →
+                    // the bulge gives the disc area πρ², signed by how that axis
+                    // faces the frame. (The seam endpoint's antipode is NOT the
+                    // domain midpoint, so the open-arc disambiguation below does
+                    // not apply.)
+                    let facing = match edge.curve() {
+                        brepkit_topology::edge::EdgeCurve::Circle(c) => {
+                            c.normal().dot(ex.cross(ey)).signum()
+                        }
+                        brepkit_topology::edge::EdgeCurve::Line
+                        | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                        | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => 1.0,
+                    };
+                    std::f64::consts::TAU * facing
                 } else {
                     // Sample the arc at its DOMAIN midpoint (the domain need not be
                     // [0,1]) to disambiguate the signed sweep > π for a major arc.

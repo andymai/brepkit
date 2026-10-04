@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeId};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::SolidId;
@@ -440,12 +440,15 @@ fn pointed_cone_seam(
     Ok(None)
 }
 
-/// Fix face orientations so normals point outward from the solid.
+/// Fix plane faces whose normal disagrees with their outer wire.
 ///
-/// Uses the signed volume test: for each face, computes the signed volume
-/// contribution. If the total signed volume is negative, the overall
-/// orientation is flipped. Then checks individual faces against the
-/// expected outward direction.
+/// A shell's faces wind their stored outer wires one way about their surface
+/// normals, counterclockwise by convention, reversed flag or not. Each
+/// shell's planes vote on which way it winds, and a plane winding the other
+/// way carries a flipped normal, which is negated. The winding is read
+/// arc-true. Where the material lies is not consulted: a cavity's floor faces
+/// toward the solid's middle. Curved faces and planes bounded by a NURBS edge
+/// are left alone.
 ///
 /// Returns the number of faces whose orientation was fixed.
 ///
@@ -456,94 +459,62 @@ pub fn fix_face_orientations(
     solid: SolidId,
 ) -> Result<usize, crate::OperationsError> {
     let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<_> = shell.faces().to_vec();
-
-    let mut center = Vec3::new(0.0, 0.0, 0.0);
-    let mut total_faces: usize = 0;
-
-    for &fid in &face_ids {
-        let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        let mut face_center = Vec3::new(0.0, 0.0, 0.0);
-        let edges = wire.edges();
-        for oe in edges {
-            let edge = topo.edge(oe.edge())?;
-            let pos = topo.vertex(edge.start())?.point();
-            face_center += Vec3::new(pos.x(), pos.y(), pos.z());
-        }
-
-        let vert_count = edges.len();
-        if vert_count > 0 {
-            #[allow(clippy::cast_precision_loss)]
-            let inv = 1.0 / vert_count as f64;
-            center += face_center * inv;
-            total_faces += 1;
-        }
+    let shells: Vec<_> = std::iter::once(solid_data.outer_shell())
+        .chain(solid_data.inner_shells().iter().copied())
+        .collect();
+    let mut fixed = 0;
+    for shell in shells {
+        let faces = topo.shell(shell)?.faces().to_vec();
+        fixed += fix_shell_plane_orientations(topo, &faces)?;
     }
+    Ok(fixed)
+}
 
-    if total_faces == 0 {
-        return Ok(0);
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    let inv_faces = 1.0 / total_faces as f64;
-    let center_pt = Point3::new(
-        center.x() * inv_faces,
-        center.y() * inv_faces,
-        center.z() * inv_faces,
-    );
-
-    let mut fixed_count = 0;
-    let mut faces_to_flip = Vec::new();
-
-    for &fid in &face_ids {
+/// [`fix_face_orientations`] over one shell's faces.
+fn fix_shell_plane_orientations(
+    topo: &mut Topology,
+    faces: &[FaceId],
+) -> Result<usize, crate::OperationsError> {
+    let lin = Tolerance::new().linear;
+    let mut planes = Vec::new();
+    for &fid in faces {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        let first_oe = match wire.edges().first() {
-            Some(oe) => oe,
-            None => continue,
+        let FaceSurface::Plane { normal, d } = face.surface() else {
+            continue;
         };
-        let edge = topo.edge(first_oe.edge())?;
-        let face_point = topo.vertex(edge.start())?.point();
-        let to_face = face_point - center_pt;
-
-        match face.surface() {
-            FaceSurface::Plane { normal, d } => {
-                if normal.dot(to_face) < 0.0 {
-                    faces_to_flip.push((fid, *normal, *d));
-                    fixed_count += 1;
-                }
-            }
-            FaceSurface::Cylinder(cyl) => {
-                // For cylinders, the outward radial direction should point away from center.
-                let to_pt = Vec3::new(
-                    face_point.x() - cyl.origin().x(),
-                    face_point.y() - cyl.origin().y(),
-                    face_point.z() - cyl.origin().z(),
-                );
-                let h = to_pt.dot(cyl.axis());
-                let radial = to_pt - cyl.axis() * h;
-                if radial.dot(to_face) < 0.0 {
-                    // Cylinder orientation is wrong — but we can only flip planar faces.
-                    // For analytic surfaces, orientation is inherent; skip.
-                }
-            }
-            // Non-planar faces: orientation is determined by surface parameterization,
-            // not a flippable normal. Skip for now.
-            _ => {}
+        let (normal, d) = (*normal, *d);
+        let Ok(frame) =
+            brepkit_math::frame::Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), normal)
+        else {
+            continue;
+        };
+        let Some((area2, _)) = crate::measure::helpers::planar_wire_signed_area2(
+            topo,
+            face.outer_wire(),
+            frame.x,
+            frame.y,
+        )?
+        else {
+            continue;
+        };
+        if area2.abs() > lin * lin {
+            planes.push((fid, normal, d, area2 > 0.0));
         }
     }
 
-    for (fid, normal, d) in faces_to_flip {
-        let face = topo.face_mut(fid)?;
-        face.set_surface(FaceSurface::Plane {
-            normal: -normal,
-            d: -d,
-        });
+    let counterclockwise = planes.iter().filter(|p| p.3).count();
+    let winds_counterclockwise = 2 * counterclockwise >= planes.len();
+    let mut fixed = 0;
+    for &(fid, normal, d, ccw) in &planes {
+        if ccw != winds_counterclockwise {
+            topo.face_mut(fid)?.set_surface(FaceSurface::Plane {
+                normal: -normal,
+                d: -d,
+            });
+            fixed += 1;
+        }
     }
-
-    Ok(fixed_count)
+    Ok(fixed)
 }
 
 /// Close gaps between consecutive edges in face wires.
@@ -670,12 +641,41 @@ pub fn close_wire_gaps(
     Ok(gaps_closed)
 }
 
+/// The control hull of a NURBS curve over `[t0, t1]` alone: the curve is
+/// split to that span, and the span lies inside its control points.
+fn nurbs_span_hull(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+) -> brepkit_math::aabb::Aabb3 {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    let (d0, d1) = curve.domain();
+    let eps = 1e-9 * (d1 - d0).abs();
+    let (lo, hi) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+    let mut span = curve.clone();
+    if lo > d0 + eps
+        && lo < d1 - eps
+        && let Ok((_, right)) = curve_split(&span, lo)
+    {
+        span = right;
+    }
+    if hi > d0 + eps
+        && hi < d1 - eps
+        && let Ok((left, _)) = curve_split(&span, hi)
+    {
+        span = left;
+    }
+    span.aabb()
+}
+
 /// Remove faces smaller than a minimum area threshold.
 ///
 /// Faces with a bounding-box diagonal smaller than `tolerance` are
 /// considered degenerate slivers and are removed from the shell.
 /// This is common after boolean operations that produce micro-faces
-/// at near-tangent intersections.
+/// at near-tangent intersections. The box bounds each boundary edge's curve,
+/// not only its ends: a disc bounded by one closed circle has a single
+/// vertex.
 ///
 /// Returns the number of faces removed.
 ///
@@ -709,8 +709,18 @@ pub fn remove_small_faces(
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            for &vid in &[edge.start(), edge.end()] {
-                let pos = topo.vertex(vid)?.point();
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let bounds = match edge.curve() {
+                EdgeCurve::Line => brepkit_math::aabb::Aabb3::from_points([start, end]),
+                EdgeCurve::Circle(c) => c.arc_aabb(t0, t1),
+                EdgeCurve::Ellipse(e) => e.arc_aabb(t0, t1),
+                EdgeCurve::NurbsCurve(n) => nurbs_span_hull(n, t0, t1),
+            };
+            for pos in [bounds.min, bounds.max] {
                 min_pt = Vec3::new(
                     min_pt.x().min(pos.x()),
                     min_pt.y().min(pos.y()),
@@ -758,8 +768,8 @@ pub fn remove_small_faces(
 /// Remove duplicate (coincident) faces from a solid.
 ///
 /// Two faces are considered duplicates if their outward normals are
-/// parallel (or anti-parallel) and all vertices of one face are within
-/// `tolerance` of the other face's plane. This happens when boolean
+/// parallel (or anti-parallel) and their outer wires and holes have the same
+/// corners within `tolerance`. This happens when boolean
 /// operations create overlapping fragments.
 ///
 /// Returns the number of duplicate faces removed.
@@ -782,9 +792,10 @@ pub fn remove_duplicate_faces(
     let shell = topo.shell(shell_id)?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
-    // Collect face data for comparison.
-    // Tuple: (centroid, normal, vertex_count)
-    let mut face_data: Vec<(FaceId, Point3, Vec3, usize)> = Vec::new();
+    // Collect face data for comparison: centroid, normal, outer corners and
+    // hole count.
+    #[allow(clippy::type_complexity)]
+    let mut face_data: Vec<(FaceId, Point3, Vec3, Vec<Point3>, Vec<Vec<Point3>>)> = Vec::new();
 
     for &fid in &face_ids {
         let face = topo.face(fid)?;
@@ -800,11 +811,13 @@ pub fn remove_duplicate_faces(
         let wire = topo.wire(face.outer_wire())?;
         let mut centroid = Vec3::new(0.0, 0.0, 0.0);
         let mut count = 0;
+        let mut corners = Vec::new();
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
             let pos = topo.vertex(edge.start())?.point();
             centroid += Vec3::new(pos.x(), pos.y(), pos.z());
+            corners.push(pos);
             count += 1;
         }
 
@@ -815,7 +828,15 @@ pub fn remove_duplicate_faces(
         }
 
         let centroid_pt = Point3::new(centroid.x(), centroid.y(), centroid.z());
-        face_data.push((fid, centroid_pt, normal, count));
+        let mut holes = Vec::with_capacity(face.inner_wires().len());
+        for &hole in face.inner_wires() {
+            let mut hole_corners = Vec::new();
+            for oe in topo.wire(hole)?.edges() {
+                hole_corners.push(topo.vertex(topo.edge(oe.edge())?.start())?.point());
+            }
+            holes.push(hole_corners);
+        }
+        face_data.push((fid, centroid_pt, normal, corners, holes));
     }
 
     // Find duplicate pairs: same vertex count, parallel normals, close centroids.
@@ -830,11 +851,21 @@ pub fn remove_duplicate_faces(
                 continue;
             }
 
-            let (_, centroid_a, normal_a, count_a) = &face_data[i];
-            let (fid_j, centroid_b, normal_b, count_b) = &face_data[j];
+            let (_, centroid_a, normal_a, corners_a, holes_a) = &face_data[i];
+            let (fid_j, centroid_b, normal_b, corners_b, holes_b) = &face_data[j];
 
-            // Same vertex count.
-            if count_a != count_b {
+            // Same corners, outer and hole by hole: a ring and the face
+            // filling its hole can share a plane, a corner count and a
+            // centroid.
+            let same_corners = |a: &[Point3], b: &[Point3]| {
+                a.len() == b.len() && a.iter().all(|p| b.iter().any(|q| (*p - *q).length() < tol))
+            };
+            if !same_corners(corners_a, corners_b)
+                || holes_a.len() != holes_b.len()
+                || !holes_a
+                    .iter()
+                    .all(|ha| holes_b.iter().any(|hb| same_corners(ha, hb)))
+            {
                 continue;
             }
 
