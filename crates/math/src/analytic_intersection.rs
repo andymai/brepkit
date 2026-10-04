@@ -1888,7 +1888,7 @@ fn parallel_axis_torus_cylinder(
     };
     let samples = ruling_samples(cyl, &roots);
     let loops = if samples.iter().all(Option::is_some) {
-        closed_ruling_loops(&samples)
+        closed_ruling_loops(cyl, &roots, &samples)
     } else {
         partial_ruling_loops(cyl, &roots, &samples)
     };
@@ -2533,7 +2533,7 @@ fn off_axis_sphere_cylinder(
     };
     let samples = ruling_samples(cyl, &roots);
     let loops = if samples.iter().all(Option::is_some) {
-        closed_ruling_loops(&samples)
+        closed_ruling_loops(cyl, &roots, &samples)
     } else {
         partial_ruling_loops(cyl, &roots, &samples)
     };
@@ -2617,11 +2617,11 @@ fn algebraic_cylinder_cylinder(
     let (roots1, roots2) = (roots(c1, c2), roots(c2, c1));
     let samples1 = ruling_samples(c1, &roots1);
     let loops = if samples1.iter().all(Option::is_some) {
-        closed_ruling_loops(&samples1)
+        closed_ruling_loops(c1, &roots1, &samples1)
     } else {
         let samples2 = ruling_samples(c2, &roots2);
         if samples2.iter().all(Option::is_some) {
-            closed_ruling_loops(&samples2)
+            closed_ruling_loops(c2, &roots2, &samples2)
         } else if samples1.iter().any(Option::is_some) {
             partial_ruling_loops(c1, &roots1, &samples1)
         } else {
@@ -2708,7 +2708,7 @@ fn ruling_cone_cylinder(
         }
     }
     let loops = if samples.iter().all(Option::is_some) {
-        closed_ruling_loops(&samples)
+        closed_ruling_loops(cyl, &roots, &samples)
     } else {
         partial_ruling_loops(cyl, &roots, &samples)
     };
@@ -2968,12 +2968,83 @@ fn ruling_samples(
 }
 
 /// Every ruling meets the other surface: each root traces a closed loop.
-fn closed_ruling_loops(samples: &[Option<(Point3, Point3)>]) -> Vec<Vec<Point3>> {
-    let mut plus: Vec<Point3> = samples.iter().flatten().map(|s| s.0).collect();
-    let mut minus: Vec<Point3> = samples.iter().flatten().map(|s| s.1).collect();
+/// Where the loops pass closest at one ruling they are sampled from it,
+/// closer together near it, so the fit follows the narrow neck between
+/// them; where they touch there, they are the two halves of one curve
+/// crossing itself, each with a corner at that point, which then falls at
+/// their shared start and end, where the fit keeps it.
+fn closed_ruling_loops(
+    sweep: &CylindricalSurface,
+    roots: &impl Fn(f64) -> (f64, f64, f64),
+    samples: &[Option<(Point3, Point3)>],
+) -> Vec<Vec<Point3>> {
+    let (mut plus, mut minus): (Vec<Point3>, Vec<Point3>) =
+        if let Some((neck, touching)) = narrowest_ruling(roots) {
+            let count = 2 * RULING_SAMPLES;
+            #[allow(clippy::cast_precision_loss)]
+            (0..count)
+                .map(|i| {
+                    let t = i as f64 / count as f64;
+                    let u = TAU.mul_add(t - 0.9 * (TAU * t).sin() / TAU, neck);
+                    let (_, vp, vm) = roots(u);
+                    if i == 0 && touching {
+                        let at = sweep.evaluate(u, 0.5 * (vp + vm));
+                        (at, at)
+                    } else {
+                        (sweep.evaluate(u, vp), sweep.evaluate(u, vm))
+                    }
+                })
+                .unzip()
+        } else {
+            samples.iter().flatten().copied().unzip()
+        };
     plus.push(plus[0]);
     minus.push(minus[0]);
     vec![plus, minus]
+}
+
+/// The ruling where the two roots pass closest, when exactly one ruling
+/// stands out: a local minimum of their gap, scanned finer than the
+/// sampling and refined, that either closes to within tolerance (the
+/// roots touch there; the tolerance scales with the widest gap, the loops'
+/// own size, so the decision does not move with the model) or narrows
+/// below a quarter of the widest gap while no other minimum does. Equal
+/// crossing cylinders touch at two rulings and get `None`.
+fn narrowest_ruling(roots: &impl Fn(f64) -> (f64, f64, f64)) -> Option<(f64, bool)> {
+    let scan = WINDOW_SCAN * RULING_SAMPLES;
+    #[allow(clippy::cast_precision_loss)]
+    let step = TAU / scan as f64;
+    let gap = |u: f64| {
+        let (_, vp, vm) = roots(u);
+        (vp - vm).abs()
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let gaps: Vec<f64> = (0..scan).map(|k| gap(step * k as f64)).collect();
+    let widest = gaps.iter().copied().fold(0.0, f64::max);
+    let tol = Tolerance::new().linear * (1.0 + widest);
+    let mut necks = Vec::new();
+    for k in 0..scan {
+        let (before, here, after) = (gaps[(k + scan - 1) % scan], gaps[k], gaps[(k + 1) % scan]);
+        if here > before || here >= after || here >= 0.25 * widest {
+            continue;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let (mut lo, mut hi) = (step * (k as f64 - 1.0), step * (k as f64 + 1.0));
+        for _ in 0..100 {
+            let (a, b) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+            if gap(a) < gap(b) {
+                hi = b;
+            } else {
+                lo = a;
+            }
+        }
+        let u = 0.5 * (lo + hi);
+        necks.push((u, gap(u) <= tol));
+    }
+    match necks[..] {
+        [neck] => Some(neck),
+        _ => None,
+    }
 }
 
 /// Only windows of rulings meet the other surface: each cyclic window
