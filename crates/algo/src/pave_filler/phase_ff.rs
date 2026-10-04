@@ -1049,7 +1049,13 @@ impl FaceExtent {
                             poly.push(frame.project(if oe.is_forward() { s3 } else { e3 }));
                         }
                         curve => {
-                            let (t0, t1) = curve.domain_with_endpoints(s3, e3);
+                            let (mut t0, mut t1) = curve.domain_with_endpoints(s3, e3);
+                            // A NURBS edge can store its curve from the end
+                            // vertex back while its domain still ascends.
+                            let first = curve.evaluate_with_endpoints(t0, s3, e3);
+                            if (first - e3).length() < (first - s3).length() {
+                                std::mem::swap(&mut t0, &mut t1);
+                            }
                             for i in 0..=16 {
                                 #[allow(clippy::cast_precision_loss)]
                                 let f = i as f64 / 16.0;
@@ -5816,7 +5822,17 @@ fn circle_face_hits(
                     }
                 }
             }
-            EdgeCurve::NurbsCurve(_) => continue,
+            // A NURBS boundary edge ending on the circle: the face leaves the
+            // circle at that vertex, as a wall strip's corner under a lip
+            // cone does where the cone's plane section starts.
+            EdgeCurve::NurbsCurve(_) => {
+                for p in [sv.point(), ev.point()] {
+                    let t = circle.project(p);
+                    if (circle.evaluate(t) - p).length() < tol.linear * 10.0 {
+                        edge_hits.push((t.rem_euclid(std::f64::consts::TAU), p, Some(oe.edge())));
+                    }
+                }
+            }
         }
         for (t, p, src) in edge_hits {
             let dup = hits

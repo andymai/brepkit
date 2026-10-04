@@ -10,8 +10,15 @@
 //! came apart into dozens of pieces, the wall was split there into pieces
 //! the fuse could not classify, and the fuse fell back to a mesh.
 //!
+//! Two more captures from `binGenerator.export.interiorFilletScoops.test.ts`
+//! fuse the plain fillet into bins whose scoops or wall cutout change the
+//! pocket's corners: there the bin's corner wall is only a strip of the
+//! cylinder the material's air wall lies on, so the air wall must be split
+//! along the strip's edges to be matched with it.
+//!
 //! Data: `interior_fillet_bin.bin` (the bin), `interior_fillet_material.bin`
-//! (the fillet material).
+//! (the fillet material), and the `interior_fillet_scoops_*` and
+//! `interior_fillet_cutout_*` pairs.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -68,18 +75,16 @@ fn exact(topo: &mut Topology, op: BooleanOp, a: SolidId, b: SolidId) -> SolidId 
     result
 }
 
-#[test]
-fn interior_fillet_material_fuses_into_its_bin_exactly() {
+/// Fuses the fillet material into its bin and cuts it from the bin, both
+/// exactly, and checks they read the same overlap: what the fuse leaves out
+/// of the material is the part inside the bin, which the cut takes away.
+fn assert_fuses_exactly(bin_data: &str, material_data: &str) {
     let mut topo = Topology::new();
-    let bin = load(&mut topo, "interior_fillet_bin.bin");
-    let material = load(&mut topo, "interior_fillet_material.bin");
+    let bin = load(&mut topo, bin_data);
+    let material = load(&mut topo, material_data);
     let fused = exact(&mut topo, BooleanOp::Fuse, bin, material);
-    let bin = load(&mut topo, "interior_fillet_bin.bin");
-    let material = load(&mut topo, "interior_fillet_material.bin");
     let cut = exact(&mut topo, BooleanOp::Cut, bin, material);
 
-    // What the fuse leaves out of the material is the part inside the bin,
-    // which the cut takes away from it: both read the bin's overlap.
     let volume = |topo: &Topology, s: SolidId| solid_volume(topo, s, 0.001).unwrap();
     let (v_bin, v_material) = (volume(&topo, bin), volume(&topo, material));
     let through_fuse = v_bin + v_material - volume(&topo, fused);
@@ -93,5 +98,31 @@ fn interior_fillet_material_fuses_into_its_bin_exactly() {
     assert!(
         (through_fuse - 12_957.832_253_1).abs() < 1e-6 * v_bin,
         "overlap {through_fuse}"
+    );
+}
+
+#[test]
+fn interior_fillet_material_fuses_into_its_bin_exactly() {
+    assert_fuses_exactly("interior_fillet_bin.bin", "interior_fillet_material.bin");
+}
+
+/// Scoops on two adjacent walls: at the corners beside them the bin's wall
+/// is a strip topped by a lip cone's arc that stops short of the air wall's
+/// quarter, beside a plane whose sloped edge is a NURBS curve stored from
+/// its end vertex back.
+#[test]
+fn interior_fillet_material_fuses_into_a_scooped_bin_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_scoops_bin.bin",
+        "interior_fillet_scoops_material.bin",
+    );
+}
+
+/// A wall cutout beside a scoop.
+#[test]
+fn interior_fillet_material_fuses_into_a_bin_with_a_wall_cutout_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_cutout_bin.bin",
+        "interior_fillet_cutout_material.bin",
     );
 }
