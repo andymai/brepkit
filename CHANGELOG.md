@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.31](https://github.com/andymai/brepkit/compare/v4.1.30...v4.1.31) (2026-10-04)
+
+
+### Bug Fixes
+
+* **operations:** revolve each profile edge's own curve, not its chord ([#1981](https://github.com/andymai/brepkit/issues/1981)) ([325db18](https://github.com/andymai/brepkit/commit/325db18d0df08b579fc1941e4edae5764db841da))
+
 ## [4.1.30](https://github.com/andymai/brepkit/compare/v4.1.29...v4.1.30) (2026-10-04)
 
 
