@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791088504909,
+  "lastUpdate": 1791090235839,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50867,6 +50867,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36162116,
             "range": "± 23376",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "20107644eaf27b4e6b7bfc4e338dd379192ca747",
+          "message": "fix(io): read a STEP edge's curve through a curve on surfaces (#1970)\n\n`read_step` now reads STEP files whose edges carry curve geometry as a\n`SURFACE_CURVE`, `SEAM_CURVE`, or `INTERSECTION_CURVE`. Of 23 captured\nboolean results from the reference kernel, 22 now read successfully.\n\n## What failed\n\n`build_curve_geometry` in `crates/io/src/step/reader.rs` dispatched only\nplain curve entities: LINE, CIRCLE, ELLIPSE, and B-spline curves. Files\nusing surface curve entities failed with `unsupported STEP entity:\nSURFACE_CURVE`.\n\nThe reference kernel writes one `SURFACE_CURVE` for every edge. One\nexported fused body contained 48 `SURFACE_CURVE` entities for 48\n`EDGE_CURVE`s, and none of the 23 exported boolean results could be\nread.\n\n## Change\n\nA curve on surfaces lists its 3D curve first, followed by its images on\nthe faces it bounds. The reader now handles `SURFACE_CURVE`,\n`SEAM_CURVE`, and `INTERSECTION_CURVE` by reading edge geometry through\nthat 3D curve, skipping the record's quoted name, and finds it in a\ncomplex record's curve-on-surfaces component. A chain of curves on\nsurfaces is followed to its plain curve, and a reference cycle returns\nan error.\n\n## Verification\n\n`surface_curves_read_through_their_3d_curve` writes a cylinder with\nbrepkit's STEP writer, rewraps each `EDGE_CURVE` curve in a\n`SURFACE_CURVE`, and reads it back as one solid with the original volume\nto within 1e-6. It also reads the same file with a quoted name holding\n`#` references, with each curve on surfaces as a complex record, and\nwith one wrapped in another, and a curve on surfaces that names itself\nas its 3D curve fails with an error. Each fixture lists one of the\nfile's own surfaces as the curve's associated geometry. The test fails\nwithout this change.\n\nAll 46 STEP reader and writer tests pass. Of the 23 captured files, 22\nnow read. The remaining file fails on a `SURFACE_OF_LINEAR_EXTRUSION`\nface, a surface type the reader does not support.\n\n## Roadmap\n\nThe captures came from tracing the gridfinity test, \"has a flat\nunderside around magnet pockets without boss seams,\" to compare the\nreference kernel's STEP chain with brepkit's.\n\nThe comparison found that `simplify(skirt)` merges same-domain faces\nthrough the reference adapter, while the brepkit adapter's `simplify`\nonly heals. Routing it to `unifyFaces` opens other nesting meshes\nbecause `unify_faces` breaks those bodies.\n\n`.claude/skills/roadmap/SKILL.md` now has a closed entry for this fix\nthat notes the `SURFACE_OF_LINEAR_EXTRUSION` gap. The open seam row\nrecords the `simplify` cause and `unify_faces` breakage, with the\ncaptured bodies and probe named.",
+          "timestamp": "2026-10-04T05:01:06Z",
+          "tree_id": "34ec1604246946776e6fb0f2e3a9776e7be1ba59",
+          "url": "https://github.com/andymai/brepkit/commit/20107644eaf27b4e6b7bfc4e338dd379192ca747"
+        },
+        "date": 1791090229742,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1046024,
+            "range": "± 9411",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1131769,
+            "range": "± 50376",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13237,
+            "range": "± 318",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 803282,
+            "range": "± 2185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43507304,
+            "range": "± 2223750",
             "unit": "ns/iter"
           }
         ]
