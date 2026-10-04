@@ -1,0 +1,24 @@
+crates/math/src/analytic_intersection.rs
+  s_a8677c67f85a06::t_dd76d70b1c5e39 4017-4030,4034,4036-4044
+  s_a8677c67f85a06::t_7d28d6f5673bdd 1086-1089
+  s_a8677c67f85a06::t_4f6f3702e710f9 4031-4033,4035
+  s_a8677c67f85a06::t_e89dd4a75190a8 93-95,97,113-124
+crates/operations/tests/rounded_rod_on_a_box.rs
+  s_a8677c67f85a06::t_7cee3e4a615604 1-54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5ba246335f802c57265483adcdfed3f3340db1ff",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
