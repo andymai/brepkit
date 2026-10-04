@@ -1,0 +1,21 @@
+crates/io/src/step/reader.rs
+  s_a8677c67f85a06::t_99160577e181c3 536-537,543-564
+  s_a8677c67f85a06::t_40eadb78626b47 1404-1405,1429,1431-1432
+  s_a8677c67f85a06::t_c5738c0342736e 1412-1418,1421,1426,1430,1445
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0a141086543044d771c60105020c721fbaee42a7",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
