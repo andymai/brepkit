@@ -1,0 +1,30 @@
+crates/wasm/src/bindings/nurbs.rs
+  s_a8677c67f85a06::t_495e02ae2c999f 206
+  s_a8677c67f85a06::t_d299e07013ebe5 13,443-444
+crates/operations/src/extrude.rs
+  s_a8677c67f85a06::t_5833aff9559c79 880
+  s_a8677c67f85a06::t_f902d7bb16ca1d 56,60-67,73,78-92,105-111,114-115,123-180,381,400-403,409
+crates/operations/tests/closed_curve_extrusion.rs
+  s_a8677c67f85a06::t_5833aff9559c79 1-140
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_edc5c226a1994b 193-195,201
+crates/topology/src/builder.rs
+  s_a8677c67f85a06::t_495e02ae2c999f 705,709-724,738
+  s_a8677c67f85a06::t_b76cc55bf06808 17,694-696
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "28042e9323a0d369af7c357cb84dc8ca8ec28606",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
