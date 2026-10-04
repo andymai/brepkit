@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791064079372,
+  "lastUpdate": 1791072628894,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50597,6 +50597,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43416277,
             "range": "± 603272",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c55d9bc5ca084cb2246241b8c0562e1b78d18635",
+          "message": "fix(blend): round a rod's rim past half its radius and a tube's ring-capped mouth (#1965)\n\nFilleting the top rim of a radius 5, height 6 rod, or the outer top rim\nof the same cylinder with a radius 1 bore, now succeeds at radii 1 and\n3. Each result is a valid solid with a watertight mesh, and its volume\nloss matches the exact removed ring within 1e-4 of the solid volume.\n\n## What was wrong\n\nFor the rod, `plane_cylinder_fillet` limited convex rims to less than\nhalf the cylinder radius. A radius 3 fillet therefore declined the\nanalytic torus and failed with `contour stripe failed: empty input where\nat least one element is required`. Above half the cylinder radius the\ntorus is a spindle torus, but the quarter tube the blend uses stays\nclear of its self-crossing.\n\nFor the tube, `plane_is_bounded_disc` rejected caps with inner wires.\nThe ring-shaped mouth was interpreted as a plate around a post, placing\nthe torus outward. At radius 1, the resulting mesh was not watertight\nand removed 7.043 mm³ instead of 6.441 mm³.\n\n## Change\n\nThe analytic bound is now `r < r_c` for every case.\n`plane_is_bounded_disc` accepts a cap when all boundary vertices,\nincluding hole vertices, lie within the cylinder radius of the axis.\n\n`closed_rim_info` and `assemble_closed_rim` preserve cap holes during\nthe closed-rim rebuild. They decline to rebuild when a hole edge reaches\nthe plate contact circle or uses a NURBS curve, leaving the normal trim\npath. Both new contact circles begin on the rim vertex's radial\ndirection, placing their vertices on the wall seam.\n\nThe rebuild is skipped when another stripe in the same fillet call also\nfollows the cap. This preserves `cross_one_row_fillet_inmem.rs`, where\nthe cap's hole rim is filleted in the same call.\n\nThe analytic unit test verifies that radius 1.5 on a radius 2 cylinder\nreturns a torus, while radius 2.0 returns none.\n\n## Verification\n\nThe workspace suite passes locally: 3329 passed, 20 skipped. The pose\nsweep and truth audit match main exactly. `approx_census` differs only\nin a NURBS offset line that varies between main runs.\n\nOn this branch's wasm build, gridfinity failure counts match main:\n`binGenerator.scenario.interiorFilletScoops` 17, both export suites 2\neach, and `assemblyGenerator.scenario` 1. `hingeSwing.scenario` passes\n27 of 27.\n\n## Roadmap\n\nThe roadmap records this fix as closed. The rounded-prism rim ease row\npoints to `wip/rounded-prism-cap-side`, which holds a cap material-side\ntest. That test stays out of this PR: it lets the tool's interior\nfillets build, and their fuse with the bin (27 tori tangent to the floor\nat z = 2.25) then falls back natively with free edges on that floor,\ntaking `export.interiorFillet` from 2 to 5 failures,\n`export.interiorFilletScoops` from 2 to 8 and\n`assemblyGenerator.scenario` from 1 to 2.\n\nA new open row records `nestingFloor.geometry` failing 8 of 19 because a\ncorner quarter-cylinder uses the snap mesher and samples its shared\nfloor arc independently.",
+          "timestamp": "2026-10-04T00:07:26Z",
+          "tree_id": "78fd04f98ea1259bae7eb1100aeb99a4a1d27cc5",
+          "url": "https://github.com/andymai/brepkit/commit/c55d9bc5ca084cb2246241b8c0562e1b78d18635"
+        },
+        "date": 1791072622383,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1044296,
+            "range": "± 1835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1129424,
+            "range": "± 3531",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13057,
+            "range": "± 110",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 806767,
+            "range": "± 2255",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43622260,
+            "range": "± 91555",
             "unit": "ns/iter"
           }
         ]
