@@ -2978,13 +2978,8 @@ fn closed_ruling_loops(
     roots: &impl Fn(f64) -> (f64, f64, f64),
     samples: &[Option<(Point3, Point3)>],
 ) -> Vec<Vec<Point3>> {
-    let reach = samples
-        .iter()
-        .flatten()
-        .map(|s| Vec3::new(s.0.x(), s.0.y(), s.0.z()).length())
-        .fold(sweep.radius(), f64::max);
     let (mut plus, mut minus): (Vec<Point3>, Vec<Point3>) =
-        if let Some((neck, touching)) = narrowest_ruling(roots, reach) {
+        if let Some((neck, touching)) = narrowest_ruling(roots) {
             let count = 2 * RULING_SAMPLES;
             #[allow(clippy::cast_precision_loss)]
             (0..count)
@@ -3011,11 +3006,11 @@ fn closed_ruling_loops(
 /// The ruling where the two roots pass closest, when exactly one ruling
 /// stands out: a local minimum of their gap, scanned finer than the
 /// sampling and refined, that either closes to within tolerance (the
-/// roots touch there; the tolerance scales with `reach`, the size of the
-/// loops' coordinates, since the discriminant's rounding grows with it) or
-/// narrows below a quarter of the widest gap while no other minimum does.
-/// Equal crossing cylinders touch at two rulings and get `None`.
-fn narrowest_ruling(roots: &impl Fn(f64) -> (f64, f64, f64), reach: f64) -> Option<(f64, bool)> {
+/// roots touch there; the tolerance scales with the widest gap, the loops'
+/// own size, so the decision does not move with the model) or narrows
+/// below a quarter of the widest gap while no other minimum does. Equal
+/// crossing cylinders touch at two rulings and get `None`.
+fn narrowest_ruling(roots: &impl Fn(f64) -> (f64, f64, f64)) -> Option<(f64, bool)> {
     let scan = WINDOW_SCAN * RULING_SAMPLES;
     #[allow(clippy::cast_precision_loss)]
     let step = TAU / scan as f64;
@@ -3026,7 +3021,7 @@ fn narrowest_ruling(roots: &impl Fn(f64) -> (f64, f64, f64), reach: f64) -> Opti
     #[allow(clippy::cast_precision_loss)]
     let gaps: Vec<f64> = (0..scan).map(|k| gap(step * k as f64)).collect();
     let widest = gaps.iter().copied().fold(0.0, f64::max);
-    let tol = Tolerance::new().linear * (1.0 + reach);
+    let tol = Tolerance::new().linear * (1.0 + widest);
     let mut necks = Vec::new();
     for k in 0..scan {
         let (before, here, after) = (gaps[(k + scan - 1) % scan], gaps[k], gaps[(k + 1) % scan]);

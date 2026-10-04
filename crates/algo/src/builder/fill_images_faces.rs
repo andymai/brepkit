@@ -1520,6 +1520,33 @@ fn loop_meets_a_sibling_twice(
     })
 }
 
+/// Whether a closed curve winds once around the axis of `face`'s cylinder
+/// or cone, read from its angle about the axis alone, so a curve that
+/// starts on the seam counts like any other.
+fn winds_once(face: &Face, nurbs: &brepkit_math::nurbs::curve::NurbsCurve) -> bool {
+    use std::f64::consts::{PI, TAU};
+    const SAMPLES: u32 = 64;
+    let surface = face.surface();
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return false;
+    }
+    let (t0, t1) = nurbs.domain();
+    let Some(angles) = (0..=SAMPLES)
+        .map(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            surface.project_point(nurbs.evaluate(t)).map(|(u, _)| u)
+        })
+        .collect::<Option<Vec<f64>>>()
+    else {
+        return false;
+    };
+    let winding: f64 = angles
+        .windows(2)
+        .map(|w| (w[1] - w[0] + PI).rem_euclid(TAU) - PI)
+        .sum();
+    (winding.abs() - TAU).abs() <= 0.5
+}
+
 /// A face whose seam runs through the point where two closed sections of
 /// one face pair meet, both winding the face: the two halves of a curve
 /// crossing itself there (a rod whose side touches a wall, the rod's seam on
@@ -1561,7 +1588,7 @@ fn seam_through_a_crossing(topo: &Topology, arena: &GfaArena) -> Option<FaceId> 
                     .evaluate(seam_u, v)
                     .is_some_and(|p| (p - start).length() <= SEAM_ON_CIRCLE_TOL)
             });
-            if on_seam && seam_anchor_on_winding_loop(topo, face, nurbs).is_some() {
+            if on_seam && winds_once(face, nurbs) {
                 return Some(fid);
             }
         }
