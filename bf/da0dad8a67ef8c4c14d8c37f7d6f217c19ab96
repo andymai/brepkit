@@ -1,0 +1,37 @@
+crates/io/tests/data/swept_wall_cut.step
+  s_a8677c67f85a06::t_cbc648435cce6f 1-1817
+crates/io/tests/step_linear_extrusion.rs
+  s_a8677c67f85a06::t_881c93cd8c1138 34
+  s_a8677c67f85a06::t_9aec2cde5fc5fd 30-33,37
+  s_a8677c67f85a06::t_8725b5e164a36a 1-29,35-36,38-56,62-78,85-137,143-144
+  s_a8677c67f85a06::t_85283ad8ae8b5d 57-61,79-84,138-142
+crates/io/src/step/reader.rs
+  s_a8677c67f85a06::t_acc762cf63ddc1 870,872-920,922-965
+  s_a8677c67f85a06::t_df26c7eaaf74c2 1659-1728,1730,1761-1766,1775-1800,1802-1805,1813-1816,1854-1855
+  s_a8677c67f85a06::t_85283ad8ae8b5d 1834-1839
+  s_a8677c67f85a06::t_f3e8c98f2c3c1b 291-298,501-502,553,566-572,579-583,587,589-591,638-643,654,672,681-686
+  s_a8677c67f85a06::t_e386ef04061905 232-237,251,276-290,299-301,307
+  s_a8677c67f85a06::t_47f6754b0b3e97 921
+  s_a8677c67f85a06::t_dd2c384853a84d 1729,1732-1760,1767-1774,1801,1806-1812,1817-1833,1840-1853
+  s_a8677c67f85a06::t_cb5ad88d82ba22 302-304,636-637,644-653,655-671,673-680,687-709,858-869
+  s_a8677c67f85a06::t_a195006c86cc86 871,1731
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_6f2cb938b78bb1 200
+  s_a8677c67f85a06::t_ab25f8383dca6c 198
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bfda0dad8a67ef8c4c14d8c37f7d6f217c19ab96",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
