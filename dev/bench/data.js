@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791110365938,
+  "lastUpdate": 1791111141753,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51245,6 +51245,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36154748,
             "range": "± 278930",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c7933deb8ab40af9a7c81edc219f1075bc9ce921",
+          "message": "fix(algo): meet a cylinder exactly where a rod's side rests on its wall (#1976)\n\nA rod resting on a cylinder wall now gives exact, valid Cut, Intersect,\nand Fuse results when the rod's seam is away from the touching ruling,\nalso when moved `1e6` from the origin, and so do rods just inside the\nwall. The seam-on-ruling configuration returns valid, watertight mesh\nfallbacks.\n\n## What failed\n\nThe geometry is a cylinder wall of radius 2 about z and a rod of radius\n0.3 along y through `(x0, ., 1)`. At `x0 = 1.7`, the rod's outermost\nruling rests on the wall. The cylinders meet in two loops around the rod\nthat touch at one point. These are the two halves of one self-crossing\ncurve, each with a corner at the shared point.\n\nOn main, Cut and Fuse returned exact results that failed\n`validate_solid` with `2 shared edges have inconsistent face\norientations`. Their volumes were 74.5453 and 79.9160, versus true\nvolumes of 74.8295 and 80.4844. The Intersect mesher reached 21 GB\nresident before the probe was stopped, and failed allocation under a 4\nGB cap. At `x0 = 1.699`, Cut was also invalid.\n\nThe ruling solvers sampled 128 fixed-angle rulings and fitted a cubic\nthrough each loop, rounding off the corner. Section edges strayed up to\n`2.6e-4` from the surfaces at `x0 = 1.7`. Just inside, the narrow neck\nwas undersampled: edges strayed `8.0e-5` at 1.699 and `2.2e-4` at\n1.6999.\n\nThe seam-anchor pre-pass also left two loops unanchored whenever they\ncame within one tenth of their extent. That rule, written for equal\ncrossing cylinders, produced rod-band faces bounded by one loop each.\n\n## Change\n\n`closed_ruling_loops` detects a unique local minimum in the gap between\nroots when it is below one quarter of the widest gap. Both loops are\nthen sampled from that ruling using 256 samples spaced by `t - 0.9 sin(2\npi t) / (2 pi)`, concentrating samples near it.\n\nLoops whose gap closes within the linear tolerance, scaled by the widest\ngap (the loops' own size), share their start point. This places the\ncorner at the ends of both edges without making the decision move with\nthe model. Section edges now lie within about `2e-8` of both surfaces\nfrom `x0 = 1.69` through 1.7.\n\nIn `fill_images_faces.rs`, loops remain unanchored only when a sibling\napproaches within one tenth of the extent along two separate stretches,\nas equal crossing cylinders do at two rulings.\n\n`seam_through_a_crossing` reports a face unsplit when two closed loops\nshare a start point on the seam of a face they both wind. Winding is\nread from the curve's angle about the axis alone, so a loop starting on\nthe seam counts. The boolean then takes its mesh fallback.\n\n## Still a fallback\n\nWhen the rod seam lies on the touching ruling, both loops meet the seam\nat their shared point. All three operations return valid, watertight\nmesh fallbacks at three turns of the wall.\n\nAn exact layout requires a band split accepting two loops that share a\nseam vertex, validation that counts that vertex once per sheet, and the\nwall split where its seam also passes through the point.\n\n## Verification\n\nWith the rod turned about its axis, results at `x0 = 1.7` are exact and\nvalid: Cut 74.829504, Intersect 0.568720, and Fuse 80.484370. Integrated\nvolumes are 74.8295036, 0.5687201, and 80.4843704. The as-made rod is\nexact and valid at `x0 = 1.69`, 1.698, and 1.6999.\n\nFour regression tests cover the turned touching case, the same case\nmoved `1e6` from the origin, the three inside offsets, and the\nseam-on-ruling fallback. They check validity, watertightness, volume\ntolerances, exact face census, and curved-edge surface distance as\napplicable.\n\n`pose_sweep` and `truth_audit` match same-day main baselines exactly.\n`approx_census` differs only in the named face pair of an already\nfailing NURBS-loft offset, which also varies between main runs. Nextest\nreports 2179 passing tests across brepkit-math, brepkit-algo, and\nbrepkit-operations.\n\nWith each wasm overlaid, `hingeSwing.scenario` passes 27/27 on main and\nthe branch in 186 seconds each. `assemblyGenerator.scenario` fails the\nsame tilted block and cradle test on both.\n\n## Roadmap\n\nThe roadmap contains a closed entry for this fix. The remaining open row\ncovers only the seam-on-ruling case and records the exact-layout\nrequirements above.",
+          "timestamp": "2026-10-04T10:49:48Z",
+          "tree_id": "754a9d0077514b6a4bb9f7e0e73996be9b7dbae7",
+          "url": "https://github.com/andymai/brepkit/commit/c7933deb8ab40af9a7c81edc219f1075bc9ce921"
+        },
+        "date": 1791111135580,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 843977,
+            "range": "± 1335",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 919752,
+            "range": "± 1334",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11055,
+            "range": "± 145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 638233,
+            "range": "± 7993",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36236916,
+            "range": "± 52824",
             "unit": "ns/iter"
           }
         ]
