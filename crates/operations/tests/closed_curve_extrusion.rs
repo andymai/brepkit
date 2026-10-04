@@ -11,6 +11,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::fitting::interpolate;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::make_box;
@@ -18,10 +19,10 @@ use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
-use brepkit_topology::builder::{make_face_from_wire, make_nurbs_edge};
+use brepkit_topology::builder::{make_face_from_wire, make_nurbs_edge, make_polygon_wire};
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::explorer::solid_faces;
-use brepkit_topology::face::FaceSurface;
+use brepkit_topology::face::{Face, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
@@ -89,6 +90,19 @@ fn assert_exact(topo: &Topology, solid: SolidId, volume: f64, label: &str) {
     );
 }
 
+/// Each point classifies as expected against the result.
+fn assert_points(topo: &Topology, solid: SolidId, points: &[(Point3, bool)], label: &str) {
+    for &(point, kept) in points {
+        let expected = if kept {
+            PointClassification::Inside
+        } else {
+            PointClassification::Outside
+        };
+        let got = classify_point(topo, solid, point, 0.01, 1e-7).unwrap();
+        assert_eq!(got, expected, "{label}: {point:?}");
+    }
+}
+
 #[test]
 fn a_closed_spline_edge_has_one_vertex() {
     let mut topo = Topology::new();
@@ -113,6 +127,23 @@ fn a_ribbed_bore_cuts_a_block_exactly() {
         transform_solid(&mut topo, block, &Mat4::translation(-6.0, -6.0, 0.0)).unwrap();
         let cut = boolean(&mut topo, BooleanOp::Cut, block, bore).unwrap();
         assert_exact(&topo, cut, area.mul_add(-inside, 720.0), &label);
+        // Mid-height of the part inside the block: the bore's axis and a rib
+        // peak's direction (wave radius 3.25) are cut away, a rib trough's
+        // direction (wave radius 2.95) keeps the block at radius 3.1, and so
+        // does the block away from the bore.
+        let z = 0.5f64.mul_add(inside, lift);
+        let trough = PI / 8.0;
+        assert_points(
+            &topo,
+            cut,
+            &[
+                (Point3::new(0.0, 0.0, z), false),
+                (Point3::new(3.0, 0.0, z), false),
+                (Point3::new(3.1 * trough.cos(), 3.1 * trough.sin(), z), true),
+                (Point3::new(5.0, 5.0, z), true),
+            ],
+            &label,
+        );
     }
 }
 
@@ -127,7 +158,11 @@ fn an_elliptical_boss_cuts_a_block_exactly() {
     )
     .unwrap();
     let vertex = topo.add_vertex(Vertex::new(ellipse.evaluate(0.0), 1e-7));
-    let edge = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Ellipse(ellipse)));
+    let edge = topo.add_edge(Edge::new(
+        vertex,
+        vertex,
+        EdgeCurve::Ellipse(ellipse.clone()),
+    ));
     let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
     let face = make_face_from_wire(&mut topo, wire).unwrap();
     let boss = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), HEIGHT).unwrap();
@@ -137,4 +172,89 @@ fn an_elliptical_boss_cuts_a_block_exactly() {
     transform_solid(&mut topo, block, &Mat4::translation(-6.0, -6.0, 0.0)).unwrap();
     let cut = boolean(&mut topo, BooleanOp::Cut, block, boss).unwrap();
     assert_exact(&topo, cut, 720.0 - volume, "cut");
+    // Within the semi-major axis, past the semi-minor one, at mid-height.
+    let mid = Point3::new(0.0, 0.0, 1.2);
+    assert_points(
+        &topo,
+        cut,
+        &[
+            (mid + ellipse.u_axis() * 2.5, false),
+            (mid + ellipse.v_axis() * 2.5, true),
+        ],
+        "cut",
+    );
+}
+
+/// A 12 x 12 plate with a hole of one closed curve, traversed either way,
+/// extrudes exactly: the ribbed wave and the ellipse.
+#[test]
+fn a_plate_with_a_closed_curve_hole_extrudes_exactly() {
+    let ellipse = brepkit_math::curves::Ellipse3D::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        3.0,
+        2.0,
+    )
+    .unwrap();
+    for (hole, forward) in [
+        ("wave", true),
+        ("wave", false),
+        ("ellipse", true),
+        ("ellipse", false),
+    ] {
+        let label = format!("{hole} hole, forward {forward}");
+        let mut topo = Topology::new();
+        let (edge, area) = if hole == "wave" {
+            let points = ring();
+            let curve = interpolate(&points, 3).unwrap();
+            let (t0, t1) = curve.domain();
+            let area = 0.5
+                * (0..20_000)
+                    .map(|k| {
+                        let p = curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 20_000.0);
+                        let q = curve.evaluate(t0 + (t1 - t0) * f64::from(k + 1) / 20_000.0);
+                        p.x().mul_add(q.y(), -(q.x() * p.y()))
+                    })
+                    .sum::<f64>();
+            (
+                make_nurbs_edge(&mut topo, points[0], points[64], curve, 1e-7),
+                area,
+            )
+        } else {
+            let vertex = topo.add_vertex(Vertex::new(ellipse.evaluate(0.0), 1e-7));
+            let edge = topo.add_edge(Edge::new(
+                vertex,
+                vertex,
+                EdgeCurve::Ellipse(ellipse.clone()),
+            ));
+            (edge, PI * 6.0)
+        };
+        let corners = [
+            Point3::new(-6.0, -6.0, 0.0),
+            Point3::new(6.0, -6.0, 0.0),
+            Point3::new(6.0, 6.0, 0.0),
+            Point3::new(-6.0, 6.0, 0.0),
+        ];
+        let outer = make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+        let inner = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap());
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![inner],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let plate = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), HEIGHT).unwrap();
+        assert_exact(&topo, plate, (144.0 - area) * HEIGHT, &label);
+        assert_points(
+            &topo,
+            plate,
+            &[
+                (Point3::new(0.0, 0.0, 1.2), false),
+                (Point3::new(5.0, 5.0, 1.2), true),
+            ],
+            &label,
+        );
+    }
 }
