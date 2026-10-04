@@ -768,8 +768,8 @@ pub fn remove_small_faces(
 /// Remove duplicate (coincident) faces from a solid.
 ///
 /// Two faces are considered duplicates if their outward normals are
-/// parallel (or anti-parallel), their outer wires have the same corners
-/// within `tolerance`, and they have as many holes. This happens when boolean
+/// parallel (or anti-parallel) and their outer wires and holes have the same
+/// corners within `tolerance`. This happens when boolean
 /// operations create overlapping fragments.
 ///
 /// Returns the number of duplicate faces removed.
@@ -795,7 +795,7 @@ pub fn remove_duplicate_faces(
     // Collect face data for comparison: centroid, normal, outer corners and
     // hole count.
     #[allow(clippy::type_complexity)]
-    let mut face_data: Vec<(FaceId, Point3, Vec3, Vec<Point3>, usize)> = Vec::new();
+    let mut face_data: Vec<(FaceId, Point3, Vec3, Vec<Point3>, Vec<Vec<Point3>>)> = Vec::new();
 
     for &fid in &face_ids {
         let face = topo.face(fid)?;
@@ -828,7 +828,15 @@ pub fn remove_duplicate_faces(
         }
 
         let centroid_pt = Point3::new(centroid.x(), centroid.y(), centroid.z());
-        face_data.push((fid, centroid_pt, normal, corners, face.inner_wires().len()));
+        let mut holes = Vec::with_capacity(face.inner_wires().len());
+        for &hole in face.inner_wires() {
+            let mut hole_corners = Vec::new();
+            for oe in topo.wire(hole)?.edges() {
+                hole_corners.push(topo.vertex(topo.edge(oe.edge())?.start())?.point());
+            }
+            holes.push(hole_corners);
+        }
+        face_data.push((fid, centroid_pt, normal, corners, holes));
     }
 
     // Find duplicate pairs: same vertex count, parallel normals, close centroids.
@@ -846,13 +854,17 @@ pub fn remove_duplicate_faces(
             let (_, centroid_a, normal_a, corners_a, holes_a) = &face_data[i];
             let (fid_j, centroid_b, normal_b, corners_b, holes_b) = &face_data[j];
 
-            // Same corners and holes: a ring and the face filling its hole
-            // can share a plane, a corner count and a centroid.
-            if corners_a.len() != corners_b.len()
-                || holes_a != holes_b
-                || !corners_a
+            // Same corners, outer and hole by hole: a ring and the face
+            // filling its hole can share a plane, a corner count and a
+            // centroid.
+            let same_corners = |a: &[Point3], b: &[Point3]| {
+                a.len() == b.len() && a.iter().all(|p| b.iter().any(|q| (*p - *q).length() < tol))
+            };
+            if !same_corners(corners_a, corners_b)
+                || holes_a.len() != holes_b.len()
+                || !holes_a
                     .iter()
-                    .all(|a| corners_b.iter().any(|b| (*a - *b).length() < tol))
+                    .all(|ha| holes_b.iter().any(|hb| same_corners(ha, hb)))
             {
                 continue;
             }
