@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.29](https://github.com/andymai/brepkit/compare/v4.1.28...v4.1.29) (2026-10-04)
+
+
+### Bug Fixes
+
+* **algo:** meet a cylinder exactly where a rod's side rests on its wall ([#1976](https://github.com/andymai/brepkit/issues/1976)) ([c7933de](https://github.com/andymai/brepkit/commit/c7933deb8ab40af9a7c81edc219f1075bc9ce921))
+
 ## [4.1.28](https://github.com/andymai/brepkit/compare/v4.1.27...v4.1.28) (2026-10-04)
 
 
