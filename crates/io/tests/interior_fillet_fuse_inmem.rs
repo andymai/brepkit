@@ -78,7 +78,7 @@ fn exact(topo: &mut Topology, op: BooleanOp, a: SolidId, b: SolidId) -> SolidId 
 /// Fuses the fillet material into its bin and cuts it from the bin, both
 /// exactly, and checks they read the same overlap: what the fuse leaves out
 /// of the material is the part inside the bin, which the cut takes away.
-fn assert_fuses_exactly(bin_data: &str, material_data: &str) {
+fn assert_fuses_exactly(bin_data: &str, material_data: &str, overlap: f64) {
     let mut topo = Topology::new();
     let bin = load(&mut topo, bin_data);
     let material = load(&mut topo, material_data);
@@ -96,14 +96,18 @@ fn assert_fuses_exactly(bin_data: &str, material_data: &str) {
     // The overlap both readings agree on, pinned so that a classification
     // error they share also fails.
     assert!(
-        (through_fuse - 12_957.832_253_1).abs() < 1e-6 * v_bin,
+        (through_fuse - overlap).abs() < 1e-6 * v_bin,
         "overlap {through_fuse}"
     );
 }
 
 #[test]
 fn interior_fillet_material_fuses_into_its_bin_exactly() {
-    assert_fuses_exactly("interior_fillet_bin.bin", "interior_fillet_material.bin");
+    assert_fuses_exactly(
+        "interior_fillet_bin.bin",
+        "interior_fillet_material.bin",
+        12_957.832_253_1,
+    );
 }
 
 /// Scoops on two adjacent walls: at the corners beside them the bin's wall
@@ -115,6 +119,7 @@ fn interior_fillet_material_fuses_into_a_scooped_bin_exactly() {
     assert_fuses_exactly(
         "interior_fillet_scoops_bin.bin",
         "interior_fillet_scoops_material.bin",
+        3_214.707_481_1,
     );
 }
 
@@ -124,5 +129,6 @@ fn interior_fillet_material_fuses_into_a_bin_with_a_wall_cutout_exactly() {
     assert_fuses_exactly(
         "interior_fillet_cutout_bin.bin",
         "interior_fillet_cutout_material.bin",
+        5_473.993_142_6,
     );
 }
