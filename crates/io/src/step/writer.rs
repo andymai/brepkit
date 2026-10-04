@@ -481,7 +481,10 @@ impl StepWriteContext {
                 self.write_entity(
                     id,
                     "CONICAL_SURFACE",
-                    &format!("'', #{axis}, 0.0E0, {:.15E})", cone.half_angle()),
+                    &format!(
+                        "'', #{axis}, 0.0E0, {:.15E})",
+                        std::f64::consts::FRAC_PI_2 - cone.half_angle()
+                    ),
                 );
                 id
             }
@@ -662,9 +665,10 @@ impl StepWriteContext {
         let _ = writeln!(out, "HEADER;");
         let _ = writeln!(
             out,
-            "FILE_DESCRIPTION(('{}', '{}'), '2;1');",
+            "FILE_DESCRIPTION(('{}', '{}', '{}'), '2;1');",
             super::EXPORT_DESCRIPTION,
-            super::ISO_FACE_BOUNDS
+            super::ISO_FACE_BOUNDS,
+            super::ISO_CONE_ANGLES
         );
         let _ = writeln!(
             out,

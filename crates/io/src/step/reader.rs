@@ -34,6 +34,8 @@ pub fn read_step(input: &str, topo: &mut Topology) -> Result<Vec<SolidId>, IoErr
     let legacy_bounds =
         header.contains(super::EXPORT_DESCRIPTION) && !header.contains(super::ISO_FACE_BOUNDS);
     let mut builder = StepBuilder::new(topo, &entities, legacy_bounds);
+    builder.legacy_cones =
+        header.contains(super::EXPORT_DESCRIPTION) && !header.contains(super::ISO_CONE_ANGLES);
     builder.build_all_solids()
 }
 
@@ -111,6 +113,9 @@ struct StepBuilder<'a> {
     /// An earlier brepkit export: its bounds already run about the surface's
     /// normal.
     legacy_bounds: bool,
+    /// An earlier brepkit export: its cones sit at their apex with the angle
+    /// from the plane across the axis.
+    legacy_cones: bool,
 }
 
 impl<'a> StepBuilder<'a> {
@@ -125,6 +130,7 @@ impl<'a> StepBuilder<'a> {
             vertex_cache: HashMap::new(),
             edge_cache: HashMap::new(),
             legacy_bounds,
+            legacy_cones: false,
         }
     }
 
@@ -316,12 +322,27 @@ impl<'a> StepBuilder<'a> {
                 let axis_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
                     reason: format!("CONICAL_SURFACE #{surface_ref} missing axis"),
                 })?;
-                // STEP: CONICAL_SURFACE('', #axis, base_radius, half_angle)
-                // half_angle is in radians in STEP AP203.
-                let half_angle = floats.last().copied().ok_or_else(|| IoError::ParseError {
-                    reason: format!("CONICAL_SURFACE #{surface_ref} missing half_angle"),
-                })?;
-                let (apex, axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
+                // CONICAL_SURFACE('', #position, radius, semi_angle): the
+                // radius is the cone's at the position, and the semi-angle runs
+                // from the axis, so the apex lies `radius / tan(semi_angle)`
+                // back along it. brepkit measures a cone's angle from the
+                // plane across the axis.
+                let (Some(&radius), Some(&semi_angle)) = (floats.first(), floats.last()) else {
+                    return Err(IoError::ParseError {
+                        reason: format!(
+                            "CONICAL_SURFACE #{surface_ref} needs a radius and an angle"
+                        ),
+                    });
+                };
+                let (position, axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
+                let (apex, half_angle) = if self.legacy_cones {
+                    (position, semi_angle)
+                } else {
+                    (
+                        position - axis * (radius / semi_angle.tan()),
+                        std::f64::consts::FRAC_PI_2 - semi_angle,
+                    )
+                };
                 let cone = brepkit_math::surfaces::ConicalSurface::new(apex, axis, half_angle)
                     .map_err(|e| IoError::ParseError {
                         reason: format!("CONICAL_SURFACE #{surface_ref}: {e}"),
@@ -1444,6 +1465,187 @@ mod tests {
             format!("#{id} = SURFACE_CURVE('', #{id}, ({surface}), .CURVE_3D.);")
         });
         assert!(read_step(&looped, &mut Topology::new()).is_err());
+    }
+
+    /// The largest distance from a cone face's boundary to its surface, read
+    /// back: a misplaced cone leaves its boundary circles off the surface.
+    fn cone_boundary_gap(step: &str) -> f64 {
+        let mut read = Topology::new();
+        let solids = read_step(step, &mut read).unwrap();
+        let mut gap = 0.0_f64;
+        for face in brepkit_topology::explorer::solid_faces(&read, solids[0]).unwrap() {
+            let face = read.face(face).unwrap();
+            if !matches!(face.surface(), FaceSurface::Cone(_)) {
+                continue;
+            }
+            for oe in read.wire(face.outer_wire()).unwrap().edges() {
+                let edge = read.edge(oe.edge()).unwrap();
+                let (a, b) = (
+                    read.vertex(edge.start()).unwrap().point(),
+                    read.vertex(edge.end()).unwrap().point(),
+                );
+                let (t0, t1) = if edge.start() == edge.end() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    edge.curve().domain_with_endpoints(a, b)
+                };
+                for k in 0..=8 {
+                    let p = edge.curve().evaluate_with_endpoints(
+                        (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
+                        a,
+                        b,
+                    );
+                    let (u, v) = face.surface().project_point(p).unwrap();
+                    gap = gap.max((face.surface().evaluate(u, v).unwrap() - p).length());
+                }
+            }
+        }
+        gap
+    }
+
+    /// A frustum's cone written by brepkit, with the cone record rewritten by
+    /// `cone` from the record's id, its placement's point, axis and reference
+    /// ids, and its semi-angle.
+    fn frustum_with_cone(
+        cone: impl Fn(&str, Point3, Vec3, &str, &str, f64, &mut u64) -> Vec<String>,
+    ) -> (f64, String) {
+        let mut topo = Topology::new();
+        let frustum = brepkit_operations::primitives::make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, frustum, 0.001).unwrap();
+        let plain = writer::write_step(&topo, &[frustum]).unwrap();
+        let record = |id: &str| {
+            plain
+                .lines()
+                .find(|l| l.starts_with(&format!("{id} =")))
+                .unwrap()
+                .to_string()
+        };
+        let refs = |line: &str| -> Vec<String> {
+            line.split('#')
+                .skip(2)
+                .map(|p| {
+                    let digits: String = p.chars().take_while(char::is_ascii_digit).collect();
+                    format!("#{digits}")
+                })
+                .collect()
+        };
+        let coords = |line: &str| {
+            let inner = &line[line.rfind('(').unwrap() + 1..line.find(')').unwrap()];
+            let v: Vec<f64> = inner
+                .split(',')
+                .map(|x| x.trim().parse().unwrap())
+                .collect();
+            Vec3::new(v[0], v[1], v[2])
+        };
+        let mut next = plain
+            .lines()
+            .filter_map(|l| l.strip_prefix('#')?.split_once(' ')?.0.parse::<u64>().ok())
+            .max()
+            .unwrap()
+            + 1;
+        let mut out = Vec::new();
+        let mut extra = Vec::new();
+        for line in plain.lines() {
+            if !line.contains("= CONICAL_SURFACE(") {
+                out.push(line.to_string());
+                continue;
+            }
+            let id = line.split(' ').next().unwrap();
+            let placement = &refs(line)[0];
+            let parts = refs(&record(placement));
+            let at = coords(&record(&parts[0]));
+            let axis = coords(&record(&parts[1]));
+            let semi: f64 = line[line.rfind(',').unwrap() + 1..line.rfind(')').unwrap()]
+                .trim()
+                .parse()
+                .unwrap();
+            let rewritten = cone(
+                id,
+                Point3::new(at.x(), at.y(), at.z()),
+                axis,
+                &parts[1],
+                &parts[2],
+                semi,
+                &mut next,
+            );
+            out.push(rewritten[0].clone());
+            extra.extend(rewritten[1..].iter().cloned());
+        }
+        let step = out.join("\n").replacen(
+            "ENDSEC;\nEND-ISO",
+            &format!("{}\nENDSEC;\nEND-ISO", extra.join("\n")),
+            1,
+        );
+        (volume, step)
+    }
+
+    /// A cone placed where its radius is not zero, as other writers place
+    /// it, with its semi-angle from the axis.
+    #[test]
+    fn cones_read_from_their_placement_radius() {
+        let (volume, step) = frustum_with_cone(|id, apex, axis, axis_ref, ref_ref, semi, next| {
+            let (point, placement) = (*next, *next + 1);
+            *next += 2;
+            let at = apex + axis * (1.5 / semi.tan());
+            vec![
+                format!("{id} = CONICAL_SURFACE('', #{placement}, 1.5, {semi:.17});"),
+                format!(
+                    "#{point} = CARTESIAN_POINT('', ({}, {}, {}));",
+                    at.x(),
+                    at.y(),
+                    at.z()
+                ),
+                format!("#{placement} = AXIS2_PLACEMENT_3D('', #{point}, {axis_ref}, {ref_ref});"),
+            ]
+        });
+        let mut read = Topology::new();
+        let solids = read_step(&step, &mut read).unwrap();
+        let got = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
+        assert!(
+            (got - volume).abs() < 1e-6 * volume,
+            "{got} against {volume}"
+        );
+        assert!(cone_boundary_gap(&step) < 1e-9);
+    }
+
+    /// An earlier brepkit export wrote a cone's angle from the plane across its
+    /// axis and has no cone marker; it still reads as written.
+    #[test]
+    fn earlier_brepkit_cones_read_as_written() {
+        let mut topo = Topology::new();
+        let frustum = brepkit_operations::primitives::make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, frustum, 0.001).unwrap();
+        let current = writer::write_step(&topo, &[frustum]).unwrap();
+        let legacy: String = current
+            .lines()
+            .map(|line| {
+                if line.contains("= CONICAL_SURFACE(") {
+                    let at = line.rfind(',').unwrap();
+                    let semi: f64 = line[at + 1..line.rfind(')').unwrap()]
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    format!(
+                        "{}, {:.15E});",
+                        &line[..at],
+                        std::f64::consts::FRAC_PI_2 - semi
+                    )
+                } else {
+                    line.replace(&format!(", '{}'", super::super::ISO_CONE_ANGLES), "")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!legacy.contains(super::super::ISO_CONE_ANGLES));
+        let mut read = Topology::new();
+        let solids = read_step(&legacy, &mut read).unwrap();
+        let got = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
+        assert!(
+            (got - volume).abs() < 1e-6 * volume,
+            "{got} against {volume}"
+        );
+        assert!(cone_boundary_gap(&legacy) < 1e-9);
+        assert!(cone_boundary_gap(&current) < 1e-9);
     }
 
     #[test]
