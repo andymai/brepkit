@@ -617,12 +617,16 @@ pub fn close_wire_gaps(
     Ok(gaps_closed)
 }
 
+const EDGE_EXTENT_SAMPLES: usize = 4;
+
 /// Remove faces smaller than a minimum area threshold.
 ///
 /// Faces with a bounding-box diagonal smaller than `tolerance` are
 /// considered degenerate slivers and are removed from the shell.
 /// This is common after boolean operations that produce micro-faces
-/// at near-tangent intersections.
+/// at near-tangent intersections. The box spans points along each boundary
+/// edge, not only its ends: a disc bounded by one closed circle has a single
+/// vertex.
 ///
 /// Returns the number of faces removed.
 ///
@@ -656,8 +660,15 @@ pub fn remove_small_faces(
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            for &vid in &[edge.start(), edge.end()] {
-                let pos = topo.vertex(vid)?.point();
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            for k in 0..=EDGE_EXTENT_SAMPLES {
+                #[allow(clippy::cast_precision_loss)]
+                let t = t0 + (t1 - t0) * k as f64 / EDGE_EXTENT_SAMPLES as f64;
+                let pos = edge.curve().evaluate_with_endpoints(t, start, end);
                 min_pt = Vec3::new(
                     min_pt.x().min(pos.x()),
                     min_pt.y().min(pos.y()),

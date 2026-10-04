@@ -105,6 +105,19 @@ fn fix_orientations_restores_a_flipped_plane() {
     assert!((*fixed - normal).length() < 1e-12 && (fixed_d - d).abs() < 1e-12);
 }
 
+/// A cylinder's caps are discs bounded by one closed circle, so their only
+/// vertex says nothing about their size.
+#[test]
+fn heal_keeps_a_cylinders_disc_caps() {
+    let mut topo = Topology::new();
+    let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 2.0).unwrap();
+
+    let report = heal_solid(&mut topo, rod, 1e-7).unwrap();
+    assert_eq!(report.small_faces_removed, 0);
+    let mesh = crate::tessellate::tessellate_solid(&topo, rod, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+}
+
 // ── Wire gap closure tests ──────────────────────────
 
 #[test]
