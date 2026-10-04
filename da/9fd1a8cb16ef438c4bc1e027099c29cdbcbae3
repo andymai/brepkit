@@ -1,0 +1,26 @@
+crates/io/tests/data/interior_fillet_bin.bin
+  s_a8677c67f85a06::t_b709d9cef45679 1
+crates/io/tests/data/interior_fillet_material.bin
+  s_a8677c67f85a06::t_b709d9cef45679 1
+crates/math/src/analytic_intersection.rs
+  s_a8677c67f85a06::t_b709d9cef45679 1993-1995,1998,2010-2011,2013,2019-2023,5052-5059,5061-5073,5093-5113
+crates/io/tests/interior_fillet_fuse_inmem.rs
+  s_a8677c67f85a06::t_e65e2a13da5059 1-87
+  s_a8677c67f85a06::t_3cdc66933d5280 88-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "da9fd1a8cb16ef438c4bc1e027099c29cdbcbae3",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
