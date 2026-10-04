@@ -114,13 +114,15 @@ fn exact_plane_torus(
             if height.abs() > small + 1e-10 * small {
                 return Ok(Some(Vec::new()));
             }
-            // Tangent to the tube's top or bottom: the two circles meet in
-            // the one of the torus's own radius, where they lie within the
-            // linear tolerance of it. A tilted plane's section is no circle.
-            let reach = small.mul_add(small, -(height * height)).max(0.0).sqrt();
+            // Tangent to the tube's top or bottom: the plane touches the
+            // torus along the one circle of its own radius. That circle lies
+            // on the torus within the plane's distance from the tube's top,
+            // so it stands for the section while that distance is within the
+            // linear tolerance, whatever the scale. A tilted plane's section
+            // is no circle.
             if big <= 1e-10 * small
                 || axis.cross(n).length() > 1e-12
-                || reach > crate::tolerance::Tolerance::default().linear
+                || (small - height.abs()).abs() > crate::tolerance::Tolerance::default().linear
             {
                 return Ok(None);
             }
@@ -4045,8 +4047,7 @@ mod tests {
                 let sampled = intersect_plane_torus(&torus, Vec3::new(0.0, 0.0, 1.0), z).unwrap();
                 assert_eq!(sampled.len(), 1, "R={major} r={minor} z={z}");
             }
-            // A tilted plane and one just inside the tube's top cut no
-            // single circle of radius R.
+            // A tilted plane cuts no single circle of radius R.
             let single = |normal: Vec3, d: f64| {
                 matches!(
                     exact_plane_analytic(AnalyticSurface::Torus(&torus), normal, d)
@@ -4056,11 +4057,27 @@ mod tests {
                 )
             };
             assert!(!single(Vec3::new(1e-6, 0.0, 1.0), 3.0 + minor));
-            assert!(!single(
-                Vec3::new(0.0, 0.0, 1.0),
-                minor.mul_add(1.0 - 1e-11, 3.0)
-            ));
         }
+    }
+
+    /// Tangency is read from the plane's distance to the tube's top, so it
+    /// survives rounding on a large torus, and a plane further inside than
+    /// the linear tolerance still cuts its two circles.
+    #[test]
+    fn plane_tangent_to_a_large_tube_is_read_through_rounding() {
+        let torus = ToroidalSurface::new(Point3::new(0.3, -0.7, 3.0), 200.0, 100.1).unwrap();
+        let level = Vec3::new(0.0, 0.0, 1.0);
+        let curves =
+            |d: f64| exact_plane_analytic(AnalyticSurface::Torus(&torus), level, d).unwrap();
+        assert!(matches!(
+            curves(3.0 + 100.1).as_slice(),
+            [ExactIntersectionCurve::Circle(_)]
+        ));
+        let inside = curves(3.0 + 100.1 - 4e-7);
+        assert!(!matches!(
+            inside.as_slice(),
+            [ExactIntersectionCurve::Circle(_)]
+        ));
     }
 
     /// Signed distance of a point to a z-axis torus centred at the origin:
