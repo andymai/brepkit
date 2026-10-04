@@ -540,18 +540,17 @@ impl<'a> StepBuilder<'a> {
         curve_ref: u64,
         curve_3d: Option<u64>,
     ) -> Result<EdgeCurve, IoError> {
-        let mut visited = vec![curve_ref];
+        let mut visited = std::collections::HashSet::from([curve_ref]);
         let mut next = curve_3d;
         loop {
             let at = next.ok_or_else(|| IoError::ParseError {
                 reason: format!("curve on surfaces #{curve_ref} missing its 3D curve"),
             })?;
-            if visited.contains(&at) {
+            if !visited.insert(at) {
                 return Err(IoError::ParseError {
                     reason: format!("curve on surfaces #{curve_ref} reaches #{at} again"),
                 });
             }
-            visited.push(at);
             let target = self.get_entity(at)?;
             next = if CURVES_ON_SURFACES.contains(&target.entity_type.as_str()) {
                 ref_after_name(&target.attrs)
