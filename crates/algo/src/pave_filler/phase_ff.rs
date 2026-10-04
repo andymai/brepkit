@@ -5822,14 +5822,21 @@ fn circle_face_hits(
                     }
                 }
             }
-            // A NURBS boundary edge ending on the circle: the face leaves the
-            // circle at that vertex, as a wall strip's corner under a lip
-            // cone does where the cone's plane section starts.
-            EdgeCurve::NurbsCurve(_) => {
-                for p in [sv.point(), ev.point()] {
-                    let t = circle.project(p);
-                    if (circle.evaluate(t) - p).length() < tol.linear * 10.0 {
-                        edge_hits.push((t.rem_euclid(std::f64::consts::TAU), p, Some(oe.edge())));
+            // A NURBS boundary edge ending on the circle and leaving it: the
+            // face leaves the circle at that vertex, as a wall strip's corner
+            // under a lip cone does where the cone's plane section starts. An
+            // edge running along the circle (a fillet's contact curve) adds no
+            // crossing, as a coincident arc does not.
+            curve @ EdgeCurve::NurbsCurve(_) => {
+                let off_circle = |p: Point3| (circle.evaluate(circle.project(p)) - p).length();
+                let (t0, t1) = curve.domain_with_endpoints(sv.point(), ev.point());
+                let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), sv.point(), ev.point());
+                if off_circle(mid) > tol.linear * 10.0 {
+                    for p in [sv.point(), ev.point()] {
+                        if off_circle(p) < tol.linear * 10.0 {
+                            let t = circle.project(p).rem_euclid(std::f64::consts::TAU);
+                            edge_hits.push((t, p, Some(oe.edge())));
+                        }
                     }
                 }
             }

@@ -16,9 +16,19 @@
 //! cylinder the material's air wall lies on, so the air wall must be split
 //! along the strip's edges to be matched with it.
 //!
+//! A capture from `binGenerator.export.interiorFillet.test.ts`'s custom shape
+//! on a non-square pitch adds a reflex corner, where the bin's wall stops
+//! under a lip chamfer stored as a NURBS face and the material's air wall
+//! runs on above it.
+//!
+//! The `interior_fillet_l_pocket_*` pair is built the same way from
+//! primitives: an L-shaped pocket in a block, its air rounded along the floor
+//! at 2.45 against corners of 2.55, so the corner tori are spindles.
+//!
 //! Data: `interior_fillet_bin.bin` (the bin), `interior_fillet_material.bin`
-//! (the fillet material), and the `interior_fillet_scoops_*` and
-//! `interior_fillet_cutout_*` pairs.
+//! (the fillet material), and the `interior_fillet_scoops_*`,
+//! `interior_fillet_cutout_*`, `interior_fillet_custom_*` and
+//! `interior_fillet_l_pocket_*` pairs.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -130,5 +140,43 @@ fn interior_fillet_material_fuses_into_a_bin_with_a_wall_cutout_exactly() {
         "interior_fillet_cutout_bin.bin",
         "interior_fillet_cutout_material.bin",
         5_473.993_142_6,
+    );
+}
+
+/// A custom outline's reflex corner: the bin's coaxial wall ends under the
+/// chamfer, and the air wall is split along the arcs where it does.
+#[test]
+fn interior_fillet_material_fuses_into_a_custom_outline_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_custom_bin.bin",
+        "interior_fillet_custom_material.bin",
+        6_113.649_848_0,
+    );
+}
+
+/// An L-shaped pocket: under the fillet along its x = -15 wall, the wall's
+/// strip lies inside the fillet material, and a ray from it toward the far
+/// wall passes the spindle tori of the far corners.
+#[test]
+fn interior_fillet_material_fuses_into_an_l_shaped_pocket_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_l_pocket_bin.bin",
+        "interior_fillet_l_pocket_material.bin",
+        822.027_526_6,
+    );
+}
+
+/// The boolean's own classifier reads the strip inside the material: each
+/// corner torus counts the crossings the curved patch makes, not those of a
+/// flat polygon through its rim.
+#[test]
+fn a_ray_past_spindle_corner_tori_counts_their_patches_exactly() {
+    let mut topo = Topology::new();
+    let material = load(&mut topo, "interior_fillet_l_pocket_material.bin");
+    let geoms = brepkit_algo::classifier::RayCastGeoms::new(&topo, material).unwrap();
+    let strip = brepkit_math::vec::Point3::new(-15.0, 0.0, 3.475);
+    assert_eq!(
+        brepkit_algo::classifier::classify_ray_cast_cached(&geoms, strip).unwrap(),
+        brepkit_algo::FaceClass::Inside
     );
 }

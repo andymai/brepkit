@@ -278,6 +278,8 @@ fn check_edge_face_pairs(
         })
         .collect::<Result<_, _>>()?;
 
+    let mut trims: Vec<Option<Option<crate::classifier::LateralTrim>>> =
+        (0..faces.len()).map(|_| None).collect();
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
         let (curve, start_pos, end_pos, t0, t1) = {
@@ -339,6 +341,36 @@ fn check_edge_face_pairs(
                 distance_to_surface_near(pt, surface, hull, tol) < tol.linear
             });
             if edge_on_surface {
+                // Through the inside of a cylinder or cone face, the edge
+                // bounds a region the two solids share there (a bin wall's
+                // top arc on the coaxial air wall of a fillet that reaches
+                // past it), and the face is split along it.
+                let near = 10.0 * tol.linear;
+                let lateral = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+                    && matches!(curve, EdgeCurve::Line | EdgeCurve::Circle(_));
+                if lateral {
+                    let trim = trims[face_idx]
+                        .get_or_insert_with(|| {
+                            crate::classifier::LateralTrim::new(topo, fid)
+                                .ok()
+                                .flatten()
+                        })
+                        .as_ref();
+                    let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), start_pos, end_pos);
+                    if trim.is_some_and(|trim| {
+                        trim.holds_clear(mid, near)
+                            && trim.holds(start_pos, near)
+                            && trim.holds(end_pos, near)
+                    }) {
+                        log::debug!("EF: edge {eid:?} lies inside face {fid:?}");
+                        arena.interference.ef.push(Interference::EF {
+                            edge: eid,
+                            face: fid,
+                            new_vertex: None,
+                            parameter: None,
+                        });
+                    }
+                }
                 continue;
             }
 
