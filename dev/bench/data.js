@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791112775600,
+  "lastUpdate": 1791116130977,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51353,6 +51353,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43419164,
             "range": "± 302221",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "288e45b79ecd7efd15622c061d21bfa6e492e906",
+          "message": "fix(operations): extrude a closed curve other than a circle to exact faces (#1979)\n\nThe layout tool’s crush-rib magnet holes now pass 7 of 7 tests on\nbrepkit, up from 2 of 7, matching 7 of 7 on the reference kernel. The\nother 43 exercised cutout, handle, and magnet generator files remain\nidentical.\n\n## What failed\n\nThe tool interpolates one spline through a ring of points returning to\nits start, makes a face, extrudes it, optionally fuses a chamfer\nfrustum, and cuts the result into the part.\n\nThree defects affected this path:\n\n1. `make_nurbs_edge`, `make_nurbs_edge_from_curve`, and the wasm\n`interpolatePoints` each added an end vertex to a closed spline edge.\nThe extruded bore had 3 vertices and failed `validate_solid`. Its mesh\nintegrated to 12.4 against an exact 72.5, and the file produced 26\ncaptured mesh fallback calls during booleans.\n\n2. After sharing the vertex, `extrude` divided the closed curve into\nchords. This produced a 43-sided prism with volume 0.38% short. The\ntool’s wave fit measured 0.1458 against its bound of 0.06.\n\n3. A closed ellipse, or a spline passed whole, swept into one ruled\nNURBS face closed on itself along a seam. The solid mesh left the face’s\nbottom row unjoined. On main, cutting an elliptical boss from a 12 x 12\nx 5 box returned the unchanged box, with volume 720 against 674.7611.\n\n## Change\n\nThe topology builders now share a vertex when a curve’s ends coincide\nwithin the vertex tolerance. `interpolatePoints` builds its edge through\nthose builders.\n\nFor an outer wire, `extrude` keeps a closed circle, or a NURBS\nrecognized as one, whole as one cylinder. Any other closed curve is\ndivided by `split_closed_edge_exact` into four exact pieces: NURBS\nsub-curves split at evenly spaced parameters, or ellipse arcs. Each\npiece sweeps a ruled face between distinct edges. At least three pieces\nare needed so that no two share both endpoints, which the duplicate-edge\nmerge would weld; the split uses four.\n\nA hole consisting of one closed edge follows the same route through\n`inner_wire_is_single_closed_edge`. A circle becomes one cylinder wall.\nOther curves become exact pieces, with each wall oriented from its own\ndistinct ends.\n\nSweep and revolve retain chord splitting, and that path now places a\nreversed edge's pieces in reverse order. With one vertex on a closed\nspline, a reversed spline hole had reached it, and its pieces did not\nmeet.\n\nThe ribbed bore now extrudes into 4 NURBS faces and 2 planes, valid and\nwatertight. Cuts are exact and valid when the mouth is flush with the\nblock bottom, buried as a cavity, or breaks through the top. The\nelliptical boss cut is exact at 674.7704 against 674.7611.\n\n## Still open\n\n- A NURBS face closed on itself along a seam still meshes open, and\nbooleans ignore it when it arrives through STEP import or another\noperation.\n- Sweep and revolve still use `split_closed_edge` to cut noncircular\nclosed profiles into chords.\n- The tool’s chamfered cutter is a frustum whose top circle touches the\nrib wave at its 8 peaks. It is exact and watertight with the correct\nvolume, but fails the `validate_solid` Euler check with `V - E + F =\n-1`. The check counts a vertex where the boundary touches itself only\nonce.\n\n## Verification\n\n`crates/operations/tests/closed_curve_extrusion.rs` covers:\n\n- `a_closed_spline_edge_has_one_vertex`\n- `a_ribbed_bore_cuts_a_block_exactly`, flush, buried, and through the\ntop\n- `an_elliptical_boss_cuts_a_block_exactly`\n- `a_plate_with_a_closed_curve_hole_extrudes_exactly`, using both the\nwave and ellipse holes with either edge traversal direction\n\nEach result validates, meshes watertight, remains exact with a NURBS\nface among fewer than 60 faces, and measures within 1e-4 of enclosed\narea times height. Probe classification removes the bore axis and a rib\npeak direction, while keeping a rib trough direction at radius 3.1 and\nblock material away from the bore.\n\nClippy is clean. Nextest across brepkit-topology, brepkit-operations,\nbrepkit-wasm, and brepkit-io reports 2043 passed. `pose_sweep` and\n`truth_audit` exactly match same-day main baselines. `approx_census`\ndiffers only in the named face pair for an already failing NURBS-loft\noffset, which also changes between main runs.\n\nThe 44 layout tool files were run with main’s wasm and this branch\noverlaid. Only `magnetHoleStyle.kernel` changed, from 5 failures to 0.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` records a closed entry for this fix\nand open rows for seam-closed NURBS faces, chord splitting in sweep and\nrevolve, and the chamfered cutter Euler validation failure.",
+          "timestamp": "2026-10-04T12:13:01Z",
+          "tree_id": "fefbdd13f9a515a1d921c636c5a7b2289f6eb433",
+          "url": "https://github.com/andymai/brepkit/commit/288e45b79ecd7efd15622c061d21bfa6e492e906"
+        },
+        "date": 1791116123363,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 591324,
+            "range": "± 10248",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 659008,
+            "range": "± 3858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8450,
+            "range": "± 408",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 498873,
+            "range": "± 64476",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30255742,
+            "range": "± 561903",
             "unit": "ns/iter"
           }
         ]
