@@ -167,6 +167,37 @@ fn nurbs_span_hull_bounds_only_the_span() {
     assert!(hull.max.x() - hull.min.x() < 2.0, "{hull:?}");
 }
 
+/// A ring and the square that fills its hole lie in one plane, both centred
+/// on the axis with four outer corners, yet cover different regions.
+#[test]
+fn heal_keeps_a_face_filling_a_coplanar_hole() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let plate = crate::primitives::make_box(&mut topo, 8.0, 8.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, plate, &Mat4::translation(-4.0, -4.0, 0.0))
+        .unwrap();
+    let cutter = crate::primitives::make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+    crate::transform::transform_solid(&mut topo, cutter, &Mat4::translation(-1.0, -1.0, -1.0))
+        .unwrap();
+    let ring =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, plate, cutter).unwrap();
+    let plug = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    crate::transform::transform_solid(&mut topo, plug, &Mat4::translation(-1.0, -1.0, 0.0))
+        .unwrap();
+    let (filled, _) = crate::boolean::boolean_with_evolution(
+        &mut topo,
+        crate::boolean::BooleanOp::Fuse,
+        ring,
+        plug,
+    )
+    .unwrap();
+
+    assert_eq!(remove_duplicate_faces(&mut topo, filled, 1e-7).unwrap(), 0);
+    let mesh = crate::tessellate::tessellate_solid(&topo, filled, 0.01).unwrap();
+    assert!(crate::tessellate::is_watertight(&mesh));
+}
+
 // ── Wire gap closure tests ──────────────────────────
 
 #[test]

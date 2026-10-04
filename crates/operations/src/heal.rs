@@ -442,13 +442,13 @@ fn pointed_cone_seam(
 
 /// Fix plane faces whose normal disagrees with their outer wire.
 ///
-/// A solid's faces wind their stored outer wires one way about their surface
-/// normals, counterclockwise by convention, reversed flag or not. The planes
-/// vote on which way this solid winds, and a plane winding the other way
-/// carries a flipped normal, which is negated. The winding is read arc-true.
-/// Where the material lies is not consulted: a cavity's floor faces toward the
-/// solid's middle. Curved faces and planes bounded by a NURBS edge are left
-/// alone.
+/// A shell's faces wind their stored outer wires one way about their surface
+/// normals, counterclockwise by convention, reversed flag or not. Each
+/// shell's planes vote on which way it winds, and a plane winding the other
+/// way carries a flipped normal, which is negated. The winding is read
+/// arc-true. Where the material lies is not consulted: a cavity's floor faces
+/// toward the solid's middle. Curved faces and planes bounded by a NURBS edge
+/// are left alone.
 ///
 /// Returns the number of faces whose orientation was fixed.
 ///
@@ -458,8 +458,26 @@ pub fn fix_face_orientations(
     topo: &mut Topology,
     solid: SolidId,
 ) -> Result<usize, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shells: Vec<_> = std::iter::once(solid_data.outer_shell())
+        .chain(solid_data.inner_shells().iter().copied())
+        .collect();
+    let mut fixed = 0;
+    for shell in shells {
+        let faces = topo.shell(shell)?.faces().to_vec();
+        fixed += fix_shell_plane_orientations(topo, &faces)?;
+    }
+    Ok(fixed)
+}
+
+/// [`fix_face_orientations`] over one shell's faces.
+fn fix_shell_plane_orientations(
+    topo: &mut Topology,
+    faces: &[FaceId],
+) -> Result<usize, crate::OperationsError> {
+    let lin = Tolerance::new().linear;
     let mut planes = Vec::new();
-    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+    for &fid in faces {
         let face = topo.face(fid)?;
         let FaceSurface::Plane { normal, d } = face.surface() else {
             continue;
@@ -479,7 +497,6 @@ pub fn fix_face_orientations(
         else {
             continue;
         };
-        let lin = Tolerance::new().linear;
         if area2.abs() > lin * lin {
             planes.push((fid, normal, d, area2 > 0.0));
         }
@@ -497,7 +514,6 @@ pub fn fix_face_orientations(
             fixed += 1;
         }
     }
-
     Ok(fixed)
 }
 
@@ -752,8 +768,8 @@ pub fn remove_small_faces(
 /// Remove duplicate (coincident) faces from a solid.
 ///
 /// Two faces are considered duplicates if their outward normals are
-/// parallel (or anti-parallel) and all vertices of one face are within
-/// `tolerance` of the other face's plane. This happens when boolean
+/// parallel (or anti-parallel), their outer wires have the same corners
+/// within `tolerance`, and they have as many holes. This happens when boolean
 /// operations create overlapping fragments.
 ///
 /// Returns the number of duplicate faces removed.
@@ -776,9 +792,10 @@ pub fn remove_duplicate_faces(
     let shell = topo.shell(shell_id)?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
-    // Collect face data for comparison.
-    // Tuple: (centroid, normal, vertex_count)
-    let mut face_data: Vec<(FaceId, Point3, Vec3, usize)> = Vec::new();
+    // Collect face data for comparison: centroid, normal, outer corners and
+    // hole count.
+    #[allow(clippy::type_complexity)]
+    let mut face_data: Vec<(FaceId, Point3, Vec3, Vec<Point3>, usize)> = Vec::new();
 
     for &fid in &face_ids {
         let face = topo.face(fid)?;
@@ -794,11 +811,13 @@ pub fn remove_duplicate_faces(
         let wire = topo.wire(face.outer_wire())?;
         let mut centroid = Vec3::new(0.0, 0.0, 0.0);
         let mut count = 0;
+        let mut corners = Vec::new();
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
             let pos = topo.vertex(edge.start())?.point();
             centroid += Vec3::new(pos.x(), pos.y(), pos.z());
+            corners.push(pos);
             count += 1;
         }
 
@@ -809,7 +828,7 @@ pub fn remove_duplicate_faces(
         }
 
         let centroid_pt = Point3::new(centroid.x(), centroid.y(), centroid.z());
-        face_data.push((fid, centroid_pt, normal, count));
+        face_data.push((fid, centroid_pt, normal, corners, face.inner_wires().len()));
     }
 
     // Find duplicate pairs: same vertex count, parallel normals, close centroids.
@@ -824,11 +843,17 @@ pub fn remove_duplicate_faces(
                 continue;
             }
 
-            let (_, centroid_a, normal_a, count_a) = &face_data[i];
-            let (fid_j, centroid_b, normal_b, count_b) = &face_data[j];
+            let (_, centroid_a, normal_a, corners_a, holes_a) = &face_data[i];
+            let (fid_j, centroid_b, normal_b, corners_b, holes_b) = &face_data[j];
 
-            // Same vertex count.
-            if count_a != count_b {
+            // Same corners and holes: a ring and the face filling its hole
+            // can share a plane, a corner count and a centroid.
+            if corners_a.len() != corners_b.len()
+                || holes_a != holes_b
+                || !corners_a
+                    .iter()
+                    .all(|a| corners_b.iter().any(|b| (*a - *b).length() < tol))
+            {
                 continue;
             }
 
