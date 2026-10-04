@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791117904588,
+  "lastUpdate": 1791119968896,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51461,6 +51461,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43567307,
             "range": "± 219637",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "325db18d0df08b579fc1941e4edae5764db841da",
+          "message": "fix(operations): revolve each profile edge's own curve, not its chord (#1981)\n\nCurved profile edges now revolve from their own geometry. The corrected\nspheroids, elliptic ring, and tunnelled ring validate, mesh watertight,\nand produce volumes close to their analytic references. A circle profile\nstill produces one exact torus.\n\n## What was wrong\n\nFor any profile edge other than a line or circle arc, `revolve` built\nthe band from the chord between its endpoints. `make_revolution_surface`\nwas degree 1 along the profile, with 2 control points. Circle arcs whose\ntorus would be a spindle used the same fallback, and holes used it for\nevery edge.\n\nOn main, half ellipse and equivalent NURBS profiles with semi axes 2\nfrom the axis and 1 along it produced valid solids with volume 0 instead\nof 16.75516. Closed curves were first cut into chords by\n`maybe_split_closed_wire`. An ellipse with semi axes 1 by 0.5, centered\n3 from the axis, became 80 cone faces with volume 29.12417 instead of\n29.60881. A 3 x 4 rectangle with a circular hole of radius 1 produced\n196.20817 instead of 194.80655.\n\n## Change\n\nEvery nonline band now sweeps the edge's own curve.\n`curve_revolution_surface` constructs the NURBS surface of revolution\nover the band's span. Each control point sweeps a rational quadratic\narc, with the middle weight scaled by the cosine of half the segment\nangle.\n\n`profile_band_curve` obtains the curve between the band's ring vertices\nas a circle or ellipse arc converted to NURBS, or as a NURBS subcurve.\nIt orients that curve along the band and turns it to the segment. This\napplies to outer wires and holes.\n\nClosed edges are divided into exact pieces by `split_closed_wire_exact`,\nusing the exact split from #1979. `revolution_band_surface` now returns\n`OperationsError`.\n\nNURBS edges may store their curve from end vertex to start vertex while\n`domain_with_endpoints` returns the full increasing domain. The band\ncurve is put in the edge's own order by checking which vertex its first\npoint lies on. `profile_chart_is_ccw` orders samples identically. Both\ncorrections are required: applying only one makes the reversed storage\nspheroid inside out, with oriented volume -16.7507.\n\n## Still open\n\nBoth `classify_point` and `classify_point_winding` misclassify points\ninside the elliptic ring at radius 3, height 0.3, and angles 90 and 180\ndegrees. The bands lie on the ring. This remains undug.\n\nSweep along a curved path still cuts closed noncircular profile curves\ninto chords.\n\n## Verification\n\nThe spheroids measure 16.75410 for the ellipse and 16.75409 for NURBS,\nagainst 16.75516. The elliptic ring measures 29.60821 against 29.60881.\nThe tunnelled ring measures 194.82031 against 194.80655.\n\n`crates/operations/tests/revolve_curved_profiles.rs` covers the\nspheroids, elliptic ring, and tunnelled ring, including reversed NURBS\nstorage and three tunnelled ring classification points. Each case checks\nvalidity, watertight meshing, at most 40 faces, volume within 1e-4,\noriented mesh volume within 1e-3, and every NURBS face within 1e-9 of\nthe swept surface.\n\nClippy is clean. Nextest over `brepkit-operations` and `brepkit-io`\nreports 1737 passed. `pose_sweep` and `truth_audit` exactly match same\nday main baselines. `approx_census` differs only in the reported face\npair for an already failing NURBS loft offset, which also changes\nbetween main runs. Only `kumikoCornerSlab` directly calls revolve in the\nlayout tool.\n\n## Roadmap\n\nThe roadmap records this fix as closed, narrows the sweep row to sweep\nalong a curved path, and adds a row for the classifier misreads.",
+          "timestamp": "2026-10-04T13:16:24Z",
+          "tree_id": "b6cd8a645043c92dfeaa9ff3521a3e684e9d295a",
+          "url": "https://github.com/andymai/brepkit/commit/325db18d0df08b579fc1941e4edae5764db841da"
+        },
+        "date": 1791119962917,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1046042,
+            "range": "± 1801",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1133508,
+            "range": "± 14226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13061,
+            "range": "± 289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 805821,
+            "range": "± 9051",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44155397,
+            "range": "± 128015",
             "unit": "ns/iter"
           }
         ]
