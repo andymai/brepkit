@@ -90,9 +90,11 @@ pub fn exact_plane_analytic_reaching(
 /// - a plane through the axis: the two tube cross-sections of radius `r`,
 ///   `R` either side of the axis.
 ///
+/// A plane across the axis tangent to the tube's top or bottom touches it
+/// along the one circle of radius `R`.
+///
 /// `Some` of no curves for a plane across the axis that misses the tube;
-/// `None` for any other plane, a plane tangent to the tube, or a torus whose
-/// tube reaches its axis.
+/// `None` for any other plane, or a torus whose tube reaches its axis.
 fn exact_plane_torus(
     torus: &ToroidalSurface,
     normal: Vec3,
@@ -108,11 +110,18 @@ fn exact_plane_torus(
     let along = n.dot(axis);
     if along.abs() > 1.0 - 1e-10 {
         if height.abs() >= small - 1e-10 * small {
-            return Ok(if height.abs() > small + 1e-10 * small {
-                Some(Vec::new())
-            } else {
-                None
-            });
+            if height.abs() > small + 1e-10 * small {
+                return Ok(Some(Vec::new()));
+            }
+            // Tangent to the tube's top or bottom: the two circles meet in
+            // the one of the torus's own radius.
+            if big <= 1e-10 * small {
+                return Ok(None);
+            }
+            let middle = center + n * height;
+            return Ok(Some(vec![ExactIntersectionCurve::Circle(Circle3D::new(
+                middle, n, big,
+            )?)]));
         }
         let reach = small.mul_add(small, -(height * height)).sqrt();
         if big - reach <= 1e-10 * big {
@@ -1074,8 +1083,10 @@ fn plane_torus_loops(
         let v0 = sin_v.clamp(-1.0, 1.0).asin();
         let v1 = std::f64::consts::PI - v0;
         let mut vs = vec![v0];
-        // Skip the mirror circle when the plane is tangent (v0 == v1).
-        if (v1 - v0).abs() > 1e-9 {
+        // Skip the mirror circle when the plane is tangent: at the tube's top
+        // v0 == v1, and at its bottom they differ by a whole turn.
+        let apart = (v1 - v0).rem_euclid(TAU);
+        if apart.min(TAU - apart) > 1e-9 {
             vs.push(v1);
         }
         return vs
@@ -4001,6 +4012,34 @@ mod tests {
             !curves.is_empty(),
             "should find intersection curves with torus"
         );
+    }
+
+    /// A plane resting on a torus's tube touches it along one circle of the
+    /// torus's own radius, ring or spindle, at the tube's top or bottom.
+    #[test]
+    fn plane_tangent_to_a_tube_touches_it_along_one_circle() {
+        for (major, minor) in [(5.0, 1.0), (0.1, 2.45)] {
+            let torus = ToroidalSurface::new(Point3::new(1.0, 2.0, 3.0), major, minor).unwrap();
+            for z in [3.0 - minor, 3.0 + minor] {
+                let exact = exact_plane_analytic(
+                    AnalyticSurface::Torus(&torus),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    z,
+                )
+                .unwrap();
+                assert_eq!(exact.len(), 1, "R={major} r={minor} z={z}");
+                let circle = match &exact[0] {
+                    ExactIntersectionCurve::Circle(c) => Some(c),
+                    _ => None,
+                };
+                let c = circle.expect("a circle");
+                assert!((c.radius() - major).abs() < 1e-12);
+                assert!((c.center() - Point3::new(1.0, 2.0, z)).length() < 1e-12);
+
+                let sampled = intersect_plane_torus(&torus, Vec3::new(0.0, 0.0, 1.0), z).unwrap();
+                assert_eq!(sampled.len(), 1, "R={major} r={minor} z={z}");
+            }
+        }
     }
 
     /// Signed distance of a point to a z-axis torus centred at the origin:
