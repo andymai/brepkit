@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791081175642,
+  "lastUpdate": 1791086509188,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -50759,6 +50759,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43425297,
             "range": "± 93092",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4bbcd322689f43c112d0916b8096f6e0107e1b09",
+          "message": "fix(operations): heal closed bodies without flipping cavity planes or deleting circle discs (#1968)\n\nOn this branch’s wasm build, the gridfinity\n`nestingFloor.geometry.test.ts` suite now fails 2 of 19 tests, compared\nwith 8 of 19 on main’s build. All eight failures from main pass. The\nremaining two passed on main because damaged solids forced mesh\nfallback.\n\n## What was wrong\n\nThe gridfinity tool calls brepjs `healSolid` in place on finished\nbodies, reaching `operations::heal::heal_solid`. In every traced case,\nthe boolean result before healing meshed with no open edges, while the\nhealed body did not. Three repairs damaged correct solids.\n\n`fix_face_orientations` flipped every plane whose normal pointed toward\nthe centroid of the solid’s face centres. Cavity floors and walls face\nthat centroid by design. One captured body had 9 planes flipped,\nchanging their normals but not their wires.\n\n`remove_small_faces` used the bounding box of edge endpoints. A disc\nbounded by one closed circle has one vertex, so four radius 3 magnet\npocket floors measured zero and were deleted. Every later fuse and the\ncompound cut then fell back to a mesh.\n\n`remove_duplicate_faces` matched outer wires using vertex count,\nparallel normals, and nearby vertex centroids. It deleted a floor\nfilling the bed’s opening because both faces had 8 corners and were\ncentred on the axis, leaving 28 open edges.\n\n`planar_wire_signed_area2` also treated a full circle’s sweep as\npositive regardless of its axis direction.\n\n## Change\n\n`fix_face_orientations` now reads each plane’s outer-wire winding about\nits normal, arc-true. Each shell’s planes vote on the shell winding,\nwith counterclockwise as the convention, and only opposing planes are\nflipped. A shell stored entirely in the opposite convention is left\nunchanged. Near-zero-area planes do not vote.\n\nFace sizing now uses boundary-curve bounds: exact bounds for lines,\ncircles, and ellipses, and the control-point hull of the edge’s own span\nfor NURBS.\n\nDuplicate removal now requires matching corners in both outer wires and\nholes. Closed-circle sweep sign now follows the circle axis. Area and\nvolume remain unaffected because they use the magnitude.\n\n## Verification\n\nThe heal and measure tests pass locally, 107 tests total. The three\ncaptured tool bodies pass through the new heal unchanged and retain\nwatertight meshes.\n\nAdded tests in `crates/operations/src/heal/tests.rs`:\n\n- `fix_orientations_leaves_a_cups_cavity_alone`\n- `fix_orientations_restores_a_flipped_plane`\n- `fix_orientations_reads_the_solids_own_winding`\n- `heal_keeps_a_cylinders_disc_caps`\n- `nurbs_span_hull_bounds_only_the_span`\n- `heal_keeps_a_face_filling_a_coplanar_hole`\n\nThe pose sweep and truth audit match main exactly. `approx_census`\ndiffers only in a NURBS offset line that also varies between runs on\nmain.\n\nIn the full generator-suite run, 302 files had finished at the time of\nwriting. The nesting floor file was the only finished file whose failure\ncount differed from a full main run earlier that day.\n\n## Still failing\n\nBoth export variants of “has a flat underside around magnet pockets\nwithout boss seams” fail. With the pocket floors preserved, the fuses\nremain exact, each magnet boss bottom remains a separate coplanar face,\nand export includes a seam circle at the boss radius.\n\nThe tool’s `fuse(body, pad)` reaches `fuseWithEvolution` without\noptions. `boolean_with_evolution` skips `unify_faces` to preserve\nper-face provenance, and the adapter’s evolution path ignores\n`simplify`. Applying `unify_faces` to the captured fuse merges the bed\nplane into one face.\n\nThese tests are left failing because changing how fuses merge coplanar\nfaces affects results used broadly by the tool and belongs in its own\nchange. How the reference kernel’s fuse avoids the seam remains to be\nfound.\n\n## Roadmap\n\nThe roadmap records the heal fixes as closed and the boss seams,\nincluding the current findings, as open. The open row from #1965 blaming\nthe corner quarter-cylinders’ mesher is removed because that diagnosis\nwas wrong.",
+          "timestamp": "2026-10-04T03:58:49Z",
+          "tree_id": "cf4124120aed129790620133d3a6b951b9299344",
+          "url": "https://github.com/andymai/brepkit/commit/4bbcd322689f43c112d0916b8096f6e0107e1b09"
+        },
+        "date": 1791086502712,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1126934,
+            "range": "± 6144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1174214,
+            "range": "± 55393",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14090,
+            "range": "± 57",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 816355,
+            "range": "± 3650",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46837567,
+            "range": "± 82565",
             "unit": "ns/iter"
           }
         ]
