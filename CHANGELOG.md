@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.24](https://github.com/andymai/brepkit/compare/v4.1.23...v4.1.24) (2026-10-04)
+
+
+### Bug Fixes
+
+* **blend:** round a rod's rim past half its radius and a tube's ring-capped mouth ([#1965](https://github.com/andymai/brepkit/issues/1965)) ([c55d9bc](https://github.com/andymai/brepkit/commit/c55d9bc5ca084cb2246241b8c0562e1b78d18635))
+* **math:** meet a plane resting on a torus's tube in its one exact circle ([#1967](https://github.com/andymai/brepkit/issues/1967)) ([2382bd1](https://github.com/andymai/brepkit/commit/2382bd1f3e7a74b575a89c331d4a6cc351cf7603))
+
 ## [4.1.23](https://github.com/andymai/brepkit/compare/v4.1.22...v4.1.23) (2026-10-03)
 
 
