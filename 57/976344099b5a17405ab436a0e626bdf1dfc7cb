@@ -1,0 +1,36 @@
+crates/io/tests/data/interior_fillet_custom_material.bin
+  s_a8677c67f85a06::t_c07515ebb5794b 1
+crates/io/tests/interior_fillet_fuse_inmem.rs
+  s_a8677c67f85a06::t_c07515ebb5794b 19-23,25-26,140-147
+  s_a8677c67f85a06::t_52893984753537 148
+  s_a8677c67f85a06::t_8d2a0c9656aa18 149-150
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_ac7d5f292c2d55 281-282,344-373
+crates/operations/tests/rounded_pocket_fillet_fuse.rs
+  s_a8677c67f85a06::t_b4ebe5af910dd8 6-7,10,13,32-36,42-43,49-56,61-112,114-118,121,123-124,127,129,137,152-153,164,170-182
+crates/io/tests/data/interior_fillet_custom_bin.bin
+  s_a8677c67f85a06::t_c07515ebb5794b 1
+crates/algo/src/classifier/ray_cast.rs
+  s_a8677c67f85a06::t_54eb44aa071b54 1126,2633-2639
+  s_a8677c67f85a06::t_a64b0a64301fbc 90-99,627,1121-1125,1700-1704,2551-2632,2640-2643,2645
+  s_a8677c67f85a06::t_ac7d5f292c2d55 1457-1470,1476,1484,1486-1487,1492
+  s_a8677c67f85a06::t_7571c9ea387470 1127,2644,2646
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_c07515ebb5794b 5825-5839
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "57976344099b5a17405ab436a0e626bdf1dfc7cb",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
