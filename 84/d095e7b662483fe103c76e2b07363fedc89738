@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_356696383eb9e0 198
+crates/operations/src/heal.rs
+  s_a8677c67f85a06::t_356696383eb9e0 771-772,798,831-839,857-865,867
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "84d095e7b662483fe103c76e2b07363fedc89738",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
