@@ -79,6 +79,35 @@ fn fix_orientations_leaves_a_cups_cavity_alone() {
     assert!(crate::tessellate::is_watertight(&mesh));
 }
 
+/// A solid whose faces all wind their wires the other way about their
+/// normals, each with its reversed flag toggled, is still a correct solid:
+/// its planes agree with each other, so none is flipped.
+#[test]
+fn fix_orientations_reads_the_solids_own_winding() {
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let reversed = face.is_reversed();
+        let edges: Vec<OrientedEdge> = topo
+            .wire(face.outer_wire())
+            .unwrap()
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.face_mut(fid).unwrap();
+        face.set_outer_wire(wire);
+        face.set_reversed(!reversed);
+    }
+
+    assert_eq!(fix_face_orientations(&mut topo, solid).unwrap(), 0);
+}
+
 #[test]
 fn fix_orientations_restores_a_flipped_plane() {
     let mut topo = Topology::new();

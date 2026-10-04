@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeId};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::SolidId;
@@ -442,12 +442,13 @@ fn pointed_cone_seam(
 
 /// Fix plane faces whose normal disagrees with their outer wire.
 ///
-/// A face's stored outer wire runs counterclockwise about its surface
-/// normal, reversed flag or not, so a plane whose outer wire winds clockwise
-/// about its normal carries a flipped normal, which is negated. The winding is
-/// read arc-true. Where the material lies is not consulted: a cavity's floor
-/// faces toward the solid's middle. Curved faces and planes bounded by a NURBS
-/// edge are left alone.
+/// A solid's faces wind their stored outer wires one way about their surface
+/// normals, counterclockwise by convention, reversed flag or not. The planes
+/// vote on which way this solid winds, and a plane winding the other way
+/// carries a flipped normal, which is negated. The winding is read arc-true.
+/// Where the material lies is not consulted: a cavity's floor faces toward the
+/// solid's middle. Curved faces and planes bounded by a NURBS edge are left
+/// alone.
 ///
 /// Returns the number of faces whose orientation was fixed.
 ///
@@ -457,7 +458,7 @@ pub fn fix_face_orientations(
     topo: &mut Topology,
     solid: SolidId,
 ) -> Result<usize, crate::OperationsError> {
-    let mut faces_to_flip = Vec::new();
+    let mut planes = Vec::new();
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
         let face = topo.face(fid)?;
         let FaceSurface::Plane { normal, d } = face.surface() else {
@@ -478,19 +479,25 @@ pub fn fix_face_orientations(
         else {
             continue;
         };
-        if area2 < 0.0 {
-            faces_to_flip.push((fid, normal, d));
+        if area2 != 0.0 {
+            planes.push((fid, normal, d, area2 > 0.0));
         }
     }
 
-    for &(fid, normal, d) in &faces_to_flip {
-        topo.face_mut(fid)?.set_surface(FaceSurface::Plane {
-            normal: -normal,
-            d: -d,
-        });
+    let counterclockwise = planes.iter().filter(|p| p.3).count();
+    let winds_counterclockwise = 2 * counterclockwise >= planes.len();
+    let mut fixed = 0;
+    for &(fid, normal, d, ccw) in &planes {
+        if ccw != winds_counterclockwise {
+            topo.face_mut(fid)?.set_surface(FaceSurface::Plane {
+                normal: -normal,
+                d: -d,
+            });
+            fixed += 1;
+        }
     }
 
-    Ok(faces_to_flip.len())
+    Ok(fixed)
 }
 
 /// Close gaps between consecutive edges in face wires.
@@ -617,15 +624,13 @@ pub fn close_wire_gaps(
     Ok(gaps_closed)
 }
 
-const EDGE_EXTENT_SAMPLES: usize = 4;
-
 /// Remove faces smaller than a minimum area threshold.
 ///
 /// Faces with a bounding-box diagonal smaller than `tolerance` are
 /// considered degenerate slivers and are removed from the shell.
 /// This is common after boolean operations that produce micro-faces
-/// at near-tangent intersections. The box spans points along each boundary
-/// edge, not only its ends: a disc bounded by one closed circle has a single
+/// at near-tangent intersections. The box bounds each boundary edge's curve,
+/// not only its ends: a disc bounded by one closed circle has a single
 /// vertex.
 ///
 /// Returns the number of faces removed.
@@ -665,10 +670,13 @@ pub fn remove_small_faces(
                 topo.vertex(edge.end())?.point(),
             );
             let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-            for k in 0..=EDGE_EXTENT_SAMPLES {
-                #[allow(clippy::cast_precision_loss)]
-                let t = t0 + (t1 - t0) * k as f64 / EDGE_EXTENT_SAMPLES as f64;
-                let pos = edge.curve().evaluate_with_endpoints(t, start, end);
+            let bounds = match edge.curve() {
+                EdgeCurve::Line => brepkit_math::aabb::Aabb3::from_points([start, end]),
+                EdgeCurve::Circle(c) => c.arc_aabb(t0, t1),
+                EdgeCurve::Ellipse(e) => e.arc_aabb(t0, t1),
+                EdgeCurve::NurbsCurve(n) => n.aabb(),
+            };
+            for pos in [bounds.min, bounds.max] {
                 min_pt = Vec3::new(
                     min_pt.x().min(pos.x()),
                     min_pt.y().min(pos.y()),

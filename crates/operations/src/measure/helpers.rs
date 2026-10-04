@@ -473,7 +473,9 @@ pub fn planar_wire_signed_area2(
                         brepkit_topology::edge::EdgeCurve::Circle(c) => {
                             c.normal().dot(ex.cross(ey)).signum()
                         }
-                        _ => 1.0,
+                        brepkit_topology::edge::EdgeCurve::Line
+                        | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                        | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => 1.0,
                     };
                     std::f64::consts::TAU * facing
                 } else {
