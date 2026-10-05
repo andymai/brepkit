@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791212832555,
+  "lastUpdate": 1791238347720,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51839,6 +51839,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28498937,
             "range": "± 1052141",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ab3b9fbfdb36d7bc84fed5af34e2795c9b2d593f",
+          "message": "fix(algo): keep the rim round a ring-shaped bin's hole when its cavity is cut out (#1989)\n\nThe ring-shaped custom bin cavity cut now preserves the rim around its\nhole and completes through the operations boolean without mesh fallback.\n\n## What was wrong\n\nThe gridfinity layout case from\n`binGenerator.export.interiorFillet.test.ts`, “a ring-shaped custom bin\nkeeps its hole open,” subtracts the bin's cavity, a thinner ring\nstanding on a 1.2 floor, from its block, a rounded square around a\nrounded square hole. On main 4.1.32, this cut falls back to a mesh.\n\nThe block's top face is a ring around the hole. The cavity walls cut it\ninto two section loops, both enclosing the hole.\n`split_face_with_internal_loops` in\n`crates/algo/src/builder/face_splitter/special_cases.rs` assigned the\nhole to the first enclosing loop, the outer loop. The strip between the\nhole and the inner loop therefore became a disc over the hole. Its\nsample point fell in the hole, the strip was classified with that point,\nand the hole's rim was left free.\n\nA hole now goes to the smallest enclosing loop by loop polygon area,\nmatching the rule already used for an enclosed loop.\n\n## Verification\n\n`crates/io/tests/ring_bin_cavity_cut_inmem.rs` uses `ring_bin_block.bin`\nand `ring_bin_cavity.bin`.\n`a_ring_bin_less_its_cavity_keeps_the_rim_round_its_hole` requires cut,\nfuse, and intersect through the operations boolean to avoid mesh\nfallback, use every edge twice, validate, produce watertight meshes, and\nmatch closed-form rounded-square ring volumes times their heights within\n`1e-6` relative. The test fails on main 4.1.32 because the cut falls\nback.\n\nClippy is clean for `brepkit-algo`, `brepkit-operations`, and\n`brepkit-io` with all targets. Nextest across `brepkit-math`,\n`brepkit-algo`, `brepkit-blend`, `brepkit-operations`, `brepkit-io`, and\n`brepkit-wasm` reports 2909 passed.\n\n`pose_sweep` and `truth_audit` exactly match a same-day main baseline.\n`approx_census` differs only for the face pair named in an already\nfailing NURBS loft offset error, which also varies between main runs.\n\nThe layout tool's full generator suite ran in four parts with\n`BREPJS_KERNEL=brepkit`, using this branch's wasm and main 4.1.32's wasm\nin the same tool worktree on the same day. This branch had 386 failing\ntests versus 385 on main. The difference was\n`binGenerator.export.kumikoPatterns`, “sakura carves a 1×1×6 bin,” which\ntimed out at 180 seconds on this branch and passed on main. Run alone,\nit times out on both builds.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` gains a closed entry for this cut, and\nthe rounded-prism rim ease row points to it.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the ring-shaped bin's cavity cut in the gridfinity tool, so the\nboolean completes exactly instead of falling back to a mesh.\n\n- The cavity walls cut the block's ring-shaped top face into two section\nloops, both enclosing the hole; the hole went to the outer loop, leaving\nthe strip between it and the inner loop classified by a sample point\ninside the hole, so the rim was left free and the cut fell back.\n- A hole now goes to the smallest enclosing loop by polygon area,\nmatching the rule already used for enclosed loops. Captured fixtures and\nan in-memory test validate both operands, then keep cut, fuse, and\nintersect exact and watertight.\n\n<sup>Written for commit 3088112fe19034d1b614c6e9adeef59c6be81c7b.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1989?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-05T15:08:52-07:00",
+          "tree_id": "9d33765d1d365ddbf3fe8aae6e53144b07cca71a",
+          "url": "https://github.com/andymai/brepkit/commit/ab3b9fbfdb36d7bc84fed5af34e2795c9b2d593f"
+        },
+        "date": 1791238341735,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1006350,
+            "range": "± 3204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1092120,
+            "range": "± 1589",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13125,
+            "range": "± 99",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 772573,
+            "range": "± 3327",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41770352,
+            "range": "± 160745",
             "unit": "ns/iter"
           }
         ]
