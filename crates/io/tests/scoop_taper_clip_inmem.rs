@@ -127,3 +127,23 @@ fn a_clipped_scoop_fuses_into_its_tapered_bin_exactly() {
         "the fuse meshes to {meshed}"
     );
 }
+
+/// The scoop's part in the bin's walls and floor. Its cubic reaches the
+/// pocket's upright x walls in a 0.04 by 0.05 sliver at their corners, which
+/// the classifier read against a flat polygon through the trimmed cubic's
+/// wires. (The cut is not a manifold solid: the cubic dips below the floor
+/// and rises back to it at the lip, so two wedges of floor touch along the
+/// lip's line.)
+#[test]
+fn a_clipped_scoop_and_its_tapered_bin_intersect_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "taper_scoop_bin.bin");
+    let scoop = load(&mut topo, "taper_scoop_clipped.bin");
+    let common = exact(&mut topo, BooleanOp::Intersect, bin, scoop);
+    let got = solid_volume(&topo, common, 0.001).unwrap();
+    let want = COMMON - SCOOP_IN_POCKET;
+    assert!(
+        (got - want).abs() <= 2e-4 * SCOOP_IN_POCKET,
+        "intersect volume {got}, expected {want}"
+    );
+}
