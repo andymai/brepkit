@@ -1260,6 +1260,9 @@ impl FaceExtent {
                 // Unlike `contains` (conservative keep on projection failure),
                 // the STRICT gate fails closed: an unprojectable point cannot
                 // certify a genuine interior crossing.
+                if !on_own_tube(surface, p, (u, v)) {
+                    return false;
+                }
                 let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 in_v && in_u
@@ -1297,6 +1300,9 @@ impl FaceExtent {
                 periodic_v,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
+                if !on_own_tube(surface, p, (u, v)) {
+                    return false;
+                }
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 in_v && in_u
@@ -1349,6 +1355,19 @@ fn face_circumferential_u_gap(
         }
     }
     crate::classifier::largest_u_gap(&u_samples)
+}
+
+/// Whether a point on a torus lies on the part of the tube its projection
+/// reads: a spindle torus's tube crosses the axis, and a point on the part
+/// across it projects into a patch it is not on. Every other surface's
+/// points are on what they project to.
+fn on_own_tube(surface: &FaceSurface, p: Point3, (u, v): (f64, f64)) -> bool {
+    let FaceSurface::Torus(t) = surface else {
+        return true;
+    };
+    surface
+        .evaluate(u, v)
+        .is_none_or(|q| (q - p).length() <= 1e-3 * t.minor_radius())
 }
 
 /// Whether `v` lies in `(v0, v1)` widened by `margin` at each end (narrowed
@@ -1891,13 +1910,11 @@ fn trim_torus_oval_to_box_face(
     if (raw.p_start - raw.p_end).length() > 1e-6 {
         return None; // open curve — not a closed oval
     }
-    let (torus, plane_face, plane_ext) = match (surf_a, surf_b) {
-        (FaceSurface::Torus(t), FaceSurface::Plane { .. }) => (t, fb, ext_b),
-        (FaceSurface::Plane { .. }, FaceSurface::Torus(t)) => (t, fa, ext_a),
+    let (torus, plane_face, plane_ext, torus_ext) = match (surf_a, surf_b) {
+        (FaceSurface::Torus(t), FaceSurface::Plane { .. }) => (t, fb, ext_b, ext_a),
+        (FaceSurface::Plane { .. }, FaceSurface::Torus(t)) => (t, fa, ext_a, ext_b),
         _ => return None,
     };
-    let _ = ext_a;
-    let _ = ext_b;
 
     // The box face's straight boundary edges (its rectangle sides).
     let face = topo.face(plane_face).ok()?;
@@ -2045,7 +2062,9 @@ fn trim_torus_oval_to_box_face(
         if pts.len() < 4 {
             continue;
         }
-        if !plane_ext.contains(pts[pts.len() / 2]) {
+        // The oval runs round the whole torus; an arc off the torus face (a
+        // corner patch's quarter of the ring) bounds nothing on it.
+        if !plane_ext.contains(pts[pts.len() / 2]) || !torus_ext.contains(pts[pts.len() / 2]) {
             continue;
         }
         let last = pts.len() - 1;
@@ -5559,7 +5578,7 @@ fn analytic_nurbs_intersection(
             c.to_nurbs(v0, v1)
         }
         FaceSurface::Sphere(s) => s.to_nurbs(),
-        FaceSurface::Torus(t) => t.to_nurbs(),
+        FaceSurface::Torus(t) => t.to_rational_nurbs(),
         _ => return Ok(Vec::new()),
     };
     nurbs_nurbs_intersection(&converted?, nurbs)
