@@ -16,7 +16,14 @@
 //! The clip fell back to a mesh, which every later boolean of the test's
 //! fillet then took as an operand.
 //!
-//! Data: `taper_clip_scoop.bin` and `taper_clip_envelope.bin`.
+//! The tool then fuses the clipped scoop into its bin, whose pocket (half
+//! sizes 43.55 by 19.55, corners r 2.55, floor at z 2.25, its x walls leaning
+//! in below z 6 like the envelope's, a stacking lip narrowing it above z
+//! 20.65) lies inside the envelope, so the scoop's part outside the pocket is
+//! inside the bin's walls and floor.
+//!
+//! Data: `taper_clip_scoop.bin` and `taper_clip_envelope.bin`; for the fuse,
+//! `taper_scoop_bin.bin` and `taper_scoop_clipped.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -25,7 +32,7 @@ use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
 use brepkit_operations::boolean::{self, BooleanOp};
-use brepkit_operations::measure::solid_volume;
+use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -95,4 +102,28 @@ fn a_scoop_clipped_by_a_tapered_envelope_keeps_its_closed_form() {
             "{label} volume {got}, expected {want}"
         );
     }
+}
+
+/// The clipped scoop's part inside the pocket, integrated numerically (to
+/// 1e-3) from the cubic and the pocket's sections, lip included.
+const SCOOP_IN_POCKET: f64 = 3_023.950;
+
+#[test]
+fn a_clipped_scoop_fuses_into_its_tapered_bin_exactly() {
+    let mut topo = Topology::new();
+    let bin = load(&mut topo, "taper_scoop_bin.bin");
+    let scoop = load(&mut topo, "taper_scoop_clipped.bin");
+    let fused = exact(&mut topo, BooleanOp::Fuse, bin, scoop);
+    let volume = |s: SolidId| solid_volume(&topo, s, 0.001).unwrap();
+    let added = volume(fused) - volume(bin);
+    assert!(
+        (added - SCOOP_IN_POCKET).abs() <= 2e-4 * SCOOP_IN_POCKET,
+        "the fuse adds {added}, expected {SCOOP_IN_POCKET}"
+    );
+    // The mesh's own volume agrees: no face meshes inside out.
+    let meshed = oriented_solid_volume(&topo, fused, 0.001).unwrap();
+    assert!(
+        (meshed - volume(fused)).abs() <= 2e-4 * SCOOP_IN_POCKET,
+        "the fuse meshes to {meshed}"
+    );
 }

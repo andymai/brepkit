@@ -565,6 +565,24 @@ pub fn perform(
                     if (0..=N).map(|i| sample(i, N)).any(in_both) {
                         return true;
                     }
+                    // A marched section can meet both boxes along a run far
+                    // shorter than any sample pitch tied to the faces' size (a
+                    // scoop crossing a pocket wall 0.06 along a 25-long
+                    // profile, where the wall's corner meets the scoop), so its
+                    // chords are slab-tested like a line.
+                    // A run only as long as the boxes' tolerance pad is two
+                    // faces touching along an edge, not a section.
+                    if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
+                        const M: usize = 256;
+                        let pts: Vec<Point3> = (0..=M).map(|i| sample(i, M)).collect();
+                        let run: f64 = pts
+                            .windows(2)
+                            .map(|w| segment_run_in_both_boxes(w[0], w[1], bb_a, bb_b))
+                            .sum();
+                        if run > 1e3 * tol.linear {
+                            return true;
+                        }
+                    }
                     // Plane×plane lines that the sampled test missed get the
                     // exact answer against the faces' TRUE OUTLINES (the fix
                     // the AABB slab-clip could not safely provide here: an
@@ -1565,6 +1583,41 @@ fn kind_counts(curves: &[RawCurve]) -> [usize; 4] {
 /// itself an AABB, so this is the standard slab clip. It replaces sampling for
 /// lines, which aliases: the overlap window can be orders of magnitude shorter
 /// than the segment, and a missed window silently discards a real section.
+/// The length of the segment `p0`-`p1` inside both boxes.
+fn segment_run_in_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> f64 {
+    let lo = [
+        a.min.x().max(b.min.x()),
+        a.min.y().max(b.min.y()),
+        a.min.z().max(b.min.z()),
+    ];
+    let hi = [
+        a.max.x().min(b.max.x()),
+        a.max.y().min(b.max.y()),
+        a.max.z().min(b.max.z()),
+    ];
+    let start = [p0.x(), p0.y(), p0.z()];
+    let dir = [p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z()];
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for i in 0..3 {
+        if lo[i] > hi[i] {
+            return 0.0;
+        }
+        if dir[i] == 0.0 {
+            if start[i] < lo[i] || start[i] > hi[i] {
+                return 0.0;
+            }
+            continue;
+        }
+        let (ta, tb) = ((lo[i] - start[i]) / dir[i], (hi[i] - start[i]) / dir[i]);
+        t0 = t0.max(ta.min(tb));
+        t1 = t1.min(ta.max(tb));
+        if t0 >= t1 {
+            return 0.0;
+        }
+    }
+    (t1 - t0) * (p1 - p0).length()
+}
+
 fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool {
     let lo = [
         a.min.x().max(b.min.x()),

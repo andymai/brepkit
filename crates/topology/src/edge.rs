@@ -159,10 +159,13 @@ impl EdgeCurve {
                 }
                 let p0 = ParametricCurve::evaluate(n, d0);
                 let p1 = ParametricCurve::evaluate(n, d1);
-                if ((p0 - start).length() < END_EPS && (p1 - end).length() < END_EPS)
-                    || ((p0 - end).length() < END_EPS && (p1 - start).length() < END_EPS)
-                {
+                if (p0 - start).length() < END_EPS && (p1 - end).length() < END_EPS {
                     return (d0, d1);
+                }
+                // An edge stored against its curve's direction runs the
+                // whole curve backward, as a reversed sub-span does below.
+                if (p0 - end).length() < END_EPS && (p1 - start).length() < END_EPS {
+                    return (d1, d0);
                 }
                 let proj = |p| brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9);
                 if let (Ok(pa), Ok(pb)) = (proj(start), proj(end)) {
@@ -403,8 +406,12 @@ mod tests {
         );
     }
 
+    /// A whole edge spans the full domain in its own direction: stored
+    /// against its curve (a boolean's section edge reused backward), it runs
+    /// the domain backward, so a consumer sampling from `t0` starts at the
+    /// edge's start vertex.
     #[test]
-    fn nurbs_domain_whole_edge_keeps_full_span_both_orientations() {
+    fn nurbs_domain_whole_edge_runs_the_full_span_its_own_way() {
         let curve = open_nurbs();
         let EdgeCurve::NurbsCurve(n) = &curve else {
             unreachable!()
@@ -413,7 +420,9 @@ mod tests {
         let p0 = brepkit_math::traits::ParametricCurve::evaluate(n, d0);
         let p1 = brepkit_math::traits::ParametricCurve::evaluate(n, d1);
         assert_full_domain(curve.domain_with_endpoints(p0, p1), d0, d1);
-        assert_full_domain(curve.domain_with_endpoints(p1, p0), d0, d1);
+        let (t0, t1) = curve.domain_with_endpoints(p1, p0);
+        assert_full_domain((t0, t1), d1, d0);
+        assert!((curve.evaluate_with_endpoints(t0, p1, p0) - p1).length() < 1e-12);
     }
 
     #[test]

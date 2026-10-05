@@ -1047,16 +1047,18 @@ mod tests {
     #[test]
     fn nurbs_section_splits_ordered_along_reversed_twin() {
         // The reverse twin stores the SAME curve but swapped endpoints, so
-        // ascending natural-domain `t` runs end→start; the splits must come
-        // back ordered from `start_3d` (nearest first) or the piece-building
-        // loop emits overlapping pieces.
+        // ascending natural-domain `t` runs end→start, while the edge's own
+        // fraction runs start→end; the splits must come back ordered from
+        // `start_3d` (nearest first) or the piece-building loop emits
+        // overlapping pieces.
         let edge = parabola_section_edge(true);
         let eval = |t: f64| evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+        assert!((eval(0.0) - edge.start_3d).length() < 1e-9);
         let (sp_a, sp_b) = (eval(0.3), eval(0.7));
-        let splits = find_splits_on_nurbs_section(&edge, &[sp_a, sp_b], 1e-3, false);
+        let splits = find_splits_on_nurbs_section(&edge, &[sp_b, sp_a], 1e-3, false);
         assert_eq!(splits.len(), 2);
-        assert!((splits[0].1 - sp_b).length() < 1e-6);
-        assert!((splits[1].1 - sp_a).length() < 1e-6);
+        assert!((splits[0].1 - sp_a).length() < 1e-6);
+        assert!((splits[1].1 - sp_b).length() < 1e-6);
         let d0 = (splits[0].1 - edge.start_3d).length();
         let d1 = (splits[1].1 - edge.start_3d).length();
         assert!(d0 < d1, "splits must walk start_3d → end_3d");
