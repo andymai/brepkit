@@ -1,0 +1,21 @@
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_c669f9cc970195 1263-1295
+crates/math/src/surfaces/tests.rs
+  s_a8677c67f85a06::t_6bd11ac9994827 627-651
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "27da8483e8d3572f2b02160da6f4a032837c99cd",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
