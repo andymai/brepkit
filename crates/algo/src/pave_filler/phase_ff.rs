@@ -3518,10 +3518,11 @@ fn trim_open_curve_to_plane_face_lines(
     // the plane face's boundary, and only by the plane: its extent is a `v`
     // band read off a few boundary samples, not a containment test, and the
     // NURBS face trims its sections to its own boundary in its splitter.
+    // With curved edges on the plane face, a NURBS partner's section is
+    // trimmed only where every crossing lands on a straight edge (checked
+    // once the crossings are found): there the sampled polygon is exact.
     let partner_is_cone = matches!(other_surf, FaceSurface::Cone(_));
-    if !partner_is_cone && has_curved_boundary {
-        return None;
-    }
+    let straight_crossings_only = !partner_is_cone && has_curved_boundary;
 
     let n_samples = 64usize;
     let eval_at =
@@ -3603,6 +3604,35 @@ fn trim_open_curve_to_plane_face_lines(
     scan_polygon(poly);
     for h in holes {
         scan_polygon(h);
+    }
+    let mut straight: Vec<(Point3, Point3)> = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            if matches!(edge.curve(), EdgeCurve::Line) {
+                straight.push((
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                ));
+            }
+        }
+    }
+    let on_segment = |p: Point3, (a, b): (Point3, Point3)| {
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let w = if len2 > 0.0 {
+            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + ab * w)).length() <= tol.linear * 10.0
+    };
+    if straight_crossings_only
+        && !crossings
+            .iter()
+            .all(|&t| straight.iter().any(|&seg| on_segment(eval_at(t), seg)))
+    {
+        return None;
     }
 
     // Crossings of the PARTNER (cone) face's angular window edges. A conic
@@ -3888,17 +3918,40 @@ fn trim_open_curve_to_plane_face_lines(
         // knot) must NOT fall back to the untrimmed curve — that is exactly
         // the corrupt state described above — so defer the WHOLE curve to the
         // generic sample-clip instead.
-        let piece_curve = match &raw.curve {
-            EdgeCurve::NurbsCurve(n) => EdgeCurve::NurbsCurve(trim_nurbs_to_span(n, t0, t1)?),
-            other => other.clone(),
+        // A piece whose two ends lie on one straight edge of the face shares
+        // both endpoints with that edge's piece between them (a co-endpoint
+        // lens), which `merge_duplicate_edges` folds into one edge. Split it
+        // at its middle, the sanctioned splitter-side resolution.
+        let lens = matches!(raw.curve, EdgeCurve::NurbsCurve(_))
+            && straight
+                .iter()
+                .any(|&seg| on_segment(p0, seg) && on_segment(p1, seg));
+        let spans = if lens {
+            let tm = f64::midpoint(t0, t1);
+            vec![(t0, tm, p0, eval_at(tm)), (tm, t1, eval_at(tm), p1)]
+        } else {
+            vec![(t0, t1, p0, p1)]
         };
-        pieces.push(RawCurve {
-            curve: piece_curve,
-            bbox: bbox.expanded(tol.linear),
-            t_range: (t0, t1),
-            p_start: p0,
-            p_end: p1,
-        });
+        for (s0, s1, q0, q1) in spans {
+            let piece_curve = match &raw.curve {
+                EdgeCurve::NurbsCurve(n) => EdgeCurve::NurbsCurve(trim_nurbs_to_span(n, s0, s1)?),
+                other => other.clone(),
+            };
+            let bbox = if lens {
+                Aabb3::try_from_points(
+                    (0..=8).map(|k| eval_at(s0 + (s1 - s0) * (f64::from(k) / 8.0))),
+                )?
+            } else {
+                bbox
+            };
+            pieces.push(RawCurve {
+                curve: piece_curve,
+                bbox: bbox.expanded(tol.linear),
+                t_range: (s0, s1),
+                p_start: q0,
+                p_end: q1,
+            });
+        }
     }
     Some(pieces)
 }
