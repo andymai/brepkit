@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.33](https://github.com/andymai/brepkit/compare/v4.1.32...v4.1.33) (2026-10-05)
+
+
+### Bug Fixes
+
+* **algo:** keep the rim round a ring-shaped bin's hole when its cavity is cut out ([#1989](https://github.com/andymai/brepkit/issues/1989)) ([ab3b9fb](https://github.com/andymai/brepkit/commit/ab3b9fbfdb36d7bc84fed5af34e2795c9b2d593f))
+
 ## [4.1.32](https://github.com/andymai/brepkit/compare/v4.1.31...v4.1.32) (2026-10-05)
 
 
