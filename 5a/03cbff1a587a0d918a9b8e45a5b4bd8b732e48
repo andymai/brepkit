@@ -14,6 +14,7 @@ crates/algo/src/pave_filler/phase_ff.rs
   s_a8677c67f85a06::t_1c9e737d28a7bd 3522-3523,3525,3945,3947-3954
 .claude/skills/roadmap/SKILL.md
   s_a8677c67f85a06::t_51b28ffe098e54 202
+  s_a8677c67f85a06::t_fe0a89da5fbb17 142
 crates/algo/src/builder/face_splitter/conversion.rs
   s_a8677c67f85a06::t_a74dcf4c6cd7a3 178-190,230-231
   s_a8677c67f85a06::t_5f49fbf9786eb4 229
