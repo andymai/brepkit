@@ -90,6 +90,10 @@ pub struct FaceLoops2d {
     surface: FaceSurface,
     periodic: bool,
     u_mean: f64,
+    /// A torus face's tube angle `v`, unwrapped along its loops like `u`
+    /// (a quarter tube from its bottom to its outer equator reads both ends
+    /// of the turn): the outer loop's mean.
+    v_mean: Option<f64>,
     /// The outer loop, in traversal order.
     pub outer: Vec<brepkit_math::vec::Point2>,
     /// The inner loops (holes), each in traversal order.
@@ -136,8 +140,10 @@ impl FaceLoops2d {
             None
         };
         let mut aabb = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+        let torus = matches!(&surface, FaceSurface::Torus(_));
         let mut sample_loop = |wid: brepkit_topology::wire::WireId,
-                               u_ref: Option<f64>|
+                               u_ref: Option<f64>,
+                               v_ref: Option<f64>|
          -> Result<Vec<Point2>, AlgoError> {
             let wire = topo.wire(wid)?;
             let mut out: Vec<Point2> = Vec::new();
@@ -184,27 +190,41 @@ impl FaceLoops2d {
                     } else {
                         q
                     };
+                    let v_anchor = if torus {
+                        out.last().map_or(v_ref, |prev| Some(prev.y()))
+                    } else {
+                        None
+                    };
+                    let q = if let Some(a) = v_anchor {
+                        Point2::new(q.x(), a + (q.y() - a + PI).rem_euclid(TAU) - PI)
+                    } else {
+                        q
+                    };
                     out.push(q);
                 }
             }
             Ok(out)
         };
-        let outer = sample_loop(face.outer_wire(), None)?;
+        let outer = sample_loop(face.outer_wire(), None, None)?;
         #[allow(clippy::cast_precision_loss)]
         let u_mean = if outer.is_empty() {
             0.0
         } else {
             outer.iter().map(|q| q.x()).sum::<f64>() / outer.len() as f64
         };
+        #[allow(clippy::cast_precision_loss)]
+        let v_mean = (torus && !outer.is_empty())
+            .then(|| outer.iter().map(|q| q.y()).sum::<f64>() / outer.len() as f64);
         let mut holes = Vec::new();
         for &wid in face.inner_wires() {
-            holes.push(sample_loop(wid, Some(u_mean))?);
+            holes.push(sample_loop(wid, Some(u_mean), v_mean)?);
         }
         Ok(Self {
             frame,
             surface,
             periodic,
             u_mean,
+            v_mean,
             outer,
             holes,
             aabb,
@@ -224,7 +244,10 @@ impl FaceLoops2d {
         };
         if self.periodic {
             let u = self.u_mean + (q.x() - self.u_mean + PI).rem_euclid(TAU) - PI;
-            Some(Point2::new(u, q.y()))
+            let v = self
+                .v_mean
+                .map_or_else(|| q.y(), |m| m + (q.y() - m + PI).rem_euclid(TAU) - PI);
+            Some(Point2::new(u, v))
         } else {
             Some(q)
         }

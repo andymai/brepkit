@@ -3889,6 +3889,16 @@ fn point_to_segment_dist_3d(pt: Point3, a: Point3, b: Point3) -> f64 {
 /// measured as the period minus the largest angular gap between boundary
 /// samples (robust against the 2pi wrap).
 fn face_u_span(topo: &Topology, face: &brepkit_topology::face::Face) -> Option<f64> {
+    face_parameter_span(topo, face, false)
+}
+
+/// The arc of one angular parameter (`v` when `along_v`) the face's outer
+/// wire covers: a turn less the largest gap between its samples.
+fn face_parameter_span(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    along_v: bool,
+) -> Option<f64> {
     const TAU: f64 = std::f64::consts::TAU;
     let surface = face.surface();
     let wire = topo.wire(face.outer_wire()).ok()?;
@@ -3901,8 +3911,8 @@ fn face_u_span(topo: &Topology, face: &brepkit_topology::face::Face) -> Option<f
             #[allow(clippy::cast_precision_loss)]
             let t = f64::from(i) / 8.0;
             let p = super::pcurve_compute::evaluate_edge_at_t(edge.curve(), sp, ep, t);
-            if let Some((u, _)) = surface.project_point(p) {
-                us.push(u.rem_euclid(TAU));
+            if let Some((u, v)) = surface.project_point(p) {
+                us.push(if along_v { v } else { u }.rem_euclid(TAU));
             }
         }
     }
@@ -3944,10 +3954,22 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
             u_periodic: true,
             v_periodic: false,
         }),
-        FaceSurface::Torus(_) => Some(SurfaceInfo::Parametric {
-            u_periodic: true,
-            v_periodic: true,
-        }),
+        // A torus patch no more than a half turn in either angle (a fillet's
+        // corner quarter) is a partial band both ways: as periodic its tube
+        // angle reads the outer equator at 0 beside a bottom at 3pi/2, and
+        // the outline covers the other three quarters of the tube.
+        FaceSurface::Torus(_) => {
+            let small = |along_v| {
+                face.inner_wires().is_empty()
+                    && face_parameter_span(topo, face, along_v)
+                        .is_some_and(|span| span <= std::f64::consts::PI + 0.05)
+            };
+            let partial = small(false) && small(true);
+            Some(SurfaceInfo::Parametric {
+                u_periodic: !partial,
+                v_periodic: !partial,
+            })
+        }
         FaceSurface::Nurbs(_) => Some(SurfaceInfo::Parametric {
             u_periodic: false,
             v_periodic: false,

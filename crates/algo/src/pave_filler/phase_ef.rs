@@ -689,6 +689,58 @@ fn find_edge_surface_crossings(
         prev_t = t;
     }
 
+    // The samples find a crossing only where one lands within a few
+    // tolerances of the surface; a transversal crossing between two of them
+    // (a fillet's meridian arc through an envelope's NURBS corner) shows only
+    // as the side of the surface flipping. On a NURBS face that flip is
+    // bisected to the surface, and kept only where it lands on it: a flip
+    // from the projection jumping to another part of the patch does not.
+    if let FaceSurface::Nurbs(_) = surface {
+        let spacing = ((t1 - t0) / (n as f64) * 2.0).abs();
+        let side = |t: f64| -> Option<f64> {
+            let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+            let (u, v) = surface.project_point(pt)?;
+            let on = surface.evaluate(u, v)?;
+            Some((pt - on).dot(surface.normal(u, v)))
+        };
+        let mut prev: Option<(f64, f64)> = None;
+        for i in 0..=n {
+            let t = t0 + (t1 - t0) * (i as f64 / n as f64);
+            let Some(s) = side(t) else {
+                prev = None;
+                continue;
+            };
+            if let Some((t_prev, s_prev)) = prev
+                && (s_prev > 0.0) != (s > 0.0)
+                && s_prev != 0.0
+                && s != 0.0
+            {
+                let (mut lo, mut hi, mut s_lo) = (t_prev, t, s_prev);
+                for _ in 0..60 {
+                    let mid = f64::midpoint(lo, hi);
+                    let Some(s_mid) = side(mid) else { break };
+                    if (s_mid > 0.0) == (s_lo > 0.0) {
+                        lo = mid;
+                        s_lo = s_mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let tc = f64::midpoint(lo, hi);
+                let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+                if distance_to_surface(pc, surface) < tol.linear
+                    && !crossings
+                        .iter()
+                        .any(|&(ct, _): &(f64, Point3)| (tc - ct).abs() < spacing)
+                {
+                    crossings.push((tc, pc));
+                }
+            }
+            prev = Some((t, s));
+        }
+        crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+
     crossings
 }
 

@@ -6927,6 +6927,43 @@ fn split_face_2d_impl(
         }
     }
 
+    // The same for a partial torus band's tube angle `v`.
+    if !v_periodic
+        && !is_plane
+        && let (_, Some(v_period)) = super::pcurve_compute::surface_periods(&surface)
+    {
+        let mut vs: Vec<f64> = all_edges
+            .iter()
+            .flat_map(|e| [e.start_uv.y(), e.end_uv.y()])
+            .map(|v| v.rem_euclid(v_period))
+            .collect();
+        vs.sort_by(f64::total_cmp);
+        if vs.len() >= 2 {
+            let mut gap_start = vs[vs.len() - 1];
+            let mut max_gap = v_period - (vs[vs.len() - 1] - vs[0]);
+            for w in vs.windows(2) {
+                if w[1] - w[0] > max_gap {
+                    max_gap = w[1] - w[0];
+                    gap_start = w[0];
+                }
+            }
+            if max_gap > 0.05 {
+                let lo = gap_start + max_gap;
+                for e in &mut all_edges {
+                    let remap = |uv: Point2| -> Point2 {
+                        let mut d = (uv.y() - lo).rem_euclid(v_period);
+                        if d > v_period - 1e-6 {
+                            d = 0.0;
+                        }
+                        Point2::new(uv.x(), lo + d)
+                    };
+                    e.start_uv = remap(e.start_uv);
+                    e.end_uv = remap(e.end_uv);
+                }
+            }
+        }
+    }
+
     // Co-register section endpoints with the boundary graph on curved
     // faces. A marched chain end and the boundary split vertex at the same
     // junction share ONE 3D vertex (the pave machinery welded them), but
@@ -8658,7 +8695,12 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // traversal: sample each edge's 3D curve from its laid-out start.
     let pts_2d = if matches!(&sub_face.surface, FaceSurface::Cone(_)) {
         sampling::sample_wire_loop_uv_on_surface(&sub_face.outer_wire, &sub_face.surface)
-    } else if matches!(&sub_face.surface, FaceSurface::Cylinder(_)) {
+    } else if matches!(
+        &sub_face.surface,
+        FaceSurface::Cylinder(_) | FaceSurface::Torus(_)
+    ) {
+        // A torus piece's tube angle wraps as its azimuth does (a quarter
+        // tube from its bottom to its outer equator).
         let (u_period, v_period) = super::pcurve_compute::surface_periods(&sub_face.surface);
         sample_wire_loop_uv_periodic(&sub_face.outer_wire, u_period, v_period)
     } else if let Some(pts) = sphere_loop_uv(sub_face) {
