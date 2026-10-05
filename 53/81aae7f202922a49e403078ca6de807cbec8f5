@@ -1,0 +1,82 @@
+crates/io/tests/data/interior_fillet_bin.bin
+  s_a8677c67f85a06::t_b709d9cef45679 1
+crates/io/tests/data/interior_fillet_material.bin
+  s_a8677c67f85a06::t_b709d9cef45679 1
+crates/math/src/analytic_intersection.rs
+  s_a8677c67f85a06::t_b709d9cef45679 1993,1998,2010-2011,2013,2019-2023,5052-5059,5061-5073,5100-5120
+  s_a8677c67f85a06::t_8b637fd6bb37ca 1994-1995,5075-5081
+crates/io/tests/interior_fillet_fuse_inmem.rs
+  s_a8677c67f85a06::t_e65e2a13da5059 1-12,28,32-87,92,95,96-97,98-102
+  s_a8677c67f85a06::t_3cdc66933d5280 103-105,182
+  s_a8677c67f85a06::t_9d7aef3a2575ad 106-108,110-111
+  s_a8677c67f85a06::t_feb202b22019a0 13-18,88-90,93-94,113-115,121-131,133-141,181-182
+  s_a8677c67f85a06::t_c30c56b2bb4215 91,109,116-120
+  s_a8677c67f85a06::t_b2f50bf510b8b0 132,142
+  s_a8677c67f85a06::t_6b449b04057f74 180
+  s_a8677c67f85a06::t_ab1cb0140951cf 165
+  s_a8677c67f85a06::t_af373289868b07 19-23,29,145-153
+  s_a8677c67f85a06::t_ad85d62ddee196 24-27,30-31,154-164,166-179,181-182
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_c4d21490c5a851 195,203
+  s_a8677c67f85a06::t_6b3d10af43ca5c 202
+  s_a8677c67f85a06::t_d5e555164b5fea 142
+crates/io/tests/data/interior_fillet_scoops_material.bin
+  s_a8677c67f85a06::t_feb202b22019a0 1
+crates/io/tests/data/interior_fillet_cutout_material.bin
+  s_a8677c67f85a06::t_feb202b22019a0 1
+crates/io/tests/data/interior_fillet_scoops_bin.bin
+  s_a8677c67f85a06::t_feb202b22019a0 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_06f2a738b1e14f 1052-1058
+  s_a8677c67f85a06::t_18f5ec6cde166c 5840-5842
+  s_a8677c67f85a06::t_af373289868b07 5825-5839
+crates/io/tests/data/interior_fillet_cutout_bin.bin
+  s_a8677c67f85a06::t_feb202b22019a0 1
+crates/io/tests/data/interior_fillet_l_pocket_material.bin
+  s_a8677c67f85a06::t_6cba119488f5fd 1
+crates/io/tests/data/interior_fillet_l_pocket_bin.bin
+  s_a8677c67f85a06::t_6cba119488f5fd 1
+crates/algo/src/classifier/ray_cast.rs
+  s_a8677c67f85a06::t_af373289868b07 90-99,627,1121-1127,1457-1470,1476,1484,1486-1487,1492,1700-1704,2551-2643,2645
+  s_a8677c67f85a06::t_40dfe249d0b12a 2644,2646
+crates/io/tests/data/interior_fillet_custom_bin.bin
+  s_a8677c67f85a06::t_af373289868b07 1
+crates/io/tests/data/interior_fillet_custom_material.bin
+  s_a8677c67f85a06::t_af373289868b07 1
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_af373289868b07 281-282,344-358,365,367-368,370-379
+  s_a8677c67f85a06::t_59224678dd326b 863-955
+  s_a8677c67f85a06::t_a87ad46dac29c5 359-364,366,369
+crates/wasm/src/bindings/assembly_probe_tests.rs
+  s_a8677c67f85a06::t_56a0c88c47f9b0 468-543
+  s_a8677c67f85a06::t_824081675a3e21 370-371,387-388
+  s_a8677c67f85a06::t_c3d8801064dbb8 347-369,372-386,389-405
+.github/workflows/ci.yml
+  s_a8677c67f85a06::t_79c5ebb9be3390 41
+crates/blend/src/analytic.rs
+  s_a8677c67f85a06::t_4a830983921173 781,1061
+  s_a8677c67f85a06::t_8fa4db1220e025 782
+  s_a8677c67f85a06::t_cbe13ff7c27bc4 777-780,848-851,991-1060
+  s_a8677c67f85a06::t_d7b0ae53e26ab6 774-776
+crates/operations/tests/rounded_pocket_fillet_fuse.rs
+  s_a8677c67f85a06::t_824081675a3e21 132-136,142-146
+  s_a8677c67f85a06::t_b4ebe5af910dd8 6-7,10,13,32-36,42-43,49-56,61-112,114-118,121,123-124,127,129,137,152-153,164,170-182
+  s_a8677c67f85a06::t_79b24b1fb50621 5,167
+  s_a8677c67f85a06::t_0d7ec8b97d5ebf 1-4,8-9,11-12,14-31,37-41,44-48,57-60,113,119-120,122,125-126,128,130-131,138-141,147-151,154-163,165-166,168-169,183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "5381aae7f202922a49e403078ca6de807cbec8f5",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
