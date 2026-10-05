@@ -406,6 +406,82 @@ fn box_all_edges_probe() {
     }
 }
 
+/// `assemblyPartTemplate.ts` `case 'riser'` at its defaults: three steps 18
+/// deep and 14 high, 60 wide; vertical corners eased at 2.5, every tread's
+/// edges at 1. Reports degenerate triangles (area under 1e-10, the tool's
+/// `assertNoDegenerateTriangles`) at a few mesh settings.
+#[test]
+#[ignore = "diagnostic: native replay of the tool's riser part"]
+fn riser_part_probe() {
+    install_log_tap();
+    let mut topo = Topology::new();
+    let (width, steps, step_depth, step_height) = (60.0_f64, 3_usize, 18.0_f64, 14.0_f64);
+    let total = steps as f64 * step_depth;
+    let mut profile = vec![
+        (-total / 2.0, -SINK),
+        (total / 2.0, -SINK),
+        (total / 2.0, steps as f64 * step_height),
+    ];
+    for i in (1..=steps).rev() {
+        let front = total / 2.0 - (steps - i + 1) as f64 * step_depth;
+        profile.push((front, i as f64 * step_height));
+        if i > 1 {
+            profile.push((front, (i - 1) as f64 * step_height));
+        }
+    }
+    let points: Vec<Point3> = profile
+        .iter()
+        .map(|&(y, z)| Point3::new(-width / 2.0, y, z))
+        .collect();
+    let face = brepkit_topology::builder::make_planar_face(&mut topo, &points, 1e-7).unwrap();
+    let stairs = brepkit_operations::extrude::extrude(
+        &mut topo,
+        face,
+        brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0),
+        width,
+    )
+    .unwrap();
+    report(&topo, stairs, "stairs");
+    let verticals = vertical_edges(&topo, stairs);
+    let corner = CORNER_FILLET_MM
+        .min(step_depth / 4.0)
+        .min(step_height / 3.0);
+    let body = fillet_step(&mut topo, stairs, &verticals, corner, "vertical corners");
+    report(&topo, body, "after corners");
+    let mut treads = Vec::new();
+    for i in 1..=steps {
+        treads.extend(edges_near_plane(&topo, body, i as f64 * step_height));
+    }
+    let body = fillet_step(
+        &mut topo,
+        body,
+        &treads,
+        TOP_EASE_MM.min(step_height / 4.0),
+        "treads",
+    );
+    report(&topo, body, "after treads");
+    for (deflection, angle) in [(0.01, 5.0_f64), (0.1, 20.0), (0.05, 10.0)] {
+        let mesh =
+            tessellate_solid_with_tolerance(&topo, body, deflection, angle.to_radians()).unwrap();
+        let mut degenerate = Vec::new();
+        for tri in mesh.indices.chunks_exact(3) {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.positions[i as usize]);
+            let area = 0.5 * (b - a).cross(c - a).length();
+            if area < 1e-10 {
+                degenerate.push((a, b, c, area));
+            }
+        }
+        eprintln!(
+            "  mesh {deflection}/{angle}deg: {} triangles, {} degenerate",
+            mesh.indices.len() / 3,
+            degenerate.len()
+        );
+        for (a, b, c, area) in degenerate.iter().take(4) {
+            eprintln!("    {a:?} {b:?} {c:?} area {area:e}");
+        }
+    }
+}
+
 /// `assemblyPartTemplate.ts` `case 'comb'` with the combriser test's bar
 /// (70 x 14 x 35, four 9 mm slots 25 deep).
 #[test]

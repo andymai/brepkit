@@ -10,8 +10,25 @@
 //! came apart into dozens of pieces, the wall was split there into pieces
 //! the fuse could not classify, and the fuse fell back to a mesh.
 //!
+//! Two more captures from `binGenerator.export.interiorFilletScoops.test.ts`
+//! fuse the plain fillet into bins whose scoops or wall cutout change the
+//! pocket's corners: there the bin's corner wall is only a strip of the
+//! cylinder the material's air wall lies on, so the air wall must be split
+//! along the strip's edges to be matched with it.
+//!
+//! A capture from `binGenerator.export.interiorFillet.test.ts`'s custom shape
+//! on a non-square pitch adds a reflex corner, where the bin's wall stops
+//! under a lip chamfer stored as a NURBS face and the material's air wall
+//! runs on above it.
+//!
+//! The `interior_fillet_l_pocket_*` pair is built the same way from
+//! primitives: an L-shaped pocket in a block, its air rounded along the floor
+//! at 2.45 against corners of 2.55, so the corner tori are spindles.
+//!
 //! Data: `interior_fillet_bin.bin` (the bin), `interior_fillet_material.bin`
-//! (the fillet material).
+//! (the fillet material), and the `interior_fillet_scoops_*`,
+//! `interior_fillet_cutout_*`, `interior_fillet_custom_*` and
+//! `interior_fillet_l_pocket_*` pairs.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -68,18 +85,16 @@ fn exact(topo: &mut Topology, op: BooleanOp, a: SolidId, b: SolidId) -> SolidId 
     result
 }
 
-#[test]
-fn interior_fillet_material_fuses_into_its_bin_exactly() {
+/// Fuses the fillet material into its bin and cuts it from the bin, both
+/// exactly, and checks they read the same overlap: what the fuse leaves out
+/// of the material is the part inside the bin, which the cut takes away.
+fn assert_fuses_exactly(bin_data: &str, material_data: &str, overlap: f64) {
     let mut topo = Topology::new();
-    let bin = load(&mut topo, "interior_fillet_bin.bin");
-    let material = load(&mut topo, "interior_fillet_material.bin");
+    let bin = load(&mut topo, bin_data);
+    let material = load(&mut topo, material_data);
     let fused = exact(&mut topo, BooleanOp::Fuse, bin, material);
-    let bin = load(&mut topo, "interior_fillet_bin.bin");
-    let material = load(&mut topo, "interior_fillet_material.bin");
     let cut = exact(&mut topo, BooleanOp::Cut, bin, material);
 
-    // What the fuse leaves out of the material is the part inside the bin,
-    // which the cut takes away from it: both read the bin's overlap.
     let volume = |topo: &Topology, s: SolidId| solid_volume(topo, s, 0.001).unwrap();
     let (v_bin, v_material) = (volume(&topo, bin), volume(&topo, material));
     let through_fuse = v_bin + v_material - volume(&topo, fused);
@@ -91,7 +106,77 @@ fn interior_fillet_material_fuses_into_its_bin_exactly() {
     // The overlap both readings agree on, pinned so that a classification
     // error they share also fails.
     assert!(
-        (through_fuse - 12_957.832_253_1).abs() < 1e-6 * v_bin,
+        (through_fuse - overlap).abs() < 1e-6 * v_bin,
         "overlap {through_fuse}"
+    );
+}
+
+#[test]
+fn interior_fillet_material_fuses_into_its_bin_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_bin.bin",
+        "interior_fillet_material.bin",
+        12_957.832_253_1,
+    );
+}
+
+/// Scoops on two adjacent walls: at the corners beside them the bin's wall
+/// is a strip topped by a lip cone's arc that stops short of the air wall's
+/// quarter, beside a plane whose sloped edge is a NURBS curve stored from
+/// its end vertex back.
+#[test]
+fn interior_fillet_material_fuses_into_a_scooped_bin_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_scoops_bin.bin",
+        "interior_fillet_scoops_material.bin",
+        3_214.707_481_1,
+    );
+}
+
+/// A wall cutout beside a scoop.
+#[test]
+fn interior_fillet_material_fuses_into_a_bin_with_a_wall_cutout_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_cutout_bin.bin",
+        "interior_fillet_cutout_material.bin",
+        5_473.993_142_6,
+    );
+}
+
+/// A custom outline's reflex corner: the bin's coaxial wall ends under the
+/// chamfer, and the air wall is split along the arcs where it does.
+#[test]
+fn interior_fillet_material_fuses_into_a_custom_outline_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_custom_bin.bin",
+        "interior_fillet_custom_material.bin",
+        6_113.649_848_0,
+    );
+}
+
+/// An L-shaped pocket: under the fillet along its x = -15 wall, the wall's
+/// strip lies inside the fillet material, and a ray from it toward the far
+/// wall passes the spindle tori of the far corners.
+#[test]
+fn interior_fillet_material_fuses_into_an_l_shaped_pocket_exactly() {
+    assert_fuses_exactly(
+        "interior_fillet_l_pocket_bin.bin",
+        "interior_fillet_l_pocket_material.bin",
+        822.027_526_6,
+    );
+}
+
+/// The boolean's own classifier reads the strip inside the material: each
+/// corner torus counts the crossings the curved patch makes, not those of a
+/// flat polygon through its rim.
+#[test]
+fn a_ray_past_spindle_corner_tori_counts_their_patches_exactly() {
+    let mut topo = Topology::new();
+    let material = load(&mut topo, "interior_fillet_l_pocket_material.bin");
+    let geoms = brepkit_algo::classifier::RayCastGeoms::new(&topo, material).unwrap();
+    let strip = brepkit_math::vec::Point3::new(-15.0, 0.0, 3.475);
+    assert_eq!(
+        brepkit_algo::classifier::classify_ray_cast_cached(&geoms, strip).unwrap(),
+        brepkit_algo::FaceClass::Inside
     );
 }

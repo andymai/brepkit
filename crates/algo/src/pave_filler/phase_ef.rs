@@ -278,6 +278,8 @@ fn check_edge_face_pairs(
         })
         .collect::<Result<_, _>>()?;
 
+    let mut trims: Vec<Option<Option<crate::classifier::LateralTrim>>> =
+        (0..faces.len()).map(|_| None).collect();
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
         let (curve, start_pos, end_pos, t0, t1) = {
@@ -339,6 +341,42 @@ fn check_edge_face_pairs(
                 distance_to_surface_near(pt, surface, hull, tol) < tol.linear
             });
             if edge_on_surface {
+                // Through the inside of a cylinder or cone face, the edge
+                // bounds a region the two solids share there (a bin wall's
+                // top arc on the coaxial air wall of a fillet that reaches
+                // past it), and the face is split along it.
+                let near = 10.0 * tol.linear;
+                let lateral = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+                    && matches!(curve, EdgeCurve::Line | EdgeCurve::Circle(_));
+                if lateral {
+                    let trim = trims[face_idx]
+                        .get_or_insert_with(|| {
+                            crate::classifier::LateralTrim::new(topo, fid)
+                                .ok()
+                                .flatten()
+                        })
+                        .as_ref();
+                    let at = |k: u32| {
+                        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
+                        curve.evaluate_with_endpoints(t, start_pos, end_pos)
+                    };
+                    // Every sample on the face: a circle can run through a
+                    // cut-out between points that lie on it.
+                    if trim.is_some_and(|trim| {
+                        trim.holds_clear(at(n_chk / 2), near)
+                            && trim.holds(start_pos, near)
+                            && trim.holds(end_pos, near)
+                            && (1..n_chk).all(|k| trim.holds(at(k), near))
+                    }) {
+                        log::debug!("EF: edge {eid:?} lies inside face {fid:?}");
+                        arena.interference.ef.push(Interference::EF {
+                            edge: eid,
+                            face: fid,
+                            new_vertex: None,
+                            parameter: None,
+                        });
+                    }
+                }
                 continue;
             }
 
@@ -821,6 +859,99 @@ mod tests {
     use super::*;
     use brepkit_math::vec::Point3;
     use brepkit_topology::edge::EdgeCurve;
+
+    /// A cylindrical band `z` in `[0, 6]` around the `z` axis at radius 2,
+    /// seamed at angle 0, with a window between 60 and 120 degrees and `z` 2
+    /// to 4 when `window` is set; and the full circle at `z` = 3 whose vertex
+    /// sits on the seam. Whether that circle is recorded as lying in the band.
+    fn circle_recorded_in_band(window: bool) -> bool {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let at = |deg: f64, z: f64| {
+            let a = deg.to_radians();
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), z)
+        };
+        let circle = |z: f64| {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, z), z_axis, 2.0).unwrap())
+        };
+        let (v_bot, v_top) = (
+            topo.add_vertex(Vertex::new(at(0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(at(0.0, 6.0), 1e-7)),
+        );
+        let e_bot = topo.add_edge(Edge::new(v_bot, v_bot, circle(0.0)));
+        let e_top = topo.add_edge(Edge::new(v_top, v_top, circle(6.0)));
+        let e_seam = topo.add_edge(Edge::new(v_bot, v_top, EdgeCurve::Line));
+        let outer = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e_bot, true),
+                    OrientedEdge::new(e_seam, true),
+                    OrientedEdge::new(e_top, false),
+                    OrientedEdge::new(e_seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let mut holes = Vec::new();
+        if window {
+            let corner = [at(60.0, 2.0), at(120.0, 2.0), at(120.0, 4.0), at(60.0, 4.0)];
+            let v = corner.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let low = topo.add_edge(Edge::new(v[0], v[1], circle(2.0)));
+            let right = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+            let high = topo.add_edge(Edge::new(v[3], v[2], circle(4.0)));
+            let left = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+            holes.push(
+                topo.add_wire(
+                    Wire::new(
+                        vec![
+                            OrientedEdge::new(left, true),
+                            OrientedEdge::new(high, true),
+                            OrientedEdge::new(right, false),
+                            OrientedEdge::new(low, false),
+                        ],
+                        true,
+                    )
+                    .unwrap(),
+                ),
+            );
+        }
+        let surface = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis, 2.0).unwrap();
+        let band = topo.add_face(Face::new(outer, holes, FaceSurface::Cylinder(surface)));
+        let v_ring = topo.add_vertex(Vertex::new(at(0.0, 3.0), 1e-7));
+        let ring = topo.add_edge(Edge::new(v_ring, v_ring, circle(3.0)));
+        let mut arena = GfaArena::new();
+        check_edge_face_pairs(
+            &mut topo,
+            &[ring],
+            &[band],
+            &[HashSet::new()],
+            Tolerance::new(),
+            &mut arena,
+        )
+        .unwrap();
+        arena.interference.ef.iter().any(|interference| {
+            matches!(
+                interference,
+                Interference::EF { edge, face, parameter: None, .. } if *edge == ring && *face == band
+            )
+        })
+    }
+
+    /// A circle on a cylinder face splits the face along it, unless it runs
+    /// through a window in the face between points that lie on the face.
+    #[test]
+    fn a_circle_through_a_window_in_a_band_is_not_in_the_band() {
+        assert!(circle_recorded_in_band(false));
+        assert!(!circle_recorded_in_band(true));
+    }
 
     /// The hull bound spares projections only where the distance is past
     /// every threshold the search compares, so it finds exactly the crossings

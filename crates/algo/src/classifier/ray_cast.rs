@@ -87,6 +87,16 @@ enum FaceGeom {
         /// tube (whole torus).
         v_band: Option<(f64, f64)>,
     },
+    /// A toroidal face covering part of the major revolution (a fillet's
+    /// corner), read against its own wires in `(u, v)` with `v` measured from
+    /// `v_mid`, the middle of the face's tube angles, so it never wraps across
+    /// the face. A flat polygon through its rim stands where the curved patch
+    /// does not and counts crossings the patch never makes.
+    TorusTrim {
+        surface: brepkit_math::surfaces::ToroidalSurface,
+        trim: UvTrim,
+        v_mid: f64,
+    },
     /// A spherical face whose loops each bound a region of the sphere cut out
     /// by planes. Crossings come from the ray/sphere quadratic, kept when the
     /// hit lies on every loop's side. The flat polygon fallback stands the
@@ -614,6 +624,7 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
                         FaceGeom::Cylinder { .. } => "cylinder".to_string(),
                         FaceGeom::Cone { .. } => "cone".to_string(),
                         FaceGeom::Torus { .. } => "torus".to_string(),
+                        FaceGeom::TorusTrim { .. } => "torus trim".to_string(),
                         FaceGeom::Sphere { loops, .. } => format!("sphere[{} loops]", loops.len()),
                         FaceGeom::SphereTrim { .. } => "sphere trim".to_string(),
                     };
@@ -1107,6 +1118,13 @@ fn collect_geoms_of(
             }
         }
 
+        if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
+            && let Some(geom) = torus_trim_geom(topo, face, t)?
+        {
+            result.push(geom);
+            continue;
+        }
+
         if let brepkit_topology::face::FaceSurface::Sphere(sph) = face.surface() {
             if let Some(loops) = sphere_face_loops(topo, face, sph)? {
                 result.push(FaceGeom::Sphere {
@@ -1436,13 +1454,26 @@ impl LateralTrim {
     /// `near` of a wire counts as on it. On a cone, a point on the nappe the
     /// face's wires avoid does not.
     pub fn holds(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on || close
+    }
+
+    /// Whether `point`, on the face's surface, lies inside the face farther
+    /// than `near` from every wire.
+    pub fn holds_clear(&self, point: Point3, near: f64) -> bool {
+        let (on, close) = self.reads(point, near);
+        on && !close
+    }
+
+    /// Whether `point` lies on the face, and whether it lies within `near`
+    /// of a wire.
+    fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
         use brepkit_topology::face::FaceSurface;
         match &self.surface {
             FaceSurface::Cylinder(cyl) => {
                 let project = |p: Point3| cyl.project_point(p);
                 let (u, v) = project(point);
-                let (on, close) = self.trim.contains(u, v, 1.0, cyl.radius(), near, &project);
-                on || close
+                self.trim.contains(u, v, 1.0, cyl.radius(), near, &project)
             }
             FaceSurface::Cone(cone) => {
                 let project = |p: Point3| cone.project_point(p);
@@ -1450,17 +1481,15 @@ impl LateralTrim {
                 let away = if v_max >= -v_min { 1.0 } else { -1.0 };
                 let (u, v) = project(point);
                 if v * away < -near {
-                    return false;
+                    return (false, false);
                 }
-                let (on, close) =
-                    self.trim
-                        .contains(u, v, away, cone.radius_at(v).abs(), near, &project);
-                on || close
+                self.trim
+                    .contains(u, v, away, cone.radius_at(v).abs(), near, &project)
             }
             FaceSurface::Plane { .. }
             | FaceSurface::Nurbs(_)
             | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_) => true,
+            | FaceSurface::Torus(_) => (true, false),
         }
     }
 }
@@ -1668,6 +1697,11 @@ fn ray_geom_crossings(
         FaceGeom::Torus { surface, v_band } => {
             ray_torus_crossings(origin, ray_dir, surface, *v_band, tol)
         }
+        FaceGeom::TorusTrim {
+            surface,
+            trim,
+            v_mid,
+        } => ray_torus_trim_crossings(origin, ray_dir, surface, trim, *v_mid, tol),
         FaceGeom::Sphere { surface, loops } => {
             ray_sphere_crossings(origin, ray_dir, surface, loops, tol)
         }
@@ -2510,6 +2544,102 @@ fn ray_torus_crossings(
             }
         }
         crossings += 1;
+    }
+    (crossings, suspicious)
+}
+
+/// A torus patch's point as `(u, v)`, its tube angle `v` taken within half a
+/// turn of `v_mid`.
+fn torus_patch_uv(
+    surface: &brepkit_math::surfaces::ToroidalSurface,
+    v_mid: f64,
+    p: Point3,
+) -> (f64, f64) {
+    let (u, v) = surface.project_point(p);
+    (u, v_mid + wrap_pi(v - v_mid))
+}
+
+/// The distance from the torus axis at tube angle `v`.
+fn torus_radius_at(surface: &brepkit_math::surfaces::ToroidalSurface, v: f64) -> f64 {
+    surface
+        .minor_radius()
+        .mul_add(v.cos(), surface.major_radius())
+}
+
+/// A [`FaceGeom::TorusTrim`] for a torus face whose tube angles stay well
+/// within half a turn of their middle; `None` for a face reaching around the
+/// tube, which keeps the fallbacks.
+fn torus_trim_geom(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    surface: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<FaceGeom>, AlgoError> {
+    let mut vertices = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            vertices.push(topo.vertex(topo.edge(oe.edge())?.start())?.point());
+        }
+    }
+    let (sin, cos) = vertices.iter().fold((0.0, 0.0), |(s, c), &p| {
+        let v = surface.project_point(p).1;
+        (s + v.sin(), c + v.cos())
+    });
+    if sin.hypot(cos) <= 1e-9 * vertices.len() as f64 {
+        return Ok(None);
+    }
+    let v_mid = sin.atan2(cos);
+    let project = |p: Point3| torus_patch_uv(surface, v_mid, p);
+    let radius = |v: f64| torus_radius_at(surface, v);
+    let Some(trim) = UvTrim::new(topo, face, &project, &radius)? else {
+        return Ok(None);
+    };
+    // Wires reaching the far side of the tube from `v_mid` would wrap there.
+    let reach = std::f64::consts::PI - std::f64::consts::FRAC_PI_8;
+    let (lo, hi) = trim.v_bounds();
+    if hi - v_mid >= reach || v_mid - lo >= reach {
+        return Ok(None);
+    }
+    Ok(Some(FaceGeom::TorusTrim {
+        surface: surface.clone(),
+        trim,
+        v_mid,
+    }))
+}
+
+/// Count ray crossings with a torus patch: the ray/torus roots whose hit lies
+/// on the face by its wires. A close root pair (a graze) or a hit beside a
+/// wire marks the ray suspicious.
+fn ray_torus_trim_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::surfaces::ToroidalSurface,
+    trim: &UvTrim,
+    v_mid: f64,
+    tol: Tolerance,
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
+    let Ok(dir) = ray_dir.normalize() else {
+        return (0, false);
+    };
+    let project = |p: Point3| torus_patch_uv(surface, v_mid, p);
+    let roots = brepkit_math::analytic_intersection::intersect_line_torus(surface, origin, dir);
+    let mut crossings = 0;
+    let mut suspicious = false;
+    for (i, &t) in roots.iter().enumerate() {
+        if t <= tol.linear {
+            continue;
+        }
+        suspicious |= roots[i + 1..].iter().any(|&t2| (t2 - t).abs() <= near);
+        let hit = origin + dir * t;
+        let (u, v) = project(hit);
+        // A spindle's tube also crosses the axis, and a hit on that inner
+        // part projects into the patch's angles without being on it.
+        if (surface.evaluate(u, v) - hit).length() > near.max(1e-9 * surface.major_radius()) {
+            continue;
+        }
+        let (on, close) = trim.contains(u, v, 1.0, torus_radius_at(surface, v), near, &project);
+        suspicious |= close;
+        crossings += i32::from(on);
     }
     (crossings, suspicious)
 }
