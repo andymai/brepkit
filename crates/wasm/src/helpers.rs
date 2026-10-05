@@ -207,6 +207,10 @@ pub fn try_fillet(
     // volume. Edge senses alone cannot detect a globally inverted shell, which
     // sends the next boolean through a corrupt mesh fallback.
     let orientation_deflection = (radius * 0.1).clamp(0.01, 0.1);
+    let input_faces: std::collections::HashSet<brepkit_topology::face::FaceId> =
+        brepkit_topology::explorer::solid_faces(topo, solid_id)?
+            .into_iter()
+            .collect();
     let is_valid = |topo: &brepkit_topology::Topology,
                     s: brepkit_topology::solid::SolidId|
      -> bool {
@@ -222,14 +226,41 @@ pub fn try_fillet(
         // directed edges must all pair. A result that fails this is
         // consumed as garbage downstream (a slot cut through it falls back
         // to a mesh), while a clean failure lets the caller keep its input.
+        //
+        // A rebuilt face whose wire crosses itself (two stripes' contacts
+        // running on past each other where no corner was built) meshes
+        // through the planar fan fallback, and a fan over a straight edge's
+        // samples leaves collinear, zero-area triangles: a rejection only
+        // the rebuilt faces can earn, so faces carried from the input are
+        // not read.
         let watertight = || {
-            brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+            let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, s) else {
+                return false;
+            };
+            brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
                 topo,
                 s,
                 orientation_deflection,
                 10.0_f64.to_radians(),
             )
-            .is_ok_and(|mesh| brepkit_operations::tessellate::boundary_edge_count(&mesh) == 0)
+            .is_ok_and(|(mesh, offsets)| {
+                let collapsed = |range: &[u32]| {
+                    let [a, b, c] =
+                        [range[0], range[1], range[2]].map(|i| mesh.positions[i as usize]);
+                    let longest = (b - a)
+                        .length_squared()
+                        .max((c - b).length_squared())
+                        .max((a - c).length_squared());
+                    (b - a).cross(c - a).length() <= 1e-12 * longest
+                };
+                brepkit_operations::tessellate::boundary_edge_count(&mesh) == 0
+                    && faces.iter().zip(offsets.windows(2)).all(|(face, span)| {
+                        input_faces.contains(face)
+                            || !mesh.indices[span[0] as usize..span[1] as usize]
+                                .chunks_exact(3)
+                                .any(collapsed)
+                    })
+            })
         };
         brepkit_topology::validation::validate_shell_closed(shell, topo).is_ok()
             && brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
@@ -912,5 +943,91 @@ mod fillet_tests {
                 .contains("none of the requested edges are filletable"),
             "unexpected error: {error}"
         );
+    }
+
+    /// The gridfinity tool's assembly base (`assemblyGenerator.scenario`,
+    /// a riser at the base centre) eases its floor plate's top rim at 0.75
+    /// after the riser is fused 0.01 into it. At each 0.01 step three stripes
+    /// meet with no corner built, the rim's and the riser foot's contacts on
+    /// the plate's top face run on past each other, and that face meshes as
+    /// a fan of zero-area triangles. Captured input:
+    /// `crates/io/tests/data/riser_plate_rim.bin`.
+    #[test]
+    fn try_fillet_keeps_a_rim_ease_whose_contacts_cross_out_of_the_result() {
+        const RIM: [[f64; 6]; 28] = [
+            [-41.75, -16.75, 2.0, -37.75, -20.75, 2.0],
+            [-41.75, 16.75, 2.0, -41.75, -16.75, 2.0],
+            [-37.75, 20.75, 2.0, -41.75, 16.75, 2.0],
+            [-37.75, 20.75, 2.0, -30.0, 20.75, 2.0],
+            [-30.0, 20.75, 2.0, -30.0, 20.75, 1.99],
+            [-30.0, 20.75, 1.99, 30.0, 20.75, 1.99],
+            [30.0, 20.75, 1.99, 30.0, 20.75, 2.0],
+            [30.0, 20.75, 2.0, 37.75, 20.75, 2.0],
+            [41.75, 16.75, 2.0, 37.75, 20.75, 2.0],
+            [41.75, -16.75, 2.0, 41.75, 16.75, 2.0],
+            [37.75, -20.75, 2.0, 41.75, -16.75, 2.0],
+            [37.75, -20.75, 2.0, 30.0, -20.75, 2.0],
+            [30.0, -20.75, 2.0, 30.0, -20.75, 1.99],
+            [30.0, -20.75, 1.99, -30.0, -20.75, 1.99],
+            [-30.0, -20.75, 1.99, -30.0, -20.75, 2.0],
+            [-30.0, -20.75, 2.0, -37.75, -20.75, 2.0],
+            [-30.0, -20.75, 2.0, -30.0, 20.75, 2.0],
+            [-30.0, 24.5, 1.99, -30.0, 20.75, 1.99],
+            [-30.0, -20.75, 1.99, -30.0, -24.5, 1.99],
+            [-30.0, 24.5, 1.99, -27.5, 27.0, 1.99],
+            [-27.5, 27.0, 1.99, 27.5, 27.0, 1.99],
+            [27.5, 27.0, 1.99, 30.0, 24.5, 1.99],
+            [30.0, 24.5, 1.99, 30.0, 20.75, 1.99],
+            [30.0, -20.75, 1.99, 30.0, -24.5, 1.99],
+            [30.0, 20.75, 2.0, 30.0, -20.75, 2.0],
+            [-27.5, -27.0, 1.99, -30.0, -24.5, 1.99],
+            [30.0, -24.5, 1.99, 27.5, -27.0, 1.99],
+            [27.5, -27.0, 1.99, -27.5, -27.0, 1.99],
+        ];
+        let mut topo = Topology::new();
+        let data = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../io/tests/data/riser_plate_rim.bin"),
+        )
+        .unwrap();
+        let plate = brepkit_io::arena_io::deserialize_solid(&data, &mut topo).unwrap();
+        let point = |c: &[f64]| brepkit_math::vec::Point3::new(c[0], c[1], c[2]);
+        let edges: Vec<EdgeId> = brepkit_topology::explorer::solid_edges(&topo, plate)
+            .unwrap()
+            .into_iter()
+            .filter(|&id| {
+                let edge = topo.edge(id).unwrap();
+                let a = topo.vertex(edge.start()).unwrap().point();
+                let b = topo.vertex(edge.end()).unwrap().point();
+                RIM.iter().any(|e| {
+                    let (p, q) = (point(&e[..3]), point(&e[3..]));
+                    ((a - p).length() < 1e-6 && (b - q).length() < 1e-6)
+                        || ((a - q).length() < 1e-6 && (b - p).length() < 1e-6)
+                })
+            })
+            .collect();
+        assert_eq!(edges.len(), RIM.len());
+
+        // A clean failure keeps the plate's sharp rim; a result must mesh
+        // with no zero-area triangle.
+        let Ok(eased) = try_fillet(&mut topo, plate, &edges, 0.75) else {
+            return;
+        };
+        let mesh = brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+            &topo,
+            eased,
+            0.075,
+            10.0_f64.to_radians(),
+        )
+        .unwrap();
+        let collapsed = mesh
+            .indices
+            .chunks_exact(3)
+            .filter(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                (b - a).cross(c - a).length() < 2e-10
+            })
+            .count();
+        assert_eq!(collapsed, 0, "zero-area triangles in the eased plate");
     }
 }
