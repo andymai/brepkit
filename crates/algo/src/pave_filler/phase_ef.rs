@@ -375,6 +375,57 @@ fn check_edge_face_pairs(
                             new_vertex: None,
                             parameter: None,
                         });
+                    } else if let Some(trim) = trim {
+                        // An edge running over several faces of one surface
+                        // (a corner arc across a wall split in two) lies in
+                        // each along a run its paves already bound.
+                        let paves: Vec<f64> = arena
+                            .edge_pave_blocks
+                            .get(&eid)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|&pb| arena.pave_blocks.get(pb))
+                            .flat_map(|pb| {
+                                [pb.start.parameter, pb.end.parameter]
+                                    .into_iter()
+                                    .chain(pb.extra_paves.iter().map(|p| p.parameter))
+                            })
+                            .collect();
+                        let t_at = |k: u32| (t1 - t0).mul_add(f64::from(k) / f64::from(n_chk), t0);
+                        let eps = (t1 - t0).abs() * 1e-9;
+                        let paved = |a: u32, b: u32| {
+                            let (lo, hi) = (t_at(a).min(t_at(b)), t_at(a).max(t_at(b)));
+                            paves.iter().any(|&p| (lo - eps..=hi + eps).contains(&p))
+                        };
+                        let clear: Vec<bool> =
+                            (0..=n_chk).map(|k| trim.holds_clear(at(k), near)).collect();
+                        let mut k = 0;
+                        while k <= n_chk {
+                            if !clear[k as usize] {
+                                k += 1;
+                                continue;
+                            }
+                            let first = k;
+                            while k < n_chk && clear[k as usize + 1] {
+                                k += 1;
+                            }
+                            let last = k;
+                            let opens = first == 0 || paved(first - 1, first);
+                            let closes = last == n_chk || paved(last, last + 1);
+                            if opens && closes && (first, last) != (0, n_chk) {
+                                let t_mid = 0.5 * (t_at(first) + t_at(last));
+                                log::debug!(
+                                    "EF: edge {eid:?} lies inside face {fid:?} around t={t_mid:.6}"
+                                );
+                                arena.interference.ef.push(Interference::EF {
+                                    edge: eid,
+                                    face: fid,
+                                    new_vertex: None,
+                                    parameter: Some(t_mid),
+                                });
+                            }
+                            k += 1;
+                        }
                     }
                 }
                 continue;
@@ -624,11 +675,54 @@ fn find_edge_surface_crossings(
     let mut prev_dist = f64::MAX;
     let mut prev_t = t0;
 
-    for i in 0..=n {
-        let t = t0 + (t1 - t0) * (i as f64 / n as f64);
-        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
-        let dist = distance_to_surface_near(pt, surface, hull, tol);
+    let samples: Vec<(f64, Point3)> = (0..=n)
+        .map(|i| {
+            let t = t0 + (t1 - t0) * (i as f64 / n as f64);
+            (t, curve.evaluate_with_endpoints(t, start_pos, end_pos))
+        })
+        .collect();
+    // On a NURBS face each sample's one projection gives its distance and,
+    // within a sample step of the patch's hull (a crossing lies within a
+    // step of the samples either side of it), the side of the surface it
+    // lies on, for the sign-change scan below.
+    let nurbs = matches!(surface, FaceSurface::Nurbs(_));
+    let step = samples
+        .windows(2)
+        .map(|w| (w[1].1 - w[0].1).length())
+        .fold(0.0_f64, f64::max);
+    let hull_gap = |p: Point3| {
+        hull.map_or(0.0, |h| {
+            let gap = |x: f64, lo: f64, hi: f64| (lo - x).max(x - hi).max(0.0);
+            gap(p.x(), h.min.x(), h.max.x())
+                .hypot(gap(p.y(), h.min.y(), h.max.y()))
+                .hypot(gap(p.z(), h.min.z(), h.max.z()))
+        })
+    };
+    let probed: Vec<(f64, Option<f64>)> = samples
+        .iter()
+        .map(|&(_, p)| {
+            let g = hull_gap(p);
+            if !nurbs || g > step + tol.linear {
+                return (distance_to_surface_near(p, surface, hull, tol), None);
+            }
+            let foot = surface
+                .project_point(p)
+                .and_then(|(u, v)| surface.evaluate(u, v).map(|q| (q, surface.normal(u, v))));
+            match foot {
+                Some((q, normal)) => {
+                    let dist = if g > NEAR_LIMIT * tol.linear {
+                        g
+                    } else {
+                        (p - q).length()
+                    };
+                    (dist, Some((p - q).dot(normal)))
+                }
+                None => (distance_to_surface_near(p, surface, hull, tol), None),
+            }
+        })
+        .collect();
 
+    for (i, (&(t, _), &(dist, _))) in samples.iter().zip(&probed).enumerate() {
         if i > 0 && dist < tol.linear {
             let is_dup = crossings.iter().any(|&(ct, _): &(f64, Point3)| {
                 (t - ct).abs() < ((t1 - t0) / (n as f64) * 2.0).abs()
@@ -687,6 +781,57 @@ fn find_edge_surface_crossings(
 
         prev_dist = dist;
         prev_t = t;
+    }
+
+    // The samples find a crossing only where one lands within a few
+    // tolerances of the surface; a transversal crossing between two of them
+    // (a fillet's meridian arc through an envelope's NURBS corner) shows only
+    // as the side of the surface flipping. On a NURBS face that flip is
+    // bisected to the surface, and kept only where it lands on it: a flip
+    // from the projection jumping to another part of the patch does not.
+    if let FaceSurface::Nurbs(_) = surface {
+        let spacing = ((t1 - t0) / (n as f64) * 2.0).abs();
+        let side = |t: f64| -> Option<f64> {
+            let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+            let (u, v) = surface.project_point(pt)?;
+            let on = surface.evaluate(u, v)?;
+            Some((pt - on).dot(surface.normal(u, v)))
+        };
+        let mut prev: Option<(f64, f64)> = None;
+        for (&(t, _), &(_, side_at)) in samples.iter().zip(&probed) {
+            let Some(s) = side_at else {
+                prev = None;
+                continue;
+            };
+            if let Some((t_prev, s_prev)) = prev
+                && (s_prev > 0.0) != (s > 0.0)
+                && s_prev != 0.0
+                && s != 0.0
+            {
+                let (mut lo, mut hi, mut s_lo) = (t_prev, t, s_prev);
+                for _ in 0..60 {
+                    let mid = f64::midpoint(lo, hi);
+                    let Some(s_mid) = side(mid) else { break };
+                    if (s_mid > 0.0) == (s_lo > 0.0) {
+                        lo = mid;
+                        s_lo = s_mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let tc = f64::midpoint(lo, hi);
+                let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+                if distance_to_surface(pc, surface) < tol.linear
+                    && !crossings
+                        .iter()
+                        .any(|&(ct, _): &(f64, Point3)| (tc - ct).abs() < spacing)
+                {
+                    crossings.push((tc, pc));
+                }
+            }
+            prev = Some((t, s));
+        }
+        crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
     }
 
     crossings
@@ -847,9 +992,18 @@ fn refine_crossing(
         }
     }
 
-    let t = f64::midpoint(lo, hi);
-    let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
-    (t, pt)
+    // The search closes on a bracket end without reaching it: a crossing at
+    // the edge's own vertex would stop a few 1e-7 short of it and outlive the
+    // endpoint-contact window as a sliver pave.
+    let at = |t: f64| {
+        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+        (distance_to_surface(pt, surface), t, pt)
+    };
+    let best = [at(f64::midpoint(lo, hi)), at(t_lo), at(t_hi)]
+        .into_iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap_or_else(|| at(f64::midpoint(lo, hi)));
+    (best.1, best.2)
 }
 
 #[cfg(test)]
@@ -1104,6 +1258,39 @@ mod tests {
             tol,
         );
         assert_eq!(plain, bounded);
+    }
+
+    /// An envelope's leaning corner edge reaching a corner cylinder at its
+    /// own end vertex crosses it exactly there, so the contact drops as the
+    /// vertex's; a search that stops short of the end left a sliver pave.
+    #[test]
+    fn a_crossing_at_an_edge_end_lands_on_the_end() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(
+                Point3::new(-41.0, -20.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                3.03,
+            )
+            .unwrap(),
+        );
+        let (start, end) = (
+            Point3::new(-38.0, -20.03, 0.0),
+            Point3::new(-41.0, -23.03, 6.0),
+        );
+        let crossings = find_edge_surface_crossings(
+            &EdgeCurve::Line,
+            start,
+            end,
+            0.0,
+            1.0,
+            &surface,
+            None,
+            Tolerance::new(),
+        );
+        let last = crossings.last().expect("the end crossing");
+        assert!((last.1 - end).length() < 1e-12, "{crossings:?}");
     }
 
     #[test]
