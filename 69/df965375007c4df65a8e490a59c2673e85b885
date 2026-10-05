@@ -1,0 +1,21 @@
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_d5e555164b5fea 142
+crates/wasm/src/bindings/assembly_probe_tests.rs
+  s_a8677c67f85a06::t_56a0c88c47f9b0 409-484
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "69df965375007c4df65a8e490a59c2673e85b885",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
