@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791212685227,
+  "lastUpdate": 1791212832555,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51785,6 +51785,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43480915,
             "range": "± 67578",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cc7a0c482538f6636ea948235891105bb8d8a830",
+          "message": "build(deps-dev): bump prettier from 3.9.8 to 3.9.9 in the npm group (#1986)\n\nBumps the npm group with 1 update:\n[prettier](https://github.com/prettier/prettier).\n\nUpdates `prettier` from 3.9.8 to 3.9.9\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/releases\">prettier's\nreleases</a>.</em></p>\n<blockquote>\n<h2>3.9.9</h2>\n<ul>\n<li>Markdown: Fix text with <code>$</code> been incorrectly parsed as\nmath syntax (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/20140\">#20140</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</li>\n</ul>\n<p>🔗 <a\nhref=\"https://github.com/prettier/prettier/blob/3.9.9/CHANGELOG.md#399\">Changelog</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/blob/main/CHANGELOG.md\">prettier's\nchangelog</a>.</em></p>\n<blockquote>\n<h1>3.9.9</h1>\n<p><a\nhref=\"https://github.com/prettier/prettier/compare/3.9.8...3.9.9\">diff</a></p>\n<h4>Markdown: Fix text with <code>$</code> been incorrectly parsed as\nmath syntax (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/20140\">#20140</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</h4>\n<!-- raw HTML omitted -->\n<pre lang=\"md\"><code>&lt;!-- Input --&gt;\n**Uses $FOO** from `a.sh` and `b.sh`, plus `$BAR` from `c.sh`, before\nanything else runs here.\n<p>&lt;!-- Prettier 3.9.8 --&gt;<br />\n<strong>Uses $FOO</strong> from <code>a.sh</code> and <code>b.sh</code>,\nplus <code>$BAR</code>from<code>c.sh</code>, before anything else runs\nhere.</p>\n<p>&lt;!-- Prettier 3.9.9 --&gt;<br />\n<strong>Uses $FOO</strong> from <code>a.sh</code> and <code>b.sh</code>,\nplus <code>$BAR</code> from <code>c.sh</code>, before anything else runs\nhere.<br />\n</code></pre></p>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/cdd17f2288b28b170a76416c72dac56e3ea5daff\"><code>cdd17f2</code></a>\nRelease 3.9.9</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/dc7b8968e678f51ea00e2be3fe8c717d114691a3\"><code>dc7b896</code></a>\nDisable <code>singleDollarTextMath</code> in\n<code>mdast-util-math</code> (<a\nhref=\"https://redirect.github.com/prettier/prettier/issues/20140\">#20140</a>)</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/f9be58fb8ec62dd47197ea19a30aac5ad26dfee0\"><code>f9be58f</code></a>\nGit blame ignore 3.9.8</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/88470cb79ca3b757dd6b93906d9a992aa1a456c3\"><code>88470cb</code></a>\nBump Prettier dependency to 3.9.8</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/9559cab39eb5082c99a27e8829760c055adba841\"><code>9559cab</code></a>\nClean changelog_unreleased</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/4fc8ee87465de8d54780273a6996d74e8e9da827\"><code>4fc8ee8</code></a>\nUpdate dependents count</li>\n<li>See full diff in <a\nhref=\"https://github.com/prettier/prettier/compare/3.9.8...3.9.9\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility\nscore](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=prettier&package-manager=npm_and_yarn&previous-version=3.9.8&new-version=3.9.9)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's major version (unless you unignore this specific\ndependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's minor version (unless you unignore this specific\ndependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR\nand stop Dependabot creating any more for the specific dependency\n(unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore\nconditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will\nremove the ignore condition of the specified dependency and ignore\nconditions\n\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nUpdates `prettier` from 3.9.8 to 3.9.9 in the npm group. This patch\nrelease fixes Markdown text containing `$` being incorrectly parsed as\nmath syntax, which previously corrupted formatting.\n\n<sup>Written for commit 4dd02aae5e6db6cacba6f2824b195050d3e5eb06.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1986?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-05T08:02:00-07:00",
+          "tree_id": "9ba4aa14ddfb2331a22bd8f203750c5f4e878df8",
+          "url": "https://github.com/andymai/brepkit/commit/cc7a0c482538f6636ea948235891105bb8d8a830"
+        },
+        "date": 1791212826547,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 579972,
+            "range": "± 9535",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 651617,
+            "range": "± 9515",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7874,
+            "range": "± 163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 448862,
+            "range": "± 13846",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28498937,
+            "range": "± 1052141",
             "unit": "ns/iter"
           }
         ]
