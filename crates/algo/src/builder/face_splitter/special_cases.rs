@@ -3664,30 +3664,41 @@ pub(super) fn split_face_with_internal_loops(
                 parent_loop[lj] = Some(li);
             }
         }
-        for (li, loop_edges) in loops.iter().enumerate() {
-            let polygon: Vec<Point2> = sample_edges_3d(loop_edges)
+        // A hole belongs to the smallest loop enclosing it: a ring cut from
+        // a ring-shaped face (a bin round a centre hole, less its cavity)
+        // leaves the hole inside both section loops, and on the larger one
+        // the inner rim strip comes out as a disc over the hole.
+        for (hi, hole) in original_inner_wires.iter().enumerate() {
+            if consumed_holes.contains(&hi) {
+                continue;
+            }
+            let pts: Vec<Point2> = sample_edges_3d(hole)
                 .iter()
                 .map(|p| frame.project(*p))
                 .collect();
-            if polygon.len() < 3 {
+            if pts.is_empty() {
                 continue;
             }
-            for (hi, hole) in original_inner_wires.iter().enumerate() {
-                if consumed_holes.contains(&hi) || nested_holes.contains(&hi) {
+            let mut best: Option<(f64, usize)> = None;
+            for (li, polygon) in polygons.iter().enumerate() {
+                if polygon.len() < 3
+                    || !pts
+                        .iter()
+                        .all(|p| super::super::classify_2d::point_in_polygon_2d(*p, polygon))
+                {
                     continue;
                 }
-                let pts = sample_edges_3d(hole);
-                if !pts.is_empty()
-                    && pts.iter().all(|p| {
-                        super::super::classify_2d::point_in_polygon_2d(frame.project(*p), &polygon)
-                    })
-                {
-                    log::debug!(
-                        "split_face_with_internal_loops: face {face_id:?} loop {li} encloses hole {hi}"
-                    );
-                    nested_holes_by_loop[li].push(hi);
-                    nested_holes.insert(hi);
+                let a = area(polygon);
+                if best.is_none_or(|(ba, _)| a < ba) {
+                    best = Some((a, li));
                 }
+            }
+            if let Some((_, li)) = best {
+                log::debug!(
+                    "split_face_with_internal_loops: face {face_id:?} loop {li} encloses hole {hi}"
+                );
+                nested_holes_by_loop[li].push(hi);
+                nested_holes.insert(hi);
             }
         }
     }
