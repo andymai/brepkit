@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791122085115,
+  "lastUpdate": 1791161783433,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51569,6 +51569,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46185468,
             "range": "± 477533",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "64b8876583bb68349f627ff7e840cfa817589445",
+          "message": "fix(math): meet a coaxial wall touching a torus's tube in its one exact circle (#1983)\n\nThe captured interior fillet material now fuses into its bin without\nmesh fallback in 180 ms, producing a valid, watertight solid with 199\nanalytic faces (12 cones, 62 cylinders, 98 planes, 27 tori) and every\nedge used twice. The cut of the same operands is also exact.\n\n## What was wrong\n\nThe case comes from the gridfinity layout tool's\n`binGenerator.export.interiorFillet` tests. It captures the fuse of an\ninterior fillet's material into its bin on a brepkit-wasm build that\nrounds the compartment air's floor rim. The bin has 106 faces (12 cones,\n24 cylinders, 70 planes), and the fillet material has 118 faces (47\ncylinders, 44 planes, 27 tori).\n\nOn main, the fuse falls back in 2163 ms to a 2371-face planar mesh with\n17 free edges. The raw GFA fuse assembles 199 faces with 18 free edges\nat the bin's four outer pocket corners.\n\nAt each corner, a radius 2.55 cylindrical wall is coaxial with a spindle\ntorus having major radius 0.1, minor radius 2.45, and centre height z =\n4.7. The tube's outer equator touches the wall along one circle. The\nface-face intersection instead returns 64 curves because\n`exact_cylinder_torus` defers spindle tori, and walls within 1e-9 of the\nscale of touching the tube, to the marcher.\n\n## Change\n\nA coaxial wall whose distance from the tube's outer or inner equator is\nwithin the linear tolerance now intersects the torus in one circle at\nthe wall's radius and the torus's centre height. The circle lies on the\ntorus within the wall's distance from the tube, so it represents the\nsection at any scale. This follows the plane resting on a torus's tube\nin #1967.\n\nA spindle torus is now solved exactly when the wall radius plus the\nmajor radius exceeds the minor radius by more than the linear tolerance.\nIn that case the wall cannot reach the part of the tube across the axis.\nOther spindle cases still defer.\n\n## Verification\n\n- `interior_fillet_material_fuses_into_its_bin_exactly` uses the\ncaptured operands in `crates/io/tests/data/interior_fillet_bin.bin` and\n`interior_fillet_material.bin`. It requires exact fuse and cut results,\ntwice-used edges, valid solids, watertight meshes, and overlap readings\nwithin 1e-6 of the bin's volume. It fails on main with `Fuse fell back`.\n- The overlap is 12957.8322531 through both the fuse and cut\ncalculations, equal within 2e-9.\n- Cylinder-torus tests cover outer and inner tangency, walls 1e-6 clear\nof and into the tube, the captured spindle (0.1, 2.45) touching a radius\n2.55 wall in one circle at z = 4.7 and crossing a radius 2.4 wall in two\ncircles, and continued deferral for a spindle with major radius 1, minor\nradius 2, and rod radius 0.5.\n- Clippy is clean on brepkit-math, brepkit-algo, brepkit-blend,\nbrepkit-operations, and brepkit-wasm with all targets. Nextest reports\n2902 passed across those crates plus brepkit-io. `pose_sweep` and\n`truth_audit` exactly match same-day main baselines. `approx_census`\ndiffers only at an already failing NURBS loft offset error that also\nvaries between main runs.\n\n## Still open\n\nIntersecting the captured operands still falls back. Its raw result has\nfour free edges at the corner where the material's air wall is split\nalong x = y while the bin's coincident wall is one face.\n\nThe rim fillet that produces this material is not part of this PR,\nbecause it exposes downstream tool failures that remain open. This fix\nstands on its own because the captured operands reproduce the fallback\non main.\n\n\n## Tool side\n\nThe gridfinity layout tool's generator suite was run in four parts in\nthe `brepkit-kumiko` tool worktree with `BREPJS_KERNEL=brepkit`. In the\nfirst part (954 tests), a brepkit-wasm built from this branch fails 75\ntests, compared with 76 for one built from main.\n\nAcross the full suite (3763 tests), a brepkit-wasm built from #1984,\nwhich is stacked on this branch, fails 385 tests, compared with 386 on\nmain. In both runs, the only differing test is the kumiko sakura export\nin `binGenerator.export.kumikoPatterns`, which fails on main and passes\non the branch.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` records this fix as closed. The\nrounded-prism rim ease row records the tool-side result:\n`scenario.interiorFillet` changes from 19 to 6 failures,\n`export.interiorFillet` from 2 to 6, `export.interiorFilletScoops` from\n2 to 9, and `assemblyGenerator.scenario` from 1 to 2, with each newly\nfailing test's first failing operation. The classifier row records that\n`operations::classify::classify_point_winding` uses the same ray cast as\n`classify_point`, while the check crate's winding number fans each face\nboundary polygon and ignores the surface.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the interior fillet fuse that fell back to a planar mesh when the\nfillet material's spindle torus touched the bin's coaxial corner wall,\nso both the fuse and cut of the captured operands are now exact and\nwatertight.\n\nA coaxial wall whose distance from the torus's outer or inner equator is\nwithin the linear tolerance now intersects the torus in one circle at\nthe wall's radius and centre height, instead of deferring that tangency\nto the marcher. Spindle tori are solved exactly when the wall stays\nclear of the tube's part across the axis; other cases still defer.\n\n- Adds captured-operand regression tests requiring exact fuse and cut\nresults, twice-used edges, valid solids, and watertight meshes.\n- Adds unit coverage for outer and inner tangency, walls clear of and\ninto the tube, the captured spindle, and continued deferral cases.\n- Pins the overlap both fuse and cut agree on, so a classification error\nshared by both also fails.\n\n<sup>Written for commit b431e86c9489e84215d0c1cac02e98b25d7120fa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1983?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-04T17:53:56-07:00",
+          "tree_id": "3cbedfd7a9aa32ba1c8575bbbb1f44f8703a5c68",
+          "url": "https://github.com/andymai/brepkit/commit/64b8876583bb68349f627ff7e840cfa817589445"
+        },
+        "date": 1791161777323,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 593670,
+            "range": "± 29231",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 652720,
+            "range": "± 10167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8040,
+            "range": "± 131",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 483059,
+            "range": "± 12400",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28106652,
+            "range": "± 1114492",
             "unit": "ns/iter"
           }
         ]
