@@ -690,7 +690,15 @@ fn march_direction(
             // point it left, or fails to refine: short of the edge that is an
             // overshoot, so retry shorter until the march reaches the band
             // `finish_chain` snaps; in the band it is the curve's end.
-            if (refined.point - current.point).length() < tolerance {
+            // A clamped step's state no longer lies on the curve, and Newton
+            // can carry it back down the curve to a point already passed.
+            let clamped = next
+                .iter()
+                .zip(y4.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-15);
+            let backward = clamped
+                && prev_tangent.is_some_and(|t| (refined.point - current.point).dot(t) <= 0.0);
+            if backward || (refined.point - current.point).length() < tolerance {
                 if accepted_h > h_min && !in_clamp_band(&y, s1, s2) {
                     h = (accepted_h * 0.5).max(h_min);
                     continue;

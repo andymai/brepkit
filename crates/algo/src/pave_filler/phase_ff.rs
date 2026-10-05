@@ -684,6 +684,12 @@ pub fn perform(
                     raw_curves.len()
                 );
             }
+            let raw_curves: Vec<RawCurve> = raw_curves
+                .into_iter()
+                .map(|raw| {
+                    pull_ends_onto_corners(topo, arena, (fa, surf_a), (fb, surf_b), raw, tol)
+                })
+                .collect();
             // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
             // resolution: each arc's endpoints are bit-identical to the shared
             // boundary-line crossing of the adjacent tread's arc, so consult
@@ -910,6 +916,201 @@ pub fn perform(
     }
 
     Ok(())
+}
+
+/// Distance from `p` to a face's unbounded surface; `None` when no foot is
+/// found.
+fn surface_gap(surface: &FaceSurface, p: Point3) -> Option<f64> {
+    match surface {
+        FaceSurface::Plane { normal, d } => {
+            Some((normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs())
+        }
+        other => other
+            .project_point(p)
+            .and_then(|(u, v)| other.evaluate(u, v))
+            .map(|q| (q - p).length()),
+    }
+}
+
+/// Pull an open marched section's end onto the corner where both faces'
+/// boundaries cross, when the march stopped short of it along a direction
+/// both surfaces contain.
+///
+/// Where one face's boundary only grazes the partner surface (a scoop's
+/// end profile touching a corner cylinder along the cylinder's ruling), the
+/// boundary point solving both surfaces is a double root: the marcher's
+/// refined end sits a few thousandths of a millimetre along the tangent
+/// from the corner yet within 1e-6 of both surfaces, on no vertex, and the
+/// section dangles. The corner is already a vertex (the two boundary
+/// edges' EE crossing). It is adopted only when it lies on a boundary of
+/// each face and on both surfaces, the chord to it stays on both surfaces,
+/// the end being moved is the curve's clamped end, and the reshaped end
+/// span sits no farther off the surfaces than the fitted curve already
+/// did.
+fn pull_ends_onto_corners(
+    topo: &Topology,
+    arena: &GfaArena,
+    (fa, surf_a): (FaceId, &FaceSurface),
+    (fb, surf_b): (FaceId, &FaceSurface),
+    mut raw: RawCurve,
+    tol: Tolerance,
+) -> RawCurve {
+    const BAND: f64 = 1e-2;
+    let EdgeCurve::NurbsCurve(curve) = &raw.curve else {
+        return raw;
+    };
+    if (raw.p_start - raw.p_end).length() < tol.linear {
+        return raw;
+    }
+    let hug = tol.linear * 10.0;
+    let boundary_vertices = |fid: FaceId| -> Vec<(brepkit_topology::vertex::VertexId, Point3)> {
+        let mut out = Vec::new();
+        let Ok(face) = topo.face(fid) else {
+            return out;
+        };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Some(pbs) = arena.edge_pave_blocks.get(&oe.edge()) else {
+                    continue;
+                };
+                for &pb_id in pbs {
+                    let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                        continue;
+                    };
+                    for pave in [pb.start, pb.end].iter().chain(pb.extra_paves.iter()) {
+                        let vid = arena.resolve_vertex(pave.vertex);
+                        if let Ok(v) = topo.vertex(vid) {
+                            out.push((vid, v.point()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
+    let on_a = boundary_vertices(fa);
+    let on_b = boundary_vertices(fb);
+    let corners: Vec<Point3> = on_a
+        .iter()
+        .filter(|(va, pa)| {
+            on_b.iter()
+                .any(|(vb, pb)| va == vb || (*pa - *pb).length() <= tol.linear)
+        })
+        .map(|&(_, p)| p)
+        .collect();
+    let on_both = |p: Point3| {
+        surface_gap(surf_a, p).is_some_and(|d| d <= hug)
+            && surface_gap(surf_b, p).is_some_and(|d| d <= hug)
+    };
+    let knots = curve.knots();
+    let deg = curve.degree();
+    let n = curve.control_points().len();
+    if n < 2 || knots.len() != n + deg + 1 {
+        return raw;
+    }
+    let (k0, k1) = (knots[0], knots[knots.len() - 1]);
+    let clamped_start = knots[..=deg].iter().all(|&k| (k - k0).abs() <= 1e-12);
+    let clamped_end = knots[knots.len() - deg - 1..]
+        .iter()
+        .all(|&k| (k - k1).abs() <= 1e-12);
+    let mut shifts: [Option<Vec3>; 2] = [None, None];
+    for (end, p, t, clamped) in [
+        (0, raw.p_start, raw.t_range.0, clamped_start),
+        (1, raw.p_end, raw.t_range.1, clamped_end),
+    ] {
+        let at_knot_end = if end == 0 {
+            (t - k0).abs() <= 1e-12
+        } else {
+            (t - k1).abs() <= 1e-12
+        };
+        if !clamped || !at_knot_end || corners.iter().any(|&c| (c - p).length() <= hug) {
+            continue;
+        }
+        let Some(&v) = corners
+            .iter()
+            .filter(|&&c| (c - p).length() <= BAND)
+            .min_by(|&&a, &&b| (a - p).length().total_cmp(&(b - p).length()))
+        else {
+            continue;
+        };
+        if on_both(v) && [0.25, 0.5, 0.75].iter().all(|&s| on_both(p + (v - p) * s)) {
+            shifts[end] = Some(v - p);
+        }
+    }
+    if shifts.iter().all(Option::is_none) {
+        return raw;
+    }
+    let gap = |q: Point3| {
+        surface_gap(surf_a, q)
+            .unwrap_or(f64::INFINITY)
+            .max(surface_gap(surf_b, q).unwrap_or(f64::INFINITY))
+    };
+    let at = |k: u32, m: u32, lo: f64, hi: f64| lo + (hi - lo) * f64::from(k) / f64::from(m);
+    let fit = (0..=32)
+        .map(|k| gap(curve.evaluate(at(k, 32, k0, k1))))
+        .fold(hug, f64::max);
+    let length: f64 = (0..32)
+        .map(|k| {
+            (curve.evaluate(at(k + 1, 32, k0, k1)) - curve.evaluate(at(k, 32, k0, k1))).length()
+        })
+        .sum();
+    // The moved end point drags only the span it bounds, so that span is
+    // first cut down to a few shift lengths of curve.
+    let mut reshaped = curve.clone();
+    let mut spans = Vec::new();
+    for (end, shift) in shifts.iter().enumerate() {
+        let Some(d) = shift else { continue };
+        let reach = ((k1 - k0) * 20.0 * d.length() / length.max(tol.linear)).min(0.25 * (k1 - k0));
+        let t_ins = if end == 0 { k0 + reach } else { k1 - reach };
+        let ks = reshaped.knots();
+        let inner = if end == 0 {
+            ks[deg + 1]
+        } else {
+            ks[ks.len() - deg - 2]
+        };
+        if (end == 0 && t_ins < inner) || (end == 1 && t_ins > inner) {
+            match brepkit_math::nurbs::knot_ops::curve_knot_insert(&reshaped, t_ins, 1) {
+                Ok(c) => reshaped = c,
+                Err(_) => return raw,
+            }
+        }
+        let ks = reshaped.knots();
+        let span = if end == 0 {
+            (k0, ks[deg + 1])
+        } else {
+            (ks[ks.len() - deg - 2], k1)
+        };
+        let mut cps = reshaped.control_points().to_vec();
+        let i = if end == 0 { 0 } else { cps.len() - 1 };
+        cps[i] = cps[i] + *d;
+        match brepkit_math::nurbs::curve::NurbsCurve::new(
+            deg,
+            ks.to_vec(),
+            cps,
+            reshaped.weights().to_vec(),
+        ) {
+            Ok(c) => reshaped = c,
+            Err(_) => return raw,
+        }
+        spans.push(span);
+    }
+    // No worse off both surfaces than the fit already was.
+    if spans
+        .iter()
+        .any(|&(lo, hi)| (0..=8).any(|k| gap(reshaped.evaluate(at(k, 8, lo, hi))) > fit + hug))
+    {
+        return raw;
+    }
+    raw.p_start = reshaped.evaluate(raw.t_range.0);
+    raw.p_end = reshaped.evaluate(raw.t_range.1);
+    let mut pts: Vec<Point3> = (0..=16)
+        .map(|k| reshaped.evaluate(at(k, 16, k0, k1)))
+        .collect();
+    pts.extend([raw.bbox.min, raw.bbox.max]);
+    raw.bbox = Aabb3::from_points(pts);
+    raw.curve = EdgeCurve::NurbsCurve(reshaped);
+    raw
 }
 
 /// Quantize a point to a fine grid for the exact-arc vertex registry. The
