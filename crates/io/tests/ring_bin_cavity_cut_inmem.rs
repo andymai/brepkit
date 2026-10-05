@@ -66,6 +66,10 @@ fn a_ring_bin_less_its_cavity_keeps_the_rim_round_its_hole() {
     let mut topo = Topology::new();
     let block = load(&mut topo, "ring_bin_block.bin");
     let cavity = load(&mut topo, "ring_bin_cavity.bin");
+    for operand in [block, cavity] {
+        let report = validate_solid(&topo, operand).unwrap();
+        assert!(report.is_valid(), "operand: {:?}", report.issues);
+    }
     let cut = exact(&mut topo, BooleanOp::Cut, block, cavity);
     let fused = exact(&mut topo, BooleanOp::Fuse, block, cavity);
     let common = exact(&mut topo, BooleanOp::Intersect, block, cavity);
