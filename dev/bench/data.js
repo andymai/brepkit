@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791161783433,
+  "lastUpdate": 1791163524019,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51623,6 +51623,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28106652,
             "range": "± 1114492",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4a3f6aed33e30f62742f3a2aacad515d46b6d33e",
+          "message": "fix(algo): fuse a fillet's rounding into scooped, cut-out, custom and L-shaped pockets exactly (#1984)\n\nThis PR is stacked on #1983 and fixes three boolean pipeline failures\nfound in the gridfinity layout tool's interior fillet. All four captured\nfuses now avoid mesh fallback and produce valid, watertight solids with\nevery edge used twice. The cases model a compartment outline grown into\nthe walls and floor, less the compartment's air rounded along its floor,\nfused into the bin. The rim fillet stays out of this PR because the tool\ntests it still breaks have open roots. These fixes reproduce on captured\noperands without it.\n\n## What was wrong\n\nOn the base branch with #1983's coaxial torus fix, four cases fell back\nto a mesh: scoops on adjacent walls\n(`binGenerator.export.interiorFilletScoops`, op 837) had 46 free edges\nin the raw GFA result and dropped three of four corner tori; a wall\ncutout beside a scoop (op 888) had 32 free edges; a custom outline on a\nnon-square pitch (`binGenerator.export.interiorFillet`, op 1003) had 13\nfree and 1 over-shared edge, while the mesh fallback left 753 free\nedges; and an L-shaped pocket built from primitives, with fillet radius\n2.45 against corners of 2.55, had 3 free and 1 over-shared edge.\n\nAt a scoop corner, two sections cutting the bin's cylindrical\ncorner-wall strip out of the air wall were lost. A plane face's\n`FaceExtent` sampled a NURBS edge stored from its end vertex back in\nreverse, producing a self-crossing outline that classified the plane's\nruling along its boundary as outside. `closed_circle_boundary_crossings`\nalso skipped NURBS boundary edges, so the section circle was not cut\nwhere the cone's NURBS boundary ended on it and the cone arc was dropped\nwith the rest of the quarter.\n\nIn the L pocket, the ray-cast classifier represented a torus patch\ncovering part of the major revolution by one flat polygon through its\nrim. The wall-strip sample `(-15, 0, 3.475)` read Outside the material\nbecause its +x ray counted four crossings instead of three. The extra\ncrossing came from the polygon representing the reflex corner's torus,\nalthough the curved patch does not meet that ray.\n\nAt the custom outline's reflex corner, the coaxial corner wall ends\nunder a lip chamfer stored as a NURBS face, while the material's air\nwall continues above it. The chamfer and air-wall face-face section\nproduced no curve. The edge-face phase treated an edge on the face's\nsurface as a coincidence, so the air wall was not split along the arcs\nwhere the bin wall ends.\n\n## Change\n\nCurved-edge samples in an outline are now oriented according to which\nvertex contains the curve's first point. A NURBS boundary edge ending on\na section circle contributes that endpoint as a crossing when its\nmidpoint is off the circle. An edge running along the circle contributes\nno crossings. Counting both endpoints split a fillet's floor-contact\ncircle at its midpoint and broke the L pocket. Counting endpoints from a\ncoincident circle arc also sent three\n`crates/io/tests/hinge_swing_inmem.rs` intersects to mesh fallback.\n\nA torus patch covering only part of the major revolution is now tested\nagainst its own wires using `UvTrim` in `(u, v)`. The tube angle `v` is\nmeasured from the middle of the face's tube angles to avoid wrapping\nacross the face. A ray and torus root counts only when the trim places\nit on the face. A root is dropped when its `(u, v)` does not evaluate\nback to the hit, which handles spindle-torus hits on the tube portion\nacross the axis that project into the patch without lying on it. A face\nwhose wires reach more than seven eighths of a half turn from that\nmiddle retains the polygon path.\n\nA line or circle edge lying on a cylinder or cone face is now recorded\nas an edge-face interference without a parameter, allowing the face to\nsplit along it. Its midpoint must be inside the trim by more than ten\ntimes the linear tolerance from the wires through\n`LateralTrim::holds_clear`, and all sixteen samples along the edge,\nincluding both ends, must be inside or on the trim. Full-edge sampling\nprevents a circle passing through a cutout between points on the face\nfrom being recorded.\n\n## Verification\n\n`crates/io/tests/interior_fillet_fuse_inmem.rs` adds four captured\noperand pairs and one classifier test:\n\n- Scoops: pinned overlap `3214.7074811`.\n- Wall cutout: pinned overlap `5473.9931426`.\n- Custom outline: pinned overlap `6113.6498480`.\n- L pocket: pinned overlap `822.0275266`.\n\nEach pair requires both fuse and cut to avoid mesh fallback, use every\nedge twice, validate, and mesh watertight. The overlap computed through\nthe fuse and through the cut must agree within `1e-6` of the bin volume\nand match the pinned value. For the L pocket, material volume `937.954`\nless the overlap is `115.9265`, against `115.926` for the closed-form\nfloor-fillet volume from straight runs plus five convex and one reflex\ncorner by Pappus.\n`a_ray_past_spindle_corner_tori_counts_their_patches_exactly` requires\nthe boolean ray cast to classify `(-15, 0, 3.475)` as Inside the L\npocket's material.\n\n`a_circle_through_a_window_in_a_band_is_not_in_the_band` in\n`crates/algo/src/pave_filler/phase_ef.rs` constructs a cylindrical band\nwith a window and a full circle through it. The circle is recorded on\nthe band without the window and not on the band with it. Checking only\nits ends and midpoint recorded it on both.\n\nEach fix is required. Without torus-patch reading, five of the file's\nsix tests fail. Without in-face edges, the custom-outline fixture and\n#1983's fixture fail. Without NURBS endpoint crossings, the scoop and\ncutout fixtures fail. The scoop and cutout raw GFA results still have 22\nfree edges, while the operations path results have none.\n\nClippy is clean for brepkit-math, brepkit-algo, brepkit-blend,\nbrepkit-operations, and brepkit-wasm with all targets. Nextest across\nbrepkit-math, brepkit-algo, brepkit-blend, brepkit-operations,\nbrepkit-io, and brepkit-wasm reports 2907 passed. `pose_sweep` and\n`truth_audit` match same-day main baselines exactly. `approx_census`\ndiffers only in the face pair named in an already failing NURBS loft\noffset error, which also varies between main runs. After the full-length\nedge sampling, nextest across brepkit-algo, brepkit-io, and\nbrepkit-operations reports 1997 passed.\n\nThe gridfinity layout tool's full generator suite ran 3763 tests in the\n`brepkit-kumiko` worktree with `BREPJS_KERNEL=brepkit`. Against\nbrepkit-wasm builds from main and this branch including #1983, main\nfails 386 tests and this branch fails 385. The only differing test is\nthe kumiko sakura export in `binGenerator.export.kumikoPatterns`, which\nfails on main and passes here. That wasm predates full-length edge\nsampling, which only records fewer edges.\n\nThe Test job limit in `.github/workflows/ci.yml` increases from 20 to 30\nminutes. On main, nextest takes about 18 minutes and the complexity\nguards about 1.5 more. Initial branch runs were cancelled during the\ncomplexity guards after nextest and doc tests passed.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` adds a closed entry for these three\nroots. The rounded-prism rim-ease row records the separate rim branch's\ntool result on these fixes: `scenario.interiorFillet` moves from 19 to 4\nfailures and `scenario.interiorFilletScoops` from 17 to 14, while\n`export.interiorFillet` moves from 2 to 4, `export.interiorFilletScoops`\nfrom 2 to 6, and `assemblyGenerator.scenario` from 1 to 2. It also\nrecords the remaining roots, beginning with a pair of scoop ramps whose\nfuse falls back on main too.",
+          "timestamp": "2026-10-05T01:22:28Z",
+          "tree_id": "b8b25d07beff7fd5adba873f17531ae010b65bfd",
+          "url": "https://github.com/andymai/brepkit/commit/4a3f6aed33e30f62742f3a2aacad515d46b6d33e"
+        },
+        "date": 1791163519859,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1038501,
+            "range": "± 2242",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1122817,
+            "range": "± 7510",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13030,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 803997,
+            "range": "± 3227",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43538397,
+            "range": "± 1255659",
             "unit": "ns/iter"
           }
         ]
