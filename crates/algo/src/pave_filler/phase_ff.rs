@@ -1014,6 +1014,9 @@ enum FaceExtent {
         /// bounded by one wire of rulings and coaxial circles, whose sampled
         /// ends are exact. An ellipse or NURBS rim peaks between its samples.
         exact_window: bool,
+        /// `v` is an angle read modulo a turn from `v0` (a torus patch whose
+        /// tube arc runs across the angle's origin).
+        periodic_v: bool,
     },
 }
 
@@ -1119,6 +1122,16 @@ impl FaceExtent {
                     }
                 }
             };
+            // A torus patch's tube angle wraps: a quarter tube from the bottom
+            // to the outer equator reads both ends of the turn, and its
+            // smallest and largest samples span the whole tube. The window is
+            // the arc its boundary's samples leave out of the turn.
+            let torus_window = match surface {
+                FaceSurface::Torus(_) => face_tube_window(topo, face_id, surface),
+                _ => None,
+            };
+            let periodic_v = torus_window.is_some();
+            let (v0, v1) = torus_window.unwrap_or((v0, v1));
             // A sphere range reaching a pole spans from the face's boundary
             // latitude, where the margin keeps sections on the boundary; a
             // hundredth of a hemisphere's span would admit latitudes past it.
@@ -1138,7 +1151,21 @@ impl FaceExtent {
             // near-tangent section curve "inside" the v-band but on the far
             // half of the cylinder is wrongly kept, wrapping the trimmed arc
             // onto the wrong side of the wedge.
-            let u_gap = face_circumferential_u_gap(topo, face_id, surface);
+            //
+            // A torus patch's points report the azimuth of their own tube
+            // circle only while the patch stays on that circle's side of the
+            // axis: a spindle torus's tube runs across it, and a point there
+            // projects half a turn round. Such a patch keeps no gap.
+            let own_side = match surface {
+                FaceSurface::Torus(t) => (0..=64).all(|k| {
+                    let v = (v1 - v0).mul_add(f64::from(k) / 64.0, v0);
+                    t.minor_radius().mul_add(v.cos(), t.major_radius()) > 0.0
+                }),
+                _ => true,
+            };
+            let u_gap = own_side
+                .then(|| face_circumferential_u_gap(topo, face_id, surface))
+                .flatten();
             // Only the outer wire sets the window and meets a circle's
             // crossings, so a face with inner wires does not qualify.
             let exact_window = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
@@ -1159,6 +1186,7 @@ impl FaceExtent {
                 margin,
                 u_gap,
                 exact_window,
+                periodic_v,
             })
         }
     }
@@ -1226,12 +1254,13 @@ impl FaceExtent {
                 v0,
                 v1,
                 u_gap,
+                periodic_v,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
                 // Unlike `contains` (conservative keep on projection failure),
                 // the STRICT gate fails closed: an unprojectable point cannot
                 // certify a genuine interior crossing.
-                let in_v = v >= *v0 + depth && v <= *v1 - depth;
+                let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 in_v && in_u
             }),
@@ -1265,9 +1294,10 @@ impl FaceExtent {
                 v1,
                 margin,
                 u_gap,
+                periodic_v,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
-                let in_v = v >= *v0 - *margin && v <= *v1 + *margin;
+                let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 in_v && in_u
             }),
@@ -1294,7 +1324,10 @@ fn face_circumferential_u_gap(
     // on-surface points near that u. A real partial-arc face (a rounded-rect
     // corner) still shows its large angular gap.
     const N_GAP: usize = 64;
-    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+    if !matches!(
+        surface,
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Torus(_)
+    ) {
         return None;
     }
     let face = topo.face(face_id).ok()?;
@@ -1316,6 +1349,49 @@ fn face_circumferential_u_gap(
         }
     }
     crate::classifier::largest_u_gap(&u_samples)
+}
+
+/// Whether `v` lies in `(v0, v1)` widened by `margin` at each end (narrowed
+/// for a negative one), read modulo a turn from `v0` when `periodic`.
+fn in_window(v: f64, (v0, v1): (f64, f64), margin: f64, periodic: bool) -> bool {
+    if periodic {
+        (v - (v0 - margin)).rem_euclid(std::f64::consts::TAU) <= 2.0f64.mul_add(margin, v1 - v0)
+    } else {
+        v >= v0 - margin && v <= v1 + margin
+    }
+}
+
+/// A torus face's tube-angle arc from its outer-wire samples, from `v0` to
+/// `v1 > v0` (past a turn when it crosses the angle's origin). `None` when
+/// the samples leave no arc out (a tube running all the way round).
+fn face_tube_window(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Option<(f64, f64)> {
+    const N_GAP: usize = 64;
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut v_samples = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for i in 0..=N_GAP {
+            #[allow(clippy::cast_precision_loss)]
+            let f = i as f64 / N_GAP as f64;
+            let pt = edge
+                .curve()
+                .evaluate_with_endpoints(t0 + (t1 - t0) * f, sp, ep);
+            if let Some((_, v)) = surface.project_point(pt) {
+                v_samples.push(v);
+            }
+        }
+    }
+    let (gap_start, gap_end) = crate::classifier::largest_u_gap(&v_samples)?;
+    let end = if gap_start < gap_end {
+        gap_start + std::f64::consts::TAU
+    } else {
+        gap_start
+    };
+    Some((gap_end, end))
 }
 
 /// Minimum distance from a 2D point to a closed polygon's edges.
