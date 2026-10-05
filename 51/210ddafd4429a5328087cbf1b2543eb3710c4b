@@ -1,0 +1,65 @@
+crates/io/tests/fillet_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_1af94633964370 1-12,15-70,72-74,76-80,82-86,88-94
+  s_a8677c67f85a06::t_b8d24561d76c8e 13-14,71,75,81,87
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_a8677c67f85a06::t_b4f59e977dac1d 72
+  s_a8677c67f85a06::t_057b632992219c 9,17,160-227
+  s_a8677c67f85a06::t_a237c7d15e143a 228
+  s_a8677c67f85a06::t_2d2a4bc982455f 83-95
+crates/math/src/surfaces/tests.rs
+  s_a8677c67f85a06::t_6bd11ac9994827 627-651
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_2d2fff9e5ed64c 678-707,711-723,725,801-802
+  s_a8677c67f85a06::t_c669f9cc970195 1263-1295
+  s_a8677c67f85a06::t_8fdadab914a249 825-827
+  s_a8677c67f85a06::t_d904dbf4688509 395,398
+  s_a8677c67f85a06::t_83895e9da41857 708-710
+  s_a8677c67f85a06::t_42d0f0d68eeb6f 378-394,396-397,399-428
+  s_a8677c67f85a06::t_5c5660cd739320 786-800,803-824,828-836
+  s_a8677c67f85a06::t_83241d3d04aaa3 995-1006
+crates/math/src/surfaces.rs
+  s_a8677c67f85a06::t_534d0c0add8ca4 891-948
+crates/algo/src/builder/face_splitter/sampling.rs
+  s_a8677c67f85a06::t_d694092e601cfd 187-189,194-195
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_752d22f9489101 166-167,850,853-860,865-872,951-955,961,970-972
+  s_a8677c67f85a06::t_534d0c0add8ca4 5863
+  s_a8677c67f85a06::t_434bfe895dcec7 851-852,861,956-960,962-969,973-979
+  s_a8677c67f85a06::t_79ce1600307aa8 1420-1434,1593-1596
+  s_a8677c67f85a06::t_67a3507cfe2cd6 980-985
+  s_a8677c67f85a06::t_ab43238538363f 1283-1285,1391-1400,1455,1523,1529,1563,1566,1620-1662
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_954d6221864ba3 142,204
+crates/io/tests/data/fillet_taper_clip_material.bin
+  s_a8677c67f85a06::t_01d3a1dd88cc8a 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_b34a415ced1ea6 6930-6966
+crates/algo/src/builder/fill_images_faces.rs
+  s_a8677c67f85a06::t_348579126e62d7 1957,1988-1994
+  s_a8677c67f85a06::t_053837e2c2eb86 1984,2053
+  s_a8677c67f85a06::t_49dad89ab5e744 1979,1983,1999-2004
+  s_a8677c67f85a06::t_b34a415ced1ea6 3958-3967,3980-3981,4023-4038
+  s_a8677c67f85a06::t_d4aed29ef29bde 1960-1962,1980-1982
+  s_a8677c67f85a06::t_d17693d1013985 1947-1952,1954-1955,1959,1972,1985-1986,2005-2052
+crates/io/tests/data/fillet_taper_clip_envelope.bin
+  s_a8677c67f85a06::t_01d3a1dd88cc8a 1
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_a8677c67f85a06::t_e5816e2613cdcd 218-221,230
+  s_a8677c67f85a06::t_8fdadab914a249 222-225
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51210ddafd4429a5328087cbf1b2543eb3710c4b",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
