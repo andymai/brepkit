@@ -184,12 +184,15 @@ pub(super) fn sample_wire_loop_uv_periodic(
                     } else {
                         (nurbs.evaluate(tn), nurbs.evaluate(t0))
                     };
+                    // A marched section's pcurve is a fit, its ends a few
+                    // 1e-4 off the edge's own UVs; whole turns are what tell
+                    // the copy apart, not the fit's residual.
                     let whole_periods = |at_start: f64, at_end: f64| {
                         let turns = (at_start / std::f64::consts::TAU).round();
                         let shift = turns * std::f64::consts::TAU;
                         if turns != 0.0
-                            && (at_start - shift).abs() < 1e-6
-                            && (at_end - shift).abs() < 1e-6
+                            && (at_start - shift).abs() < 1e-2
+                            && (at_end - shift).abs() < 1e-2
                         {
                             shift
                         } else {

@@ -6927,6 +6927,43 @@ fn split_face_2d_impl(
         }
     }
 
+    // The same for a partial torus band's tube angle `v`.
+    if !v_periodic
+        && !is_plane
+        && let (_, Some(v_period)) = super::pcurve_compute::surface_periods(&surface)
+    {
+        let mut vs: Vec<f64> = all_edges
+            .iter()
+            .flat_map(|e| [e.start_uv.y(), e.end_uv.y()])
+            .map(|v| v.rem_euclid(v_period))
+            .collect();
+        vs.sort_by(f64::total_cmp);
+        if vs.len() >= 2 {
+            let mut gap_start = vs[vs.len() - 1];
+            let mut max_gap = v_period - (vs[vs.len() - 1] - vs[0]);
+            for w in vs.windows(2) {
+                if w[1] - w[0] > max_gap {
+                    max_gap = w[1] - w[0];
+                    gap_start = w[0];
+                }
+            }
+            if max_gap > 0.05 {
+                let lo = gap_start + max_gap;
+                for e in &mut all_edges {
+                    let remap = |uv: Point2| -> Point2 {
+                        let mut d = (uv.y() - lo).rem_euclid(v_period);
+                        if d > v_period - 1e-6 {
+                            d = 0.0;
+                        }
+                        Point2::new(uv.x(), lo + d)
+                    };
+                    e.start_uv = remap(e.start_uv);
+                    e.end_uv = remap(e.end_uv);
+                }
+            }
+        }
+    }
+
     // Co-register section endpoints with the boundary graph on curved
     // faces. A marched chain end and the boundary split vertex at the same
     // junction share ONE 3D vertex (the pave machinery welded them), but

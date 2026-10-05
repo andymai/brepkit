@@ -888,6 +888,64 @@ impl ToroidalSurface {
             (0.0, std::f64::consts::TAU),
         )
     }
+
+    /// The torus exactly, as a rational biquadratic NURBS: the tube's
+    /// circle swept round the ring's, each the 9-point rational circle.
+    /// Its parameters are not the torus's angles. The sampled
+    /// [`Self::to_nurbs`] (eight bilinear spans round the tube) sags off it
+    /// by 7.6% of the tube's radius between rows.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `NurbsSurface` construction fails.
+    pub fn to_rational_nurbs(&self) -> Result<NurbsSurface, MathError> {
+        use std::f64::consts::{FRAC_1_SQRT_2, TAU};
+        let dirs: [(f64, f64); 9] = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let weight = |i: usize| if i % 2 == 1 { FRAC_1_SQRT_2 } else { 1.0 };
+        let mut cps = Vec::with_capacity(9);
+        let mut weights = Vec::with_capacity(9);
+        for (i, &(ux, uy)) in dirs.iter().enumerate() {
+            let mut row = Vec::with_capacity(9);
+            let mut w_row = Vec::with_capacity(9);
+            for (j, &(dx, dy)) in dirs.iter().enumerate() {
+                let radial = dx.mul_add(self.minor_radius, self.major_radius);
+                row.push(
+                    self.center
+                        + self.x_axis * (ux * radial)
+                        + self.y_axis * (uy * radial)
+                        + self.z_axis * (dy * self.minor_radius),
+                );
+                w_row.push(weight(i) * weight(j));
+            }
+            cps.push(row);
+            weights.push(w_row);
+        }
+        let knots = vec![
+            0.0,
+            0.0,
+            0.0,
+            TAU * 0.25,
+            TAU * 0.25,
+            TAU * 0.5,
+            TAU * 0.5,
+            TAU * 0.75,
+            TAU * 0.75,
+            TAU,
+            TAU,
+            TAU,
+        ];
+        NurbsSurface::new(2, 2, knots.clone(), knots, cps, weights)
+    }
 }
 
 /// A surface of revolution created by revolving a curve around an axis.

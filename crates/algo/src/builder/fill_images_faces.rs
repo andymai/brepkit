@@ -1944,24 +1944,22 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
             }
         }
     }
-    // IN edges from EF interferences — individual PaveBlocks.
-    // For faces that already have a curved (non-Line) FF curve, skip ALL
-    // IN PBs — the complete FF curve already captures the same geometry.
-    // This prevents 28 arc fragments from being added alongside the single
-    // complete circle intersection curve.
-    let faces_with_curved_ff: std::collections::HashSet<usize> = map
+    // IN edges from EF interferences, as individual PaveBlocks. On a face
+    // that already has a curved (non-Line) FF curve, an IN PB lying along
+    // one of its FF sections is that section again (28 arc fragments of the
+    // one complete circle); an IN PB elsewhere on the face (a wall's seam
+    // ruling across a coaxial corner) still splits it.
+    let ff_on_face: HashMap<usize, Vec<&SectionSource>> = map
         .iter()
-        .filter_map(|(fid, sources)| {
-            sources
-                .iter()
-                .any(|s| matches!(s, SectionSource::Curve(_)))
-                .then_some(fid.index())
-        })
+        .filter(|(_, sources)| sources.iter().any(|s| matches!(s, SectionSource::Curve(_))))
+        .map(|(fid, sources)| (fid.index(), sources.iter().collect()))
         .collect();
+    let mut additions: Vec<(FaceId, PaveBlockId)> = Vec::new();
     for (&face_id, fi) in &arena.face_info {
-        if faces_with_curved_ff.contains(&face_id.index()) {
-            continue; // Face has curved FF curve — IN PBs are redundant.
-        }
+        let ff = ff_on_face.get(&face_id.index());
+        let lateral = topo
+            .face(face_id)
+            .is_ok_and(|f| matches!(f.surface(), FaceSurface::Cylinder(_) | FaceSurface::Cone(_)));
         // A plane cap disc (outer boundary is a single closed circle, e.g.
         // the cutting tool's own cap lying flush on a wall) needs no interior
         // splitting: its boundary already trims it. IN edges projected onto
@@ -1971,18 +1969,86 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
         // cap disc and survives the cut as a stray face. Keep only IN edges
         // strictly inside the disc; drop those on or outside its boundary.
         let cap_disc = cap_disc_circle(topo, face_id);
+        let mut kept = Vec::new();
         for &pb_id in &fi.pave_blocks_in {
             if let Some(circle) = &cap_disc
                 && !pb_strictly_inside_circle(topo, arena, pb_id, circle)
             {
                 continue;
             }
-            map.entry(face_id)
-                .or_default()
-                .push(SectionSource::PaveBlock(pb_id, None));
+            if ff.is_some_and(|ff| {
+                !lateral
+                    || !pb_is_line(topo, arena, pb_id)
+                    || pb_on_sections(topo, arena, pb_id, ff)
+            }) {
+                continue;
+            }
+            kept.push(pb_id);
         }
+        additions.extend(kept.into_iter().map(|pb_id| (face_id, pb_id)));
+    }
+    drop(ff_on_face);
+    for (face_id, pb_id) in additions {
+        map.entry(face_id)
+            .or_default()
+            .push(SectionSource::PaveBlock(pb_id, None));
     }
     map
+}
+
+fn pb_is_line(topo: &Topology, arena: &GfaArena, pb_id: PaveBlockId) -> bool {
+    arena
+        .pave_blocks
+        .get(pb_id)
+        .and_then(|pb| topo.edge(pb.original_edge).ok())
+        .is_some_and(|e| matches!(e.curve(), EdgeCurve::Line))
+}
+
+/// Whether a pave block's midpoint lies on one of a face's FF sections.
+fn pb_on_sections(
+    topo: &Topology,
+    arena: &GfaArena,
+    pb_id: PaveBlockId,
+    sections: &[&SectionSource],
+) -> bool {
+    let point_of = |pb_id: PaveBlockId, f: f64| -> Option<Point3> {
+        let pb = arena.pave_blocks.get(pb_id)?;
+        let edge = topo.edge(pb.original_edge).ok()?;
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        let (t0, t1) = pb.parameter_range();
+        Some(
+            edge.curve()
+                .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep),
+        )
+    };
+    let Some(mid) = point_of(pb_id, 0.5) else {
+        return false;
+    };
+    let near = |q: Point3| (q - mid).length() <= SEAM_ON_CIRCLE_TOL;
+    sections.iter().any(|section| match section {
+        SectionSource::Curve(idx) => arena.curves.get(*idx).is_some_and(|c| match &c.curve {
+            EdgeCurve::Circle(circle) => near(circle.evaluate(circle.project(mid))),
+            EdgeCurve::Ellipse(ellipse) => near(ellipse.evaluate(ellipse.project(mid))),
+            EdgeCurve::NurbsCurve(nurbs) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(nurbs, mid, 1e-9)
+                    .is_ok_and(|p| p.distance <= SEAM_ON_CIRCLE_TOL)
+            }
+            EdgeCurve::Line => false,
+        }),
+        SectionSource::PaveBlock(other, _) => {
+            let (Some(a), Some(b)) = (point_of(*other, 0.0), point_of(*other, 1.0)) else {
+                return false;
+            };
+            let ab = b - a;
+            let w = if ab.dot(ab) > 0.0 {
+                ((mid - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            near(a + ab * w)
+        }
+    })
 }
 
 /// If `face_id` is a plane whose outer wire is a single closed circular edge
@@ -3889,6 +3955,16 @@ fn point_to_segment_dist_3d(pt: Point3, a: Point3, b: Point3) -> f64 {
 /// measured as the period minus the largest angular gap between boundary
 /// samples (robust against the 2pi wrap).
 fn face_u_span(topo: &Topology, face: &brepkit_topology::face::Face) -> Option<f64> {
+    face_parameter_span(topo, face, false)
+}
+
+/// The arc of one angular parameter (`v` when `along_v`) the face's outer
+/// wire covers: a turn less the largest gap between its samples.
+fn face_parameter_span(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    along_v: bool,
+) -> Option<f64> {
     const TAU: f64 = std::f64::consts::TAU;
     let surface = face.surface();
     let wire = topo.wire(face.outer_wire()).ok()?;
@@ -3901,8 +3977,8 @@ fn face_u_span(topo: &Topology, face: &brepkit_topology::face::Face) -> Option<f
             #[allow(clippy::cast_precision_loss)]
             let t = f64::from(i) / 8.0;
             let p = super::pcurve_compute::evaluate_edge_at_t(edge.curve(), sp, ep, t);
-            if let Some((u, _)) = surface.project_point(p) {
-                us.push(u.rem_euclid(TAU));
+            if let Some((u, v)) = surface.project_point(p) {
+                us.push(if along_v { v } else { u }.rem_euclid(TAU));
             }
         }
     }
@@ -3944,10 +4020,22 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
             u_periodic: true,
             v_periodic: false,
         }),
-        FaceSurface::Torus(_) => Some(SurfaceInfo::Parametric {
-            u_periodic: true,
-            v_periodic: true,
-        }),
+        // A torus patch no more than a half turn in either angle (a fillet's
+        // corner quarter) is a partial band both ways: as periodic its tube
+        // angle reads the outer equator at 0 beside a bottom at 3pi/2, and
+        // the outline covers the other three quarters of the tube.
+        FaceSurface::Torus(_) => {
+            let small = |along_v| {
+                face.inner_wires().is_empty()
+                    && face_parameter_span(topo, face, along_v)
+                        .is_some_and(|span| span <= std::f64::consts::PI + 0.05)
+            };
+            let partial = small(false) && small(true);
+            Some(SurfaceInfo::Parametric {
+                u_periodic: !partial,
+                v_periodic: !partial,
+            })
+        }
         FaceSurface::Nurbs(_) => Some(SurfaceInfo::Parametric {
             u_periodic: false,
             v_periodic: false,
