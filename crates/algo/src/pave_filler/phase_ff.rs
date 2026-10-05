@@ -101,6 +101,19 @@ impl JunctionRegistry {
         p: Point3,
         tol: Tolerance,
     ) -> Point3 {
+        self.resolve_snapping(topo, fa, fb, p, tol, tol.linear * 1000.0)
+    }
+
+    /// [`Self::resolve`], snapping onto a face boundary within `snap_band`.
+    fn resolve_snapping(
+        &mut self,
+        topo: &Topology,
+        fa: FaceId,
+        fb: FaceId,
+        p: Point3,
+        tol: Tolerance,
+        snap_band: f64,
+    ) -> Point3 {
         let band = tol.linear * 1000.0;
         if let Some(j) = self.lookup(p, band) {
             return j;
@@ -119,7 +132,7 @@ impl JunctionRegistry {
         {
             return j1;
         }
-        match snap_to_boundary_junction_band(topo, fa, fb, p, tol, band) {
+        match snap_to_boundary_junction_band(topo, fa, fb, p, tol, snap_band) {
             Some(j) => {
                 self.cells.insert(Self::key(j), j);
                 j
@@ -1014,6 +1027,11 @@ enum FaceExtent {
         /// bounded by one wire of rulings and coaxial circles, whose sampled
         /// ends are exact. An ellipse or NURBS rim peaks between its samples.
         exact_window: bool,
+        /// A trimmed NURBS face's outer wire in its `(u, v)`, and the band
+        /// round it a point may stray into (the samples' chord sag and the
+        /// margin): the `v` window alone admits a section running past a
+        /// boundary that is not a `v` line.
+        uv_poly: Option<(Vec<brepkit_math::vec::Point2>, f64)>,
     },
 }
 
@@ -1152,6 +1170,10 @@ impl FaceExtent {
                             })
                         })
                 });
+            let uv_poly = nurbs_face_uv_polygon(topo, face_id, surface).map(|(poly, sag)| {
+                let band = sag.mul_add(2.0, crate::builder::classify_2d::boundary_eps(&poly));
+                (poly, band + margin)
+            });
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -1159,6 +1181,7 @@ impl FaceExtent {
                 margin,
                 u_gap,
                 exact_window,
+                uv_poly,
             })
         }
     }
@@ -1226,6 +1249,7 @@ impl FaceExtent {
                 v0,
                 v1,
                 u_gap,
+                uv_poly,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
                 // Unlike `contains` (conservative keep on projection failure),
@@ -1233,9 +1257,24 @@ impl FaceExtent {
                 // certify a genuine interior crossing.
                 let in_v = v >= *v0 + depth && v <= *v1 - depth;
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
-                in_v && in_u
+                let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
+                    let q = brepkit_math::vec::Point2::new(u, v);
+                    crate::builder::classify_2d::point_in_polygon_2d(q, poly)
+                        && point_to_polygon_dist(q, poly) > depth
+                });
+                in_v && in_u && in_poly
             }),
         }
+    }
+
+    const fn has_uv_poly(&self) -> bool {
+        matches!(
+            self,
+            Self::Analytic {
+                uv_poly: Some(_),
+                ..
+            }
+        )
     }
 
     fn contains(&self, p: Point3) -> bool {
@@ -1265,11 +1304,17 @@ impl FaceExtent {
                 v1,
                 margin,
                 u_gap,
+                uv_poly,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
                 let in_v = v >= *v0 - *margin && v <= *v1 + *margin;
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
-                in_v && in_u
+                let in_poly = uv_poly.as_ref().is_none_or(|(poly, band)| {
+                    let q = brepkit_math::vec::Point2::new(u, v);
+                    crate::builder::classify_2d::point_in_polygon_2d(q, poly)
+                        || point_to_polygon_dist(q, poly) <= *band
+                });
+                in_v && in_u && in_poly
             }),
         }
     }
@@ -2121,8 +2166,8 @@ fn rescue_corner_crossing(
     // surfaces), while the boundary splitters gate candidates at the exact
     // 1e-7 tolerance — the recurring fit-error-vs-exact-gate class. Adopting
     // the boundary FOOT gives both faces the identical on-boundary junction.
-    let p_start = junctions.resolve(topo, fa, fb, point_at(t_lo), tol);
-    let p_end = junctions.resolve(topo, fa, fb, point_at(t_hi), tol);
+    let (t_lo, p_start) = snap_window_end(topo, fa, fb, raw, ext_a, ext_b, t_lo, tol, junctions);
+    let (t_hi, p_end) = snap_window_end(topo, fa, fb, raw, ext_a, ext_b, t_hi, tol, junctions);
     Some(RawCurve {
         curve: raw.curve.clone(),
         bbox: raw.bbox,
@@ -2130,6 +2175,53 @@ fn rescue_corner_crossing(
         p_start,
         p_end,
     })
+}
+
+/// A window end resolved onto its triple junction, and the parameter where
+/// the curve passes nearest it. A window end on a NURBS face's boundary
+/// polygon sits on a chord, off the boundary curve by its sag, so it snaps
+/// from farther; the section then evaluates at its vertex rather than at
+/// the polygon's chord.
+#[allow(clippy::too_many_arguments)]
+fn snap_window_end(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    raw: &RawCurve,
+    ext_a: &FaceExtent,
+    ext_b: &FaceExtent,
+    t: f64,
+    tol: Tolerance,
+    junctions: &mut JunctionRegistry,
+) -> (f64, Point3) {
+    let point_at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+    let p = point_at(t);
+    let nurbs_face = ext_a.has_uv_poly() || ext_b.has_uv_poly();
+    let snap_band = if nurbs_face {
+        1e-3
+    } else {
+        tol.linear * 1000.0
+    };
+    let j = junctions.resolve_snapping(topo, fa, fb, p, tol, snap_band);
+    if !nurbs_face || (j - p).length() <= tol.linear {
+        return (t, j);
+    }
+    let reach = 0.02 * (raw.t_range.1 - raw.t_range.0).abs();
+    let (lo0, hi0) = (
+        raw.t_range.0.min(raw.t_range.1),
+        raw.t_range.0.max(raw.t_range.1),
+    );
+    let (mut lo, mut hi) = ((t - reach).max(lo0), (t + reach).min(hi0));
+    for _ in 0..80 {
+        let m1 = (hi - lo).mul_add(1.0 / 3.0, lo);
+        let m2 = (hi - lo).mul_add(2.0 / 3.0, lo);
+        if (point_at(m1) - j).length() < (point_at(m2) - j).length() {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    (f64::midpoint(lo, hi), j)
 }
 
 /// Emit every maximal in-both window of a section curve, closed or open
@@ -2203,9 +2295,21 @@ fn emit_curve_windows(
                 continue;
             }
         }
-        let mut t_lo = t_at(r0);
-        if r0 > 0 {
-            let (mut out_t, mut in_t) = (t_at(r0 - 1), t_lo);
+        // A run's end samples can lie in the margin only; the strict
+        // predicate's transition then lies between the last sample it
+        // certifies and the next, not past the run's end.
+        let (mut s0, mut s1) = (r0, r1);
+        if anchor.is_some() {
+            while s0 < s1 && !inside(t_at(s0)) {
+                s0 += 1;
+            }
+            while s1 > s0 && !inside(t_at(s1)) {
+                s1 -= 1;
+            }
+        }
+        let mut t_lo = t_at(s0);
+        if s0 > r0 || r0 > 0 {
+            let (mut out_t, mut in_t) = (t_at(s0 - 1), t_lo);
             for _ in 0..48 {
                 let mid = 0.5 * (out_t + in_t);
                 if inside(mid) {
@@ -2216,13 +2320,13 @@ fn emit_curve_windows(
             }
             t_lo = in_t;
         }
-        let mut t_hi = t_at(r1);
+        let mut t_hi = t_at(s1);
         // `r1 == n` ends exactly at the seam duplicate (no out-sample to
         // bisect against in-domain); `r1 > n` is the wrapped-Ellipse
         // fall-through, whose periodic evaluation makes the out-of-domain
         // bisection valid.
-        if r1 != n {
-            let (mut in_t, mut out_t) = (t_hi, t_at(r1 + 1));
+        if s1 < r1 || r1 != n {
+            let (mut in_t, mut out_t) = (t_hi, t_at(s1 + 1));
             for _ in 0..48 {
                 let mid = 0.5 * (in_t + out_t);
                 if inside(mid) {
@@ -2236,8 +2340,12 @@ fn emit_curve_windows(
         if t_hi <= t_lo {
             continue;
         }
-        let p_start = junctions.resolve(topo, fa, fb, point_at(t_lo), tol);
-        let p_end = junctions.resolve(topo, fa, fb, point_at(t_hi), tol);
+        let (t_lo, p_start) =
+            snap_window_end(topo, fa, fb, raw, ext_a, ext_b, t_lo, tol, junctions);
+        let (t_hi, p_end) = snap_window_end(topo, fa, fb, raw, ext_a, ext_b, t_hi, tol, junctions);
+        if t_hi <= t_lo {
+            continue;
+        }
         out.push(RawCurve {
             curve: raw.curve.clone(),
             bbox: raw.bbox,

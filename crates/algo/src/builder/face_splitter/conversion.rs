@@ -547,6 +547,85 @@ pub(super) fn uv_endpoints_from_pcurve(
     surface: &FaceSurface,
     wire_pts: &[Point3],
 ) -> (Point2, Point2) {
+    let (su, eu) = pcurve_end_uvs(pcurve, start_3d, end_3d, surface, wire_pts);
+    (
+        uv_at_own_end(pcurve, su, start_3d, surface, wire_pts),
+        uv_at_own_end(pcurve, eu, end_3d, surface, wire_pts),
+    )
+}
+
+/// A piece of a split section keeps its parent's pcurve, whose ends are the
+/// parent's. Where `uv` does not land on the piece's own end `p`, the UV is
+/// `p`'s projection, moved by whole periods onto the pcurve's unwrapping.
+fn uv_at_own_end(
+    pcurve: &brepkit_math::curves2d::Curve2D,
+    uv: Point2,
+    p: Point3,
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
+) -> Point2 {
+    use brepkit_math::curves2d::Curve2D;
+    const OFF_END: f64 = 1e-3;
+    if surface
+        .evaluate(uv.x(), uv.y())
+        .is_none_or(|q| (q - p).length() <= OFF_END)
+    {
+        return uv;
+    }
+    let own = project_point_on_surface(p, surface, wire_pts, None);
+    let to_pcurve = |c: Point2| -> f64 {
+        match pcurve {
+            Curve2D::Line(line) => {
+                let o = line.evaluate(0.0);
+                let d = line.evaluate(1.0) - o;
+                let w = c - o;
+                (w.x() * d.y() - w.y() * d.x()).abs() / d.length().max(f64::MIN_POSITIVE)
+            }
+            Curve2D::Nurbs(nurbs) => {
+                let knots = nurbs.knots();
+                let (t0, t1) = (knots[0], knots[knots.len() - 1]);
+                (0..=64)
+                    .map(|k| {
+                        let t = (t1 - t0).mul_add(f64::from(k) / 64.0, t0);
+                        (nurbs.evaluate(t) - c).length()
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            }
+            Curve2D::Circle(_) | Curve2D::Ellipse(_) => (c - uv).length(),
+        }
+    };
+    let (pu, pv) = super::super::pcurve_compute::surface_periods(surface);
+    let shifts = |period: Option<f64>, from: f64, to: f64| -> Vec<f64> {
+        period.map_or_else(
+            || vec![0.0],
+            |t| {
+                let k = ((to - from) / t).round();
+                vec![(k - 1.0) * t, k * t, (k + 1.0) * t]
+            },
+        )
+    };
+    let mut best = (to_pcurve(own), own);
+    for du in shifts(pu, own.x(), uv.x()) {
+        for dv in shifts(pv, own.y(), uv.y()) {
+            let c = Point2::new(own.x() + du, own.y() + dv);
+            let d = to_pcurve(c);
+            if d < best.0 {
+                best = (d, c);
+            }
+        }
+    }
+    best.1
+}
+
+/// The UVs of a pcurve's own ends: a line's at its origin and at the length
+/// to `end_3d`'s projection, a NURBS curve's at its knot ends.
+fn pcurve_end_uvs(
+    pcurve: &brepkit_math::curves2d::Curve2D,
+    start_3d: Point3,
+    end_3d: Point3,
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
+) -> (Point2, Point2) {
     use brepkit_math::curves2d::Curve2D;
 
     match pcurve {
@@ -587,5 +666,41 @@ pub(super) fn uv_endpoints_from_pcurve(
             project_point_on_surface(start_3d, surface, wire_pts, None),
             project_point_on_surface(end_3d, surface, wire_pts, None),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_math::vec::Vec2;
+
+    /// A section split at a junction hands each piece the whole section's
+    /// pcurve; each piece's ends read at its own points, not the section's.
+    #[test]
+    fn a_piece_of_a_split_section_reads_its_own_ends() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl.clone());
+        let (start, end) = (cyl.evaluate(1.0, 4.0), cyl.evaluate(1.0, 6.0));
+        let ruling =
+            Curve2D::Line(Line2D::new(Point2::new(1.0, 0.0), Vec2::new(0.0, 1.0)).unwrap());
+        let fitted = Curve2D::Nurbs(
+            NurbsCurve2D::new(
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![Point2::new(1.0, 0.0), Point2::new(1.0, 10.0)],
+                vec![1.0, 1.0],
+            )
+            .unwrap(),
+        );
+        for pcurve in [ruling, fitted] {
+            let (su, eu) = uv_endpoints_from_pcurve(&pcurve, start, end, &surface, &[]);
+            assert!((su - Point2::new(1.0, 4.0)).length() < 1e-9, "{su:?}");
+            assert!((eu - Point2::new(1.0, 6.0)).length() < 1e-9, "{eu:?}");
+        }
     }
 }
