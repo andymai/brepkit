@@ -1,0 +1,35 @@
+crates/algo/src/builder/fill_images_faces.rs
+  s_a8677c67f85a06::t_348579126e62d7 1957,1988-1994
+  s_a8677c67f85a06::t_d4aed29ef29bde 1960-1962,1980-1982
+  s_a8677c67f85a06::t_053837e2c2eb86 1984,2053
+  s_a8677c67f85a06::t_d17693d1013985 1947-1952,1954-1955,1959,1972,1985-1986,2005-2052
+  s_a8677c67f85a06::t_49dad89ab5e744 1979,1983,1999-2004
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_83241d3d04aaa3 953-964
+  s_a8677c67f85a06::t_42d0f0d68eeb6f 378-394,396-397,399-428
+  s_a8677c67f85a06::t_d904dbf4688509 395,398
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_a8677c67f85a06::t_a237c7d15e143a 228
+  s_a8677c67f85a06::t_b4f59e977dac1d 72
+  s_a8677c67f85a06::t_057b632992219c 9,17,160-227
+  s_a8677c67f85a06::t_2d2a4bc982455f 83-95
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_0d5f3ce178b41e 8678-8688,8691-8692,8713,8716-8717
+  s_a8677c67f85a06::t_029d8092f007e7 8689-8690
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c7ba5ca6404bdc203c249e948cafd7344d37efad",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
