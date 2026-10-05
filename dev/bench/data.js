@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791238347720,
+  "lastUpdate": 1791241346362,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -51893,6 +51893,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 41770352,
             "range": "± 160745",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f20f563aaf7f3462081ca2c791304a88bd675ca9",
+          "message": "chore(main): release 4.1.33 (#1990)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.33](https://github.com/andymai/brepkit/compare/v4.1.32...v4.1.33)\n(2026-10-05)\n\n\n### Bug Fixes\n\n* **algo:** keep the rim round a ring-shaped bin's hole when its cavity\nis cut out ([#1989](https://github.com/andymai/brepkit/issues/1989))\n([ab3b9fb](https://github.com/andymai/brepkit/commit/ab3b9fbfdb36d7bc84fed5af34e2795c9b2d593f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.1.33, which fixes a bug in the `algo` crate where\ncutting out a ring-shaped bin's cavity no longer removes the rim around\nits hole. Updates the changelog, release manifest, and workspace crate\nversions.\n\n<sup>Written for commit 59fb13262bec3b658bdd9bb0bc3fd0784a96cd8a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1990?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-05T22:59:31Z",
+          "tree_id": "0080c62c849a1c35a418db8b78c42f31889943aa",
+          "url": "https://github.com/andymai/brepkit/commit/f20f563aaf7f3462081ca2c791304a88bd675ca9"
+        },
+        "date": 1791241341285,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1048639,
+            "range": "± 9066",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1132638,
+            "range": "± 1741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13047,
+            "range": "± 39",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 797647,
+            "range": "± 2767",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43404526,
+            "range": "± 113033",
             "unit": "ns/iter"
           }
         ]
