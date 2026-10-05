@@ -1,6 +1,8 @@
 crates/algo/src/pave_filler/phase_ff.rs
   s_a13d2397d068b4::t_71bd6031a2d2ee 5831-5833,5835,5849-5850,5851-5865,5871-5886,5892-5897,5903-5905
   s_a13d2397d068b4::t_9eecd15e7c795d 5906
+  s_a8677c67f85a06::t_e542a1040407c4 5866-5870,5887-5891
+  s_a8677c67f85a06::t_c583e745844199 5825-5830,5836-5848
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -12,6 +14,14 @@ crates/algo/src/pave_filler/phase_ff.rs
       "agent_id": {
         "tool": "claude",
         "id": "8b25f217-c127-443f-8828-8d65b09b3fc7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
         "model": "claude-opus-5-5"
       },
       "human_author": "Andy Aragon <hi@andymai.com>"
