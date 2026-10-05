@@ -467,6 +467,44 @@ fn material_side_witness(
     Ok(extreme)
 }
 
+/// The sign of `material_side_witness` read at the spine itself: `+1` when
+/// `face` lies on the material side of the other plane just beside `p`, `-1`
+/// on the void side. A face stepping across the other plane (a wall whose
+/// bottom drops by a step at the spine) has far vertices on both sides, and
+/// only the face's own extent beside the spine tells a step's concave edge
+/// from a convex one. `None` when the face has a NURBS edge or neither probe
+/// alone lies in it.
+fn local_material_side(
+    topo: &Topology,
+    face: FaceId,
+    n_face: Vec3,
+    n_other: Vec3,
+    tangent: Vec3,
+    p: Point3,
+    reach: f64,
+) -> Result<Option<f64>, BlendError> {
+    let toward = n_other - n_face * n_face.dot(n_other) - tangent * tangent.dot(n_other);
+    let (Ok(x), Ok(y)) = (toward.normalize(), n_face.cross(toward).normalize()) else {
+        return Ok(None);
+    };
+    let Some(pieces) = brepkit_topology::planar::face_boundary_2d(topo, face, p, x, y)? else {
+        return Ok(None);
+    };
+    let tol = reach * 1e-3;
+    let inside = |offset: f64| {
+        brepkit_math::region2d::point_in_region(
+            &pieces,
+            brepkit_math::vec::Point2::new(offset, 0.0),
+            tol,
+        )
+    };
+    Ok(match (inside(reach), inside(-reach)) {
+        (Some(true), Some(false)) => Some(1.0),
+        (Some(false), Some(true)) => Some(-1.0),
+        _ => None,
+    })
+}
+
 fn plane_plane_fillet(
     spine: &Spine,
     topo: &Topology,
@@ -498,8 +536,16 @@ fn plane_plane_fillet(
     // void side. On a concave edge the fillet centre and contacts sit up the
     // OUTWARD bisector, and the in-plane contact projections then follow the
     // real walls instead of their extensions.
-    let w1 = material_side_witness(topo, face1, n2, p_start)?;
-    let w2 = material_side_witness(topo, face2, n1, p_start)?;
+    let p_mid = spine.evaluate(topo, 0.5 * spine.length())?;
+    let reach = 1e-3 * radius.min(spine.length());
+    let w1 = match local_material_side(topo, face1, n1, n2, tangent, p_mid, reach)? {
+        Some(side) => side,
+        None => material_side_witness(topo, face1, n2, p_start)?,
+    };
+    let w2 = match local_material_side(topo, face2, n2, n1, tangent, p_mid, reach)? {
+        Some(side) => side,
+        None => material_side_witness(topo, face2, n1, p_start)?,
+    };
     let bisector = if w1 < -ANALYTIC_TOL_LIN && w2 < -ANALYTIC_TOL_LIN {
         -bisector
     } else {

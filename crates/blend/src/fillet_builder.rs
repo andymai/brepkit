@@ -502,8 +502,20 @@ impl<'a> FilletBuilder<'a> {
                 notchable: &notchable_vertices,
             }
         };
+        // Only a single-contact trim splits the boundary edges its contact
+        // ends on, and a neighbour trimmed later ends its own contact on that
+        // split vertex. Trimming the single-contact faces first keeps a
+        // multi-contact neighbour (a wall carrying several stripes) from
+        // minting a twin vertex where two tangent stripes meet at its seam.
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
-        restriction_faces.sort_unstable_by_key(|face| face.index());
+        restriction_faces.sort_unstable_by_key(|face| {
+            (
+                restrictions_by_face
+                    .get(face)
+                    .is_some_and(|list| list.len() > 1),
+                face.index(),
+            )
+        });
         for face_id in restriction_faces {
             let restrictions = restrictions_by_face
                 .remove(&face_id)
@@ -1428,6 +1440,13 @@ impl<'a> FilletBuilder<'a> {
             })
         });
 
+        let carried: HashSet<FaceId> = original_faces.iter().copied().collect();
+        for &face_id in &result_faces {
+            if !carried.contains(&face_id) && planar_face_crosses_itself(topo, face_id)? {
+                return Err(BlendError::TrimmingFailure { face: face_id });
+            }
+        }
+
         // Faces carried over from the input solid keep their (correct)
         // orientation: they seed the sense propagation and calibrate the
         // boundary-walk convention. Only faces built by THIS pass — walls,
@@ -1537,6 +1556,80 @@ impl<'a> FilletBuilder<'a> {
         })
     }
 }
+/// Whether a rebuilt planar face's wires cross themselves or each other away
+/// from every edge end. Two stripes overlapping on the face with no corner
+/// built between them leave their contacts running on past each other, and
+/// a face bounded that way meshes as a fan of zero-area triangles.
+fn planar_face_crosses_itself(topo: &Topology, face_id: FaceId) -> Result<bool, BlendError> {
+    use brepkit_math::filtered::{SegmentIntersection, segment_intersection};
+    use brepkit_math::vec::Point2;
+    const SAMPLES: usize = 16;
+    let face = topo.face(face_id)?;
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return Ok(false);
+    };
+    let normal = *normal;
+    let x = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let x = (x - normal * normal.dot(x)).normalize()?;
+    let y = normal.cross(x);
+    let mut origin = None;
+    let mut polylines: Vec<(Vec<Point2>, [f64; 4])> = Vec::new();
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oriented in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            let start = topo.vertex(edge.start())?.point();
+            let end = topo.vertex(edge.end())?.point();
+            let origin = *origin.get_or_insert(start);
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let points: Vec<Point2> = (0..=SAMPLES)
+                .map(|k| {
+                    let t = t0 + (t1 - t0) * k as f64 / SAMPLES as f64;
+                    let p = edge.curve().evaluate_with_endpoints(t, start, end) - origin;
+                    Point2::new(p.dot(x), p.dot(y))
+                })
+                .collect();
+            let mut bounds = [
+                f64::INFINITY,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NEG_INFINITY,
+            ];
+            for p in &points {
+                bounds = [
+                    bounds[0].min(p.x()),
+                    bounds[1].min(p.y()),
+                    bounds[2].max(p.x()),
+                    bounds[3].max(p.y()),
+                ];
+            }
+            polylines.push((points, bounds));
+        }
+    }
+    for (i, (pa, ba)) in polylines.iter().enumerate() {
+        for (pb, bb) in &polylines[i + 1..] {
+            if ba[0] > bb[2] || bb[0] > ba[2] || ba[1] > bb[3] || bb[1] > ba[3] {
+                continue;
+            }
+            let ends = [pa[0], pa[SAMPLES], pb[0], pb[SAMPLES]];
+            for sa in pa.windows(2) {
+                for sb in pb.windows(2) {
+                    if let SegmentIntersection::Point { point, .. } =
+                        segment_intersection(sa[0], sa[1], sb[0], sb[1])
+                        && ends.iter().all(|end| (*end - point).length() > 1e-6)
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn face_edge_forward(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Option<bool> {
     let face = topo.face(face_id).ok()?;
     std::iter::once(face.outer_wire())
