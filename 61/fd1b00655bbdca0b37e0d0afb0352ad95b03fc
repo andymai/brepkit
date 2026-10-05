@@ -1,0 +1,39 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_0fa9d0d5b9d658 3521-3523,3525,3617-3618,3627
+  s_a8677c67f85a06::t_9825a386394bfc 3608-3616,3619-3626,3628-3636,3921-3933,3935-3954
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_a8677c67f85a06::t_a74dcf4c6cd7a3 178-190,230-231
+  s_a8677c67f85a06::t_5f49fbf9786eb4 229
+crates/io/tests/data/scoop_ramp_a.bin
+  s_a8677c67f85a06::t_40a584d929408a 1
+crates/operations/src/tessellate/nonplanar.rs
+  s_a8677c67f85a06::t_063d8b03c13f28 4198-4204
+  s_a8677c67f85a06::t_547383ee09abcd 2663-2671,4177-4197,4205-4267
+crates/io/tests/scoop_ramp_fuse_inmem.rs
+  s_a8677c67f85a06::t_25071773120e02 65-66
+  s_a8677c67f85a06::t_40a584d929408a 1-28,32-37,43-64,67-109
+  s_a8677c67f85a06::t_063d8b03c13f28 29-31,38-42
+crates/algo/src/classifier/ray_cast.rs
+  s_a8677c67f85a06::t_063d8b03c13f28 1281-1288,1870-1873
+  s_a8677c67f85a06::t_af14a3e9772155 22-27,636,1128-1134,1240-1280,1289-1317,1807-1869,1874-1877,1879
+crates/io/tests/data/scoop_ramp_b.bin
+  s_a8677c67f85a06::t_40a584d929408a 1
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_51b28ffe098e54 142,202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "61fd1b00655bbdca0b37e0d0afb0352ad95b03fc",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
