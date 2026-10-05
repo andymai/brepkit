@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.32](https://github.com/andymai/brepkit/compare/v4.1.31...v4.1.32) (2026-10-05)
+
+
+### Bug Fixes
+
+* **algo:** fuse a fillet's rounding into scooped, cut-out, custom and L-shaped pockets exactly ([#1984](https://github.com/andymai/brepkit/issues/1984)) ([4a3f6ae](https://github.com/andymai/brepkit/commit/4a3f6aed33e30f62742f3a2aacad515d46b6d33e))
+* **math:** meet a coaxial wall touching a torus's tube in its one exact circle ([#1983](https://github.com/andymai/brepkit/issues/1983)) ([64b8876](https://github.com/andymai/brepkit/commit/64b8876583bb68349f627ff7e840cfa817589445))
+
 ## [4.1.31](https://github.com/andymai/brepkit/compare/v4.1.30...v4.1.31) (2026-10-04)
 
 
