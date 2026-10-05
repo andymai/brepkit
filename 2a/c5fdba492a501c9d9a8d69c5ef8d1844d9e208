@@ -1,0 +1,30 @@
+crates/io/tests/fillet_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_1af94633964370 1-12,15-70,72-74,76-80,82-86,88-94
+  s_a8677c67f85a06::t_b8d24561d76c8e 13-14,71,75,81,87
+crates/io/tests/data/fillet_taper_clip_material.bin
+  s_a8677c67f85a06::t_01d3a1dd88cc8a 1
+crates/io/tests/data/fillet_taper_clip_envelope.bin
+  s_a8677c67f85a06::t_01d3a1dd88cc8a 1
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_67a3507cfe2cd6 980-985
+  s_a8677c67f85a06::t_752d22f9489101 166-167,850,853-860,865-872,951-955,961,970-972
+  s_a8677c67f85a06::t_434bfe895dcec7 851-852,861,956-960,962-969,973-979
+crates/algo/src/builder/face_splitter/sampling.rs
+  s_a8677c67f85a06::t_d694092e601cfd 187-189,194-195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2ac5fdba492a501c9d9a8d69c5ef8d1844d9e208",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}

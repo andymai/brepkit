@@ -1,0 +1,22 @@
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_2d2fff9e5ed64c 678-707,711-723,725,801-802
+  s_a8677c67f85a06::t_83895e9da41857 708-710
+crates/algo/src/classifier/mod.rs
+  s_a8677c67f85a06::t_649992d5fdaa9d 140,192,201,227
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6fca88538c8bc4567e7809a0b26ee56642da870a",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}

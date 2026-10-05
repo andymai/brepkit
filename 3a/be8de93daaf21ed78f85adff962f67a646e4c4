@@ -1,0 +1,24 @@
+crates/math/src/surfaces.rs
+  s_a8677c67f85a06::t_534d0c0add8ca4 891-948
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_64090daaf96c9f 1482-1484,1522-1524,1579-1589
+  s_a8677c67f85a06::t_534d0c0add8ca4 5835
+  s_a8677c67f85a06::t_9666cd4761bb5b 2167-2169,2319-2321
+  s_a8677c67f85a06::t_e911e021ff071f 1590-1591
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3abe8de93daaf21ed78f85adff962f67a646e4c4",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
