@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791269814099,
+  "lastUpdate": 1791320598716,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52055,6 +52055,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28290402,
             "range": "± 817176",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "11609b6edae5937a7b054365aab2fe218f469838",
+          "message": "fix(algo): carry curved sections when a plate face's hole is promoted into its arrangement (#1994)\n\nThe captured gridfinity “2×2 with slot insert” fuse now completes\nexactly: raw GFA and the operations boolean produce the same closed\n187-face result instead of a 1055-face mesh fallback.\n\n## What was wrong\n\nOperation 464 from `binGenerator.export.inserts.test.ts` fuses an\n80-face plate with a stadium-shaped slot to a 104-face 2x2 cell base\ntouching it at z 4.75. On main, raw GFA fails with `face splitting\nfailed: face Id(0) is cut by sections but split into nothing`.\n\nFace 0 is the plate bottom, with the slot as a hole. Cell wall sections\nrun into the slot and cross its radius 5 end arcs.\n`integrate_holes_plane` declines because a section crosses an arc hole\nedge chord. A hole vertex also lies on a line section, so the slot is\npromoted into the arrangement. Promotion included only line sections,\ndropping the eight corner arcs that connect cell wall lines to the plate\nrim. The dangling lines were pruned, leaving no split face.\n\n## Change\n\nPromotion now carries curved sections whose interiors remain clear of\nevery hole. Sampling uses 64 steps, reading holes exactly when made from\nlines and conic arcs and otherwise as 64-step polygons. No interior\nsample may lie inside a hole, and within any one step the stretch\nbetween two crossings of a hole's boundary may not either. This excludes\ncurves dipping through narrow openings while carrying curves tangent to,\nending on, or touching a hole rim.\n\nEach carried curve becomes a forward and reverse pair sharing one source\nid, with its pcurve refit in the face frame. The new\n`curved_section_pair` helper also builds arc sections for\n`integrate_holes_plane`.\n\nCurves reaching into holes remain excluded, as do curves whose chord\nlies on a straight hole edge line, using the shared `chord_on_line`\nrule. This is required because promoted arrangements read regions by\nchords. It preserves\n`compound_cut_by_two_keyhole_pins_meeting_on_a_knuckle_face_stays_exact`,\nwhere carrying a clearance bore bottom arc would merge its chord with a\npin tail base, attach the pin hole to the outer region, use 11 step-ring\nedges three times, and force mesh fallback.\n\n## Verification\n\nFor the captured pair, fuse is 187 faces with every edge used twice and\nvolume 50961.048, versus operand sum 50961.056. Cut is 87 faces with\nvolume 23502.860, versus plate volume 23502.869. Intersect is empty.\nVolumes use mesh deflection 0.001.\n\n`fuse_slotted_plate_onto_a_cell_reaching_into_the_slot_is_exact` covers\nthe failure through the public operations fuse. It builds a rounded 83.5\nsquare plate and stadium slot on one rounded 41.5 square cell centered\nat (-21, -21). With `without_mesh_fallback`, it requires no decline, a\nclosed manifold with every edge used twice, retained cylinder faces, and\nvolume within 1e-4 of the closed form. It falls back to a mesh on main.\n\nClippy is clean for brepkit-math, -algo, -blend, -operations, and -io\nwith all targets. Nextest runs 2922 tests across brepkit-topology,\n-math, -algo, -blend, -operations, -io, and -wasm, all passing.\n`pose_sweep` and `truth_audit` exactly match main. `approx_census`\ndiffers only at a face pair in an already failing NURBS loft offset\nerror that also varies between main runs.\n\nThe layout tool catalog at commit a4945a2aab, using\n`BREPJS_KERNEL=brepkit`, the forks pool, two workers, and four parts,\nimproves from 412 failures of 3763 on same-day main to 408. Four plate\ninsert or slot tests now pass, no test newly fails. A final-wasm rerun\nof their three files, 79 tests on one worker, preserves the same four\nnew passes and four remaining failures, versus eight failures on main.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` gains a closed entry for this fuse.",
+          "timestamp": "2026-10-06T20:59:58Z",
+          "tree_id": "e37d1f7731101f3c01f59baa1d9bf1f6ff1e2ed2",
+          "url": "https://github.com/andymai/brepkit/commit/11609b6edae5937a7b054365aab2fe218f469838"
+        },
+        "date": 1791320591484,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1056328,
+            "range": "± 5232",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1138626,
+            "range": "± 5708",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13183,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 809275,
+            "range": "± 6171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43710277,
+            "range": "± 153112",
             "unit": "ns/iter"
           }
         ]
