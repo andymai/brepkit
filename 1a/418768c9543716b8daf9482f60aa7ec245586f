@@ -1,0 +1,27 @@
+crates/io/tests/data/slotted_lip_body.bin
+  s_a8677c67f85a06::t_be90ec2ea90495 1
+crates/algo/src/builder/fill_images_faces.rs
+  s_a8677c67f85a06::t_4d7eca327f3a99 4817-4837
+  s_a8677c67f85a06::t_728a0d442a330a 1049-1091,1156-1157,1265-1275,1278
+crates/io/tests/data/slotted_lip_base.bin
+  s_a8677c67f85a06::t_be90ec2ea90495 1
+crates/io/tests/slotted_lip_base_fuse_inmem.rs
+  s_a8677c67f85a06::t_2ed8ae1d0a1900 1-75
+  s_a8677c67f85a06::t_4c78a8978bf8da 76-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a418768c9543716b8daf9482f60aa7ec245586f",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
