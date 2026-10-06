@@ -6250,8 +6250,6 @@ fn circle_exits_plane_boundary(
     })
 }
 
-/// Where a closed section circle meets a face's outer boundary: each hit's
-/// circle parameter, point, and the boundary edge it lies on.
 /// Where a line parallel to `circle`'s axis crosses the circle, when it
 /// stands on the circle's cylinder only to a fit's accuracy: a fitted wall's
 /// rulings (a glyph's rounded corner) sit a few microns off the cylinder its
@@ -6274,16 +6272,21 @@ fn ruling_crossing(
     if h0.min(h1) > tol.linear || h0.max(h1) < -tol.linear {
         return None;
     }
-    let v = a - circle.center();
+    // Read the fit where the line meets the circle's plane: a slight tilt
+    // moves that point along the line's length.
+    let q = a + d * (h0 / (h0 - h1)).clamp(0.0, 1.0);
+    let v = q - circle.center();
     let radial = v - n * v.dot(n);
     let r = radial.length();
     if (r - circle.radius()).abs() > FIT_BAND || r < tol.linear {
         return None;
     }
-    let t = circle.project(a);
+    let t = circle.project(q).rem_euclid(std::f64::consts::TAU);
     Some((t, circle.evaluate(t)))
 }
 
+/// Where a closed section circle meets a face's outer boundary: each hit's
+/// circle parameter, point, and the boundary edge it lies on.
 fn circle_face_hits(
     topo: &Topology,
     fid: FaceId,
@@ -7894,6 +7897,18 @@ mod tests {
         );
         assert!(ruling_crossing(&circle, off(1.01, -1.0), off(1.01, 1.0), tol).is_none());
         assert!(ruling_crossing(&circle, off(1.0, 0.5), off(1.0, 1.0), tol).is_none());
+        // Parallel to the axis within the gate but tilted: it meets the
+        // circle's plane at radius 1.01.
+        assert!(ruling_crossing(&circle, off(1.0, -500.0), off(1.02, 500.0), tol).is_none());
+        // Below the circle's u axis the crossing reads in [0, TAU), as the
+        // exact boundary hits do.
+        let below = |z: f64| Point3::new(0.0, -1.0 - 1e-5, z);
+        let (t, p) = ruling_crossing(&circle, below(-1.0), below(1.0), tol).expect("a crossing");
+        assert!(
+            (t - 1.5 * std::f64::consts::PI).abs() < 1e-9
+                && (p - Point3::new(0.0, -1.0, 0.0)).length() < 1e-12,
+            "{t} {p:?}"
+        );
     }
 
     fn unit_circle_xy() -> brepkit_math::curves::Circle3D {

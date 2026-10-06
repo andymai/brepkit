@@ -20,7 +20,7 @@ use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
 use brepkit_operations::boolean::{self, BooleanOp};
-use brepkit_operations::measure::oriented_solid_volume;
+use brepkit_operations::measure::{oriented_solid_volume, solid_bounding_box};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -76,7 +76,8 @@ fn a_glyph_engraved_into_a_label_plate_cuts_exactly() {
     }
 
     // The glyph stands 0.01 above the plate top, so the two pieces make up
-    // the plate and the common part is under the glyph's own volume.
+    // the plate, and the common part is the glyph, a prism, up to the plate
+    // top: a closed partition classified the wrong way round misses both.
     let cut_vol = oriented_solid_volume(&topo, cut, 0.001).unwrap();
     let common_vol = oriented_solid_volume(&topo, common, 0.001).unwrap();
     let glyph_vol = oriented_solid_volume(&topo, glyph, 0.001).unwrap();
@@ -84,8 +85,14 @@ fn a_glyph_engraved_into_a_label_plate_cuts_exactly() {
         (cut_vol + common_vol - plate_vol).abs() / plate_vol < 1e-6,
         "cut {cut_vol:.4} + common {common_vol:.4} != plate {plate_vol:.4}"
     );
+    let (glyph_box, plate_box) = (
+        solid_bounding_box(&topo, glyph).unwrap(),
+        solid_bounding_box(&topo, plate).unwrap(),
+    );
+    let below_top = glyph_vol * (plate_box.max.z() - glyph_box.min.z())
+        / (glyph_box.max.z() - glyph_box.min.z());
     assert!(
-        common_vol > 0.9 * glyph_vol && common_vol < glyph_vol,
-        "common {common_vol:.4} against glyph {glyph_vol:.4}"
+        (common_vol - below_top).abs() < 1e-4 * glyph_vol,
+        "common {common_vol:.6} against the glyph below the plate top {below_top:.6}"
     );
 }
