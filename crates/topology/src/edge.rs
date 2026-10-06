@@ -109,11 +109,15 @@ impl EdgeCurve {
     /// edge a full turn from its vertex. Open arcs project both endpoints onto
     /// the curve and return the CCW angular range `[a₀, a₁]` with `a₁ > a₀`,
     /// so sampling the domain traces exactly the trimmed arc rather than the
-    /// full curve. NURBS edges whose endpoints sit at the curve's natural
-    /// ends (either orientation), or whose endpoint projections fail to
-    /// validate as a forward interior sub-span, use the full knot span; a
-    /// validated open sub-span returns the projected `[t₀, t₁]` so the edge
-    /// samples only its own piece of a shared curve.
+    /// full curve. A NURBS edge whose endpoints sit at the curve's natural
+    /// ends uses the full knot span from its start vertex's end, so an edge
+    /// stored against its curve gets `(d₁, d₀)` and `t₀` evaluates at its
+    /// start; one whose endpoint projections fail to validate as a sub-span
+    /// uses the full span. A validated open sub-span returns the projected
+    /// `[t₀, t₁]` (descending when reversed) so the edge samples only its own
+    /// piece of a shared curve. A descending domain traverses the curve
+    /// against its derivative, so a directional tangent there is the
+    /// opposite of [`Self::tangent_with_endpoints`].
     #[must_use]
     pub fn domain_with_endpoints(&self, start: Point3, end: Point3) -> (f64, f64) {
         const TAU: f64 = std::f64::consts::TAU;

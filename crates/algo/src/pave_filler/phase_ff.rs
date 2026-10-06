@@ -1602,6 +1602,8 @@ fn segment_run_in_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> f64 
         if lo[i] > hi[i] {
             return 0.0;
         }
+        // Exact zero is the only component that makes the slab ratio NaN; a
+        // tiny one divides to a large bound the min/max below handle.
         if dir[i] == 0.0 {
             if start[i] < lo[i] || start[i] > hi[i] {
                 return 0.0;
@@ -4125,6 +4127,67 @@ fn trim_open_curve_to_plane_face_lines(
     ts.push(raw.t_range.1);
     ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
 
+    // The sampled polygon runs along each curved edge's 16 chords, so where
+    // an edge bows into the face the polygon holds a sliver the face does
+    // not, and a piece passing through it crosses the edge but no chord. A
+    // piece within an edge's chord sag of that edge declines like one
+    // straying out of the polygon.
+    let seg_dist = |q: Point3, a: Point3, b: Point3| {
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let w = if len2 > 0.0 {
+            ((q - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (q - (a + ab * w)).length()
+    };
+    let mut curved_bands: Vec<(Vec<Point3>, f64)> = Vec::new();
+    if has_curved_boundary {
+        const CHORDS: u32 = 16;
+        const PER_CHORD: u32 = 8;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                if matches!(edge.curve(), EdgeCurve::Line) {
+                    continue;
+                }
+                let (sp, ep) = (
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                );
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                let pts: Vec<Point3> = (0..=CHORDS * PER_CHORD)
+                    .map(|k| {
+                        let f = f64::from(k) / f64::from(CHORDS * PER_CHORD);
+                        edge.curve()
+                            .evaluate_with_endpoints((d1 - d0).mul_add(f, d0), sp, ep)
+                    })
+                    .collect();
+                let sag = pts
+                    .chunks(PER_CHORD as usize)
+                    .zip(
+                        pts.iter()
+                            .skip(PER_CHORD as usize)
+                            .step_by(PER_CHORD as usize),
+                    )
+                    .map(|(chunk, &b)| {
+                        let a = chunk[0];
+                        chunk
+                            .iter()
+                            .map(|&q| seg_dist(q, a, b))
+                            .fold(0.0_f64, f64::max)
+                    })
+                    .fold(0.0_f64, f64::max);
+                curved_bands.push((pts, sag + 10.0 * tol.linear));
+            }
+        }
+    }
+    let near_curved_edge = |q: Point3| {
+        curved_bands
+            .iter()
+            .any(|(pts, band)| pts.windows(2).any(|w| seg_dist(q, w[0], w[1]) <= *band))
+    };
     let mut pieces = Vec::new();
     for w in ts.windows(2) {
         let (t0, t1) = (w[0], w[1]);
@@ -4158,6 +4221,9 @@ fn trim_open_curve_to_plane_face_lines(
                 .iter()
                 .any(|p| !inside_face(frame.project(*p)))
         {
+            return None;
+        }
+        if (1..32).any(|k| near_curved_edge(eval_at(t0 + (t1 - t0) * (f64::from(k) / 32.0)))) {
             return None;
         }
         let bbox = Aabb3::try_from_points(sub_pts)?;
