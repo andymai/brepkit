@@ -6603,9 +6603,10 @@ fn split_face_2d_impl(
                     .map(|h| sample_wire_loop_uv_via_frame(h, frame))
                     .collect();
                 // A section clear of every hole at its samples can still dip
-                // into a narrow opening between two of them, so its polyline
-                // must not cross a hole's boundary either, away from its own
-                // ends (which may rest on a hole's rim).
+                // into a narrow opening between two of them: within one step
+                // of its polyline, the stretch between two crossings of a
+                // hole's boundary lies inside the hole. A section touching a
+                // hole's rim (tangent, or ending on it) has no such stretch.
                 let enters_hole = |sct: &SectionEdge| {
                     const STEPS: u32 = 64;
                     let (d0, d1) = sct.curve_3d.domain_with_endpoints(sct.start, sct.end);
@@ -6617,28 +6618,38 @@ fn split_face_2d_impl(
                             )
                         })
                         .collect();
-                    let near_end = |q: Point2| {
-                        let (a, b) = (pts[0], pts[pts.len() - 1]);
-                        (q.x() - a.x()).hypot(q.y() - a.y()) <= tol.linear * 10.0
-                            || (q.x() - b.x()).hypot(q.y() - b.y()) <= tol.linear * 10.0
-                    };
                     hole_polys
                         .iter()
                         .filter(|poly| poly.len() >= 3)
                         .any(|poly| {
-                            let inside = pts[1..pts.len() - 1].iter().any(|&p| {
+                            let in_hole = |p: Point2| {
                                 super::classify_2d::point_in_polygon_2d(p, poly)
                                     && super::classify_2d::distance_to_polygon_boundary(p, poly)
                                         > tol.linear * 10.0
-                            });
-                            inside
-                                || pts.windows(2).any(|w| {
-                                    (0..poly.len()).any(|i| {
-                                        let (h0, h1) = (poly[i], poly[(i + 1) % poly.len()]);
-                                        segments_cross_at(w[0], w[1], h0, h1)
-                                            .is_some_and(|q| !near_end(q))
+                            };
+                            let dips_in = |w: &[Point2]| {
+                                let from = w[0];
+                                let reach = |q: &Point2| (q.x() - from.x()).hypot(q.y() - from.y());
+                                let mut at: Vec<Point2> = (0..poly.len())
+                                    .filter_map(|i| {
+                                        segments_cross_at(
+                                            w[0],
+                                            w[1],
+                                            poly[i],
+                                            poly[(i + 1) % poly.len()],
+                                        )
                                     })
+                                    .collect();
+                                at.sort_by(|a, b| reach(a).total_cmp(&reach(b)));
+                                at.windows(2).any(|c| {
+                                    in_hole(Point2::new(
+                                        0.5 * (c[0].x() + c[1].x()),
+                                        0.5 * (c[0].y() + c[1].y()),
+                                    ))
                                 })
+                            };
+                            pts[1..pts.len() - 1].iter().any(|&p| in_hole(p))
+                                || pts.windows(2).any(dips_in)
                         })
                 };
                 let hole_lines: Vec<(Point2, Point2)> = original_inner_wires
