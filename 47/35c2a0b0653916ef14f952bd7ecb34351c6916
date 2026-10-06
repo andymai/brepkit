@@ -1,3 +1,10 @@
+crates/algo/src/classifier/ray_cast.rs
+  s_a8677c67f85a06::t_9dfe661b0004dd 3469,3498,3507,3538
+  s_a8677c67f85a06::t_34e974f9e87c95 22-24,28,1242-1244,1304-1306,1320,1322-1324,1330-1332,1334,1340-1427,1430-1441,1934-1938,1942-1945,1951,2021-2036,2038,2040,3570-3574
+crates/io/tests/scoop_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_34e974f9e87c95 133-152
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_34e974f9e87c95 204
 ---
 {
   "schema_version": "authorship/3.0.0",
