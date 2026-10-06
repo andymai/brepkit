@@ -4952,12 +4952,21 @@ fn fuse_slotted_plate_onto_a_cell_reaching_into_the_slot_is_exact() {
     )
     .unwrap();
 
-    let result =
-        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, slotted, cell)
-            .unwrap();
+    let before = super::mesh_fallback_count();
+    let result = boolean(&mut topo, BooleanOp::Fuse, slotted, cell).unwrap();
+    assert_eq!(super::mesh_fallback_count(), before, "the fuse fell back");
 
     assert!(is_closed_manifold(&topo, result).unwrap());
     assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    let cylinders = brepkit_topology::explorer::solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .count();
+    assert!(
+        cylinders > 0,
+        "the fuse lost the rounded corners' cylinders"
+    );
     let slot_area = 4.0f64.mul_add(10.0 * 5.0, std::f64::consts::PI * 25.0);
     let expected = 4.0
         * (rounded_rect_area(41.75, 41.75, 3.75) - slot_area

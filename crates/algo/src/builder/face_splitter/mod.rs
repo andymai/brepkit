@@ -956,6 +956,21 @@ fn integrate_holes_plane(
 }
 
 /// Whether the chord `a`-`b` lies along the line through `h0`-`h1`.
+/// Where segments `a0`-`a1` and `b0`-`b1` cross at a point inside both.
+fn segments_cross_at(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<Point2> {
+    let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
+    let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
+    let denom = rx.mul_add(sy, -(ry * sx));
+    if denom.abs() <= 1e-12 * rx.hypot(ry) * sx.hypot(sy) {
+        return None;
+    }
+    let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
+    let t = qx.mul_add(sy, -(qy * sx)) / denom;
+    let u = qx.mul_add(ry, -(qy * rx)) / denom;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u))
+        .then(|| Point2::new(rx.mul_add(t, a0.x()), ry.mul_add(t, a0.y())))
+}
+
 fn chord_on_line(a: Point2, b: Point2, h0: Point2, h1: Point2) -> bool {
     let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
     let len = dx.hypot(dy);
@@ -6587,19 +6602,44 @@ fn split_face_2d_impl(
                     .iter()
                     .map(|h| sample_wire_loop_uv_via_frame(h, frame))
                     .collect();
+                // A section clear of every hole at its samples can still dip
+                // into a narrow opening between two of them, so its polyline
+                // must not cross a hole's boundary either, away from its own
+                // ends (which may rest on a hole's rim).
                 let enters_hole = |sct: &SectionEdge| {
+                    const STEPS: u32 = 64;
                     let (d0, d1) = sct.curve_3d.domain_with_endpoints(sct.start, sct.end);
-                    (1..8).any(|k| {
-                        let t = (d1 - d0).mul_add(f64::from(k) / 8.0, d0);
-                        let p = frame
-                            .project(sct.curve_3d.evaluate_with_endpoints(t, sct.start, sct.end));
-                        hole_polys.iter().any(|poly| {
-                            poly.len() >= 3
-                                && super::classify_2d::point_in_polygon_2d(p, poly)
-                                && super::classify_2d::distance_to_polygon_boundary(p, poly)
-                                    > tol.linear * 10.0
+                    let pts: Vec<Point2> = (0..=STEPS)
+                        .map(|k| {
+                            let t = (d1 - d0).mul_add(f64::from(k) / f64::from(STEPS), d0);
+                            frame.project(
+                                sct.curve_3d.evaluate_with_endpoints(t, sct.start, sct.end),
+                            )
                         })
-                    })
+                        .collect();
+                    let near_end = |q: Point2| {
+                        let (a, b) = (pts[0], pts[pts.len() - 1]);
+                        (q.x() - a.x()).hypot(q.y() - a.y()) <= tol.linear * 10.0
+                            || (q.x() - b.x()).hypot(q.y() - b.y()) <= tol.linear * 10.0
+                    };
+                    hole_polys
+                        .iter()
+                        .filter(|poly| poly.len() >= 3)
+                        .any(|poly| {
+                            let inside = pts[1..pts.len() - 1].iter().any(|&p| {
+                                super::classify_2d::point_in_polygon_2d(p, poly)
+                                    && super::classify_2d::distance_to_polygon_boundary(p, poly)
+                                        > tol.linear * 10.0
+                            });
+                            inside
+                                || pts.windows(2).any(|w| {
+                                    (0..poly.len()).any(|i| {
+                                        let (h0, h1) = (poly[i], poly[(i + 1) % poly.len()]);
+                                        segments_cross_at(w[0], w[1], h0, h1)
+                                            .is_some_and(|q| !near_end(q))
+                                    })
+                                })
+                        })
                 };
                 let hole_lines: Vec<(Point2, Point2)> = original_inner_wires
                     .iter()
