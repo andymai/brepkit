@@ -1067,13 +1067,13 @@ fn cb_edge_runs_along(
     let (t0, t1) = curve.domain_with_endpoints(start, end);
     let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), start, end);
     let (c0, c1) = cb.curve().domain_with_endpoints(cs, ce);
-    let samples: Vec<Point3> = (0..=32)
-        .map(|k| {
-            cb.curve()
-                .evaluate_with_endpoints((c1 - c0).mul_add(f64::from(k) / 32.0, c0), cs, ce)
-        })
-        .collect();
-    let gap = samples
+    let at = |k: f64| (c1 - c0).mul_add(k / 32.0, c0);
+    let on_cb = |t: f64| cb.curve().evaluate_with_endpoints(t, cs, ce);
+    let samples: Vec<Point3> = (0..=32).map(|k| on_cb(at(f64::from(k)))).collect();
+    // The nearest chord only brackets the foot: a coincident arc
+    // parameterized differently meets the curve between samples, as far off
+    // the chord as its sag, so the distance is read on the curve itself.
+    let Some(nearest) = samples
         .windows(2)
         .map(|w| {
             let d = w[1] - w[0];
@@ -1085,7 +1085,27 @@ fn cb_edge_runs_along(
             };
             (mid - (w[0] + d * f)).length()
         })
-        .fold(f64::INFINITY, f64::min);
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(k, _)| k)
+    else {
+        return false;
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let (mut lo, mut hi) = (
+        at(nearest.saturating_sub(1) as f64),
+        at((nearest + 2).min(32) as f64),
+    );
+    for _ in 0..60 {
+        let m1 = lo + (hi - lo) / 3.0;
+        let m2 = hi - (hi - lo) / 3.0;
+        if (on_cb(m1) - mid).length() < (on_cb(m2) - mid).length() {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    let gap = (on_cb(f64::midpoint(lo, hi)) - mid).length();
     gap <= 1e-4_f64.max(1e-4 * (end - start).length())
 }
 
@@ -4833,6 +4853,35 @@ mod tests {
         assert!(cb_edge_runs_along(&topo, &arc, a, b, arc_edge));
         assert!(cb_edge_runs_along(&topo, &EdgeCurve::Line, a, b, chord));
         assert!(!cb_edge_runs_along(&topo, &EdgeCurve::Line, a, b, arc_edge));
+    }
+
+    /// A quarter circle and a rational quadratic tracing the same arc at a
+    /// different pace (weights 1, sqrt 2, 4) run along each other, though
+    /// the circle's midpoint falls between two of the quadratic's samples.
+    #[test]
+    fn a_reparameterized_arc_runs_along_its_circle() {
+        let mut topo = Topology::new();
+        let (a, b) = (Point3::new(1.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0));
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let quadratic = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![a, Point3::new(1.0, 1.0, 0.0), b],
+            vec![1.0, std::f64::consts::SQRT_2, 4.0],
+        )
+        .unwrap();
+        let along = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(quadratic)));
+        let arc = EdgeCurve::Circle(
+            Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+        );
+        assert!(cb_edge_runs_along(&topo, &arc, a, b, along));
     }
 
     /// A plane sub-face whose hole the splitter reached twice (woven into

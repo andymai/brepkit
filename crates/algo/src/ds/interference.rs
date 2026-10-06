@@ -59,6 +59,10 @@ pub enum Interference {
         new_vertex: Option<VertexId>,
         /// Parameter on edge at intersection.
         parameter: Option<f64>,
+        /// The span of the edge's parameter lying in the face, when the edge
+        /// lies in only part of it: every piece the edge is later split into
+        /// within the span lies in the face.
+        run: Option<(f64, f64)>,
     },
     /// Face-face intersection.
     FF {

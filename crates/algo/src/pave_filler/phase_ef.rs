@@ -374,6 +374,7 @@ fn check_edge_face_pairs(
                             face: fid,
                             new_vertex: None,
                             parameter: None,
+                            run: None,
                         });
                     } else if let Some(trim) = trim {
                         // An edge running over several faces of one surface
@@ -414,6 +415,29 @@ fn check_edge_face_pairs(
                             let closes = last == n_chk || paved(last, last + 1);
                             if opens && closes && (first, last) != (0, n_chk) {
                                 let t_mid = 0.5 * (t_at(first) + t_at(last));
+                                // The run reaches out to the paves bounding
+                                // it, beyond its first and last samples.
+                                let pave_near = |a: u32, b: u32, toward: f64| {
+                                    let (lo, hi) = (t_at(a).min(t_at(b)), t_at(a).max(t_at(b)));
+                                    paves
+                                        .iter()
+                                        .copied()
+                                        .filter(|&p| (lo - eps..=hi + eps).contains(&p))
+                                        .min_by(|p, q| {
+                                            (p - toward).abs().total_cmp(&(q - toward).abs())
+                                        })
+                                        .unwrap_or(toward)
+                                };
+                                let from = if first == 0 {
+                                    t_at(0)
+                                } else {
+                                    pave_near(first - 1, first, t_at(first))
+                                };
+                                let to = if last == n_chk {
+                                    t_at(n_chk)
+                                } else {
+                                    pave_near(last, last + 1, t_at(last))
+                                };
                                 log::debug!(
                                     "EF: edge {eid:?} lies inside face {fid:?} around t={t_mid:.6}"
                                 );
@@ -422,6 +446,7 @@ fn check_edge_face_pairs(
                                     face: fid,
                                     new_vertex: None,
                                     parameter: Some(t_mid),
+                                    run: Some((from.min(to), from.max(to))),
                                 });
                             }
                             k += 1;
@@ -597,6 +622,7 @@ fn check_edge_face_pairs(
                     face: fid,
                     new_vertex: Some(vertex_id),
                     parameter: Some(t),
+                    run: None,
                 });
 
                 arena.face_info_mut(fid).vertices_in.insert(vertex_id);
@@ -790,7 +816,6 @@ fn find_edge_surface_crossings(
     // bisected to the surface, and kept only where it lands on it: a flip
     // from the projection jumping to another part of the patch does not.
     if let FaceSurface::Nurbs(_) = surface {
-        let spacing = ((t1 - t0) / (n as f64) * 2.0).abs();
         let side = |t: f64| -> Option<f64> {
             let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
             let (u, v) = surface.project_point(pt)?;
@@ -821,10 +846,12 @@ fn find_edge_surface_crossings(
                 }
                 let tc = f64::midpoint(lo, hi);
                 let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+                // The sample scan may already hold this root; two roots a
+                // sample step apart are still two crossings.
                 if distance_to_surface(pc, surface) < tol.linear
                     && !crossings
                         .iter()
-                        .any(|&(ct, _): &(f64, Point3)| (tc - ct).abs() < spacing)
+                        .any(|&(_, cp): &(f64, Point3)| (pc - cp).length() < tol.linear * 100.0)
                 {
                     crossings.push((tc, pc));
                 }
@@ -1300,6 +1327,54 @@ mod tests {
         );
         let last = crossings.last().expect("the end crossing");
         assert!((last.1 - end).length() < 1e-12, "{crossings:?}");
+    }
+
+    /// Two roots in adjacent sample intervals, a fraction of a sample step
+    /// apart, are two crossings.
+    #[test]
+    fn two_nearby_crossings_of_a_nurbs_patch_both_land() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        // z = 100 (t - 0.404)(t - 0.421) along x = t.
+        let parabola = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 17.0084),
+                Point3::new(0.5, 0.0, -24.2416),
+                Point3::new(1.0, 0.0, 34.5084),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let patch = FaceSurface::Nurbs(
+            NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![
+                    vec![Point3::new(-1.0, -1.0, 0.0), Point3::new(-1.0, 1.0, 0.0)],
+                    vec![Point3::new(2.0, -1.0, 0.0), Point3::new(2.0, 1.0, 0.0)],
+                ],
+                vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+            )
+            .unwrap(),
+        );
+        let (start, end) = (parabola.evaluate(0.0), parabola.evaluate(1.0));
+        let crossings = find_edge_surface_crossings(
+            &EdgeCurve::NurbsCurve(parabola),
+            start,
+            end,
+            0.0,
+            1.0,
+            &patch,
+            None,
+            Tolerance::new(),
+        );
+        assert_eq!(crossings.len(), 2, "{crossings:?}");
+        assert!((crossings[0].1.x() - 0.404).abs() < 1e-6, "{crossings:?}");
+        assert!((crossings[1].1.x() - 0.421).abs() < 1e-6, "{crossings:?}");
     }
 
     #[test]

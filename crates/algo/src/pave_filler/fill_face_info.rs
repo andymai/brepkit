@@ -251,10 +251,11 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                 edge,
                 face,
                 parameter,
+                run,
                 ..
             } = interf
             {
-                Some((*edge, *face, *parameter))
+                Some((*edge, *face, *parameter, *run))
             } else {
                 None
             }
@@ -263,25 +264,45 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
 
     let mut regions: std::collections::HashMap<FaceId, Option<PlaneRegion>> =
         std::collections::HashMap::new();
-    for (edge_id, face_id, parameter) in ef_data {
+    for (edge_id, face_id, parameter, run) in ef_data {
         let region = regions
             .entry(face_id)
             .or_insert_with(|| PlaneRegion::of(topo, face_id))
             .as_ref();
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
-            let selected: Vec<PaveBlockId> = match parameter {
-                Some(t) => {
+            let periodic = topo.edge(edge_id).is_ok_and(|e| {
+                matches!(
+                    e.curve(),
+                    brepkit_topology::edge::EdgeCurve::Circle(_)
+                        | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+                )
+            });
+            let selected: Vec<PaveBlockId> = match (run, parameter) {
+                // An edge lying in part of the face: every leaf within the
+                // span, also those cut out of it after the span was found.
+                (Some((lo, hi)), _) => leaves
+                    .iter()
+                    .copied()
+                    .filter(|&leaf_id| {
+                        arena.pave_blocks.get(leaf_id).is_some_and(|pb| {
+                            let (a, b) = pb.parameter_range();
+                            let (a, b) = (a.min(b), a.max(b));
+                            let eps = (hi - lo).abs().max(1.0) * LEAF_PARAM_REL_EPS;
+                            let shift = if periodic {
+                                ((a - lo + eps) / std::f64::consts::TAU).floor()
+                                    * std::f64::consts::TAU
+                            } else {
+                                0.0
+                            };
+                            a - shift >= lo - eps && b - shift <= hi + eps
+                        })
+                    })
+                    .collect(),
+                (None, Some(t)) => {
                     // A closed rim's leaves are seam-anchored (see
                     // `make_blocks`); bring the crossing angle into the
                     // same turn before testing containment.
-                    let periodic = topo.edge(edge_id).is_ok_and(|e| {
-                        matches!(
-                            e.curve(),
-                            brepkit_topology::edge::EdgeCurve::Circle(_)
-                                | brepkit_topology::edge::EdgeCurve::Ellipse(_)
-                        )
-                    });
                     let filtered: Vec<PaveBlockId> = leaves
                         .iter()
                         .copied()
@@ -314,7 +335,7 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                         filtered
                     }
                 }
-                None => leaves,
+                (None, None) => leaves,
             };
             // A leaf adjacent to a TRANSVERSAL crossing only touches the
             // face at the crossing point — it does not "lie in" the face,
@@ -409,5 +430,72 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                 fi.pave_blocks_in.insert(leaf_id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::ds::{Pave, PaveBlock};
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::vertex::Vertex;
+
+    /// An edge lying in part of a face, cut into pieces within that part
+    /// after its run was found: every piece of the run lies in the face, and
+    /// none outside it.
+    #[test]
+    fn every_piece_of_a_run_lies_in_the_face() {
+        let mut topo = Topology::new();
+        let cube =
+            brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let bottom = brepkit_topology::explorer::solid_faces(&topo, cube)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, .. } if normal.z() < -0.5)
+            })
+            .unwrap();
+        // x = -1 + 3t along y = 0.5 on z = 0: in the face for t in [1/3, 2/3].
+        let at = |t: f64| Point3::new(3.0_f64.mul_add(t, -1.0), 0.5, 0.0);
+        let ts = [0.0, 1.0 / 3.0, 0.4, 0.5, 0.6, 2.0 / 3.0, 1.0];
+        let verts: Vec<_> = ts
+            .iter()
+            .map(|&t| topo.add_vertex(Vertex::new(at(t), 1e-7)))
+            .collect();
+        let edge = topo.add_edge(Edge::new(verts[0], verts[6], EdgeCurve::Line));
+        let mut arena = GfaArena::new();
+        let leaves: Vec<PaveBlockId> = (0..6)
+            .map(|k| {
+                arena.pave_blocks.alloc(PaveBlock::new(
+                    edge,
+                    Pave::new(verts[k], ts[k]),
+                    Pave::new(verts[k + 1], ts[k + 1]),
+                ))
+            })
+            .collect();
+        arena.edge_pave_blocks.insert(edge, leaves.clone());
+        arena.interference.ef.push(Interference::EF {
+            edge,
+            face: bottom,
+            new_vertex: None,
+            parameter: Some(0.5),
+            run: Some((1.0 / 3.0, 2.0 / 3.0)),
+        });
+
+        fill_ef_in(&topo, &mut arena);
+
+        let mut got: Vec<_> = arena
+            .face_info(bottom)
+            .unwrap()
+            .pave_blocks_in
+            .iter()
+            .copied()
+            .collect();
+        got.sort_by_key(|pb| pb.index());
+        assert_eq!(got, leaves[1..5].to_vec());
     }
 }
