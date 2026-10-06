@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.35](https://github.com/andymai/brepkit/compare/v4.1.34...v4.1.35) (2026-10-06)
+
+
+### Bug Fixes
+
+* **algo:** carry curved sections when a plate face's hole is promoted into its arrangement ([#1994](https://github.com/andymai/brepkit/issues/1994)) ([11609b6](https://github.com/andymai/brepkit/commit/11609b6edae5937a7b054365aab2fe218f469838))
+
 ## [4.1.34](https://github.com/andymai/brepkit/compare/v4.1.33...v4.1.34) (2026-10-06)
 
 
