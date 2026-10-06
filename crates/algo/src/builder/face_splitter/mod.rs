@@ -955,7 +955,6 @@ fn integrate_holes_plane(
     any_crossing.then_some((out, passthrough))
 }
 
-/// Whether the chord `a`-`b` lies along the line through `h0`-`h1`.
 /// Where segments `a0`-`a1` and `b0`-`b1` cross at a point inside both.
 fn segments_cross_at(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<Point2> {
     let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
@@ -971,6 +970,7 @@ fn segments_cross_at(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<P
         .then(|| Point2::new(rx.mul_add(t, a0.x()), ry.mul_add(t, a0.y())))
 }
 
+/// Whether the chord `a`-`b` lies along the line through `h0`-`h1`.
 fn chord_on_line(a: Point2, b: Point2, h0: Point2, h1: Point2) -> bool {
     let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
     let len = dx.hypot(dy);
