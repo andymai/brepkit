@@ -723,15 +723,28 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     // none of them is a copy of another. Only a member whose
                     // region shares no area with any other member of its rank
                     // is a tile; a partial overlap stays a duplicate.
+                    // Two halves of a corner cylinder split at its 45 degree
+                    // line, under one quarter of the other rank, are tiles
+                    // the same way as two plane pieces are.
+                    let apart = |m: usize| match topo
+                        .face(sub_faces[idx].face_id)
+                        .map(|f| f.surface().is_planar())
+                    {
+                        Ok(true) => {
+                            planar_regions_apart(topo, sub_faces[idx].face_id, sub_faces[m].face_id)
+                        }
+                        Ok(false) => {
+                            topo.face(sub_faces[idx].face_id)
+                                .is_ok_and(|f| f.surface().is_analytic())
+                                && !analytic_faces_overlap(topo, sub_faces, idx, m, tol)
+                        }
+                        Err(_) => false,
+                    };
                     let beside = members.iter().all(|&m| {
                         m == idx
                             || sub_faces[m].rank != sub_faces[idx].rank
                             || (edge_sets[idx].is_none() || edge_sets[idx] != edge_sets[m])
-                                && planar_regions_apart(
-                                    topo,
-                                    sub_faces[idx].face_id,
-                                    sub_faces[m].face_id,
-                                )
+                                && apart(m)
                     });
                     if beside {
                         if std::env::var("BK_SD").is_ok() {
