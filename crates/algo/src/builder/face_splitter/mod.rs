@@ -6598,9 +6598,34 @@ fn split_face_2d_impl(
             if !holes_integrated {
                 holes_integrated = true;
                 holes_promoted = true;
+                // Holes of lines and conic arcs are read exactly; a dense
+                // polygon of each hole's rim finds the section's crossings.
+                let hole_exact: Vec<Option<Vec<brepkit_math::region2d::Boundary2>>> =
+                    original_inner_wires
+                        .iter()
+                        .map(|h| containment::exact_hole(h, frame))
+                        .collect();
                 let hole_polys: Vec<Vec<Point2>> = original_inner_wires
                     .iter()
-                    .map(|h| sample_wire_loop_uv_via_frame(h, frame))
+                    .map(|h| {
+                        h.iter()
+                            .flat_map(|e| {
+                                let n: u32 = if matches!(e.curve_3d, EdgeCurve::Line) {
+                                    1
+                                } else {
+                                    64
+                                };
+                                (0..n).map(move |k| {
+                                    frame.project(evaluate_edge_at_t(
+                                        &e.curve_3d,
+                                        e.start_3d,
+                                        e.end_3d,
+                                        f64::from(k) / f64::from(n),
+                                    ))
+                                })
+                            })
+                            .collect()
+                    })
                     .collect();
                 // A section clear of every hole at its samples can still dip
                 // into a narrow opening between two of them: within one step
@@ -6620,12 +6645,22 @@ fn split_face_2d_impl(
                         .collect();
                     hole_polys
                         .iter()
-                        .filter(|poly| poly.len() >= 3)
-                        .any(|poly| {
-                            let in_hole = |p: Point2| {
-                                super::classify_2d::point_in_polygon_2d(p, poly)
-                                    && super::classify_2d::distance_to_polygon_boundary(p, poly)
-                                        > tol.linear * 10.0
+                        .zip(&hole_exact)
+                        .filter(|(poly, _)| poly.len() >= 3)
+                        .any(|(poly, exact)| {
+                            let in_hole = |p: Point2| match exact {
+                                Some(pieces) => {
+                                    brepkit_math::region2d::point_in_region(
+                                        pieces,
+                                        p,
+                                        tol.linear * 10.0,
+                                    ) == Some(true)
+                                }
+                                None => {
+                                    super::classify_2d::point_in_polygon_2d(p, poly)
+                                        && super::classify_2d::distance_to_polygon_boundary(p, poly)
+                                            > tol.linear * 10.0
+                                }
                             };
                             let dips_in = |w: &[Point2]| {
                                 let from = w[0];

@@ -4952,9 +4952,10 @@ fn fuse_slotted_plate_onto_a_cell_reaching_into_the_slot_is_exact() {
     )
     .unwrap();
 
-    let before = super::mesh_fallback_count();
-    let result = boolean(&mut topo, BooleanOp::Fuse, slotted, cell).unwrap();
-    assert_eq!(super::mesh_fallback_count(), before, "the fuse fell back");
+    let (result, declined) =
+        super::without_mesh_fallback(|| boolean(&mut topo, BooleanOp::Fuse, slotted, cell));
+    assert!(!declined, "the fuse needed the mesh fallback");
+    let result = result.unwrap();
 
     assert!(is_closed_manifold(&topo, result).unwrap());
     assert_eq!(count_non_manifold_edges(&topo, result), 0);
