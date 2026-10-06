@@ -668,12 +668,6 @@ fn integrate_holes_plane(
     // tail base) bounds nothing it can see; such an arc is left to the
     // un-woven path. The test is on the line, not the segment: the rod's own
     // bottom arc splits that base into two walls, one under each end.
-    let chord_on_line = |a: Point2, b: Point2, h0: Point2, h1: Point2| -> bool {
-        let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
-        let len = dx.hypot(dy);
-        let off = |p: Point2| ((p.x() - h0.x()) * dy - (p.y() - h0.y()) * dx).abs() / len;
-        len > 1e-12 && off(a) < 1e-8 && off(b) < 1e-8
-    };
     let arc_uv: Vec<(Point2, Point2)> = sections
         .iter()
         .filter(|s| !matches!(s.curve_3d, EdgeCurve::Line))
@@ -953,26 +947,48 @@ fn integrate_holes_plane(
         {
             continue;
         }
-        // Recompute the arc's pcurve in THIS face's frame (a plane face: project
-        // the 3D arc into `frame`). The stored `pcurve_a` may have been fitted in
-        // a different plane frame or on the opposing face, which would disconnect
-        // the arc in this UV space — mirror the main section path's plane refit.
-        let arc_pcurve = super::pcurve_compute::compute_pcurve_on_surface(
-            &s.curve_3d,
-            s.start,
-            s.end,
-            surface,
-            wire_pts,
-            Some(frame),
-        );
-        let pcurve_uv = |p: Point3| frame.project(p);
         let src = next_src;
         next_src += 1;
-        let su = pcurve_uv(s.start);
-        let eu = pcurve_uv(s.end);
-        out.push(OrientedPCurveEdge {
+        out.extend(curved_section_pair(s, frame, surface, wire_pts, src));
+    }
+
+    any_crossing.then_some((out, passthrough))
+}
+
+/// Whether the chord `a`-`b` lies along the line through `h0`-`h1`.
+fn chord_on_line(a: Point2, b: Point2, h0: Point2, h1: Point2) -> bool {
+    let (dx, dy) = (h1.x() - h0.x(), h1.y() - h0.y());
+    let len = dx.hypot(dy);
+    let off = |p: Point2| ((p.x() - h0.x()) * dy - (p.y() - h0.y()) * dx).abs() / len;
+    len > 1e-12 && off(a) < 1e-8 && off(b) < 1e-8
+}
+
+/// A curved section on a plane face as a forward/reverse pair sharing one
+/// source id, so `build_topology_face` welds the two sub-face uses to one
+/// edge. The pcurve is refit in THIS face's frame: the stored one may come
+/// from another plane frame or the opposing face, which would disconnect the
+/// arc in this UV space.
+fn curved_section_pair(
+    s: &SectionEdge,
+    frame: &PlaneFrame,
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
+    src: usize,
+) -> [OrientedPCurveEdge; 2] {
+    let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+        &s.curve_3d,
+        s.start,
+        s.end,
+        surface,
+        wire_pts,
+        Some(frame),
+    );
+    let su = frame.project(s.start);
+    let eu = frame.project(s.end);
+    [
+        OrientedPCurveEdge {
             curve_3d: s.curve_3d.clone(),
-            pcurve: arc_pcurve.clone(),
+            pcurve: pcurve.clone(),
             start_uv: su,
             end_uv: eu,
             start_3d: s.start,
@@ -980,10 +996,10 @@ fn integrate_holes_plane(
             forward: true,
             source_edge_idx: Some(src),
             pave_block_id: s.pave_block_id,
-        });
-        out.push(OrientedPCurveEdge {
+        },
+        OrientedPCurveEdge {
             curve_3d: s.curve_3d.clone(),
-            pcurve: arc_pcurve,
+            pcurve,
             start_uv: eu,
             end_uv: su,
             start_3d: s.end,
@@ -991,10 +1007,8 @@ fn integrate_holes_plane(
             forward: false,
             source_edge_idx: Some(src),
             pave_block_id: s.pave_block_id,
-        });
-    }
-
-    any_crossing.then_some((out, passthrough))
+        },
+    ]
 }
 
 /// How a loop sits relative to an outer loop's sampled polygon. Exact for
@@ -6569,8 +6583,58 @@ fn split_face_2d_impl(
             if !holes_integrated {
                 holes_integrated = true;
                 holes_promoted = true;
+                let hole_polys: Vec<Vec<Point2>> = original_inner_wires
+                    .iter()
+                    .map(|h| sample_wire_loop_uv_via_frame(h, frame))
+                    .collect();
+                let enters_hole = |sct: &SectionEdge| {
+                    let (d0, d1) = sct.curve_3d.domain_with_endpoints(sct.start, sct.end);
+                    (1..8).any(|k| {
+                        let t = (d1 - d0).mul_add(f64::from(k) / 8.0, d0);
+                        let p = frame
+                            .project(sct.curve_3d.evaluate_with_endpoints(t, sct.start, sct.end));
+                        hole_polys.iter().any(|poly| {
+                            poly.len() >= 3
+                                && super::classify_2d::point_in_polygon_2d(p, poly)
+                                && super::classify_2d::distance_to_polygon_boundary(p, poly)
+                                    > tol.linear * 10.0
+                        })
+                    })
+                };
+                let hole_lines: Vec<(Point2, Point2)> = original_inner_wires
+                    .iter()
+                    .flatten()
+                    .filter(|e| edge_curve_is_straight(&e.curve_3d))
+                    .map(|e| (frame.project(e.start_3d), frame.project(e.end_3d)))
+                    .collect();
+                let chord_on_hole_line = |sct: &SectionEdge| {
+                    let (a, b) = (frame.project(sct.start), frame.project(sct.end));
+                    hole_lines
+                        .iter()
+                        .any(|&(h0, h1)| chord_on_line(a, b, h0, h1))
+                };
                 for (si, sct) in sections.iter().enumerate() {
                     if !matches!(sct.curve_3d, EdgeCurve::Line) {
+                        // A curved section clear of every opening (a corner
+                        // arc closing a cell outline on the outer ring) is
+                        // carried whole: without it the line sections it
+                        // joins dangle and the whole arrangement is pruned.
+                        // One reaching into an opening has no split here,
+                        // and one whose chord lies along a straight hole
+                        // edge's line is left out as the weave leaves it:
+                        // the arrangement reads regions by chords.
+                        if (sct.start - sct.end).length() >= 1e-10
+                            && !enters_hole(sct)
+                            && !chord_on_hole_line(sct)
+                        {
+                            all_edges.extend(curved_section_pair(
+                                sct,
+                                frame,
+                                &surface,
+                                &wire_pts,
+                                WEAVE_SECTION_SRC_BASE + si,
+                            ));
+                        }
                         continue;
                     }
                     let s0 = frame.project(sct.start);

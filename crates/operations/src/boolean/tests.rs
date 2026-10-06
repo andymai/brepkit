@@ -4880,6 +4880,95 @@ fn cut_coaxial_counterbore_from_a_tube_splits_the_top_annulus() {
     );
 }
 
+/// A stadium face at height `z`: straight sides of half length `hl` at
+/// `y = ±r` and end semicircles of radius `r`, each split at its tip (CCW,
+/// +Z normal).
+fn make_stadium_face(topo: &mut Topology, hl: f64, r: f64, z: f64) -> FaceId {
+    use brepkit_math::curves::Circle3D;
+
+    let normal = Vec3::new(0.0, 0.0, 1.0);
+    let pts = [
+        (-hl, -r),
+        (hl, -r),
+        (hl + r, 0.0),
+        (hl, r),
+        (-hl, r),
+        (-hl - r, 0.0),
+    ];
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7)))
+        .collect();
+    let arc = |topo: &mut Topology, i: usize, cx: f64| {
+        let center = Point3::new(cx, 0.0, z);
+        let (sx, sy) = pts[i];
+        let u_axis = Vec3::new((sx - cx) / r, sy / r, 0.0);
+        let circle = Circle3D::with_axes(center, normal, r, u_axis, normal.cross(u_axis)).unwrap();
+        topo.add_edge(Edge::new(
+            vids[i],
+            vids[(i + 1) % 6],
+            EdgeCurve::Circle(circle),
+        ))
+    };
+    let eids = [
+        topo.add_edge(Edge::new(vids[0], vids[1], EdgeCurve::Line)),
+        arc(topo, 1, hl),
+        arc(topo, 2, hl),
+        topo.add_edge(Edge::new(vids[3], vids[4], EdgeCurve::Line)),
+        arc(topo, 4, -hl),
+        arc(topo, 5, -hl),
+    ];
+    let wire = Wire::new(
+        eids.iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d: z }))
+}
+
+/// A plate with a stadium slot rests on one rounded cell whose inner corner
+/// lies inside the slot. On the plate's bottom face the cell's walls cut lines
+/// that run into the slot, crossing its end arc, and its outer corner
+/// cylinders cut the arcs that join those lines to the plate's rim. The slot is
+/// promoted into the face's arrangement, which once took only the line
+/// sections: every line dangled, the face split into nothing, and the fuse
+/// fell back to a mesh.
+#[test]
+fn fuse_slotted_plate_onto_a_cell_reaching_into_the_slot_is_exact() {
+    let mut topo = Topology::new();
+    let plate = make_rounded_rect_arc_prism(&mut topo, 41.75, 41.75, 3.75, 4.75, 4.0);
+    let slot_face = make_stadium_face(&mut topo, 10.0, 5.0, 4.0);
+    let slot =
+        crate::extrude::extrude(&mut topo, slot_face, Vec3::new(0.0, 0.0, 1.0), 6.0).unwrap();
+    let slotted = boolean(&mut topo, BooleanOp::Cut, plate, slot).unwrap();
+    let cell = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.75, 4.0);
+    crate::transform::transform_solid(
+        &mut topo,
+        cell,
+        &brepkit_math::mat::Mat4::translation(-21.0, -21.0, 0.0),
+    )
+    .unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Fuse, slotted, cell)
+            .unwrap();
+
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    let slot_area = 4.0f64.mul_add(10.0 * 5.0, std::f64::consts::PI * 25.0);
+    let expected = 4.0
+        * (rounded_rect_area(41.75, 41.75, 3.75) - slot_area
+            + rounded_rect_area(20.75, 20.75, 3.75));
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-4,
+        "fused volume {vol:.3} != expected {expected:.3}"
+    );
+}
+
 /// A tube standing on a plate, sunk 0.01 mm into it (the tool's assembly
 /// parts): the plate's top face receives the tube's wall circle and, inside
 /// it, the bore circle. The wall disc must carry the bore circle as its hole
