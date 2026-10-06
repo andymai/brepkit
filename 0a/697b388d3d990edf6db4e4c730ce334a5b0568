@@ -1,0 +1,26 @@
+crates/io/tests/data/riser_plate_rim.bin
+  s_a8677c67f85a06::t_4594b14b1de706 1
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_3f81d8fede943b 142
+  s_a8677c67f85a06::t_6a0a7e83e42ec2 141
+crates/wasm/src/helpers.rs
+  s_a8677c67f85a06::t_672448ab570ba2 248-249
+  s_a8677c67f85a06::t_e2a05d12b47715 947-1032
+  s_a8677c67f85a06::t_a5a6c7824116e8 210-213,229-235,237-240,246-247,250-263
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0a697b388d3d990edf6db4e4c730ce334a5b0568",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
