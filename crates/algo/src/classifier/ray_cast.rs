@@ -19,6 +19,12 @@ use crate::error::AlgoError;
 
 /// Per-face geometry used for ray crossing tests.
 enum FaceGeom {
+    /// An untrimmed NURBS face that is a profile curve moved along a fixed
+    /// vector: the whole patch, so every hit on the surface lies on the face.
+    Extrusion {
+        profile: brepkit_math::nurbs::curve::NurbsCurve,
+        along: Vec3,
+    },
     /// A planar (or planar-approximated) face: boundary polygon, hole
     /// polygons, and the supporting plane.
     Planar {
@@ -627,6 +633,7 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
                         FaceGeom::TorusTrim { .. } => "torus trim".to_string(),
                         FaceGeom::Sphere { loops, .. } => format!("sphere[{} loops]", loops.len()),
                         FaceGeom::SphereTrim { .. } => "sphere trim".to_string(),
+                        FaceGeom::Extrusion { .. } => "extrusion".to_string(),
                     };
                     log::debug!(
                         "RAYHIT {label} dir=({:.3},{:.3},{:.3}) geom#{gi} {tag} c={c} susp={s}",
@@ -1118,6 +1125,13 @@ fn collect_geoms_of(
             }
         }
 
+        if let brepkit_topology::face::FaceSurface::Nurbs(n) = face.surface()
+            && let Some(geom) = extrusion_geom(topo, face, n)?
+        {
+            result.push(geom);
+            continue;
+        }
+
         if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
             && let Some(geom) = torus_trim_geom(topo, face, t)?
         {
@@ -1221,6 +1235,113 @@ fn collect_geoms_of(
     }
 
     Ok(result)
+}
+
+/// A NURBS face bounded by exactly its patch's four corners, whose two
+/// control rows (or columns) differ by one vector: an untrimmed extrusion.
+fn extrusion_geom(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> Result<Option<FaceGeom>, AlgoError> {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    if !face.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let cps = surface.control_points();
+    let weights = surface.weights();
+    let (profile_pts, profile_w, other_pts, other_w, degree, knots) =
+        if surface.degree_u() == 1 && cps.len() == 2 {
+            (
+                cps[0].clone(),
+                weights[0].clone(),
+                cps[1].clone(),
+                weights[1].clone(),
+                surface.degree_v(),
+                surface.knots_v().to_vec(),
+            )
+        } else if surface.degree_v() == 1 && cps.iter().all(|row| row.len() == 2) {
+            (
+                cps.iter().map(|row| row[0]).collect(),
+                weights.iter().map(|row| row[0]).collect(),
+                cps.iter().map(|row| row[1]).collect(),
+                weights.iter().map(|row| row[1]).collect(),
+                surface.degree_u(),
+                surface.knots_u().to_vec(),
+            )
+        } else {
+            return Ok(None);
+        };
+    let Some(&first) = profile_pts.first() else {
+        return Ok(None);
+    };
+    let along = other_pts[0] - first;
+    let scale = along.length().max(1.0);
+    if along.length() <= 1e-9
+        || profile_pts
+            .iter()
+            .zip(&other_pts)
+            .any(|(a, b)| ((*b - *a) - along).length() > 1e-9 * scale)
+        || profile_w
+            .iter()
+            .zip(&other_w)
+            .any(|(a, b)| (a - b).abs() > 1e-12)
+    {
+        return Ok(None);
+    }
+    let Ok(profile) = NurbsCurve::new(degree, knots, profile_pts, profile_w) else {
+        return Ok(None);
+    };
+    let (v0, v1) = profile.domain();
+    let corners = [
+        profile.evaluate(v0),
+        profile.evaluate(v1),
+        profile.evaluate(v0) + along,
+        profile.evaluate(v1) + along,
+    ];
+    let wire = topo.wire(face.outer_wire())?;
+    if wire.edges().len() != 4 {
+        return Ok(None);
+    }
+    // Corners alone admit a wire that cuts across the patch between them:
+    // each edge must also run along one of the patch's own edges, a copy of
+    // the profile or an end ruling, at seven points along it.
+    let on_patch_edge = |q: Point3| {
+        let near = 1e-6 * scale;
+        let on_ruling = [corners[0], corners[1]].iter().any(|&c| {
+            let w = q - c;
+            let f = (w.dot(along) / along.dot(along)).clamp(0.0, 1.0);
+            (w - along * f).length() <= near
+        });
+        on_ruling
+            || [Vec3::new(0.0, 0.0, 0.0), along].iter().any(|&shift| {
+                brepkit_math::nurbs::projection::project_point_to_curve(&profile, q - shift, 1e-12)
+                    .is_ok_and(|c| c.distance <= near)
+            })
+    };
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        for p in [sp, ep] {
+            if !corners.iter().any(|c| (*c - p).length() <= 1e-7 * scale) {
+                return Ok(None);
+            }
+        }
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        if !(1..8).all(|k| {
+            on_patch_edge(edge.curve().evaluate_with_endpoints(
+                (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
+                sp,
+                ep,
+            ))
+        }) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(FaceGeom::Extrusion { profile, along }))
 }
 
 /// `x` wrapped into `[-π, π)`.
@@ -1712,7 +1833,172 @@ fn ray_geom_crossings(
             away,
             beyond,
         } => ray_sphere_trim_crossings(origin, ray_dir, surface, frame, trim, *away, *beyond, tol),
+        FaceGeom::Extrusion { profile, along } => {
+            ray_extrusion_crossings(origin, ray_dir, profile, *along, tol)
+        }
     }
+}
+
+/// Count ray crossings with an untrimmed extrusion `profile(v) + s along`,
+/// `s` in `[0, 1]`: across `along` the ray is a line in the profile's
+/// projection, and each place the profile crosses that line is a hit.
+fn ray_extrusion_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    profile: &brepkit_math::nurbs::curve::NurbsCurve,
+    along: Vec3,
+    tol: Tolerance,
+) -> (i32, bool) {
+    const SAMPLES: usize = 64;
+    const MAX_DEPTH: u32 = 8;
+    let near = 10.0 * tol.linear;
+    let Ok(axis) = along.normalize() else {
+        return (0, true);
+    };
+    let flat = |x: Vec3| x - axis * axis.dot(x);
+    let (v0, v1) = profile.domain();
+    let at = |k: usize| v0 + (v1 - v0) * (k as f64 / SAMPLES as f64);
+    let rp = flat(ray_dir);
+    let rp_len = rp.length();
+    if rp_len <= 1e-12 * ray_dir.length() {
+        // Along the extrusion: the ray runs in the surface or misses it.
+        let grazes = (0..=SAMPLES).any(|k| flat(profile.evaluate(at(k)) - origin).length() <= near);
+        return (0, grazes);
+    }
+    let side = |v: f64| flat(profile.evaluate(v) - origin).cross(rp).dot(axis) / rp_len;
+    let ends = [profile.evaluate(v0), profile.evaluate(v1)];
+    let along_len2 = along.dot(along);
+    // Two crossings inside one sample interval leave its ends on one side of
+    // the ray. The distance to the ray's line changes no faster than the
+    // profile's arc length, so an interval with an end farther from the line
+    // than its length holds no crossing; any other is halved down to a leaf
+    // (or until both ends lie on the line), and each leaf is read by its sign
+    // change.
+    // The samples and the profile's interior knots bound the first
+    // intervals, so a narrow knot span is never read through one coarse
+    // interval's chords.
+    let mut breaks: Vec<f64> = (0..=SAMPLES).map(at).collect();
+    breaks.extend(
+        profile
+            .knots()
+            .iter()
+            .copied()
+            .filter(|&k| k > v0 && k < v1),
+    );
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (v1 - v0).abs());
+    let flat_at = |v: f64| flat(profile.evaluate(v) - origin);
+    let mut leaves: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let mut stack: Vec<(f64, f64, f64, f64, u32)> = breaks
+        .windows(2)
+        .rev()
+        .map(|w| (w[0], w[1], side(w[0]), side(w[1]), 0))
+        .collect();
+    while let Some((a, b, fa, fb, depth)) = stack.pop() {
+        let m = f64::midpoint(a, b);
+        let length =
+            1.5 * ((flat_at(m) - flat_at(a)).length() + (flat_at(b) - flat_at(m)).length());
+        if fa.abs().max(fb.abs()) > length + near {
+            continue;
+        }
+        if depth >= MAX_DEPTH || fa.abs().max(fb.abs()) <= near {
+            leaves.push((a, b, fa, fb));
+            continue;
+        }
+        let fm = side(m);
+        stack.push((m, b, fm, fb, depth + 1));
+        stack.push((a, m, fa, fm, depth + 1));
+    }
+    let reach = near / along_len2.sqrt();
+    let count = |v: f64, crossings: &mut i32, suspicious: &mut bool| {
+        let q = profile.evaluate(v);
+        let w = flat(q - origin);
+        let t = w.dot(rp) / (rp_len * rp_len);
+        let hit = origin + ray_dir * t;
+        let s = (hit - q).dot(along) / along_len2;
+        *suspicious |= (t * ray_dir.length()).abs() <= near
+            || (s.abs() <= reach || (s - 1.0).abs() <= reach)
+            || ends.iter().any(|e| (*e - q).length() <= near);
+        if t * ray_dir.length() > near && (0.0..=1.0).contains(&s) {
+            *crossings += 1;
+        }
+    };
+    // Leaves come in order of `v`, and the pruned gaps between them keep one
+    // sign. A value within `near` of the line has none: the profile crosses
+    // there once when the signs before and after it differ (counted once,
+    // whichever leaves share the point), and touches when they agree.
+    let sign = |f: f64| {
+        if f.abs() <= near {
+            0
+        } else if f > 0.0 {
+            1
+        } else {
+            -1
+        }
+    };
+    let mut crossings = 0;
+    let mut suspicious = false;
+    let mut last_sign = 0_i32;
+    let mut on_line: Option<f64> = None;
+    let settle = |s: i32,
+                  on_line: &mut Option<f64>,
+                  last_sign: &mut i32,
+                  crossings: &mut i32,
+                  suspicious: &mut bool| {
+        if let Some(v) = on_line.take() {
+            if *last_sign != 0 && *last_sign != s {
+                count(v, crossings, suspicious);
+            } else {
+                *suspicious = true;
+            }
+        }
+        *last_sign = s;
+    };
+    for (lo_v, hi_v, fa, fb) in leaves {
+        let (sa, sb) = (sign(fa), sign(fb));
+        if sa != 0 {
+            settle(
+                sa,
+                &mut on_line,
+                &mut last_sign,
+                &mut crossings,
+                &mut suspicious,
+            );
+        } else if on_line.is_none() {
+            on_line = Some(lo_v);
+        }
+        if sa != 0 && sb != 0 && sa != sb {
+            let (mut lo, mut hi, mut f_lo) = (lo_v, hi_v, fa);
+            for _ in 0..60 {
+                let mid = f64::midpoint(lo, hi);
+                let f_mid = side(mid);
+                if (f_mid > 0.0) == (f_lo > 0.0) {
+                    lo = mid;
+                    f_lo = f_mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            count(f64::midpoint(lo, hi), &mut crossings, &mut suspicious);
+        }
+        if sb == 0 {
+            if on_line.is_none() {
+                on_line = Some(hi_v);
+            }
+        } else if sa == 0 {
+            settle(
+                sb,
+                &mut on_line,
+                &mut last_sign,
+                &mut crossings,
+                &mut suspicious,
+            );
+        } else {
+            last_sign = sb;
+        }
+    }
+    suspicious |= on_line.is_some();
+    (crossings, suspicious)
 }
 
 /// Count ray crossings with a spherical face: the ray/sphere roots whose hit
@@ -2981,6 +3267,187 @@ mod tests {
     use brepkit_topology::solid::Solid;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The extrusion `(x, v, v^2)` of a parabola along x over `[0, 1]`,
+    /// bounded by its two end rulings, its far profile, and `near` from
+    /// `(0, 0, 0)` to `(0, 1, 1)`.
+    fn parabola_extrusion_face(
+        topo: &mut Topology,
+        near: brepkit_math::nurbs::curve::NurbsCurve,
+    ) -> brepkit_topology::face::FaceId {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let profile = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.5, 0.0),
+            Point3::new(0.0, 1.0, 1.0),
+        ];
+        let shifted: Vec<Point3> = profile
+            .iter()
+            .map(|p| *p + Vec3::new(1.0, 0.0, 0.0))
+            .collect();
+        let surface = NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![profile.to_vec(), shifted.clone()],
+            vec![vec![1.0; 3], vec![1.0; 3]],
+        )
+        .unwrap();
+        let far =
+            NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], shifted, vec![1.0; 3]).unwrap();
+        let mut v =
+            |x: f64, y: f64, z: f64| topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7));
+        let (a, b, c, d) = (
+            v(0.0, 0.0, 0.0),
+            v(0.0, 1.0, 1.0),
+            v(1.0, 1.0, 1.0),
+            v(1.0, 0.0, 0.0),
+        );
+        let edges = [
+            topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(near))),
+            topo.add_edge(Edge::new(b, c, EdgeCurve::Line)),
+            topo.add_edge(Edge::new(d, c, EdgeCurve::NurbsCurve(far))),
+            topo.add_edge(Edge::new(d, a, EdgeCurve::Line)),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(edges[0], true),
+                    OrientedEdge::new(edges[1], true),
+                    OrientedEdge::new(edges[2], false),
+                    OrientedEdge::new(edges[3], true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
+    }
+
+    /// The profile `z = (y - 0.004)(y - 0.010)` crosses the ray's line twice
+    /// inside one sample interval, once behind the ray's origin and once in
+    /// front: a scan by sample signs alone sees neither.
+    #[test]
+    fn two_crossings_inside_one_sample_interval_are_both_found() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let profile = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.000_04),
+                Point3::new(0.0, 0.5, -0.006_96),
+                Point3::new(0.0, 1.0, 0.986_04),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let (crossings, _) = ray_extrusion_crossings(
+            Point3::new(0.5, 0.007, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            &profile,
+            Vec3::new(1.0, 0.0, 0.0),
+            Tolerance::new(),
+        );
+        assert_eq!(crossings, 1);
+    }
+
+    /// The parabola `z = y^2` with its vertex at the middle sample of its
+    /// parameter: a ray across it there crosses once, a ray along its tangent
+    /// there touches it.
+    #[test]
+    fn a_profile_meeting_the_ray_at_a_sample_counts_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let profile = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, -1.0, 1.0),
+                Point3::new(0.0, 0.0, -1.0),
+                Point3::new(0.0, 1.0, 1.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let along = Vec3::new(1.0, 0.0, 0.0);
+        let across = ray_extrusion_crossings(
+            Point3::new(0.5, 0.0, -5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            &profile,
+            along,
+            Tolerance::new(),
+        );
+        assert_eq!(across.0, 1, "{across:?}");
+        let (touches, suspicious) = ray_extrusion_crossings(
+            Point3::new(0.5, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            &profile,
+            along,
+            Tolerance::new(),
+        );
+        assert_eq!(touches % 2, 0);
+        assert!(suspicious);
+    }
+
+    /// A polyline profile dipping below `z = 0` in a V two ten-thousandths of
+    /// its parameter wide, inside one sample interval: a ray along `z = 0`
+    /// starting between the V's two crossings meets one of them ahead.
+    #[test]
+    fn a_crossing_in_a_narrow_knot_span_is_found() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let profile = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.5, 0.5001, 0.5002, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, -1.0, 1.0),
+                Point3::new(0.0, 0.0, 1.0),
+                Point3::new(0.0, 0.001, -1.0),
+                Point3::new(0.0, 0.002, 1.0),
+                Point3::new(0.0, 1.0, 1.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let (crossings, _) = ray_extrusion_crossings(
+            Point3::new(0.5, 0.001, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            &profile,
+            Vec3::new(1.0, 0.0, 0.0),
+            Tolerance::new(),
+        );
+        assert_eq!(crossings, 1);
+    }
+
+    /// A wire through the patch's four corners whose near edge bows into the
+    /// patch (`x = 0.4 v (1 - v)`) trims part of it off: only the wire along
+    /// the patch's own edges takes the whole-patch extrusion path.
+    #[test]
+    fn a_wire_through_the_corners_that_cuts_across_is_not_the_whole_patch() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        for (bow, whole) in [(0.0, true), (0.2, false)] {
+            let near = NurbsCurve::new(
+                2,
+                knots.clone(),
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(bow, 0.5, 0.0),
+                    Point3::new(0.0, 1.0, 1.0),
+                ],
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let mut topo = Topology::new();
+            let fid = parabola_extrusion_face(&mut topo, near);
+            let face = topo.face(fid).unwrap();
+            let FaceSurface::Nurbs(surface) = face.surface() else {
+                unreachable!()
+            };
+            let geom = extrusion_geom(&topo, face, surface).unwrap();
+            assert_eq!(geom.is_some(), whole, "bow {bow}");
+        }
+    }
 
     /// Build a degenerate solid where all faces have < 3 vertices
     /// (single-edge faces). This tests the empty polygon fallback.

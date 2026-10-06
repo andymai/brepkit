@@ -61,6 +61,10 @@ pub fn intersect_plane_nurbs(
     // honeycomb thin-wall branches), and each statistic that fixes one side
     // breaks the other. Cell connectivity satisfies both by construction.
     let mut crossings: Vec<(f64, f64)> = Vec::new();
+    // Which parameter a crossing on the domain's edge lines must keep: a
+    // chain ending there ends ON the patch boundary, where the boundary
+    // edge's own crossing with the plane (EE/EF) puts its vertex.
+    let mut pinned: Vec<Option<Pin>> = Vec::new();
     // horiz[i][j]: crossing on the edge (i,j)->(i+1,j); vert[i][j]: on
     // (i,j)->(i,j+1).
     let mut horiz = vec![vec![None::<usize>; n]; n - 1];
@@ -77,7 +81,13 @@ pub fn intersect_plane_nurbs(
                     let t = da / (da - db);
                     let u = u0.mul_add(1.0 - t, (u0 + u_step) * t);
                     horiz[i][j] = Some(crossings.len());
-                    crossings.push((u, v0));
+                    let (v, pin) = match j {
+                        0 => (v_min, Some(Pin::V)),
+                        _ if j + 1 == n => (v_max, Some(Pin::V)),
+                        _ => (v0, None),
+                    };
+                    crossings.push((u, v));
+                    pinned.push(pin);
                 }
             }
             if j + 1 < n {
@@ -86,7 +96,13 @@ pub fn intersect_plane_nurbs(
                     let t = da / (da - db);
                     let v = v0.mul_add(1.0 - t, (v0 + v_step) * t);
                     vert[i][j] = Some(crossings.len());
-                    crossings.push((u0, v));
+                    let (u, pin) = match i {
+                        0 => (u_min, Some(Pin::U)),
+                        _ if i + 1 == n => (u_max, Some(Pin::U)),
+                        _ => (u0, None),
+                    };
+                    crossings.push((u, v));
+                    pinned.push(pin);
                 }
             }
         }
@@ -186,9 +202,13 @@ pub fn intersect_plane_nurbs(
         let mut current: Vec<IntersectionPoint> = Vec::new();
         for idx in chain {
             let (u_guess, v_guess) = crossings[idx];
-            if let Some(refined) =
-                refine_plane_surface_point(surface, plane_normal, plane_d, u_guess, v_guess)
-            {
+            if let Some(refined) = refine_plane_surface_point(
+                surface,
+                plane_normal,
+                plane_d,
+                (u_guess, v_guess),
+                pinned[idx],
+            ) {
                 current.push(refined);
             } else if current.len() >= 2 {
                 ordered_chains.push(std::mem::take(&mut current));
@@ -209,13 +229,21 @@ pub fn intersect_plane_nurbs(
     build_curves_from_chains(&ordered_chains)
 }
 
-/// Refine a plane-surface intersection point using Newton iteration.
+/// The parameter a boundary crossing holds fixed during refinement.
+#[derive(Clone, Copy)]
+enum Pin {
+    U,
+    V,
+}
+
+/// Refine a plane-surface intersection point using Newton iteration; a
+/// pinned parameter stays on its domain edge.
 fn refine_plane_surface_point(
     surface: &NurbsSurface,
     plane_normal: Vec3,
     plane_d: f64,
-    u_guess: f64,
-    v_guess: f64,
+    (u_guess, v_guess): (f64, f64),
+    pin: Option<Pin>,
 ) -> Option<IntersectionPoint> {
     let mut u = u_guess;
     let mut v = v_guess;
@@ -240,8 +268,14 @@ fn refine_plane_surface_point(
         let du = derivs[1][0]; // dS/du
         let dv = derivs[0][1]; // dS/dv
 
-        let grad_u = plane_normal.dot(du);
-        let grad_v = plane_normal.dot(dv);
+        let grad_u = match pin {
+            Some(Pin::U) => 0.0,
+            _ => plane_normal.dot(du),
+        };
+        let grad_v = match pin {
+            Some(Pin::V) => 0.0,
+            _ => plane_normal.dot(dv),
+        };
 
         let grad_len_sq = grad_u.mul_add(grad_u, grad_v * grad_v);
         if grad_len_sq < 1e-20 {

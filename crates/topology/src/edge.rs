@@ -109,11 +109,15 @@ impl EdgeCurve {
     /// edge a full turn from its vertex. Open arcs project both endpoints onto
     /// the curve and return the CCW angular range `[a₀, a₁]` with `a₁ > a₀`,
     /// so sampling the domain traces exactly the trimmed arc rather than the
-    /// full curve. NURBS edges whose endpoints sit at the curve's natural
-    /// ends (either orientation), or whose endpoint projections fail to
-    /// validate as a forward interior sub-span, use the full knot span; a
-    /// validated open sub-span returns the projected `[t₀, t₁]` so the edge
-    /// samples only its own piece of a shared curve.
+    /// full curve. A NURBS edge whose endpoints sit at the curve's natural
+    /// ends uses the full knot span from its start vertex's end, so an edge
+    /// stored against its curve gets `(d₁, d₀)` and `t₀` evaluates at its
+    /// start; one whose endpoint projections fail to validate as a sub-span
+    /// uses the full span. A validated open sub-span returns the projected
+    /// `[t₀, t₁]` (descending when reversed) so the edge samples only its own
+    /// piece of a shared curve. A descending domain traverses the curve
+    /// against its derivative, so a directional tangent there is the
+    /// opposite of [`Self::tangent_with_endpoints`].
     #[must_use]
     pub fn domain_with_endpoints(&self, start: Point3, end: Point3) -> (f64, f64) {
         const TAU: f64 = std::f64::consts::TAU;
@@ -159,10 +163,13 @@ impl EdgeCurve {
                 }
                 let p0 = ParametricCurve::evaluate(n, d0);
                 let p1 = ParametricCurve::evaluate(n, d1);
-                if ((p0 - start).length() < END_EPS && (p1 - end).length() < END_EPS)
-                    || ((p0 - end).length() < END_EPS && (p1 - start).length() < END_EPS)
-                {
+                if (p0 - start).length() < END_EPS && (p1 - end).length() < END_EPS {
                     return (d0, d1);
+                }
+                // An edge stored against its curve's direction runs the
+                // whole curve backward, as a reversed sub-span does below.
+                if (p0 - end).length() < END_EPS && (p1 - start).length() < END_EPS {
+                    return (d1, d0);
                 }
                 let proj = |p| brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9);
                 if let (Ok(pa), Ok(pb)) = (proj(start), proj(end)) {
@@ -403,8 +410,12 @@ mod tests {
         );
     }
 
+    /// A whole edge spans the full domain in its own direction: stored
+    /// against its curve (a boolean's section edge reused backward), it runs
+    /// the domain backward, so a consumer sampling from `t0` starts at the
+    /// edge's start vertex.
     #[test]
-    fn nurbs_domain_whole_edge_keeps_full_span_both_orientations() {
+    fn nurbs_domain_whole_edge_runs_the_full_span_its_own_way() {
         let curve = open_nurbs();
         let EdgeCurve::NurbsCurve(n) = &curve else {
             unreachable!()
@@ -413,7 +424,9 @@ mod tests {
         let p0 = brepkit_math::traits::ParametricCurve::evaluate(n, d0);
         let p1 = brepkit_math::traits::ParametricCurve::evaluate(n, d1);
         assert_full_domain(curve.domain_with_endpoints(p0, p1), d0, d1);
-        assert_full_domain(curve.domain_with_endpoints(p1, p0), d0, d1);
+        let (t0, t1) = curve.domain_with_endpoints(p1, p0);
+        assert_full_domain((t0, t1), d1, d0);
+        assert!((curve.evaluate_with_endpoints(t0, p1, p0) - p1).length() < 1e-12);
     }
 
     #[test]

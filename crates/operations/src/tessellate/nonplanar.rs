@@ -2660,7 +2660,15 @@ pub(super) fn tessellate_nonplanar_cdt(
             let cell = radius * du / divisions as f64;
             (radius, cell / dv)
         }
-        _ => nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv)).unwrap_or((1.0, 1.0)),
+        _ => extrusion_metric(
+            face_data.surface(),
+            (u_min, du),
+            (v_min, dv),
+            deflection,
+            angular_tol,
+        )
+        .or_else(|| nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv)))
+        .unwrap_or((1.0, 1.0)),
     };
     let to_cdt = |point: Point2| Point2::new(point.x() * cdt_u_scale, point.y() * cdt_v_scale);
     let from_cdt = |point: Point2| Point2::new(point.x() / cdt_u_scale, point.y() / cdt_v_scale);
@@ -4166,6 +4174,97 @@ fn route_through_poles(
 /// a circumference its v spans 4 along), so the CDT measures in lengths:
 /// raw, it would pick diagonals running far round the surface and chord
 /// through the solid.
+/// Which parameter of a NURBS surface runs along straight rulings that are
+/// all one vector: `Some(true)` for `u` (two control rows, the second the
+/// first moved by that vector), `Some(false)` for `v`.
+fn extrusion_direction(surface: &FaceSurface) -> Option<bool> {
+    let FaceSurface::Nurbs(nurbs) = surface else {
+        return None;
+    };
+    let cps = nurbs.control_points();
+    let weights = nurbs.weights();
+    let translated = |pairs: &mut dyn Iterator<Item = ((Point3, f64), (Point3, f64))>| {
+        let pairs: Vec<_> = pairs.collect();
+        let first = pairs.first()?;
+        let along = first.1.0 - first.0.0;
+        let scale = along.length().max(1.0);
+        (along.length() > 1e-9
+            && pairs.iter().all(|((a, wa), (b, wb))| {
+                ((*b - *a) - along).length() <= 1e-9 * scale && (wa - wb).abs() <= 1e-12
+            }))
+        .then_some(())
+    };
+    if nurbs.degree_u() == 1 && cps.len() == 2 {
+        translated(
+            &mut cps[0]
+                .iter()
+                .copied()
+                .zip(weights[0].iter().copied())
+                .zip(cps[1].iter().copied().zip(weights[1].iter().copied())),
+        )
+        .map(|()| true)
+    } else if nurbs.degree_v() == 1 && cps.iter().all(|row| row.len() == 2) {
+        translated(
+            &mut cps
+                .iter()
+                .zip(weights)
+                .map(|(row, w)| ((row[0], w[0]), (row[1], w[1]))),
+        )
+        .map(|()| false)
+    } else {
+        None
+    }
+}
+
+/// The triangulation metric of a trimmed NURBS extrusion: the curved
+/// direction at its own speed, the rulings shrunk so their whole span is one
+/// chord cell of the curve. Delaunay over raw rulings tens of cells long
+/// joins a corner on one long side to curve samples far along it, a chord
+/// through the surface; one cell wide, it ladders the two sides.
+fn extrusion_metric(
+    surface: &FaceSurface,
+    (u_min, du): (f64, f64),
+    (v_min, dv): (f64, f64),
+    deflection: f64,
+    angular_tol: f64,
+) -> Option<(f64, f64)> {
+    let along_u = extrusion_direction(surface)?;
+    let (speed_u, speed_v) = nurbs_speeds(surface, (u_min, du), (v_min, dv))?;
+    let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
+    let normal_at = |u: f64, v: f64| {
+        let (u, v) = wrap_to_domain(surface, u, v);
+        surface.normal(u, v)
+    };
+    let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
+    if along_u {
+        let divisions = super::nurbs::iso_divisions_over(
+            &at,
+            &normal_at,
+            false,
+            (v_span, u_span),
+            deflection,
+            angular_tol,
+            1024,
+        )
+        .max(1);
+        let cell = speed_v * dv / divisions as f64;
+        Some((cell / du, speed_v))
+    } else {
+        let divisions = super::nurbs::iso_divisions_over(
+            &at,
+            &normal_at,
+            true,
+            (u_span, v_span),
+            deflection,
+            angular_tol,
+            1024,
+        )
+        .max(1);
+        let cell = speed_u * du / divisions as f64;
+        Some((speed_u, cell / dv))
+    }
+}
+
 fn nurbs_speeds(
     surface: &FaceSurface,
     (u_min, du): (f64, f64),

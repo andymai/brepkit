@@ -1978,12 +1978,14 @@ pub fn fillet_rolling_ball(
                             let curve = edge.curve().clone();
                             let p_s = topo.vertex(e_start)?.point();
                             let p_e = topo.vertex(e_end)?.point();
+                            let (t0, t1) = curve.domain_with_endpoints(p_s, p_e);
+                            // A domain running down traverses the curve against
+                            // its derivative.
+                            let ascending = if t1 >= t0 { 1.0 } else { -1.0 };
                             let (t_param, sign) = if e_start.index() == vi {
-                                let (t0, _) = curve.domain_with_endpoints(p_s, p_e);
-                                (t0, 1.0)
+                                (t0, ascending)
                             } else {
-                                let (_, t1) = curve.domain_with_endpoints(p_s, p_e);
-                                (t1, -1.0)
+                                (t1, -ascending)
                             };
                             let tan = curve.tangent_with_endpoints(t_param, p_s, p_e);
                             if let Ok(n) = (tan * sign).normalize() {
@@ -2397,10 +2399,13 @@ fn corner_is_concave(
         };
         let (p_s, p_e) = (vs.point(), ve.point());
         let curve = edge.curve().clone();
+        let (t0, t1) = curve.domain_with_endpoints(p_s, p_e);
+        // A domain running down traverses the curve against its derivative.
+        let ascending = if t1 >= t0 { 1.0 } else { -1.0 };
         let (t_param, sign) = if edge.start().index() == vi {
-            (curve.domain_with_endpoints(p_s, p_e).0, 1.0)
+            (t0, ascending)
         } else {
-            (curve.domain_with_endpoints(p_s, p_e).1, -1.0)
+            (t1, -ascending)
         };
         let tan = curve.tangent_with_endpoints(t_param, p_s, p_e);
         if let Ok(n) = (tan * sign).normalize() {

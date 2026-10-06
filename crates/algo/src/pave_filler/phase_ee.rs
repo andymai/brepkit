@@ -253,6 +253,17 @@ fn find_edge_edge_crossings(
             ) && domain_a.contains(&t_a)
                 && domain_b.contains(&t_b)
             {
+                // Two sample chords meet at a point the curves miss by the
+                // chords' sag; that point disagrees with the exact crossing
+                // the EF and FF phases compute on the same curves, and the
+                // two copies of one vertex then bound a sliver edge.
+                let (t_a, t_b, pt) = refine_on_curves(
+                    (edge_a.curve(), ea),
+                    (edge_b.curve(), eb),
+                    (t_a, t_b),
+                    tol.linear,
+                )
+                .unwrap_or((t_a, t_b, pt));
                 // Deduplicate: skip if too close to existing crossing
                 let is_dup = crossings
                     .iter()
@@ -267,6 +278,44 @@ fn find_edge_edge_crossings(
     }
 
     Ok(crossings)
+}
+
+/// Gauss-Newton on `Ca(ta) - Cb(tb)` from a sampled crossing, inside both
+/// edges' domains. `None` when the curves do not meet within `tol` there.
+fn refine_on_curves(
+    (ca, ea): (&EdgeCurve, &EdgeData),
+    (cb, eb): (&EdgeCurve, &EdgeData),
+    (mut ta, mut tb): (f64, f64),
+    tol: f64,
+) -> Option<(f64, f64, Point3)> {
+    let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
+    let at_b = |t: f64| cb.evaluate_with_endpoints(t, eb.start_pos, eb.end_pos);
+    let (lo_a, hi_a) = (ea.t0.min(ea.t1), ea.t0.max(ea.t1));
+    let (lo_b, hi_b) = (eb.t0.min(eb.t1), eb.t0.max(eb.t1));
+    let (ha, hb) = ((hi_a - lo_a) * 1e-7, (hi_b - lo_b) * 1e-7);
+    if ha <= 0.0 || hb <= 0.0 {
+        return None;
+    }
+    for _ in 0..30 {
+        let r = at_a(ta) - at_b(tb);
+        if r.length() <= tol * 1e-3 {
+            break;
+        }
+        let da = (at_a((ta + ha).min(hi_a)) - at_a((ta - ha).max(lo_a)))
+            * (1.0 / ((ta + ha).min(hi_a) - (ta - ha).max(lo_a)));
+        let db = (at_b((tb + hb).min(hi_b)) - at_b((tb - hb).max(lo_b)))
+            * (-1.0 / ((tb + hb).min(hi_b) - (tb - hb).max(lo_b)));
+        let (a11, a12, a22) = (da.dot(da), da.dot(db), db.dot(db));
+        let (g1, g2) = (da.dot(r), db.dot(r));
+        let det = a11.mul_add(a22, -(a12 * a12));
+        if det.abs() <= 1e-12 * a11 * a22 {
+            return None;
+        }
+        ta = (ta - (a22 * g1 - a12 * g2) / det).clamp(lo_a, hi_a);
+        tb = (tb - (a11 * g2 - a12 * g1) / det).clamp(lo_b, hi_b);
+    }
+    let (pa, pb) = (at_a(ta), at_b(tb));
+    ((pa - pb).length() <= tol).then(|| (ta, tb, pa + (pb - pa) * 0.5))
 }
 
 /// Exact line-segment vs circular-arc intersection.
@@ -462,6 +511,52 @@ mod tests {
             bbox_min: Point3::new(0.0, 0.0, 0.0),
             bbox_max: Point3::new(0.0, 0.0, 0.0),
         }
+    }
+
+    /// A scoop's cubic end profile crossing an envelope's straight edge in
+    /// the plane they share: the crossing lies on both curves, not where two
+    /// of their sample chords meet (0.008 along the edge from it).
+    #[test]
+    fn a_cubic_crossing_a_line_is_found_on_the_cubic() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::Edge;
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::default();
+        let profile = [
+            Point3::new(44.03, -5.116_666_666_666_667, 2.25),
+            Point3::new(44.03, -12.702_471_043_387_55, -1.230_890_664_590_062),
+            Point3::new(44.03, -21.630_890_664_590_066, 7.697_528_956_612_448),
+            Point3::new(44.03, -18.15, 15.283_333_333_333_331),
+        ];
+        let cubic = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            profile.to_vec(),
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let mut edge = |a: Point3, b: Point3, curve: EdgeCurve| {
+            let va = topo.add_vertex(Vertex::new(a, tol.linear));
+            let vb = topo.add_vertex(Vertex::new(b, tol.linear));
+            topo.add_edge(Edge::new(va, vb, curve))
+        };
+        let ea = edge(profile[0], profile[3], EdgeCurve::NurbsCurve(cubic));
+        let eb = edge(
+            Point3::new(44.03, -17.0, 6.0),
+            Point3::new(44.03, 17.0, 6.0),
+            EdgeCurve::Line,
+        );
+        let da = collect_edge_data(&topo, &[ea]).unwrap();
+        let db = collect_edge_data(&topo, &[eb]).unwrap();
+        let hits = find_edge_edge_crossings(&topo, ea, &da[0], eb, &db[0], tol).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        let p = hits[0].2;
+        assert!((p.z() - 6.0).abs() < 1e-9, "off the line: {p:?}");
+        assert!(
+            (p.y() + 16.963_564_789_203).abs() < 1e-9,
+            "off the cubic: {p:?}"
+        );
     }
 
     #[test]

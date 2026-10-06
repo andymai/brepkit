@@ -175,6 +175,19 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
             .all(|p| ((*p - center).length() - r).abs() <= 1e-6 * r.max(1.0))
     };
 
+    // A single polynomial span on a plane face is a drawn profile (an
+    // extruded scoop's end edge) whose EF junctions are exact; the marched
+    // sections the circle gate keeps out are fits spanning many knots.
+    let nurbs_is_one_span = |eid: brepkit_topology::edge::EdgeId| -> bool {
+        topo.edge(eid).is_ok_and(|edge| {
+            matches!(
+                edge.curve(),
+                brepkit_topology::edge::EdgeCurve::NurbsCurve(n)
+                    if n.knots().len() == 2 * (n.degree() + 1)
+            )
+        })
+    };
+
     let junction_in_band_nurbs = |imgs: &[brepkit_topology::edge::EdgeId]| -> bool {
         for w in imgs.windows(2) {
             let (Ok(e0), Ok(e1)) = (topo.edge(w[0]), topo.edge(w[1])) else {
@@ -213,7 +226,9 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
                             ) && topo
                                 .edge(oe.edge())
                                 .is_ok_and(|e| e.start() != e.end()))
-                                || nurbs_is_circular(oe.edge()))
+                                || nurbs_is_circular(oe.edge())
+                                || (matches!(surface, FaceSurface::Plane { .. })
+                                    && nurbs_is_one_span(oe.edge())))
                             && junction_in_band_nurbs(imgs))) =>
             {
                 if oe.is_forward() {

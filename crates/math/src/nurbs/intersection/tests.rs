@@ -1424,3 +1424,78 @@ fn an_open_section_never_absorbs_a_closed_loop() {
         assert_eq!(chains.len(), 2, "the loop and the open section stay apart");
     }
 }
+
+/// The tool's scoop: a cubic profile from the floor lip (y -5.117, z 2.25)
+/// up to the back wall (y -18.15, z 15.283), extruded along x over
+/// [-44.03, 44.03] (u is x, v runs the profile from the wall down).
+fn scoop_surface() -> NurbsSurface {
+    let profile = [
+        (-18.15, 15.283_333_333_333_331),
+        (-21.630_890_664_590_066, 7.697_528_956_612_448),
+        (-12.702_471_043_387_55, -1.230_890_664_590_062),
+        (-5.116_666_666_666_667, 2.25),
+    ];
+    let row =
+        |x: f64| -> Vec<Point3> { profile.iter().map(|&(y, z)| Point3::new(x, y, z)).collect() };
+    NurbsSurface::new(
+        1,
+        3,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![row(-44.03), row(44.03)],
+        vec![vec![1.0; 4]; 2],
+    )
+    .unwrap()
+}
+
+/// A tapered wall leaning out from x 41.03 at z 0 to 44.03 at z 6 cuts the
+/// scoop and leaves it through the patch's x = 44.03 edge, where the wall's
+/// top edge meets the scoop's end profile. A crossing found on that edge
+/// line must stay on it: refined in both parameters it drifted 1e-3 inside,
+/// and the section's end missed the corner vertex the edges share.
+#[test]
+fn plane_section_ends_on_the_patch_edge_it_leaves_through() {
+    let surface = scoop_surface();
+    let normal = Vec3::new(0.894_427_191, 0.0, -0.447_213_595_5);
+    let d = normal.dot(Vec3::new(41.03, 0.0, 0.0));
+    let curves = intersect_plane_nurbs(&surface, normal, d, 32).unwrap();
+    let ends: Vec<Point3> = curves
+        .iter()
+        .flat_map(|c| [c.points[0].point, c.points[c.points.len() - 1].point])
+        .collect();
+    assert!(
+        ends.iter().any(|p| (p.x() - 44.03).abs() < 1e-9),
+        "no section end on the x = 44.03 edge: {ends:?}"
+    );
+}
+
+/// The scoop against the corner cylinder at (-41, -17): the section climbs
+/// to the scoop's top edge at z 15.283. Steps past that edge were clamped
+/// back into the patch, and Newton from the clamped state slid down the
+/// curve to points already traced, which the march kept: the chain ran up
+/// and down its top half three times and its fitted curve strayed 0.3 off
+/// both surfaces.
+#[test]
+fn a_march_reaching_a_patch_edge_does_not_double_back() {
+    let scoop = scoop_surface();
+    let cylinder = crate::surfaces::CylindricalSurface::with_ref_dir(
+        Point3::new(-41.0, -17.0, 6.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        3.03,
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap()
+    .to_nurbs(0.0, 19.25)
+    .unwrap();
+    let seed =
+        refine_ssi_point(&cylinder, &scoop, 0.3575, 0.3439, 0.007_43, 0.115_58, 1e-6).unwrap();
+    let chain = march_intersection(&cylinder, &scoop, &seed, 0.01, 1e-6);
+    let z: Vec<f64> = chain.iter().map(|p| p.point.z()).collect();
+    assert!(
+        z.iter().any(|&z| z > 15.2),
+        "the march never reached the top edge: {z:?}"
+    );
+    let rising = z.windows(2).all(|w| w[1] >= w[0] - 1e-9);
+    let falling = z.windows(2).all(|w| w[1] <= w[0] + 1e-9);
+    assert!(rising || falling, "the section doubles back: z = {z:?}");
+}

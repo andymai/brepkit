@@ -519,23 +519,23 @@ fn edge_in_face(topo: &Topology, face_id: FaceId, edge_id: EdgeId) -> Result<boo
 fn edge_direction_away_from(topo: &Topology, edge: &Edge, vertex: VertexId) -> Option<Vec3> {
     let start_point = topo.vertex(edge.start()).ok()?.point();
     let end_point = topo.vertex(edge.end()).ok()?.point();
+    let (d0, d1) = edge.curve().domain_with_endpoints(start_point, end_point);
     let (t, forward) = if edge.start() == vertex {
-        (
-            edge.curve().domain_with_endpoints(start_point, end_point).0,
-            true,
-        )
+        (d0, true)
     } else if edge.end() == vertex {
-        (
-            edge.curve().domain_with_endpoints(start_point, end_point).1,
-            false,
-        )
+        (d1, false)
     } else {
         return None;
     };
     let tangent = edge
         .curve()
         .tangent_with_endpoints(t, start_point, end_point);
-    let direction = if forward { tangent } else { -tangent };
+    // A domain running down traverses the curve against its derivative.
+    let direction = if forward == (d1 >= d0) {
+        tangent
+    } else {
+        -tangent
+    };
     direction.normalize().ok()
 }
 

@@ -208,7 +208,9 @@ impl Spine {
             1.0 - local_t
         };
         let mut tan = curve.tangent_with_endpoints(t0 + (t1 - t0) * t, p_start, p_end);
-        if !self.directions[idx] {
+        // A domain running down (an edge stored against its curve) traverses
+        // the curve backward, so its tangent is the derivative's opposite.
+        if self.directions[idx] == (t1 < t0) {
             tan = -tan;
         }
         Ok(tan.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)))
@@ -294,5 +296,38 @@ mod tests {
         let edge = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Line));
         let spine = Spine::from_chain(&topo, vec![edge]).unwrap();
         assert!(spine.is_closed());
+    }
+
+    /// A whole NURBS edge stored against its curve runs from the curve's end
+    /// to its start: its tangent along the spine points that way too.
+    #[test]
+    fn a_reversed_whole_nurbs_edge_tangent_follows_its_traversal() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let mut topo = Topology::new();
+        let curve = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(5.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let start = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, 0.0), 1e-7));
+        let end = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let eid = topo.add_edge(Edge::new(start, end, EdgeCurve::NurbsCurve(curve)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+        assert!(
+            (spine.evaluate(&topo, 0.0).unwrap() - Point3::new(10.0, 0.0, 0.0)).length() < 1e-9
+        );
+        for s in [0.0, 0.5 * spine.length(), spine.length()] {
+            let tangent = spine.tangent(&topo, s).unwrap();
+            assert!(
+                (tangent - Vec3::new(-1.0, 0.0, 0.0)).length() < 1e-9,
+                "{tangent:?}"
+            );
+        }
     }
 }

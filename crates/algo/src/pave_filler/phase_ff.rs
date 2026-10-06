@@ -565,6 +565,24 @@ pub fn perform(
                     if (0..=N).map(|i| sample(i, N)).any(in_both) {
                         return true;
                     }
+                    // A marched section can meet both boxes along a run far
+                    // shorter than any sample pitch tied to the faces' size (a
+                    // scoop crossing a pocket wall 0.06 along a 25-long
+                    // profile, where the wall's corner meets the scoop), so its
+                    // chords are slab-tested like a line.
+                    // A run only as long as the boxes' tolerance pad is two
+                    // faces touching along an edge, not a section.
+                    if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
+                        const M: usize = 256;
+                        let pts: Vec<Point3> = (0..=M).map(|i| sample(i, M)).collect();
+                        let run: f64 = pts
+                            .windows(2)
+                            .map(|w| segment_run_in_both_boxes(w[0], w[1], bb_a, bb_b))
+                            .sum();
+                        if run > 1e3 * tol.linear {
+                            return true;
+                        }
+                    }
                     // Plane×plane lines that the sampled test missed get the
                     // exact answer against the faces' TRUE OUTLINES (the fix
                     // the AABB slab-clip could not safely provide here: an
@@ -684,6 +702,12 @@ pub fn perform(
                     raw_curves.len()
                 );
             }
+            let raw_curves: Vec<RawCurve> = raw_curves
+                .into_iter()
+                .map(|raw| {
+                    pull_ends_onto_corners(topo, arena, (fa, surf_a), (fb, surf_b), raw, tol)
+                })
+                .collect();
             // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
             // resolution: each arc's endpoints are bit-identical to the shared
             // boundary-line crossing of the adjacent tread's arc, so consult
@@ -910,6 +934,201 @@ pub fn perform(
     }
 
     Ok(())
+}
+
+/// Distance from `p` to a face's unbounded surface; `None` when no foot is
+/// found.
+fn surface_gap(surface: &FaceSurface, p: Point3) -> Option<f64> {
+    match surface {
+        FaceSurface::Plane { normal, d } => {
+            Some((normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs())
+        }
+        other => other
+            .project_point(p)
+            .and_then(|(u, v)| other.evaluate(u, v))
+            .map(|q| (q - p).length()),
+    }
+}
+
+/// Pull an open marched section's end onto the corner where both faces'
+/// boundaries cross, when the march stopped short of it along a direction
+/// both surfaces contain.
+///
+/// Where one face's boundary only grazes the partner surface (a scoop's
+/// end profile touching a corner cylinder along the cylinder's ruling), the
+/// boundary point solving both surfaces is a double root: the marcher's
+/// refined end sits a few thousandths of a millimetre along the tangent
+/// from the corner yet within 1e-6 of both surfaces, on no vertex, and the
+/// section dangles. The corner is already a vertex (the two boundary
+/// edges' EE crossing). It is adopted only when it lies on a boundary of
+/// each face and on both surfaces, the chord to it stays on both surfaces,
+/// the end being moved is the curve's clamped end, and the reshaped end
+/// span sits no farther off the surfaces than the fitted curve already
+/// did.
+fn pull_ends_onto_corners(
+    topo: &Topology,
+    arena: &GfaArena,
+    (fa, surf_a): (FaceId, &FaceSurface),
+    (fb, surf_b): (FaceId, &FaceSurface),
+    mut raw: RawCurve,
+    tol: Tolerance,
+) -> RawCurve {
+    const BAND: f64 = 1e-2;
+    let EdgeCurve::NurbsCurve(curve) = &raw.curve else {
+        return raw;
+    };
+    if (raw.p_start - raw.p_end).length() < tol.linear {
+        return raw;
+    }
+    let hug = tol.linear * 10.0;
+    let boundary_vertices = |fid: FaceId| -> Vec<(brepkit_topology::vertex::VertexId, Point3)> {
+        let mut out = Vec::new();
+        let Ok(face) = topo.face(fid) else {
+            return out;
+        };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Some(pbs) = arena.edge_pave_blocks.get(&oe.edge()) else {
+                    continue;
+                };
+                for &pb_id in pbs {
+                    let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                        continue;
+                    };
+                    for pave in [pb.start, pb.end].iter().chain(pb.extra_paves.iter()) {
+                        let vid = arena.resolve_vertex(pave.vertex);
+                        if let Ok(v) = topo.vertex(vid) {
+                            out.push((vid, v.point()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    };
+    let on_a = boundary_vertices(fa);
+    let on_b = boundary_vertices(fb);
+    let corners: Vec<Point3> = on_a
+        .iter()
+        .filter(|(va, pa)| {
+            on_b.iter()
+                .any(|(vb, pb)| va == vb || (*pa - *pb).length() <= tol.linear)
+        })
+        .map(|&(_, p)| p)
+        .collect();
+    let on_both = |p: Point3| {
+        surface_gap(surf_a, p).is_some_and(|d| d <= hug)
+            && surface_gap(surf_b, p).is_some_and(|d| d <= hug)
+    };
+    let knots = curve.knots();
+    let deg = curve.degree();
+    let n = curve.control_points().len();
+    if n < 2 || knots.len() != n + deg + 1 {
+        return raw;
+    }
+    let (k0, k1) = (knots[0], knots[knots.len() - 1]);
+    let clamped_start = knots[..=deg].iter().all(|&k| (k - k0).abs() <= 1e-12);
+    let clamped_end = knots[knots.len() - deg - 1..]
+        .iter()
+        .all(|&k| (k - k1).abs() <= 1e-12);
+    let mut shifts: [Option<Vec3>; 2] = [None, None];
+    for (end, p, t, clamped) in [
+        (0, raw.p_start, raw.t_range.0, clamped_start),
+        (1, raw.p_end, raw.t_range.1, clamped_end),
+    ] {
+        let at_knot_end = if end == 0 {
+            (t - k0).abs() <= 1e-12
+        } else {
+            (t - k1).abs() <= 1e-12
+        };
+        if !clamped || !at_knot_end || corners.iter().any(|&c| (c - p).length() <= hug) {
+            continue;
+        }
+        let Some(&v) = corners
+            .iter()
+            .filter(|&&c| (c - p).length() <= BAND)
+            .min_by(|&&a, &&b| (a - p).length().total_cmp(&(b - p).length()))
+        else {
+            continue;
+        };
+        if on_both(v) && [0.25, 0.5, 0.75].iter().all(|&s| on_both(p + (v - p) * s)) {
+            shifts[end] = Some(v - p);
+        }
+    }
+    if shifts.iter().all(Option::is_none) {
+        return raw;
+    }
+    let gap = |q: Point3| {
+        surface_gap(surf_a, q)
+            .unwrap_or(f64::INFINITY)
+            .max(surface_gap(surf_b, q).unwrap_or(f64::INFINITY))
+    };
+    let at = |k: u32, m: u32, lo: f64, hi: f64| lo + (hi - lo) * f64::from(k) / f64::from(m);
+    let fit = (0..=32)
+        .map(|k| gap(curve.evaluate(at(k, 32, k0, k1))))
+        .fold(hug, f64::max);
+    let length: f64 = (0..32)
+        .map(|k| {
+            (curve.evaluate(at(k + 1, 32, k0, k1)) - curve.evaluate(at(k, 32, k0, k1))).length()
+        })
+        .sum();
+    // The moved end point drags only the span it bounds, so that span is
+    // first cut down to a few shift lengths of curve.
+    let mut reshaped = curve.clone();
+    let mut spans = Vec::new();
+    for (end, shift) in shifts.iter().enumerate() {
+        let Some(d) = shift else { continue };
+        let reach = ((k1 - k0) * 20.0 * d.length() / length.max(tol.linear)).min(0.25 * (k1 - k0));
+        let t_ins = if end == 0 { k0 + reach } else { k1 - reach };
+        let ks = reshaped.knots();
+        let inner = if end == 0 {
+            ks[deg + 1]
+        } else {
+            ks[ks.len() - deg - 2]
+        };
+        if (end == 0 && t_ins < inner) || (end == 1 && t_ins > inner) {
+            match brepkit_math::nurbs::knot_ops::curve_knot_insert(&reshaped, t_ins, 1) {
+                Ok(c) => reshaped = c,
+                Err(_) => return raw,
+            }
+        }
+        let ks = reshaped.knots();
+        let span = if end == 0 {
+            (k0, ks[deg + 1])
+        } else {
+            (ks[ks.len() - deg - 2], k1)
+        };
+        let mut cps = reshaped.control_points().to_vec();
+        let i = if end == 0 { 0 } else { cps.len() - 1 };
+        cps[i] = cps[i] + *d;
+        match brepkit_math::nurbs::curve::NurbsCurve::new(
+            deg,
+            ks.to_vec(),
+            cps,
+            reshaped.weights().to_vec(),
+        ) {
+            Ok(c) => reshaped = c,
+            Err(_) => return raw,
+        }
+        spans.push(span);
+    }
+    // No worse off both surfaces than the fit already was.
+    if spans
+        .iter()
+        .any(|&(lo, hi)| (0..=8).any(|k| gap(reshaped.evaluate(at(k, 8, lo, hi))) > fit + hug))
+    {
+        return raw;
+    }
+    raw.p_start = reshaped.evaluate(raw.t_range.0);
+    raw.p_end = reshaped.evaluate(raw.t_range.1);
+    let mut pts: Vec<Point3> = (0..=16)
+        .map(|k| reshaped.evaluate(at(k, 16, k0, k1)))
+        .collect();
+    pts.extend([raw.bbox.min, raw.bbox.max]);
+    raw.bbox = Aabb3::from_points(pts);
+    raw.curve = EdgeCurve::NurbsCurve(reshaped);
+    raw
 }
 
 /// Quantize a point to a fine grid for the exact-arc vertex registry. The
@@ -1364,6 +1583,43 @@ fn kind_counts(curves: &[RawCurve]) -> [usize; 4] {
 /// itself an AABB, so this is the standard slab clip. It replaces sampling for
 /// lines, which aliases: the overlap window can be orders of magnitude shorter
 /// than the segment, and a missed window silently discards a real section.
+/// The length of the segment `p0`-`p1` inside both boxes.
+fn segment_run_in_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> f64 {
+    let lo = [
+        a.min.x().max(b.min.x()),
+        a.min.y().max(b.min.y()),
+        a.min.z().max(b.min.z()),
+    ];
+    let hi = [
+        a.max.x().min(b.max.x()),
+        a.max.y().min(b.max.y()),
+        a.max.z().min(b.max.z()),
+    ];
+    let start = [p0.x(), p0.y(), p0.z()];
+    let dir = [p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z()];
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for i in 0..3 {
+        if lo[i] > hi[i] {
+            return 0.0;
+        }
+        // Exact zero is the only component that makes the slab ratio NaN; a
+        // tiny one divides to a large bound the min/max below handle.
+        if dir[i] == 0.0 {
+            if start[i] < lo[i] || start[i] > hi[i] {
+                return 0.0;
+            }
+            continue;
+        }
+        let (ta, tb) = ((lo[i] - start[i]) / dir[i], (hi[i] - start[i]) / dir[i]);
+        t0 = t0.max(ta.min(tb));
+        t1 = t1.min(ta.max(tb));
+        if t0 >= t1 {
+            return 0.0;
+        }
+    }
+    (t1 - t0) * (p1 - p0).length()
+}
+
 fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool {
     let lo = [
         a.min.x().max(b.min.x()),
@@ -3518,10 +3774,11 @@ fn trim_open_curve_to_plane_face_lines(
     // the plane face's boundary, and only by the plane: its extent is a `v`
     // band read off a few boundary samples, not a containment test, and the
     // NURBS face trims its sections to its own boundary in its splitter.
+    // With curved edges on the plane face, a NURBS partner's section is
+    // trimmed only where every crossing lands on a straight edge (checked
+    // once the crossings are found): there the sampled polygon is exact.
     let partner_is_cone = matches!(other_surf, FaceSurface::Cone(_));
-    if !partner_is_cone && has_curved_boundary {
-        return None;
-    }
+    let straight_crossings_only = !partner_is_cone && has_curved_boundary;
 
     let n_samples = 64usize;
     let eval_at =
@@ -3603,6 +3860,35 @@ fn trim_open_curve_to_plane_face_lines(
     scan_polygon(poly);
     for h in holes {
         scan_polygon(h);
+    }
+    let mut straight: Vec<(Point3, Point3)> = Vec::new();
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            if matches!(edge.curve(), EdgeCurve::Line) {
+                straight.push((
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                ));
+            }
+        }
+    }
+    let on_segment = |p: Point3, (a, b): (Point3, Point3)| {
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let w = if len2 > 0.0 {
+            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + ab * w)).length() <= tol.linear * 10.0
+    };
+    if straight_crossings_only
+        && !crossings
+            .iter()
+            .all(|&t| straight.iter().any(|&seg| on_segment(eval_at(t), seg)))
+    {
+        return None;
     }
 
     // Crossings of the PARTNER (cone) face's angular window edges. A conic
@@ -3841,6 +4127,106 @@ fn trim_open_curve_to_plane_face_lines(
     ts.push(raw.t_range.1);
     ts.dedup_by(|x, y| (*x - *y).abs() < 1e-9);
 
+    // The sampled polygon runs along each curved edge's 16 chords, so where
+    // an edge bows into the face the polygon holds a sliver the face does
+    // not, and a piece passing through it crosses the edge but no chord. A
+    // piece entering that sliver declines like one straying out of the
+    // polygon.
+    let seg_dist = |q: Point3, a: Point3, b: Point3| {
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let w = if len2 > 0.0 {
+            ((q - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (q - (a + ab * w)).length()
+    };
+    let mut curved_bands: Vec<(Vec<Point3>, f64)> = Vec::new();
+    if has_curved_boundary {
+        const CHORDS: u32 = 16;
+        const PER_CHORD: u32 = 8;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                if matches!(edge.curve(), EdgeCurve::Line) {
+                    continue;
+                }
+                let (sp, ep) = (
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                );
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                let pts: Vec<Point3> = (0..=CHORDS * PER_CHORD)
+                    .map(|k| {
+                        let f = f64::from(k) / f64::from(CHORDS * PER_CHORD);
+                        edge.curve()
+                            .evaluate_with_endpoints((d1 - d0).mul_add(f, d0), sp, ep)
+                    })
+                    .collect();
+                let sag = pts
+                    .chunks(PER_CHORD as usize)
+                    .zip(
+                        pts.iter()
+                            .skip(PER_CHORD as usize)
+                            .step_by(PER_CHORD as usize),
+                    )
+                    .map(|(chunk, &b)| {
+                        let a = chunk[0];
+                        chunk
+                            .iter()
+                            .map(|&q| seg_dist(q, a, b))
+                            .fold(0.0_f64, f64::max)
+                    })
+                    .fold(0.0_f64, f64::max);
+                curved_bands.push((pts, sag + 10.0 * tol.linear));
+            }
+        }
+    }
+    let near_curved_edge = |q: Point3| {
+        curved_bands
+            .iter()
+            .any(|(pts, band)| pts.windows(2).any(|w| seg_dist(q, w[0], w[1]) <= *band))
+    };
+    // The face's wires with each curved edge sampled densely, in traversal
+    // order: near a curved edge, a point is read against these rather than
+    // the 16 chords, so a section running close inside the edge keeps its
+    // trim and only one crossing into the sliver declines.
+    let mut dense_loops: Vec<Vec<Point2>> = Vec::new();
+    if has_curved_boundary {
+        const DENSE: u32 = 512;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let mut loop_uv = Vec::new();
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let (sp, ep) = (
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                );
+                if matches!(edge.curve(), EdgeCurve::Line) {
+                    loop_uv.push(frame.project(if oe.is_forward() { sp } else { ep }));
+                    continue;
+                }
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                for k in 0..DENSE {
+                    let f = f64::from(k) / f64::from(DENSE);
+                    let f = if oe.is_forward() { f } else { 1.0 - f };
+                    loop_uv.push(frame.project(edge.curve().evaluate_with_endpoints(
+                        (d1 - d0).mul_add(f, d0),
+                        sp,
+                        ep,
+                    )));
+                }
+            }
+            dense_loops.push(loop_uv);
+        }
+    }
+    let inside_dense = |q: Point3| {
+        let uv = frame.project(q);
+        dense_loops.split_first().is_none_or(|(outer, holes)| {
+            point_in_polygon_2d(uv, outer) && !holes.iter().any(|h| point_in_polygon_2d(uv, h))
+        })
+    };
     let mut pieces = Vec::new();
     for w in ts.windows(2) {
         let (t0, t1) = (w[0], w[1]);
@@ -3876,6 +4262,12 @@ fn trim_open_curve_to_plane_face_lines(
         {
             return None;
         }
+        if (1..32).any(|k| {
+            let q = eval_at(t0 + (t1 - t0) * (f64::from(k) / 32.0));
+            near_curved_edge(q) && !inside_dense(q)
+        }) {
+            return None;
+        }
         let bbox = Aabb3::try_from_points(sub_pts)?;
         // Trim the stored NURBS geometry to the kept span. Downstream
         // consumers normalize over `domain_with_endpoints`, which for a NURBS
@@ -3888,17 +4280,40 @@ fn trim_open_curve_to_plane_face_lines(
         // knot) must NOT fall back to the untrimmed curve — that is exactly
         // the corrupt state described above — so defer the WHOLE curve to the
         // generic sample-clip instead.
-        let piece_curve = match &raw.curve {
-            EdgeCurve::NurbsCurve(n) => EdgeCurve::NurbsCurve(trim_nurbs_to_span(n, t0, t1)?),
-            other => other.clone(),
+        // A piece whose two ends lie on one straight edge of the face shares
+        // both endpoints with that edge's piece between them (a co-endpoint
+        // lens), which `merge_duplicate_edges` folds into one edge. Split it
+        // at its middle, the sanctioned splitter-side resolution.
+        let lens = matches!(raw.curve, EdgeCurve::NurbsCurve(_))
+            && straight
+                .iter()
+                .any(|&seg| on_segment(p0, seg) && on_segment(p1, seg));
+        let spans = if lens {
+            let tm = f64::midpoint(t0, t1);
+            vec![(t0, tm, p0, eval_at(tm)), (tm, t1, eval_at(tm), p1)]
+        } else {
+            vec![(t0, t1, p0, p1)]
         };
-        pieces.push(RawCurve {
-            curve: piece_curve,
-            bbox: bbox.expanded(tol.linear),
-            t_range: (t0, t1),
-            p_start: p0,
-            p_end: p1,
-        });
+        for (s0, s1, q0, q1) in spans {
+            let piece_curve = match &raw.curve {
+                EdgeCurve::NurbsCurve(n) => EdgeCurve::NurbsCurve(trim_nurbs_to_span(n, s0, s1)?),
+                other => other.clone(),
+            };
+            let bbox = if lens {
+                Aabb3::try_from_points(
+                    (0..=8).map(|k| eval_at(s0 + (s1 - s0) * (f64::from(k) / 8.0))),
+                )?
+            } else {
+                bbox
+            };
+            pieces.push(RawCurve {
+                curve: piece_curve,
+                bbox: bbox.expanded(tol.linear),
+                t_range: (s0, s1),
+                p_start: q0,
+                p_end: q1,
+            });
+        }
     }
     Some(pieces)
 }
