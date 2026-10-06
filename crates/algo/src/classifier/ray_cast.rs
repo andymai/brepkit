@@ -1874,11 +1874,25 @@ fn ray_extrusion_crossings(
     // than its length holds no crossing; any other is halved down to a leaf
     // (or until both ends lie on the line), and each leaf is read by its sign
     // change.
+    // The samples and the profile's interior knots bound the first
+    // intervals, so a narrow knot span is never read through one coarse
+    // interval's chords.
+    let mut breaks: Vec<f64> = (0..=SAMPLES).map(at).collect();
+    breaks.extend(
+        profile
+            .knots()
+            .iter()
+            .copied()
+            .filter(|&k| k > v0 && k < v1),
+    );
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (v1 - v0).abs());
     let flat_at = |v: f64| flat(profile.evaluate(v) - origin);
     let mut leaves: Vec<(f64, f64, f64, f64)> = Vec::new();
-    let mut stack: Vec<(f64, f64, f64, f64, u32)> = (1..=SAMPLES)
+    let mut stack: Vec<(f64, f64, f64, f64, u32)> = breaks
+        .windows(2)
         .rev()
-        .map(|k| (at(k - 1), at(k), side(at(k - 1)), side(at(k)), 0))
+        .map(|w| (w[0], w[1], side(w[0]), side(w[1]), 0))
         .collect();
     while let Some((a, b, fa, fb, depth)) = stack.pop() {
         let m = f64::midpoint(a, b);
@@ -1895,11 +1909,66 @@ fn ray_extrusion_crossings(
         stack.push((m, b, fm, fb, depth + 1));
         stack.push((a, m, fa, fm, depth + 1));
     }
+    let reach = near / along_len2.sqrt();
+    let count = |v: f64, crossings: &mut i32, suspicious: &mut bool| {
+        let q = profile.evaluate(v);
+        let w = flat(q - origin);
+        let t = w.dot(rp) / (rp_len * rp_len);
+        let hit = origin + ray_dir * t;
+        let s = (hit - q).dot(along) / along_len2;
+        *suspicious |= (t * ray_dir.length()).abs() <= near
+            || (s.abs() <= reach || (s - 1.0).abs() <= reach)
+            || ends.iter().any(|e| (*e - q).length() <= near);
+        if t * ray_dir.length() > near && (0.0..=1.0).contains(&s) {
+            *crossings += 1;
+        }
+    };
+    // Leaves come in order of `v`, and the pruned gaps between them keep one
+    // sign. A value within `near` of the line has none: the profile crosses
+    // there once when the signs before and after it differ (counted once,
+    // whichever leaves share the point), and touches when they agree.
+    let sign = |f: f64| {
+        if f.abs() <= near {
+            0
+        } else if f > 0.0 {
+            1
+        } else {
+            -1
+        }
+    };
     let mut crossings = 0;
     let mut suspicious = false;
-    for (lo_v, hi_v, prev, next) in leaves {
-        if prev.abs() <= near || (prev > 0.0) != (next > 0.0) {
-            let (mut lo, mut hi, mut f_lo) = (lo_v, hi_v, prev);
+    let mut last_sign = 0_i32;
+    let mut on_line: Option<f64> = None;
+    let settle = |s: i32,
+                  on_line: &mut Option<f64>,
+                  last_sign: &mut i32,
+                  crossings: &mut i32,
+                  suspicious: &mut bool| {
+        if let Some(v) = on_line.take() {
+            if *last_sign != 0 && *last_sign != s {
+                count(v, crossings, suspicious);
+            } else {
+                *suspicious = true;
+            }
+        }
+        *last_sign = s;
+    };
+    for (lo_v, hi_v, fa, fb) in leaves {
+        let (sa, sb) = (sign(fa), sign(fb));
+        if sa != 0 {
+            settle(
+                sa,
+                &mut on_line,
+                &mut last_sign,
+                &mut crossings,
+                &mut suspicious,
+            );
+        } else if on_line.is_none() {
+            on_line = Some(lo_v);
+        }
+        if sa != 0 && sb != 0 && sa != sb {
+            let (mut lo, mut hi, mut f_lo) = (lo_v, hi_v, fa);
             for _ in 0..60 {
                 let mid = f64::midpoint(lo, hi);
                 let f_mid = side(mid);
@@ -1910,25 +1979,25 @@ fn ray_extrusion_crossings(
                     hi = mid;
                 }
             }
-            let v = f64::midpoint(lo, hi);
-            let q = profile.evaluate(v);
-            let w = flat(q - origin);
-            let t = w.dot(rp) / (rp_len * rp_len);
-            let hit = origin + ray_dir * t;
-            let s = (hit - q).dot(along) / along_len2;
-            let reach = near / along_len2.sqrt();
-            suspicious |= (t * ray_dir.length()).abs() <= near
-                || (s.abs() <= reach || (s - 1.0).abs() <= reach)
-                || ends.iter().any(|e| (*e - q).length() <= near)
-                || (prev > 0.0) == (next > 0.0);
-            if t * ray_dir.length() > near
-                && (0.0..=1.0).contains(&s)
-                && (prev > 0.0) != (next > 0.0)
-            {
-                crossings += 1;
+            count(f64::midpoint(lo, hi), &mut crossings, &mut suspicious);
+        }
+        if sb == 0 {
+            if on_line.is_none() {
+                on_line = Some(hi_v);
             }
+        } else if sa == 0 {
+            settle(
+                sb,
+                &mut on_line,
+                &mut last_sign,
+                &mut crossings,
+                &mut suspicious,
+            );
+        } else {
+            last_sign = sb;
         }
     }
+    suspicious |= on_line.is_some();
     (crossings, suspicious)
 }
 
@@ -3276,6 +3345,72 @@ mod tests {
         .unwrap();
         let (crossings, _) = ray_extrusion_crossings(
             Point3::new(0.5, 0.007, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            &profile,
+            Vec3::new(1.0, 0.0, 0.0),
+            Tolerance::new(),
+        );
+        assert_eq!(crossings, 1);
+    }
+
+    /// The parabola `z = y^2` with its vertex at the middle sample of its
+    /// parameter: a ray across it there crosses once, a ray along its tangent
+    /// there touches it.
+    #[test]
+    fn a_profile_meeting_the_ray_at_a_sample_counts_once() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let profile = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, -1.0, 1.0),
+                Point3::new(0.0, 0.0, -1.0),
+                Point3::new(0.0, 1.0, 1.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let along = Vec3::new(1.0, 0.0, 0.0);
+        let across = ray_extrusion_crossings(
+            Point3::new(0.5, 0.0, -5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            &profile,
+            along,
+            Tolerance::new(),
+        );
+        assert_eq!(across.0, 1, "{across:?}");
+        let (touches, suspicious) = ray_extrusion_crossings(
+            Point3::new(0.5, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            &profile,
+            along,
+            Tolerance::new(),
+        );
+        assert_eq!(touches % 2, 0);
+        assert!(suspicious);
+    }
+
+    /// A polyline profile dipping below `z = 0` in a V two ten-thousandths of
+    /// its parameter wide, inside one sample interval: a ray along `z = 0`
+    /// starting between the V's two crossings meets one of them ahead.
+    #[test]
+    fn a_crossing_in_a_narrow_knot_span_is_found() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let profile = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.5, 0.5001, 0.5002, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, -1.0, 1.0),
+                Point3::new(0.0, 0.0, 1.0),
+                Point3::new(0.0, 0.001, -1.0),
+                Point3::new(0.0, 0.002, 1.0),
+                Point3::new(0.0, 1.0, 1.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let (crossings, _) = ray_extrusion_crossings(
+            Point3::new(0.5, 0.001, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
             Vec3::new(1.0, 0.0, 0.0),
