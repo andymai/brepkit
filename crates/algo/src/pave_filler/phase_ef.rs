@@ -973,6 +973,7 @@ fn refine_crossing(
 ) -> (f64, Point3) {
     let mut lo = t_lo;
     let mut hi = t_hi;
+    let (mut lo_moved, mut hi_moved) = (false, false);
 
     for _ in 0..30 {
         let m1 = lo + (hi - lo) / 3.0;
@@ -987,22 +988,30 @@ fn refine_crossing(
         );
         if d1 < d2 {
             hi = m2;
+            hi_moved = true;
         } else {
             lo = m1;
+            lo_moved = true;
         }
     }
 
-    // The search closes on a bracket end without reaching it: a crossing at
-    // the edge's own vertex would stop a few 1e-7 short of it and outlive the
-    // endpoint-contact window as a sliver pave.
+    // A search that never left one bracket end closed on that end without
+    // reaching it: a crossing at the edge's own vertex would stop a few 1e-7
+    // short of it and outlive the endpoint-contact window as a sliver pave.
+    // A search that left both ends found its point inside, where a nearer
+    // end is another contact (a rib touching a rim a millimetre from the
+    // rim edge's vertex).
     let at = |t: f64| {
         let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
         (distance_to_surface(pt, surface), t, pt)
     };
-    let best = [at(f64::midpoint(lo, hi)), at(t_lo), at(t_hi)]
-        .into_iter()
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .unwrap_or_else(|| at(f64::midpoint(lo, hi)));
+    let mid = at(f64::midpoint(lo, hi));
+    let pinned = match (lo_moved, hi_moved) {
+        (false, true) => Some(at(t_lo)),
+        (true, false) => Some(at(t_hi)),
+        _ => None,
+    };
+    let best = pinned.filter(|end| end.0 <= mid.0).unwrap_or(mid);
     (best.1, best.2)
 }
 
