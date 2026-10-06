@@ -1305,7 +1305,7 @@ fn extrusion_geom(
     }
     // Corners alone admit a wire that cuts across the patch between them:
     // each edge must also run along one of the patch's own edges, a copy of
-    // the profile or an end ruling.
+    // the profile or an end ruling, at seven points along it.
     let on_patch_edge = |q: Point3| {
         let near = 1e-6 * scale;
         let on_ruling = [corners[0], corners[1]].iter().any(|&c| {
@@ -1331,10 +1331,13 @@ fn extrusion_geom(
             }
         }
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        if !on_patch_edge(
-            edge.curve()
-                .evaluate_with_endpoints(f64::midpoint(t0, t1), sp, ep),
-        ) {
+        if !(1..8).all(|k| {
+            on_patch_edge(edge.curve().evaluate_with_endpoints(
+                (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
+                sp,
+                ep,
+            ))
+        }) {
             return Ok(None);
         }
     }

@@ -4130,8 +4130,8 @@ fn trim_open_curve_to_plane_face_lines(
     // The sampled polygon runs along each curved edge's 16 chords, so where
     // an edge bows into the face the polygon holds a sliver the face does
     // not, and a piece passing through it crosses the edge but no chord. A
-    // piece within an edge's chord sag of that edge declines like one
-    // straying out of the polygon.
+    // piece entering that sliver declines like one straying out of the
+    // polygon.
     let seg_dist = |q: Point3, a: Point3, b: Point3| {
         let ab = b - a;
         let len2 = ab.dot(ab);
@@ -4188,6 +4188,45 @@ fn trim_open_curve_to_plane_face_lines(
             .iter()
             .any(|(pts, band)| pts.windows(2).any(|w| seg_dist(q, w[0], w[1]) <= *band))
     };
+    // The face's wires with each curved edge sampled densely, in traversal
+    // order: near a curved edge, a point is read against these rather than
+    // the 16 chords, so a section running close inside the edge keeps its
+    // trim and only one crossing into the sliver declines.
+    let mut dense_loops: Vec<Vec<Point2>> = Vec::new();
+    if has_curved_boundary {
+        const DENSE: u32 = 512;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let mut loop_uv = Vec::new();
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let (sp, ep) = (
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                );
+                if matches!(edge.curve(), EdgeCurve::Line) {
+                    loop_uv.push(frame.project(if oe.is_forward() { sp } else { ep }));
+                    continue;
+                }
+                let (d0, d1) = edge.curve().domain_with_endpoints(sp, ep);
+                for k in 0..DENSE {
+                    let f = f64::from(k) / f64::from(DENSE);
+                    let f = if oe.is_forward() { f } else { 1.0 - f };
+                    loop_uv.push(frame.project(edge.curve().evaluate_with_endpoints(
+                        (d1 - d0).mul_add(f, d0),
+                        sp,
+                        ep,
+                    )));
+                }
+            }
+            dense_loops.push(loop_uv);
+        }
+    }
+    let inside_dense = |q: Point3| {
+        let uv = frame.project(q);
+        dense_loops.split_first().is_none_or(|(outer, holes)| {
+            point_in_polygon_2d(uv, outer) && !holes.iter().any(|h| point_in_polygon_2d(uv, h))
+        })
+    };
     let mut pieces = Vec::new();
     for w in ts.windows(2) {
         let (t0, t1) = (w[0], w[1]);
@@ -4223,7 +4262,10 @@ fn trim_open_curve_to_plane_face_lines(
         {
             return None;
         }
-        if (1..32).any(|k| near_curved_edge(eval_at(t0 + (t1 - t0) * (f64::from(k) / 32.0)))) {
+        if (1..32).any(|k| {
+            let q = eval_at(t0 + (t1 - t0) * (f64::from(k) / 32.0));
+            near_curved_edge(q) && !inside_dense(q)
+        }) {
             return None;
         }
         let bbox = Aabb3::try_from_points(sub_pts)?;
