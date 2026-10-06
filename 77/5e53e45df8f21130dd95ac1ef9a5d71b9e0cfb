@@ -1,15 +1,15 @@
 crates/io/tests/glyph_prism_classify_inmem.rs
   s_a8677c67f85a06::t_033b1531608811 1-57
-crates/math/src/nurbs/intersection/tests.rs
-  s_a8677c67f85a06::t_591b366ffe0a5f 127-141
-  s_a8677c67f85a06::t_a609346979d525 126
 crates/math/src/nurbs/intersection/line.rs
   s_a8677c67f85a06::t_abccb0a649c1ba 139-152
-  s_a8677c67f85a06::t_d7774f81ed1d03 153
+  s_a8677c67f85a06::t_80ac4d99dd9829 153
+crates/math/src/nurbs/intersection/tests.rs
+  s_a8677c67f85a06::t_591b366ffe0a5f 127-141
+  s_a8677c67f85a06::t_fd8d5bc5b417c0 126
 crates/io/tests/data/glyph_prism.bin
   s_a8677c67f85a06::t_033b1531608811 1
 .claude/skills/roadmap/SKILL.md
-  s_a8677c67f85a06::t_f88c22981434bd 204
+  s_a8677c67f85a06::t_4e0c65a6de848e 204
 ---
 {
   "schema_version": "authorship/3.0.0",
