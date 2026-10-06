@@ -1046,6 +1046,49 @@ fn expand_edge<S: BuildHasher>(
     out
 }
 
+/// Whether `cb_edge` runs where an edge on `curve` from `start` to `end`
+/// does. The CommonBlock map is keyed by endpoint pair alone, and a chord
+/// shares both ends with the arc it subtends (a mesh polygon's edge on a
+/// cone's rim circle): substituting it would trace the face along the chord.
+fn cb_edge_runs_along(
+    topo: &Topology,
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    cb_edge: EdgeId,
+) -> bool {
+    let Ok(cb) = topo.edge(cb_edge) else {
+        return false;
+    };
+    let (Ok(cs), Ok(ce)) = (topo.vertex(cb.start()), topo.vertex(cb.end())) else {
+        return false;
+    };
+    let (cs, ce) = (cs.point(), ce.point());
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), start, end);
+    let (c0, c1) = cb.curve().domain_with_endpoints(cs, ce);
+    let samples: Vec<Point3> = (0..=32)
+        .map(|k| {
+            cb.curve()
+                .evaluate_with_endpoints((c1 - c0).mul_add(f64::from(k) / 32.0, c0), cs, ce)
+        })
+        .collect();
+    let gap = samples
+        .windows(2)
+        .map(|w| {
+            let d = w[1] - w[0];
+            let len2 = d.dot(d);
+            let f = if len2 > 0.0 {
+                ((mid - w[0]).dot(d) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (mid - (w[0] + d * f)).length()
+        })
+        .fold(f64::INFINITY, f64::min);
+    gap <= 1e-4_f64.max(1e-4 * (end - start).length())
+}
+
 /// Rebuild an unsplit face replacing boundary edges with CommonBlock shared edges.
 ///
 /// For each boundary edge of the face, checks if its PaveBlock belongs to a
@@ -1110,6 +1153,8 @@ fn rebuild_face_with_cb_edges(
                 let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
                 if let Some(&cb_edge) = cb_qpair_edges.get(&key)
                     && cb_edge != oe.edge()
+                    && (qs == qe
+                        || cb_edge_runs_along(topo, edge.curve(), sv.point(), ev.point(), cb_edge))
                 {
                     return true;
                 }
@@ -1217,8 +1262,20 @@ fn rebuild_face_with_cb_edges(
 
             // (1) CB edge replacement
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+            let runs_along = |topo: &Topology| {
+                qs == qe
+                    || curve.as_ref().is_some_and(|c| {
+                        let (Ok(a), Ok(b)) = (topo.vertex(sv), topo.vertex(ev)) else {
+                            return false;
+                        };
+                        cb_qpair_edges.get(&key).is_some_and(|&cb| {
+                            cb_edge_runs_along(topo, c, a.point(), b.point(), cb)
+                        })
+                    })
+            };
             if let Some(&cb_edge) = cb_qpair_edges.get(&key)
                 && cb_edge != eid
+                && runs_along(topo)
             {
                 let new_fwd = if qs == qe {
                     // Closed rim replaced by the CB circle: endpoints cannot
@@ -4756,6 +4813,27 @@ mod tests {
     use super::*;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::Vec3;
+
+    /// A chord shares both ends with the arc it subtends; only an edge that
+    /// runs along the arc may stand in for it.
+    #[test]
+    fn a_chord_does_not_stand_in_for_its_arc() {
+        let mut topo = Topology::new();
+        let r = 3.75;
+        let a = Point3::new(r, 0.0, 0.0);
+        let b = Point3::new(r * 0.5_f64.cos(), r * 0.5_f64.sin(), 0.0);
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let arc = EdgeCurve::Circle(
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap(),
+        );
+        let chord = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        let arc_edge = topo.add_edge(Edge::new(va, vb, arc.clone()));
+        assert!(!cb_edge_runs_along(&topo, &arc, a, b, chord));
+        assert!(cb_edge_runs_along(&topo, &arc, a, b, arc_edge));
+        assert!(cb_edge_runs_along(&topo, &EdgeCurve::Line, a, b, chord));
+        assert!(!cb_edge_runs_along(&topo, &EdgeCurve::Line, a, b, arc_edge));
+    }
 
     /// A plane sub-face whose hole the splitter reached twice (woven into
     /// the arrangement and attached whole) builds with that hole once, also
