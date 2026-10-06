@@ -1499,3 +1499,43 @@ fn a_march_reaching_a_patch_edge_does_not_double_back() {
     let falling = z.windows(2).all(|w| w[1] <= w[0] + 1e-9);
     assert!(rising || falling, "the section doubles back: z = {z:?}");
 }
+
+/// The scoop against the bin pocket's corner cylinder at (41, -17): the
+/// scoop's profile bulges past its top edge's line, so the section swings
+/// out round the corner and back. The march steps up to 0.87 along it, and
+/// later seeds re-trace it with points up to 0.014 off those chords, which
+/// the overlap trim read as a second curve over the bulge.
+#[test]
+fn a_re_traced_section_comes_back_once() {
+    use crate::nurbs::projection::project_point_to_curve;
+    let scoop = scoop_surface();
+    let cylinder = crate::surfaces::CylindricalSurface::with_ref_dir(
+        Point3::new(41.0, -17.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        2.55,
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap()
+    .to_nurbs(4.7, 22.55)
+    .unwrap();
+    let curves = intersect_nurbs_nurbs(&cylinder, &scoop, 32, 0.01).unwrap();
+    for (i, a) in curves.iter().enumerate() {
+        for (j, b) in curves.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            let inner = &b.points[1..b.points.len() - 1];
+            let shared = inner
+                .iter()
+                .filter(|p| {
+                    project_point_to_curve(&a.curve, p.point, 1e-9)
+                        .is_ok_and(|proj| proj.distance < 1e-4)
+                })
+                .count();
+            assert_eq!(
+                shared, 0,
+                "curve {j} re-traces curve {i} at {shared} points"
+            );
+        }
+    }
+}

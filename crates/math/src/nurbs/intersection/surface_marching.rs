@@ -1204,11 +1204,44 @@ pub(super) fn near_existing_segment(
             }
             continue;
         }
-        for w in seg.windows(2) {
-            if point_to_segment_dist(point.point, w[0].point, w[1].point) < dist {
+        for (i, w) in seg.windows(2).enumerate() {
+            let d = point_to_segment_dist(point.point, w[0].point, w[1].point);
+            if d < dist {
+                return true;
+            }
+            let chord = (w[1].point - w[0].point).length();
+            if d < dist + chord * MAX_SAG_PER_CHORD && d < dist + chord_sag(seg, i) {
                 return true;
             }
         }
     }
     false
+}
+
+/// `chord_sag`'s ceiling as a share of the chord: the arc turning through
+/// `MAX_SAG_TURN` (`tan(MAX_SAG_TURN / 4) / 2`).
+const MAX_SAG_PER_CHORD: f64 = 0.134;
+
+/// The largest turn `chord_sag` credits to a chord. A trace turning faster
+/// is at a kink, not along an arc its chords cut short.
+const MAX_SAG_TURN: f64 = std::f64::consts::FRAC_PI_3;
+
+/// How far the traced curve can stand off its chord from `seg[i]` to
+/// `seg[i + 1]`. The marcher steps up to a millimetre along a gentle
+/// curve, so a later trace of the same curve lies off these chords by
+/// their sag, which reads it as a second curve. An arc whose chords
+/// turn by `a` stands `chord * tan(a / 4) / 2` off each; the turn is the
+/// larger of the chord's turns at its two ends.
+fn chord_sag(seg: &[IntersectionPoint], i: usize) -> f64 {
+    let (a, b) = (seg[i].point, seg[i + 1].point);
+    let chord = b - a;
+    let turn = |u: Vec3, v: Vec3| u.cross(v).length().atan2(u.dot(v));
+    let mut alpha = 0.0_f64;
+    if let Some(prev) = i.checked_sub(1).and_then(|k| seg.get(k)) {
+        alpha = alpha.max(turn(a - prev.point, chord));
+    }
+    if let Some(next) = seg.get(i + 2) {
+        alpha = alpha.max(turn(chord, next.point - b));
+    }
+    0.5 * chord.length() * (alpha.min(MAX_SAG_TURN) / 4.0).tan()
 }
