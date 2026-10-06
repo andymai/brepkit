@@ -1,0 +1,130 @@
+crates/io/tests/data/scoop_ramp_a.bin
+  s_a8677c67f85a06::t_40a584d929408a 1
+crates/algo/src/classifier/ray_cast.rs
+  s_a8677c67f85a06::t_063d8b03c13f28 1281-1288
+  s_a8677c67f85a06::t_af14a3e9772155 22-27,636,1128-1134,1240-1280,1289-1305,1322-1323,1329-1332,1343-1346,1836-1852,1854-1870,1939-1940,1972-1981,1987,1998,2001
+crates/io/tests/data/scoop_ramp_b.bin
+  s_a8677c67f85a06::t_40a584d929408a 1
+crates/operations/src/tessellate/nonplanar.rs
+  s_a8677c67f85a06::t_063d8b03c13f28 4198-4204
+  s_a8677c67f85a06::t_547383ee09abcd 2663-2671,4177-4197,4205-4267
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_0fa9d0d5b9d658 3987,3996
+  s_a8677c67f85a06::t_9825a386394bfc 3900,3988-3995,3997-4015,4406-4418,4420-4429,4431
+  s_a8677c67f85a06::t_1c9e737d28a7bd 3901-3902,3904,4430,4432-4439
+  s_a8677c67f85a06::t_ecabcb76288b12 986-1006,1015-1030,1032-1081,1086-1101,1104-1105,1107-1108,1113,1168-1172,1174-1180
+  s_a8677c67f85a06::t_60e86c4e80ddda 707-708,712
+  s_a8677c67f85a06::t_a0442e9075723f 709-711,1007-1014,1119-1121,1132-1136
+  s_a8677c67f85a06::t_c5a839202b70f7 1082-1085,1102-1103,1106,1109-1112,1114-1118,1122-1131,1137-1161,1163-1167,1173
+  s_a8677c67f85a06::t_a1ddccb6459a76 1162
+  s_a8677c67f85a06::t_5bbd96c2c6a4ae 1031
+  s_a8677c67f85a06::t_521f57f6667586 575-577,580,582-584,1709-1727,1730-1745
+  s_a8677c67f85a06::t_90236514805a87 570-574,578-579,581,585-587
+  s_a8677c67f85a06::t_752d22f9489101 166-167,850,853-860,865-872,951-955,961,970-972
+  s_a8677c67f85a06::t_534d0c0add8ca4 5971
+  s_a8677c67f85a06::t_434bfe895dcec7 851-852,861,956-960,962-969,973-979
+  s_a8677c67f85a06::t_79ce1600307aa8 1420-1434,1593-1596
+  s_a8677c67f85a06::t_67a3507cfe2cd6 980-985
+  s_a8677c67f85a06::t_ab43238538363f 1283-1285,1391-1400,1455,1523,1529,1563,1566,1620-1662
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_51b28ffe098e54 206
+  s_a8677c67f85a06::t_0bd32ab8d478da 194
+  s_a8677c67f85a06::t_e693f0063d33c2 192
+  s_a8677c67f85a06::t_095823ce07e6bf 193,205
+  s_a8677c67f85a06::t_954d6221864ba3 204
+  s_a8677c67f85a06::t_0d1cab35be9344 142
+crates/algo/src/builder/face_splitter/conversion.rs
+  s_a8677c67f85a06::t_a74dcf4c6cd7a3 178-190,239-240
+  s_a8677c67f85a06::t_5f49fbf9786eb4 238
+  s_a8677c67f85a06::t_e5816e2613cdcd 218-221,230
+  s_a8677c67f85a06::t_8fdadab914a249 222-225
+crates/io/tests/scoop_ramp_fuse_inmem.rs
+  s_a8677c67f85a06::t_40a584d929408a 1-28,32-37,43-64,67-81,85,90-91,93-112
+  s_a8677c67f85a06::t_063d8b03c13f28 29-31,38-42
+  s_a8677c67f85a06::t_25071773120e02 65-66
+crates/math/src/nurbs/intersection/tests.rs
+  s_a8677c67f85a06::t_016b4d80d3b3da 1427-1437,1440-1472,1478-1480,1501
+  s_a8677c67f85a06::t_68ec1e5f246f86 1481-1489
+  s_a8677c67f85a06::t_f2b23dc64eb4fe 1438-1439,1473-1477,1490-1500
+crates/algo/src/pave_filler/phase_ee.rs
+  s_a8677c67f85a06::t_f0e3c6b96e2e05 283-320
+  s_a8677c67f85a06::t_a32ce2bcc03ad2 516-561
+  s_a8677c67f85a06::t_d884e22cdae65d 256-266
+crates/io/tests/data/taper_clip_envelope.bin
+  s_a8677c67f85a06::t_739d0b6730f12c 1
+crates/io/tests/data/taper_clip_scoop.bin
+  s_a8677c67f85a06::t_739d0b6730f12c 1
+crates/io/tests/scoop_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_36838a9ef95658 1-15,18,27-34,36-93,97,102-103,105-108
+  s_a8677c67f85a06::t_1164b5160b71b0 16-17
+  s_a8677c67f85a06::t_23e8841be85ea7 19-26,109-124,131
+  s_a8677c67f85a06::t_2dbf565e9df4be 132
+  s_a8677c67f85a06::t_257be751bfc93d 35,125-130
+crates/math/src/nurbs/intersection/plane.rs
+  s_a8677c67f85a06::t_10f12934ec0c66 64-67,84-90,99-105,205-211,232-240,245-246,271-278
+crates/math/src/nurbs/intersection/surface_marching.rs
+  s_a8677c67f85a06::t_793ce3e06930e5 693-694,699-701
+  s_a8677c67f85a06::t_2a0592e9e49711 695-698
+crates/io/tests/data/taper_scoop_clipped.bin
+  s_a8677c67f85a06::t_23e8841be85ea7 1
+crates/io/tests/data/taper_scoop_bin.bin
+  s_a8677c67f85a06::t_23e8841be85ea7 1
+crates/topology/src/edge.rs
+  s_a8677c67f85a06::t_744ad15d545007 413-416,418,427-429
+  s_a8677c67f85a06::t_4cfe9193a7123f 166,169-172
+  s_a8677c67f85a06::t_1b9dfa3395afa6 173
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_a8677c67f85a06::t_4277387b0226b2 1050-1053,1056,1058,1060-1061
+crates/io/tests/fillet_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_1af94633964370 1-12,15-70,72-74,76-80,82-86,88-94
+  s_a8677c67f85a06::t_b8d24561d76c8e 13-14,71,75,81,87
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_a8677c67f85a06::t_b4f59e977dac1d 72
+  s_a8677c67f85a06::t_057b632992219c 9,17,160-227
+  s_a8677c67f85a06::t_a237c7d15e143a 228
+  s_a8677c67f85a06::t_2d2a4bc982455f 83-95
+crates/math/src/surfaces/tests.rs
+  s_a8677c67f85a06::t_6bd11ac9994827 627-651
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_2d2fff9e5ed64c 678-707,711-723,725,801-802
+  s_a8677c67f85a06::t_c669f9cc970195 1263-1295
+  s_a8677c67f85a06::t_8fdadab914a249 825-827
+  s_a8677c67f85a06::t_d904dbf4688509 395,398
+  s_a8677c67f85a06::t_83895e9da41857 708-710
+  s_a8677c67f85a06::t_42d0f0d68eeb6f 378-394,396-397,399-428
+  s_a8677c67f85a06::t_5c5660cd739320 786-800,803-824,828-836
+  s_a8677c67f85a06::t_83241d3d04aaa3 995-1006
+crates/math/src/surfaces.rs
+  s_a8677c67f85a06::t_534d0c0add8ca4 891-948
+crates/algo/src/builder/face_splitter/sampling.rs
+  s_a8677c67f85a06::t_d694092e601cfd 187-189,194-195
+crates/io/tests/data/fillet_taper_clip_material.bin
+  s_a8677c67f85a06::t_01d3a1dd88cc8a 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_b34a415ced1ea6 6930-6966
+crates/algo/src/builder/fill_images_faces.rs
+  s_a8677c67f85a06::t_348579126e62d7 1957,1988-1994
+  s_a8677c67f85a06::t_053837e2c2eb86 1984,2053
+  s_a8677c67f85a06::t_49dad89ab5e744 1979,1983,1999-2004
+  s_a8677c67f85a06::t_b34a415ced1ea6 3958-3967,3980-3981,4023-4038
+  s_a8677c67f85a06::t_d4aed29ef29bde 1960-1962,1980-1982
+  s_a8677c67f85a06::t_d17693d1013985 1947-1952,1954-1955,1959,1972,1985-1986,2005-2052
+crates/io/tests/data/fillet_taper_clip_envelope.bin
+  s_a8677c67f85a06::t_01d3a1dd88cc8a 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3566fe1c38f701111263e934488cfd3222a2e557",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}

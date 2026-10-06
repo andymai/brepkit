@@ -1,0 +1,28 @@
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_d2d772858131b0 203
+crates/io/tests/scoop_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_df8abaec1915a0 133-152
+crates/algo/src/classifier/ray_cast.rs
+  s_a8677c67f85a06::t_0ea26a35cf0d32 22-24,28,1242-1244,1320,1342-1348,1356-1361,1370-1374,1389-1403,1409-1411,1420-1423,1427-1428,1431-1435,1442,1934-1938
+  s_a8677c67f85a06::t_bc8f8283dd98b0 1362-1369,1375-1383,1388,1412-1419,1426,1430,1436-1441
+  s_a8677c67f85a06::t_df8abaec1915a0 1406
+  s_a8677c67f85a06::t_a9fee680813159 1349-1355,1384-1387,1424-1425
+  s_a8677c67f85a06::t_8dda9e04ab600a 1942-1945,1951
+  s_a8677c67f85a06::t_5670d762fff3ab 1404-1405,1407-1408,1429
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74ede21318a0bf9a3bbc52e410a0be3d0085424b",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
