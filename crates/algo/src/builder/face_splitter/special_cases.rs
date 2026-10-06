@@ -3924,7 +3924,7 @@ pub(super) fn split_face_with_internal_loops(
                 .as_ref()
                 .map_or(disc_interior, |(discs, _)| discs[li])
         } else {
-            between_loop_and_holes(loop_edges, &nested).map_or(disc_interior, into_solid)
+            between_loop_and_holes(surface, loop_edges, &nested).map_or(disc_interior, into_solid)
         };
         result.push(SplitSubFace {
             surface: surface.clone(),
@@ -4057,7 +4057,7 @@ pub(super) fn split_face_with_internal_loops(
         } else if nested_holes.is_empty() && parent_loop.iter().all(Option::is_none) {
             None
         } else {
-            between_loop_and_holes(boundary_edges, &all_holes).map(into_solid)
+            between_loop_and_holes(surface, boundary_edges, &all_holes).map(into_solid)
         }
     });
     let remainder = SplitSubFace {
@@ -4246,21 +4246,75 @@ fn reverse_loop_edges(loop_edges: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEd
 
 /// A point midway between a sample of `loop_edges` and the nearest sample of
 /// any of `holes`: inside the ring the loop bounds around holes it encloses.
+/// On a plane the midpoint is kept only inside the loop and outside every
+/// hole: across a non-convex ring (a glyph's "e", whose mouth reaches in
+/// toward its counter) the way to the nearest hole point can leave the ring.
 fn between_loop_and_holes(
+    surface: &FaceSurface,
     loop_edges: &[OrientedPCurveEdge],
     holes: &[Vec<OrientedPCurveEdge>],
 ) -> Option<Point3> {
-    let q = *sample_edges_3d(loop_edges).first()?;
-    let h = holes
-        .iter()
-        .flat_map(|h| sample_edges_3d(h))
-        .min_by(|a, b| {
+    let hole_pts: Vec<Point3> = holes.iter().flat_map(|h| sample_edges_3d(h)).collect();
+    let midpoint = |q: Point3| -> Option<Point3> {
+        let h = hole_pts.iter().copied().min_by(|a, b| {
             (*a - q)
                 .length()
                 .partial_cmp(&(*b - q).length())
                 .unwrap_or(std::cmp::Ordering::Equal)
         })?;
-    Some(q + (h - q) * 0.5)
+        Some(q + (h - q) * 0.5)
+    };
+    let samples = sample_edges_3d(loop_edges);
+    let first = midpoint(*samples.first()?);
+    let FaceSurface::Plane { normal, .. } = surface else {
+        return first;
+    };
+    let frame = PlaneFrame::from_normal_and_point(*normal, *samples.first()?);
+    let flat = |edges: &[OrientedPCurveEdge]| -> Vec<Point2> {
+        loop_polygon_3d(edges)
+            .into_iter()
+            .map(|p| frame.project(p))
+            .collect()
+    };
+    let outer = flat(loop_edges);
+    let hole_polys: Vec<Vec<Point2>> = holes.iter().map(|h| flat(h)).collect();
+    let in_ring = |p: Point3| {
+        let uv = frame.project(p);
+        super::super::classify_2d::point_in_polygon_2d(uv, &outer)
+            && !hole_polys
+                .iter()
+                .any(|h| super::super::classify_2d::point_in_polygon_2d(uv, h))
+    };
+    samples
+        .iter()
+        .filter_map(|&q| midpoint(q))
+        .find(|&m| in_ring(m))
+        .or(first)
+}
+
+/// A loop's vertices in traversal order, with its curved edges sampled
+/// between them.
+fn loop_polygon_3d(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
+    let mut pts = Vec::new();
+    for e in edges {
+        pts.push(e.start_3d);
+        if matches!(e.curve_3d, EdgeCurve::Line) {
+            continue;
+        }
+        let (from, to) = natural_endpoints(e);
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
+        let mut span: Vec<Point3> = (1..16)
+            .map(|k| {
+                e.curve_3d
+                    .evaluate_with_endpoints(t0 + (t1 - t0) * f64::from(k) / 16.0, from, to)
+            })
+            .collect();
+        if !e.forward {
+            span.reverse();
+        }
+        pts.extend(span);
+    }
+    pts
 }
 
 /// True when an internal section loop and a pre-existing inner wire (both
@@ -5605,7 +5659,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
         FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, arc_covers_segment,
-        point_in_hole_loops_uv,
+        between_loop_and_holes, point_in_hole_loops_uv,
     };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -5650,6 +5704,39 @@ mod tests {
             source_edge_idx: None,
             pave_block_id: None,
         }
+    }
+
+    /// A ring whose outline has a mouth reaching in toward its hole, as a
+    /// glyph's "e" does: from the mouth's foot, the midpoint toward the
+    /// nearest hole point lies in the mouth, off the ring.
+    #[test]
+    fn a_ring_point_stays_off_its_mouth() {
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let chain = |pts: &[Point3]| -> Vec<OrientedPCurveEdge> {
+            (0..pts.len())
+                .map(|i| line_chord(pts[i], pts[(i + 1) % pts.len()]))
+                .collect()
+        };
+        let outer = chain(&[
+            p(0.0, 4.0),
+            p(6.0, 4.0),
+            p(6.0, 6.0),
+            p(0.0, 6.0),
+            p(0.0, 10.0),
+            p(10.0, 10.0),
+            p(10.0, 0.0),
+            p(0.0, 0.0),
+        ]);
+        let hole = chain(&[p(7.0, 4.0), p(7.0, 6.0), p(9.0, 6.0), p(9.0, 4.0)]);
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let q = between_loop_and_holes(&plane, &outer, &[hole]).expect("a point");
+        let in_mouth = q.x() < 6.0 && q.y() > 4.0 && q.y() < 6.0;
+        let in_hole = q.x() > 7.0 && q.x() < 9.0 && q.y() > 4.0 && q.y() < 6.0;
+        let in_square = q.x() > 0.0 && q.x() < 10.0 && q.y() > 0.0 && q.y() < 10.0;
+        assert!(in_square && !in_mouth && !in_hole, "{q:?} is off the ring");
     }
 
     #[test]
