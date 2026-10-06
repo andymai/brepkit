@@ -61,7 +61,7 @@ const SEED_CLEARANCE: f64 = 1e-7;
 
 /// A hole's boundary flattened into the plane frame, each line a segment and
 /// each circle or ellipse the arc it is. `None` when an edge is a NURBS curve.
-fn exact_hole(
+pub(super) fn exact_hole(
     hole: &[OrientedPCurveEdge],
     frame: &super::super::plane_frame::PlaneFrame,
 ) -> Option<Vec<Boundary2>> {
