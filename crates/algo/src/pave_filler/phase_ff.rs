@@ -6252,6 +6252,38 @@ fn circle_exits_plane_boundary(
 
 /// Where a closed section circle meets a face's outer boundary: each hit's
 /// circle parameter, point, and the boundary edge it lies on.
+/// Where a line parallel to `circle`'s axis crosses the circle, when it
+/// stands on the circle's cylinder only to a fit's accuracy: a fitted wall's
+/// rulings (a glyph's rounded corner) sit a few microns off the cylinder its
+/// arcs were fitted to, past the exact crossing test, yet they bound the very
+/// face the circle is cut from. The crossing is taken on the circle.
+fn ruling_crossing(
+    circle: &brepkit_math::curves::Circle3D,
+    a: Point3,
+    b: Point3,
+    tol: Tolerance,
+) -> Option<(f64, Point3)> {
+    const FIT_BAND: f64 = 1e-4;
+    let n = circle.normal();
+    let d = b - a;
+    let len = d.length();
+    if len < tol.linear || (d.dot(n) / len).abs() < 1.0 - 1e-9 {
+        return None;
+    }
+    let (h0, h1) = ((a - circle.center()).dot(n), (b - circle.center()).dot(n));
+    if h0.min(h1) > tol.linear || h0.max(h1) < -tol.linear {
+        return None;
+    }
+    let v = a - circle.center();
+    let radial = v - n * v.dot(n);
+    let r = radial.length();
+    if (r - circle.radius()).abs() > FIT_BAND || r < tol.linear {
+        return None;
+    }
+    let t = circle.project(a);
+    Some((t, circle.evaluate(t)))
+}
+
 fn circle_face_hits(
     topo: &Topology,
     fid: FaceId,
@@ -6288,6 +6320,11 @@ fn circle_face_hits(
             EdgeCurve::Line => {
                 for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
                     edge_hits.push((t, p, Some(oe.edge())));
+                }
+                if edge_hits.is_empty()
+                    && let Some(hit) = ruling_crossing(circle, sv.point(), ev.point(), tol)
+                {
+                    edge_hits.push((hit.0, hit.1, Some(oe.edge())));
                 }
             }
             // Arc boundary edges (a plane face rimmed by a cone/cylinder
@@ -7833,6 +7870,30 @@ mod tests {
             ])
         };
         (mk(a), mk(b))
+    }
+
+    /// A rounded glyph corner's wall is fitted: its rulings stand microns off
+    /// the cylinder its arcs were fitted to, and the plate's top circle has to
+    /// cross them there all the same.
+    #[test]
+    fn a_fitted_ruling_crosses_its_circle() {
+        let circle = unit_circle_xy();
+        let tol = Tolerance::default();
+        let off = |x: f64, z: f64| Point3::new(x, 0.0, z);
+        assert!(
+            circle
+                .intersect_segment(off(1.0 + 1e-5, -1.0), off(1.0 + 1e-5, 1.0), tol.linear)
+                .is_empty(),
+            "the exact test misses the fitted ruling"
+        );
+        let (t, p) = ruling_crossing(&circle, off(1.0 + 1e-5, -1.0), off(1.0 + 1e-5, 1.0), tol)
+            .expect("a crossing");
+        assert!(
+            t.abs() < 1e-9 && (p - off(1.0, 0.0)).length() < 1e-12,
+            "{t} {p:?}"
+        );
+        assert!(ruling_crossing(&circle, off(1.01, -1.0), off(1.01, 1.0), tol).is_none());
+        assert!(ruling_crossing(&circle, off(1.0, 0.5), off(1.0, 1.0), tol).is_none());
     }
 
     fn unit_circle_xy() -> brepkit_math::curves::Circle3D {
