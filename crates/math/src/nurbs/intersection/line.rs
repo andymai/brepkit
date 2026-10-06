@@ -130,12 +130,26 @@ fn refine_line_surface_point(
             });
         }
 
-        // Newton step in (u, v) space.
         let derivs = surface.derivatives(u, v, 1);
         let su = derivs[1][0];
         let sv = derivs[0][1];
 
         let r = Vec3::new(residual.x(), residual.y(), residual.z());
+
+        // Newton on S(u, v) = o + t d in (u, v, t). The projection step below
+        // only converges linearly along a ray oblique to the surface, and its
+        // loose roots from neighbouring seeds land a few 1e-5 apart, past the
+        // dedup: one crossing counted several times flips a ray's parity.
+        let back = -ray_dir;
+        let det = su.dot(sv.cross(back));
+        if det.abs() > 1e-6 * su.length() * sv.length() * back.length() {
+            let rhs = -r;
+            u = (u + rhs.dot(sv.cross(back)) / det).clamp(u_min, u_max);
+            v = (v + su.dot(rhs.cross(back)) / det).clamp(v_min, v_max);
+            continue;
+        }
+
+        // A ray grazing the surface: step in (u, v) toward its foot.
 
         // Solve 2x2 system: [su*su, su*sv; sv*su, sv*sv] * [du, dv] = [su*r, sv*r]
         let a11 = su.dot(su);
