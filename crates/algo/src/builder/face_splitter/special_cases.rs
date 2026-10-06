@@ -4378,6 +4378,17 @@ fn loop_polygon_uv(
         }
         let (from, to) = natural_endpoints(e);
         let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
+        if let EdgeCurve::NurbsCurve(curve) = &e.curve_3d
+            && let Some((mut pts, bound)) = nurbs_hull_polygon(curve, t0, t1, frame, steps)
+        {
+            if !e.forward {
+                pts.reverse();
+            }
+            pts.pop();
+            poly.extend(pts);
+            sag = sag.max(bound);
+            continue;
+        }
         let mut pts: Vec<Point2> = (0..=2 * steps)
             .map(|k| {
                 let t = (t1 - t0).mul_add(f64::from(k) / f64::from(2 * steps), t0);
@@ -4387,15 +4398,95 @@ fn loop_polygon_uv(
         if !e.forward {
             pts.reverse();
         }
+        // A circle's arc stands farthest off its chord at its midpoint; an
+        // ellipse's need not, so its chords also take the sag of an arc at
+        // its tightest radius of curvature.
+        let tightest = match &e.curve_3d {
+            EdgeCurve::Ellipse(el) => Some(el.semi_minor().powi(2) / el.semi_major()),
+            _ => None,
+        };
         for k in (1..pts.len() - 1).step_by(2) {
             sag = sag.max(super::super::classify_2d::distance_to_polygon_boundary(
                 pts[k],
                 &[pts[k - 1], pts[k + 1]],
             ));
+            if let Some(r) = tightest {
+                let half = 0.5 * (pts[k + 1] - pts[k - 1]).length();
+                sag = sag.max(if half < r {
+                    r - (r * r - half * half).sqrt()
+                } else {
+                    2.0 * half
+                });
+            }
         }
         poly.extend(pts.iter().step_by(2).take(steps as usize));
     }
     (poly, sag)
+}
+
+/// A NURBS edge's `[t0, t1]` span in a plane frame as a polygon through the
+/// ends of its Bezier pieces, each piece cut into `steps` per edge or more,
+/// from `t0` to `t1`, and a bound on how far the curve stands off it: a piece
+/// lies in the hull of its control points (all weights positive), so off its
+/// chord by no more than its farthest control point. `None` when a weight is
+/// not positive or the span cannot be cut out.
+fn nurbs_hull_polygon(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+    frame: &PlaneFrame,
+    steps: u32,
+) -> Option<(Vec<Point2>, f64)> {
+    use brepkit_math::nurbs::decompose::curve_to_bezier_segments;
+    use brepkit_math::nurbs::knot_ops::curve_split;
+
+    if t1 <= t0 || curve.weights().iter().any(|&w| w <= 0.0) {
+        return None;
+    }
+    let (d0, d1) = curve.domain();
+    let eps = (d1 - d0).abs() * 1e-12;
+    let mut span = curve.clone();
+    if t1 < d1 - eps {
+        span = curve_split(&span, t1).ok()?.0;
+    }
+    if t0 > d0 + eps {
+        span = curve_split(&span, t0).ok()?.1;
+    }
+    let beziers = curve_to_bezier_segments(&span).ok()?;
+    #[allow(clippy::cast_possible_truncation)]
+    let per = (steps as usize).div_ceil(beziers.len().max(1)).max(1);
+    let mut pts = Vec::new();
+    let mut sag = 0.0_f64;
+    for bezier in &beziers {
+        let (b0, b1) = bezier.domain();
+        let mut rest = bezier.clone();
+        for k in 1..=per {
+            let piece = if k == per {
+                rest.clone()
+            } else {
+                #[allow(clippy::cast_precision_loss)]
+                let at = (b1 - b0).mul_add(k as f64 / per as f64, b0);
+                let (head, tail) = curve_split(&rest, at).ok()?;
+                rest = tail;
+                head
+            };
+            let hull: Vec<Point2> = piece
+                .control_points()
+                .iter()
+                .map(|&p| frame.project(p))
+                .collect();
+            let (first, last) = (*hull.first()?, *hull.last()?);
+            for &p in &hull {
+                sag = sag.max(super::super::classify_2d::distance_to_polygon_boundary(
+                    p,
+                    &[first, last],
+                ));
+            }
+            pts.push(first);
+        }
+    }
+    pts.push(frame.project(span.control_points().last().copied()?));
+    Some((pts, sag))
 }
 
 /// True when an internal section loop and a pre-existing inner wire (both
@@ -5853,6 +5944,58 @@ mod tests {
         let q = between_loop_and_holes(&plane, &circle(1.0), &[circle(0.9999)]).expect("a point");
         let r = (q - Point3::new(0.0, 0.0, 0.0)).length();
         assert!(r > 0.9999 && r < 1.0, "{q:?} is off the ring (r = {r})");
+    }
+
+    /// A NURBS edge whose bump lives in two short knot spans, which samples
+    /// even in its parameter step over: the polygon and its bound still hold
+    /// every point of the curve.
+    #[test]
+    fn a_loop_polygon_bounds_a_bump_between_its_samples() {
+        let pt = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let bump = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 0.5, 0.505, 0.51, 1.0, 1.0, 1.0],
+            vec![
+                pt(0.0, 0.0),
+                pt(0.4, 0.0),
+                pt(0.505, 1.0),
+                pt(0.51, 0.0),
+                pt(0.6, 0.0),
+                pt(1.0, 0.0),
+            ],
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let line = |a: Point3, b: Point3| OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(0.0, 0.0),
+            start_3d: a,
+            end_3d: b,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let edges = vec![
+            OrientedPCurveEdge {
+                curve_3d: EdgeCurve::NurbsCurve(bump.clone()),
+                ..line(pt(0.0, 0.0), pt(1.0, 0.0))
+            },
+            line(pt(1.0, 0.0), pt(1.0, -1.0)),
+            line(pt(1.0, -1.0), pt(0.0, -1.0)),
+            line(pt(0.0, -1.0), pt(0.0, 0.0)),
+        ];
+        let frame = PlaneFrame::from_normal_and_point(Vec3::new(0.0, 0.0, 1.0), pt(0.0, 0.0));
+        let (poly, sag) = super::loop_polygon_uv(&edges, &frame, 16);
+        for k in 0..=4000 {
+            let q = frame.project(bump.evaluate(f64::from(k) / 4000.0));
+            let off = crate::builder::classify_2d::distance_to_polygon_boundary(q, &poly);
+            assert!(
+                off <= sag + 1e-12,
+                "{q:?} stands {off} off the polygon, bound {sag}"
+            );
+        }
     }
 
     /// A one-edge round outline whose seam vertex sits half a turn from the
