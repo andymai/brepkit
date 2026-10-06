@@ -57,7 +57,7 @@ pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveE
 }
 
 /// How near a hole's boundary a seed may lie and still be read outside it.
-const SEED_CLEARANCE: f64 = 1e-7;
+pub(super) const SEED_CLEARANCE: f64 = 1e-7;
 
 /// A hole's boundary flattened into the plane frame, each line a segment and
 /// each circle or ellipse the arc it is. `None` when an edge is a NURBS curve.
