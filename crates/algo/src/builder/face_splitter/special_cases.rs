@@ -3919,12 +3919,20 @@ pub(super) fn split_face_with_internal_loops(
                 nested.push(reverse_loop_edges(&loops[lj]));
             }
         }
-        let disc_interior = if nested.is_empty() {
-            ring_interiors
-                .as_ref()
-                .map_or(disc_interior, |(discs, _)| discs[li])
+        // A plane ring with no point found on it leaves the generic interior
+        // search to the classifier: the disc's own point lies in its hole.
+        let interior = if nested.is_empty() {
+            Some(
+                ring_interiors
+                    .as_ref()
+                    .map_or(disc_interior, |(discs, _)| discs[li]),
+            )
         } else {
-            between_loop_and_holes(surface, loop_edges, &nested).map_or(disc_interior, into_solid)
+            match between_loop_and_holes(surface, loop_edges, &nested) {
+                Some(p) => Some(into_solid(p)),
+                None if matches!(surface, FaceSurface::Plane { .. }) => None,
+                None => Some(disc_interior),
+            }
         };
         result.push(SplitSubFace {
             surface: surface.clone(),
@@ -3933,7 +3941,7 @@ pub(super) fn split_face_with_internal_loops(
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: Some(disc_interior),
+            precomputed_interior: interior,
         });
 
         // Build the outside sub-face's hole: the merged union outline when
@@ -4272,19 +4280,34 @@ fn between_loop_and_holes(
         return midpoint(*samples.first()?);
     };
     let frame = PlaneFrame::from_normal_and_point(*normal, *samples.first()?);
-    let outer = FlatLoop::new(loop_edges, &frame);
-    let flat_holes: Vec<FlatLoop> = holes.iter().map(|h| FlatLoop::new(h, &frame)).collect();
-    let on_ring = |uv: Point2| outer.holds(uv) && flat_holes.iter().all(|h| h.excludes(uv));
-    if let Some(m) = samples
-        .iter()
-        .filter_map(|&q| midpoint(q))
-        .find(|&m| on_ring(frame.project(m)))
-    {
-        return Some(m);
+    // A ring thinner than its curves' chord sag clears no point at the
+    // coarse sampling: sample finer before giving up.
+    for steps in [16, 64, 256] {
+        let outer = FlatLoop::new(loop_edges, &frame, steps);
+        let flat_holes: Vec<FlatLoop> = holes
+            .iter()
+            .map(|h| FlatLoop::new(h, &frame, steps))
+            .collect();
+        let on_ring = |uv: Point2| outer.holds(uv) && flat_holes.iter().all(|h| h.excludes(uv));
+        if let Some(m) = samples
+            .iter()
+            .filter_map(|&q| midpoint(q))
+            .find(|&m| on_ring(frame.project(m)))
+        {
+            return Some(m);
+        }
+        let (outer_pts, _) = loop_polygon_uv(loop_edges, &frame, steps);
+        let seed = super::containment::find_point_outside_holes(&outer_pts, holes, Some(&frame));
+        if on_ring(seed) {
+            return Some(frame.evaluate(seed.x(), seed.y()));
+        }
+        if matches!(outer, FlatLoop::Exact(_))
+            && flat_holes.iter().all(|h| matches!(h, FlatLoop::Exact(_)))
+        {
+            break;
+        }
     }
-    let (outer_pts, _) = loop_polygon_uv(loop_edges, &frame);
-    let seed = super::containment::find_point_outside_holes(&outer_pts, holes, Some(&frame));
-    on_ring(seed).then(|| frame.evaluate(seed.x(), seed.y()))
+    None
 }
 
 /// A loop seen in a plane frame: exact pieces when its edges are lines and
@@ -4296,10 +4319,10 @@ enum FlatLoop {
 }
 
 impl FlatLoop {
-    fn new(edges: &[OrientedPCurveEdge], frame: &PlaneFrame) -> Self {
+    fn new(edges: &[OrientedPCurveEdge], frame: &PlaneFrame, steps: u32) -> Self {
         super::containment::exact_hole(edges, frame).map_or_else(
             || {
-                let (poly, sag) = loop_polygon_uv(edges, frame);
+                let (poly, sag) = loop_polygon_uv(edges, frame, steps);
                 Self::Sampled(poly, sag)
             },
             Self::Exact,
@@ -4341,8 +4364,11 @@ impl FlatLoop {
 /// edges sampled, and the farthest any of their chords stands off them. Every
 /// point is the curve's own: a closed edge's span starts at its parameter
 /// origin, not at the vertex the loop starts from.
-fn loop_polygon_uv(edges: &[OrientedPCurveEdge], frame: &PlaneFrame) -> (Vec<Point2>, f64) {
-    const STEPS: u32 = 16;
+fn loop_polygon_uv(
+    edges: &[OrientedPCurveEdge],
+    frame: &PlaneFrame,
+    steps: u32,
+) -> (Vec<Point2>, f64) {
     let mut poly = Vec::new();
     let mut sag = 0.0_f64;
     for e in edges {
@@ -4352,9 +4378,9 @@ fn loop_polygon_uv(edges: &[OrientedPCurveEdge], frame: &PlaneFrame) -> (Vec<Poi
         }
         let (from, to) = natural_endpoints(e);
         let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
-        let mut pts: Vec<Point2> = (0..=2 * STEPS)
+        let mut pts: Vec<Point2> = (0..=2 * steps)
             .map(|k| {
-                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(2 * STEPS), t0);
+                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(2 * steps), t0);
                 frame.project(e.curve_3d.evaluate_with_endpoints(t, from, to))
             })
             .collect();
@@ -4367,7 +4393,7 @@ fn loop_polygon_uv(edges: &[OrientedPCurveEdge], frame: &PlaneFrame) -> (Vec<Poi
                 &[pts[k - 1], pts[k + 1]],
             ));
         }
-        poly.extend(pts.iter().step_by(2).take(STEPS as usize));
+        poly.extend(pts.iter().step_by(2).take(steps as usize));
     }
     (poly, sag)
 }
@@ -5785,6 +5811,48 @@ mod tests {
         let q = between_loop_and_holes(&plane, &outer, &holes).expect("a point");
         assert!((q - center).length() > 0.999, "{q:?} is in the hole");
         assert!(q.x() > 0.0 && q.x() < 10.0 && q.y() > 0.0 && q.y() < 10.0);
+    }
+
+    /// A ring thinner than its NURBS curves' chord sag at the first
+    /// sampling: concentric circles of radius 1 and 0.9999, each four
+    /// rational quadratic arcs.
+    #[test]
+    fn a_ring_point_lands_on_a_ring_thinner_than_its_chords_sag() {
+        let circle = |r: f64| -> Vec<OrientedPCurveEdge> {
+            (0..4)
+                .map(|k| {
+                    let a = f64::from(k) * std::f64::consts::FRAC_PI_2;
+                    let at = |t: f64| Point3::new(r * t.cos(), r * t.sin(), 0.0);
+                    let corner = Point3::new(r * (a.cos() - a.sin()), r * (a.sin() + a.cos()), 0.0);
+                    let (p0, p2) = (at(a), at(a + std::f64::consts::FRAC_PI_2));
+                    let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                        2,
+                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        vec![p0, corner, p2],
+                        vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+                    )
+                    .unwrap();
+                    OrientedPCurveEdge {
+                        curve_3d: EdgeCurve::NurbsCurve(curve),
+                        pcurve: dummy_pcurve(),
+                        start_uv: Point2::new(0.0, 0.0),
+                        end_uv: Point2::new(0.0, 0.0),
+                        start_3d: p0,
+                        end_3d: p2,
+                        forward: true,
+                        source_edge_idx: None,
+                        pave_block_id: None,
+                    }
+                })
+                .collect()
+        };
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let q = between_loop_and_holes(&plane, &circle(1.0), &[circle(0.9999)]).expect("a point");
+        let r = (q - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(r > 0.9999 && r < 1.0, "{q:?} is off the ring (r = {r})");
     }
 
     /// A one-edge round outline whose seam vertex sits half a turn from the
