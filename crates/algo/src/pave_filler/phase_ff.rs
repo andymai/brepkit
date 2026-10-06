@@ -6738,6 +6738,9 @@ fn closed_circle_sections(
 /// four points 83 and 97 degrees apart, so each hit must also be a vertex of
 /// the boundary, and a boundary that bulges past the circle between its
 /// vertices crosses it there, so every edge's midpoint must lie within it.
+/// The boundary stands for the circle only on a curved face (a sphere's
+/// chordal equator): a plane face's inscribed polygon is its true edge, and
+/// the circle in its plane runs outside it between the corners.
 fn boundary_is_inscribed(
     topo: &Topology,
     fid: FaceId,
@@ -6745,6 +6748,12 @@ fn boundary_is_inscribed(
     circle: &brepkit_math::curves::Circle3D,
     tol: Tolerance,
 ) -> bool {
+    if topo
+        .face(fid)
+        .is_ok_and(|face| matches!(face.surface(), FaceSurface::Plane { .. }))
+    {
+        return false;
+    }
     let slack = tol.linear * 100.0;
     let at_vertices = hits.iter().all(|&(_, p, src)| {
         src.and_then(|e| topo.edge(e).ok()).is_some_and(|edge| {
@@ -8279,11 +8288,12 @@ mod tests {
     }
 
     /// A unit circle in the plane of a square inscribed in it meets the
-    /// square only at its corners, which are not crossings. A hexagon through
-    /// the same four points whose other two corners lie outside the circle
-    /// crosses it at each of them, and keeps them.
+    /// square only at its corners, and a hexagon through the same four points
+    /// whose other two corners lie outside the circle crosses it at each of
+    /// them. A plane face's boundary is its true edge, so both keep the four
+    /// corners: between them the circle runs outside the square.
     #[test]
-    fn corners_on_the_circle_are_crossings_unless_the_boundary_stays_inside() {
+    fn a_plane_face_keeps_its_corners_on_a_section_circle() {
         use brepkit_math::curves::Circle3D;
         use brepkit_topology::builder::make_planar_face;
 
@@ -8299,7 +8309,7 @@ mod tests {
             pt(-1.06, -1.06),
             pt(0.0, -1.0),
         ];
-        for (boundary, crosses) in [(&corners[..], false), (&lobed[..], true)] {
+        for boundary in [&corners[..], &lobed[..]] {
             let mut topo = Topology::new();
             let face = make_planar_face(&mut topo, boundary, 1e-7).unwrap();
             let other = make_planar_face(&mut topo, &far, 1e-7).unwrap();
@@ -8307,7 +8317,7 @@ mod tests {
                 closed_circle_boundary_crossings(&topo, face, other, &circle, Tolerance::default());
             for c in corners {
                 let kept = hits.iter().any(|&(_, p)| (p - c).length() < 1e-6);
-                assert_eq!(kept, crosses, "{} corners: {c:?}", boundary.len());
+                assert!(kept, "{} corners: {c:?}", boundary.len());
             }
         }
     }

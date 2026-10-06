@@ -4979,6 +4979,62 @@ fn fuse_slotted_plate_onto_a_cell_reaching_into_the_slot_is_exact() {
     );
 }
 
+/// A prism on a regular polygon inscribed in a frustum's top rim, standing
+/// on that rim. The prism's bottom face meets the frustum's cone in the rim
+/// circle, which touches the polygon only at its corners and runs outside it
+/// between them. The face's hits on the circle, evenly spread corners with
+/// every edge inside the circle, read as a boundary standing for the circle
+/// (a sphere's chordal equator), so the whole circle was kept as a section
+/// on the polygon and carved it into a disc larger than the face.
+#[test]
+fn fuse_polygon_prism_standing_on_a_frustum_rim_is_exact() {
+    let mut topo = Topology::new();
+    let (r_top, sides) = (21.0_f64, 24_usize);
+    let frustum = crate::primitives::make_cone(&mut topo, 18.0, r_top, 3.0).unwrap();
+    let vids: Vec<_> = (0..sides)
+        .map(|k| {
+            #[allow(clippy::cast_precision_loss)]
+            let a = std::f64::consts::TAU * k as f64 / sides as f64;
+            topo.add_vertex(Vertex::new(
+                Point3::new(r_top * a.cos(), r_top * a.sin(), 3.0),
+                1e-7,
+            ))
+        })
+        .collect();
+    let eids: Vec<EdgeId> = (0..sides)
+        .map(|k| topo.add_edge(Edge::new(vids[k], vids[(k + 1) % sides], EdgeCurve::Line)))
+        .collect();
+    let wire = Wire::new(
+        eids.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let base = brepkit_topology::builder::make_face_from_wire(&mut topo, wid).unwrap();
+    let prism = crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+
+    let result = brepkit_algo::gfa::boolean(
+        &mut topo,
+        brepkit_algo::bop::BooleanOp::Fuse,
+        frustum,
+        prism,
+    )
+    .unwrap();
+
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    #[allow(clippy::cast_precision_loss)]
+    let polygon = 0.5 * sides as f64 * r_top * r_top * (std::f64::consts::TAU / sides as f64).sin();
+    let frustum_volume =
+        std::f64::consts::PI * 3.0 / 3.0 * (18.0_f64.mul_add(18.0, 18.0 * r_top) + r_top * r_top);
+    let expected = frustum_volume + polygon;
+    let vol = crate::measure::oriented_solid_volume(&topo, result, 0.001).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-4,
+        "fused volume {vol:.3} != expected {expected:.3}"
+    );
+}
+
 /// A tube standing on a plate, sunk 0.01 mm into it (the tool's assembly
 /// parts): the plate's top face receives the tube's wall circle and, inside
 /// it, the bore circle. The wall disc must carry the bore circle as its hole
