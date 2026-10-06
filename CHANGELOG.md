@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.34](https://github.com/andymai/brepkit/compare/v4.1.33...v4.1.34) (2026-10-06)
+
+
+### Bug Fixes
+
+* **algo:** fuse overlapping scoop ramps and clip a scoop into a tapered bin exactly ([#1991](https://github.com/andymai/brepkit/issues/1991)) ([015b7c7](https://github.com/andymai/brepkit/commit/015b7c7dee1ae0b193b2e6a4b01a9d9ded5f6b70))
+
 ## [4.1.33](https://github.com/andymai/brepkit/compare/v4.1.32...v4.1.33) (2026-10-05)
 
 
