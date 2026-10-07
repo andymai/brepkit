@@ -811,11 +811,11 @@ pub fn perform(
                 .map(|raw| {
                     pull_ends_onto_corners(topo, arena, (fa, surf_a), (fb, surf_b), raw, tol)
                 })
-                .map(|raw| {
+                .filter_map(|raw| {
                     if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
                         onto_lying_boundary_edge(topo, (fa, surf_a), (fb, surf_b), raw, tol)
                     } else {
-                        raw
+                        Some(raw)
                     }
                 })
                 .flat_map(|raw| split_lens_off_boundary_edge(topo, fa, fb, raw, tol))
@@ -1165,27 +1165,27 @@ fn face_boundary_edges(
         .filter_map(|oe| topo.edge(oe.edge()).ok())
 }
 
-/// A marched section running end to end along an analytic boundary edge of
-/// one face that lies on the other face's surface, re-emitted as that edge.
+/// A marched section lying along an analytic boundary edge of one face that
+/// lies on the other face's surface, re-emitted as that edge or the stretch
+/// of it the section covers, or dropped when that stretch is shorter than
+/// the junction band.
 ///
 /// The two faces meet along the edge itself; where one of them leaves the
 /// other tangentially there (a taper envelope flush on a wall), the march
-/// re-traces the edge up to 1e-4 off with its ends just as far off its
-/// vertices, and the face holding the edge in its interior is split twice
-/// along it into a sliver lens. Carrying the edge's own curve and ends lets
-/// `link_existing` fold the section into the edge's block.
+/// re-traces the edge up to 1e-4 off, end to end or only part of the way
+/// with stubs left at a corner, and the face holding the edge in its
+/// interior is split along both into sliver lenses and zero-length edges.
+/// Carrying the edge's own curve lets `link_existing` fold the section into
+/// the edge's block.
 fn onto_lying_boundary_edge(
     topo: &Topology,
     (fa, surf_a): (FaceId, &FaceSurface),
     (fb, surf_b): (FaceId, &FaceSurface),
     raw: RawCurve,
     tol: Tolerance,
-) -> RawCurve {
+) -> Option<RawCurve> {
     const PROBES: u32 = 16;
     let band = JunctionRegistry::ADOPT_MAX;
-    if (raw.p_start - raw.p_end).length() <= band {
-        return raw;
-    }
     let probes: Vec<Point3> = (0..=PROBES)
         .map(|k| {
             let t = (raw.t_range.1 - raw.t_range.0)
@@ -1205,36 +1205,90 @@ fn onto_lying_boundary_edge(
                 continue;
             };
             let (a, b) = (va.point(), vb.point());
-            let ends_match = ((raw.p_start - a).length() <= band
-                && (raw.p_end - b).length() <= band)
-                || ((raw.p_start - b).length() <= band && (raw.p_end - a).length() <= band);
-            if !ends_match || (a - b).length() <= band {
+            if (a - b).length() <= band
+                || !edge_hull_box(topo, edge).is_some_and(|hull| {
+                    let reach = Vec3::new(band, band, band);
+                    let hull = Aabb3 {
+                        min: hull.min - reach,
+                        max: hull.max + reach,
+                    };
+                    hull.contains_point(raw.p_start) && hull.contains_point(raw.p_end)
+                })
+            {
                 continue;
             }
             let Some((along, sag)) = edge_chords(topo, edge) else {
                 continue;
             };
-            let on_other = along
+            if !probes
                 .iter()
-                .step_by(8)
-                .all(|&p| surface_gap(other, p).is_some_and(|g| g <= 10.0 * tol.linear));
-            if on_other
-                && probes
+                .all(|&q| polyline_gap(&along, q) <= band + sag)
+                || !along
                     .iter()
-                    .all(|&q| polyline_gap(&along, q) <= band + sag)
+                    .step_by(8)
+                    .all(|&p| surface_gap(other, p).is_some_and(|g| g <= 10.0 * tol.linear))
             {
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                return RawCurve {
-                    curve: edge.curve().clone(),
-                    bbox: raw.bbox,
-                    t_range: (t0, t1),
-                    p_start: a,
-                    p_end: b,
-                };
+                continue;
             }
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let at = |f: f64| {
+                edge.curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+            };
+            let (f_lo, f_hi) = {
+                let (fs, fe) = (
+                    polyline_fraction(&along, raw.p_start),
+                    polyline_fraction(&along, raw.p_end),
+                );
+                (fs.min(fe), fs.max(fe))
+            };
+            let (lo_at_a, hi_at_b) = (
+                (at(f_lo) - a).length() <= band,
+                (at(f_hi) - b).length() <= band,
+            );
+            let (f_lo, p_lo) = if lo_at_a { (0.0, a) } else { (f_lo, at(f_lo)) };
+            let (f_hi, p_hi) = if hi_at_b { (1.0, b) } else { (f_hi, at(f_hi)) };
+            if (p_hi - p_lo).length() <= band {
+                return None;
+            }
+            let t_range = if matches!(edge.curve(), EdgeCurve::Line) {
+                (0.0, 1.0)
+            } else {
+                ((t1 - t0).mul_add(f_lo, t0), (t1 - t0).mul_add(f_hi, t0))
+            };
+            return Some(RawCurve {
+                curve: edge.curve().clone(),
+                bbox: raw.bbox,
+                t_range,
+                p_start: p_lo,
+                p_end: p_hi,
+            });
         }
     }
-    raw
+    Some(raw)
+}
+
+/// Where `q` projects along a polyline of evenly spaced curve samples, as a
+/// fraction of the curve's domain.
+fn polyline_fraction(along: &[Point3], q: Point3) -> f64 {
+    let n = along.len().saturating_sub(1).max(1);
+    let (k, s, _) = along
+        .windows(2)
+        .enumerate()
+        .fold((0, 0.0, f64::INFINITY), |best, (k, w)| {
+            let seg = w[1] - w[0];
+            let len2 = seg.dot(seg);
+            let s = if len2 > 0.0 {
+                ((q - w[0]).dot(seg) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let gap = (q - (w[0] + seg * s)).length();
+            if gap < best.2 { (k, s, gap) } else { best }
+        });
+    #[allow(clippy::cast_precision_loss)]
+    let f = (k as f64 + s) / n as f64;
+    f
 }
 
 /// A marched section whose two ends lie on one boundary edge of either face

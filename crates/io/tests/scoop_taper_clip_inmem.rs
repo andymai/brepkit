@@ -228,3 +228,33 @@ fn the_fillet_material_and_the_clipped_scoop_meet_exactly() {
         );
     }
 }
+
+/// The same scoop against the fillet material once its rim is rounded: the
+/// envelope's leaning corner is tangent to the material's front wall along
+/// a ruling, and the march re-traces only part of that ruling with stubs at
+/// its foot, which split the wall off the ruling's own edge.
+#[test]
+fn the_rounded_fillet_material_and_the_clipped_scoop_meet_exactly() {
+    let mut topo = Topology::new();
+    let material = load(&mut topo, "rounded_fillet_material.bin");
+    let scoop = load(&mut topo, "rounded_fillet_scoop.bin");
+    let common = exact(&mut topo, BooleanOp::Intersect, material, scoop);
+    let common_swapped = exact(&mut topo, BooleanOp::Intersect, scoop, material);
+    let fused = exact(&mut topo, BooleanOp::Fuse, material, scoop);
+    let scoop_only = exact(&mut topo, BooleanOp::Cut, scoop, material);
+
+    // The scoop's NURBS faces mesh up to 0.5 off at deflection 0.001.
+    let volume = |s: SolidId| oriented_solid_volume(&topo, s, 0.001).unwrap();
+    let (a, b, c) = (volume(material), volume(scoop), volume(common));
+    for (label, got, want) in [
+        ("swapped intersect", volume(common_swapped), c),
+        ("fuse", volume(fused), a + b - c),
+        ("scoop cut", volume(scoop_only), b - c),
+        ("fuse less scoop cut", volume(fused) - volume(scoop_only), a),
+    ] {
+        assert!(
+            (got - want).abs() <= 0.75,
+            "{label} volume {got}, expected {want}"
+        );
+    }
+}
