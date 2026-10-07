@@ -1497,3 +1497,58 @@ fn planar_regions_apart_sees_strips_crossing_between_probes() {
     assert!(!super::planar_regions_apart(&topo, along, across));
     assert!(!super::planar_regions_apart(&topo, across, along));
 }
+
+/// Two halves of a split cylinder meeting along a ruling are apart; a patch
+/// overlapping another by a fifth of its area is not, though that overlap is
+/// too thin for the pass to pair them.
+#[test]
+fn coaxial_patches_read_apart_only_when_they_share_no_area() {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_8};
+    let mut topo = Topology::new();
+    let tol = Tolerance::new();
+    let a = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        0.0,
+        FRAC_PI_4,
+        13.3,
+        16.0,
+        Rank::A,
+    );
+    let half = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        FRAC_PI_4,
+        FRAC_PI_2,
+        13.3,
+        16.0,
+        Rank::A,
+    );
+    let partial = cylinder_patch(
+        &mut topo,
+        0.0,
+        0.0,
+        3.75,
+        FRAC_PI_8,
+        FRAC_PI_8 + FRAC_PI_2,
+        14.85,
+        17.55,
+        Rank::A,
+    );
+    assert!(super::analytic_regions_apart(
+        &topo,
+        a.face_id,
+        half.face_id,
+        tol
+    ));
+    assert!(!super::analytic_regions_apart(
+        &topo,
+        a.face_id,
+        partial.face_id,
+        tol
+    ));
+}
