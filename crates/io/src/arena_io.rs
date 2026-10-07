@@ -559,6 +559,28 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_keeps_floats_a_best_effort_parser_rounds_off() {
+        // Each offset parses one ulp off without exact float parsing.
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 10.0, 20.0, 30.0).unwrap();
+        brepkit_operations::transform::transform_solid(
+            &mut topo,
+            solid,
+            &brepkit_math::mat::Mat4::translation(
+                1.055_261_488_752_658_3e-14,
+                20.029_999_999_999_966,
+                -7.035_076_591_683_869e-14,
+            ),
+        )
+        .unwrap();
+
+        let bytes = serialize_solid(&topo, solid).unwrap();
+        let mut topo2 = Topology::new();
+        let solid2 = deserialize_solid(&bytes, &mut topo2).unwrap();
+        assert!(serialize_solid(&topo2, solid2).unwrap() == bytes);
+    }
+
+    #[test]
     fn roundtrip_cylinder_preserves_analytic_surface_exact() {
         let mut topo = Topology::new();
         let solid = make_cylinder(&mut topo, 7.5, 12.5).unwrap();
