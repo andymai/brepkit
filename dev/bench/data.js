@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791346898535,
+  "lastUpdate": 1791347057719,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52541,6 +52541,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36357048,
             "range": "± 155237",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7a488904ea397a6b073563e5ddc5d47e727486e1",
+          "message": "fix(algo): keep both halves of a split coaxial wall under one coincident face (#2000)\n\nThe same-domain pass now preserves the upper cavity corner pieces when\ncutting the gridfinity sliding lid plug from its bin.\n\n## What was wrong\n\nIn `slideLidSeating.scenario.test.ts`, the sliding lid's plug sits in\nthe bin's cavity and touches its walls. The cut left 16 free edges and\nfell back to a mesh in every test in that file.\n\nEach cavity corner cylinder is split at 45 degrees into two halves,\nwhile the plug's corner is one quarter. The same-domain pass in\n`crates/algo/src/builder/same_domain.rs` grouped all three surfaces. A\nsecond member of a rank stays as a tile only when it lies beside the\nothers, but that test read plane faces alone. The other cylinder half\nwas therefore treated as a within-rank duplicate, and its upper piece\nwent missing at every corner.\n\n## Change\n\nA coaxial analytic member now counts as lying beside the other members\nwhen it shares no area with them.\n\n## Verification\n\nThe regression test\n`cut_a_plug_touching_a_cavity_with_split_corners_leaves_the_box` was\nadded to `crates/operations/src/boolean/tests.rs`.\n\nWith this change alone on brepkit 4.1.33 (tool commit `a4945a2aab`,\n`BREPJS_KERNEL=brepkit`), `slideLidSeating.scenario.test.ts` fails 2 of\n16 tests, against 11 on brepkit 4.1.33.\n\n- Clippy is clean for `brepkit-math`, `brepkit-algo`, `brepkit-blend`,\n`brepkit-operations`, and `brepkit-io` with all targets.\n- Nextest runs 2996 tests across `brepkit-topology`, `brepkit-math`,\n`brepkit-algo`, `brepkit-blend`, `brepkit-operations`, `brepkit-io`, and\n`brepkit-wasm`, with all tests passing.\n- `pose_sweep` and `truth_audit` match a main baseline exactly.\n- `approx_census` differs only for the face pair named in an already\nfailing NURBS loft offset error, which also varies between main runs.\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` gains a closed entry for this case.",
+          "timestamp": "2026-10-07T04:18:58Z",
+          "tree_id": "7c7fbe9e18150e7432978e34847b9f31d13406e3",
+          "url": "https://github.com/andymai/brepkit/commit/7a488904ea397a6b073563e5ddc5d47e727486e1"
+        },
+        "date": 1791347050841,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 873400,
+            "range": "± 18809",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 916948,
+            "range": "± 1241",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11060,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 682955,
+            "range": "± 14288",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36232665,
+            "range": "± 68207",
             "unit": "ns/iter"
           }
         ]
