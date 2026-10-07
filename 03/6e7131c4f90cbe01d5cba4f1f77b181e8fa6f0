@@ -1,0 +1,26 @@
+crates/io/tests/counterbore_cap_circle_cut_inmem.rs
+  s_a8677c67f85a06::t_e468610adb11d8 57
+  s_a8677c67f85a06::t_1e5db8153bee5c 1-56,58-66
+crates/io/tests/data/magnet_screw_base.bin
+  s_a8677c67f85a06::t_6bc37a49f27323 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_e468610adb11d8 5188,5211,5213,5231,5379-5386,5392,5414,5431-5432
+crates/io/tests/data/magnet_screw_counterbore.bin
+  s_a8677c67f85a06::t_6bc37a49f27323 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "036e7131c4f90cbe01d5cba4f1f77b181e8fa6f0",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
