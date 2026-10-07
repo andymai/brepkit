@@ -314,25 +314,28 @@ pub(super) fn sample_edge(
     };
 
     // A fitted curve's evaluated end can miss its vertex by the fit error (a
-    // marched section's end sits ~1e-8 off the pave), enough to land in
-    // another merge cell than the neighbouring edge's end: its ends are the
-    // vertices every edge meeting there shares. Its samples already run
-    // start to end; the analytic curves' ends are exact.
+    // marched section's end sits ~1e-8 off the pave, a fillet's contact curve
+    // 1.4e-6 off its corner), enough to land in another merge cell than the
+    // neighbouring edge's end and leave a sliver an exporter collapses: its
+    // ends are the vertices every edge meeting there shares. A hundredth of
+    // the deflection keeps the mesh within its own error. Its samples already
+    // run start to end; the analytic curves' ends are exact.
     if !matches!(edge.curve(), EdgeCurve::NurbsCurve(_)) {
         return Ok(points);
     }
+    let snap = (1e-2 * deflection).max(1e-6);
     let mut points = points;
     let (start, end) = (
         topo.vertex(edge.start())?.point(),
         topo.vertex(edge.end())?.point(),
     );
     if let Some(first) = points.first_mut()
-        && (*first - start).length() < 1e-6
+        && (*first - start).length() < snap
     {
         *first = start;
     }
     if let Some(last) = points.last_mut()
-        && (*last - end).length() < 1e-6
+        && (*last - end).length() < snap
     {
         *last = end;
     }
@@ -543,4 +546,36 @@ pub(super) fn sample_wire_positions(
     }
 
     Ok(positions)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+
+    #[test]
+    fn a_fitted_edge_meshes_to_its_vertices() {
+        let mut topo = Topology::new();
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+        // The curve's end misses its vertex by a fillet contact curve's fit
+        // error.
+        let curve = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![a, Point3::new(1.0, 0.0, 1.4e-6)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let (va, vb) = (
+            topo.add_vertex(Vertex::new(a, 1e-7)),
+            topo.add_vertex(Vertex::new(b, 1e-7)),
+        );
+        let edge = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(curve)));
+        let points = sample_edge(&topo, topo.edge(edge).unwrap(), 0.01, 0.3, false).unwrap();
+        assert_eq!((points.first(), points.last()), (Some(&a), Some(&b)));
+    }
 }
