@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791347057719,
+  "lastUpdate": 1791347696728,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52595,6 +52595,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36232665,
             "range": "± 68207",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "65cb16e5e3ccee3d864b65b63d7e4d5fba4adb0f",
+          "message": "fix(algo): keep a section circle off a plane face whose polygon it circumscribes (#1999)\n\nA prism on a regular polygon inscribed in a frustum's top rim, standing\non that rim, now fuses exactly instead of failing with `open 1-face\ngrowth shell`.\n\n## What was wrong\n\nThe prism's bottom face meets the frustum's cone in the rim circle. The\ncircle touches the polygon only at its corners and runs outside it\nbetween them.\n\n`boundary_is_inscribed` in `crates/algo/src/pave_filler/phase_ff.rs`\nread those evenly spread corner hits as a boundary standing for the\ncircle, the case of a sphere bounded by its chordal equator. The whole\ncircle therefore stayed a section on the polygon face and carved it into\na disc larger than the face.\n\n## Change\n\nThe boundary now stands for the circle only on a curved face. A plane\nface's inscribed polygon is its true edge.\n\n## Verification\n\nThe regression is covered by\n`fuse_polygon_prism_standing_on_a_frustum_rim_is_exact` in\n`crates/operations/src/boolean/tests.rs`.\n\n- Clippy is clean on brepkit-math, -algo, -blend, -operations and -io\nwith all targets.\n- Nextest over brepkit-topology, -math, -algo, -blend, -operations, -io\nand -wasm runs 2996 tests, all passing.\n- `pose_sweep` and `truth_audit` match a main baseline exactly.\n- `approx_census` differs only in the face pair named in an already\nfailing NURBS loft offset error, which also varies between main runs.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` gains a closed entry for this case.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes fusing a prism whose polygon is inscribed in a frustum's top rim,\nwhich previously failed with an `open 1-face growth shell` error.\n\n- `boundary_is_inscribed` mistook the evenly spread corner hits as a\nboundary standing for the circle and kept the whole circle as a section,\ncarving the plane face into a disc larger than it.\n- The boundary now stands for the circle only on curved faces; a plane\nface's inscribed polygon is its true edge.\n- Renames the unit test to reflect that a plane face keeps its corners\non a section circle.\n- Adds `fuse_polygon_prism_standing_on_a_frustum_rim_is_exact`, which\nalso holds the fuse to one solid: only the slivers between the polygon\nand the rim remain at the contact plane.\n- Closes the corresponding roadmap entry.\n\n<sup>Written for commit aa40a339da232f7523f98f90f922e129baf89052.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/1999?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/1999?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F1999&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-07T04:32:36Z",
+          "tree_id": "161f443fd4d5bb3017cb3429c9121e878a76ecfd",
+          "url": "https://github.com/andymai/brepkit/commit/65cb16e5e3ccee3d864b65b63d7e4d5fba4adb0f"
+        },
+        "date": 1791347691903,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 560018,
+            "range": "± 1335",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 615773,
+            "range": "± 1612",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7826,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 442495,
+            "range": "± 8347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27182621,
+            "range": "± 665701",
             "unit": "ns/iter"
           }
         ]
