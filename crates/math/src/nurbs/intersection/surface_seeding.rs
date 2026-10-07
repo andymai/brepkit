@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::bvh::Bvh;
+use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{BezierPatch, surface_to_bezier_patches};
 use crate::nurbs::fitting::interpolate;
 use crate::nurbs::projection::project_point_to_surface;
@@ -13,6 +14,7 @@ use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
 use super::chaining::{build_curves_from_chains, chain_traced_segments};
+use super::curve_surface::intersect_curve_surface;
 use super::surface_marching::{
     constrain_param, constrain_state, march_with_branches, near_existing_segment,
     surface_newton_step,
@@ -67,7 +69,7 @@ pub fn intersect_nurbs_nurbs(
         march_step
     };
 
-    // Phase 1: Find seed points using Bezier subdivision (robust, can't miss branches).
+    // Phase 1: Find seed points using Bezier subdivision.
     // Falls back to grid sampling if decomposition fails.
     let seeds = {
         let sub_seeds = find_ssi_seeds_subdivision(surface1, surface2, tolerance);
@@ -78,6 +80,19 @@ pub fn intersect_nurbs_nurbs(
         }
     };
 
+    // An open branch ends where a boundary curve of one patch meets the
+    // other, so those points seed every open branch; the subdivision alone
+    // can miss a short one in a patch corner (a fillet run's end against a
+    // leaning corner, x 1.7 long on a run of 82).
+    let mut seeds = seeds;
+    for b in boundary_seeds(surface1, surface2, tolerance) {
+        if !seeds
+            .iter()
+            .any(|s| (s.point - b.point).length() < tolerance * 100.0)
+        {
+            seeds.push(b);
+        }
+    }
     if seeds.is_empty() {
         return Ok(Vec::new());
     }
@@ -140,6 +155,75 @@ pub fn intersect_nurbs_nurbs(
     let validated = validate_intersection_curves(&curves, surface1, surface2, tolerance * 10.0);
 
     Ok(validated)
+}
+
+/// Points where a boundary curve of either patch crosses the other patch.
+fn boundary_seeds(s1: &NurbsSurface, s2: &NurbsSurface, tolerance: f64) -> Vec<IntersectionPoint> {
+    const MAX_BOUNDARY_SEEDS: usize = 16;
+    let mut out = Vec::new();
+    for (own_is_s1, own, other) in [(true, s1, s2), (false, s2, s1)] {
+        for (curve, fixed_is_u, fixed) in boundary_curves(own) {
+            let Ok(hits) = intersect_curve_surface(&curve, other, tolerance) else {
+                continue;
+            };
+            for hit in hits {
+                let on_edge = if fixed_is_u {
+                    (fixed, hit.t)
+                } else {
+                    (hit.t, fixed)
+                };
+                let (param1, param2) = if own_is_s1 {
+                    (on_edge, hit.uv)
+                } else {
+                    (hit.uv, on_edge)
+                };
+                out.push(IntersectionPoint {
+                    point: hit.point,
+                    param1,
+                    param2,
+                });
+                if out.len() >= MAX_BOUNDARY_SEEDS {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A patch's boundary curves, each with whether `u` is the parameter held
+/// fixed along it and its value. A clamped knot vector puts only the end
+/// row (or column) of control points on that end.
+fn boundary_curves(s: &NurbsSurface) -> Vec<(NurbsCurve, bool, f64)> {
+    let clamped = |k: &[f64], p: usize| {
+        k.len() > 2 * p + 1
+            && k[..=p].iter().all(|&x| (x - k[0]).abs() <= 1e-15)
+            && k[k.len() - p - 1..]
+                .iter()
+                .all(|&x| (x - k[k.len() - 1]).abs() <= 1e-15)
+    };
+    let (ku, kv) = (s.knots_u(), s.knots_v());
+    let (pu, pv) = (s.degree_u(), s.degree_v());
+    let (cps, w) = (s.control_points(), s.weights());
+    let mut out = Vec::new();
+    if clamped(ku, pu) && !cps.is_empty() {
+        for (row, u) in [(0, ku[0]), (cps.len() - 1, ku[ku.len() - 1])] {
+            if let Ok(c) = NurbsCurve::new(pv, kv.to_vec(), cps[row].clone(), w[row].clone()) {
+                out.push((c, true, u));
+            }
+        }
+    }
+    if clamped(kv, pv) && cps.first().is_some_and(|r| !r.is_empty()) {
+        let last = cps[0].len() - 1;
+        for (col, v) in [(0, kv[0]), (last, kv[kv.len() - 1])] {
+            let points: Vec<Point3> = cps.iter().map(|r| r[col]).collect();
+            let weights: Vec<f64> = w.iter().map(|r| r[col]).collect();
+            if let Ok(c) = NurbsCurve::new(pu, ku.to_vec(), points, weights) {
+                out.push((c, false, v));
+            }
+        }
+    }
+    out
 }
 
 /// Validate intersection curves by checking that the fitted NURBS curve

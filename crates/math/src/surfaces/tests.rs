@@ -624,3 +624,28 @@ fn cone_partial_v_is_unit_at_v1() {
         dv.length()
     );
 }
+
+/// The rational torus is the torus: every point of it lies at the minor
+/// radius from the tube's centre circle, where the bilinear `to_nurbs` grid
+/// sags off a small tube between its rows.
+#[test]
+fn rational_torus_lies_on_the_torus() {
+    let torus = ToroidalSurface::new(Point3::new(1.0, -2.0, 0.5), 4.0, 1.5).unwrap();
+    let nurbs = torus.to_rational_nurbs().unwrap();
+    let ((u0, u1), (v0, v1)) = (nurbs.domain_u(), nurbs.domain_v());
+    for i in 0..=40 {
+        for j in 0..=40 {
+            let p = nurbs.evaluate(
+                (u1 - u0).mul_add(f64::from(i) / 40.0, u0),
+                (v1 - v0).mul_add(f64::from(j) / 40.0, v0),
+            );
+            let d = p - Point3::new(1.0, -2.0, 0.5);
+            let ring = d.x().hypot(d.y()) - 4.0;
+            assert!(
+                (ring.hypot(d.z()) - 1.5).abs() < 1e-9,
+                "({i}, {j}) lies {} off the tube",
+                ring.hypot(d.z()) - 1.5
+            );
+        }
+    }
+}

@@ -215,10 +215,19 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
             curve_kind,
             Some(brepkit_topology::edge::EdgeCurve::NurbsCurve(_))
         );
+        // A torus patch's meridian arcs are its sides: a section ending on
+        // one ends at the pave that split it, which the face's own splitting
+        // misses when the end's azimuth reads a hair off the meridian's.
+        let torus_meridian = matches!(surface, FaceSurface::Torus(_))
+            && matches!(
+                curve_kind,
+                Some(brepkit_topology::edge::EdgeCurve::Circle(_))
+            );
         match edge_images.get(&oe.edge()) {
             Some(imgs)
                 if imgs.len() > 1
                     && ((is_line && expand_lines && junction_near_anchor(imgs))
+                        || (torus_meridian && junction_in_band_nurbs(imgs))
                         || (is_nurbs
                             && ((matches!(
                                 surface,

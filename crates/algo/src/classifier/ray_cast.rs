@@ -19,11 +19,13 @@ use crate::error::AlgoError;
 
 /// Per-face geometry used for ray crossing tests.
 enum FaceGeom {
-    /// An untrimmed NURBS face that is a profile curve moved along a fixed
-    /// vector: the whole patch, so every hit on the surface lies on the face.
+    /// A NURBS face that is a profile curve moved along a fixed vector. A
+    /// hit on the surface lies on the face when the face is the whole patch
+    /// (`trim` `None`), else when its wires hold it.
     Extrusion {
         profile: brepkit_math::nurbs::curve::NurbsCurve,
         along: Vec3,
+        trim: Option<ExtrusionTrim>,
     },
     /// A planar (or planar-approximated) face: boundary polygon, hole
     /// polygons, and the supporting plane.
@@ -1237,17 +1239,15 @@ fn collect_geoms_of(
     Ok(result)
 }
 
-/// A NURBS face bounded by exactly its patch's four corners, whose two
-/// control rows (or columns) differ by one vector: an untrimmed extrusion.
+/// A NURBS face whose two control rows (or columns) differ by one vector:
+/// an extrusion, untrimmed when the face is bounded by exactly its patch's
+/// four corners.
 fn extrusion_geom(
     topo: &Topology,
     face: &brepkit_topology::face::Face,
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
 ) -> Result<Option<FaceGeom>, AlgoError> {
     use brepkit_math::nurbs::curve::NurbsCurve;
-    if !face.inner_wires().is_empty() {
-        return Ok(None);
-    }
     let cps = surface.control_points();
     let weights = surface.weights();
     let (profile_pts, profile_w, other_pts, other_w, degree, knots) =
@@ -1300,12 +1300,10 @@ fn extrusion_geom(
         profile.evaluate(v1) + along,
     ];
     let wire = topo.wire(face.outer_wire())?;
-    if wire.edges().len() != 4 {
-        return Ok(None);
-    }
     // Corners alone admit a wire that cuts across the patch between them:
-    // each edge must also run along one of the patch's own edges, a copy of
-    // the profile or an end ruling, at seven points along it.
+    // the face is the whole patch only when each edge also runs along one
+    // of the patch's own edges, a copy of the profile or an end ruling, at
+    // seven points along it.
     let on_patch_edge = |q: Point3| {
         let near = 1e-6 * scale;
         let on_ruling = [corners[0], corners[1]].iter().any(|&c| {
@@ -1319,29 +1317,129 @@ fn extrusion_geom(
                     .is_ok_and(|c| c.distance <= near)
             })
     };
+    let mut whole = face.inner_wires().is_empty() && wire.edges().len() == 4;
     for oe in wire.edges() {
+        if !whole {
+            break;
+        }
         let edge = topo.edge(oe.edge())?;
         let (sp, ep) = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        for p in [sp, ep] {
-            if !corners.iter().any(|c| (*c - p).length() <= 1e-7 * scale) {
-                return Ok(None);
-            }
-        }
+        whole &= [sp, ep]
+            .iter()
+            .all(|p| corners.iter().any(|c| (*c - *p).length() <= 1e-7 * scale));
         let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        if !(1..8).all(|k| {
+        whole &= (1..8).all(|k| {
             on_patch_edge(edge.curve().evaluate_with_endpoints(
                 (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
                 sp,
                 ep,
             ))
-        }) {
+        });
+    }
+    if whole {
+        return Ok(Some(FaceGeom::Extrusion {
+            profile,
+            along,
+            trim: None,
+        }));
+    }
+    Ok(
+        ExtrusionTrim::new(topo, face, &profile, along)?.map(|trim| FaceGeom::Extrusion {
+            profile,
+            along,
+            trim: Some(trim),
+        }),
+    )
+}
+
+/// A trimmed extrusion face's wires in `(u, s)`: `u` the profile's parameter
+/// scaled to `[0, 1]`, so the [`UvTrim`]'s angular reading of it never wraps,
+/// and `s` the distance along the extrusion.
+struct ExtrusionTrim {
+    frame: ExtrusionFrame,
+    /// The profile's length, the scale of `u`.
+    length: f64,
+    trim: UvTrim,
+}
+
+/// Where a point of an extrusion lies in its `(u, s)`.
+struct ExtrusionFrame {
+    /// The profile projected across the extrusion, through `base`.
+    flat: brepkit_math::nurbs::curve::NurbsCurve,
+    base: Point3,
+    axis: Vec3,
+    domain: (f64, f64),
+}
+
+impl ExtrusionFrame {
+    fn project(&self, profile: &brepkit_math::nurbs::curve::NurbsCurve, p: Point3) -> (f64, f64) {
+        let d = p - self.base;
+        let q = self.base + (d - self.axis * self.axis.dot(d));
+        let (d0, d1) = self.domain;
+        let v = brepkit_math::nurbs::projection::project_point_to_curve(&self.flat, q, 1e-12)
+            .map_or(d0, |c| c.parameter);
+        (
+            (v - d0) / (d1 - d0),
+            (p - profile.evaluate(v)).dot(self.axis),
+        )
+    }
+}
+
+impl ExtrusionTrim {
+    fn new(
+        topo: &Topology,
+        face: &brepkit_topology::face::Face,
+        profile: &brepkit_math::nurbs::curve::NurbsCurve,
+        along: Vec3,
+    ) -> Result<Option<Self>, AlgoError> {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let Ok(axis) = along.normalize() else {
+            return Ok(None);
+        };
+        let domain = profile.domain();
+        let base = profile.evaluate(domain.0);
+        // A closed profile's `u` jumps at its seam, where the trim's reading
+        // of a wire crossing it would not.
+        if (profile.evaluate(domain.1) - base).length() <= Tolerance::new().linear {
             return Ok(None);
         }
+        let Ok(flat) = NurbsCurve::new(
+            profile.degree(),
+            profile.knots().to_vec(),
+            profile
+                .control_points()
+                .iter()
+                .map(|&c| {
+                    let d = c - base;
+                    base + (d - axis * axis.dot(d))
+                })
+                .collect(),
+            profile.weights().to_vec(),
+        ) else {
+            return Ok(None);
+        };
+        let at =
+            |k: i32| flat.evaluate((domain.1 - domain.0).mul_add(f64::from(k) / 64.0, domain.0));
+        let length: f64 = (1..=64).map(|k| (at(k) - at(k - 1)).length()).sum();
+        if length <= 1e-12 {
+            return Ok(None);
+        }
+        let frame = ExtrusionFrame {
+            flat,
+            base,
+            axis,
+            domain,
+        };
+        let trim = UvTrim::new(topo, face, &|p| frame.project(profile, p), &|_| length)?;
+        Ok(trim.map(|trim| Self {
+            frame,
+            length,
+            trim,
+        }))
     }
-    Ok(Some(FaceGeom::Extrusion { profile, along }))
 }
 
 /// `x` wrapped into `[-π, π)`.
@@ -1833,20 +1931,24 @@ fn ray_geom_crossings(
             away,
             beyond,
         } => ray_sphere_trim_crossings(origin, ray_dir, surface, frame, trim, *away, *beyond, tol),
-        FaceGeom::Extrusion { profile, along } => {
-            ray_extrusion_crossings(origin, ray_dir, profile, *along, tol)
-        }
+        FaceGeom::Extrusion {
+            profile,
+            along,
+            trim,
+        } => ray_extrusion_crossings(origin, ray_dir, profile, *along, trim.as_ref(), tol),
     }
 }
 
-/// Count ray crossings with an untrimmed extrusion `profile(v) + s along`,
-/// `s` in `[0, 1]`: across `along` the ray is a line in the profile's
-/// projection, and each place the profile crosses that line is a hit.
+/// Count ray crossings with an extrusion `profile(v) + s along`, `s` in
+/// `[0, 1]`: across `along` the ray is a line in the profile's projection,
+/// and each place the profile crosses that line is a hit, on the face when
+/// the face is the whole patch or its `trim` holds it.
 fn ray_extrusion_crossings(
     origin: Point3,
     ray_dir: Vec3,
     profile: &brepkit_math::nurbs::curve::NurbsCurve,
     along: Vec3,
+    trim: Option<&ExtrusionTrim>,
     tol: Tolerance,
 ) -> (i32, bool) {
     const SAMPLES: usize = 64;
@@ -1916,10 +2018,26 @@ fn ray_extrusion_crossings(
         let t = w.dot(rp) / (rp_len * rp_len);
         let hit = origin + ray_dir * t;
         let s = (hit - q).dot(along) / along_len2;
+        let (on_face, by_wire) = if let Some(trim) = trim {
+            let (d0, d1) = trim.frame.domain;
+            trim.trim.contains(
+                (v - d0) / (d1 - d0),
+                s * along_len2.sqrt(),
+                1.0,
+                trim.length,
+                near,
+                &|p| trim.frame.project(profile, p),
+            )
+        } else {
+            (
+                (0.0..=1.0).contains(&s),
+                s.abs() <= reach || (s - 1.0).abs() <= reach,
+            )
+        };
         *suspicious |= (t * ray_dir.length()).abs() <= near
-            || (s.abs() <= reach || (s - 1.0).abs() <= reach)
+            || by_wire
             || ends.iter().any(|e| (*e - q).length() <= near);
-        if t * ray_dir.length() > near && (0.0..=1.0).contains(&s) {
+        if t * ray_dir.length() > near && on_face {
             *crossings += 1;
         }
     };
@@ -3348,6 +3466,7 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
             Vec3::new(1.0, 0.0, 0.0),
+            None,
             Tolerance::new(),
         );
         assert_eq!(crossings, 1);
@@ -3376,6 +3495,7 @@ mod tests {
             Vec3::new(0.0, 0.0, 1.0),
             &profile,
             along,
+            None,
             Tolerance::new(),
         );
         assert_eq!(across.0, 1, "{across:?}");
@@ -3384,6 +3504,7 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
             along,
+            None,
             Tolerance::new(),
         );
         assert_eq!(touches % 2, 0);
@@ -3414,6 +3535,7 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
             &profile,
             Vec3::new(1.0, 0.0, 0.0),
+            None,
             Tolerance::new(),
         );
         assert_eq!(crossings, 1);
@@ -3445,7 +3567,11 @@ mod tests {
                 unreachable!()
             };
             let geom = extrusion_geom(&topo, face, surface).unwrap();
-            assert_eq!(geom.is_some(), whole, "bow {bow}");
+            assert_eq!(
+                matches!(geom, Some(FaceGeom::Extrusion { trim: None, .. })),
+                whole,
+                "bow {bow}"
+            );
         }
     }
 
