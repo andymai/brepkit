@@ -5185,7 +5185,7 @@ pub fn split_face_2d(
         .collect();
 
     let mut cap_sections: Vec<SectionEdge> = Vec::new();
-    let mut cap_centers: Vec<Point3> = Vec::new();
+    let mut cap_points: Vec<Point3> = Vec::new();
     let mut rest_sections: Vec<SectionEdge> = Vec::new();
     for s in sections {
         // An oblique plane's ellipse lies within its semi-major axis of its
@@ -5208,9 +5208,9 @@ pub fn split_face_2d(
             None
         };
         match cap_center {
-            Some(c) => {
+            Some(_) => {
                 cap_sections.push(s.clone());
-                cap_centers.push(c);
+                cap_points.push(s.start);
             }
             None => rest_sections.push(s.clone()),
         }
@@ -5228,15 +5228,7 @@ pub fn split_face_2d(
     // sections split.
     let base = run_impl(&rest_sections);
 
-    distribute_cap_circles(
-        topo,
-        face_id,
-        base,
-        &cap_sections,
-        &cap_centers,
-        rank,
-        frame,
-    )
+    distribute_cap_circles(topo, face_id, base, &cap_sections, &cap_points, rank, frame)
 }
 
 /// The centroid of a closed curved section's samples when every sample
@@ -5384,18 +5376,20 @@ fn collect_wire_points_oriented(
 /// base sub-faces.
 ///
 /// Each cap circle is assigned to the first base sub-face whose outer boundary
-/// contains the circle's centre in UV, then that sub-face is re-split via
-/// [`split_face_with_internal_loops`] (disc cap + holed remainder). A circle
-/// whose centre lies inside a sub-face hole is air — the rim of a drill
-/// emerging inside an existing opening — and a circle contained by no sub-face
-/// has no home; both are dropped, exactly as the impl's air filter and
-/// arrangement paths drop them.
+/// contains a point on the circle in UV, then that sub-face is re-split via
+/// [`split_face_with_internal_loops`] (disc cap + holed remainder, the
+/// sub-face's holes inside the circle moving to the disc). A circle on a
+/// sub-face hole's inside is air — the rim of a drill emerging inside an
+/// existing opening — and a circle contained by no sub-face has no home; both
+/// are dropped, exactly as the impl's air filter and arrangement paths drop
+/// them. The circle's centre decides neither: a counterbore's rim circles a
+/// hole, so its centre lies in the hole while the circle does not.
 fn distribute_cap_circles(
     topo: &Topology,
     face_id: FaceId,
     base: Vec<SplitSubFace>,
     cap_sections: &[SectionEdge],
-    cap_centers: &[Point3],
+    cap_points: &[Point3],
     rank: Rank,
     frame: Option<&PlaneFrame>,
 ) -> Vec<SplitSubFace> {
@@ -5417,7 +5411,7 @@ fn distribute_cap_circles(
         &owned_frame
     };
 
-    let centers_uv: Vec<Point2> = cap_centers.iter().map(|&c| frame.project(c)).collect();
+    let points_uv: Vec<Point2> = cap_points.iter().map(|&c| frame.project(c)).collect();
 
     let mut assigned = vec![false; cap_sections.len()];
     let mut result: Vec<SplitSubFace> = Vec::with_capacity(base.len() + cap_sections.len());
@@ -5434,8 +5428,8 @@ fn distribute_cap_circles(
                 .enumerate()
                 .filter_map(|(i, cs)| {
                     if assigned[i]
-                        || !super::classify_2d::point_in_polygon_2d(centers_uv[i], &poly)
-                        || is_inside_any_hole(&centers_uv[i], &sf.inner_wires)
+                        || !super::classify_2d::point_in_polygon_2d(points_uv[i], &poly)
+                        || is_inside_any_hole(&points_uv[i], &sf.inner_wires)
                     {
                         return None;
                     }
