@@ -3919,12 +3919,20 @@ pub(super) fn split_face_with_internal_loops(
                 nested.push(reverse_loop_edges(&loops[lj]));
             }
         }
-        let disc_interior = if nested.is_empty() {
-            ring_interiors
-                .as_ref()
-                .map_or(disc_interior, |(discs, _)| discs[li])
+        // A plane ring with no point found on it leaves the generic interior
+        // search to the classifier: the disc's own point lies in its hole.
+        let interior = if nested.is_empty() {
+            Some(
+                ring_interiors
+                    .as_ref()
+                    .map_or(disc_interior, |(discs, _)| discs[li]),
+            )
         } else {
-            between_loop_and_holes(loop_edges, &nested).map_or(disc_interior, into_solid)
+            match between_loop_and_holes(surface, loop_edges, &nested) {
+                Some(p) => Some(into_solid(p)),
+                None if matches!(surface, FaceSurface::Plane { .. }) => None,
+                None => Some(disc_interior),
+            }
         };
         result.push(SplitSubFace {
             surface: surface.clone(),
@@ -3933,7 +3941,7 @@ pub(super) fn split_face_with_internal_loops(
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: Some(disc_interior),
+            precomputed_interior: interior,
         });
 
         // Build the outside sub-face's hole: the merged union outline when
@@ -4057,7 +4065,7 @@ pub(super) fn split_face_with_internal_loops(
         } else if nested_holes.is_empty() && parent_loop.iter().all(Option::is_none) {
             None
         } else {
-            between_loop_and_holes(boundary_edges, &all_holes).map(into_solid)
+            between_loop_and_holes(surface, boundary_edges, &all_holes).map(into_solid)
         }
     });
     let remainder = SplitSubFace {
@@ -4246,21 +4254,239 @@ fn reverse_loop_edges(loop_edges: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEd
 
 /// A point midway between a sample of `loop_edges` and the nearest sample of
 /// any of `holes`: inside the ring the loop bounds around holes it encloses.
+/// On a plane the midpoint is kept only on the ring, inside the loop and
+/// outside every hole: across a non-convex ring (a glyph's "e", whose mouth
+/// reaches in toward its counter) the way to the nearest hole point can
+/// leave the ring. When no midpoint lands on it (a ring thinner than the
+/// samples' spacing) a point stepped in from the loop is tried, and failing
+/// that there is none.
 fn between_loop_and_holes(
+    surface: &FaceSurface,
     loop_edges: &[OrientedPCurveEdge],
     holes: &[Vec<OrientedPCurveEdge>],
 ) -> Option<Point3> {
-    let q = *sample_edges_3d(loop_edges).first()?;
-    let h = holes
-        .iter()
-        .flat_map(|h| sample_edges_3d(h))
-        .min_by(|a, b| {
+    let hole_pts: Vec<Point3> = holes.iter().flat_map(|h| sample_edges_3d(h)).collect();
+    let midpoint = |q: Point3| -> Option<Point3> {
+        let h = hole_pts.iter().copied().min_by(|a, b| {
             (*a - q)
                 .length()
                 .partial_cmp(&(*b - q).length())
                 .unwrap_or(std::cmp::Ordering::Equal)
         })?;
-    Some(q + (h - q) * 0.5)
+        Some(q + (h - q) * 0.5)
+    };
+    let samples = sample_edges_3d(loop_edges);
+    let FaceSurface::Plane { normal, .. } = surface else {
+        return midpoint(*samples.first()?);
+    };
+    let frame = PlaneFrame::from_normal_and_point(*normal, *samples.first()?);
+    // A ring thinner than its curves' chord sag clears no point at the
+    // coarse sampling: sample finer before giving up.
+    for steps in [16, 64, 256] {
+        let outer = FlatLoop::new(loop_edges, &frame, steps);
+        let flat_holes: Vec<FlatLoop> = holes
+            .iter()
+            .map(|h| FlatLoop::new(h, &frame, steps))
+            .collect();
+        let on_ring = |uv: Point2| outer.holds(uv) && flat_holes.iter().all(|h| h.excludes(uv));
+        if let Some(m) = samples
+            .iter()
+            .filter_map(|&q| midpoint(q))
+            .find(|&m| on_ring(frame.project(m)))
+        {
+            return Some(m);
+        }
+        let (outer_pts, _) = loop_polygon_uv(loop_edges, &frame, steps);
+        let seed = super::containment::find_point_outside_holes(&outer_pts, holes, Some(&frame));
+        if on_ring(seed) {
+            return Some(frame.evaluate(seed.x(), seed.y()));
+        }
+        if matches!(outer, FlatLoop::Exact(_))
+            && flat_holes.iter().all(|h| matches!(h, FlatLoop::Exact(_)))
+        {
+            break;
+        }
+    }
+    None
+}
+
+/// A loop seen in a plane frame: exact pieces when its edges are lines and
+/// conic arcs, else a polygon through samples of its curves together with
+/// how far those chords stand off the curves.
+enum FlatLoop {
+    Exact(Vec<brepkit_math::region2d::Boundary2>),
+    Sampled(Vec<Point2>, f64),
+}
+
+impl FlatLoop {
+    fn new(edges: &[OrientedPCurveEdge], frame: &PlaneFrame, steps: u32) -> Self {
+        super::containment::exact_hole(edges, frame).map_or_else(
+            || {
+                let (poly, sag) = loop_polygon_uv(edges, frame, steps);
+                Self::Sampled(poly, sag)
+            },
+            Self::Exact,
+        )
+    }
+
+    /// Whether `p` lies inside the loop, clear of its boundary.
+    fn holds(&self, p: Point2) -> bool {
+        let clear = super::containment::SEED_CLEARANCE;
+        match self {
+            Self::Exact(pieces) => {
+                brepkit_math::region2d::point_in_region(pieces, p, clear) == Some(true)
+            }
+            Self::Sampled(poly, sag) => {
+                super::super::classify_2d::point_in_polygon_2d(p, poly)
+                    && super::super::classify_2d::distance_to_polygon_boundary(p, poly)
+                        > sag + clear
+            }
+        }
+    }
+
+    /// Whether `p` lies outside the loop, clear of its boundary.
+    fn excludes(&self, p: Point2) -> bool {
+        let clear = super::containment::SEED_CLEARANCE;
+        match self {
+            Self::Exact(pieces) => {
+                brepkit_math::region2d::point_in_region(pieces, p, clear) == Some(false)
+            }
+            Self::Sampled(poly, sag) => {
+                !super::super::classify_2d::point_in_polygon_2d(p, poly)
+                    && super::super::classify_2d::distance_to_polygon_boundary(p, poly)
+                        > sag + clear
+            }
+        }
+    }
+}
+
+/// A loop's polygon in a plane frame, in traversal order, with its curved
+/// edges sampled, and the farthest any of their chords stands off them. Every
+/// point is the curve's own: a closed edge's span starts at its parameter
+/// origin, not at the vertex the loop starts from.
+fn loop_polygon_uv(
+    edges: &[OrientedPCurveEdge],
+    frame: &PlaneFrame,
+    steps: u32,
+) -> (Vec<Point2>, f64) {
+    let mut poly = Vec::new();
+    let mut sag = 0.0_f64;
+    for e in edges {
+        if matches!(e.curve_3d, EdgeCurve::Line) {
+            poly.push(frame.project(e.start_3d));
+            continue;
+        }
+        let (from, to) = natural_endpoints(e);
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
+        if let EdgeCurve::NurbsCurve(curve) = &e.curve_3d
+            && let Some((mut pts, bound)) = nurbs_hull_polygon(curve, t0, t1, frame, steps)
+        {
+            if !e.forward {
+                pts.reverse();
+            }
+            pts.pop();
+            poly.extend(pts);
+            sag = sag.max(bound);
+            continue;
+        }
+        let mut pts: Vec<Point2> = (0..=2 * steps)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(f64::from(k) / f64::from(2 * steps), t0);
+                frame.project(e.curve_3d.evaluate_with_endpoints(t, from, to))
+            })
+            .collect();
+        if !e.forward {
+            pts.reverse();
+        }
+        // A circle's arc stands farthest off its chord at its midpoint; an
+        // ellipse's need not, so its chords also take the sag of an arc at
+        // its tightest radius of curvature.
+        let tightest = match &e.curve_3d {
+            EdgeCurve::Ellipse(el) => Some(el.semi_minor().powi(2) / el.semi_major()),
+            _ => None,
+        };
+        for k in (1..pts.len() - 1).step_by(2) {
+            sag = sag.max(super::super::classify_2d::distance_to_polygon_boundary(
+                pts[k],
+                &[pts[k - 1], pts[k + 1]],
+            ));
+            if let Some(r) = tightest {
+                let half = 0.5 * (pts[k + 1] - pts[k - 1]).length();
+                sag = sag.max(if half < r {
+                    r - (r * r - half * half).sqrt()
+                } else {
+                    2.0 * half
+                });
+            }
+        }
+        poly.extend(pts.iter().step_by(2).take(steps as usize));
+    }
+    (poly, sag)
+}
+
+/// A NURBS edge's `[t0, t1]` span in a plane frame as a polygon through the
+/// ends of its Bezier pieces, each piece cut into `steps` per edge or more,
+/// from `t0` to `t1`, and a bound on how far the curve stands off it: a piece
+/// lies in the hull of its control points (all weights positive), so off its
+/// chord by no more than its farthest control point. `None` when a weight is
+/// not positive or the span cannot be cut out.
+fn nurbs_hull_polygon(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+    frame: &PlaneFrame,
+    steps: u32,
+) -> Option<(Vec<Point2>, f64)> {
+    use brepkit_math::nurbs::decompose::curve_to_bezier_segments;
+    use brepkit_math::nurbs::knot_ops::curve_split;
+
+    if t1 <= t0 || curve.weights().iter().any(|&w| w <= 0.0) {
+        return None;
+    }
+    let (d0, d1) = curve.domain();
+    let eps = (d1 - d0).abs() * 1e-12;
+    let mut span = curve.clone();
+    if t1 < d1 - eps {
+        span = curve_split(&span, t1).ok()?.0;
+    }
+    if t0 > d0 + eps {
+        span = curve_split(&span, t0).ok()?.1;
+    }
+    let beziers = curve_to_bezier_segments(&span).ok()?;
+    #[allow(clippy::cast_possible_truncation)]
+    let per = (steps as usize).div_ceil(beziers.len().max(1)).max(1);
+    let mut pts = Vec::new();
+    let mut sag = 0.0_f64;
+    for bezier in &beziers {
+        let (b0, b1) = bezier.domain();
+        let mut rest = bezier.clone();
+        for k in 1..=per {
+            let piece = if k == per {
+                rest.clone()
+            } else {
+                #[allow(clippy::cast_precision_loss)]
+                let at = (b1 - b0).mul_add(k as f64 / per as f64, b0);
+                let (head, tail) = curve_split(&rest, at).ok()?;
+                rest = tail;
+                head
+            };
+            let hull: Vec<Point2> = piece
+                .control_points()
+                .iter()
+                .map(|&p| frame.project(p))
+                .collect();
+            let (first, last) = (*hull.first()?, *hull.last()?);
+            for &p in &hull {
+                sag = sag.max(super::super::classify_2d::distance_to_polygon_boundary(
+                    p,
+                    &[first, last],
+                ));
+            }
+            pts.push(first);
+        }
+    }
+    pts.push(frame.project(span.control_points().last().copied()?));
+    Some((pts, sag))
 }
 
 /// True when an internal section loop and a pre-existing inner wire (both
@@ -5605,7 +5831,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
         FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, arc_covers_segment,
-        point_in_hole_loops_uv,
+        between_loop_and_holes, point_in_hole_loops_uv,
     };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -5650,6 +5876,174 @@ mod tests {
             source_edge_idx: None,
             pave_block_id: None,
         }
+    }
+
+    /// A circular hole closer to the outline than its own chords' sag: the
+    /// first midpoint lies between a hole chord and its arc, inside the hole.
+    #[test]
+    fn a_ring_point_stays_out_of_a_round_hole_near_the_outline() {
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let outer: Vec<OrientedPCurveEdge> = [
+            (p(0.0, 0.0), p(10.0, 0.0)),
+            (p(10.0, 0.0), p(10.0, 10.0)),
+            (p(10.0, 10.0), p(0.0, 10.0)),
+            (p(0.0, 10.0), p(0.0, 0.0)),
+        ]
+        .into_iter()
+        .map(|(a, b)| line_chord(a, b))
+        .collect();
+        let center = p(2.5, 1.0);
+        let hole = Circle3D::new(center, Vec3::new(0.0, 0.0, 1.0), 0.999).unwrap();
+        let holes = vec![vec![arc_edge(&hole, 0.0, TAU, true)]];
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let q = between_loop_and_holes(&plane, &outer, &holes).expect("a point");
+        assert!((q - center).length() > 0.999, "{q:?} is in the hole");
+        assert!(q.x() > 0.0 && q.x() < 10.0 && q.y() > 0.0 && q.y() < 10.0);
+    }
+
+    /// A ring thinner than its NURBS curves' chord sag at the first
+    /// sampling: concentric circles of radius 1 and 0.9999, each four
+    /// rational quadratic arcs.
+    #[test]
+    fn a_ring_point_lands_on_a_ring_thinner_than_its_chords_sag() {
+        let circle = |r: f64| -> Vec<OrientedPCurveEdge> {
+            (0..4)
+                .map(|k| {
+                    let a = f64::from(k) * std::f64::consts::FRAC_PI_2;
+                    let at = |t: f64| Point3::new(r * t.cos(), r * t.sin(), 0.0);
+                    let corner = Point3::new(r * (a.cos() - a.sin()), r * (a.sin() + a.cos()), 0.0);
+                    let (p0, p2) = (at(a), at(a + std::f64::consts::FRAC_PI_2));
+                    let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                        2,
+                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        vec![p0, corner, p2],
+                        vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+                    )
+                    .unwrap();
+                    OrientedPCurveEdge {
+                        curve_3d: EdgeCurve::NurbsCurve(curve),
+                        pcurve: dummy_pcurve(),
+                        start_uv: Point2::new(0.0, 0.0),
+                        end_uv: Point2::new(0.0, 0.0),
+                        start_3d: p0,
+                        end_3d: p2,
+                        forward: true,
+                        source_edge_idx: None,
+                        pave_block_id: None,
+                    }
+                })
+                .collect()
+        };
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let q = between_loop_and_holes(&plane, &circle(1.0), &[circle(0.9999)]).expect("a point");
+        let r = (q - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(r > 0.9999 && r < 1.0, "{q:?} is off the ring (r = {r})");
+    }
+
+    /// A NURBS edge whose bump lives in two short knot spans, which samples
+    /// even in its parameter step over: the polygon and its bound still hold
+    /// every point of the curve.
+    #[test]
+    fn a_loop_polygon_bounds_a_bump_between_its_samples() {
+        let pt = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let bump = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 0.5, 0.505, 0.51, 1.0, 1.0, 1.0],
+            vec![
+                pt(0.0, 0.0),
+                pt(0.4, 0.0),
+                pt(0.505, 1.0),
+                pt(0.51, 0.0),
+                pt(0.6, 0.0),
+                pt(1.0, 0.0),
+            ],
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let line = |a: Point3, b: Point3| OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(0.0, 0.0),
+            start_3d: a,
+            end_3d: b,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let edges = vec![
+            OrientedPCurveEdge {
+                curve_3d: EdgeCurve::NurbsCurve(bump.clone()),
+                ..line(pt(0.0, 0.0), pt(1.0, 0.0))
+            },
+            line(pt(1.0, 0.0), pt(1.0, -1.0)),
+            line(pt(1.0, -1.0), pt(0.0, -1.0)),
+            line(pt(0.0, -1.0), pt(0.0, 0.0)),
+        ];
+        let frame = PlaneFrame::from_normal_and_point(Vec3::new(0.0, 0.0, 1.0), pt(0.0, 0.0));
+        let (poly, sag) = super::loop_polygon_uv(&edges, &frame, 16);
+        for k in 0..=4000 {
+            let q = frame.project(bump.evaluate(f64::from(k) / 4000.0));
+            let off = crate::builder::classify_2d::distance_to_polygon_boundary(q, &poly);
+            assert!(
+                off <= sag + 1e-12,
+                "{q:?} stands {off} off the polygon, bound {sag}"
+            );
+        }
+    }
+
+    /// A one-edge round outline whose seam vertex sits half a turn from the
+    /// circle's parameter origin still reads as the round region it bounds.
+    #[test]
+    fn a_ring_point_reads_a_round_outline_from_its_own_seam() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let outline = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 5.0).unwrap();
+        let outer = vec![arc_edge(&outline, PI, PI + TAU, true)];
+        let hole = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap();
+        let holes = vec![vec![arc_edge(&hole, 0.0, TAU, true)]];
+        let plane = FaceSurface::Plane { normal: z, d: 0.0 };
+        let q = between_loop_and_holes(&plane, &outer, &holes).expect("a point");
+        let r = (q - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(r > 1.0 && r < 5.0, "{q:?} is off the ring");
+    }
+
+    /// A ring whose outline has a mouth reaching in toward its hole, as a
+    /// glyph's "e" does: from the mouth's foot, the midpoint toward the
+    /// nearest hole point lies in the mouth, off the ring.
+    #[test]
+    fn a_ring_point_stays_off_its_mouth() {
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let chain = |pts: &[Point3]| -> Vec<OrientedPCurveEdge> {
+            (0..pts.len())
+                .map(|i| line_chord(pts[i], pts[(i + 1) % pts.len()]))
+                .collect()
+        };
+        let outer = chain(&[
+            p(0.0, 4.0),
+            p(6.0, 4.0),
+            p(6.0, 6.0),
+            p(0.0, 6.0),
+            p(0.0, 10.0),
+            p(10.0, 10.0),
+            p(10.0, 0.0),
+            p(0.0, 0.0),
+        ]);
+        let hole = chain(&[p(7.0, 4.0), p(7.0, 6.0), p(9.0, 6.0), p(9.0, 4.0)]);
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let q = between_loop_and_holes(&plane, &outer, &[hole]).expect("a point");
+        let in_mouth = q.x() < 6.0 && q.y() > 4.0 && q.y() < 6.0;
+        let in_hole = q.x() > 7.0 && q.x() < 9.0 && q.y() > 4.0 && q.y() < 6.0;
+        let in_square = q.x() > 0.0 && q.x() < 10.0 && q.y() > 0.0 && q.y() < 10.0;
+        assert!(in_square && !in_mouth && !in_hole, "{q:?} is off the ring");
     }
 
     #[test]
