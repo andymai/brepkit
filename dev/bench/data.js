@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791346352297,
+  "lastUpdate": 1791346898535,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52487,6 +52487,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36334084,
             "range": "± 67718",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d42bc8b2c1f98038935839d35040707b4fb1f69b",
+          "message": "fix(math): solve a line's NURBS crossing in (u, v, t) (#1997)\n\n`classify_point` now classifies the glyph prism consistently after\nreplacing line to NURBS refinement with Newton iteration in `(u, v, t)`.\n\n## What was wrong\n\n`classify_point` (`brepkit_check::classify`, behind\n`brepkit_operations::classify::classify_point` and the wasm\n`classifyPoint` binding) read a caption glyph prism from the gridfinity\nlayout tool both ways. The glyph from `labelPlateBuilder.test.ts` has 14\nfaces, stands from z 0.8 to 1.21, and has walls extruded from fitted\nfont curves. At (7.0819, 1.0550), classification was inside at z 0.9,\n1.05, and 1.199, but outside at z 1.19. At (6.78394, 0.37506), only z\n0.9 was inside.\n\nA ray's NURBS face crossings come from `intersect_line_nurbs` in\n`crates/math/src/nurbs/intersection/line.rs`. It seeded from a grid and\nrefined each seed by stepping in `(u, v)` toward the ray point nearest\nthe surface point. Along a ray oblique to the surface, convergence was\nonly linear. After 20 steps, neighbouring seeds returned crossings a few\n1e-5 apart, beyond the 1e-6 deduplication tolerance, or failed the 1e-5\nfinal check. At (7.0819, 1.0550, 1.19), the first ray met one wall once\nbut counted it six times, and the second ray counted it twice. Two of\nthree rays therefore classified the point outside.\n\n## Change\n\nRefinement now runs Newton iteration on `S(u, v) = o + t d` in `(u, v,\nt)`. A ray within 1e-6, using the relative determinant, of the surface's\ntangent plane retains the projection step.\n\nThe check classifier also gates multi-piece intersects in\n`operations::boolean`, where an Outside result vetoes a piece, and backs\nhidden-line projection.\n\n## Verification\n\n- `an_oblique_line_crosses_a_surface_once_on_its_exact_point` verifies\nthat a ray about 12 degrees off a flat patch crosses once within 1e-9 of\nthe exact point. Before the change, it found no crossing.\n- `crates/io/tests/glyph_prism_classify_inmem.rs`, using\n`glyph_prism.bin`, checks 24 by 24 columns at six heights. Every column\nmust read one way. The inside share is 251 of 576, or 0.436, within 0.03\nof the prism volume ratio of 0.425. The two misread columns must\nrespectively read inside and outside at five heights. The test fails\nbefore the change.\n- Clippy is clean on brepkit-math, -algo, -blend, -check, -operations,\nand -io with all targets. Nextest runs 3053 tests across\nbrepkit-topology, -math, -algo, -blend, -check, -operations, -io, and\n-wasm, all passing.\n- `pose_sweep` and `truth_audit` exactly match a main baseline.\n`approx_census` differs only for the face pair in an already failing\nNURBS loft offset error, which also varies between main runs.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` gains a closed entry for this case.",
+          "timestamp": "2026-10-07T04:18:55Z",
+          "tree_id": "dbadd3d7d1f7a016cc780eb1f5fbfcd9680c12d2",
+          "url": "https://github.com/andymai/brepkit/commit/d42bc8b2c1f98038935839d35040707b4fb1f69b"
+        },
+        "date": 1791346892296,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 842622,
+            "range": "± 1455",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 915853,
+            "range": "± 961",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11075,
+            "range": "± 169",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 650723,
+            "range": "± 10902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36357048,
+            "range": "± 155237",
             "unit": "ns/iter"
           }
         ]
