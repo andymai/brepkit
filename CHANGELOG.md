@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.37](https://github.com/andymai/brepkit/compare/v4.1.36...v4.1.37) (2026-10-07)
+
+
+### Bug Fixes
+
+* **math:** read a marched section re-traced along its chords' sag as one curve ([#2002](https://github.com/andymai/brepkit/issues/2002)) ([647397f](https://github.com/andymai/brepkit/commit/647397f899b9a58dce6e3b3912fba82b29ff5f0c))
+
 ## [4.1.36](https://github.com/andymai/brepkit/compare/v4.1.35...v4.1.36) (2026-10-07)
 
 
