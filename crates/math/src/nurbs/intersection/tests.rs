@@ -1519,6 +1519,8 @@ fn a_re_traced_section_comes_back_once() {
     .to_nurbs(4.7, 22.55)
     .unwrap();
     let curves = intersect_nurbs_nurbs(&cylinder, &scoop, 32, 0.01).unwrap();
+    // The scoop crosses the cylinder once on either side of its axis.
+    assert_eq!(curves.len(), 2, "{} sections", curves.len());
     for (i, a) in curves.iter().enumerate() {
         for (j, b) in curves.iter().enumerate() {
             if i == j {
@@ -1538,4 +1540,28 @@ fn a_re_traced_section_comes_back_once() {
             );
         }
     }
+}
+
+/// A trace through three points of a unit circle 60 degrees apart: a point
+/// on the arc between two of them, off their chord by its sag, lies on the
+/// trace; one as far off on the chord's inner side does not.
+#[test]
+fn a_chord_takes_its_sag_on_the_side_its_arc_bulges() {
+    let on = |deg: f64| {
+        let a = deg.to_radians();
+        IntersectionPoint {
+            point: Point3::new(a.cos(), a.sin(), 0.0),
+            param1: (0.0, 0.0),
+            param2: (0.0, 0.0),
+        }
+    };
+    let trace = vec![vec![on(-60.0), on(0.0), on(60.0)]];
+    assert!(near_existing_segment(&trace, &on(30.0), 0.005));
+    let mid = Point3::new(0.75, 0.433_012_701_892_219_3, 0.0);
+    let inner = IntersectionPoint {
+        point: mid + Vec3::new(-0.866_025_403_784_438_6, -0.5, 0.0) * 0.05,
+        param1: (0.0, 0.0),
+        param2: (0.0, 0.0),
+    };
+    assert!(!near_existing_segment(&trace, &inner, 0.005));
 }
