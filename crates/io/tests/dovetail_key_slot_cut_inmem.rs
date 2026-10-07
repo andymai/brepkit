@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{self, BooleanOp};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
@@ -73,4 +75,29 @@ fn a_key_slot_cut_through_a_pocket_cone_rim_is_exact() {
         (removed - inside).abs() <= 0.01,
         "the cut removes {removed}, the tool's part inside the plate is {inside}"
     );
+
+    // Points the operands place on either side: in the plate's border under
+    // the slot, in the border away from it, and in the slot past the plate.
+    let inside_of = |s: SolidId, p: Point3| {
+        classify_point(&topo, s, p, 0.01, 1e-7).unwrap() == PointClassification::Inside
+    };
+    for (p, in_plate, in_tool) in [
+        (Point3::new(-63.0, -83.8, -3.0), true, true),
+        (Point3::new(-63.0, -83.8, -4.5), true, true),
+        (Point3::new(-100.0, -83.8, -2.0), true, false),
+        (Point3::new(-80.0, -83.8, -2.0), true, false),
+        (Point3::new(-63.0, -84.5, -2.0), false, true),
+    ] {
+        assert_eq!(
+            (inside_of(plate, p), inside_of(tool, p)),
+            (in_plate, in_tool),
+            "operands at {p:?}"
+        );
+        assert_eq!(inside_of(cut, p), in_plate && !in_tool, "cut at {p:?}");
+        assert_eq!(
+            inside_of(common, p),
+            in_plate && in_tool,
+            "intersect at {p:?}"
+        );
+    }
 }

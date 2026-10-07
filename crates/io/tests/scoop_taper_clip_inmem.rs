@@ -31,7 +31,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{self, BooleanOp};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
@@ -190,4 +192,39 @@ fn the_fillet_material_and_the_clipped_scoop_meet_exactly() {
         (meshed - volume(fused)).abs() <= 0.75,
         "the fuse meshes to {meshed}"
     );
+
+    // Points the operands place on either side: in the front wall behind
+    // the scoop (up high and down at the floor), in a side wall clear of the
+    // scoop, in the scoop above the wall top, and in the pocket's air.
+    let inside_of = |s: SolidId, p: Point3| {
+        classify_point(&topo, s, p, 0.01, 1e-7).unwrap() == PointClassification::Inside
+    };
+    for (p, in_material, in_scoop) in [
+        (Point3::new(0.0, -19.8, 12.0), true, true),
+        (Point3::new(0.0, -19.8, 3.0), true, true),
+        (Point3::new(-43.8, 10.0, 12.0), true, false),
+        (Point3::new(0.0, -19.0, 23.0), false, true),
+        (Point3::new(0.0, 0.0, 10.0), false, false),
+    ] {
+        assert_eq!(
+            (inside_of(material, p), inside_of(scoop, p)),
+            (in_material, in_scoop),
+            "operands at {p:?}"
+        );
+        assert_eq!(
+            inside_of(common, p),
+            in_material && in_scoop,
+            "intersect at {p:?}"
+        );
+        assert_eq!(
+            inside_of(fused, p),
+            in_material || in_scoop,
+            "fuse at {p:?}"
+        );
+        assert_eq!(
+            inside_of(scoop_only, p),
+            in_scoop && !in_material,
+            "scoop cut at {p:?}"
+        );
+    }
 }

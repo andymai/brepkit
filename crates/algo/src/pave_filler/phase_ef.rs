@@ -480,10 +480,13 @@ fn check_edge_face_pairs(
                     })
                     .as_ref()
             {
-                let spacing = ((t1 - t0) / (N_SAMPLES as f64) * 2.0).abs();
+                // The sample scan may already hold this root; two roots a
+                // sample step apart are still two crossings.
                 for (t, p) in find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol) {
                     if trim.holds(p, 10.0 * tol.linear)
-                        && !crossings.iter().any(|&(ct, _)| (ct - t).abs() < spacing)
+                        && !crossings
+                            .iter()
+                            .any(|&(_, cp)| (p - cp).length() < tol.linear * 100.0)
                     {
                         crossings.push((t, p));
                     }
