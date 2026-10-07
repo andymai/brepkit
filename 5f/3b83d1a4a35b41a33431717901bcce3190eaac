@@ -1,0 +1,20 @@
+crates/algo/src/pave_filler/make_blocks.rs
+  s_a8677c67f85a06::t_742b87f421cc84 26-29,248-275
+  s_a8677c67f85a06::t_002c5e0b562ea8 14-25,30-37,111,115-116,139,276
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5f3b83d1a4a35b41a33431717901bcce3190eaac",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
