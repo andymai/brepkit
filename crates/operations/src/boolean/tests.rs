@@ -4979,96 +4979,6 @@ fn fuse_slotted_plate_onto_a_cell_reaching_into_the_slot_is_exact() {
     );
 }
 
-/// A rounded-rect prism whose four corner arcs are each split at 45 degrees
-/// into two eighth arcs, from `z0` up by `height` (+Z normal, CCW).
-fn make_rounded_rect_split_corner_prism(
-    topo: &mut Topology,
-    hw: f64,
-    hd: f64,
-    r: f64,
-    z0: f64,
-    height: f64,
-) -> SolidId {
-    use brepkit_math::curves::Circle3D;
-    use std::f64::consts::FRAC_PI_4;
-
-    let normal = Vec3::new(0.0, 0.0, 1.0);
-    let corners = [
-        (hw - r, hd - r, 0.0),
-        (-(hw - r), hd - r, 1.0),
-        (-(hw - r), -(hd - r), 2.0),
-        (hw - r, -(hd - r), 3.0),
-    ];
-    let mut pts: Vec<Point3> = Vec::new();
-    for &(cx, cy, quarter) in &corners {
-        for k in 0..3 {
-            let a = (quarter + f64::from(k) * 0.5) * 2.0 * FRAC_PI_4;
-            pts.push(Point3::new(
-                r.mul_add(a.cos(), cx),
-                r.mul_add(a.sin(), cy),
-                z0,
-            ));
-        }
-    }
-    let vids: Vec<_> = pts
-        .iter()
-        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
-        .collect();
-    let mut eids: Vec<EdgeId> = Vec::new();
-    for (c, &(cx, cy, _)) in corners.iter().enumerate() {
-        let center = Point3::new(cx, cy, z0);
-        for k in 0..2 {
-            let (s, e) = (3 * c + k, 3 * c + k + 1);
-            let radial = pts[s] - center;
-            let u_axis = Vec3::new(radial.x() / r, radial.y() / r, 0.0);
-            let circle =
-                Circle3D::with_axes(center, normal, r, u_axis, normal.cross(u_axis)).unwrap();
-            eids.push(topo.add_edge(Edge::new(vids[s], vids[e], EdgeCurve::Circle(circle))));
-        }
-        let next = (3 * c + 3) % pts.len();
-        eids.push(topo.add_edge(Edge::new(vids[3 * c + 2], vids[next], EdgeCurve::Line)));
-    }
-    let wire = Wire::new(
-        eids.iter()
-            .map(|&eid| OrientedEdge::new(eid, true))
-            .collect(),
-        true,
-    )
-    .unwrap();
-    let wid = topo.add_wire(wire);
-    let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d: z0 }));
-    crate::extrude::extrude(topo, face, normal, height).unwrap()
-}
-
-/// A plug seated in a box's cavity, touching its walls: the cavity's corner
-/// cylinders are each split at 45 degrees, the plug's are whole quarters.
-/// The cut leaves the box as it was. The same-domain pass grouped both
-/// halves of a cavity corner under the plug's one quarter and kept only one
-/// of them, so the other half's upper piece went missing at every corner
-/// (the tool's slide-lid seating, every test).
-#[test]
-fn cut_a_plug_touching_a_cavity_with_split_corners_leaves_the_box() {
-    let mut topo = Topology::new();
-    let outer = make_rounded_rect_arc_prism(&mut topo, 30.0, 20.0, 3.75, 0.0, 20.0);
-    let cavity = make_rounded_rect_split_corner_prism(&mut topo, 28.8, 18.8, 2.55, 2.0, 20.0);
-    let bin = boolean(&mut topo, BooleanOp::Cut, outer, cavity).unwrap();
-    let plug = make_rounded_rect_arc_prism(&mut topo, 28.8, 18.8, 2.55, 15.0, 3.0);
-
-    let result =
-        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, bin, plug)
-            .unwrap();
-
-    assert!(is_closed_manifold(&topo, result).unwrap());
-    assert_eq!(count_non_manifold_edges(&topo, result), 0);
-    let expected =
-        20.0 * rounded_rect_area(30.0, 20.0, 3.75) - 18.0 * rounded_rect_area(28.8, 18.8, 2.55);
-    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
-    assert!(
-        (vol - expected).abs() / expected < 1e-4,
-        "box volume {vol:.3} != expected {expected:.3}"
-    );
-}
-
 /// A tube standing on a plate, sunk 0.01 mm into it (the tool's assembly
 /// parts): the plate's top face receives the tube's wall circle and, inside
 /// it, the bore circle. The wall disc must carry the bore circle as its hole
@@ -8520,4 +8430,94 @@ fn a_ring_inside_the_tool_is_a_stray_piece() {
             "z = {z}, flipped {flipped}: a genuine piece"
         );
     }
+}
+
+/// A rounded-rect prism whose four corner arcs are each split at 45 degrees
+/// into two eighth arcs, from `z0` up by `height` (+Z normal, CCW).
+fn make_rounded_rect_split_corner_prism(
+    topo: &mut Topology,
+    hw: f64,
+    hd: f64,
+    r: f64,
+    z0: f64,
+    height: f64,
+) -> SolidId {
+    use brepkit_math::curves::Circle3D;
+    use std::f64::consts::FRAC_PI_4;
+
+    let normal = Vec3::new(0.0, 0.0, 1.0);
+    let corners = [
+        (hw - r, hd - r, 0.0),
+        (-(hw - r), hd - r, 1.0),
+        (-(hw - r), -(hd - r), 2.0),
+        (hw - r, -(hd - r), 3.0),
+    ];
+    let mut pts: Vec<Point3> = Vec::new();
+    for &(cx, cy, quarter) in &corners {
+        for k in 0..3 {
+            let a = (quarter + f64::from(k) * 0.5) * 2.0 * FRAC_PI_4;
+            pts.push(Point3::new(
+                r.mul_add(a.cos(), cx),
+                r.mul_add(a.sin(), cy),
+                z0,
+            ));
+        }
+    }
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+        .collect();
+    let mut eids: Vec<EdgeId> = Vec::new();
+    for (c, &(cx, cy, _)) in corners.iter().enumerate() {
+        let center = Point3::new(cx, cy, z0);
+        for k in 0..2 {
+            let (s, e) = (3 * c + k, 3 * c + k + 1);
+            let radial = pts[s] - center;
+            let u_axis = Vec3::new(radial.x() / r, radial.y() / r, 0.0);
+            let circle =
+                Circle3D::with_axes(center, normal, r, u_axis, normal.cross(u_axis)).unwrap();
+            eids.push(topo.add_edge(Edge::new(vids[s], vids[e], EdgeCurve::Circle(circle))));
+        }
+        let next = (3 * c + 3) % pts.len();
+        eids.push(topo.add_edge(Edge::new(vids[3 * c + 2], vids[next], EdgeCurve::Line)));
+    }
+    let wire = Wire::new(
+        eids.iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d: z0 }));
+    crate::extrude::extrude(topo, face, normal, height).unwrap()
+}
+
+/// A plug seated in a box's cavity, touching its walls: the cavity's corner
+/// cylinders are each split at 45 degrees, the plug's are whole quarters.
+/// The cut leaves the box as it was. The same-domain pass grouped both
+/// halves of a cavity corner under the plug's one quarter and kept only one
+/// of them, so the other half's upper piece went missing at every corner
+/// (the tool's slide-lid seating, every test).
+#[test]
+fn cut_a_plug_touching_a_cavity_with_split_corners_leaves_the_box() {
+    let mut topo = Topology::new();
+    let outer = make_rounded_rect_arc_prism(&mut topo, 30.0, 20.0, 3.75, 0.0, 20.0);
+    let cavity = make_rounded_rect_split_corner_prism(&mut topo, 28.8, 18.8, 2.55, 2.0, 20.0);
+    let bin = boolean(&mut topo, BooleanOp::Cut, outer, cavity).unwrap();
+    let plug = make_rounded_rect_arc_prism(&mut topo, 28.8, 18.8, 2.55, 15.0, 3.0);
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, bin, plug)
+            .unwrap();
+
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert_eq!(count_non_manifold_edges(&topo, result), 0);
+    let expected =
+        20.0 * rounded_rect_area(30.0, 20.0, 3.75) - 18.0 * rounded_rect_area(28.8, 18.8, 2.55);
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-4,
+        "box volume {vol:.3} != expected {expected:.3}"
+    );
 }
