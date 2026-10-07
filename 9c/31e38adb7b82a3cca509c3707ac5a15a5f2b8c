@@ -1,0 +1,23 @@
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_7582d401d5adee 483-484,487-489
+crates/io/tests/scoop_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_7454eafca1db06 34,36,195-229
+crates/io/tests/dovetail_key_slot_cut_inmem.rs
+  s_a8677c67f85a06::t_7454eafca1db06 18,20,78-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c31e38adb7b82a3cca509c3707ac5a15a5f2b8c",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
