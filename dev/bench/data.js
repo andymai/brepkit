@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791414355076,
+  "lastUpdate": 1791416830717,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52703,6 +52703,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44254204,
             "range": "± 115805",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eee9c27218efbb1898ddae8c1358c2dabb3b5f35",
+          "message": "chore(main): release 4.1.38 (#2004)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.38](https://github.com/andymai/brepkit/compare/v4.1.37...v4.1.38)\n(2026-10-07)\n\n\n### Bug Fixes\n\n* **algo:** cross a section circle at a fitted wall's rulings\n([#1995](https://github.com/andymai/brepkit/issues/1995))\n([bea6d5e](https://github.com/andymai/brepkit/commit/bea6d5e5b2075b8bac7577e36931a08f51cc19da))\n* **algo:** keep a section circle off a plane face whose polygon it\ncircumscribes ([#1999](https://github.com/andymai/brepkit/issues/1999))\n([65cb16e](https://github.com/andymai/brepkit/commit/65cb16e5e3ccee3d864b65b63d7e4d5fba4adb0f))\n* **algo:** keep both halves of a split coaxial wall under one\ncoincident face\n([#2000](https://github.com/andymai/brepkit/issues/2000))\n([7a48890](https://github.com/andymai/brepkit/commit/7a488904ea397a6b073563e5ddc5d47e727486e1))\n* **algo:** sample a ring between its outline and holes inside the ring\n([#1993](https://github.com/andymai/brepkit/issues/1993))\n([336c70a](https://github.com/andymai/brepkit/commit/336c70abf4aff0d2970ff8f2909e3d0d285ab885))\n* **io:** restore a captured solid's floats exactly\n([#2006](https://github.com/andymai/brepkit/issues/2006))\n([1d2214a](https://github.com/andymai/brepkit/commit/1d2214a532105ddfbc37c83bf9b55cbf08fc6059))\n* **math:** solve a line's NURBS crossing in (u, v, t)\n([#1997](https://github.com/andymai/brepkit/issues/1997))\n([d42bc8b](https://github.com/andymai/brepkit/commit/d42bc8b2c1f98038935839d35040707b4fb1f69b))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-07T23:44:12Z",
+          "tree_id": "dc48de3eb99382738c47f5b108e70f4a29e9c735",
+          "url": "https://github.com/andymai/brepkit/commit/eee9c27218efbb1898ddae8c1358c2dabb3b5f35"
+        },
+        "date": 1791416823872,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1141348,
+            "range": "± 1228",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1186973,
+            "range": "± 30783",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14294,
+            "range": "± 65",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 840265,
+            "range": "± 2142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46506738,
+            "range": "± 161895",
             "unit": "ns/iter"
           }
         ]
