@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791416830717,
+  "lastUpdate": 1791417022187,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52757,6 +52757,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46506738,
             "range": "± 161895",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c4fb4f824602550a2877d341e804568afda05863",
+          "message": "fix(algo): carve a counterbore's rim circle into the piece around it (#2007)\n\nThe gridfinity layout tool's `binGenerator.scenario.split-export`\ncounterbore case now stays exact. Cutting the 312-face bin base with 48\nmagnet and screw counterbores completes natively in 119 ms with 456\nfaces. On main, the cut produces a 7,704-face planar mesh in 3.6 s,\nafter which the slow split-export fuse noted in #2005 takes about 60 s\nnatively and also falls back. A single-counterbore cut is exact at 315\nfaces and removes exactly the tool's volume.\n\n## Root\n\nEach counterbore has an r 3.25 magnet pocket from z -4.75 to -2.75 over\nan r 1.5 screw hole extending to z 0. Its underside is flush with the\nbase underside at z -4.75 and consists of an annulus and a disc sharing\nthe r 1.5 circle.\n\nThe base underside is first split along that r 1.5 circle, producing a\ndisc and an underside with an r 1.5 hole. `distribute_cap_circles` in\n`crates/algo/src/builder/face_splitter/mod.rs` assigned the pocket\nwall's closed r 3.25 rim circle to the sub-face whose outline contains\nthe circle's centre. Because the centre lies in the r 1.5 hole, the\ncircle was assigned to the disc instead of the underside surrounding the\nhole. The underside retained its r 1.5 hole, the disc remained, and the\npocket wall had one free rim edge per counterbore.\n\n## Fix\n\nCap circles are now assigned using a point on the circle. A circle on\nthe inside of a hole is still dropped as air, covering a drill emerging\ninside an existing opening. `split_face_with_internal_loops` already\nmoves a sub-face's holes that lie inside the new circle into the\ncircle's disc.\n\n## Tests\n\n`a_counterbore_flush_with_the_base_underside_cuts_exactly` in\n`crates/io/tests/counterbore_cap_circle_cut_inmem.rs` uses\n`magnet_screw_base.bin` and `magnet_screw_counterbore.bin`, captured\nfrom the tool. It requires no mesh fallback, a valid solid, removed\nvolume equal to the tool's volume within 0.01 at deflection 0.01, and\nfive point classifications: in the pocket, in the screw hole, in the\nannulus, and two in the base around the pocket. It fails without the\nfix.\n\n## Verification\n\n- On main at #1999 with this change, clippy is clean on brepkit-math,\nbrepkit-algo, brepkit-blend, brepkit-operations, and brepkit-io with all\ntargets. Nextest runs 3021 tests across brepkit-topology, brepkit-math,\nbrepkit-algo, brepkit-blend, brepkit-operations, brepkit-io, and\nbrepkit-wasm, all passing. `pose_sweep` and `truth_audit` match a main\nbaseline exactly. `approx_census` differs only in the face pair named in\nan already failing NURBS loft offset error, which also varies between\nmain runs.\n- In back-to-back tool-side runs from the same worktree, main's wasm\nfails the target test on its timeout at 120.4 s, while this branch's\nwasm passes in 0.6 s. The `binGenerator.scenario.split-export` file goes\nfrom 1 to 0 of 7 failing.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` adds a closed entry for this case\nbeside the related tube counterbore entry.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the gridfinity split-export counterbore cut falling back to a\nmesh. Cap circles are now assigned to a sub-face by a point on the\ncircle instead of its center, so a counterbore's rim that circles a hole\n(like the screw hole) goes to the face around the hole rather than the\ndisc inside it. A 48-counterbore base cut is now exact natively in 119\nms; on main it produced a 7,704-face mesh in 3.6 s, followed by a\nroughly 60 s fallback fuse.\n\n**Verification**\n- New captured-operand test\n`a_counterbore_flush_with_the_base_underside_cuts_exactly` requires no\nmesh fallback, a valid solid, the removed volume matching the tool's\nwithin 0.01, and five point classifications; it fails without the fix.\n- Clippy is clean and all 3021 nextest tests pass across the brepkit\ncrates; tool-side, the wasm test passes in 0.6 s where main timed out at\n120.4 s.\n\n<sup>Written for commit 59c22167bd8e694bb8cb542913d77726e30e3337.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2007?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2007?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2007&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-07T23:46:36Z",
+          "tree_id": "b5b7257924bfb4685c121a028881acda14656481",
+          "url": "https://github.com/andymai/brepkit/commit/c4fb4f824602550a2877d341e804568afda05863"
+        },
+        "date": 1791417015532,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1010207,
+            "range": "± 1833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1096013,
+            "range": "± 9192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12943,
+            "range": "± 539",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 781512,
+            "range": "± 7086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 41579343,
+            "range": "± 95160",
             "unit": "ns/iter"
           }
         ]
