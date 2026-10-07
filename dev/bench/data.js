@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791341197507,
+  "lastUpdate": 1791343101913,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52271,6 +52271,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44007960,
             "range": "± 238927",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "647397f899b9a58dce6e3b3912fba82b29ff5f0c",
+          "message": "fix(math): read a marched section re-traced along its chords' sag as one curve (#2002)\n\nThe scoop clip of a fillet material with a rounded floor rim now\nreceives one NURBS x NURBS section for the affected scoop and pocket\ncorner cylinder face pair. Duplicate branch trimming accounts for\ncurvature between sampled trace points.\n\n## What was wrong\n\nIn the tool's interior fillet scoops, a NURBS x NURBS section between a\nscoop and a pocket's r 2.55 corner cylinder came back twice. Each\nquarter face of the cylinder took its window of both copies, leaving\nedges on three faces.\n\nIn `crates/math/src/nurbs/intersection/surface_marching.rs`, the marcher\nsteps up to 0.87 along a gentle curve. A later seed re-tracing the same\nbranch lies up to 1.4e-2 off those chords, past the 0.005 overlap band,\nso the trim kept the bulge as a second curve.\n\n## Change\n\nA point now counts as on an earlier trace within the band plus the\nchord's sag. The sag is read from how far the trace turns at the chord's\nends by `chord_sag`.\n\n## Verification\n\nThe regression test is `a_re_traced_section_comes_back_once` in\n`crates/math/src/nurbs/intersection/tests.rs`.\n\nVerification on main at 4.1.35 with this change:\n\n- Clippy is clean on brepkit-math, brepkit-algo, brepkit-blend,\nbrepkit-operations, and brepkit-io with all targets.\n- Nextest over brepkit-topology, brepkit-math, brepkit-algo,\nbrepkit-blend, brepkit-operations, brepkit-io, and brepkit-wasm runs\n2996 tests, all passing.\n- `pose_sweep` and `truth_audit` match a main baseline exactly.\n- `approx_census` differs only in the face pair named in an already\nfailing NURBS loft offset error, which also varies between main runs.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` gains a closed entry for this case.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a fillet scoop's NURBS x NURBS section against a pocket corner\ncylinder coming back twice when a later seed re-traces the same branch.\nThe marcher steps up to 0.87 along a gentle curve, leaving a re-trace up\nto 1.4e-2 off the original chords, past the 0.005 overlap band, so the\ntrim kept the bulge as a second curve and left edges on three faces of\nthe cylinder.\n\nThe proximity check now accepts a point within the band plus the chord's\nsag, read from the trace's turn at the chord's ends (`chord_sag` in\n`surface_marching.rs`). The sag counts only on the side the arc bulges;\nthe plain band still applies across the chord. Regression tests cover\nthe affected scoop and cylinder pair and the direction of the allowance.\n\n<sup>Written for commit 40c5a22d0d1c6b63b5bb848e7161a12b5e5fcd42.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2002?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"Review in cubic\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2002?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2002&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-07T03:15:17Z",
+          "tree_id": "52d686dd0149b8321ade369cd8aeda9441829266",
+          "url": "https://github.com/andymai/brepkit/commit/647397f899b9a58dce6e3b3912fba82b29ff5f0c"
+        },
+        "date": 1791343097379,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1040780,
+            "range": "± 1811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1126297,
+            "range": "± 44086",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12930,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 816698,
+            "range": "± 7099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43433525,
+            "range": "± 490136",
             "unit": "ns/iter"
           }
         ]
