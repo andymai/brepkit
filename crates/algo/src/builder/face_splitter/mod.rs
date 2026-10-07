@@ -569,7 +569,7 @@ fn split_arcs_shadowing_chords(
 /// span of a genuinely curved carrier is never misjudged by sampling only part
 /// of it. The collinearity band is the kernel's default linear tolerance
 /// (1e-7); a control polygon that tight is straight for any splitting purpose.
-fn edge_curve_is_straight(curve: &EdgeCurve) -> bool {
+pub fn edge_curve_is_straight(curve: &EdgeCurve) -> bool {
     match curve {
         EdgeCurve::Line => true,
         EdgeCurve::NurbsCurve(n) => {

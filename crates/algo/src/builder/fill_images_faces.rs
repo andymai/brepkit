@@ -2055,7 +2055,7 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
             }
             if ff.is_some_and(|ff| {
                 !lateral
-                    || !pb_is_line(topo, arena, pb_id)
+                    || !pb_is_line_or_circle(topo, arena, pb_id)
                     || pb_on_sections(topo, arena, pb_id, ff)
             }) {
                 continue;
@@ -2073,12 +2073,12 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
     map
 }
 
-fn pb_is_line(topo: &Topology, arena: &GfaArena, pb_id: PaveBlockId) -> bool {
+fn pb_is_line_or_circle(topo: &Topology, arena: &GfaArena, pb_id: PaveBlockId) -> bool {
     arena
         .pave_blocks
         .get(pb_id)
         .and_then(|pb| topo.edge(pb.original_edge).ok())
-        .is_some_and(|e| matches!(e.curve(), EdgeCurve::Line))
+        .is_some_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_)))
 }
 
 /// Whether a pave block's midpoint lies on one of a face's FF sections.
@@ -2368,7 +2368,12 @@ fn build_section_edges(
                             None => (curve_ds.curve.clone(), start, end),
                         }]
                     }
-                    None => vec![(curve_ds.curve.clone(), start, end)],
+                    None => vec![(
+                        window_curve(&curve_ds.curve, curve_ds.t_range, (start, end))
+                            .unwrap_or_else(|| curve_ds.curve.clone()),
+                        start,
+                        end,
+                    )],
                 };
 
                 for (curve_3d, start, end) in spans {
@@ -3052,22 +3057,101 @@ fn curve_endpoints(
     // snapped the pave vertices to (boundary-foot anchors); downstream boundary
     // splitters gate on the exact 1e-7 tolerance, so hand back the VERTEX
     // positions when they are the same endpoints: never a repositioning,
-    // only the exact-snap variant of the same point. The band is the one the
-    // junction registry snaps within (1000x the linear tolerance): a fitted
-    // cylinder x NURBS window end lands 1.03e-5 off the triple junction that
-    // a plane x NURBS section trimmed at the same edge ends on exactly.
+    // only the exact-snap variant of the same point. The band is the junction
+    // registry's weld (1000x the linear tolerance): a fitted cylinder x NURBS
+    // window end lands 1.03e-5 off the triple junction that a plane x NURBS
+    // section trimmed at the same edge ends on exactly. An end FF landed on
+    // where a boundary edge of one face crosses the other is that crossing,
+    // up to the adoption ceiling: a fitted edge's crossing stands 1.4e-4 off
+    // the pair's fitted curve.
     if curve_ds.pave_blocks.len() == 1
         && !matches!(curve_ds.curve, brepkit_topology::edge::EdgeCurve::Line)
         && let Some(pb) = arena.pave_blocks.get(curve_ds.pave_blocks[0])
         && let (Ok(sv), Ok(ev)) = (topo.vertex(pb.start.vertex), topo.vertex(pb.end.vertex))
     {
-        let weld = 1e-4;
+        let bounds = |face: brepkit_topology::face::FaceId, edge| {
+            topo.face(face).is_ok_and(|f| {
+                std::iter::once(f.outer_wire())
+                    .chain(f.inner_wires().iter().copied())
+                    .filter_map(|w| topo.wire(w).ok())
+                    .any(|w| w.edges().iter().any(|oe| oe.edge() == edge))
+            })
+        };
+        // The section's end vertex is minted at the crossing's position, so
+        // the crossing is found where it lies, not by id.
+        let crossing = |v: brepkit_topology::vertex::VertexId| {
+            let Ok(at) = topo.vertex(v).map(brepkit_topology::vertex::Vertex::point) else {
+                return false;
+            };
+            arena.interference.ef.iter().any(|interf| {
+                matches!(
+                    interf,
+                    crate::ds::Interference::EF {
+                        edge,
+                        face,
+                        new_vertex: Some(nv),
+                        ..
+                    } if topo
+                        .vertex(arena.resolve_vertex(*nv))
+                        .is_ok_and(|x| (x.point() - at).length() <= 1e-7)
+                        && ((*face == curve_ds.face_a && bounds(curve_ds.face_b, *edge))
+                            || (*face == curve_ds.face_b && bounds(curve_ds.face_a, *edge)))
+                )
+            })
+        };
+        let within = |gap: f64, v| gap <= 1e-4 || (gap <= 1e-3 && crossing(v));
         let (svp, evp) = (sv.point(), ev.point());
-        if (svp - start_3d).length() <= weld && (evp - end_3d).length() <= weld {
+        if within((svp - start_3d).length(), pb.start.vertex)
+            && within((evp - end_3d).length(), pb.end.vertex)
+        {
             return (Some(svp), Some(evp));
         }
     }
     (Some(start_3d), Some(end_3d))
+}
+
+/// A section's NURBS curve cut to its window when an end vertex lies off
+/// it. An edge reads its span by projecting its vertices, and a vertex
+/// snapped onto a boundary junction a few 1e-5 off the curve fails that
+/// reading, which then takes the whole curve: a section window on a band
+/// read as its marched curve end to end, and the face splitter cut it at
+/// its own start. Cut to the window, the whole curve is the window. Split
+/// operand edges keep their shared curve, which coincident faces pair on.
+fn window_curve(
+    curve: &EdgeCurve,
+    (t0, t1): (f64, f64),
+    (start, end): (brepkit_math::vec::Point3, brepkit_math::vec::Point3),
+) -> Option<EdgeCurve> {
+    // The span reading's own on-curve band.
+    const ON_CURVE: f64 = 1e-5;
+    let EdgeCurve::NurbsCurve(n) = curve else {
+        return None;
+    };
+    let (d0, d1) = n.domain();
+    let eps = 1e-9 * (d1 - d0);
+    if t1 - t0 <= eps || (t0 - d0 <= eps && d1 - t1 <= eps) {
+        return None;
+    }
+    let off = |p: brepkit_math::vec::Point3| {
+        brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
+            .map_or(true, |c| c.distance >= ON_CURVE)
+    };
+    if !off(start) && !off(end) {
+        return None;
+    }
+    let tail = if t0 - d0 > eps {
+        brepkit_math::nurbs::knot_ops::curve_split(n, t0).ok()?.1
+    } else {
+        n.clone()
+    };
+    let window = if d1 - t1 > eps {
+        brepkit_math::nurbs::knot_ops::curve_split(&tail, t1)
+            .ok()?
+            .0
+    } else {
+        tail
+    };
+    Some(EdgeCurve::NurbsCurve(window))
 }
 
 /// Sub-intervals of the straight section `start..end` NOT covered by any
@@ -5148,6 +5232,34 @@ mod tests {
             hits.iter().any(|(p, _)| (*p - inner).length() < 1e-9),
             "{hits:?}"
         );
+    }
+    /// A window whose end vertex was snapped a few 1e-5 off the curve is cut
+    /// out of it, so the edge's whole curve is its window; a window whose
+    /// ends lie on the curve keeps the shared curve.
+    #[test]
+    fn a_window_with_an_end_off_its_curve_is_cut_to_the_window() {
+        let pts: Vec<brepkit_math::vec::Point3> = (0..=8)
+            .map(|k| {
+                let a = f64::from(k) * 0.3;
+                brepkit_math::vec::Point3::new(4.0 * a.cos(), 4.0 * a.sin(), 0.5 * f64::from(k))
+            })
+            .collect();
+        let n = brepkit_math::nurbs::fitting::interpolate(&pts, 3).unwrap();
+        let (d0, d1) = n.domain();
+        let (t0, t1) = (0.25_f64.mul_add(d1 - d0, d0), 0.6_f64.mul_add(d1 - d0, d0));
+        let (a, b) = (n.evaluate(t0), n.evaluate(t1));
+        let curve = EdgeCurve::NurbsCurve(n);
+        assert!(window_curve(&curve, (t0, t1), (a, b)).is_none());
+
+        let off = b + brepkit_math::vec::Vec3::new(0.0, 0.0, 6e-5);
+        let trimmed = window_curve(&curve, (t0, t1), (a, off)).expect("the window was cut");
+        let EdgeCurve::NurbsCurve(w) = trimmed else {
+            unreachable!()
+        };
+        let (w0, w1) = w.domain();
+        assert!((w0 - t0).abs() < 1e-12 && (w1 - t1).abs() < 1e-12);
+        assert!((w.evaluate(w0) - a).length() < 1e-9);
+        assert!((w.evaluate(w1) - b).length() < 1e-9);
     }
 }
 

@@ -28,6 +28,8 @@ struct VertexEntry {
     outgoing: bool,
     /// Tangent angle at this vertex in \[0, 2pi).
     angle: f64,
+    /// A NURBS pcurve's derivative angle there, pointing into the edge.
+    exact: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -100,11 +102,13 @@ pub fn build_wire_loops_with_winding(
             edge_idx: idx,
             outgoing: true,
             angle: angle_out,
+            exact: exact_nurbs_angle(edge, true),
         });
         adj.entry(end_key).or_default().push(VertexEntry {
             edge_idx: idx,
             outgoing: false,
             angle: angle_in,
+            exact: exact_nurbs_angle(edge, false),
         });
     }
 
@@ -147,6 +151,18 @@ pub fn build_wire_loops_with_winding(
             // Incoming angle at the end vertex.
             let incoming_angle =
                 edge_angle_at_vertex_periodic(current_edge, false, u_period, v_period);
+            let incoming_exact = exact_nurbs_angle(current_edge, false);
+            // A straight continuation ranks after every turn; between two
+            // of them (a section leaving tangentially), the sampled tangents
+            // still order by curvature.
+            let score = |entry: &VertexEntry| {
+                let turn = turn_score(incoming_angle, entry.angle);
+                if continues_straight(incoming_exact, entry.exact) {
+                    TAU + turn
+                } else {
+                    turn
+                }
+            };
             let arriving_start =
                 quantize_uv_periodic(current_edge.start_uv, tol, u_period, v_period);
 
@@ -174,7 +190,7 @@ pub fn build_wire_loops_with_winding(
                         c.end_uv.x(),
                         c.end_uv.y(),
                         entry.angle,
-                        turn_score(incoming_angle, entry.angle)
+                        score(entry)
                     );
                 }
                 // Skip the reverse of the arriving edge (prevents U-turns
@@ -190,7 +206,7 @@ pub fn build_wire_loops_with_winding(
                     }
                 }
 
-                let cw = turn_score(incoming_angle, entry.angle);
+                let cw = score(entry);
                 if cw < best_cw {
                     best_cw = cw;
                     best_idx = Some(entry.edge_idx);
@@ -204,8 +220,8 @@ pub fn build_wire_loops_with_winding(
                     .iter()
                     .filter(|e| e.outgoing && !used[e.edge_idx])
                     .min_by(|a, b| {
-                        turn_score(incoming_angle, a.angle)
-                            .partial_cmp(&turn_score(incoming_angle, b.angle))
+                        score(a)
+                            .partial_cmp(&score(b))
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 if let Some(fb) = fallback {
@@ -640,6 +656,64 @@ fn edge_angle_at_vertex_periodic(
     if angle < 0.0 { angle + TAU } else { angle }
 }
 
+/// A NURBS pcurve read at an edge endpoint: the curve, the parameter there,
+/// the sign of a parameter step into the edge, and the edge's parameter
+/// span. `None` for other pcurves and for a stale one.
+///
+/// A pcurve may run in the edge's traversal order or in its stored order (a
+/// reverse edge reusing its forward pcurve): it is read from whichever end
+/// sits on the edge's start, falling back to the traversal flag when both
+/// ends do (a closed loop in the plane).
+fn nurbs_endpoint(
+    edge: &OrientedPCurveEdge,
+    at_start: bool,
+) -> Option<(&brepkit_math::curves2d::NurbsCurve2D, f64, f64, f64)> {
+    use brepkit_math::curves2d::Curve2D;
+
+    let Curve2D::Nurbs(ref nurbs) = edge.pcurve else {
+        return None;
+    };
+    let knots = nurbs.knots();
+    if knots.len() < 2 {
+        return None;
+    }
+    let t0_raw = knots[0];
+    let tn_raw = knots[knots.len() - 1];
+    let off_start = |t: f64| {
+        let p = nurbs.evaluate(t);
+        (p.x() - edge.start_uv.x()).powi(2) + (p.y() - edge.start_uv.y()).powi(2)
+    };
+    let (d0, dn) = (off_start(t0_raw), off_start(tn_raw));
+    let traversal_order = if (d0 - dn).abs() <= 1e-18 {
+        edge.forward
+    } else {
+        d0 < dn
+    };
+    let (t_start, t_end) = if traversal_order {
+        (t0_raw, tn_raw)
+    } else {
+        (tn_raw, t0_raw)
+    };
+
+    // The stored pcurve can be STALE relative to the edge's UV
+    // endpoints: junction co-registration welds start_uv/end_uv
+    // across faces without refitting the pcurve, so a short
+    // T-split piece's sampled departure direction disagrees with
+    // where the edge actually starts, and one bad angle in the
+    // rotation mis-orders every walker at that junction. When the
+    // pcurve's own endpoint sits measurably off the stored UV,
+    // fall through to the chord, which follows the welded points.
+    let anchor = if at_start { edge.start_uv } else { edge.end_uv };
+    let t_anchor = if at_start { t_start } else { t_end };
+    let pe = nurbs.evaluate(t_anchor);
+    let stale_eps_sq: f64 = 1e-9 * 1e-9;
+    if (pe.x() - anchor.x()).powi(2) + (pe.y() - anchor.y()).powi(2) > stale_eps_sq {
+        return None;
+    }
+    let inward = (t_end - t_start).signum() * if at_start { 1.0 } else { -1.0 };
+    Some((nurbs, t_anchor, inward, (t_end - t_start).abs()))
+}
+
 /// Compute the tangent direction at an edge endpoint in UV space.
 ///
 /// For `Line2D` pcurves, returns the chord direction (exact).
@@ -647,62 +721,11 @@ fn edge_angle_at_vertex_periodic(
 /// to approximate the true tangent -- important for half-circle arcs where
 /// the chord direction can be perpendicular to the actual tangent.
 fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64, f64) {
-    use brepkit_math::curves2d::Curve2D;
-
     // For NURBS pcurves, sample near the endpoint for tangent direction.
-    // A pcurve may run in the edge's traversal order or in its stored
-    // order (a reverse edge reusing its forward pcurve): read it from
-    // whichever end sits on the edge's start, and fall back to the
-    // traversal flag when both ends do (a closed loop in the plane).
-    if let Curve2D::Nurbs(ref nurbs) = edge.pcurve {
-        let knots = nurbs.knots();
-        if knots.len() >= 2 {
-            let t0_raw = knots[0];
-            let tn_raw = knots[knots.len() - 1];
-            let off_start = |t: f64| {
-                let p = nurbs.evaluate(t);
-                (p.x() - edge.start_uv.x()).powi(2) + (p.y() - edge.start_uv.y()).powi(2)
-            };
-            let (d0, dn) = (off_start(t0_raw), off_start(tn_raw));
-            let traversal_order = if (d0 - dn).abs() <= 1e-18 {
-                edge.forward
-            } else {
-                d0 < dn
-            };
-            let (t_start, t_end) = if traversal_order {
-                (t0_raw, tn_raw)
-            } else {
-                (tn_raw, t0_raw)
-            };
-            let span = (t_end - t_start).abs();
-            let delta = span * 0.01;
-
-            // The stored pcurve can be STALE relative to the edge's UV
-            // endpoints: junction co-registration welds start_uv/end_uv
-            // across faces without refitting the pcurve, so a short
-            // T-split piece's sampled departure direction disagrees with
-            // where the edge actually starts — and one bad angle in the
-            // rotation mis-orders every walker at that junction. When the
-            // pcurve's own endpoint sits measurably off the stored UV,
-            // fall through to the chord, which follows the welded points.
-            let anchor = if at_start { edge.start_uv } else { edge.end_uv };
-            let t_anchor = if at_start { t_start } else { t_end };
-            let pe = nurbs.evaluate(t_anchor);
-            let stale_eps_sq: f64 = 1e-9 * 1e-9;
-            let stale =
-                (pe.x() - anchor.x()).powi(2) + (pe.y() - anchor.y()).powi(2) > stale_eps_sq;
-            if !stale {
-                if at_start {
-                    let p0 = nurbs.evaluate(t_start);
-                    let p1 = nurbs.evaluate(t_start + (t_end - t_start).signum() * delta);
-                    return (p1.x() - p0.x(), p1.y() - p0.y());
-                }
-                // at_end: incoming direction (from end back toward start).
-                let p0 = nurbs.evaluate(t_end);
-                let p1 = nurbs.evaluate(t_end - (t_end - t_start).signum() * delta);
-                return (p1.x() - p0.x(), p1.y() - p0.y());
-            }
-        }
+    if let Some((nurbs, t, inward, span)) = nurbs_endpoint(edge, at_start) {
+        let p0 = nurbs.evaluate(t);
+        let p1 = nurbs.evaluate(inward.mul_add(span * 0.01, t));
+        return (p1.x() - p0.x(), p1.y() - p0.y());
     }
 
     // For Line2D and fallback: use chord direction.
@@ -717,6 +740,36 @@ fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64
             edge.start_uv.y() - edge.end_uv.y(),
         )
     }
+}
+
+/// The angle in \[0, 2pi) of a NURBS pcurve's derivative at an edge
+/// endpoint, pointing into the edge; `None` where [`nurbs_endpoint`] reads
+/// nothing or the derivative vanishes.
+fn exact_nurbs_angle(edge: &OrientedPCurveEdge, at_start: bool) -> Option<f64> {
+    let (nurbs, t, inward, span) = nurbs_endpoint(edge, at_start)?;
+    let d = nurbs.tangent(t);
+    (d.x().is_finite() && d.y().is_finite() && d.length() * span > 1e-9)
+        .then(|| (inward * d.y()).atan2(inward * d.x()).rem_euclid(TAU))
+}
+
+/// Whether an edge leaving a vertex continues the arriving edge straight
+/// on, read from both pcurves' derivatives.
+///
+/// The sampled tangents are chords a hundredth of a span long, so a curved
+/// boundary split at a vertex kinks there by its curvature: into a slight
+/// right turn where it curves away from the face, which the walk prefers
+/// to a section leaving that vertex to the left, and the region that
+/// section bounds never closes. The derivatives of two pieces of one curve
+/// agree to 2.4e-7 (a scoop's side edge). A hole's arc pieces, fitted one by
+/// one, kink by 3e-6 to 1e-5, and the hole weave relies on the walk reading
+/// those as turns (the keyholed knuckle cuts), so the band stays below them.
+fn continues_straight(incoming: Option<f64>, outgoing: Option<f64>) -> bool {
+    const STRAIGHT: f64 = 1e-6;
+    let (Some(back), Some(out)) = (incoming, outgoing) else {
+        return false;
+    };
+    let da = (back + std::f64::consts::PI - out).rem_euclid(TAU);
+    !(STRAIGHT..=TAU - STRAIGHT).contains(&da)
 }
 
 /// Compute the clockwise sweep angle from `angle_in` to `angle_out`.
@@ -784,6 +837,63 @@ mod tests {
         let mut e = make_line_edge(start, end);
         e.source_edge_idx = Some(src);
         e
+    }
+
+    fn make_bezier_edge(points: [Point2; 3]) -> OrientedPCurveEdge {
+        let pcurve = Curve2D::Nurbs(
+            brepkit_math::curves2d::NurbsCurve2D::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                points.to_vec(),
+                vec![1.0; 3],
+            )
+            .unwrap(),
+        );
+        let mut e = make_line_edge(points[0], points[2]);
+        e.pcurve = pcurve;
+        e
+    }
+
+    /// A boundary curving away from a section that leaves its split point
+    /// a few degrees to the left runs straight on through that point: its
+    /// two pieces share their tangent there. Read as chords a hundredth of
+    /// a span long, the pieces kink by the curvature into a slight right
+    /// turn, which the walk prefers to the section, so the region the
+    /// section bounds was never closed.
+    #[test]
+    fn a_curved_boundary_runs_straight_through_its_split_point() {
+        // The right side bulges in to x 8 at y 5, as two halves of one
+        // parabola; the section rises from there to the top edge.
+        let mut edges = vec![
+            make_line_edge(Point2::new(0.0, 0.0), Point2::new(10.0, 0.0)),
+            make_bezier_edge([
+                Point2::new(10.0, 0.0),
+                Point2::new(8.0, 2.5),
+                Point2::new(8.0, 5.0),
+            ]),
+            make_bezier_edge([
+                Point2::new(8.0, 5.0),
+                Point2::new(8.0, 7.5),
+                Point2::new(10.0, 10.0),
+            ]),
+            make_line_edge(Point2::new(10.0, 10.0), Point2::new(7.5, 10.0)),
+            make_line_edge(Point2::new(7.5, 10.0), Point2::new(0.0, 10.0)),
+            make_line_edge(Point2::new(0.0, 10.0), Point2::new(0.0, 0.0)),
+        ];
+        edges.push(make_section_edge(
+            Point2::new(8.0, 5.0),
+            Point2::new(7.5, 10.0),
+            0,
+        ));
+        edges.push(make_section_edge(
+            Point2::new(7.5, 10.0),
+            Point2::new(8.0, 5.0),
+            0,
+        ));
+        let loops = build_wire_loops(&edges, 1e-7, false, false);
+        let mut sizes: Vec<usize> = loops.iter().map(Vec::len).collect();
+        sizes.sort_unstable();
+        assert_eq!(sizes, vec![3, 5], "{loops:?}");
     }
 
     #[test]

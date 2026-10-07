@@ -150,3 +150,44 @@ fn a_clipped_scoop_and_its_tapered_bin_intersect_exactly() {
         "intersect volume {got}, expected {want}"
     );
 }
+
+/// The test's fillet material (the bin's walls and floor: half sizes 44.03
+/// by 20.03 with r 3.03 corners, z 1.25 to 22.55, less a pocket with half
+/// sizes 43.55 by 19.55, r 2.55 corners and its floor at z 2.25 rounded r
+/// 2.45 by cylinders and spindle tori) against the clipped scoop. The
+/// scoop's cubic bulges past the pocket's corner cylinders between two
+/// crossings of their seam line, its envelope's leaning corners cross the
+/// spindle tori's tubes, and its front taper lies flush on the material's
+/// front wall. (The material less the scoop is the floor-wedge non-manifold
+/// solid above.)
+#[test]
+fn the_fillet_material_and_the_clipped_scoop_meet_exactly() {
+    let mut topo = Topology::new();
+    let material = load(&mut topo, "taper_scoop_fillet_material.bin");
+    let scoop = load(&mut topo, "taper_scoop_fillet_scoop.bin");
+    let common = exact(&mut topo, BooleanOp::Intersect, material, scoop);
+    let common_swapped = exact(&mut topo, BooleanOp::Intersect, scoop, material);
+    let fused = exact(&mut topo, BooleanOp::Fuse, material, scoop);
+    let scoop_only = exact(&mut topo, BooleanOp::Cut, scoop, material);
+
+    // At deflection 0.001 the fuse and the scoop cut both read 0.37 below
+    // these sums, the scoop's own volume reading that much high; the
+    // allowance is twice that.
+    let volume = |s: SolidId| solid_volume(&topo, s, 0.001).unwrap();
+    let (a, b, c) = (volume(material), volume(scoop), volume(common));
+    for (label, got, want) in [
+        ("swapped intersect", volume(common_swapped), c),
+        ("fuse", volume(fused), a + b - c),
+        ("scoop cut", volume(scoop_only), b - c),
+    ] {
+        assert!(
+            (got - want).abs() <= 0.75,
+            "{label} volume {got}, expected {want}"
+        );
+    }
+    let meshed = oriented_solid_volume(&topo, fused, 0.001).unwrap();
+    assert!(
+        (meshed - volume(fused)).abs() <= 0.75,
+        "the fuse meshes to {meshed}"
+    );
+}
