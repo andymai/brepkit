@@ -1204,11 +1204,63 @@ pub(super) fn near_existing_segment(
             }
             continue;
         }
-        for w in seg.windows(2) {
-            if point_to_segment_dist(point.point, w[0].point, w[1].point) < dist {
+        for (i, w) in seg.windows(2).enumerate() {
+            let d = point_to_segment_dist(point.point, w[0].point, w[1].point);
+            if d < dist {
                 return true;
+            }
+            // Off the chord by its sag, toward the side the arc bulges.
+            if let Some((outward, sag)) = chord_bulge(seg, i) {
+                let (a, b) = (w[0].point, w[1].point);
+                let ab = b - a;
+                let f = ((point.point - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
+                let off = point.point - (a + ab * f);
+                let out = off.dot(outward);
+                let lateral = (off - outward * out).length();
+                if out > -dist && out < dist + sag && lateral < dist {
+                    return true;
+                }
             }
         }
     }
     false
+}
+
+/// The largest turn `chord_bulge` credits to a chord. A trace turning faster
+/// is at a kink, not along an arc its chords cut short.
+const MAX_SAG_TURN: f64 = std::f64::consts::FRAC_PI_3;
+
+/// Which way, and how far, the traced curve can stand off its chord from
+/// `seg[i]` to `seg[i + 1]`. The marcher steps up to a millimetre along a
+/// gentle curve, so a later trace of the same curve lies off these chords by
+/// their sag, which reads it as a second curve. An arc whose chords turn by
+/// `a` stands `chord * tan(a / 4) / 2` off each, on the side away from the
+/// turn; the turn is the larger of the chord's turns at its two ends. `None`
+/// for a chord the trace does not turn at.
+fn chord_bulge(seg: &[IntersectionPoint], i: usize) -> Option<(Vec3, f64)> {
+    let (a, b) = (seg[i].point, seg[i + 1].point);
+    let chord = b - a;
+    let turn = |u: Vec3, v: Vec3| u.cross(v).length().atan2(u.dot(v));
+    // The bend's inside at each end: along the neighbouring chord's far
+    // end, square to this chord.
+    let inside = |q: Point3, at: Point3| {
+        let r = q - at;
+        r - chord * (r.dot(chord) / chord.dot(chord))
+    };
+    let mut best = i
+        .checked_sub(1)
+        .and_then(|k| seg.get(k))
+        .map(|prev| (turn(a - prev.point, chord), inside(prev.point, a)));
+    if let Some(next) = seg.get(i + 2) {
+        let alpha = turn(chord, next.point - b);
+        if best.is_none_or(|(beta, _)| alpha > beta) {
+            best = Some((alpha, inside(next.point, b)));
+        }
+    }
+    let (alpha, inward) = best?;
+    let outward = (-inward).normalize().ok()?;
+    Some((
+        outward,
+        0.5 * chord.length() * (alpha.min(MAX_SAG_TURN) / 4.0).tan(),
+    ))
 }
