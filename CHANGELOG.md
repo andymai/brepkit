@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.36](https://github.com/andymai/brepkit/compare/v4.1.35...v4.1.36) (2026-10-07)
+
+
+### Bug Fixes
+
+* **algo:** clip a fillet material to a tapered envelope and classify trimmed extrusions exactly ([#1998](https://github.com/andymai/brepkit/issues/1998)) ([f8c4032](https://github.com/andymai/brepkit/commit/f8c4032b598bfb460e541a4aa6a49579a5bc8efc))
+
 ## [4.1.35](https://github.com/andymai/brepkit/compare/v4.1.34...v4.1.35) (2026-10-06)
 
 
