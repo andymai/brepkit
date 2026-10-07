@@ -1680,6 +1680,18 @@ One line each; the fixture/PR carries the story. Newest first.
   into the loop's disc and both sub-faces sample their interior between their
   rims (a ring's centroid falls in its hole). The captured cut replays exact
   (6 faces). Tool-side (the #1657 build -> this build): `combriser` 0 of 4, `assemblyGenerator.scenario` 3 of 23; the tube test's export drops from 622 to 93 open mesh edges because its chain now reaches a chamfer that fails cleanly on the exact tube (`cannot normalize zero vector`, two edges at r=1/3) and a two-solid `fuseAll` that falls back (row above).
+- **A cap circle around a sub-face's hole: a magnet and screw counterbore flush with a bin base's underside (CLOSED 2026-10-07; pin `a_counterbore_flush_with_the_base_underside_cuts_exactly` in `crates/io/tests/counterbore_cap_circle_cut_inmem.rs`)** —
+  the split export's base cut by 48 counterbores
+  (`binGenerator.scenario.split-export`, "exported STL pieces with
+  magnet+screw base have full geometry") fell back to a 7,704-face mesh. Each
+  tool's underside is an annulus and a disc sharing the screw hole's r = 1.5
+  circle; the base's underside split along that circle first, and
+  `distribute_cap_circles` gave the magnet pocket's r = 3.25 rim circle to the
+  piece holding the circle's centre (the r = 1.5 disc) instead of the
+  underside around the hole. Cap circles go by a point on the circle. The
+  48-tool compound cut is exact natively in 119 ms (a mesh in 3.6 s before).
+  Tool-side (main's wasm -> this build): the test passes in 0.6 s where it
+  failed on its timeout at 120.4 s, and the file goes 1 -> 0 of 7 failing.
 - **Coaxial same-domain pairs took their orientation from the axis sign (CLOSED 2026-09-15; pin `fuse_plate_onto_downward_extruded_cell_bands_keeps_the_corner_slivers` in `crates/operations/src/boolean/tests.rs`, unit pins `cylinders_same_domain_opposite_axis_shares_normals` + `torus_same_domain_opposite_axis_shares_normals`)** —
   the empty 2x1 assembly base (every `combriser` test) exported 46 open mesh
   edges: the plate is extruded up from z=-0.01 onto two cell socket tops whose
