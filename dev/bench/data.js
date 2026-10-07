@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791346027224,
+  "lastUpdate": 1791346352297,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52433,6 +52433,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 44103223,
             "range": "± 197283",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bea6d5e5b2075b8bac7577e36931a08f51cc19da",
+          "message": "fix(algo): cross a section circle at a fitted wall's rulings (#1995)\n\nOperation 9312 now completes with exact booleans, preserving the\ncomplete glyph outline and avoiding the mesh fallback that caused the\nfollowing wasm cut to trap.\n\n## What was wrong\n\nThe gridfinity layout tool's `labelPlateBuilder.test.ts` case \"two-line\ncaptions\" uses `cutWithEvolution` to engrave a caption glyph into a\n232-face label plate whose top is at z 1.2. The glyph has 14 faces (one\ncylinder, four NURBS, nine planes), volume 0.301, and spans z 0.8 to\n1.21.\n\nOn main, the raw cut and fuse fail with `open growth shell ... would be\ndropped`, then the operations boolean falls back to a mesh. With the\nglyph-ring fix (#1993), the next wasm cut runs 786 s on that mesh and\ntraps with `RuntimeError: unreachable`. The following two tests report\n`recursive use of an object detected which would lead to unsafe aliasing\nin rust`.\n\nA rounded glyph edge is a radius 0.371 cylinder spanning 8 degrees. Its\nfitted rulings are 1.3e-6 and 9.7e-6 off the cylinder. Only 2 of 24\nrestriction samples lie on both faces, with no contiguous run, so\n`closed_circle_boundary_crossings` seeks exact crossings with the wall\nrulings. `Circle3D::intersect_segment` requires 1e-7 proximity and found\nnone. The arc was dropped, leaving 11 of 12 sections in the glyph\noutline, so the plate top was never split.\n\n## Change\n\n`ruling_crossing` in `crates/algo/src/pave_filler/phase_ff.rs` handles\nfitted straight rulings when the exact test finds no crossing. A line\nparallel to the circle axis within 1e-9 in cosine, meeting the circle\nplane within 1e-4 of the circle, crosses at the circle point at that\nangle. The fit and angle are read at the plane intersection, with the\nangle normalized to `[0, TAU)` like exact hits.\n\n## Verification\n\n- At deflection 0.05, the captured pair produces a 245-face cut with\nevery edge used twice and volume 458.056, a 14-face intersect of 0.294,\nand a fuse of 458.357. The plate is 458.350 and the glyph 0.301, so the\ncut and the intersect make up the plate, and the fuse is the plate plus\nthe glyph less the common part.\n- `a_fitted_ruling_crosses_its_circle` covers the 1e-5 miss at angle 0,\nrejection at 0.01, failure to reach the plane, the leaning `(1, 0,\n-500)` to `(1.02, 0, 500)` line meeting at radius 1.01, and a crossing\nat `3pi/2`.\n- `glyph_ruling_cut_inmem.rs` uses `glyph_ruling_plate.bin` (925 KB) and\n`glyph_ruling_glyph.bin`. It requires no mesh fallback for the cut and\nintersect, twice-used edges, validation, watertight meshes, the plate\npartition within 1e-6, and the common prism below the plate top within\n1e-4 of the glyph volume. On main both operations fall back. The whole\nplate is required because an exact crop does not reproduce the defect.\n- Clippy is clean on brepkit-math, -algo, -blend, -operations and -io\nwith all targets. Nextest over brepkit-topology, -math, -algo, -blend,\n-operations, -io and -wasm runs 2996 tests, all passing. `pose_sweep`\nand `truth_audit` exactly match main. `approx_census` differs only at an\nalready failing NURBS loft offset pair that varies between main runs.\n- Tool commit `a4945a2aab`, with `BREPJS_KERNEL=brepkit`, one worker,\nand the whole file, stalls past 30 minutes on main, passes 18 of 21 in\n927 s with #1993, and passes 20 of 21 in 188 s with both fixes. The\nremaining failure uses brepjs 18.124.8 and `invalid compound handle`,\nfixed in brepjs #2384, so engraving is skipped and plate volume remains\nunchanged.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` adds a closed entry for this case.",
+          "timestamp": "2026-10-07T04:09:52Z",
+          "tree_id": "d16910823de470e4eb6685ab54c356177a93e37c",
+          "url": "https://github.com/andymai/brepkit/commit/bea6d5e5b2075b8bac7577e36931a08f51cc19da"
+        },
+        "date": 1791346345069,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 848091,
+            "range": "± 31385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 922247,
+            "range": "± 2436",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10997,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 653312,
+            "range": "± 5260",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 36334084,
+            "range": "± 67718",
             "unit": "ns/iter"
           }
         ]
