@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791347696728,
+  "lastUpdate": 1791414355076,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52649,6 +52649,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27182621,
             "range": "± 665701",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d2214a532105ddfbc37c83bf9b55cbf08fc6059",
+          "message": "fix(io): restore a captured solid's floats exactly (#2006)\n\nCaptured solids now restore floats that are bit-identical to the\ncaptured values. `arena_io::serialize_solid` writes exact floats using\ntheir shortest round-trip text, while `deserialize_solid` previously\nused serde_json's best-effort default float parser, which can return a\ndouble one ulp away from the written decimal. The workspace serde_json\ndependency now enables `float_roundtrip` in the root `Cargo.toml`.\n\n## Why it mattered\n\nOne deserialize then serialize round trip of a captured tool operand\nwith 37 faces changed 32 of its 1,414 floats by one ulp. For example,\n`1.0552614887526583e-14` became `1.0552614887526584e-14`, and\n`20.029999999999966` became `20.02999999999997`.\n\nThese changes prevented booleans replayed from captures from reproducing\nthe tool. The fuse of op 433 in the gridfinity layout tool's\n`binGenerator.scenario.split-export` test, \"exported STL pieces with\nmagnet+screw base have full geometry\", falls back to a mesh in the tool\nbut replayed exact natively and in a fresh wasm kernel. With exact\nparsing, it falls back natively too, making such fallbacks debuggable\nfrom a capture.\n\n## Tests\n\n`roundtrip_keeps_floats_a_best_effort_parser_rounds_off` in\n`crates/io/src/arena_io.rs` translates a box by three offsets that the\ndefault parser reads one ulp off. It requires serializing the\ndeserialized solid to reproduce the original bytes and fails without\n`float_roundtrip`.\n\n## Verification\n\nNextest runs 3,021 tests across brepkit-topology, brepkit-math,\nbrepkit-algo, brepkit-blend, brepkit-operations, brepkit-io, and\nbrepkit-wasm. All pass. Clippy passes with all targets and features\nthrough the pre-commit hook.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` records the recurring trap: a tool\nfallback that replayed exact natively was a lossy capture parse.\nCaptures replayed before this change, including op 4412 in the\ngenerator-hangs row, need replaying again.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `arena_io` so captured solids restore floats bit-identically.\nserde_json's default parser could land a written decimal one ulp off, so\none deserialize-serialize round trip of a captured tool operand changed\n32 of its 1,414 floats (for example `1.0552614887526583e-14` became\n`1.0552614887526584e-14`). Those shifts made booleans replayed from\ncaptures fail to reproduce the tool; with exact parsing, replay\nfallbacks match native behavior, making them debuggable from a capture.\n\n**Changes**\n- Enables `float_roundtrip` on the workspace `serde_json` dependency.\n- Adds `roundtrip_keeps_floats_a_best_effort_parser_rounds_off` in\n`crates/io/src/arena_io.rs`, which requires re-serializing a\ndeserialized solid to reproduce the captured bytes.\n- Captures replayed before this fix, including op 4412 in the\ngenerator-hangs row, need replaying again.\n\n<sup>Written for commit f9ea2172b61418e764fd9b069a26df1aad1f00e9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2006?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2006?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2006&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-07T23:02:40Z",
+          "tree_id": "f14869a3ec1dfb525b3b7ade7e449f008e8e2a5b",
+          "url": "https://github.com/andymai/brepkit/commit/1d2214a532105ddfbc37c83bf9b55cbf08fc6059"
+        },
+        "date": 1791414349352,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1055901,
+            "range": "± 3171",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1144132,
+            "range": "± 2834",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13311,
+            "range": "± 410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 829290,
+            "range": "± 1837",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44254204,
+            "range": "± 115805",
             "unit": "ns/iter"
           }
         ]
