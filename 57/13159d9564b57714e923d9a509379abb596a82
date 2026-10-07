@@ -1,0 +1,34 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_07cde273514656 8566-8582
+  s_a8677c67f85a06::t_1d4ca6029edcd3 981,988,4207,4210,4213,4216,4222,4265,4360,4732,4738
+  s_a8677c67f85a06::t_a722a89d25c3e0 1081-1135,1165-1190,1192-1201,1233-1237,1239,2269,2271
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_778993eec8b642 203
+  s_a8677c67f85a06::t_dd72b0f77188ce 142
+crates/algo/src/builder/wire_builder.rs
+  s_a8677c67f85a06::t_9410876ec68b13 794-850
+crates/io/tests/scoop_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_424eb07b1c2a04 173,184,190
+  s_a8677c67f85a06::t_8742daac7c41d0 174-175
+  s_a8677c67f85a06::t_f30e0019728230 153-172,176-183,185-189,191-193
+crates/io/tests/data/taper_scoop_fillet_material.bin
+  s_a8677c67f85a06::t_ce0fb53d88c048 1
+crates/io/tests/data/taper_scoop_fillet_scoop.bin
+  s_a8677c67f85a06::t_ce0fb53d88c048 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5713159d9564b57714e923d9a509379abb596a82",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
