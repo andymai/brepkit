@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791322936215,
+  "lastUpdate": 1791339356110,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52163,6 +52163,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43789013,
             "range": "± 68041",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f8c4032b598bfb460e541a4aa6a49579a5bc8efc",
+          "message": "fix(algo): clip a fillet material to a tapered envelope and classify trimmed extrusions exactly (#1998)\n\nExact B-Rep operations now handle the fillet material clip and the\ntrimmed extrusion intersection without mesh fallback. The edge-end snap\nregressions and review findings are fixed, with the affected generator\ncases and kernel suites verified.\n\n## Fillet material clip\n\nThe case is the gridfinity layout tool's interior fillet material\nclipped to a bin's tapered envelope\n(`binGenerator.export.interiorFillet.test.ts`, \"a tapered bottom band\nkeeps the fillet inside the leaning wall\"). It was captured on a\nbrepkit-wasm build that rounds the compartment air's floor rim through\nthe separate rounded-prism rim branch.\n\nThe material is a rounded box with half sizes 44.03 by 23.03, corners r\n3.03, and z 1.25 to 22.55, less a pocket with half sizes 43.55 by 22.55,\ncorners r 2.55, and floor at z 2.25. The floor rim is rounded r 2.45\nusing cylinders along the runs and spindle tori with major radius 0.1 at\nthe corners, each a quarter tube from its bottom to its outer equator.\nThe envelope walls lean below z 6 to half sizes 41.03 by 20.03 at z 0.\nIts corners are oblique quarter-circle extrusions with NURBS ruled\nfaces. Above z 6, it matches the material's outer box and corner\ncylinders.\n\nOn main at #1991, all three booleans fall back to a mesh. The raw\nintersect reports `open growth shell with 14 faces would be dropped`,\nthe raw fuse reports the same condition with 28 faces, and the raw cut\nleaves 51 free edges.\n\nRoots and changes:\n\n- A torus patch's FF extent had no azimuth gap and a whole-turn\ntube-angle window. It now uses the arc its boundary's samples leave out,\nread modulo a turn, plus the azimuth gap when the patch stays on its own\nside of the axis (a spindle torus's tube crosses it). Both are needed.\n- `analytic_nurbs_intersection` now marches the exact rational\nbiquadratic torus from `ToroidalSurface::to_rational_nurbs`, added in\n`crates/math/src/surfaces.rs`. The previous `to_nurbs` bilinear grid had\neight tube spans and sagged 0.19 from a 2.45 tube between rows.\n- The face splitter read a corner quarter torus as periodic in both\nangles, with its outer equator at v 0 beside its bottom at 3pi/2. A\ntorus patch within half a turn both ways is now a partial band in both\nangles (`fill_images_faces.rs`, `face_splitter/mod.rs`).\n`face_splitter/conversion.rs` expands a split meridian arc into its\npieces.\n- NURBS x NURBS marching also seeds from points where each patch's\nboundary curves cross the other patch, with at most 16 seeds.\n- EF now bisects a side-of-surface flip between distance samples, lands\nan edge-end crossing on the edge vertex, and records a run where an edge\nlies inside one of several faces of the same surface.\n- Marched section ends from different face pairs share one vertex when\nthey are within ten times the tolerance. An IN ruling from the curved\nsections still splits the lateral wall.\n- `sample_wire_loop_uv_periodic` accepts a fitted pcurve whole-turn\nshift with residual up to 1e-2 instead of 1e-6.\n\nResults on the captured pair through operations, without mesh fallback:\n\n- Intersect is 5657.184 at deflection 0.001, against 5657.297 integrated\nnumerically over horizontal sections.\n- Cut is 1270.133 at deflection 0.001, against 1269.731 integrated the\nsame way.\n- Fuse is 101143.888 at deflection 0.001, against 101143.678 integrated\nthe same way.\n- Every edge is used twice in all three results.\n\n`crates/io/tests/fillet_taper_clip_inmem.rs` uses\n`fillet_taper_clip_material.bin` and `fillet_taper_clip_envelope.bin`.\nIt requires all three operations to avoid mesh fallback, use every edge\ntwice, validate, mesh watertight, and match the closed forms within 2e-4\nof the material's volume. Unit coverage includes\n`rational_torus_lies_on_the_torus` and\n`a_crossing_at_an_edge_end_lands_on_the_end`.\n\nIn the dev profile, `hull_bound_keeps_every_nurbs_crossing` takes 9.4 s\nversus 6.4 s, and the kumiko lattice cut test takes 16.8 s versus 15.7\ns. The EF sign-change scan shares one projection per sample.\n\n## Trimmed extrusion classification\n\nThe intersect of `taper_scoop_bin.bin` and `taper_scoop_clipped.bin`\nleft 6 free edges. At each corner, the scoop cubic crosses the pocket's\nupright x walls in a 0.04 by 0.05 sliver. Its sample point was\nclassified outside because the +z and +y rays missed the cubic by about\n0.005.\n\nIn `crates/algo/src/classifier/ray_cast.rs`, the GFA ray caster now hits\na trimmed NURBS extrusion exactly and clips it by its wires through the\nexisting `UvTrim` path used by cylinders and cones. Coordinates are the\nprofile parameter scaled to [0, 1] and distance along the extrusion. A\nclosed profile keeps the polygon path.\n\nMain at #1991 falls back with 2828 free edges. The operations intersect\nis now exact at 2055.248 at deflection 0.001, against 2054.983 from\nnumerical integration of the clipped scoop less its part in the pocket.\n`a_clipped_scoop_and_its_tapered_bin_intersect_exactly` covers the case.\n\nThe raw cut correctly keeps one edge on four faces. The cubic falls\nbelow the pocket floor to z 1.474 and rises to it at the lip, leaving\ntwo floor wedges touching along the lip line. The operations cut takes\nthe mesh fallback.\n\n## Edge-end snap regressions\n\nLanding an EF crossing on its edge-end vertex exposed two roots across\nseven tool files.\n\n`rebuild_face_with_cb_edges` matched CommonBlock replacements by\nendpoint pair alone. In the 3x4 slotted stacking-lip preview, the\n1082-face planar body has inscribed polygonal corner walls standing on\nthe base rim at z 4.75. Cone rim arcs were replaced by corner-wall\nchords, leaving each arc on the base-top sliver and each chord on three\nfaces. Replacement now also requires the face edge's midpoint to lie on\nthe CommonBlock edge. `slotted_lip_base_fuse_inmem.rs` and\n`a_chord_does_not_stand_in_for_its_arc` cover this. The fuse has 1422\nfaces, every edge twice, and volume 175809.851 at deflection 0.001. The\ntouching body and base have volumes 93435.274 and 82374.562,\nrespectively, both at deflection 0.001.\n\nEF previously selected the nearest of a converged crossing and both\nbracket ends. In the crush-rib case, a touch 1.25e-3 from the chamfer\nrim vertex moved onto that vertex and disappeared as the vertex's own\ncontact. A search that leaves one bracket end fixed now lands on that\nend, while one that moves both retains its converged point.\n`crush_rib_chamfer_fuse_inmem.rs` produces 8 faces, every edge twice,\nand volume 72.494 at deflection 0.001. The pocket and chamfer volumes\nare 60.445 and 36.214 at deflection 0.001.\n\nThe knife block fuse gains one cylinder face, from 51 to 52, moving its\ntriangle snapshot from 1500 to 1506. For operands with volumes\n534289.656 and 7209.924 at deflection 0.001, the intersect is exact at\n3307.761 at deflection 0.001, where current main falls back to a mesh.\nThe fuse is 538191.833 at deflection 0.001 against 538191.820 at\ndeflection 0.001, the sum of the cut at 530981.896 and second operand at\n7209.924, both at deflection 0.001. Main reads 538191.906 at deflection\n0.001.\n\n## Review fixes\n\nEF interferences now retain an inside run's full pave-bounded span, so\nevery later piece within it reaches the face.\n`every_piece_of_a_run_lies_in_the_face` covers this.\n\nSide-flip crossings are deduplicated only when they are the same point,\npreserving two roots in adjacent sample intervals.\n`two_nearby_crossings_of_a_nurbs_patch_both_land` covers this.\n\nThe CommonBlock run test now measures against the curve instead of 32\nchords, avoiding chord sag between coincident arcs with different\nparameterization. `a_reparameterized_arc_runs_along_its_circle` covers\nthis.\n\n## Verification\n\nClippy is clean for brepkit-math, brepkit-algo, brepkit-blend,\nbrepkit-operations, and brepkit-io with all targets. Nextest runs 3005\ntests across brepkit-topology, brepkit-math, brepkit-algo,\nbrepkit-blend, brepkit-operations, brepkit-io, and brepkit-wasm, all\npassing. `pose_sweep` and `truth_audit` exactly match main.\n`approx_census` differs only on the face pair from an already failing\nNURBS loft offset error that varies between main runs.\n\nThe layout tool catalog at commit a4945a2aab, using brepjs 18.124.8,\n`BREPJS_KERNEL=brepkit`, the forks pool, two workers, four parts, and\n3763 tests, improves from 408 failures to 394. Ten previously failing\ntests pass: three magnet and screw base exports, the magnet and screw\nfloor-pattern case, the 2x2 interior fillet scoop case, three\nlightweight underside and magnet tests, the 3×3 permutation matrix case,\nand the 2×2 base-only tile case. Five kumiko tests also pass but are\nexcluded because they remain near the 180 s timeout. The asanoha export\ntakes 179.7 s here and 186.4 s in the baseline. The knife block snapshot\nis the one new failure.\n\nThe final wasm rerun on one worker confirms that those ten tests still\npass after the EF run-span, nearby-crossing deduplication, and\nCommonBlock curve-distance review fixes.\n\n## Roadmap\n\nClosed entries cover the fillet material clip, the bin and clipped scoop\nintersect, and the edge-end snap regressions. The rim taper-clip row\npoints to its closed entry, and the open intersect and cut row is\nremoved.\n\nThe kumiko corner-wrap row records `fix/kumiko-seam-section`. Its four\ngeneric changes move one band cut from 186 free and 17 over-shared edges\nto 188 and 14, with native tests and sweeps unchanged. The next root is\na straight section cut at a fitted boundary ending 7.9e-6 from the\njunction used by a snapped marched section.",
+          "timestamp": "2026-10-06T19:12:45-07:00",
+          "tree_id": "ebafd1559bea07ec9188883acfd3957e9b1df4d5",
+          "url": "https://github.com/andymai/brepkit/commit/f8c4032b598bfb460e541a4aa6a49579a5bc8efc"
+        },
+        "date": 1791339349151,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1058280,
+            "range": "± 2137",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1142079,
+            "range": "± 7070",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13159,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 818374,
+            "range": "± 4585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43620883,
+            "range": "± 1320140",
             "unit": "ns/iter"
           }
         ]
