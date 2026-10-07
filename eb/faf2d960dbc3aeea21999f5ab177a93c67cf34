@@ -1,0 +1,27 @@
+crates/check/src/classify/boundary.rs
+  s_a8677c67f85a06::t_a33275b5820866 980-993
+  s_a8677c67f85a06::t_8c84fe154adbb9 971
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_b6af315891c130 8183-8200
+crates/check/src/classify/mod.rs
+  s_a8677c67f85a06::t_67c43608b09386 317,319,326-335
+  s_a8677c67f85a06::t_3b7cd8d3f9e7d8 309
+crates/algo/src/builder/wire_builder.rs
+  s_a8677c67f85a06::t_122589c3214c8e 695-699
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ebfaf2d960dbc3aeea21999f5ab177a93c67cf34",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
