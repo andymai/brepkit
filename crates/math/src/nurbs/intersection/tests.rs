@@ -124,6 +124,22 @@ fn line_flat_surface_intersection() {
 }
 
 #[test]
+fn an_oblique_line_crosses_a_surface_once_on_its_exact_point() {
+    let surface = flat_surface();
+    // About 12 degrees off the surface: every grid seed near the ray refines
+    // to the one crossing at t = 0.4.
+    let dir = Vec3::new(1.0, 0.7, -0.25);
+    let result = intersect_line_nurbs(&surface, Point3::new(0.2, 0.3, 0.1), dir, 20).unwrap();
+    assert_eq!(result.len(), 1, "{result:?}");
+    let exact = Point3::new(0.6, 0.58, 0.0);
+    assert!(
+        (result[0].point - exact).length() < 1e-9,
+        "{:?}",
+        result[0].point
+    );
+}
+
+#[test]
 fn line_misses_surface() {
     let surface = flat_surface();
     // Ray parallel to the surface should miss.
