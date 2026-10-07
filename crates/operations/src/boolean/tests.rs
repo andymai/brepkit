@@ -5033,6 +5033,22 @@ fn fuse_polygon_prism_standing_on_a_frustum_rim_is_exact() {
         (vol - expected).abs() / expected < 1e-4,
         "fused volume {vol:.3} != expected {expected:.3}"
     );
+    // One solid, not the two operands touching: of the frustum's top only
+    // the slivers between the polygon and the rim are left at z 3.
+    let at_contact: f64 = brepkit_topology::explorer::solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                if normal.z().abs() > 1.0 - 1e-9 && (d.abs() - 3.0).abs() < 1e-9)
+        })
+        .map(|f| crate::measure::face_area(&topo, f, 0.001).unwrap())
+        .sum();
+    let slivers = std::f64::consts::PI.mul_add(r_top * r_top, -polygon);
+    assert!(
+        (at_contact - slivers).abs() < 1e-3 * slivers,
+        "faces at the contact plane cover {at_contact:.4}, the slivers {slivers:.4}"
+    );
 }
 
 /// A tube standing on a plate, sunk 0.01 mm into it (the tool's assembly
