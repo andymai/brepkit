@@ -1,0 +1,20 @@
+crates/operations/src/tessellate/edge_sampling.rs
+  s_a8677c67f85a06::t_829e6b7461706e 317-322,326,333,338,550-580
+  s_a8677c67f85a06::t_664f139f2465e4 581
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "704052c81ea18d3cb8761a5b0aeb85df92f8971a",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
