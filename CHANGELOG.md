@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.39](https://github.com/andymai/brepkit/compare/v4.1.38...v4.1.39) (2026-10-07)
+
+
+### Bug Fixes
+
+* **algo:** carve a counterbore's rim circle into the piece around it ([#2007](https://github.com/andymai/brepkit/issues/2007)) ([c4fb4f8](https://github.com/andymai/brepkit/commit/c4fb4f824602550a2877d341e804568afda05863))
+
 ## [4.1.38](https://github.com/andymai/brepkit/compare/v4.1.37...v4.1.38) (2026-10-07)
 
 
