@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791344920129,
+  "lastUpdate": 1791346027224,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52379,6 +52379,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43642546,
             "range": "± 1261430",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "336c70abf4aff0d2970ff8f2909e3d0d285ab885",
+          "message": "fix(algo): sample a ring between its outline and holes inside the ring (#1993)\n\nThe gridfinity fit-test glyph cut now produces valid, watertight cut and\nintersect results with no mesh fallback, and all 29 scenario tests pass.\n\n## What was wrong\n\n`fitTestSlice.scenario.test.ts` cuts text into the underside of a\nfit-test card with 86 faces spanning z 24 to 28. Operation 1479 cuts a\nmirrored `e`, a 27-face prism with 17 NURBS walls spanning z 23.99 to\n24.4.\n\nOn main, the raw cut leaves 18 edges on three faces and falls back to a\nmesh. Later wasm cuts take 12 to 310 s until one traps with\n`RuntimeError: unreachable`. The remaining 28 tests fail with `recursive\nuse of an object detected which would lead to unsafe aliasing in rust`\nbecause the trap leaves the kernel borrowed. All 29 tests fail.\n\nThe bottom face is split by the glyph outline and counter in\n`split_face_with_internal_loops`. `between_loop_and_holes` used the\nmidpoint from the outline's first sample to the nearest counter sample.\nFrom the foot of the `e` mouth, this lies outside the ring. The ring was\nclassified outside the glyph and retained over the pocket, sending its\n18 outline edges to three faces.\n\n## Change\n\nOn planes, each outline sample is tried and its midpoint is accepted\nonly inside the outline and outside every hole. Lines and conic arcs are\nread exactly. NURBS loops use polygons through the ends of their Bezier\npieces, divided evenly into 16, 64, then 256 steps per edge until a\npoint clears the clearance bound. The bound uses the farthest control\npoint from each chord, and elliptic arc chord sag at the tightest radius\nof curvature. Closed curves are sampled from their own parameter start.\n\nIf no midpoint works, the generic hole-avoiding step from the outline is\ntried. A plane ring with no point receives no precomputed point,\nallowing the classifier's generic interior search instead of the disc\npoint inside the hole. Other surfaces are unchanged.\n\n## Verification\n\n- At deflection 0.05, captured raw GFA and operations results agree with\nno mesh fallback. Cut: 113 faces, every edge used twice, volume\n26384.068. Intersect: 27 faces, volume 0.578. Their sum is the card\nvolume, 26384.646. The glyph volume is 0.592, and its 0.01 below the\ncard (0.01 times the outline's 1.364 area) is outside the card.\n- Unit tests cover the mouth, a round hole near the outline, a round\noutline with a displaced seam, a NURBS bump between samples, and a ring\nthinner than chord sag. `glyph_stamp_cut_inmem.rs` uses the captured\nbinaries and requires valid, watertight results, every edge twice, no\nmesh fallback, and volume agreement within 1e-6. On main, both fixture\noperations fall back. The mouth test fails on the plain midpoint, which\nlands in the mouth, and the round-hole test fails when the hole is read\nas a 16-chord polygon.\n- Clippy is clean on brepkit-math, -algo, -blend, -operations and -io\nwith all targets. Nextest over brepkit-topology, -math, -algo, -blend,\n-operations, -io and -wasm runs 3001 tests, all passing on main with\n#1994. `pose_sweep` and `truth_audit` exactly match main.\n`approx_census` differs only at the face pair in an already failing\nNURBS loft offset error that varies between main runs.\n- With tool commit `a4945a2aab`, `BREPJS_KERNEL=brepkit`, and this wasm\noverlaid, all 29 tests pass in 579 s on one worker. There is no mesh\nfallback, and the slowest kernel call is 5.1 s. A two-worker run using\nmain build 4.1.33 fails all 29 after one trap leaves the borrow held.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` adds a closed entry for this case.",
+          "timestamp": "2026-10-07T04:04:01Z",
+          "tree_id": "6f46037cbd8b907acc7f7e028d21119bce1025e3",
+          "url": "https://github.com/andymai/brepkit/commit/336c70abf4aff0d2970ff8f2909e3d0d285ab885"
+        },
+        "date": 1791346020979,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1040282,
+            "range": "± 1312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1126313,
+            "range": "± 4992",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13000,
+            "range": "± 38",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 822616,
+            "range": "± 2191",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 44103223,
+            "range": "± 197283",
             "unit": "ns/iter"
           }
         ]
