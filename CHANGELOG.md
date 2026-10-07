@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.1.38](https://github.com/andymai/brepkit/compare/v4.1.37...v4.1.38) (2026-10-07)
+
+
+### Bug Fixes
+
+* **algo:** cross a section circle at a fitted wall's rulings ([#1995](https://github.com/andymai/brepkit/issues/1995)) ([bea6d5e](https://github.com/andymai/brepkit/commit/bea6d5e5b2075b8bac7577e36931a08f51cc19da))
+* **algo:** keep a section circle off a plane face whose polygon it circumscribes ([#1999](https://github.com/andymai/brepkit/issues/1999)) ([65cb16e](https://github.com/andymai/brepkit/commit/65cb16e5e3ccee3d864b65b63d7e4d5fba4adb0f))
+* **algo:** keep both halves of a split coaxial wall under one coincident face ([#2000](https://github.com/andymai/brepkit/issues/2000)) ([7a48890](https://github.com/andymai/brepkit/commit/7a488904ea397a6b073563e5ddc5d47e727486e1))
+* **algo:** sample a ring between its outline and holes inside the ring ([#1993](https://github.com/andymai/brepkit/issues/1993)) ([336c70a](https://github.com/andymai/brepkit/commit/336c70abf4aff0d2970ff8f2909e3d0d285ab885))
+* **io:** restore a captured solid's floats exactly ([#2006](https://github.com/andymai/brepkit/issues/2006)) ([1d2214a](https://github.com/andymai/brepkit/commit/1d2214a532105ddfbc37c83bf9b55cbf08fc6059))
+* **math:** solve a line's NURBS crossing in (u, v, t) ([#1997](https://github.com/andymai/brepkit/issues/1997)) ([d42bc8b](https://github.com/andymai/brepkit/commit/d42bc8b2c1f98038935839d35040707b4fb1f69b))
+
 ## [4.1.37](https://github.com/andymai/brepkit/compare/v4.1.36...v4.1.37) (2026-10-07)
 
 
