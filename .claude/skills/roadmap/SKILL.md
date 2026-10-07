@@ -2226,6 +2226,11 @@ One line each; the fixture/PR carries the story. Newest first.
   the fallback tell** — but weak where the construction is legitimately planar.
 - **Never replay a captured operand without printing its free/over counts first.**
   Captures can be fallback-poisoned; a whole iteration has been spent inside that trap.
+- **A tool fallback that "replays exact natively" was a lossy capture parse until
+  serde_json's `float_roundtrip`** (`arena_io` round trip pinned by
+  `roundtrip_keeps_floats_a_best_effort_parser_rounds_off`): one ulp moved in 32 of 1,414
+  floats flipped a fuse from mesh to exact. Captures replayed before that fix mislead,
+  including op 4412 in the generator-hangs row; re-replay them before believing it.
 - **Every `BK_*` knob is NATIVE-ONLY** (`std::env::var` returns Err on wasm32).
   `setLogLevel` + a JS ring buffer is the only handle on kernel internals from JS.
 - **`log::debug!` in `fill_images_faces.rs` does not reach a custom logger** that

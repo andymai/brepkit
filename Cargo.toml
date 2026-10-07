@@ -27,7 +27,9 @@ log = "0.4"
 
 # Serialization
 serde = {version = "1", features = ["derive"]}
-serde_json = "1"
+# float_roundtrip: the default parser can land a float one ulp off, and a
+# solid captured by `arena_io` must replay with every f64 exact.
+serde_json = {version = "1", features = ["float_roundtrip"]}
 
 # Parallelism
 rayon = "1.11"
