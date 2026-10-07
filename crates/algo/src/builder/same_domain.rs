@@ -723,15 +723,29 @@ pub fn detect_same_domain_with_shells<S: BuildHasher>(
                     // none of them is a copy of another. Only a member whose
                     // region shares no area with any other member of its rank
                     // is a tile; a partial overlap stays a duplicate.
+                    // Two halves of a corner cylinder split at its 45 degree
+                    // line, under one quarter of the other rank, are tiles
+                    // the same way as two plane pieces are.
+                    let apart = |m: usize| match topo
+                        .face(sub_faces[idx].face_id)
+                        .map(|f| f.surface().is_planar())
+                    {
+                        Ok(true) => {
+                            planar_regions_apart(topo, sub_faces[idx].face_id, sub_faces[m].face_id)
+                        }
+                        Ok(false) => analytic_regions_apart(
+                            topo,
+                            sub_faces[idx].face_id,
+                            sub_faces[m].face_id,
+                            tol,
+                        ),
+                        Err(_) => false,
+                    };
                     let beside = members.iter().all(|&m| {
                         m == idx
                             || sub_faces[m].rank != sub_faces[idx].rank
                             || (edge_sets[idx].is_none() || edge_sets[idx] != edge_sets[m])
-                                && planar_regions_apart(
-                                    topo,
-                                    sub_faces[idx].face_id,
-                                    sub_faces[m].face_id,
-                                )
+                                && apart(m)
                     });
                     if beside {
                         if std::env::var("BK_SD").is_ok() {
@@ -1031,27 +1045,17 @@ struct PlanarRegion {
     chord_error: f64,
 }
 
-/// Whether two coplanar planar faces' material regions share no area. Each
-/// face is probed just inside every boundary segment and on a 16 x 16 grid
-/// over its box, no probe of either may lie in the other, and their
-/// boundaries may not cross where both faces' material meets. Outlines are
-/// sampled 32 times along each curved edge, and a probe counts as inside the
-/// other face only past that face's own chord error, so a tile beside it on a
-/// shared arc split differently does not read as overlapping. `false` when
-/// either outline cannot be read or yields no probe, which keeps the member a
-/// duplicate.
-fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
-    use super::classify_2d::{boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d};
-    use brepkit_math::vec::{Point2, Point3};
-
-    type Region = PlanarRegion;
-
-    let Ok(face_a) = topo.face(a) else {
-        return false;
-    };
-    let FaceSurface::Plane { normal, .. } = *face_a.surface() else {
-        return false;
-    };
+/// A face's outer loop and holes sampled in 3D (curved edges at 32 chords),
+/// with the farthest any chord stands off its curve.
+fn face_loop_samples(
+    topo: &Topology,
+    fid: FaceId,
+) -> Option<(
+    Vec<brepkit_math::vec::Point3>,
+    Vec<Vec<brepkit_math::vec::Point3>>,
+    f64,
+)> {
+    use brepkit_math::vec::Point3;
     let wire_samples = |wid: brepkit_topology::wire::WireId| -> Option<(Vec<Point3>, f64)> {
         let wire = topo.wire(wid).ok()?;
         let (mut pts, mut chord_error) = (Vec::new(), 0.0_f64);
@@ -1084,7 +1088,7 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
         }
         Some((pts, chord_error))
     };
-    let face_samples = |fid: FaceId| -> Option<(Vec<Point3>, Vec<Vec<Point3>>, f64)> {
+    {
         let face = topo.face(fid).ok()?;
         let (outer, mut err) = wire_samples(face.outer_wire())?;
         let mut holes = Vec::new();
@@ -1094,8 +1098,28 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
             holes.push(h);
         }
         Some((outer, holes, err))
+    }
+}
+
+/// Whether two coplanar planar faces' material regions share no area. Each
+/// face is probed just inside every boundary segment and on a 16 x 16 grid
+/// over its box, no probe of either may lie in the other, and their
+/// boundaries may not cross where both faces' material meets. Outlines are
+/// sampled 32 times along each curved edge, and a probe counts as inside the
+/// other face only past that face's own chord error, so a tile beside it on a
+/// shared arc split differently does not read as overlapping. `false` when
+/// either outline cannot be read or yields no probe, which keeps the member a
+/// duplicate.
+fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
+    use brepkit_math::vec::Point3;
+
+    let Ok(face_a) = topo.face(a) else {
+        return false;
     };
-    let (Some(sa), Some(sb)) = (face_samples(a), face_samples(b)) else {
+    let FaceSurface::Plane { normal, .. } = *face_a.surface() else {
+        return false;
+    };
+    let (Some(sa), Some(sb)) = (face_loop_samples(topo, a), face_loop_samples(topo, b)) else {
         return false;
     };
     if sa.0.len() < 3 || sb.0.len() < 3 {
@@ -1112,6 +1136,19 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
                 .collect(),
             chord_error: *chord_error,
         };
+    regions_apart(&region(&sa), &region(&sb))
+}
+
+/// Whether two regions of one surface's parameter plane share no area. Each
+/// is probed just inside every boundary segment and on a 16 x 16 grid over
+/// its box, no probe of either may lie in the other, and their boundaries
+/// may not cross where both regions' material meets.
+fn regions_apart(ra: &PlanarRegion, rb: &PlanarRegion) -> bool {
+    use super::classify_2d::{boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d};
+    use brepkit_math::vec::Point2;
+
+    type Region = PlanarRegion;
+
     // Inside a region clear of its boundary by `margin`.
     let clear_inside = |q: Point2, r: &Region, margin: f64| -> bool {
         let eps = boundary_eps(&r.outer).max(margin);
@@ -1186,7 +1223,6 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
         );
         out
     };
-    let (ra, rb) = (region(&sa), region(&sb));
     let bounds = |r: &Region| {
         r.outer.iter().fold(
             (
@@ -1198,7 +1234,7 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
             |(x0, y0, x1, y1), p| (x0.min(p.x()), y0.min(p.y()), x1.max(p.x()), y1.max(p.y())),
         )
     };
-    let (ba, bb) = (bounds(&ra), bounds(&rb));
+    let (ba, bb) = (bounds(ra), bounds(rb));
     let (x0, y0, x1, y1) = (
         ba.0.max(bb.0),
         ba.1.max(bb.1),
@@ -1209,15 +1245,15 @@ fn planar_regions_apart(topo: &Topology, a: FaceId, b: FaceId) -> bool {
     if x0 > x1 + pad || y0 > y1 + pad {
         return true;
     }
-    for (from, into) in [(&ra, &rb), (&rb, &ra)] {
+    for (from, into) in [(ra, rb), (rb, ra)] {
         let ps = probes(from);
         let margin = 1.5 * into.chord_error;
         if ps.is_empty() || ps.iter().any(|&q| clear_inside(q, into, margin)) {
             return false;
         }
     }
-    !boundaries_cross(&ra, &rb, (x0 - pad, y0 - pad, x1 + pad, y1 + pad), &|q| {
-        clear_inside(q, &ra, 1.5 * ra.chord_error) && clear_inside(q, &rb, 1.5 * rb.chord_error)
+    !boundaries_cross(ra, rb, (x0 - pad, y0 - pad, x1 + pad, y1 + pad), &|q| {
+        clear_inside(q, ra, 1.5 * ra.chord_error) && clear_inside(q, rb, 1.5 * rb.chord_error)
     })
 }
 
@@ -1892,6 +1928,79 @@ fn project_points_through_surface(
         return None;
     }
     Some((samples, radius))
+}
+
+/// Whether two coaxial cylinder or cone faces of one surface share no area,
+/// read in the first face's parameters: angle as arc length at its radius
+/// against the axial coordinate, every other loop moved by the whole turn
+/// that best aligns it with the first face's outline. `false` for any other
+/// surface, a patch spanning about a whole turn, or an outline that cannot
+/// be read, which keeps the member a duplicate.
+fn analytic_regions_apart(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) -> bool {
+    use brepkit_math::vec::Point2;
+    use std::f64::consts::TAU;
+
+    let Ok(surface) = topo.face(a).map(|f| f.surface().clone()) else {
+        return false;
+    };
+    let (Some(sa), Some(sb)) = (face_loop_samples(topo, a), face_loop_samples(topo, b)) else {
+        return false;
+    };
+    let Some((first, radius)) = project_points_through_surface(&surface, &sa.0) else {
+        return false;
+    };
+    let reference = unwrap_angles(&first);
+    let span = |pts: &[(f64, f64)]| {
+        pts.iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(u, _)| {
+                (lo.min(u), hi.max(u))
+            })
+    };
+    let (r_lo, r_hi) = span(&reference);
+    if r_hi - r_lo >= TAU - tol.angular {
+        return false;
+    }
+    let develop = |pts: &[brepkit_math::vec::Point3]| -> Option<Vec<Point2>> {
+        let (raw, _) = project_points_through_surface(&surface, pts)?;
+        let loop_uv = unwrap_angles(&raw);
+        let (lo, hi) = span(&loop_uv);
+        if hi - lo >= TAU - tol.angular {
+            return None;
+        }
+        let shift = [-TAU, 0.0, TAU]
+            .into_iter()
+            .max_by(|x, y| {
+                let overlap = |d: f64| (hi + d).min(r_hi) - (lo + d).max(r_lo);
+                overlap(*x).total_cmp(&overlap(*y))
+            })
+            .unwrap_or(0.0);
+        Some(
+            loop_uv
+                .iter()
+                .map(|&(u, axial)| Point2::new((u + shift) * radius, axial))
+                .collect(),
+        )
+    };
+    let region = |(outer, holes, chord_error): &(
+        Vec<brepkit_math::vec::Point3>,
+        Vec<Vec<brepkit_math::vec::Point3>>,
+        f64,
+    )|
+     -> Option<PlanarRegion> {
+        Some(PlanarRegion {
+            outer: develop(outer)?,
+            holes: holes
+                .iter()
+                .filter(|h| h.len() >= 3)
+                .map(|h| develop(h))
+                .collect::<Option<Vec<_>>>()?,
+            chord_error: *chord_error,
+        })
+    };
+    match (region(&sa), region(&sb)) {
+        (Some(ra), Some(rb)) => regions_apart(&ra, &rb),
+        _ => false,
+    }
 }
 
 /// Unwrap a sequence of raw angular samples (each in `[0, 2π)`) into a
