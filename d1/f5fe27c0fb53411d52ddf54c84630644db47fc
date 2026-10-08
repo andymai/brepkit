@@ -1,0 +1,23 @@
+crates/io/tests/data/ring_bin_base.bin
+  s_a8677c67f85a06::t_9251197de7753b 1
+crates/io/tests/data/ring_bin_fillet_material.bin
+  s_a8677c67f85a06::t_9251197de7753b 1
+crates/io/tests/ring_bin_fillet_fuse_inmem.rs
+  s_a8677c67f85a06::t_9251197de7753b 1-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d1f5fe27c0fb53411d52ddf54c84630644db47fc",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
