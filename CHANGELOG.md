@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.42](https://github.com/andymai/brepkit/compare/v4.1.41...v4.1.42) (2026-10-08)
+
+
+### Bug Fixes
+
+* **algo:** bound an analytic face's extent margin by the junction band ([#2012](https://github.com/andymai/brepkit/issues/2012)) ([2709180](https://github.com/andymai/brepkit/commit/270918041cd3ab2570b826d59bf32cacb330a091))
+
 ## [4.1.41](https://github.com/andymai/brepkit/compare/v4.1.40...v4.1.41) (2026-10-08)
 
 
