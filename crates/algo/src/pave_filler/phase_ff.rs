@@ -19,6 +19,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 
+use crate::builder::face_splitter::edge_curve_is_straight;
 use crate::ds::{GfaArena, Interference, IntersectionCurveDS, Pave, PaveBlock};
 use crate::error::AlgoError;
 
@@ -63,6 +64,9 @@ fn ff_trace_x() -> Option<f64> {
 #[derive(Default)]
 struct JunctionRegistry {
     cells: std::collections::HashMap<(i64, i64, i64), Point3>,
+    /// Per face pair, the EF vertices where a boundary edge of one face
+    /// crosses the other: the exact ends of that pair's sections.
+    crossings: std::collections::HashMap<(usize, usize), Vec<Point3>>,
 }
 
 impl JunctionRegistry {
@@ -134,6 +138,65 @@ impl JunctionRegistry {
         }
     }
 
+    fn pair_key(fa: FaceId, fb: FaceId) -> (usize, usize) {
+        (fa.index().min(fb.index()), fa.index().max(fb.index()))
+    }
+
+    fn add_crossing(&mut self, fa: FaceId, fb: FaceId, p: Point3) {
+        self.crossings
+            .entry(Self::pair_key(fa, fb))
+            .or_default()
+            .push(p);
+    }
+
+    /// The pair's boundary crossing lying on `raw` within `band`, at a
+    /// parameter within `step` of `t`, nearest `t`: where a window bisected
+    /// against a sampled boundary polygon truly ends.
+    fn crossing_on_curve(
+        &self,
+        fa: FaceId,
+        fb: FaceId,
+        raw: &RawCurve,
+        t: f64,
+        step: f64,
+        band: f64,
+    ) -> Option<(f64, Point3)> {
+        let pts = self.crossings.get(&Self::pair_key(fa, fb))?;
+        let periodic = matches!(raw.curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
+        let (dom_lo, dom_hi) = if periodic {
+            (f64::NEG_INFINITY, f64::INFINITY)
+        } else {
+            (
+                raw.t_range.0.min(raw.t_range.1),
+                raw.t_range.0.max(raw.t_range.1),
+            )
+        };
+        let gap = |s: f64, p: Point3| {
+            (raw.curve.evaluate_with_endpoints(s, raw.p_start, raw.p_end) - p).length()
+        };
+        let mut best: Option<(f64, Point3)> = None;
+        for &p in pts {
+            let (mut lo, mut hi) = ((t - step).max(dom_lo), (t + step).min(dom_hi));
+            if hi <= lo {
+                continue;
+            }
+            for _ in 0..60 {
+                let m1 = lo + (hi - lo) / 3.0;
+                let m2 = hi - (hi - lo) / 3.0;
+                if gap(m1, p) < gap(m2, p) {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let s = f64::midpoint(lo, hi);
+            if gap(s, p) <= band && best.is_none_or(|(bs, _)| (s - t).abs() < (bs - t).abs()) {
+                best = Some((s, p));
+            }
+        }
+        best
+    }
+
     fn nearest_two(&self, p: Point3) -> Option<(f64, Point3, f64)> {
         let mut best: Option<(f64, Point3)> = None;
         let mut second = f64::INFINITY;
@@ -190,6 +253,30 @@ pub fn perform(
             }
         }
     }
+    let mut edge_faces: std::collections::HashMap<brepkit_topology::edge::EdgeId, Vec<FaceId>> =
+        std::collections::HashMap::new();
+    for &fid in faces_a.iter().chain(&faces_b) {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                edge_faces.entry(oe.edge()).or_default().push(fid);
+            }
+        }
+    }
+    for interf in &arena.interference.ef {
+        if let Interference::EF {
+            edge,
+            face,
+            new_vertex: Some(vid),
+            ..
+        } = interf
+            && let Ok(v) = topo.vertex(arena.resolve_vertex(*vid))
+        {
+            for &owner in edge_faces.get(edge).into_iter().flatten() {
+                junction_registry.add_crossing(owner, *face, v.point());
+            }
+        }
+    }
 
     // Pre-compute face AABBs for rejection
     let bboxes_a = compute_face_bboxes(topo, &faces_a, tol)?;
@@ -217,6 +304,13 @@ pub fn perform(
         .zip(surfs_b.iter())
         .map(|(&fid, surf)| face_v_range(topo, fid, surf))
         .collect();
+    // Each face's trimmed extent, built on first use and shared by every
+    // pair: a NURBS face's boundary polygon projects each of its samples
+    // onto the surface.
+    let extents_a: Vec<std::cell::OnceCell<Option<FaceExtent>>> =
+        faces_a.iter().map(|_| std::cell::OnceCell::new()).collect();
+    let extents_b: Vec<std::cell::OnceCell<Option<FaceExtent>>> =
+        faces_b.iter().map(|_| std::cell::OnceCell::new()).collect();
 
     // Registry of endpoint vertices created for the EXACT faceted-ramp arcs
     // (see `trim_ellipse_to_boundary_crossings`). Adjacent treads share a
@@ -461,12 +555,16 @@ pub fn perform(
             // the surface — shared between adjacent treads, so the arcs chain.
             // These exact arcs bypass the generic filters below.
             let (exact_arcs, raw_curves): (Vec<RawCurve>, Vec<RawCurve>) = {
-                let ext_a = FaceExtent::new(topo, fa, surf_a, v_range_a, tol);
-                let ext_b = FaceExtent::new(topo, fb, surf_b, v_range_b, tol);
+                let ext_a = extents_a[idx_a]
+                    .get_or_init(|| FaceExtent::new(topo, fa, surf_a, v_range_a, tol))
+                    .as_ref();
+                let ext_b = extents_b[idx_b]
+                    .get_or_init(|| FaceExtent::new(topo, fb, surf_b, v_range_b, tol))
+                    .as_ref();
                 let mut exact = Vec::new();
                 let mut rest = Vec::new();
                 for raw in raw_curves {
-                    if let (Some(ea), Some(eb)) = (&ext_a, &ext_b)
+                    if let (Some(ea), Some(eb)) = (ext_a, ext_b)
                         && let Some(arcs) = trim_ellipse_to_boundary_crossings(
                             topo, fa, fb, surf_a, surf_b, &raw, ea, eb, tol,
                         )
@@ -689,8 +787,12 @@ pub fn perform(
                 fb,
                 surf_a,
                 surf_b,
-                v_range_a,
-                v_range_b,
+                extents_a[idx_a]
+                    .get_or_init(|| FaceExtent::new(topo, fa, surf_a, v_range_a, tol))
+                    .as_ref(),
+                extents_b[idx_b]
+                    .get_or_init(|| FaceExtent::new(topo, fb, surf_b, v_range_b, tol))
+                    .as_ref(),
                 raw_curves,
                 tol,
                 &mut junction_registry,
@@ -709,6 +811,14 @@ pub fn perform(
                 .map(|raw| {
                     pull_ends_onto_corners(topo, arena, (fa, surf_a), (fb, surf_b), raw, tol)
                 })
+                .filter_map(|raw| {
+                    if matches!(raw.curve, EdgeCurve::NurbsCurve(_)) {
+                        onto_lying_boundary_edge(topo, (fa, surf_a), (fb, surf_b), raw, tol)
+                    } else {
+                        Some(raw)
+                    }
+                })
+                .flat_map(|raw| split_lens_off_boundary_edge(topo, fa, fb, raw, tol))
                 .collect();
             // Emit the EXACT faceted-ramp arcs with registry-aware endpoint
             // resolution: each arc's endpoints are bit-identical to the shared
@@ -981,6 +1091,262 @@ fn section_end_vertex(
     let vid = topo.add_vertex(Vertex::new(p, tol.linear));
     ends.push((p, vid));
     vid
+}
+
+/// A boundary edge as 64 chords, with the largest gap between a chord's
+/// midpoint and the edge at that chord's middle parameter.
+fn edge_chords(topo: &Topology, edge: &brepkit_topology::edge::Edge) -> Option<(Vec<Point3>, f64)> {
+    const CHORDS: u32 = 64;
+    let a = topo.vertex(edge.start()).ok()?.point();
+    let b = topo.vertex(edge.end()).ok()?.point();
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let at = |f: f64| {
+        edge.curve()
+            .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+    };
+    let along: Vec<Point3> = (0..=CHORDS)
+        .map(|k| at(f64::from(k) / f64::from(CHORDS)))
+        .collect();
+    let sag = (0..CHORDS)
+        .map(|k| {
+            let (p, q) = (along[k as usize], along[k as usize + 1]);
+            let mid = p + (q - p) * 0.5;
+            (at((f64::from(k) + 0.5) / f64::from(CHORDS)) - mid).length()
+        })
+        .fold(0.0, f64::max);
+    Some((along, sag))
+}
+
+/// A box holding a boundary edge: its ends for a line, its whole circle or
+/// ellipse, a NURBS curve's control points.
+fn edge_hull_box(topo: &Topology, edge: &brepkit_topology::edge::Edge) -> Option<Aabb3> {
+    let reach = |center: Point3, r: f64| {
+        Aabb3::from_points([center - Vec3::new(r, r, r), center + Vec3::new(r, r, r)])
+    };
+    match edge.curve() {
+        EdgeCurve::Line => Aabb3::try_from_points([
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        ]),
+        EdgeCurve::Circle(c) => Some(reach(c.center(), c.radius())),
+        EdgeCurve::Ellipse(e) => Some(reach(e.center(), e.semi_major())),
+        EdgeCurve::NurbsCurve(n) => Aabb3::try_from_points(n.control_points().iter().copied()),
+    }
+}
+
+/// Distance from `q` to a polyline.
+fn polyline_gap(along: &[Point3], q: Point3) -> f64 {
+    along
+        .windows(2)
+        .map(|w| {
+            let seg = w[1] - w[0];
+            let len2 = seg.dot(seg);
+            let s = if len2 > 0.0 {
+                ((q - w[0]).dot(seg) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (q - (w[0] + seg * s)).length()
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The edges of a face's outer and inner wires.
+fn face_boundary_edges(
+    topo: &Topology,
+    face: FaceId,
+) -> impl Iterator<Item = &brepkit_topology::edge::Edge> {
+    topo.face(face)
+        .ok()
+        .into_iter()
+        .flat_map(|f| std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()))
+        .filter_map(|wid| topo.wire(wid).ok())
+        .flat_map(|wire| wire.edges().iter())
+        .filter_map(|oe| topo.edge(oe.edge()).ok())
+}
+
+/// A marched section lying along an analytic boundary edge of one face that
+/// lies on the other face's surface, re-emitted as that edge or the stretch
+/// of it the section covers, or dropped when that stretch is shorter than
+/// the junction band.
+///
+/// The two faces meet along the edge itself; where one of them leaves the
+/// other tangentially there (a taper envelope flush on a wall), the march
+/// re-traces the edge up to 1e-4 off, end to end or only part of the way
+/// with stubs left at a corner, and the face holding the edge in its
+/// interior is split along both into sliver lenses and zero-length edges.
+/// Carrying the edge's own curve lets `link_existing` fold the section into
+/// the edge's block.
+fn onto_lying_boundary_edge(
+    topo: &Topology,
+    (fa, surf_a): (FaceId, &FaceSurface),
+    (fb, surf_b): (FaceId, &FaceSurface),
+    raw: RawCurve,
+    tol: Tolerance,
+) -> Option<RawCurve> {
+    const PROBES: u32 = 16;
+    let band = JunctionRegistry::ADOPT_MAX;
+    let probes: Vec<Point3> = (0..=PROBES)
+        .map(|k| {
+            let t = (raw.t_range.1 - raw.t_range.0)
+                .mul_add(f64::from(k) / f64::from(PROBES), raw.t_range.0);
+            raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+        })
+        .collect();
+    for (owner, other) in [(fa, surf_b), (fb, surf_a)] {
+        for edge in face_boundary_edges(topo, owner) {
+            if !matches!(
+                edge.curve(),
+                EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
+            ) {
+                continue;
+            }
+            let (Ok(va), Ok(vb)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (a, b) = (va.point(), vb.point());
+            if (a - b).length() <= band
+                || !edge_hull_box(topo, edge).is_some_and(|hull| {
+                    let reach = Vec3::new(band, band, band);
+                    let hull = Aabb3 {
+                        min: hull.min - reach,
+                        max: hull.max + reach,
+                    };
+                    hull.contains_point(raw.p_start) && hull.contains_point(raw.p_end)
+                })
+            {
+                continue;
+            }
+            let Some((along, sag)) = edge_chords(topo, edge) else {
+                continue;
+            };
+            if !probes
+                .iter()
+                .all(|&q| polyline_gap(&along, q) <= band + sag)
+                || !along
+                    .iter()
+                    .step_by(8)
+                    .all(|&p| surface_gap(other, p).is_some_and(|g| g <= 10.0 * tol.linear))
+            {
+                continue;
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let at = |f: f64| {
+                edge.curve()
+                    .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), a, b)
+            };
+            let (f_lo, f_hi) = {
+                let (fs, fe) = (
+                    polyline_fraction(&along, raw.p_start),
+                    polyline_fraction(&along, raw.p_end),
+                );
+                (fs.min(fe), fs.max(fe))
+            };
+            let (lo_at_a, hi_at_b) = (
+                (at(f_lo) - a).length() <= band,
+                (at(f_hi) - b).length() <= band,
+            );
+            let (f_lo, p_lo) = if lo_at_a { (0.0, a) } else { (f_lo, at(f_lo)) };
+            let (f_hi, p_hi) = if hi_at_b { (1.0, b) } else { (f_hi, at(f_hi)) };
+            if (p_hi - p_lo).length() <= band {
+                return None;
+            }
+            let t_range = if matches!(edge.curve(), EdgeCurve::Line) {
+                (0.0, 1.0)
+            } else {
+                ((t1 - t0).mul_add(f_lo, t0), (t1 - t0).mul_add(f_hi, t0))
+            };
+            return Some(RawCurve {
+                curve: edge.curve().clone(),
+                bbox: raw.bbox,
+                t_range,
+                p_start: p_lo,
+                p_end: p_hi,
+            });
+        }
+    }
+    Some(raw)
+}
+
+/// Where `q` projects along a polyline of evenly spaced curve samples, as a
+/// fraction of the curve's domain.
+fn polyline_fraction(along: &[Point3], q: Point3) -> f64 {
+    let n = along.len().saturating_sub(1).max(1);
+    let (k, s, _) = along
+        .windows(2)
+        .enumerate()
+        .fold((0, 0.0, f64::INFINITY), |best, (k, w)| {
+            let seg = w[1] - w[0];
+            let len2 = seg.dot(seg);
+            let s = if len2 > 0.0 {
+                ((q - w[0]).dot(seg) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let gap = (q - (w[0] + seg * s)).length();
+            if gap < best.2 { (k, s, gap) } else { best }
+        });
+    #[allow(clippy::cast_precision_loss)]
+    let f = (k as f64 + s) / n as f64;
+    f
+}
+
+/// A marched section whose two ends lie on one boundary edge of either face
+/// while its middle stands off it, emitted as two halves.
+///
+/// Its ends split that edge, and the piece between them shares both
+/// endpoints with the section: a lens (a scoop bulging into a corner wall
+/// between two crossings of the wall's seam line), which
+/// `merge_duplicate_edges` folds into one edge, putting the seam line on the
+/// scoop face.
+fn split_lens_off_boundary_edge(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    raw: RawCurve,
+    tol: Tolerance,
+) -> Vec<RawCurve> {
+    if !matches!(raw.curve, EdgeCurve::NurbsCurve(_))
+        || (raw.p_start - raw.p_end).length() <= 10.0 * tol.linear
+    {
+        return vec![raw];
+    }
+    let t_mid = 0.5 * (raw.t_range.0 + raw.t_range.1);
+    let p_mid = raw
+        .curve
+        .evaluate_with_endpoints(t_mid, raw.p_start, raw.p_end);
+    let near = 10.0 * tol.linear;
+    let lens = [fa, fb].into_iter().any(|f| {
+        face_boundary_edges(topo, f).any(|edge| {
+            edge_hull_box(topo, edge).is_some_and(|hull| {
+                let hull = hull.expanded(near);
+                hull.contains_point(raw.p_start) && hull.contains_point(raw.p_end)
+            }) && edge_chords(topo, edge).is_some_and(|(along, sag)| {
+                polyline_gap(&along, raw.p_start) <= 10.0 * tol.linear + sag
+                    && polyline_gap(&along, raw.p_end) <= 10.0 * tol.linear + sag
+                    && polyline_gap(&along, p_mid) > 100.0 * tol.linear + sag
+            })
+        })
+    });
+    if !lens {
+        return vec![raw];
+    }
+    vec![
+        RawCurve {
+            curve: raw.curve.clone(),
+            bbox: raw.bbox,
+            t_range: (raw.t_range.0, t_mid),
+            p_start: raw.p_start,
+            p_end: p_mid,
+        },
+        RawCurve {
+            curve: raw.curve,
+            bbox: raw.bbox,
+            t_range: (t_mid, raw.t_range.1),
+            p_start: p_mid,
+            p_end: raw.p_end,
+        },
+    ]
 }
 
 /// Distance from `p` to a face's unbounded surface; `None` when no foot is
@@ -1283,6 +1649,16 @@ enum FaceExtent {
         /// `v` is an angle read modulo a turn from `v0` (a torus patch whose
         /// tube arc runs across the angle's origin).
         periodic_v: bool,
+        /// A NURBS face's boundary in `(u, v)` and the band round it. A
+        /// trimmed patch ends across both parameters (a scoop clipped by a
+        /// tapered envelope's corner curves), which a `v` window alone misses.
+        uv_poly: Option<(Vec<brepkit_math::vec::Point2>, f64)>,
+        /// A torus patch on its own side of the axis, whose points project
+        /// onto themselves. A spindle torus's other sheet (the tube's far
+        /// side swung across the axis) projects to a foot on this sheet's
+        /// azimuth and tube angle, off the point by up to twice the major
+        /// radius; a march against the exact rational torus traces it.
+        own_sheet: bool,
     },
 }
 
@@ -1432,6 +1808,7 @@ impl FaceExtent {
             let u_gap = own_side
                 .then(|| face_circumferential_u_gap(topo, face_id, surface))
                 .flatten();
+            let own_sheet = own_side && matches!(surface, FaceSurface::Torus(_));
             // Only the outer wire sets the window and meets a circle's
             // crossings, so a face with inner wires does not qualify.
             let exact_window = matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
@@ -1445,6 +1822,8 @@ impl FaceExtent {
                             })
                         })
                 });
+            let uv_poly = nurbs_face_uv_polygon(topo, face_id, surface)
+                .map(|(poly, sag)| (poly, 2.0f64.mul_add(sag, 1e-7)));
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -1453,6 +1832,8 @@ impl FaceExtent {
                 u_gap,
                 exact_window,
                 periodic_v,
+                uv_poly,
+                own_sheet,
             })
         }
     }
@@ -1521,14 +1902,25 @@ impl FaceExtent {
                 v1,
                 u_gap,
                 periodic_v,
+                uv_poly,
+                own_sheet,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
                 // Unlike `contains` (conservative keep on projection failure),
                 // the STRICT gate fails closed: an unprojectable point cannot
                 // certify a genuine interior crossing.
+                if *own_sheet && !on_own_sheet(surface, p, u, v) {
+                    return false;
+                }
                 let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
-                in_v && in_u
+                let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
+                    let uv = brepkit_math::vec::Point2::new(u, v);
+                    crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
+                        && crate::builder::classify_2d::distance_to_polygon_boundary(uv, poly)
+                            > depth
+                });
+                in_v && in_u && in_poly
             }),
         }
     }
@@ -1561,14 +1953,33 @@ impl FaceExtent {
                 margin,
                 u_gap,
                 periodic_v,
+                uv_poly,
+                own_sheet,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
+                if *own_sheet && !on_own_sheet(surface, p, u, v) {
+                    return false;
+                }
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
-                in_v && in_u
+                let in_poly = uv_poly.as_ref().is_none_or(|(poly, band)| {
+                    let uv = brepkit_math::vec::Point2::new(u, v);
+                    crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
+                        || crate::builder::classify_2d::distance_to_polygon_boundary(uv, poly)
+                            <= *band
+                });
+                in_v && in_u && in_poly
             }),
         }
     }
+}
+
+/// Whether a point lies on the surface at its projected `(u, v)`, within the
+/// junction registry's adoption band.
+fn on_own_sheet(surface: &FaceSurface, p: Point3, u: f64, v: f64) -> bool {
+    surface
+        .evaluate(u, v)
+        .is_none_or(|q| (q - p).length() <= JunctionRegistry::ADOPT_MAX)
 }
 
 /// Compute the excluded angular `u` gap of a cylinder/cone lateral face from
@@ -1842,8 +2253,8 @@ fn restrict_curves_to_faces(
     fb: FaceId,
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
-    v_range_a: Option<(f64, f64)>,
-    v_range_b: Option<(f64, f64)>,
+    ext_a: Option<&FaceExtent>,
+    ext_b: Option<&FaceExtent>,
     raw_curves: Vec<RawCurve>,
     tol: Tolerance,
     junctions: &mut JunctionRegistry,
@@ -1854,10 +2265,7 @@ fn restrict_curves_to_faces(
     // and skipped the clip entirely".
     let trace_restrict = std::env::var_os("BK_RESTRICT").is_some();
 
-    let (Some(ext_a), Some(ext_b)) = (
-        FaceExtent::new(topo, fa, surf_a, v_range_a, tol),
-        FaceExtent::new(topo, fb, surf_b, v_range_b, tol),
-    ) else {
+    let (Some(ext_a), Some(ext_b)) = (ext_a, ext_b) else {
         // Conservative: if either face's extent can't be built, don't restrict.
         if trace_restrict {
             log::debug!(
@@ -1892,7 +2300,7 @@ fn restrict_curves_to_faces(
         // partner is a planar face with straight (Line) boundary edges; defers
         // (None) otherwise, so all other sections keep the sample-clip below.
         if let Some(arcs) =
-            trim_torus_oval_to_box_face(topo, fa, fb, surf_a, surf_b, &raw, &ext_a, &ext_b, tol)
+            trim_torus_oval_to_box_face(topo, fa, fb, surf_a, surf_b, &raw, ext_a, ext_b, tol)
         {
             out.extend(arcs);
             continue;
@@ -1912,19 +2320,19 @@ fn restrict_curves_to_faces(
         // crossing points chain with the adjacent faces' sections (a point on
         // the shared edge and on the cone lies on BOTH faces' conics).
         if let Some(pieces) = trim_open_curve_to_plane_face_lines(
-            topo, fa, surf_a, fb, surf_b, &raw, &ext_a, &ext_b, tol,
+            topo, fa, surf_a, fb, surf_b, &raw, ext_a, ext_b, tol,
         ) {
             out.extend(pieces);
             continue;
         }
         if let Some(pieces) = trim_open_curve_to_plane_face_lines(
-            topo, fb, surf_b, fa, surf_a, &raw, &ext_b, &ext_a, tol,
+            topo, fb, surf_b, fa, surf_a, &raw, ext_b, ext_a, tol,
         ) {
             out.extend(pieces);
             continue;
         }
 
-        let raw = start_outside_windows(&raw, &ext_a, &ext_b, N).unwrap_or(raw);
+        let raw = start_outside_windows(&raw, ext_a, ext_b, N).unwrap_or(raw);
         let pt = |i: usize| -> Point3 {
             #[allow(clippy::cast_precision_loss)]
             let f = i as f64 / N as f64;
@@ -2007,7 +2415,7 @@ fn restrict_curves_to_faces(
             let n_fine = ((8.0 * approx_len / min_dim).ceil() as usize).clamp(N, 1024);
             if n_fine <= N {
                 out.extend(rescue_corner_crossing(
-                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb, tol, junctions,
+                    topo, fa, fb, &raw, ext_a, ext_b, &inb, tol, junctions,
                 ));
                 continue;
             }
@@ -2026,7 +2434,7 @@ fn restrict_curves_to_faces(
             let (f0, f1) = longest_inboth_run(&inb_fine, closed);
             if f1 - f0 < 2 {
                 out.extend(rescue_corner_crossing(
-                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, tol, junctions,
+                    topo, fa, fb, &raw, ext_a, ext_b, &inb_fine, tol, junctions,
                 ));
                 continue;
             }
@@ -2038,7 +2446,7 @@ fn restrict_curves_to_faces(
                         && !matches!(surf_b, FaceSurface::Plane { .. })))
             {
                 emit_curve_windows(
-                    topo, fa, fb, &raw, &ext_a, &ext_b, &inb_fine, n_fine, closed, tol, junctions,
+                    topo, fa, fb, &raw, ext_a, ext_b, &inb_fine, n_fine, closed, tol, junctions,
                     &mut out,
                 );
                 continue;
@@ -2071,7 +2479,7 @@ fn restrict_curves_to_faces(
             // boundary-junction snapping — sample-index endpoints sit ~0.03
             // off the junction and never weld.
             emit_curve_windows(
-                topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, closed, tol, junctions, &mut out,
+                topo, fa, fb, &raw, ext_a, ext_b, &inb, N, closed, tol, junctions, &mut out,
             );
             continue;
         }
@@ -2090,7 +2498,7 @@ fn restrict_curves_to_faces(
             && !matches!(surf_b, FaceSurface::Plane { .. })
         {
             emit_curve_windows(
-                topo, fa, fb, &raw, &ext_a, &ext_b, &inb, N, closed, tol, junctions, &mut out,
+                topo, fa, fb, &raw, ext_a, ext_b, &inb, N, closed, tol, junctions, &mut out,
             );
             continue;
         }
@@ -2612,11 +3020,36 @@ fn emit_curve_windows(
             }
             t_hi = in_t;
         }
+        // A bisected end sits on the sampled polygon of a curved boundary,
+        // up to its chord sag off the boundary itself: where that boundary
+        // edge crosses the partner face lies on this curve, so the window
+        // ends there exactly.
+        #[allow(clippy::cast_precision_loss)]
+        let step = span / n as f64;
+        let band = JunctionRegistry::ADOPT_MAX;
+        let start = (r0 > 0)
+            .then(|| junctions.crossing_on_curve(fa, fb, raw, t_lo, step, band))
+            .flatten();
+        let end = (r1 != n)
+            .then(|| junctions.crossing_on_curve(fa, fb, raw, t_hi, step, band))
+            .flatten();
+        if let Some((t, _)) = start {
+            t_lo = t;
+        }
+        if let Some((t, _)) = end {
+            t_hi = t;
+        }
         if t_hi <= t_lo {
             continue;
         }
-        let p_start = junctions.resolve(topo, fa, fb, point_at(t_lo), tol);
-        let p_end = junctions.resolve(topo, fa, fb, point_at(t_hi), tol);
+        let p_start = match start {
+            Some((_, p)) => p,
+            None => junctions.resolve(topo, fa, fb, point_at(t_lo), tol),
+        };
+        let p_end = match end {
+            Some((_, p)) => p,
+            None => junctions.resolve(topo, fa, fb, point_at(t_hi), tol),
+        };
         out.push(RawCurve {
             curve: raw.curve.clone(),
             bbox: raw.bbox,
@@ -3888,7 +4321,7 @@ fn trim_open_curve_to_plane_face_lines(
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         let wire = topo.wire(wid).ok()?;
         for oe in wire.edges() {
-            if !matches!(topo.edge(oe.edge()).ok()?.curve(), EdgeCurve::Line) {
+            if !edge_curve_is_straight(topo.edge(oe.edge()).ok()?.curve()) {
                 has_curved_boundary = true;
             }
         }
@@ -3988,7 +4421,7 @@ fn trim_open_curve_to_plane_face_lines(
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         for oe in topo.wire(wid).ok()?.edges() {
             let edge = topo.edge(oe.edge()).ok()?;
-            if matches!(edge.curve(), EdgeCurve::Line) {
+            if edge_curve_is_straight(edge.curve()) {
                 straight.push((
                     topo.vertex(edge.start()).ok()?.point(),
                     topo.vertex(edge.end()).ok()?.point(),
@@ -4596,26 +5029,28 @@ fn all_inboth_runs(inb: &[bool], closed: bool) -> Vec<(usize, usize)> {
 }
 
 fn longest_inboth_run(inb: &[bool], closed: bool) -> (usize, usize) {
+    // A lone in-both sample is a run too: a section whose only sample on
+    // both faces is its last (a cylinder's circle reaching a cone's rim
+    // just inside the cylinder's quarter) is otherwise read as no run.
     let n = inb.len();
     if !closed || n < 2 {
-        let (mut b0, mut b1) = (0usize, 0usize);
+        let mut best: Option<(usize, usize)> = None;
         let mut start: Option<usize> = None;
         for (i, &v) in inb.iter().enumerate() {
             if v {
                 let s = *start.get_or_insert(i);
-                if i - s > b1 - b0 {
-                    b0 = s;
-                    b1 = i;
+                if best.is_none_or(|(b0, b1)| i - s > b1 - b0) {
+                    best = Some((s, i));
                 }
             } else {
                 start = None;
             }
         }
-        return (b0, b1);
+        return best.unwrap_or((0, 0));
     }
     // Closed: distinct samples are 0..m (sample m duplicates sample 0).
     let m = n - 1;
-    let (mut b0, mut b1) = (0usize, 0usize);
+    let mut best: Option<(usize, usize)> = None;
     let mut start: Option<usize> = None;
     for k in 0..2 * m {
         if inb[k % m] {
@@ -4623,15 +5058,14 @@ fn longest_inboth_run(inb: &[bool], closed: bool) -> (usize, usize) {
             if k - s >= m {
                 return (0, m); // whole curve in-both
             }
-            if k - s > b1 - b0 {
-                b0 = s;
-                b1 = k;
+            if best.is_none_or(|(b0, b1)| k - s > b1 - b0) {
+                best = Some((s, k));
             }
         } else {
             start = None;
         }
     }
-    (b0, b1)
+    best.unwrap_or((0, 0))
 }
 
 /// Compute AABB for a face by sampling its boundary edges.
@@ -8215,6 +8649,37 @@ mod tests {
         let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
         let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus)));
         assert!(!face_boundary_all_degenerate(&topo, face, Tolerance::default()).unwrap());
+    }
+
+    /// A lone in-both sample is the run, wherever it falls.
+    #[test]
+    fn a_lone_in_both_sample_is_a_run() {
+        let mut inb = vec![false; 25];
+        inb[24] = true;
+        assert_eq!(longest_inboth_run(&inb, false), (24, 24));
+        inb[24] = false;
+        inb[7] = true;
+        assert_eq!(longest_inboth_run(&inb, true), (7, 7));
+        inb[8] = true;
+        inb[20] = true;
+        assert_eq!(longest_inboth_run(&inb, false), (7, 8));
+    }
+
+    /// A spindle torus's other sheet (its tube swung across the axis)
+    /// projects onto this sheet's azimuth and tube angle, a sheet's spacing
+    /// off the point; a point on this sheet projects onto itself.
+    #[test]
+    fn a_spindle_torus_other_sheet_is_off_its_own_sheet() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        let torus = ToroidalSurface::new(Point3::new(41.0, -17.0, 4.7), 0.1, 2.45).unwrap();
+        let surface = FaceSurface::Torus(torus.clone());
+        let on = |u: f64, v: f64| {
+            let p = torus.evaluate(u, v);
+            let (pu, pv) = surface.project_point(p).unwrap();
+            on_own_sheet(&surface, p, pu, pv)
+        };
+        assert!(on(5.5, -0.6));
+        assert!(!on(2.36, std::f64::consts::PI + 0.6));
     }
 
     #[test]

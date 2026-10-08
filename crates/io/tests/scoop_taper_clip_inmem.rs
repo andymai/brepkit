@@ -31,7 +31,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{self, BooleanOp};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
@@ -149,4 +151,110 @@ fn a_clipped_scoop_and_its_tapered_bin_intersect_exactly() {
         (got - want).abs() <= 2e-4 * SCOOP_IN_POCKET,
         "intersect volume {got}, expected {want}"
     );
+}
+
+/// The test's fillet material (the bin's walls and floor: half sizes 44.03
+/// by 20.03 with r 3.03 corners, z 1.25 to 22.55, less a pocket with half
+/// sizes 43.55 by 19.55, r 2.55 corners and its floor at z 2.25 rounded r
+/// 2.45 by cylinders and spindle tori) against the clipped scoop. The
+/// scoop's cubic bulges past the pocket's corner cylinders between two
+/// crossings of their seam line, its envelope's leaning corners cross the
+/// spindle tori's tubes, and its front taper lies flush on the material's
+/// front wall. (The material less the scoop is the floor-wedge non-manifold
+/// solid above.)
+#[test]
+fn the_fillet_material_and_the_clipped_scoop_meet_exactly() {
+    let mut topo = Topology::new();
+    let material = load(&mut topo, "taper_scoop_fillet_material.bin");
+    let scoop = load(&mut topo, "taper_scoop_fillet_scoop.bin");
+    let common = exact(&mut topo, BooleanOp::Intersect, material, scoop);
+    let common_swapped = exact(&mut topo, BooleanOp::Intersect, scoop, material);
+    let fused = exact(&mut topo, BooleanOp::Fuse, material, scoop);
+    let scoop_only = exact(&mut topo, BooleanOp::Cut, scoop, material);
+
+    // At deflection 0.001 the fuse and the scoop cut both read 0.37 below
+    // these sums, the scoop's own volume reading that much high; the
+    // allowance is twice that.
+    let volume = |s: SolidId| solid_volume(&topo, s, 0.001).unwrap();
+    let (a, b, c) = (volume(material), volume(scoop), volume(common));
+    for (label, got, want) in [
+        ("swapped intersect", volume(common_swapped), c),
+        ("fuse", volume(fused), a + b - c),
+        ("scoop cut", volume(scoop_only), b - c),
+    ] {
+        assert!(
+            (got - want).abs() <= 0.75,
+            "{label} volume {got}, expected {want}"
+        );
+    }
+    let meshed = oriented_solid_volume(&topo, fused, 0.001).unwrap();
+    assert!(
+        (meshed - volume(fused)).abs() <= 0.75,
+        "the fuse meshes to {meshed}"
+    );
+
+    // Points the operands place on either side: in the front wall behind
+    // the scoop (up high and down at the floor), in a side wall clear of the
+    // scoop, in the scoop above the wall top, and in the pocket's air.
+    let inside_of = |s: SolidId, p: Point3| {
+        classify_point(&topo, s, p, 0.01, 1e-7).unwrap() == PointClassification::Inside
+    };
+    for (p, in_material, in_scoop) in [
+        (Point3::new(0.0, -19.8, 12.0), true, true),
+        (Point3::new(0.0, -19.8, 3.0), true, true),
+        (Point3::new(-43.8, 10.0, 12.0), true, false),
+        (Point3::new(0.0, -19.0, 23.0), false, true),
+        (Point3::new(0.0, 0.0, 10.0), false, false),
+    ] {
+        assert_eq!(
+            (inside_of(material, p), inside_of(scoop, p)),
+            (in_material, in_scoop),
+            "operands at {p:?}"
+        );
+        assert_eq!(
+            inside_of(common, p),
+            in_material && in_scoop,
+            "intersect at {p:?}"
+        );
+        assert_eq!(
+            inside_of(fused, p),
+            in_material || in_scoop,
+            "fuse at {p:?}"
+        );
+        assert_eq!(
+            inside_of(scoop_only, p),
+            in_scoop && !in_material,
+            "scoop cut at {p:?}"
+        );
+    }
+}
+
+/// The same scoop against the fillet material once its rim is rounded: the
+/// envelope's leaning corner is tangent to the material's front wall along
+/// a ruling, and the march re-traces only part of that ruling with stubs at
+/// its foot, which split the wall off the ruling's own edge.
+#[test]
+fn the_rounded_fillet_material_and_the_clipped_scoop_meet_exactly() {
+    let mut topo = Topology::new();
+    let material = load(&mut topo, "rounded_fillet_material.bin");
+    let scoop = load(&mut topo, "rounded_fillet_scoop.bin");
+    let common = exact(&mut topo, BooleanOp::Intersect, material, scoop);
+    let common_swapped = exact(&mut topo, BooleanOp::Intersect, scoop, material);
+    let fused = exact(&mut topo, BooleanOp::Fuse, material, scoop);
+    let scoop_only = exact(&mut topo, BooleanOp::Cut, scoop, material);
+
+    // The scoop's NURBS faces mesh up to 0.5 off at deflection 0.001.
+    let volume = |s: SolidId| oriented_solid_volume(&topo, s, 0.001).unwrap();
+    let (a, b, c) = (volume(material), volume(scoop), volume(common));
+    for (label, got, want) in [
+        ("swapped intersect", volume(common_swapped), c),
+        ("fuse", volume(fused), a + b - c),
+        ("scoop cut", volume(scoop_only), b - c),
+        ("fuse less scoop cut", volume(fused) - volume(scoop_only), a),
+    ] {
+        assert!(
+            (got - want).abs() <= 0.75,
+            "{label} volume {got}, expected {want}"
+        );
+    }
 }

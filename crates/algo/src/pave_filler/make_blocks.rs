@@ -11,6 +11,30 @@ use brepkit_topology::vertex::Vertex;
 use crate::ds::{GfaArena, Pave};
 use crate::error::AlgoError;
 
+/// Two paves of one edge mark the same point: equal parameters, one
+/// vertex, or two vertices within the linear tolerance.
+///
+/// Separate interferences put their own vertices on an edge where it crosses
+/// two faces' shared boundary, and their parameters agree only to the curve
+/// projection's rounding (5e-14 natively, 1.3e-10 in wasm on a fillet
+/// material's corner): a parameter test alone leaves a zero-length block
+/// between them on one platform and not the other.
+fn same_pave(topo: &Topology, arena: &GfaArena, a: Pave, b: Pave) -> bool {
+    if (a.parameter - b.parameter).abs() < 1e-10 {
+        return true;
+    }
+    let (va, vb) = (
+        arena.resolve_vertex(a.vertex),
+        arena.resolve_vertex(b.vertex),
+    );
+    va == vb
+        || matches!(
+            (topo.vertex(va), topo.vertex(vb)),
+            (Ok(p), Ok(q)) if (p.point() - q.point()).length()
+                <= brepkit_math::tolerance::Tolerance::new().linear
+        )
+}
+
 /// Split all pave blocks at their extra paves.
 ///
 /// After this, each pave block represents a contiguous edge segment
@@ -84,13 +108,12 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                     }
                 };
                 sorted_paves.sort_by(along);
-                sorted_paves.dedup_by(|a, b| (a.parameter - b.parameter).abs() < 1e-10);
+                sorted_paves.dedup_by(|a, b| same_pave(topo, arena, *a, *b));
                 let interior: Vec<Pave> = sorted_paves
                     .iter()
                     .copied()
-                    .filter(|pave| {
-                        (pave.parameter - start.parameter).abs() >= 1e-10
-                            && (pave.parameter - end.parameter).abs() >= 1e-10
+                    .filter(|&pave| {
+                        !same_pave(topo, arena, pave, start) && !same_pave(topo, arena, pave, end)
                     })
                     .collect();
                 if closed {
@@ -113,9 +136,7 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
 
                 for pave in &sorted_paves {
                     // Skip paves that coincide with the boundaries
-                    if (pave.parameter - start.parameter).abs() < 1e-10
-                        || (pave.parameter - end.parameter).abs() < 1e-10
-                    {
+                    if same_pave(topo, arena, *pave, start) || same_pave(topo, arena, *pave, end) {
                         continue;
                     }
 
@@ -223,4 +244,33 @@ fn midpoint_paves_of_both_arcs(
         mids.push(Pave::new(vid, t));
     }
     mids
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::ds::PaveBlock;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+
+    #[test]
+    fn two_paves_at_one_point_split_an_edge_once() {
+        let mut topo = Topology::new();
+        let at = |topo: &mut Topology, x: f64| {
+            topo.add_vertex(Vertex::new(Point3::new(x, 0.0, 0.0), 1e-7))
+        };
+        let (v0, v1) = (at(&mut topo, 0.0), at(&mut topo, 1.0));
+        // Two interferences' vertices on one crossing, 1e-9 apart, so their
+        // parameters differ by more than 1e-10.
+        let (a, b) = (at(&mut topo, 0.5), at(&mut topo, 0.5 + 1e-9));
+        let edge = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let mut arena = GfaArena::new();
+        let mut pb = PaveBlock::new(edge, Pave::new(v0, 0.0), Pave::new(v1, 1.0));
+        pb.extra_paves = vec![Pave::new(a, 0.5), Pave::new(b, 0.5 + 1e-9)];
+        let id = arena.pave_blocks.alloc(pb);
+        arena.edge_pave_blocks.insert(edge, vec![id]);
+        perform(&mut topo, &mut arena).unwrap();
+        assert_eq!(arena.pave_blocks.get(id).unwrap().children.len(), 2);
+    }
 }

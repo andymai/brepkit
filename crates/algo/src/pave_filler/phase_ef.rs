@@ -456,7 +456,7 @@ fn check_edge_face_pairs(
                 continue;
             }
 
-            let crossings = match surface {
+            let mut crossings = match surface {
                 FaceSurface::Plane { normal, d } => {
                     find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
                 }
@@ -464,6 +464,35 @@ fn check_edge_face_pairs(
                     &curve, start_pos, end_pos, t0, t1, surface, hull, tol,
                 ),
             };
+            // A NURBS edge crossing a cylinder or cone between two samples
+            // (an envelope's corner curve through a pocket's floor fillet)
+            // shows only as the side of the surface flipping. Its unbounded
+            // surface meets far more of the edge than the face does, and this
+            // face's containment is a box, so a flip counts only where the
+            // face's own wires hold it.
+            if matches!(curve, EdgeCurve::NurbsCurve(_))
+                && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+                && let Some(trim) = trims[face_idx]
+                    .get_or_insert_with(|| {
+                        crate::classifier::LateralTrim::new(topo, fid)
+                            .ok()
+                            .flatten()
+                    })
+                    .as_ref()
+            {
+                // The sample scan may already hold this root; two roots a
+                // sample step apart are still two crossings.
+                for (t, p) in find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol) {
+                    if trim.holds(p, 10.0 * tol.linear)
+                        && !crossings
+                            .iter()
+                            .any(|&(_, cp)| (p - cp).length() < tol.linear * 100.0)
+                    {
+                        crossings.push((t, p));
+                    }
+                }
+                crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+            }
 
             // Endpoint-drop windows, one per crossing and per endpoint,
             // computed while the face's surface borrow is still live (the
@@ -862,6 +891,59 @@ fn find_edge_surface_crossings(
     }
 
     crossings
+}
+
+/// Points where a curve passes from one side of a surface to the other,
+/// bisected onto the surface. A flip where the projection jumps to another
+/// part of the surface lands off it and is dropped.
+fn find_side_flips(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> Vec<(f64, Point3)> {
+    let side = |t: f64| -> Option<f64> {
+        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+        let (u, v) = surface.project_point(pt)?;
+        let on = surface.evaluate(u, v)?;
+        Some((pt - on).dot(surface.normal(u, v)))
+    };
+    let mut out = Vec::new();
+    let mut prev: Option<(f64, f64)> = None;
+    for i in 0..=N_SAMPLES {
+        let t = (t1 - t0).mul_add(i as f64 / N_SAMPLES as f64, t0);
+        let Some(s) = side(t) else {
+            prev = None;
+            continue;
+        };
+        if let Some((t_prev, s_prev)) = prev
+            && (s_prev > 0.0) != (s > 0.0)
+            && s_prev != 0.0
+            && s != 0.0
+        {
+            let (mut lo, mut hi, mut s_lo) = (t_prev, t, s_prev);
+            for _ in 0..60 {
+                let mid = f64::midpoint(lo, hi);
+                let Some(s_mid) = side(mid) else { break };
+                if (s_mid > 0.0) == (s_lo > 0.0) {
+                    lo = mid;
+                    s_lo = s_mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let tc = f64::midpoint(lo, hi);
+            let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+            if distance_to_surface(pc, surface) < tol.linear {
+                out.push((tc, pc));
+            }
+        }
+        prev = Some((t, s));
+    }
+    out
 }
 
 /// Find crossings by sampling a signed distance function and detecting sign changes.
