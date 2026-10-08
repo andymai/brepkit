@@ -1784,7 +1784,10 @@ impl FaceExtent {
                 {
                     10.0 * tol.linear / s.radius().max(tol.linear)
                 }
-                _ => (v1 - v0).abs() * 0.01 + tol.linear,
+                // A hundredth of a long face's span reaches far past its
+                // ends: a 118 mm wall fillet admitted a perpendicular corner
+                // cylinder's curve 1.05 mm beyond its last section.
+                _ => ((v1 - v0).abs() * 0.01).min(JunctionRegistry::ADOPT_MAX) + tol.linear,
             };
             // For a partial-arc lateral face (rounded-rect corner = a 90°
             // quarter-cylinder), record the angular gap the face does NOT
@@ -5255,6 +5258,25 @@ fn compute_face_bboxes(
 
 /// Compute the v-parameter range of a face by projecting boundary vertices.
 /// Returns `None` for planes (which have no UV parameterization) or if projection fails.
+/// The extreme of `sign * f` over `[a, b]` by golden-section search, for a
+/// function with a single extreme there.
+fn golden_extreme(
+    f: &impl Fn(f64) -> Option<f64>,
+    (mut a, mut b): (f64, f64),
+    sign: f64,
+) -> Option<f64> {
+    let ratio = (5.0_f64.sqrt() - 1.0) / 2.0;
+    for _ in 0..60 {
+        let (c, d) = (b - ratio * (b - a), a + ratio * (b - a));
+        if sign * f(c)? > sign * f(d)? {
+            b = d;
+        } else {
+            a = c;
+        }
+    }
+    f(0.5 * (a + b))
+}
+
 fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Option<(f64, f64)> {
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
@@ -5304,6 +5326,40 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_) => None,
         };
+        // A NURBS rim on an analytic wall (a slanted tube cut fitted with
+        // rational arcs) peaks between those samples too, by more than the
+        // extent's margin: sample it densely and refine each sampled local
+        // extreme of `v`.
+        if matches!(edge.curve(), EdgeCurve::NurbsCurve(_)) && surface.is_analytic() {
+            const N: u32 = 32;
+            let v_at = |t: f64| {
+                surface
+                    .project_point(edge.curve().evaluate_with_endpoints(t, sp, ep))
+                    .map(|(_, v)| v)
+            };
+            let ts: Vec<f64> = (0..=N)
+                .map(|k| (t1 - t0).mul_add(f64::from(k) / f64::from(N), t0))
+                .collect();
+            let vs: Vec<Option<f64>> = ts.iter().map(|&t| v_at(t)).collect();
+            for v in vs.iter().flatten() {
+                v_min = v_min.min(*v);
+                v_max = v_max.max(*v);
+            }
+            for k in 1..ts.len() - 1 {
+                let (Some(a), Some(m), Some(b)) = (vs[k - 1], vs[k], vs[k + 1]) else {
+                    continue;
+                };
+                for sign in [1.0, -1.0] {
+                    if sign * m >= sign * a
+                        && sign * m >= sign * b
+                        && let Some(v) = golden_extreme(&v_at, (ts[k - 1], ts[k + 1]), sign)
+                    {
+                        v_min = v_min.min(v);
+                        v_max = v_max.max(v);
+                    }
+                }
+            }
+        }
         if let (EdgeCurve::Ellipse(el), Some(axis)) = (edge.curve(), wall_axis) {
             let rise = el.semi_minor() * el.v_axis().dot(axis);
             let peak = rise.atan2(el.semi_major() * el.u_axis().dot(axis));
@@ -8680,6 +8736,39 @@ mod tests {
         };
         assert!(on(5.5, -0.6));
         assert!(!on(2.36, std::f64::consts::PI + 0.6));
+    }
+
+    #[test]
+    fn a_slanted_nurbs_rim_bounds_its_wall_at_its_peak() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        // A radius 10 tube cut by z = 20 + cos(0.58) x + sin(0.58) y: its rim's
+        // first quarter as a rational quadratic arc, peaking at z = 30 between
+        // the arc's quarter samples.
+        let rim_z = |x: f64, y: f64| 20.0 + 0.58_f64.cos() * x + 0.58_f64.sin() * y;
+        let at = |x: f64, y: f64| Point3::new(x, y, rim_z(x, y));
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let arc = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![at(10.0, 0.0), at(10.0, 10.0), at(0.0, 10.0)],
+            vec![1.0, w, 1.0],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let v0 = topo.add_vertex(Vertex::new(at(10.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(at(0.0, 10.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(v0, v1, EdgeCurve::NurbsCurve(arc)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], false).unwrap());
+        let wall = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 10.0)
+                .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], wall.clone()));
+        let (_, v1) = face_v_range(&topo, face, &wall).unwrap();
+        assert!((v1 - 30.0).abs() < 1e-6, "rim peak read as {v1}");
     }
 
     #[test]
