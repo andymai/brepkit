@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.40](https://github.com/andymai/brepkit/compare/v4.1.39...v4.1.40) (2026-10-08)
+
+
+### Bug Fixes
+
+* **operations:** mesh a fitted edge's ends at its vertices within a hundredth of the deflection ([#2009](https://github.com/andymai/brepkit/issues/2009)) ([717df70](https://github.com/andymai/brepkit/commit/717df70ad52b545d0b0e6dc0ff05a7a62caa8854))
+
 ## [4.1.39](https://github.com/andymai/brepkit/compare/v4.1.38...v4.1.39) (2026-10-07)
 
 
