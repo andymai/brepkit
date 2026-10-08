@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791425589107,
+  "lastUpdate": 1791445223780,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52973,6 +52973,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43556021,
             "range": "± 107973",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d18746a10a9be5ccb170d22aaf917a07e559e9f",
+          "message": "fix(algo): close the fillet material and clipped scoop booleans and a dovetail key slot cut (#2005)\n\nThe gridfinity layout tool test\n`binGenerator.export.interiorFilletScoops`, “a scoop beside tapered side\nwalls keeps the plain fillet”, now produces exact intersect results in\nboth operand orders, an exact fuse, and an exact scoop less material\nthrough `operations::boolean`. Every edge is used twice, the results\nvalidate, and they mesh watertight. The fillet material is the bin walls\nand floor, with half sizes 44.03 by 20.03, r 3.03 corners, and z 1.25 to\n22.55, less a pocket with half sizes 43.55 by 19.55, r 2.55 corners, and\na floor at z 2.25 rounded r 2.45 by cylinders and spindle tori. It meets\nthe scoop clipped by the bin’s tapered envelope. On main every boolean\nof this pair fell back to a mesh. Material less scoop keeps one edge on\nfour faces because the scoop’s cubic dips below the pocket floor and\nrises back to it at the lip, so two floor wedges touch along the lip\nline. That operation takes the mesh fallback recorded for #1998.\n\n## Roots\n\nEleven roots close op 1356 as first captured. Each is required:\nreverting any one leaves at least one of the four booleans with free\nedges or a volume off its identity.\n\n1. A plane face’s NURBS boundary edges are expanded at their paves in\nthe face splitter (`face_splitter/conversion.rs`), not only single-span\nedges.\n2. A section’s NURBS curve is cut to its window when an end vertex lies\noff the curve (`window_curve`, `fill_images_faces.rs`). Otherwise the\nedge read its span as the whole marched curve.\n3. A window end bisected against a sampled boundary polygon lands on the\npair’s EF crossing lying on the curve within 1e-3\n(`JunctionRegistry::crossing_on_curve`, `phase_ff.rs`), and the\nsection’s end vertex welds there (`curve_endpoints`,\n`fill_images_faces.rs`).\n4. A NURBS face’s FF extent holds its boundary polygon in (u, v)\n(`FaceExtent`, `phase_ff.rs`). A v window alone admitted points beyond\nthe trimmed patch.\n5. EF finds a NURBS edge crossing a cylinder or cone between distance\nsamples by the side of the surface flipping (`find_side_flips`,\n`phase_ef.rs`), kept only where the face’s own wires hold the crossing.\n6. The plane-face section trim reads straight NURBS boundary edges as\nstraight (`trim_open_curve_to_plane_face_lines`, `phase_ff.rs`).\n7. The wire walk ranks a curved boundary’s continuation through a split\nvertex after every turn when the pieces’ NURBS pcurve derivatives agree\nwithin 1e-6 (`continues_straight`, `wire_builder.rs`). Sampled tangents\nremain chords 1% of a span long for turn ordering. Reading every tangent\nfrom the derivative broke twelve existing tests, and separately fitted\nhole arcs kink by 3e-6 to 1e-5, which the keyholed knuckle weave needs\nread as turns.\n8. A marched section running end to end along an analytic boundary edge\nof one face that lies on the other face is emitted as that edge\n(`onto_lying_boundary_edge`, `phase_ff.rs`), and `link_existing` folds\nit into the edge’s block. The scoop envelope’s leaning corner leaves the\nmaterial’s front wall tangentially along such an edge, and the march\nretraced it up to 1e-4 off, splitting the wall into a sliver lens.\n9. A marched section whose ends lie on one boundary edge while its\nmiddle stands off it is split at its middle\n(`split_lens_off_boundary_edge`, `phase_ff.rs`). The scoop bulges into\nthe pocket’s corner cylinder between two crossings of the seam line, and\nthe duplicate-edge merge folded that section into the seam line, leaving\nthe fuse closed but 20 mm3 heavy.\n10. A spindle torus’s FF extent rejects points on its other sheet\n(`on_own_sheet`, `phase_ff.rs`). The march against the exact rational\ntorus traced the sheet swung across the axis, whose points project onto\nthe face’s azimuth and tube angle 0.16 off it here.\n11. A rim arc lying in a cylinder or cone wall splits it even when the\nwall has FF sections (`build_section_map`, `fill_images_faces.rs`).\nPreviously only straight in-face edges did.\n\nTwo additional roots were found once captured operands parsed with exact\nfloats (#2006).\n\n12. A marched section lying along an analytic boundary edge for only\npart of its length becomes the stretch it covers, and one shorter than\nthe junction band is dropped (`onto_lying_boundary_edge`,\n`phase_ff.rs`). The march retraced part of a tangent ruling plus stubs\nabout 1e-5 long at its foot. The stubs left zero-length edges and the\npartial retrace split the wall beside the edge.\n13. Two paves of one edge merge when their parameters agree within\n1e-10, when they share a vertex, or when their vertices lie within the\nlinear tolerance (`same_pave`, `make_blocks.rs`). Two interferences\nplaced vertices 1e-9 apart on the material’s corner edge. Their\nparameters differed by 5e-14 natively and 1.3e-10 in wasm, so wasm kept\na zero-length block and the fuse fell back there only.\n\n## Dovetail key slots\n\n`longest_inboth_run` (`phase_ff.rs`) now reports a run consisting of a\nsingle sample even when it is not the first. A section whose only sample\non both faces was its last had been dropped as a graze. In\n`baseplateGenerator.scenario.dovetailKey`, a key slot’s r 0.4 corner\ncylinder meets a cell’s pocket cone only in the last 0.02 mm before the\ncone reaches the plate top, causing the fourth of eleven cuts to fall\nback. The cut is now exact. It removes 23.258334 mm3, and the tool’s\npart inside the plate measures 23.258335.\n\n## Performance\n\nEach face’s FF extent is built once per boolean (`phase_ff.rs`) instead\nof twice per face pair. A NURBS extent projects every boundary sample\nonto the surface. Rebuilding it per pair made the taper scoop fuse\nfixture take 555 ms against 345 ms on main. With the cache it takes 330\nms.\n\n## Tests\n\n`the_fillet_material_and_the_clipped_scoop_meet_exactly` uses\n`taper_scoop_fillet_material.bin` and `taper_scoop_fillet_scoop.bin`,\nrequires four exact booleans, and checks the swapped intersect, fuse,\nand scoop cut volume identities within 0.75 at deflection 0.001.\n`the_rounded_fillet_material_and_the_clipped_scoop_meet_exactly` uses\n`rounded_fillet_material.bin` and `rounded_fillet_scoop.bin` and applies\nthe same exactness and volume checks to the same pair once the\nmaterial’s rim is rounded. Additional coverage includes\n`a_curved_boundary_runs_straight_through_its_split_point`, which\nproduces one 8-edge loop instead of loops of 3 and 5 with the chord\ntangent, `a_spindle_torus_other_sheet_is_off_its_own_sheet`,\n`a_window_with_an_end_off_its_curve_is_cut_to_the_window`,\n`a_lone_in_both_sample_is_a_run`, and\n`two_paves_at_one_point_split_an_edge_once`, which fails with the\nparameter-only test. `a_key_slot_cut_through_a_pocket_cone_rim_is_exact`\nuses `dovetail_key_slot_plate.bin` and `dovetail_key_slot_tool.bin`,\nrequires exact cut and intersect results, and checks removed volume\nagainst the intersect within 0.01.\n\n## Verification\n\n- After rebasing onto main at #2007 with the exact-float roots, clippy\nis clean on `brepkit-math`, `brepkit-algo`, `brepkit-blend`,\n`brepkit-operations`, and `brepkit-io` with all targets. Nextest runs\n3030 tests across those crates plus `brepkit-topology` and\n`brepkit-wasm`, all passing. `pose_sweep` and `truth_audit` exactly\nmatch a main baseline. `approx_census` differs only in a face pair named\nin an already failing NURBS loft offset error that also varies between\nmain runs.\n- Alternating wasm tool timings over six slow files were 636 s against\n648 s and 785 s against 781 s. `baseplateGenerator.scenario.dovetailKey`\ntook 6.2 s and 6.3 s against 10.7 s.\n- The full generator catalog A/B covered 3763 tests using the gridfinity\nlayout tool at a4945a2aab and brepjs 18.124.8. Main at #2007 had 348\nfailures, compared with 347 here. Two tests are fixed:\n`binGenerator.export.lightweight`, “2×2 lite solid bin + magnet”, and\n`baseplateGenerator.scenario.allEdgeSlots`, “exterior slots stay\nwatertight, keep the outer extent, and match a join slot”.\n`binGenerator.scenario.openSides`, “U block: a channel stops at the arm\nit leaves, not the far arm”, newly fails because its brepkit snapshot\nreads 1832 triangles against 1858. Both builds generate the same solid:\n130 faces of the same surface types, the same edges to 1e-9, and volume\n34322.734 mm3. Native meshing at the tool settings gives 1100 triangles\nfor either solid.\n\nThe split-export test failed on main and this branch because cutting the\nbin base compound by 48 counterbores fell back to a 7,704-face mesh.\n#2007 fixes that case. With this branch over #2007, the test passes in\n0.6 s and the file passes 7 of 7, compared with a 131.3 s failure on\nthis branch alone.\n\nBoth kumiko tests time out against their 180 s limits on both builds.\nAlternating single-worker runs for `kumikoWrapping` took 249.5 s and\n195.9 s on main and 231.2 s and 182.8 s here. `kumikoComposition` took\n187.9 s and 204.6 s on main and 188.2 s and 192.5 s here.\n\nRun-to-run timing varies widely on this machine. `customShape` and\n`combriser` took 42.9 s and 68.7 s on main, then 80.0 s and 46.4 s here\nin back-to-back runs, so catalog file-level differences are not treated\nas changes.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` adds closed entries for op 1356 and\nthe dovetail key slot. The rounded-prism rim row points to the first.",
+          "timestamp": "2026-10-08T00:37:57-07:00",
+          "tree_id": "7c74bffbc10b7e21965fafc39231cd8e59d93282",
+          "url": "https://github.com/andymai/brepkit/commit/2d18746a10a9be5ccb170d22aaf917a07e559e9f"
+        },
+        "date": 1791445217372,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 585339,
+            "range": "± 7277",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 642764,
+            "range": "± 10967",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8080,
+            "range": "± 141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 424237,
+            "range": "± 15190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27951738,
+            "range": "± 816469",
             "unit": "ns/iter"
           }
         ]
