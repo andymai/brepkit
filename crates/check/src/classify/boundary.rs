@@ -259,6 +259,28 @@ where
     Ok(false)
 }
 
+/// The `(u, v)` at which a torus passes through a point on it. A spindle
+/// torus's tube runs across its axis, and a point there lies on the tube
+/// circle half a turn round (where `R + r cos v` is negative), while the
+/// projection reads it on the near tube circle, a sheet's spacing away.
+fn torus_parameters(tor: &brepkit_math::surfaces::ToroidalSurface, p: Point3) -> (f64, f64) {
+    let near = tor.project_point(p);
+    if tor.major_radius() >= tor.minor_radius() {
+        return near;
+    }
+    let rel = p - tor.center();
+    let rho = tor.x_axis().dot(rel).hypot(tor.y_axis().dot(rel));
+    let far = (
+        (near.0 + PI).rem_euclid(std::f64::consts::TAU),
+        tor.z_axis()
+            .dot(rel)
+            .atan2(-rho - tor.major_radius())
+            .rem_euclid(std::f64::consts::TAU),
+    );
+    let off = |(u, v): (f64, f64)| (tor.evaluate(u, v) - p).length();
+    if off(far) < off(near) { far } else { near }
+}
+
 /// Count crossings for analytic (non-planar) faces using UV containment.
 ///
 /// Given ray parameter roots (where the ray hits the infinite surface),
@@ -437,7 +459,7 @@ pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool
             uv_region_contains(&region, topo, face_id, project(p), &project, false)
         }
         FaceSurface::Torus(tor) => {
-            let project = |q: Point3| tor.project_point(q);
+            let project = |q: Point3| torus_parameters(tor, q);
             let region = uv_region(topo, face_id, &project, true, None)?;
             uv_region_contains(&region, topo, face_id, project(p), &project, true)
         }
@@ -896,7 +918,7 @@ pub fn count_face_ray_crossings(
                 origin,
                 direction,
                 &roots,
-                |p| tor.project_point(p),
+                |p| torus_parameters(&tor, p),
                 true,
                 None,
             )
@@ -1000,4 +1022,35 @@ fn ray_crossings_nurbs(
     }
 
     Ok(crossings)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use std::f64::consts::FRAC_PI_2;
+
+    use super::*;
+    use brepkit_math::surfaces::ToroidalSurface;
+
+    /// A pocket corner's spindle torus (major 0.1, minor 2.45): a point on
+    /// the tube swung across the axis takes that tube's parameters, and a
+    /// point on the near tube keeps its projection.
+    #[test]
+    fn a_spindle_torus_point_takes_its_own_tube_parameters() {
+        let tor = ToroidalSurface::new(Point3::new(41.0, 17.0, 4.7), 0.1, 2.45).unwrap();
+        for (u, v) in [(2.3, 4.0), (0.4, 3.6), (5.9, 2.9)] {
+            assert!(0.1 + 2.45 * f64::cos(v) < 0.0);
+            let p = tor.evaluate(u, v);
+            let (pu, pv) = torus_parameters(&tor, p);
+            assert!((tor.evaluate(pu, pv) - p).length() < 1e-9, "({u}, {v})");
+            assert!(
+                pv > FRAC_PI_2 && pv < 3.0 * FRAC_PI_2,
+                "({u}, {v}) read at v {pv}"
+            );
+        }
+        let p = tor.evaluate(0.3, 5.5);
+        let (pu, pv) = torus_parameters(&tor, p);
+        assert!((pu - 0.3).abs() < 1e-9 && (pv - 5.5).abs() < 1e-9);
+    }
 }

@@ -2605,13 +2605,11 @@ fn trim_torus_oval_to_box_face(
     if (raw.p_start - raw.p_end).length() > 1e-6 {
         return None; // open curve — not a closed oval
     }
-    let (torus, plane_face, plane_ext) = match (surf_a, surf_b) {
-        (FaceSurface::Torus(t), FaceSurface::Plane { .. }) => (t, fb, ext_b),
-        (FaceSurface::Plane { .. }, FaceSurface::Torus(t)) => (t, fa, ext_a),
+    let (torus, torus_ext, plane_face, plane_ext) = match (surf_a, surf_b) {
+        (FaceSurface::Torus(t), FaceSurface::Plane { .. }) => (t, ext_a, fb, ext_b),
+        (FaceSurface::Plane { .. }, FaceSurface::Torus(t)) => (t, ext_b, fa, ext_a),
         _ => return None,
     };
-    let _ = ext_a;
-    let _ = ext_b;
 
     // The box face's straight boundary edges (its rectangle sides).
     let face = topo.face(plane_face).ok()?;
@@ -2759,7 +2757,8 @@ fn trim_torus_oval_to_box_face(
         if pts.len() < 4 {
             continue;
         }
-        if !plane_ext.contains(pts[pts.len() / 2]) {
+        let mid = pts[pts.len() / 2];
+        if !plane_ext.contains(mid) || !torus_ext.contains(mid) {
             continue;
         }
         let last = pts.len() - 1;
@@ -8736,6 +8735,132 @@ mod tests {
         };
         assert!(on(5.5, -0.6));
         assert!(!on(2.36, std::f64::consts::PI + 0.6));
+    }
+
+    /// A rounded pocket's corner tori (corner radius 2.55, floor fillet
+    /// 2.45: spindle tori) beside a tapered wall that ends at each torus's
+    /// meridian: the wall's plane cuts the whole torus in an oval, but the
+    /// torus face holds none of it, and the wall's edge along that meridian
+    /// meets the quartic on the tube swung across the axis as well.
+    #[test]
+    fn torus_corners_beside_a_tapered_wall_take_no_section() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::default();
+        let corners = [
+            Point3::new(41.03, -17.0, 0.0),
+            Point3::new(41.03, 17.0, 0.0),
+            Point3::new(44.03, 17.0, 6.0),
+            Point3::new(44.03, -17.0, 6.0),
+        ];
+        let ws: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let sides: Vec<_> = (0..4)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(ws[i], ws[(i + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let normal = Vec3::new(2.0, 0.0, -1.0).normalize().unwrap();
+        let taper = FaceSurface::Plane {
+            normal,
+            d: normal.x() * 41.03,
+        };
+        let wall_wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let wall = topo.add_face(Face::new(wall_wire, vec![], taper.clone()));
+
+        let tol = Tolerance::default();
+        let (big, small) = (2.55, 0.1);
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        for side in [1.0, -1.0] {
+            // The quarter of the corner from the wall's meridian a half turn
+            // of the corner round, from the floor up to the outer equator.
+            let c = Point3::new(41.0, 17.0 * side, 4.7);
+            let at = |rho: f64, cos: f64, sin: f64, z: f64| {
+                Point3::new(c.x() + rho * cos, c.y() + rho * sin * side, z)
+            };
+            let vs: Vec<_> = [
+                at(small, 1.0, 0.0, 2.25),
+                at(big, 1.0, 0.0, 4.7),
+                at(big, h, h, 4.7),
+                at(small, h, h, 2.25),
+            ]
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+            let arc = |topo: &mut Topology, s, e, center, normal, r| {
+                let circle = Circle3D::new(center, normal, r).unwrap();
+                topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle)))
+            };
+            let around = Vec3::new(0.0, 0.0, side);
+            let meridian = Vec3::new(0.0, -1.0, 0.0);
+            let m0 = arc(
+                &mut topo,
+                vs[0],
+                vs[1],
+                at(small, 1.0, 0.0, 4.7),
+                meridian,
+                2.45,
+            );
+            let eq = arc(
+                &mut topo,
+                vs[1],
+                vs[2],
+                Point3::new(c.x(), c.y(), 4.7),
+                around,
+                big,
+            );
+            let diagonal = Vec3::new(side * h, -h, 0.0);
+            let m45 = arc(
+                &mut topo,
+                vs[3],
+                vs[2],
+                at(small, h, h, 4.7),
+                diagonal,
+                2.45,
+            );
+            let floor = Point3::new(c.x(), c.y(), 2.25);
+            let bottom = arc(&mut topo, vs[0], vs[3], floor, around, small);
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(m0, true),
+                        OrientedEdge::new(eq, true),
+                        OrientedEdge::new(m45, false),
+                        OrientedEdge::new(bottom, false),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let torus = FaceSurface::Torus(ToroidalSurface::new(c, big - 2.45, 2.45).unwrap());
+            let corner = topo.add_face(Face::new(wire, vec![], torus.clone()));
+
+            let boxes = compute_face_bboxes(&topo, &[corner, wall], tol).unwrap();
+            let vr_t = face_v_range(&topo, corner, &torus);
+            let vr_p = face_v_range(&topo, wall, &taper);
+            let raw = compute_raw_curves(&torus, &taper, &boxes[0], &boxes[1], vr_t, vr_p).unwrap();
+            assert!(!raw.is_empty(), "the plane meets the whole torus");
+            let ext_t = FaceExtent::new(&topo, corner, &torus, vr_t, tol).unwrap();
+            let ext_p = FaceExtent::new(&topo, wall, &taper, vr_p, tol).unwrap();
+            let kept = restrict_curves_to_faces(
+                &topo,
+                corner,
+                wall,
+                &torus,
+                &taper,
+                Some(&ext_t),
+                Some(&ext_p),
+                raw,
+                tol,
+                &mut JunctionRegistry::default(),
+            );
+            assert!(kept.is_empty(), "side {side}: {} sections kept", kept.len());
+        }
     }
 
     #[test]
