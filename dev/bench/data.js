@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791419456657,
+  "lastUpdate": 1791422431904,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -52865,6 +52865,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 36837211,
             "range": "± 350908",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "717df70ad52b545d0b0e6dc0ff05a7a62caa8854",
+          "message": "fix(operations): mesh a fitted edge's ends at its vertices within a hundredth of the deflection (#2009)\n\n`sample_edge` in `crates/operations/src/tessellate/edge_sampling.rs` now\nreplaces a NURBS edge's first and last sample with its start and end\nvertex when the sample lies within a hundredth of the requested\ndeflection, with a minimum bound of 1e-6. Meshing the captured exported\nsolid natively now gives 0 zero-area triangles where it previously gave\n8.\n\n## Why\n\nOn a bin whose rounded rim carries an interior fillet, the gridfinity\nlayout tool's `binGenerator.export.interiorFillet` test \"a tapered\nbottom band keeps the fillet inside the leaning wall\" on a development\nbranch that rounds the rim, the fillet's NURBS contact curves end about\n1.4e-6 from their corner vertices. The vertices have a tolerance of\n1e-7. The previous 1e-6 bound kept both mesh points, about 1.4e-6 apart.\nThe tool's binary STL check quantizes at 1e-4 and counted the resulting\nsliver as zero-area triangles, producing 8 against an allowance of 4.\n\nA hundredth of the deflection keeps every moved mesh point well within\nthe deflection the mesh is already allowed to deviate by.\n\n## Tests\n\n`a_fitted_edge_meshes_to_its_vertices` samples a NURBS edge whose curve\nends 1.4e-6 from its vertex at deflection 0.01. It requires the samples\nto start and end exactly at the vertices and fails with the 1e-6 bound.\n\n## Verification\n\n- Clippy is clean on `brepkit-math`, `brepkit-algo`, `brepkit-blend`,\n`brepkit-operations`, and `brepkit-io` with all targets.\n- Nextest runs 3022 tests across `brepkit-topology`, `brepkit-math`,\n`brepkit-algo`, `brepkit-blend`, `brepkit-operations`, `brepkit-io`, and\n`brepkit-wasm`, all passing.\n- `pose_sweep` and `truth_audit` match a main baseline exactly.\n`approx_census` differs only in the face pair named in an already\nfailing NURBS loft offset error, which also varies between main runs.\n- The gridfinity layout tool's 49 `binGenerator.export.*` files other\nthan the kumiko ones, totaling 618 tests, give the same status for every\ntest on this branch's wasm as on main's wasm: 31 fail on both.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes fitted NURBS edge sampling so the first and last samples snap to\nthe edge's vertices when within a hundredth of the deflection (with a\n1e-6 floor), instead of a fixed 1e-6, so an exporter no longer collapses\nthe leftover sliver into zero-area triangles.\n\n- A rim fillet's contact curves end about 1.4e-6 from their corner\nvertices, past the old bound; quantizing the exported STL at 1e-4\ncounted the sliver as 8 surplus zero-area triangles.\n- Moving a point within a hundredth of the deflection keeps the mesh\nwithin the deviation it is already allowed.\n- Adds a test for a curve whose end misses its vertex by 1.4e-6.\n\n<sup>Written for commit 704052c81ea18d3cb8761a5b0aeb85df92f8971a.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2009?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2009?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2009&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-08T01:17:19Z",
+          "tree_id": "15b5f2fac09ed44ef0fc67ab28551161b29a4477",
+          "url": "https://github.com/andymai/brepkit/commit/717df70ad52b545d0b0e6dc0ff05a7a62caa8854"
+        },
+        "date": 1791422426226,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1141425,
+            "range": "± 3048",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1187704,
+            "range": "± 18557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14483,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 839644,
+            "range": "± 1634",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46913760,
+            "range": "± 223392",
             "unit": "ns/iter"
           }
         ]
