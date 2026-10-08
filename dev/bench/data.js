@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791447810954,
+  "lastUpdate": 1791460268694,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53081,6 +53081,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43578396,
             "range": "± 785322",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "270918041cd3ab2570b826d59bf32cacb330a091",
+          "message": "fix(algo): bound an analytic face's extent margin by the junction band (#2012)\n\n`FaceExtent::new` in `crates/algo/src/pave_filler/phase_ff.rs` now caps\nan analytic face's margin around its `v` range at the junction band\n(`JunctionRegistry::ADOPT_MAX`, 1e-3), then adds the linear tolerance.\nThe margin remains one hundredth of the `v` span when that value is\nbelow the cap. NURBS boundary edges on analytic walls are now sampled at\n33 points instead of five, and each sampled local extreme of `v` is\nrefined by golden-section search. This prevents under-reading slanted\nNURBS rims, while NURBS faces skip the refinement because projecting\nonto them is costly and their extent does not use this margin. A review\ncomment on this PR raised that case. The captured pair now fuses exactly\nthrough `operations::boolean`, producing 214 faces with every edge used\ntwice and a valid result. The intersect, which falls back on main, is\nexact too.\n\n## Root\n\nThe failure came from the gridfinity layout tool test\n`binGenerator.export.interiorFillet` named `a ring-shaped custom bin\nkeeps its hole open`, on a development branch that rounds the fillet's\nrim. The ring-shaped custom bin has 174 faces and is fused with 41 faces\nof fillet material.\n\nThe fillet material's straight wall fillet is a cylinder 118 mm long, so\nthe previous margin was 1.18 mm. A pocket corner cylinder meets that\nwall fillet only tangentially at the corner's seam, at `(61.55, -59,\n4.7)`. Marching against the wall fillet's unbounded cylinder traced a\ncurve from that point down to `z = 3.673`. Its endpoint is 1.05 mm past\nthe fillet face's end at `y = -59`, and the margin retained it. The\ncorner cylinder received two such sections, one from each adjacent wall\nfillet, remained one piece, and the fuse fell back with four free edges\naround that corner.\n\n## Tests\n\n`a_ring_bin_takes_its_fillet_material_exactly` in\n`crates/io/tests/ring_bin_fillet_fuse_inmem.rs`, using\n`ring_bin_base.bin` and `ring_bin_fillet_material.bin`, requires the\nfuse and the bin less the material without a mesh fallback, a valid\nfuse, and the fuse's volume to equal the bin less the material plus the\nmaterial within 0.05 at deflection 0.001. It fails without the cap.\n\n`a_slanted_nurbs_rim_bounds_its_wall_at_its_peak` in `phase_ff.rs`\nbuilds a radius 10 tube cut by `z = 20 + cos(0.58) x + sin(0.58) y`,\nwith its rim represented by rational quadratic arcs. Five-point sampling\nreads 29.79 where the rim reaches 30. The test requires the wall's `v`\nrange to reach 30 within 1e-6 and fails without the refinement.\n\nSeparately, this pair's intersect reads 24 mm3 below the bin less its\ncut on main as well. The mesh and exact intersects agree with each\nother. This is recorded in the roadmap.\n\n## Verification\n\n- Clippy is clean on `brepkit-math`, `brepkit-algo`, `brepkit-blend`,\n`brepkit-operations`, and `brepkit-io` with all targets. After rebasing\nonto main at #2011 and adding the NURBS rim case, nextest ran 3033 tests\nacross `brepkit-topology`, `brepkit-math`, `brepkit-algo`,\n`brepkit-blend`, `brepkit-operations`, `brepkit-io`, and `brepkit-wasm`,\nall passing. `pose_sweep` and `truth_audit` match a main baseline\nexactly. `approx_census` differs only in the face pair named in an\nalready failing NURBS loft offset error, which also varies between main\nruns.\n\n- Tool A/B covered the full generator catalog of 3763 tests, using the\ngridfinity layout tool at `a4945a2aab`, brepjs 18.124.8, and main at\n#2007 against this change on the same base. Per catalog part, failures\nwere 62 against 62, 135 against 134, 94 against 93, and 57 against 57,\ntotaling 348 against 346. No test newly fails. The two tests passing\nonly with this change are time-limited kumiko tests,\n`binGenerator.scenario.kumikoComposition` named `mitsukude composes with\na front wall cutout` and `kumikoWrapBuilder.cache` named `reproduces\nidentical geometry from warm caches with clips applied`, and read as\ntiming noise. On main, the ring bin test does not reach this fuse, so it\nprovides no tool-side signal here.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` adds a closed entry for this case and\nan open row for scoop ramps overlapping across a divider. Their brepjs\nroot, a sketched Bezier lifted by interpolating its poles, is fixed in\nbrepjs #2390 and released in 20.1.5, while the tool pins 18.124.8. Two\nexact ramps overlapping 0.96 mm still need NURBS same-domain handling.",
+          "timestamp": "2026-10-08T11:48:09Z",
+          "tree_id": "0a56b220d78ec58223be0e3b623f86a58c2f56e5",
+          "url": "https://github.com/andymai/brepkit/commit/270918041cd3ab2570b826d59bf32cacb330a091"
+        },
+        "date": 1791460263466,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1058924,
+            "range": "± 7125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1139131,
+            "range": "± 20912",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13000,
+            "range": "± 218",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 775429,
+            "range": "± 2782",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43142099,
+            "range": "± 100523",
             "unit": "ns/iter"
           }
         ]
