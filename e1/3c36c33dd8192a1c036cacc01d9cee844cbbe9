@@ -1,0 +1,40 @@
+crates/io/tests/spindle_torus_classify_inmem.rs
+  s_a8677c67f85a06::t_b6c53896a642f8 1-44
+crates/math/src/analytic_intersection.rs
+  s_a8677c67f85a06::t_a1e8d42df7d3f5 1307-1312,1316-1317,1320-1332,1336
+  s_a8677c67f85a06::t_36a0455b16c33b 4745-4752,4758-4769,4774-4776
+  s_a8677c67f85a06::t_00a8f5e7a9f9da 4753-4757,4770-4773
+crates/io/tests/data/scoop_beside_taper_material.bin
+  s_a8677c67f85a06::t_b6c53896a642f8 1
+crates/check/src/classify/boundary.rs
+  s_a8677c67f85a06::t_16b3a42fbc6b25 1026-1030,1033-1046,1051-1056
+  s_a8677c67f85a06::t_b6c53896a642f8 1047-1050
+  s_a8677c67f85a06::t_9ac67fca1ac50b 262-283,462,921
+  s_a8677c67f85a06::t_1b5468eb7efd90 1031-1032
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a8677c67f85a06::t_178333b1774fd2 8741-8742,8744,8746-8775,8843-8845,8849-8850,8864
+  s_a8677c67f85a06::t_19173a9f4b8597 2608-2610,2760
+  s_a8677c67f85a06::t_870fa4dff11e58 8740,8743,8745,8776-8842
+  s_a8677c67f85a06::t_2fdc67aff3179c 8846-8848,8851-8863
+  s_a8677c67f85a06::t_ee9c3db3a1046d 2761,8865
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_b3f3e034b2e168 534-542,544-545
+crates/io/tests/fillet_taper_clip_inmem.rs
+  s_a8677c67f85a06::t_b4fa3db9b61a8e 17-20,28,30-31,33,102-148
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e13c36c33dd8192a1c036cacc01d9cee844cbbe9",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
