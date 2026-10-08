@@ -62,6 +62,10 @@ crates/operations/tests/rounded_pocket_fillet_fuse.rs
   s_a8677c67f85a06::t_b4ebe5af910dd8 6-7,10,13,32-36,42-43,49-56,61-112,114-118,121,123-124,127,129,137,152-153,164,170-182
   s_a8677c67f85a06::t_79b24b1fb50621 5,167
   s_a8677c67f85a06::t_0d7ec8b97d5ebf 1-4,8-9,11-12,14-31,37-41,44-48,57-60,113,119-120,122,125-126,128,130-131,138-141,147-151,154-163,165-166,168-169,183
+crates/io/tests/data/riser_plate_rim.bin
+  s_a8677c67f85a06::t_f73675c26ab53a 1
+crates/wasm/src/helpers.rs
+  s_a8677c67f85a06::t_f73675c26ab53a 210-213,229-235,237-240,246-263,947-1031
 ---
 {
   "schema_version": "authorship/3.0.0",
