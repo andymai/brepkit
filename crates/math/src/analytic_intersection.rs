@@ -1262,8 +1262,9 @@ fn plane_torus_winding_loops(
 /// A line meets a torus in up to four points (degree-4). Substituting the line
 /// into the torus implicit `(a² + b² + c² + R² − r²)² = 4R²(a² + b²)` — where
 /// `(a, b, c)` are the line point's coordinates in the torus frame — gives a
-/// quartic in `t`, solved here for its real roots (each refined by one Newton
-/// step against the implicit). `dir` need not be unit length; `t` is in units of
+/// quartic in `t`, solved here for its real roots, each refined by Newton steps
+/// on the tube it lies nearer (on a spindle torus, the near tube or the one
+/// swung across the axis). `dir` need not be unit length; `t` is in units of
 /// `dir`. Returns the roots sorted ascending (0–4 of them).
 ///
 /// Used by the boolean section trimmer to find where a plane×torus oval exits a
