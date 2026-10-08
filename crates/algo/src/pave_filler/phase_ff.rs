@@ -1784,7 +1784,10 @@ impl FaceExtent {
                 {
                     10.0 * tol.linear / s.radius().max(tol.linear)
                 }
-                _ => (v1 - v0).abs() * 0.01 + tol.linear,
+                // A hundredth of a long face's span reaches far past its
+                // ends: a 118 mm wall fillet admitted a perpendicular corner
+                // cylinder's curve 1.05 mm beyond its last section.
+                _ => ((v1 - v0).abs() * 0.01).min(JunctionRegistry::ADOPT_MAX) + tol.linear,
             };
             // For a partial-arc lateral face (rounded-rect corner = a 90°
             // quarter-cylinder), record the angular gap the face does NOT
