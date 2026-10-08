@@ -7,6 +7,7 @@ crates/algo/src/builder/face_splitter/mod.rs
 crates/io/tests/scoop_taper_clip_inmem.rs
   s_a8677c67f85a06::t_7ce96d2fb1dc9d 231,262-323
   s_a8677c67f85a06::t_6ff4ac3493c0fe 324-325
+  s_a8677c67f85a06::t_dd6e4fa44afdfe 261
 crates/algo/src/builder/classify_2d.rs
   s_a8677c67f85a06::t_ea1dab7d4f1047 8-27
   s_a8677c67f85a06::t_7ce96d2fb1dc9d 252-268
