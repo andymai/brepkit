@@ -1,5 +1,6 @@
 crates/io/tests/scoop_taper_clip_inmem.rs
   s_a8677c67f85a06::t_6ad0a98df329a9 232-260
+  s_a8677c67f85a06::t_0440e9e667fba7 231
 crates/io/tests/data/rounded_fillet_material.bin
   s_a8677c67f85a06::t_784c75d8c7a1d4 1
 crates/algo/src/pave_filler/phase_ff.rs
