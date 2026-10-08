@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.41](https://github.com/andymai/brepkit/compare/v4.1.40...v4.1.41) (2026-10-08)
+
+
+### Bug Fixes
+
+* **algo:** close the fillet material and clipped scoop booleans and a dovetail key slot cut ([#2005](https://github.com/andymai/brepkit/issues/2005)) ([2d18746](https://github.com/andymai/brepkit/commit/2d18746a10a9be5ccb170d22aaf917a07e559e9f))
+
 ## [4.1.40](https://github.com/andymai/brepkit/compare/v4.1.39...v4.1.40) (2026-10-08)
 
 
