@@ -125,7 +125,7 @@ fn build_face_containment(
 
     let mut all_points = Vec::new();
     let mut outer_points = Vec::new();
-    let mut max_chord = 0.0_f64;
+    let mut max_sag = 0.0_f64;
 
     let outer_wire = topo.wire(outer_wire_id)?;
     let oriented: Vec<_> = outer_wire.edges().to_vec();
@@ -136,16 +136,18 @@ fn build_face_containment(
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
         // Only curved edges contribute to the sagitta margin: a straight Line
-        // edge's sampled chords coincide with the edge exactly (zero sagitta),
-        // so it must not inflate `max_chord`. Basing the margin on a long
-        // straight edge would over-extend a thin face's boundary band (a
-        // 123mm-wide × 1mm-tall ramp strip got a 1.9mm margin, admitting EF
-        // crossings well outside it — the 3×3 scoop+label lip-corner fallback).
+        // edge's sampled chords coincide with the edge exactly (zero sagitta).
+        // The margin is each chord's own sagitta, measured at its
+        // mid-parameter: half a chord (the bound for samples spanning half a
+        // turn) let a quarter circle of radius 3.75 admit crossings 0.18
+        // outside its face, and a lattice strut face's 0.84-long corner arc
+        // admitted a wall line's crossing 0.0015 past the strut's edge.
         let is_curved = !matches!(edge.curve(), EdgeCurve::Line);
         let n = N_BOUNDARY_SAMPLES;
         // Sample inclusive of the edge's end vertex (0..=n) so the closing
         // segment of a closed wire reaches the true endpoint; consecutive
         // edges share a vertex, so dedup against the previous point.
+        let mut prev_t: Option<f64> = None;
         for i in 0..=n {
             let frac = i as f64 / n as f64;
             let frac = if oe.is_forward() { frac } else { 1.0 - frac };
@@ -153,13 +155,20 @@ fn build_face_containment(
             let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
             if let Some(p) = prev {
                 if (pt - p).length() <= tol.linear {
+                    // The shared vertex's sample still starts this edge's
+                    // first chord.
+                    prev_t = Some(t);
                     continue;
                 }
-                if is_curved {
-                    max_chord = max_chord.max((pt - p).length());
+                if is_curved && let Some(tp) = prev_t {
+                    let mid =
+                        edge.curve()
+                            .evaluate_with_endpoints(0.5 * (t + tp), start_pos, end_pos);
+                    max_sag = max_sag.max(point_to_segment(mid, p, pt));
                 }
             }
             prev = Some(pt);
+            prev_t = Some(t);
             outer_points.push(pt);
         }
     }
@@ -203,12 +212,9 @@ fn build_face_containment(
 
     if let FaceSurface::Plane { normal, .. } = &surface {
         if outer_points.len() >= 3 {
-            // Sampled chords undercut curved boundary arcs by at most the
-            // sagitta. For an arc of half-angle φ the sagitta/chord ratio is
-            // tan(φ/2)/2, which reaches 0.5 at a 180° arc, so half the chord
-            // length is a conservative bound for sub-semicircle samples.
-            // The margin keeps true near-boundary crossings accepted.
-            let margin = (max_chord * 0.5).max(tol.linear * 10.0);
+            // Sampled chords undercut curved boundary arcs by their sagitta;
+            // twice the largest keeps true near-boundary crossings accepted.
+            let margin = (2.0 * max_sag).max(tol.linear * 10.0);
             let frame = PlaneFrame::from_normal_and_point(*normal, outer_points[0]);
             let polygon: Vec<Point2> = outer_points.iter().map(|&p| frame.project(p)).collect();
             return Ok(FaceContainment {
@@ -232,6 +238,17 @@ fn build_face_containment(
         bbox: bbox.expanded((diag * 0.5).max(tol.linear * 10.0)),
         planar: None,
     })
+}
+
+/// Distance from `p` to the segment `a`-`b`.
+fn point_to_segment(p: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq <= 0.0 {
+        return (p - a).length();
+    }
+    let f = ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    (p - (a + ab * f)).length()
 }
 
 /// Check each edge against each face.
