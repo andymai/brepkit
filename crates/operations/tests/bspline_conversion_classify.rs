@@ -45,11 +45,12 @@ fn a_converted_rod_holds_its_own_axis() {
             };
             assert_eq!(class, want, "classify_point at {p:?}");
             let engine = brepkit_algo::classifier::classify_point(&topo, rod, p).unwrap();
-            assert_eq!(
-                engine == brepkit_algo::FaceClass::Inside,
-                inside,
-                "the boolean engine's classifier at {p:?}"
-            );
+            let want = if inside {
+                brepkit_algo::FaceClass::Inside
+            } else {
+                brepkit_algo::FaceClass::Outside
+            };
+            assert_eq!(engine, want, "the boolean engine's classifier at {p:?}");
         }
     }
 }
@@ -75,4 +76,13 @@ fn a_cylinder_cut_by_a_converted_rod_loses_the_rod() {
         (volume - exact).abs() < 0.02 * exact,
         "cut volume {volume}, exact {exact}"
     );
+    for (p, want) in [
+        (Point3::new(0.0, 0.0, 3.0), PointClassification::Outside),
+        (Point3::new(1.5, 0.3, 3.0), PointClassification::Outside),
+        (Point3::new(0.0, 1.2, 3.0), PointClassification::Inside),
+        (Point3::new(1.5, 0.0, 4.0), PointClassification::Inside),
+    ] {
+        let class = classify_point(&topo, cut, p, 0.01, 1e-7).unwrap();
+        assert_eq!(class, want, "the cut at {p:?}");
+    }
 }

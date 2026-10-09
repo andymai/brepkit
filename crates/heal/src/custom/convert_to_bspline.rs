@@ -226,7 +226,10 @@ pub fn patch_start_angle(
 ) -> Result<f64, HealError> {
     let apart = |a: f64, b: f64| ((a - b + PI).rem_euclid(TAU) - PI).abs();
     let face = topo.face(face_id)?;
-    let mut rulings: Vec<f64> = Vec::new();
+    // A seam is one segment the wires run twice: the same edge, or two
+    // edges joining the same pair of points. Two rulings at one angle that
+    // only share it (the sides of two holes) leave material between them.
+    let mut rulings: Vec<(EdgeId, Point3, Point3)> = Vec::new();
     for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         for oe in topo.wire(wire_id)?.edges() {
             let edge = topo.edge(oe.edge())?;
@@ -247,10 +250,15 @@ pub fn patch_start_angle(
             if apart(a, b) > 1e-7 || apart(b, c) > 1e-7 {
                 continue;
             }
-            if rulings.iter().any(|&r| apart(r, b) < 1e-7) {
+            let near = |p: Point3, q: Point3| (p - q).length() <= Tolerance::new().linear;
+            if rulings.iter().any(|&(eid, p, q)| {
+                eid == oe.edge()
+                    || (near(p, start) && near(q, end))
+                    || (near(p, end) && near(q, start))
+            }) {
                 return Ok(b.rem_euclid(TAU));
             }
-            rulings.push(b);
+            rulings.push((oe.edge(), start, end));
         }
     }
     let mut angles: Vec<f64> = boundary_points(topo, face_id)?
