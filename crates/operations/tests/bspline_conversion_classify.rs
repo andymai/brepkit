@@ -4,12 +4,13 @@
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
-use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
 use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::heal::convert_to_bspline;
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::make_cylinder;
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::transform::transform_solid;
+use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
@@ -55,36 +56,74 @@ fn a_converted_rod_holds_its_own_axis() {
     }
 }
 
-/// A cylinder cut by a converted rod through its axis loses the rod: the
-/// cut once read the rod as empty and returned the whole cylinder, 5.6%
-/// over.
-#[test]
-fn a_cylinder_cut_by_a_converted_rod_loses_the_rod() {
-    let mut topo = Topology::new();
-    let exact = {
-        let cylinder = make_cylinder(&mut topo, 2.25, 6.0).unwrap();
-        let rod = rod(&mut topo, 0.0);
-        let cut = boolean(&mut topo, BooleanOp::Cut, cylinder, rod).unwrap();
-        solid_volume(&topo, cut, 0.001).unwrap()
-    };
-    let cylinder = make_cylinder(&mut topo, 2.25, 6.0).unwrap();
-    let rod = rod(&mut topo, 0.0);
-    convert_to_bspline(&mut topo, rod).unwrap();
-    let cut = boolean(&mut topo, BooleanOp::Cut, cylinder, rod).unwrap();
-    let volume = solid_volume(&topo, cut, 0.001).unwrap();
+/// `target` cut by `tool`: exact, valid, and holding `volume` to a part in a
+/// thousand (the measure meshes a NURBS wall).
+fn assert_exact_cut(topo: &mut Topology, target: SolidId, tool: SolidId, volume: f64) -> SolidId {
+    let before = mesh_fallback_count();
+    let cut = boolean(topo, BooleanOp::Cut, target, tool).unwrap();
+    assert_eq!(mesh_fallback_count(), before, "the cut stays exact");
+    let report = validate_solid(topo, cut).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let got = solid_volume(topo, cut, 0.001).unwrap();
     assert!(
-        (volume - exact).abs() < 0.02 * exact,
-        "cut volume {volume}, exact {exact}"
+        (got - volume).abs() < 1e-3 * volume,
+        "cut volume {got}, want {volume}"
     );
-    for (p, want) in [
-        (Point3::new(0.0, 0.0, 3.0), PointClassification::Outside),
-        (Point3::new(1.5, 0.3, 3.0), PointClassification::Outside),
-        (Point3::new(0.0, 1.2, 3.0), PointClassification::Inside),
-        (Point3::new(1.5, 0.0, 4.0), PointClassification::Inside),
-    ] {
-        let class = classify_point(&topo, cut, p, 0.01, 1e-7).unwrap();
-        assert_eq!(class, want, "the cut at {p:?}");
+    cut
+}
+
+/// A box, a cylinder and a frustum cut by a converted rod lose the rod
+/// exactly, as by the rod it was converted from: the rod's NURBS wall winds
+/// its seam, and the loops where it leaves each target stack it into bands.
+#[test]
+fn a_converted_rod_cuts_a_box_a_cylinder_and_a_frustum_exactly() {
+    let targets: [fn(&mut Topology) -> SolidId; 3] = [
+        |topo| {
+            let b = make_box(topo, 4.5, 4.5, 6.0).unwrap();
+            transform_solid(topo, b, &Mat4::translation(-2.25, -2.25, 0.0)).unwrap();
+            b
+        },
+        |topo| make_cylinder(topo, 2.25, 6.0).unwrap(),
+        |topo| make_cone(topo, 3.0, 1.5, 6.0).unwrap(),
+    ];
+    for (k, target) in targets.into_iter().enumerate() {
+        for y in [0.0, 0.3] {
+            let mut topo = Topology::new();
+            let exact = {
+                let (t, r) = (target(&mut topo), rod(&mut topo, y));
+                let cut = boolean(&mut topo, BooleanOp::Cut, t, r).unwrap();
+                solid_volume(&topo, cut, 0.001).unwrap()
+            };
+            let (t, r) = (target(&mut topo), rod(&mut topo, y));
+            convert_to_bspline(&mut topo, r).unwrap();
+            let cut = assert_exact_cut(&mut topo, t, r, exact);
+            for (p, want) in [
+                (Point3::new(0.0, y, 3.0), PointClassification::Outside),
+                (Point3::new(1.5, y + 0.3, 3.0), PointClassification::Outside),
+                (Point3::new(0.0, y + 1.2, 3.0), PointClassification::Inside),
+                (Point3::new(1.5, y, 4.0), PointClassification::Inside),
+            ] {
+                let class = classify_point(&topo, cut, p, 0.01, 1e-7).unwrap();
+                assert_eq!(class, want, "target {k}, rod at y {y}, the cut at {p:?}");
+            }
+        }
     }
+}
+
+/// A box cut by a rod scaled 1.5 across its axis loses the elliptic tube's
+/// 4.5 long span, 0.54 pi in section.
+#[test]
+fn a_box_cut_by_a_rod_scaled_across_its_axis_loses_the_tube() {
+    let mut topo = Topology::new();
+    let b = make_box(&mut topo, 4.5, 4.5, 6.0).unwrap();
+    transform_solid(&mut topo, b, &Mat4::translation(-2.25, -2.25, 0.0)).unwrap();
+    let rod = rod(&mut topo, 0.3);
+    let stretch = Mat4::translation(0.0, 0.3, 3.0)
+        * Mat4::scale(1.0, 1.5, 1.0)
+        * Mat4::translation(0.0, -0.3, -3.0);
+    transform_solid(&mut topo, rod, &stretch).unwrap();
+    let volume = 4.5f64.mul_add(4.5 * 6.0, -(std::f64::consts::PI * 0.6 * 0.9 * 4.5));
+    assert_exact_cut(&mut topo, b, rod, volume);
 }
 
 /// A rod scaled 1.5 across its axis is an elliptic tube, its wall a NURBS
