@@ -14,7 +14,9 @@
 //!
 //! Data: `kumiko_lattice_cut_base.bin` (the cut base, 86 faces),
 //! `kumiko_lattice_cut_strut.bin` (a 405-face planar lattice piece),
-//! `kumiko_lattice_cut_wedge.bin` (a 6-face wedge at the corner seam).
+//! `kumiko_lattice_cut_wedge.bin` (a 6-face wedge at the corner seam),
+//! `kumiko_lattice_cut_corner_strut.bin` and `kumiko_lattice_cut_wall_strut.bin`
+//! (corner-band pieces crossing the inner corner cylinder).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -116,6 +118,8 @@ fn kumiko_lattice_pieces_are_closed() {
         "kumiko_lattice_cut_base.bin",
         "kumiko_lattice_cut_strut.bin",
         "kumiko_lattice_cut_wedge.bin",
+        "kumiko_lattice_cut_corner_strut.bin",
+        "kumiko_lattice_cut_wall_strut.bin",
     ] {
         let solid = load(&mut topo, name);
         let uses = positional_edge_uses(&topo, solid);
@@ -127,44 +131,75 @@ fn kumiko_lattice_pieces_are_closed() {
     }
 }
 
-/// The strut piece's cut matches point classification of its operands
-/// across the corner the strut wraps.
-#[test]
-fn a_lattice_strut_crossing_the_corner_cylinder_cuts_exactly() {
-    let mut topo = Topology::new();
-    let base = load(&mut topo, "kumiko_lattice_cut_base.bin");
-    let strut = load(&mut topo, "kumiko_lattice_cut_strut.bin");
-    let probe_base = copy_solid(&mut topo, base).unwrap();
-    let probe_strut = copy_solid(&mut topo, strut).unwrap();
-    let result = exact_cut(&mut topo, base, strut);
-
-    let bb = solid_bounding_box(&topo, probe_strut).unwrap();
-    let inside = |topo: &Topology, s: SolidId, p: Point3| {
+/// Points over `piece`'s box that `result` classifies other than
+/// `base` less `piece`, on an `n` grid.
+fn misclassified(
+    topo: &Topology,
+    base: SolidId,
+    piece: SolidId,
+    result: SolidId,
+    (nx, ny, nz): (usize, usize, usize),
+) -> Vec<Point3> {
+    let bb = solid_bounding_box(topo, piece).unwrap();
+    let inside = |s: SolidId, p: Point3| {
         classify_point(topo, s, p, 0.01, 1e-7).unwrap() == PointClassification::Inside
     };
-    let (nx, ny, nz) = (6, 6, 24);
-    let mut mismatches = Vec::new();
+    let at = |lo: f64, hi: f64, n: usize, m: usize| {
+        #[allow(clippy::cast_precision_loss)]
+        let f = (m as f64 + 0.503) / n as f64;
+        (hi - lo).mul_add(f, lo)
+    };
+    let mut wrong = Vec::new();
     for i in 0..nx {
         for j in 0..ny {
             for k in 0..nz {
-                let at = |lo: f64, hi: f64, n: usize, m: usize| {
-                    #[allow(clippy::cast_precision_loss)]
-                    let f = (m as f64 + 0.503) / n as f64;
-                    (hi - lo).mul_add(f, lo)
-                };
                 let p = Point3::new(
                     at(bb.min.x(), bb.max.x(), nx, i),
                     at(bb.min.y(), bb.max.y(), ny, j),
                     at(bb.min.z(), bb.max.z(), nz, k),
                 );
-                let want = inside(&topo, probe_base, p) && !inside(&topo, probe_strut, p);
-                if inside(&topo, result, p) != want {
-                    mismatches.push(p);
+                if inside(result, p) != (inside(base, p) && !inside(piece, p)) {
+                    wrong.push(p);
                 }
             }
         }
     }
-    assert!(mismatches.is_empty(), "misclassified: {mismatches:?}");
+    wrong
+}
+
+/// Cut the base by the named piece exactly and check it against point
+/// classification of the operands.
+fn cut_matches_operands(name: &str, grid: (usize, usize, usize)) {
+    let mut topo = Topology::new();
+    let base = load(&mut topo, "kumiko_lattice_cut_base.bin");
+    let piece = load(&mut topo, name);
+    let probe_base = copy_solid(&mut topo, base).unwrap();
+    let probe_piece = copy_solid(&mut topo, piece).unwrap();
+    let result = exact_cut(&mut topo, base, piece);
+    let wrong = misclassified(&topo, probe_base, probe_piece, result, grid);
+    assert!(wrong.is_empty(), "{name}: misclassified {wrong:?}");
+}
+
+/// The strut piece's cut matches point classification of its operands
+/// across the corner the strut wraps.
+#[test]
+fn a_lattice_strut_crossing_the_corner_cylinder_cuts_exactly() {
+    cut_matches_operands("kumiko_lattice_cut_strut.bin", (6, 6, 24));
+}
+
+/// A strut facet crosses the inner corner cylinder in a 0.48 window of a
+/// 19.7-long ellipse, which a sampling scaled to the faces' boxes took two
+/// samples of and read as a graze.
+#[test]
+fn a_strut_facet_crossing_the_inner_corner_cylinder_cuts_exactly() {
+    cut_matches_operands("kumiko_lattice_cut_corner_strut.bin", (6, 6, 8));
+}
+
+/// A strut poking through the inner corner cylinder bounds a triangle of
+/// sections on it, traced both ways: the island and the hole around it.
+#[test]
+fn a_strut_poking_through_the_inner_corner_cylinder_cuts_exactly() {
+    cut_matches_operands("kumiko_lattice_cut_wall_strut.bin", (6, 6, 12));
 }
 
 /// The wedge piece's cut removes exactly the part of the wedge inside the

@@ -1026,8 +1026,19 @@ pub fn compound_cut(
         // cluster merge fuses below, so a discarded merge never touches the
         // public fallback counter.
         if !batched {
+            // The fallback is declined, not just detected afterwards: a tool
+            // of many pieces is fused piece by piece through nested booleans
+            // that the taint flag does not see, and a lattice's accumulator
+            // then grows a mesh by thousands of faces per piece (3.85 GB
+            // before the kumiko wrap's wasm trapped).
             let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
-                let fused = fuse_cluster(topo, cluster)?;
+                let (fused, declined) = without_mesh_fallback(|| fuse_cluster(topo, cluster));
+                let fused = fused?;
+                if declined {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: "cluster fuse needs the mesh fallback".to_string(),
+                    });
+                }
                 match acc {
                     None => Ok(Some(fused)),
                     Some(prev) => {
@@ -1155,6 +1166,13 @@ fn cut_piecewise(
             deferred.extend(pieces);
             continue;
         }
+        // A handful of pieces is cheaper to try one by one than by halves.
+        if pieces.len() <= 4 {
+            for &piece in pieces.iter().rev() {
+                work.push_front(vec![piece]);
+            }
+            continue;
+        }
         let (low, high) = pieces.split_at(pieces.len() / 2);
         work.push_front(high.to_vec());
         work.push_front(low.to_vec());
@@ -1238,15 +1256,9 @@ pub(crate) fn fuse_cluster(
     // batch; bail at the first one instead of paying the fallback for every
     // remaining pair. `boolean_inner` + the taint flag keeps the discarded
     // probe out of the public fallback counter entirely.
-    // The fallback is declined, not just detected afterwards: a tool of many
-    // pieces is fused piece by piece through nested booleans, each free to
-    // fall back, and a lattice's accumulator then grows a mesh by thousands
-    // of faces per piece (3.85 GB before the kumiko wrap's wasm trapped).
     rest.iter().try_fold(first, |a, &t| {
-        let (fused, declined) =
-            without_mesh_fallback(|| boolean_inner(topo, BooleanOp::Fuse, a, t));
-        let fused = fused?;
-        if declined || LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
+        let fused = boolean_inner(topo, BooleanOp::Fuse, a, t)?;
+        if LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
             return Err(crate::OperationsError::InvalidInput {
                 reason: "cluster fuse degraded to mesh fallback".to_string(),
             });
