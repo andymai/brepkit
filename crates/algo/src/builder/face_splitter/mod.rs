@@ -8296,7 +8296,18 @@ fn split_face_2d_impl(
             let on_boundary = matches!(surface, FaceSurface::Cone(_))
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_none())
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_some());
-            if (has_line && has_nonline) || on_boundary {
+            // On a partial band, a loop of sections alone (a strut poking
+            // through the wall, its rulings and arcs closing a triangle) is
+            // traced both ways: the island is one, the hole around it the
+            // other, told apart by their winding.
+            let island = !u_periodic && wire_loop.iter().all(|e| e.source_edge_idx.is_some());
+            if island {
+                if loop_eff_area(&wire_loop) > 0.0 {
+                    outers.push((wire_loop, 1.0));
+                } else {
+                    holes.push(wire_loop);
+                }
+            } else if (has_line && has_nonline) || on_boundary {
                 outers.push((wire_loop, 1.0)); // area placeholder
             } else {
                 holes.push(wire_loop);

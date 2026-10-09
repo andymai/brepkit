@@ -2431,19 +2431,39 @@ fn restrict_curves_to_faces(
                 ));
                 continue;
             }
-            let ptf = |i: usize| -> Point3 {
-                #[allow(clippy::cast_precision_loss)]
-                let f = i as f64 / n_fine as f64;
-                let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
-                raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+            let inboth_samples = |n: usize| -> Vec<bool> {
+                (0..=n)
+                    .map(|i| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let f = i as f64 / n as f64;
+                        let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                        let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                        ext_a.contains(p) && ext_b.contains(p)
+                    })
+                    .collect()
             };
-            let inb_fine: Vec<bool> = (0..=n_fine)
-                .map(|i| {
-                    let p = ptf(i);
-                    ext_a.contains(p) && ext_b.contains(p)
-                })
-                .collect();
-            let (f0, f1) = longest_inboth_run(&inb_fine, closed);
+            let mut n_fine = n_fine;
+            let mut inb_fine = inboth_samples(n_fine);
+            let (mut f0, mut f1) = longest_inboth_run(&inb_fine, closed);
+            // A face's box is no measure of how narrow it is: a strut's facet
+            // crossing a corner cylinder takes a 0.48 window of a 19.7
+            // ellipse, two samples at the box-scaled density. A run that
+            // short is a graze only if it stays that short sixteen times
+            // finer.
+            if f1 - f0 < 2 && inb_fine.contains(&true) {
+                let n_finer = (n_fine * 16).min(4096);
+                let inb_finer = inboth_samples(n_finer);
+                let (g0, g1) = longest_inboth_run(&inb_finer, closed);
+                if g1 - g0 >= 2 {
+                    (n_fine, inb_fine, f0, f1) = (n_finer, inb_finer, g0, g1);
+                }
+            }
+            if trace_restrict {
+                log::debug!(
+                    "RESTRICT-FINE fa={fa:?} fb={fb:?} n_fine={n_fine} f0={f0} f1={f1} inb={} min_dim={min_dim:.3e} len={approx_len:.3}",
+                    inb_fine.iter().filter(|v| **v).count()
+                );
+            }
             if f1 - f0 < 2 {
                 out.extend(rescue_corner_crossing(
                     topo, fa, fb, &raw, ext_a, ext_b, &inb_fine, tol, junctions,
