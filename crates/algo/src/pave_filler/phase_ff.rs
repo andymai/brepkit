@@ -1639,6 +1639,8 @@ enum FaceExtent {
         poly: Vec<brepkit_math::vec::Point2>,
         holes: Vec<Vec<brepkit_math::vec::Point2>>,
         margin: f64,
+        /// Every boundary edge is a line, so the polygons are the face.
+        exact: bool,
     },
     /// Analytic lateral face (cylinder/cone/sphere/torus): bound by the
     /// axial `v` parameter range of the face and, for a partial-arc patch
@@ -1662,6 +1664,11 @@ enum FaceExtent {
         /// trimmed patch ends across both parameters (a scoop clipped by a
         /// tapered envelope's corner curves), which a `v` window alone misses.
         uv_poly: Option<(Vec<brepkit_math::vec::Point2>, f64)>,
+        /// Holes of a partial band's `uv_poly`, in the same `(u, v)`.
+        uv_holes: Vec<Vec<brepkit_math::vec::Point2>>,
+        /// The angle `uv_poly`'s `u` is read round a turn from: the middle of
+        /// the angle a partial band leaves out.
+        uv_base: Option<f64>,
         /// A torus patch on its own side of the axis, whose points project
         /// onto themselves. A spindle torus's other sheet (the tube's far
         /// side swung across the axis) projects to a foot on this sheet's
@@ -1747,11 +1754,20 @@ impl FaceExtent {
             );
             let extent = bb.max - bb.min;
             let smaller = extent.x().abs().min(extent.y().abs());
+            let exact = std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .filter_map(|w| topo.wire(w).ok())
+                .flat_map(|w| w.edges().to_vec())
+                .all(|oe| {
+                    topo.edge(oe.edge())
+                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+                });
             Some(Self::Plane {
                 frame,
                 poly,
                 holes,
                 margin: (smaller * 0.01).max(tol.linear),
+                exact,
             })
         } else {
             // A whole, untrimmed torus has no `v_range` (its boundary is the
@@ -1834,8 +1850,20 @@ impl FaceExtent {
                             })
                         })
                 });
-            let uv_poly = nurbs_face_uv_polygon(topo, face_id, surface)
-                .map(|(poly, sag)| (poly, 2.0f64.mul_add(sag, 1e-7)));
+            let uv_base = match (surface, u_gap) {
+                (FaceSurface::Cylinder(_) | FaceSurface::Cone(_), Some((lo, hi))) => {
+                    Some(0.5f64.mul_add((hi - lo).rem_euclid(std::f64::consts::TAU), lo))
+                }
+                _ => None,
+            };
+            let (uv_poly, uv_holes) = match uv_base {
+                Some(base) => lateral_face_uv_polygon(topo, face_id, surface, base)
+                    .map_or((None, Vec::new()), |(poly, sag, holes)| {
+                        (Some((poly, sag)), holes)
+                    }),
+                None => (nurbs_face_uv_polygon(topo, face_id, surface), Vec::new()),
+            };
+            let uv_poly = uv_poly.map(|(poly, sag)| (poly, 2.0f64.mul_add(sag, 1e-7)));
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -1845,6 +1873,8 @@ impl FaceExtent {
                 exact_window,
                 periodic_v,
                 uv_poly,
+                uv_holes,
+                uv_base,
                 own_sheet,
             })
         }
@@ -1869,6 +1899,24 @@ impl FaceExtent {
                 (max_x - min_x).min(max_y - min_y).abs()
             }
             Self::Analytic { v0, v1, .. } => (v1 - v0).abs(),
+        }
+    }
+
+    /// Whether the strict test reads the face itself rather than a sampled
+    /// stand-in for a curved boundary: a plane bounded by lines, a cylinder
+    /// or cone band between rulings and coaxial circles, or a face whose
+    /// sampled `(u, v)` boundary sags off its edges by no more than 1e-6.
+    fn is_exact(&self) -> bool {
+        match self {
+            Self::Plane { exact, .. } => *exact,
+            Self::Analytic {
+                exact_window,
+                uv_poly,
+                ..
+            } => match uv_poly {
+                Some((_, band)) => *band <= 1e-6,
+                None => *exact_window,
+            },
         }
     }
 
@@ -1915,6 +1963,8 @@ impl FaceExtent {
                 u_gap,
                 periodic_v,
                 uv_poly,
+                uv_holes,
+                uv_base,
                 own_sheet,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
@@ -1927,10 +1977,16 @@ impl FaceExtent {
                 let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
-                    let uv = brepkit_math::vec::Point2::new(u, v);
-                    crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
-                        && crate::builder::classify_2d::distance_to_polygon_boundary(uv, poly)
-                            > depth
+                    use crate::builder::classify_2d::{
+                        distance_to_polygon_boundary, point_in_polygon_2d,
+                    };
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
+                    point_in_polygon_2d(uv, poly)
+                        && distance_to_polygon_boundary(uv, poly) > depth
+                        && !uv_holes.iter().any(|h| {
+                            point_in_polygon_2d(uv, h)
+                                || distance_to_polygon_boundary(uv, h) <= depth
+                        })
                 });
                 in_v && in_u && in_poly
             }),
@@ -1944,6 +2000,7 @@ impl FaceExtent {
                 poly,
                 holes,
                 margin,
+                ..
             } => {
                 let uv = frame.project(p);
                 let in_outer = crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
@@ -1966,6 +2023,8 @@ impl FaceExtent {
                 u_gap,
                 periodic_v,
                 uv_poly,
+                uv_holes,
+                uv_base,
                 own_sheet,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
@@ -1975,10 +2034,16 @@ impl FaceExtent {
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, band)| {
-                    let uv = brepkit_math::vec::Point2::new(u, v);
-                    crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
-                        || crate::builder::classify_2d::distance_to_polygon_boundary(uv, poly)
-                            <= *band
+                    use crate::builder::classify_2d::{
+                        distance_to_polygon_boundary, point_in_polygon_2d,
+                    };
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
+                    (point_in_polygon_2d(uv, poly)
+                        || distance_to_polygon_boundary(uv, poly) <= *band)
+                        && !uv_holes.iter().any(|h| {
+                            point_in_polygon_2d(uv, h)
+                                && distance_to_polygon_boundary(uv, h) > *band
+                        })
                 });
                 in_v && in_u && in_poly
             }),
@@ -2431,19 +2496,61 @@ fn restrict_curves_to_faces(
                 ));
                 continue;
             }
-            let ptf = |i: usize| -> Point3 {
-                #[allow(clippy::cast_precision_loss)]
-                let f = i as f64 / n_fine as f64;
-                let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
-                raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+            let inboth_samples = |n: usize| -> Vec<bool> {
+                (0..=n)
+                    .map(|i| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let f = i as f64 / n as f64;
+                        let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                        let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                        ext_a.contains(p) && ext_b.contains(p)
+                    })
+                    .collect()
             };
-            let inb_fine: Vec<bool> = (0..=n_fine)
-                .map(|i| {
-                    let p = ptf(i);
-                    ext_a.contains(p) && ext_b.contains(p)
-                })
-                .collect();
-            let (f0, f1) = longest_inboth_run(&inb_fine, closed);
+            let mut n_fine = n_fine;
+            let mut inb_fine = inboth_samples(n_fine);
+            let (mut f0, mut f1) = longest_inboth_run(&inb_fine, closed);
+            // A face's box is no measure of how narrow it is: a strut's facet
+            // crossing a corner cylinder takes a 0.48 window of a 19.7
+            // ellipse, two samples at the box-scaled density. A run that
+            // short is a graze if it stays that short sixteen times finer,
+            // rides the faces' boundary margins (a torus corner's oval
+            // beside a tapered wall), or runs along either face's edges.
+            if f1 - f0 < 2 && inb_fine.contains(&true) && !matches!(raw.curve, EdgeCurve::Circle(_))
+            {
+                let n_finer = (n_fine * 16).min(4096);
+                let inb_finer = inboth_samples(n_finer);
+                let (g0, g1) = longest_inboth_run(&inb_finer, closed);
+                #[allow(clippy::cast_precision_loss)]
+                let mid = {
+                    let f = 0.5 * (g0 + g1) as f64 / n_finer as f64;
+                    let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                    raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+                };
+                #[allow(clippy::cast_precision_loss)]
+                let strict = (g0..=g1)
+                    .filter(|&i| {
+                        let f = (i % n_finer) as f64 / n_finer as f64;
+                        let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                        let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                        ext_a.contains_strict(p, 0.0) && ext_b.contains_strict(p, 0.0)
+                    })
+                    .count();
+                let near = 1e-5 * (1.0 + approx_len / std::f64::consts::TAU);
+                if g1 - g0 >= 4
+                    && strict >= 2
+                    && !point_on_face_edges(topo, fa, mid, near)
+                    && !point_on_face_edges(topo, fb, mid, near)
+                {
+                    (n_fine, inb_fine, f0, f1) = (n_finer, inb_finer, g0, g1);
+                }
+            }
+            if trace_restrict {
+                log::debug!(
+                    "RESTRICT-FINE fa={fa:?} fb={fb:?} n_fine={n_fine} f0={f0} f1={f1} inb={} min_dim={min_dim:.3e} len={approx_len:.3}",
+                    inb_fine.iter().filter(|v| **v).count()
+                );
+            }
             if f1 - f0 < 2 {
                 out.extend(rescue_corner_crossing(
                     topo, fa, fb, &raw, ext_a, ext_b, &inb_fine, tol, junctions,
@@ -3000,9 +3107,35 @@ fn emit_curve_windows(
                 continue;
             }
         }
-        let mut t_lo = t_at(r0);
-        if r0 > 0 {
-            let (mut out_t, mut in_t) = (t_at(r0 - 1), t_lo);
+        // The run's own end samples can pass on the margin alone, standing
+        // outside the face by up to the margin: where every face whose strict
+        // test rejects an end sample reads the face itself, bisect that end
+        // from the outermost sample the strict test holds, or the end stays
+        // there (a strut facet's section ran 0.018 past the facet's edge onto
+        // the cylinder it crosses, and the chain it closes was pruned). A
+        // sampled boundary sags inside a curved edge, so there the strict
+        // bracket would stop short of it.
+        let exact_rejects = |i: usize| {
+            let p = point_at(t_at(i));
+            (ext_a.is_exact() || ext_a.contains_strict(p, 0.0))
+                && (ext_b.is_exact() || ext_b.contains_strict(p, 0.0))
+        };
+        let (first_in, last_in) = match anchor {
+            Some(a) => (
+                if exact_rejects(r0) { a } else { r0 },
+                if r1 <= n && exact_rejects(r1) {
+                    (a..=r1)
+                        .rev()
+                        .find(|&i| strict_inside(t_at(i)))
+                        .unwrap_or(a)
+                } else {
+                    r1
+                },
+            ),
+            None => (r0, r1),
+        };
+        let mut t_lo = if r0 > 0 {
+            let (mut out_t, mut in_t) = (t_at(r0 - 1), t_at(first_in));
             for _ in 0..48 {
                 let mid = 0.5 * (out_t + in_t);
                 if inside(mid) {
@@ -3011,15 +3144,19 @@ fn emit_curve_windows(
                     out_t = mid;
                 }
             }
-            t_lo = in_t;
-        }
-        let mut t_hi = t_at(r1);
+            in_t
+        } else {
+            t_at(r0)
+        };
         // `r1 == n` ends exactly at the seam duplicate (no out-sample to
         // bisect against in-domain); `r1 > n` is the wrapped-Ellipse
         // fall-through, whose periodic evaluation makes the out-of-domain
         // bisection valid.
-        if r1 != n {
-            let (mut in_t, mut out_t) = (t_hi, t_at(r1 + 1));
+        let mut t_hi = if r1 == n {
+            t_at(r1)
+        } else {
+            let in_end = if r1 > n { r1 } else { last_in };
+            let (mut in_t, mut out_t) = (t_at(in_end), t_at(r1 + 1));
             for _ in 0..48 {
                 let mid = 0.5 * (in_t + out_t);
                 if inside(mid) {
@@ -3028,8 +3165,8 @@ fn emit_curve_windows(
                     out_t = mid;
                 }
             }
-            t_hi = in_t;
-        }
+            in_t
+        };
         // A bisected end sits on the sampled polygon of a curved boundary,
         // up to its chord sag off the boundary itself: where that boundary
         // edge crosses the partner face lies on this curve, so the window
@@ -4900,13 +5037,94 @@ fn nurbs_face_uv_polygon(
     if !matches!(surface, FaceSurface::Nurbs(_)) {
         return None;
     }
+    let (poly, sag) = outer_wire_uv_polygon(topo, face_id, surface, None)?;
+    // A boundary that crosses a closed surface's seam jumps across the
+    // parameter domain and is no polygon in (u, v).
+    let FaceSurface::Nurbs(n) = surface else {
+        return None;
+    };
+    let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
+    let seamless = poly.iter().zip(poly.iter().cycle().skip(1)).all(|(a, b)| {
+        (a.x() - b.x()).abs() < 0.5 * (u1 - u0) && (a.y() - b.y()).abs() < 0.5 * (v1 - v0)
+    });
+    (poly.len() >= 3 && seamless).then_some((poly, sag))
+}
+
+/// A partial cylinder or cone band's boundary in `(u, v)`, outer polygon,
+/// largest sag and hole polygons, `u` read from `u_base` (inside the angle
+/// the band leaves out) round a turn, when that boundary is no rectangle: an
+/// earlier cut's notch in a corner cylinder's edge, or a strut's window
+/// through it, leaves its `v` window and angular gap whole while points in
+/// the notch or window are off the face.
+#[allow(clippy::type_complexity)]
+fn lateral_face_uv_polygon(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+    u_base: f64,
+) -> Option<(
+    Vec<brepkit_math::vec::Point2>,
+    f64,
+    Vec<Vec<brepkit_math::vec::Point2>>,
+)> {
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let face = topo.face(face_id).ok()?;
+    let (poly, mut sag) = wire_uv_polygon(topo, face.outer_wire(), surface, Some(u_base))?;
+    let mut holes = Vec::new();
+    for &w in face.inner_wires() {
+        let (hole, hole_sag) = wire_uv_polygon(topo, w, surface, Some(u_base))?;
+        sag = sag.max(hole_sag);
+        holes.push(hole);
+    }
+    let (mut lo, mut hi) = (
+        brepkit_math::vec::Point2::new(f64::INFINITY, f64::INFINITY),
+        brepkit_math::vec::Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for p in &poly {
+        lo = brepkit_math::vec::Point2::new(lo.x().min(p.x()), lo.y().min(p.y()));
+        hi = brepkit_math::vec::Point2::new(hi.x().max(p.x()), hi.y().max(p.y()));
+    }
+    let area = poly
+        .iter()
+        .zip(poly.iter().cycle().skip(1))
+        .map(|(a, b)| a.x().mul_add(b.y(), -(b.x() * a.y())))
+        .sum::<f64>()
+        .abs()
+        * 0.5;
+    let rect = (hi.x() - lo.x()) * (hi.y() - lo.y());
+    (poly.len() >= 3 && (!holes.is_empty() || area < rect * (1.0 - 1e-6)))
+        .then_some((poly, sag, holes))
+}
+
+/// A face's outer wire sampled into its surface's `(u, v)` with the chords'
+/// largest sag, `u` taken round a turn from `u_base` when one is given, or
+/// `None` for a face with holes.
+fn outer_wire_uv_polygon(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+    u_base: Option<f64>,
+) -> Option<(Vec<brepkit_math::vec::Point2>, f64)> {
     let face = topo.face(face_id).ok()?;
     if !face.inner_wires().is_empty() {
         return None;
     }
+    wire_uv_polygon(topo, face.outer_wire(), surface, u_base)
+}
+
+/// A wire sampled into a surface's `(u, v)` with the chords' largest sag,
+/// `u` taken round a turn from `u_base` when one is given.
+fn wire_uv_polygon(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    surface: &FaceSurface,
+    u_base: Option<f64>,
+) -> Option<(Vec<brepkit_math::vec::Point2>, f64)> {
     let mut poly = Vec::new();
     let mut sag: f64 = 0.0;
-    for oe in topo.wire(face.outer_wire()).ok()?.edges() {
+    for oe in topo.wire(wire_id).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let sp = topo.vertex(edge.start()).ok()?.point();
         let ep = topo.vertex(edge.end()).ok()?.point();
@@ -4935,7 +5153,7 @@ fn nurbs_face_uv_polygon(
             .map(|p| {
                 surface
                     .project_point(*p)
-                    .map(|(u, v)| brepkit_math::vec::Point2::new(u, v))
+                    .map(|(u, v)| brepkit_math::vec::Point2::new(rebase_u(u, u_base), v))
             })
             .collect::<Option<_>>()?;
         for k in (0..n).step_by(2) {
@@ -4947,16 +5165,12 @@ fn nurbs_face_uv_polygon(
             poly.push(a);
         }
     }
-    // A boundary that crosses a closed surface's seam jumps across the
-    // parameter domain and is no polygon in (u, v).
-    let FaceSurface::Nurbs(n) = surface else {
-        return None;
-    };
-    let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
-    let seamless = poly.iter().zip(poly.iter().cycle().skip(1)).all(|(a, b)| {
-        (a.x() - b.x()).abs() < 0.5 * (u1 - u0) && (a.y() - b.y()).abs() < 0.5 * (v1 - v0)
-    });
-    (poly.len() >= 3 && seamless).then_some((poly, sag))
+    Some((poly, sag))
+}
+
+/// `u` read round a turn from `base`, or as projected without one.
+fn rebase_u(u: f64, base: Option<f64>) -> f64 {
+    base.map_or(u, |b| b + (u - b).rem_euclid(std::f64::consts::TAU))
 }
 
 /// Extract the `[t0, t1]` sub-curve of a NURBS curve, preserving the original

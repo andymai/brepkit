@@ -641,9 +641,19 @@ pub(super) fn find_splits_on_ellipse(
     split_pts_3d: &[Point3],
     tol: f64,
 ) -> Vec<(f64, Point3)> {
+    // An open arc spans its stored edge's counter-clockwise range; read in
+    // the traversal's order, a reversed arc's span is its complement, and a
+    // point on the ellipse just past the arc's end (a strut notch's arc ending
+    // a hair short of the seam vertex) split it into a detour through there.
+    let closed = (edge.start_3d - edge.end_3d).length() < tol;
+    let (stored_start, stored_end) = if edge.forward || closed {
+        (edge.start_3d, edge.end_3d)
+    } else {
+        (edge.end_3d, edge.start_3d)
+    };
     let (t0, t1) = edge
         .curve_3d
-        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+        .domain_with_endpoints(stored_start, stored_end);
     let span = t1 - t0;
     if span.abs() < 1e-14 {
         return Vec::new();
@@ -656,7 +666,12 @@ pub(super) fn find_splits_on_ellipse(
         if (sp - closest).length() > tol {
             continue;
         }
-        let t_norm = normalize_angle_in_span(angle, t0, span);
+        let along = normalize_angle_in_span(angle, t0, span);
+        let t_norm = if edge.forward || closed {
+            along
+        } else {
+            1.0 - along
+        };
         if t_norm <= tol || t_norm >= 1.0 - tol {
             continue;
         }
@@ -818,17 +833,12 @@ mod tests {
             );
         }
 
-        // Pin the divergence that motivated the section-specific finder: the
-        // domain-based `find_splits_on_ellipse` (still correct for boundary
-        // edges) DOES phantom-split the reverse twin on the other-window
-        // point. If it ever becomes twin-safe, delete this assertion and
-        // consider re-unifying the finders.
+        // The boundary finder reads a reversed arc by its stored span too.
         let rev = ellipse_section_edge(&ellipse, 0.2, 1.0, false);
-        let old = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7);
-        assert_eq!(
-            old.len(),
-            1,
-            "domain-based finder is expected to phantom-split the reverse twin"
+        let boundary = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7);
+        assert!(
+            boundary.is_empty(),
+            "a point off a reversed boundary arc must not split it"
         );
     }
 
