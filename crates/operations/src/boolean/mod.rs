@@ -1026,13 +1026,27 @@ pub fn compound_cut(
         // cluster merge fuses below, so a discarded merge never touches the
         // public fallback counter.
         if !batched {
+            // The fallback is declined, not just detected afterwards: a tool
+            // of many pieces is fused piece by piece through nested booleans
+            // that the taint flag does not see, and a lattice's accumulator
+            // then grows a mesh by thousands of faces per piece (3.85 GB
+            // before the mitsukude lattice's wasm trapped).
             let merged = clusters.iter().try_fold(None::<SolidId>, |acc, cluster| {
-                let fused = fuse_cluster(topo, cluster)?;
+                let (fused, declined) = without_mesh_fallback(|| fuse_cluster(topo, cluster));
+                let fused = fused?;
+                if declined {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: "cluster fuse needs the mesh fallback".to_string(),
+                    });
+                }
                 match acc {
                     None => Ok(Some(fused)),
                     Some(prev) => {
-                        let m = boolean_inner(topo, BooleanOp::Fuse, prev, fused)?;
-                        if LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
+                        let (m, declined) = without_mesh_fallback(|| {
+                            boolean_inner(topo, BooleanOp::Fuse, prev, fused)
+                        });
+                        let m = m?;
+                        if declined || LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take) {
                             return Err(crate::OperationsError::InvalidInput {
                                 reason: "cluster merge degraded to mesh fallback".to_string(),
                             });
@@ -1060,36 +1074,33 @@ pub fn compound_cut(
         }
     }
     if !batched {
-        if let Some(tool) = batch_tool {
-            // The sequential cuts are only worth it while every one stays
-            // exact: once one degrades to a mesh, each later cut grinds
-            // against that mesh (a 34,692-face blob after the first of 19
-            // slot boxes on a kumiko corner band), where the one batched cut
-            // takes a single mesh fallback. A helper can swallow the decline
-            // and return `Ok`, so the flag is read after every cut.
-            let (seq, declined) = without_mesh_fallback(|| {
-                tools.iter().try_fold(target, |cur, &t| {
-                    let cut = boolean_inner(topo, BooleanOp::Cut, cur, t)?;
-                    if MESH_FALLBACK_DECLINED.with(std::cell::Cell::get) {
-                        return Err(crate::OperationsError::InvalidInput {
-                            reason: "a sequential cut declined the mesh fallback".into(),
-                        });
-                    }
-                    Ok(cut)
-                })
-            });
-            result = match (seq, declined) {
-                (Ok(cut), false) => cut,
-                (Err(e), false) => return Err(e),
-                _ => {
-                    log::debug!("compound_cut: sequential cuts not exact, cutting the batch once");
-                    boolean(topo, BooleanOp::Cut, target, tool)?
-                }
+        // The sequential cuts are only worth it while each stays exact: once
+        // one degrades to a mesh, every later cut grinds against that mesh (a
+        // 34,692-face blob after the first of 19 slot boxes on a kumiko corner
+        // band). So the cuts that need the fallback wait until the rest are
+        // done, and then take one where they can.
+        let (cut, deferred) = cut_piecewise(topo, target, tools)?;
+        result = cut;
+        if !deferred.is_empty() {
+            log::debug!(
+                "compound_cut: {} piece(s) need the mesh fallback",
+                deferred.len()
+            );
+            result = match batch_tool {
+                Some(tool) => boolean(topo, BooleanOp::Cut, result, tool)?,
+                // Pieces that at most touch share one cut, so the fallback
+                // runs once per group rather than once per piece.
+                None => disjoint_groups(topo, &deferred)?.into_iter().try_fold(
+                    result,
+                    |cur, group| -> Result<SolidId, crate::OperationsError> {
+                        let tool = match group.as_slice() {
+                            [one] => *one,
+                            _ => crate::compound_ops::merge_disjoint_solids(topo, &group)?,
+                        };
+                        boolean(topo, BooleanOp::Cut, cur, tool)
+                    },
+                )?,
             };
-        } else {
-            for &tool in tools {
-                result = boolean(topo, BooleanOp::Cut, result, tool)?;
-            }
         }
     }
     if opts.unify_faces {
@@ -1101,6 +1112,119 @@ pub fn compound_cut(
         }
     }
     Ok(result)
+}
+
+/// Cut `target` by each tool with the mesh fallback declined. A tool whose
+/// cut needs the fallback is split into its connected pieces, and the pieces
+/// into halves, until every piece that cuts exactly has; returns the result
+/// and the pieces whose own cut still needs the fallback.
+///
+/// A lattice tool of hundreds of struts cuts in one boolean where it can,
+/// and a strut that cannot no longer turns the target into a mesh for every
+/// strut after it.
+fn cut_piecewise(
+    topo: &mut Topology,
+    target: SolidId,
+    tools: &[SolidId],
+) -> Result<(SolidId, Vec<SolidId>), crate::OperationsError> {
+    let mut cur = target;
+    let mut deferred = Vec::new();
+    let mut work: std::collections::VecDeque<Vec<SolidId>> =
+        tools.iter().map(|&t| vec![t]).collect();
+    while let Some(batch) = work.pop_front() {
+        let tool = match batch.as_slice() {
+            [one] => *one,
+            _ => crate::compound_ops::merge_disjoint_solids(topo, &batch)?,
+        };
+        let start = timer_now();
+        let (cut, declined) =
+            without_mesh_fallback(|| boolean_inner(topo, BooleanOp::Cut, cur, tool));
+        let fell_back = LAST_USED_MESH_FALLBACK.with(std::cell::Cell::take);
+        log::debug!(
+            "cut_piecewise: {} piece(s) {} in {:.1}ms",
+            batch.len(),
+            if cut.is_ok() && !declined && !fell_back {
+                "exact"
+            } else {
+                "declined"
+            },
+            timer_elapsed_ms(start)
+        );
+        match cut {
+            Ok(r) if !declined && !fell_back => {
+                cur = r;
+                continue;
+            }
+            Err(e) if !declined => return Err(e),
+            _ => {}
+        }
+        let pieces = match batch.as_slice() {
+            [one] => tool_pieces(topo, *one)?,
+            _ => batch,
+        };
+        if pieces.len() < 2 {
+            deferred.extend(pieces);
+            continue;
+        }
+        // A handful of pieces is cheaper to try one by one than by halves.
+        if pieces.len() <= 4 {
+            for &piece in pieces.iter().rev() {
+                work.push_front(vec![piece]);
+            }
+            continue;
+        }
+        let (low, high) = pieces.split_at(pieces.len() / 2);
+        work.push_front(high.to_vec());
+        work.push_front(low.to_vec());
+    }
+    Ok((cur, deferred))
+}
+
+/// `solids` in groups whose members pairwise at most touch, each solid in the
+/// first group it fits.
+fn disjoint_groups(
+    topo: &Topology,
+    solids: &[SolidId],
+) -> Result<Vec<Vec<SolidId>>, crate::OperationsError> {
+    let boxes: Vec<brepkit_math::aabb::Aabb3> = solids
+        .iter()
+        .map(|&s| crate::measure::solid_bounding_box(topo, s))
+        .collect::<Result<_, _>>()?;
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..solids.len() {
+        let fits = |group: &Vec<usize>| {
+            group
+                .iter()
+                .all(|&j| tools_at_most_touch(&[boxes[i], boxes[j]]))
+        };
+        match groups.iter_mut().find(|g| fits(g)) {
+            Some(group) => group.push(i),
+            None => groups.push(vec![i]),
+        }
+    }
+    Ok(groups
+        .into_iter()
+        .map(|g| g.into_iter().map(|i| solids[i]).collect())
+        .collect())
+}
+
+/// A tool's connected pieces as separate solids, or the tool itself when it
+/// is one piece, has cavities, or its pieces nest.
+fn tool_pieces(topo: &mut Topology, tool: SolidId) -> Result<Vec<SolidId>, crate::OperationsError> {
+    if !topo.solid(tool)?.inner_shells().is_empty() {
+        return Ok(vec![tool]);
+    }
+    let components = crate::boolean::assembly::face_components(topo, tool);
+    if components.len() < 2 || !components_are_disjoint_pieces(topo, &components) {
+        return Ok(vec![tool]);
+    }
+    components
+        .iter()
+        .map(|faces| {
+            let raw = make_solid_from_face_subset(topo, faces)?;
+            crate::copy::copy_solid(topo, raw)
+        })
+        .collect()
 }
 
 /// Fuse one AABB-overlap cluster into a single solid.
