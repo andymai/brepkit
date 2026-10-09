@@ -869,10 +869,14 @@ fn finish_chain(
 ///
 /// Pins every non-periodic parameter lying within 1.5x the clamp margin of
 /// its domain edge to that exact edge value, then Newton-solves the free
-/// parameters to bring the two surface points together. Returns `None` when
-/// no parameter is near a boundary, the reduced system is singular (e.g. a
-/// degenerate pole edge), or the solve does not reach `tolerance` — callers
-/// keep the original endpoint in those cases.
+/// parameters to bring the two surface points together. Near a patch corner
+/// both of its parameters lie in that band while the curve leaves through
+/// one edge only (a strut facet's section ending 0.0011 from the corner), so
+/// where pinning all of them finds no point, each is pinned alone and the
+/// point nearest the stalled end is kept. Returns `None` when no parameter
+/// is near a boundary, the reduced system is singular (e.g. a degenerate
+/// pole edge), or no solve reaches `tolerance`; callers keep the original
+/// endpoint in those cases.
 fn refine_onto_boundary(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -886,8 +890,8 @@ fn refine_onto_boundary(
         s2.is_periodic_u(),
         s2.is_periodic_v(),
     ];
-    let mut state = [last.param1.0, last.param1.1, last.param2.0, last.param2.1];
-    let mut pinned = [false; 4];
+    let start = [last.param1.0, last.param1.1, last.param2.0, last.param2.1];
+    let mut edges: Vec<(usize, f64)> = Vec::new();
     for i in 0..4 {
         if periodic[i] {
             continue;
@@ -897,16 +901,49 @@ fn refine_onto_boundary(
         // the margin plus Newton wobble, without reaching genuinely interior
         // endpoints.
         let band = 1.5 * NONPERIODIC_CLAMP_MARGIN * (max - min);
-        if state[i] <= min + band {
-            state[i] = min;
-            pinned[i] = true;
-        } else if state[i] >= max - band {
-            state[i] = max;
-            pinned[i] = true;
+        if start[i] <= min + band {
+            edges.push((i, min));
+        } else if start[i] >= max - band {
+            edges.push((i, max));
         }
     }
-    if !pinned.iter().any(|&p| p) {
+    if edges.is_empty() {
         return None;
+    }
+    let solve =
+        |pins: &[(usize, f64)]| solve_pinned(s1, s2, start, pins, domains, periodic, tolerance);
+    if let Some(end) = solve(&edges) {
+        return Some(end);
+    }
+    if edges.len() < 2 {
+        return None;
+    }
+    edges
+        .iter()
+        .filter_map(|&pin| solve(&[pin]))
+        .min_by(|a, b| {
+            (a.point - last.point)
+                .length()
+                .total_cmp(&(b.point - last.point).length())
+        })
+}
+
+/// Newton on the parameters `pins` leaves free, from `start` with each pin
+/// set to its edge value, until the two surface points meet.
+fn solve_pinned(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    start: [f64; 4],
+    pins: &[(usize, f64)],
+    domains: [(f64, f64); 4],
+    periodic: [bool; 4],
+    tolerance: f64,
+) -> Option<IntersectionPoint> {
+    let mut state = start;
+    let mut pinned = [false; 4];
+    for &(i, edge) in pins {
+        state[i] = edge;
+        pinned[i] = true;
     }
     let free: Vec<usize> = (0..4).filter(|&i| !pinned[i]).collect();
 

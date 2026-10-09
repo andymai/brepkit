@@ -85,7 +85,8 @@ pub fn intersect_nurbs_nurbs(
     // can miss a short one in a patch corner (a fillet run's end against a
     // leaning corner, x 1.7 long on a run of 82).
     let mut seeds = seeds;
-    for b in boundary_seeds(surface1, surface2, tolerance) {
+    let boundary = boundary_seeds(surface1, surface2, tolerance);
+    for &b in &boundary {
         if !seeds
             .iter()
             .any(|s| (s.point - b.point).length() < tolerance * 100.0)
@@ -133,6 +134,18 @@ pub fn intersect_nurbs_nurbs(
         }
     }
 
+    // A bridge joins two seeds no march reached and stays a chain of its
+    // own: within the chainer's marcher-scale trim and join radii of another
+    // branch it would be trimmed away or spliced onto that branch.
+    let bridges = bridge_orphan_seeds(
+        surface1,
+        surface2,
+        &boundary,
+        &traced_segments,
+        dedup_dist,
+        tolerance,
+    );
+
     // Phase 3: Assemble the traced segments into ordered chains and fit a
     // curve through each. A segment re-tracing another from a later seed is
     // trimmed where it overlaps (within the seed dedup distance), and the
@@ -142,7 +155,8 @@ pub fn intersect_nurbs_nurbs(
         .flat_map(|seg| seg.windows(2))
         .map(|w| (w[1].point - w[0].point).length())
         .fold(0.0_f64, f64::max);
-    let chains = chain_traced_segments(traced_segments, dedup_dist, dedup_dist + longest_step);
+    let mut chains = chain_traced_segments(traced_segments, dedup_dist, dedup_dist + longest_step);
+    chains.extend(bridges);
     if chains.is_empty() {
         return Ok(Vec::new());
     }
@@ -155,6 +169,184 @@ pub fn intersect_nurbs_nurbs(
     let validated = validate_intersection_curves(&curves, surface1, surface2, tolerance * 10.0);
 
     Ok(validated)
+}
+
+/// Curves between boundary seeds no traced segment reached. A march keeps
+/// every state a margin inside each patch's domain, so a curve crossing a
+/// patch's corner closer to it than that margin takes no step from either of
+/// its ends (a strut facet's corner poking 0.001 through a corner cylinder,
+/// its section 0.003 long). Two such seeds within a twentieth of the smaller
+/// patch's size are joined where every midpoint refined onto both patches
+/// lies inside both domains and between its neighbours. A seed within `near`
+/// of a traced segment counts as reached, the distance at which the march
+/// skips a seed as traced, so a bridge never retraces a branch.
+fn bridge_orphan_seeds(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    boundary: &[IntersectionPoint],
+    traced: &[Vec<IntersectionPoint>],
+    near: f64,
+    tolerance: f64,
+) -> Vec<Vec<IntersectionPoint>> {
+    let reached = |b: &IntersectionPoint| {
+        traced
+            .iter()
+            .any(|seg| seg.len() >= 2 && near_existing_segment(std::slice::from_ref(seg), b, near))
+    };
+    let orphans: Vec<IntersectionPoint> =
+        boundary.iter().filter(|b| !reached(b)).copied().collect();
+    if orphans.len() < 2 {
+        return Vec::new();
+    }
+    let size = |s: &NurbsSurface| {
+        let b = s.aabb();
+        (b.max - b.min).length()
+    };
+    let reach = 0.05 * size(s1).min(size(s2));
+    // The edges of either patch a seed lies on. Two seeds on one edge bound
+    // a section along that edge, which the march leaves to the edge itself.
+    let edges = |p: &IntersectionPoint| {
+        let mut on = Vec::new();
+        for (k, (s, (u, v))) in [(s1, p.param1), (s2, p.param2)].into_iter().enumerate() {
+            for (axis, x, (lo, hi)) in [(0, u, s.domain_u()), (1, v, s.domain_v())] {
+                let near = 1e-5 * (hi - lo);
+                if (x - lo).abs() <= near {
+                    on.push((k, axis, false));
+                } else if (hi - x).abs() <= near {
+                    on.push((k, axis, true));
+                }
+            }
+        }
+        on
+    };
+    let mut used = vec![false; orphans.len()];
+    let mut out = Vec::new();
+    for i in 0..orphans.len() {
+        if used[i] {
+            continue;
+        }
+        let nearest = (i + 1..orphans.len())
+            .filter(|&j| !used[j])
+            .map(|j| (j, (orphans[j].point - orphans[i].point).length()))
+            .filter(|&(j, d)| {
+                d > tolerance * 100.0
+                    && d < reach
+                    && !edges(&orphans[i])
+                        .iter()
+                        .any(|e| edges(&orphans[j]).contains(e))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let Some((j, _)) = nearest else {
+            continue;
+        };
+        if let Some(bridge) = bridge_seeds(s1, s2, &orphans[i], &orphans[j], tolerance) {
+            used[i] = true;
+            used[j] = true;
+            out.push(bridge);
+        }
+    }
+    out
+}
+
+/// The curve from `a` to `b`, both on both patches, by four rounds of
+/// midpoints refined onto both, or `None` where a midpoint leaves either
+/// domain or strays from between its neighbours.
+fn bridge_seeds(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    a: &IntersectionPoint,
+    b: &IntersectionPoint,
+    tolerance: f64,
+) -> Option<Vec<IntersectionPoint>> {
+    let within = |s: &NurbsSurface, (u, v): (f64, f64)| {
+        let ((u0, u1), (v0, v1)) = (s.domain_u(), s.domain_v());
+        let slack = 1e-9 * (u1 - u0).max(v1 - v0);
+        (u0 - slack..=u1 + slack).contains(&u) && (v0 - slack..=v1 + slack).contains(&v)
+    };
+    let mut pts = vec![*a, *b];
+    for _ in 0..4 {
+        let mut next = Vec::with_capacity(pts.len() * 2);
+        next.push(pts[0]);
+        for w in pts.windows(2) {
+            let (p, q) = (w[0], w[1]);
+            let m = refine_in_domain(
+                s1,
+                s2,
+                [
+                    f64::midpoint(p.param1.0, q.param1.0),
+                    f64::midpoint(p.param1.1, q.param1.1),
+                    f64::midpoint(p.param2.0, q.param2.0),
+                    f64::midpoint(p.param2.1, q.param2.1),
+                ],
+                tolerance,
+            );
+            let m = m?;
+            let chord = (q.point - p.point).length();
+            if !within(s1, m.param1)
+                || !within(s2, m.param2)
+                || (m.point - p.point).length() >= chord
+                || (m.point - q.point).length() >= chord
+            {
+                return None;
+            }
+            next.push(m);
+            next.push(q);
+        }
+        pts = next;
+    }
+    Some(pts)
+}
+
+/// Newton onto both patches from `guess`, clamped to each patch's own domain
+/// rather than the march's margin inside it: a bridge's points lie within
+/// that margin of a corner.
+fn refine_in_domain(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    guess: [f64; 4],
+    tolerance: f64,
+) -> Option<IntersectionPoint> {
+    let clamp = |state: [f64; 4]| {
+        let ((a0, a1), (b0, b1)) = (s1.domain_u(), s1.domain_v());
+        let ((c0, c1), (d0, d1)) = (s2.domain_u(), s2.domain_v());
+        [
+            state[0].clamp(a0, a1),
+            state[1].clamp(b0, b1),
+            state[2].clamp(c0, c1),
+            state[3].clamp(d0, d1),
+        ]
+    };
+    let mut state = clamp(guess);
+    for _ in 0..MAX_NEWTON_ITER {
+        let (p1, p2) = (
+            s1.evaluate(state[0], state[1]),
+            s2.evaluate(state[2], state[3]),
+        );
+        let r = p1 - p2;
+        if r.length() < tolerance {
+            return Some(IntersectionPoint {
+                point: p1,
+                param1: (state[0], state[1]),
+                param2: (state[2], state[3]),
+            });
+        }
+        let d1 = s1.derivatives(state[0], state[1], 1);
+        let d2 = s2.derivatives(state[2], state[3], 1);
+        let j = [d1[1][0], d1[0][1], -d2[1][0], -d2[0][1]];
+        let r_vec = Vec3::new(r.x(), r.y(), r.z());
+        let jtr: [f64; 4] = std::array::from_fn(|i| -j[i].dot(r_vec));
+        let mut jtj: [[f64; 4]; 4] =
+            std::array::from_fn(|i| std::array::from_fn(|k| j[i].dot(j[k])));
+        // The curve is a one-parameter family of solutions, so the normal
+        // equations are singular along it: damping takes the least step.
+        let lambda = (jtj[0][0] + jtj[1][1] + jtj[2][2] + jtj[3][3]).max(1e-10) * 1e-9;
+        for (i, row) in jtj.iter_mut().enumerate() {
+            row[i] += lambda;
+        }
+        let delta = solve_4x4(jtj, jtr)?;
+        state = clamp(std::array::from_fn(|i| state[i] + delta[i]));
+    }
+    None
 }
 
 /// Points where a boundary curve of either patch crosses the other patch.
