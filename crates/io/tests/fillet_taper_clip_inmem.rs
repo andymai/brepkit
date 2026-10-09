@@ -14,6 +14,10 @@
 //! pocket's air.
 //!
 //! Data: `fillet_taper_clip_material.bin` and `fillet_taper_clip_envelope.bin`.
+//! A second material, `scoop_beside_taper_material.bin`, comes from "a scoop
+//! beside tapered side walls keeps the plain fillet" in the tool's
+//! `binGenerator.export.interiorFilletScoops.test.ts`, against the envelope in
+//! `taper_clip_envelope.bin`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -21,9 +25,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use brepkit_io::arena_io::deserialize_solid;
+use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{self, BooleanOp};
-use brepkit_operations::measure::solid_volume;
+use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
+use brepkit_operations::primitives::make_box;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
@@ -91,4 +98,51 @@ fn a_fillet_material_and_a_tapered_envelope_keep_their_closed_forms() {
             "{label} volume {got}, expected {want}"
         );
     }
+}
+
+fn slab(topo: &mut Topology, y0: f64, y1: f64) -> SolidId {
+    let slab = make_box(topo, 100.0, y1 - y0, 40.0).unwrap();
+    transform_solid(topo, slab, &Mat4::translation(-50.0, y0, -5.0)).unwrap();
+    slab
+}
+
+/// The envelope against a material whose pocket ramps up a front scoop and
+/// whose side walls take the envelope's lean in their own floor rim. The
+/// corner tori meet the leaning walls' planes only past those walls' ends,
+/// at the tori's own meridians, and the scoop's rim, fitted to within 1.4e-6
+/// of its vertex on a leaning wall, meets that wall's plane there.
+///
+/// Away from the scoop every horizontal section is a rounded rectangle: the
+/// outer box (corner r 3.03 about (+-41, +-17)), the envelope (the same
+/// corners shifted to 38 + z/2 below z 6) and the pocket's air (corner
+/// 0.1 + w about the same centres, w the floor rim's reach at z). Integrated
+/// over those, the envelope trims 234.306 from the material between y -12
+/// and 12 and 80.83 beyond y 12.
+#[test]
+fn a_scooped_fillet_material_clips_to_its_tapered_envelope_exactly() {
+    let mut topo = Topology::new();
+    let material = load(&mut topo, "scoop_beside_taper_material.bin");
+    let envelope = load(&mut topo, "taper_clip_envelope.bin");
+    let common = exact(&mut topo, BooleanOp::Intersect, material, envelope);
+    let trimmed = |topo: &mut Topology, y0: f64, y1: f64| {
+        let (a, b) = (slab(topo, y0, y1), slab(topo, y0, y1));
+        let whole = exact(topo, BooleanOp::Intersect, material, a);
+        let clipped = exact(topo, BooleanOp::Intersect, common, b);
+        (whole, clipped)
+    };
+    // Planes and cylinders only: both integrate exactly.
+    let (whole, clipped) = trimmed(&mut topo, -12.0, 12.0);
+    let run =
+        solid_volume(&topo, whole, 0.001).unwrap() - solid_volume(&topo, clipped, 0.001).unwrap();
+    assert!(
+        (run - 234.306).abs() < 1e-2,
+        "straight runs trimmed by {run}"
+    );
+    let (whole, clipped) = trimmed(&mut topo, 12.0, 25.0);
+    let corners = oriented_solid_volume(&topo, whole, 0.001).unwrap()
+        - oriented_solid_volume(&topo, clipped, 0.001).unwrap();
+    assert!(
+        (corners - 80.83).abs() < 0.1,
+        "corners trimmed by {corners}"
+    );
 }

@@ -531,13 +531,18 @@ fn check_edge_face_pairs(
                     if !start_on_surface && !end_on_surface {
                         return (tol.linear, tol.linear, widened);
                     }
+                    // A fitted curve reaches its own end vertex only to its
+                    // fit error, and a root solved on it lands that far off
+                    // the surface again: a scoop rim fitted 1.4e-6 off its
+                    // vertex crossed the plane through that vertex 7e-6 away.
+                    let at_end = if matches!(curve, EdgeCurve::NurbsCurve(_)) {
+                        widened.max(1e-5)
+                    } else {
+                        widened
+                    };
                     (
-                        if start_on_surface {
-                            widened
-                        } else {
-                            tol.linear
-                        },
-                        if end_on_surface { widened } else { tol.linear },
+                        if start_on_surface { at_end } else { tol.linear },
+                        if end_on_surface { at_end } else { tol.linear },
                         widened,
                     )
                 })

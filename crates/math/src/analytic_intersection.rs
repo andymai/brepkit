@@ -1262,8 +1262,9 @@ fn plane_torus_winding_loops(
 /// A line meets a torus in up to four points (degree-4). Substituting the line
 /// into the torus implicit `(a² + b² + c² + R² − r²)² = 4R²(a² + b²)` — where
 /// `(a, b, c)` are the line point's coordinates in the torus frame — gives a
-/// quartic in `t`, solved here for its real roots (each refined by one Newton
-/// step against the implicit). `dir` need not be unit length; `t` is in units of
+/// quartic in `t`, solved here for its real roots, each refined by Newton steps
+/// on the tube it lies nearer (on a spindle torus, the near tube or the one
+/// swung across the axis). `dir` need not be unit length; `t` is in units of
 /// `dir`. Returns the roots sorted ascending (0–4 of them).
 ///
 /// Used by the boolean section trimmer to find where a plane×torus oval exits a
@@ -1304,22 +1305,36 @@ pub fn intersect_line_torus(torus: &ToroidalSurface, origin: Point3, dir: Vec3) 
     let e0 = g0.mul_add(g0, -h0);
 
     let mut roots = real_roots_quartic(e4, e3, e2, e1, e0);
-    // One Newton polish against the torus implicit for full precision.
-    let impl_f = |t: f64| -> f64 {
+    // The quartic also holds a spindle torus's tube swung across the axis
+    // (`G = -sqrt(H)`), whose roots pair up with the tube's own a few hundredths
+    // apart when `R` is small: the solver leaves them loose, and polishing one
+    // against the near tube carries it beside the other root. Each root is
+    // polished on the tube it lies nearer.
+    let tube = |t: f64, across: bool| -> f64 {
         let p = origin + dir * t;
         let q = Vec3::new(p.x() - c.x(), p.y() - c.y(), p.z() - c.z());
         let (a, b, cc) = (xa.dot(q), ya.dot(q), za.dot(q));
-        (a.hypot(b) - big_r).hypot(cc) - small_r
+        let centre = if across { -big_r } else { big_r };
+        (a.hypot(b) - centre).hypot(cc) - small_r
     };
     for t in &mut roots {
-        let eps = 1e-7;
-        let f = impl_f(*t);
-        let df = (impl_f(*t + eps) - impl_f(*t - eps)) / (2.0 * eps);
-        if df.abs() > 1e-12 {
-            *t -= f / df;
+        let across = big_r < small_r && tube(*t, true).abs() < tube(*t, false).abs();
+        for _ in 0..8 {
+            let eps = 1e-7;
+            let f = tube(*t, across);
+            let df = (tube(*t + eps, across) - tube(*t - eps, across)) / (2.0 * eps);
+            if df.abs() <= 1e-12 {
+                break;
+            }
+            let step = f / df;
+            *t -= step;
+            if step.abs() < 1e-14 * (1.0 + t.abs()) {
+                break;
+            }
         }
     }
     roots.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    roots.dedup_by(|a, b| (*a - *b).abs() < 1e-9 * (1.0 + b.abs()));
     roots
 }
 
@@ -4725,6 +4740,38 @@ mod tests {
             let rho = p.x().hypot(p.y());
             let impl_v = (rho - 10.0).hypot(p.z()) - 3.0;
             assert!(impl_v.abs() < 1e-9, "off-torus impl={impl_v}");
+        }
+    }
+
+    /// A ray out of a pocket corner's spindle torus (major 0.1, minor 2.45)
+    /// meets the tube swung across the axis at t 0.124 and its own tube at
+    /// 0.398: each root lies on one of the two tubes, not polished off the
+    /// first onto a point beside the second.
+    #[test]
+    fn line_spindle_torus_roots_lie_on_their_tubes() {
+        let torus = ToroidalSurface::new(Point3::new(41.0, 17.0, 4.7), 0.1, 2.45).unwrap();
+        let origin = Point3::new(42.36, 18.31, 3.4);
+        let dir = Vec3::new(
+            0.573_576_436_351_046,
+            0.740_535_693_464_567_5,
+            0.350_889_803_483_932_2,
+        );
+        let ts = intersect_line_torus(&torus, origin, dir);
+        let tube = |t: f64, across: f64| {
+            let q = origin + dir * t;
+            ((q.x() - 41.0).hypot(q.y() - 17.0) - across * 0.1).hypot(q.z() - 4.7) - 2.45
+        };
+        for &t in &ts {
+            assert!(
+                tube(t, 1.0).abs().min(tube(t, -1.0).abs()) < 1e-9,
+                "root {t} off both tubes in {ts:?}"
+            );
+        }
+        for want in [0.124, 0.398] {
+            assert!(
+                ts.iter().any(|&t| (t - want).abs() < 1e-3),
+                "no root near {want} in {ts:?}"
+            );
         }
     }
 
