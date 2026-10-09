@@ -1,0 +1,42 @@
+crates/io/tests/data/kumiko_lattice_cut_notch_top.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/kumiko_lattice_piece_cut_inmem.rs
+  s_d593b500b69108::t_e4ad2a3195e4c8 1-5,20-27,101-112,138-147,208-232,255-326
+  s_d593b500b69108::t_9ac5850f331d9e 327
+crates/io/tests/data/kumiko_lattice_cut_holed_base.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_notch_low.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+.claude/skills/roadmap/SKILL.md
+  s_d593b500b69108::t_b9b86138726602 145-147,206
+crates/io/tests/data/kumiko_lattice_cut_facet_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_notch_lip.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_seam_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_shard.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_top_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_notch_inner.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_holed_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2db6192362b6b6246e0191eca11e7b636472ed23",
+  "prompts": {},
+  "sessions": {
+    "s_d593b500b69108": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1538ae9-01e3-45ed-8e7e-1487989721dd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
