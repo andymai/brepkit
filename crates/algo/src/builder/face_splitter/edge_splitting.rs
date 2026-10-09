@@ -833,17 +833,12 @@ mod tests {
             );
         }
 
-        // Pin the divergence that motivated the section-specific finder: the
-        // domain-based `find_splits_on_ellipse` (still correct for boundary
-        // edges) DOES phantom-split the reverse twin on the other-window
-        // point. If it ever becomes twin-safe, delete this assertion and
-        // consider re-unifying the finders.
+        // The boundary finder reads a reversed arc by its stored span too.
         let rev = ellipse_section_edge(&ellipse, 0.2, 1.0, false);
-        let old = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7);
-        assert_eq!(
-            old.len(),
-            1,
-            "domain-based finder is expected to phantom-split the reverse twin"
+        let boundary = find_splits_on_ellipse(&ellipse, &rev, &[other_window_pt], 1e-7);
+        assert!(
+            boundary.is_empty(),
+            "a point off a reversed boundary arc must not split it"
         );
     }
 
