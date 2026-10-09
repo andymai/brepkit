@@ -683,6 +683,20 @@ fn any_outer_vertex_beyond_radius(
     false
 }
 
+/// Whether every planar face is a cap square to `axis`.
+fn planes_square_to_axis(
+    topo: &Topology,
+    faces: &[brepkit_topology::face::FaceId],
+    axis: Vec3,
+) -> bool {
+    faces.iter().all(|&fid| {
+        topo.face(fid).is_ok_and(|face| match face.surface() {
+            FaceSurface::Plane { normal, .. } => normal.dot(axis).abs() >= 1.0 - 1e-9,
+            _ => true,
+        })
+    })
+}
+
 /// Try to build a cylinder classifier from cylinder + plane caps.
 fn try_build_cylinder_classifier(
     topo: &Topology,
@@ -698,6 +712,12 @@ fn try_build_cylinder_classifier(
     // wire vertex of the solid lies beyond `radius + tol`, the pipe model is
     // invalid — bail to the geometrically-exact ray-cast classifier.
     if any_outer_vertex_beyond_radius(topo, faces, origin, axis, radius, radius, tol) {
+        return None;
+    }
+    // A plane not square to the axis cuts the pipe: a side wall of a sector
+    // or an oblique end, which the pipe-between-caps model ignores (a wedge
+    // with a cylinder patch for a side read as a whole disc).
+    if !planes_square_to_axis(topo, faces, axis) {
         return None;
     }
 
@@ -738,6 +758,9 @@ fn try_build_cone_classifier(
 ) -> Option<AnalyticClassifier> {
     let origin = apex;
     let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
+    if !planes_square_to_axis(topo, faces, axis) {
+        return None;
+    }
 
     let mut caps: Vec<(f64, f64)> = Vec::new();
     for &fid in faces {
@@ -1296,7 +1319,7 @@ mod pipe_guard_tests {
     use super::*;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::surfaces::CylindricalSurface;
-    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::face::Face;
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
@@ -1413,6 +1436,104 @@ mod pipe_guard_tests {
         assert!(
             !matches!(c, Some(AnalyticClassifier::Cylinder { .. })),
             "fillet-corner cylinder must NOT build a pipe Cylinder classifier"
+        );
+    }
+
+    /// A half cylinder of radius 4 about +Z, z in [0, 10], on the +x side:
+    /// its lateral face, the flat side x = 0, and two caps.
+    fn make_half_cylinder(topo: &mut Topology) -> SolidId {
+        let (r, z0, z1) = (4.0, 0.0, 10.0);
+        let a_bot = topo.add_vertex(Vertex::new(Point3::new(0.0, -r, z0), 1e-7));
+        let b_bot = topo.add_vertex(Vertex::new(Point3::new(0.0, r, z0), 1e-7));
+        let a_top = topo.add_vertex(Vertex::new(Point3::new(0.0, -r, z1), 1e-7));
+        let b_top = topo.add_vertex(Vertex::new(Point3::new(0.0, r, z1), 1e-7));
+        let circle = |z: f64| {
+            EdgeCurve::Circle(
+                Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), r).unwrap(),
+            )
+        };
+        let arc_bot = topo.add_edge(Edge::new(a_bot, b_bot, circle(z0)));
+        let arc_top = topo.add_edge(Edge::new(a_top, b_top, circle(z1)));
+        let seam_a = topo.add_edge(Edge::new(a_bot, a_top, EdgeCurve::Line));
+        let seam_b = topo.add_edge(Edge::new(b_bot, b_top, EdgeCurve::Line));
+        let chord_bot = topo.add_edge(Edge::new(b_bot, a_bot, EdgeCurve::Line));
+        let chord_top = topo.add_edge(Edge::new(b_top, a_top, EdgeCurve::Line));
+        let face = |topo: &mut Topology, edges: Vec<(EdgeId, bool)>, surface| {
+            let wire = Wire::new(
+                edges
+                    .into_iter()
+                    .map(|(e, fwd)| OrientedEdge::new(e, fwd))
+                    .collect(),
+                true,
+            )
+            .unwrap();
+            let wire = topo.add_wire(wire);
+            topo.add_face(Face::new(wire, vec![], surface))
+        };
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r)
+            .unwrap();
+        let lateral = face(
+            topo,
+            vec![
+                (arc_bot, true),
+                (seam_b, true),
+                (arc_top, false),
+                (seam_a, false),
+            ],
+            FaceSurface::Cylinder(cyl),
+        );
+        let side = face(
+            topo,
+            vec![
+                (seam_a, true),
+                (chord_top, false),
+                (seam_b, false),
+                (chord_bot, true),
+            ],
+            FaceSurface::Plane {
+                normal: Vec3::new(-1.0, 0.0, 0.0),
+                d: 0.0,
+            },
+        );
+        let bottom = face(
+            topo,
+            vec![(arc_bot, false), (chord_bot, false)],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: -z0,
+            },
+        );
+        let top = face(
+            topo,
+            vec![(arc_top, true), (chord_top, true)],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z1,
+            },
+        );
+        let shell = topo.add_shell(Shell::new(vec![lateral, side, bottom, top]).unwrap());
+        topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    #[test]
+    fn a_half_cylinder_is_no_pipe() {
+        let mut topo = Topology::new();
+        let solid = make_half_cylinder(&mut topo);
+        assert!(
+            !matches!(
+                try_build_analytic_classifier(&topo, solid),
+                Some(AnalyticClassifier::Cylinder { .. })
+            ),
+            "a side wall along the axis cuts the pipe in half"
+        );
+        assert_ne!(
+            classify_analytic(&topo, solid, Point3::new(-2.0, 0.0, 5.0)),
+            Some(FaceClass::Inside),
+            "a point across the flat side is outside the half"
+        );
+        assert_eq!(
+            classify_analytic(&topo, solid, Point3::new(2.0, 0.0, 5.0)),
+            Some(FaceClass::Inside)
         );
     }
 
