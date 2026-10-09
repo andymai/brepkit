@@ -1357,10 +1357,11 @@ fn extrusion_geom(
 
 /// A trimmed extrusion face's wires in `(u, s)`: `u` the profile's parameter
 /// scaled to `[0, 1]`, so the [`UvTrim`]'s angular reading of it never wraps,
-/// and `s` the distance along the extrusion.
+/// or to a full turn for a closed profile, whose `u` wraps at its seam as a
+/// cylinder's does; and `s` the distance along the extrusion.
 struct ExtrusionTrim {
     frame: ExtrusionFrame,
-    /// The profile's length, the scale of `u`.
+    /// The profile's length over its turn, the radius `u` is read at.
     length: f64,
     trim: UvTrim,
 }
@@ -1372,6 +1373,8 @@ struct ExtrusionFrame {
     base: Point3,
     axis: Vec3,
     domain: (f64, f64),
+    /// What `u` spans: `1` for an open profile, a full turn for a closed one.
+    turn: f64,
 }
 
 impl ExtrusionFrame {
@@ -1382,7 +1385,7 @@ impl ExtrusionFrame {
         let v = brepkit_math::nurbs::projection::project_point_to_curve(&self.flat, q, 1e-12)
             .map_or(d0, |c| c.parameter);
         (
-            (v - d0) / (d1 - d0),
+            (v - d0) / (d1 - d0) * self.turn,
             (p - profile.evaluate(v)).dot(self.axis),
         )
     }
@@ -1401,11 +1404,11 @@ impl ExtrusionTrim {
         };
         let domain = profile.domain();
         let base = profile.evaluate(domain.0);
-        // A closed profile's `u` jumps at its seam, where the trim's reading
-        // of a wire crossing it would not.
-        if (profile.evaluate(domain.1) - base).length() <= Tolerance::new().linear {
-            return Ok(None);
-        }
+        let turn = if (profile.evaluate(domain.1) - base).length() <= Tolerance::new().linear {
+            TAU
+        } else {
+            1.0
+        };
         let Ok(flat) = NurbsCurve::new(
             profile.degree(),
             profile.knots().to_vec(),
@@ -1423,7 +1426,7 @@ impl ExtrusionTrim {
         };
         let at =
             |k: i32| flat.evaluate((domain.1 - domain.0).mul_add(f64::from(k) / 64.0, domain.0));
-        let length: f64 = (1..=64).map(|k| (at(k) - at(k - 1)).length()).sum();
+        let length = (1..=64).map(|k| (at(k) - at(k - 1)).length()).sum::<f64>() / turn;
         if length <= 1e-12 {
             return Ok(None);
         }
@@ -1432,6 +1435,7 @@ impl ExtrusionTrim {
             base,
             axis,
             domain,
+            turn,
         };
         let trim = UvTrim::new(topo, face, &|p| frame.project(profile, p), &|_| length)?;
         Ok(trim.map(|trim| Self {
@@ -2021,7 +2025,7 @@ fn ray_extrusion_crossings(
         let (on_face, by_wire) = if let Some(trim) = trim {
             let (d0, d1) = trim.frame.domain;
             trim.trim.contains(
-                (v - d0) / (d1 - d0),
+                (v - d0) / (d1 - d0) * trim.frame.turn,
                 s * along_len2.sqrt(),
                 1.0,
                 trim.length,

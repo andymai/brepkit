@@ -86,3 +86,44 @@ fn a_cylinder_cut_by_a_converted_rod_loses_the_rod() {
         assert_eq!(class, want, "the cut at {p:?}");
     }
 }
+
+/// A rod scaled 1.5 across its axis is an elliptic tube, its wall a NURBS
+/// extrusion whose patch the transform pads past both rims: both point
+/// classifiers read its axis inside it and points past its wall outside.
+#[test]
+fn a_rod_scaled_across_its_axis_holds_its_own_axis() {
+    let mut topo = Topology::new();
+    let rod = rod(&mut topo, 0.3);
+    let stretch = Mat4::translation(0.0, 0.3, 3.0)
+        * Mat4::scale(1.0, 1.5, 1.0)
+        * Mat4::translation(0.0, -0.3, -3.0);
+    transform_solid(&mut topo, rod, &stretch).unwrap();
+    for (inside, points) in [
+        (true, [(-4.0, 0.0, 0.0), (0.0, 0.8, 0.0), (2.0, 0.0, 0.5)]),
+        (
+            false,
+            [(0.0, 0.95, 0.0), (0.0, 0.0, 0.65), (-3.0, -0.95, 0.0)],
+        ),
+    ] {
+        for (x, dy, dz) in points {
+            let p = Point3::new(x, 0.3 + dy, 3.0 + dz);
+            let want = if inside {
+                PointClassification::Inside
+            } else {
+                PointClassification::Outside
+            };
+            assert_eq!(
+                classify_point(&topo, rod, p, 0.01, 1e-7).unwrap(),
+                want,
+                "classify_point at {p:?}"
+            );
+            let want = if inside {
+                brepkit_algo::FaceClass::Inside
+            } else {
+                brepkit_algo::FaceClass::Outside
+            };
+            let engine = brepkit_algo::classifier::classify_point(&topo, rod, p).unwrap();
+            assert_eq!(engine, want, "the boolean engine's classifier at {p:?}");
+        }
+    }
+}
