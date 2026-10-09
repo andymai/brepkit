@@ -1,0 +1,20 @@
+.claude/skills/roadmap/SKILL.md
+  s_a8677c67f85a06::t_fa66c2a089d670 145
+  s_a8677c67f85a06::t_283a59a6f25a4e 204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e261bc9ae81bcc4aceeb1d1b638fbc5aa87a479",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
