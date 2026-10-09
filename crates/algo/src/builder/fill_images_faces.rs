@@ -3890,7 +3890,67 @@ fn clip_line_to_face_boundary(
     let holed_plane_partial = crossings.len() < 2
         && !face.inner_wires().is_empty()
         && matches!(face.surface(), FaceSurface::Plane { .. });
-    if crossings.len() < 2 && !single_crossing_ok && !holed_plane_partial {
+    // A ruling of a cylinder or cone can lie in the face with an end, or
+    // both, inside it, ending on other sections (a strut's flat side lying
+    // along a stacking lip's chamfer cone): the windows its ends and the
+    // crossings within it bound are read in the face's own `(u, v)` loops.
+    let in_segment = crossings
+        .iter()
+        .chain(crossings_ext.iter())
+        .filter(|&&t| (-1e-9..=1.0 + 1e-9).contains(&t))
+        .count();
+    let ruling_windows = (in_segment < 2
+        && matches!(
+            face.surface(),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+        ))
+    .then(|| {
+        let surface = face.surface();
+        let on_surface = |p: Point3| {
+            surface.project_point(p).is_some_and(|(u, v)| {
+                surface
+                    .evaluate(u, v)
+                    .is_some_and(|q| (q - p).length() <= 1e-3)
+            })
+        };
+        if ![0.25, 0.5, 0.75]
+            .iter()
+            .all(|&f| on_surface(line_start + line_dir * f))
+        {
+            return None;
+        }
+        let loops = face_loops.get(topo, face_id)?;
+        if loops.outer.len() < 3 {
+            return None;
+        }
+        let in_face = |t: f64| {
+            loops.to_uv(line_start + line_dir * t).is_some_and(|q| {
+                use crate::builder::classify_2d::point_in_polygon_2d;
+                point_in_polygon_2d(q, &loops.outer)
+                    && !loops.holes.iter().any(|h| point_in_polygon_2d(q, h))
+            })
+        };
+        let mut borders: Vec<f64> = crossings
+            .iter()
+            .chain(crossings_ext.iter())
+            .map(|t| t.clamp(0.0, 1.0))
+            .chain([0.0, 1.0])
+            .collect();
+        borders.sort_by(f64::total_cmp);
+        borders.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        let windows: Vec<(f64, f64)> = borders
+            .windows(2)
+            .filter(|w| in_face(f64::midpoint(w[0], w[1])))
+            .map(|w| (w[0], w[1]))
+            .collect();
+        (!windows.is_empty()).then_some(windows)
+    })
+    .flatten();
+    if crossings.len() < 2
+        && !single_crossing_ok
+        && !holed_plane_partial
+        && ruling_windows.is_none()
+    {
         return None;
     }
 
@@ -4000,7 +4060,9 @@ fn clip_line_to_face_boundary(
     // sections — pre-splitting them here breaks its bookkeeping (the groove
     // chain regressed). Hole-free faces have no weave; their concave bites
     // live on the OUTER wire where the outermost-pair heuristic overshoots.
-    let t_intervals: Vec<(f64, f64)> = if face.inner_wires().is_empty()
+    let t_intervals: Vec<(f64, f64)> = if let Some(windows) = ruling_windows {
+        windows
+    } else if face.inner_wires().is_empty()
         && let (Some(frame), Some(poly)) = (plane_frame.as_ref(), poly.as_ref())
     {
         // Every in-face sub-interval, not just one: a section can cross the
