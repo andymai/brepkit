@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.44](https://github.com/andymai/brepkit/compare/v4.1.43...v4.1.44) (2026-10-09)
+
+
+### Bug Fixes
+
+* **algo:** close the mitsukude lattice cuts beside corner seam notches ([#2017](https://github.com/andymai/brepkit/issues/2017)) ([d1522d0](https://github.com/andymai/brepkit/commit/d1522d0a035c3c84d9a62eda618a687daa0b8909))
+
 ## [4.1.43](https://github.com/andymai/brepkit/compare/v4.1.42...v4.1.43) (2026-10-09)
 
 
