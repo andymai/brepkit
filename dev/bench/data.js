@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791531113129,
+  "lastUpdate": 1791535671510,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53243,6 +53243,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 43335916,
             "range": "± 100106",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8ef5a5bc0a2eb56078ec18ac25205551bb3afc4d",
+          "message": "chore(main): release 4.1.43 (#2016)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.43](https://github.com/andymai/brepkit/compare/v4.1.42...v4.1.43)\n(2026-10-09)\n\n\n### Bug Fixes\n\n* **algo:** close kumiko lattice cuts at the corner cylinders\n([#2015](https://github.com/andymai/brepkit/issues/2015))\n([a7ccee8](https://github.com/andymai/brepkit/commit/a7ccee8001912bf51e67aebed0e130acf69b4b85))\n* **algo:** keep a spindle torus corner's sections on its own tube\n([#2014](https://github.com/andymai/brepkit/issues/2014))\n([68ed1d4](https://github.com/andymai/brepkit/commit/68ed1d401d96925f1ea53819402f9e47a2b1fdbb))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-09T08:44:48Z",
+          "tree_id": "71b759b35b1ba9eb6661f4dcbb81c9f52386c356",
+          "url": "https://github.com/andymai/brepkit/commit/8ef5a5bc0a2eb56078ec18ac25205551bb3afc4d"
+        },
+        "date": 1791535664118,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1074880,
+            "range": "± 5860",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1161527,
+            "range": "± 13797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13102,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 784870,
+            "range": "± 2689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47482990,
+            "range": "± 3789234",
             "unit": "ns/iter"
           }
         ]
