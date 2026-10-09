@@ -164,6 +164,26 @@ fn an_ellipse_revolves_to_an_elliptic_ring() {
         &[],
         "ring",
     );
+    // Its bands are rational surfaces of revolution: points round the ring
+    // read inside its tube and outside it at every turn.
+    for k in 0..24 {
+        let a = TAU * f64::from(k) / 24.0;
+        for (r, z, inside) in [
+            (3.0, 0.3, true),
+            (3.9, 0.0, true),
+            (3.0, 0.6, false),
+            (4.2, 0.0, false),
+        ] {
+            let p = Point3::new(r * a.cos(), r * a.sin(), z);
+            let want = if inside {
+                PointClassification::Inside
+            } else {
+                PointClassification::Outside
+            };
+            let got = classify_point(&topo, solid, p, 0.01, 1e-7).unwrap();
+            assert_eq!(got, want, "ring at {p:?}");
+        }
+    }
 }
 
 /// A 3 x 4 rectangle 2 to 5 from the axis with a hole of radius 1 at 3.5
