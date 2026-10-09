@@ -814,8 +814,9 @@ fn conic_plane_crossings(
     let (phase, delta) = (b.atan2(a), ratio.clamp(-1.0, 1.0).acos());
     // Near tangency `acos` parts the double root by its rounding, so roots
     // whose points lie within the tolerance band are the one contact, at the
-    // sinusoid's extreme.
-    let (pair, tangent) = ([phase - delta, phase + delta], [phase]);
+    // sinusoid's extreme on the plane's side.
+    let extreme = if ratio < 0.0 { phase + PI } else { phase };
+    let (pair, tangent) = ([phase - delta, phase + delta], [extreme]);
     let roots: &[f64] = if (at(pair[0]) - at(pair[1])).length() <= 10.0 * tol.linear {
         &tangent
     } else {
@@ -1405,6 +1406,30 @@ mod tests {
         assert_eq!(crossings.len(), 1, "{crossings:?}");
         let p = crossings[0].1;
         assert!((p - Point3::new(1.8, 2.4, 0.0)).length() < 1e-7, "{p:?}");
+    }
+
+    /// A rim touching a plane on the far side of its angle's phase crosses it
+    /// at that touch, not at the opposite extreme.
+    #[test]
+    fn a_rim_touching_a_plane_behind_it_crosses_it_there() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let start = circle.evaluate(0.0);
+        let crossings = find_edge_plane_crossings(
+            &EdgeCurve::Circle(circle),
+            start,
+            start,
+            0.0,
+            std::f64::consts::TAU,
+            Vec3::new(0.6, 0.8, 0.0),
+            -3.0 * (1.0 - 2e-16),
+            Tolerance::new(),
+        );
+        assert_eq!(crossings.len(), 1, "{crossings:?}");
+        let p = crossings[0].1;
+        assert!((p - Point3::new(-1.8, -2.4, 0.0)).length() < 1e-7, "{p:?}");
     }
 
     /// A straight edge through a cylinder band crosses it where no sample of
