@@ -4958,6 +4958,28 @@ fn trim_open_curve_to_plane_face_lines(
             dense_loops.push(loop_uv);
         }
     }
+    // A face with curved edges, none of them NURBS, as its own segments and
+    // conic arcs: a piece is read against the curves themselves rather than
+    // their chords, whose sag holds a sliver the face does not (a half-ellipse
+    // cap grazing a cone by less than that sag).
+    let exact_region = if has_curved_boundary {
+        brepkit_topology::planar::face_boundary_2d(
+            topo,
+            plane_face,
+            frame.origin(),
+            frame.u_axis(),
+            frame.v_axis(),
+        )
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+    let inside_exact = |q: Point3| {
+        exact_region.as_ref().and_then(|region| {
+            brepkit_math::region2d::point_in_region(region, frame.project(q), tol.linear * 10.0)
+        })
+    };
     let inside_dense = |q: Point3| {
         let uv = frame.project(q);
         dense_loops.split_first().is_none_or(|(outer, holes)| {
@@ -4976,9 +4998,8 @@ fn trim_open_curve_to_plane_face_lines(
         }
         let t_mid = f64::midpoint(t0, t1);
         let p_mid = eval_at(t_mid);
-        if !inside_face(frame.project(p_mid))
-            || (partner_is_cone && !ext_other.contains(p_mid))
-            || !inside_partner(p_mid)
+        let mid_inside = inside_exact(p_mid).unwrap_or_else(|| inside_face(frame.project(p_mid)));
+        if !mid_inside || (partner_is_cone && !ext_other.contains(p_mid)) || !inside_partner(p_mid)
         {
             continue;
         }
@@ -4986,24 +5007,33 @@ fn trim_open_curve_to_plane_face_lines(
         let sub_pts: Vec<Point3> = (0..=8)
             .map(|k| eval_at(t0 + (t1 - t0) * (f64::from(k) / 8.0)))
             .collect();
-        // With curved boundary edges present, a kept piece must stay strictly
-        // inside the sampled polygon along its whole span: exact crossings
-        // were only computed against straight segments, so a piece straying
-        // out mid-span would have needed a crossing against a curved edge —
-        // where the sampled chord is not the real boundary. Decline the whole
-        // call (the pre-relaxation behavior) rather than emit it.
-        if has_curved_boundary
-            && sub_pts[1..8]
-                .iter()
-                .any(|p| !inside_face(frame.project(*p)))
-        {
-            return None;
-        }
-        if (1..32).any(|k| {
-            let q = eval_at(t0 + (t1 - t0) * (f64::from(k) / 32.0));
-            near_curved_edge(q) && !inside_dense(q)
-        }) {
-            return None;
+        // With curved boundary edges present, a kept piece must stay inside
+        // the face along its whole span: exact crossings were only computed
+        // against straight segments, so a piece straying out mid-span would
+        // have needed a crossing against a curved edge. It is read against
+        // the curves where the face has them exactly, else against the
+        // sampled polygon, where the chord is not the real boundary. Decline
+        // the whole call (the pre-relaxation behavior) rather than emit it.
+        if exact_region.is_some() {
+            if (1..32).any(|k| {
+                inside_exact(eval_at(t0 + (t1 - t0) * (f64::from(k) / 32.0))) == Some(false)
+            }) {
+                return None;
+            }
+        } else {
+            if has_curved_boundary
+                && sub_pts[1..8]
+                    .iter()
+                    .any(|p| !inside_face(frame.project(*p)))
+            {
+                return None;
+            }
+            if (1..32).any(|k| {
+                let q = eval_at(t0 + (t1 - t0) * (f64::from(k) / 32.0));
+                near_curved_edge(q) && !inside_dense(q)
+            }) {
+                return None;
+            }
         }
         let bbox = Aabb3::try_from_points(sub_pts)?;
         // Trim the stored NURBS geometry to the kept span. Downstream
