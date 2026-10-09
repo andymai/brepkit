@@ -134,13 +134,17 @@ pub fn intersect_nurbs_nurbs(
         }
     }
 
-    traced_segments.extend(bridge_orphan_seeds(
+    // A bridge joins two seeds no march reached and stays a chain of its
+    // own: within the chainer's marcher-scale trim and join radii of another
+    // branch it would be trimmed away or spliced onto that branch.
+    let bridges = bridge_orphan_seeds(
         surface1,
         surface2,
         &boundary,
         &traced_segments,
+        dedup_dist,
         tolerance,
-    ));
+    );
 
     // Phase 3: Assemble the traced segments into ordered chains and fit a
     // curve through each. A segment re-tracing another from a later seed is
@@ -151,7 +155,8 @@ pub fn intersect_nurbs_nurbs(
         .flat_map(|seg| seg.windows(2))
         .map(|w| (w[1].point - w[0].point).length())
         .fold(0.0_f64, f64::max);
-    let chains = chain_traced_segments(traced_segments, dedup_dist, dedup_dist + longest_step);
+    let mut chains = chain_traced_segments(traced_segments, dedup_dist, dedup_dist + longest_step);
+    chains.extend(bridges);
     if chains.is_empty() {
         return Ok(Vec::new());
     }
@@ -172,18 +177,21 @@ pub fn intersect_nurbs_nurbs(
 /// its ends (a strut facet's corner poking 0.001 through a corner cylinder,
 /// its section 0.003 long). Two such seeds within a twentieth of the smaller
 /// patch's size are joined where every midpoint refined onto both patches
-/// lies inside both domains and between its neighbours.
+/// lies inside both domains and between its neighbours. A seed within `near`
+/// of a traced segment counts as reached, the distance at which the march
+/// skips a seed as traced, so a bridge never retraces a branch.
 fn bridge_orphan_seeds(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
     boundary: &[IntersectionPoint],
     traced: &[Vec<IntersectionPoint>],
+    near: f64,
     tolerance: f64,
 ) -> Vec<Vec<IntersectionPoint>> {
     let reached = |b: &IntersectionPoint| {
-        traced.iter().any(|seg| {
-            seg.len() >= 2 && near_existing_segment(std::slice::from_ref(seg), b, tolerance * 100.0)
-        })
+        traced
+            .iter()
+            .any(|seg| seg.len() >= 2 && near_existing_segment(std::slice::from_ref(seg), b, near))
     };
     let orphans: Vec<IntersectionPoint> =
         boundary.iter().filter(|b| !reached(b)).copied().collect();
