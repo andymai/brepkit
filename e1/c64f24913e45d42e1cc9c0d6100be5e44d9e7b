@@ -1,0 +1,19 @@
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_d593b500b69108::t_404e4a3894e5d2 198-213,223-229
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e1c64f24913e45d42e1cc9c0d6100be5e44d9e7b",
+  "prompts": {},
+  "sessions": {
+    "s_d593b500b69108": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1538ae9-01e3-45ed-8e7e-1487989721dd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
