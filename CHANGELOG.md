@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.46](https://github.com/andymai/brepkit/compare/v4.1.45...v4.1.46) (2026-10-09)
+
+
+### Bug Fixes
+
+* **algo:** read plane sections against curved edges, not chords ([#2023](https://github.com/andymai/brepkit/issues/2023)) ([24f59fd](https://github.com/andymai/brepkit/commit/24f59fd9bf5341560c7821bcc21966e874eb970c))
+* **math:** find corner NURBS sections and end them on edges ([#2022](https://github.com/andymai/brepkit/issues/2022)) ([b6d2d36](https://github.com/andymai/brepkit/commit/b6d2d36354c50cd602646cea78efe17c400a6735))
+
 ## [4.1.45](https://github.com/andymai/brepkit/compare/v4.1.44...v4.1.45) (2026-10-09)
 
 
