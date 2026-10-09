@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791561006229,
+  "lastUpdate": 1791563350075,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53567,6 +53567,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47751602,
             "range": "± 212123",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b6d2d36354c50cd602646cea78efe17c400a6735",
+          "message": "fix(math): find corner NURBS sections and end them on edges (#2022)\n\nShort NURBS surface intersections inside patch corners now return as\ncurves, and sections that stall near a corner now finish on the edge\nthey leave through. This recovers two cases from piece 260: a section\nabout 0.003 long that produced no curve, and a neighbouring section\nwhose end remained 4.9e-4 inside its edge.\n\n## Changes\n\n- The marcher keeps every state a margin of 0.1% of the span inside each\npatch domain. In piece 260, a strut facet corner lies about 0.001 past\nthe bin's inner corner cylinder of radius 2.55. Both crossings of the\nshort section were boundary seeds. The first march took no step, the\nsecond seed was skipped as already traced, and `intersect_nurbs_nurbs`\nreturned no curve.\n\n- `bridge_orphan_seeds` pairs boundary seeds that no traced segment\nreaches when they lie within a twentieth of the smaller patch's\nbounding-box diagonal. Four rounds add midpoints refined onto both\npatches by a Newton step, with `refine_in_domain` clamping parameters to\nthe exact domains. A bridge is kept only when every midpoint remains\ninside both domains and is closer to each neighbour than those\nneighbours are to each other.\n\n- Seeds on the same edge of either patch are never joined. Without this\ncondition, seven fixtures in `scoop_taper_clip_inmem.rs`,\n`interior_fillet_fuse_inmem.rs`, and `fillet_taper_clip_inmem.rs` fell\nback because bridges followed patch edges.\n\n- A seed is reached when a traced segment comes within half a march\nstep, matching the distance used to skip an already traced seed. Each\nbridge remains its own chain. The proximity chainer's marcher-scale trim\nand join radii could remove a short bridge or splice it onto another\nbranch.\n\n- For the neighbouring facet, `refine_onto_boundary` pinned both\nparameters in the boundary band and placed the end at the corner instead\nof on the section. When pinning every band parameter finds no point,\n`solve_pinned` now pins each parameter alone and keeps the result\nnearest the stalled point.\n\n## Tests\n\n- `a_section_within_a_patch_corner_comes_back` requires one curve, ends\non both facet corner edges, and nine samples on both surfaces within\n1e-6. Without the changes it finds no curve.\n\n- `a_section_leaving_beside_a_patch_corner_ends_on_its_edge` requires\nthe end within 1e-7 of the edge and on the cylinder. Without the changes\nthe end stands 4.9e-4 off the edge.\n\n## Verification\n\n- The math, heal, algo, check, operations, io, and wasm suites pass\nunder the profiling profile, 3,008 tests.\n\n- `pose_sweep` has 495 identical rows and `truth_audit` has 40 identical\nrows relative to main.\n\n## Effect on piece 260\n\n- This branch alone still leaves `target/tmp/mits_cap/cul260` with an\nopen 6-face hole shell after `replay_pair OP=cut`.\n\n- With `wip/cone-ruling-windows` applied, the cut assembles with 10 free\nedges and 1 over-shared edge, compared with 34 free and 4 over-shared\nedges from that change alone. The remaining edges lie on the strut top\nplane at z 35.05, where one vertex is within 4e-4 of the cone's r 2.15\ncircle. The roadmap's Mitsukude row records this.",
+          "timestamp": "2026-10-09T16:25:58Z",
+          "tree_id": "de6fad6ffe40f33f062283f2802d5f99c276d33f",
+          "url": "https://github.com/andymai/brepkit/commit/b6d2d36354c50cd602646cea78efe17c400a6735"
+        },
+        "date": 1791563343578,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1071798,
+            "range": "± 3434",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1157075,
+            "range": "± 6389",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12994,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 792830,
+            "range": "± 1765",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 48661941,
+            "range": "± 158237",
             "unit": "ns/iter"
           }
         ]
