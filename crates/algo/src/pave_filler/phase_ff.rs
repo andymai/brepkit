@@ -2397,13 +2397,13 @@ fn restrict_curves_to_faces(
         // crossing points chain with the adjacent faces' sections (a point on
         // the shared edge and on the cone lies on BOTH faces' conics).
         if let Some(pieces) = trim_open_curve_to_plane_face_lines(
-            topo, fa, surf_a, fb, surf_b, &raw, ext_a, ext_b, tol,
+            topo, fa, surf_a, fb, surf_b, &raw, ext_a, ext_b, tol, junctions,
         ) {
             out.extend(pieces);
             continue;
         }
         if let Some(pieces) = trim_open_curve_to_plane_face_lines(
-            topo, fb, surf_b, fa, surf_a, &raw, ext_b, ext_a, tol,
+            topo, fb, surf_b, fa, surf_a, &raw, ext_b, ext_a, tol, junctions,
         ) {
             out.extend(pieces);
             continue;
@@ -4431,6 +4431,7 @@ fn trim_open_curve_to_plane_face_lines(
     ext_plane: &FaceExtent,
     ext_other: &FaceExtent,
     tol: Tolerance,
+    junctions: &JunctionRegistry,
 ) -> Option<Vec<RawCurve>> {
     use crate::builder::classify_2d::point_in_polygon_2d;
     use brepkit_math::vec::Point2;
@@ -4798,6 +4799,31 @@ fn trim_open_curve_to_plane_face_lines(
                 if !crossings.iter().any(|&c| (c - t).abs() < 1e-9) {
                     crossings.push(t);
                 }
+            }
+        }
+    }
+    // A crossing bisected against a curved boundary edge's chord sits up to
+    // the chord's sag off the edge. The section lies on the partner, so it
+    // meets that edge where the edge crosses the partner: the EF vertex the
+    // edge was paved at, where the piece ends exactly.
+    #[allow(clippy::cast_precision_loss)]
+    let step = (raw.t_range.1 - raw.t_range.0).abs() / n_samples as f64;
+    for t in &mut crossings {
+        let p = eval_at(*t);
+        if straight.iter().any(|&seg| on_segment(p, seg)) {
+            continue;
+        }
+        if let Some((s, x)) = junctions.crossing_on_curve(
+            plane_face,
+            other_face,
+            raw,
+            *t,
+            step,
+            JunctionRegistry::ADOPT_MAX,
+        ) {
+            *t = s;
+            if !snaps.iter().any(|&(q, _)| (q - s).abs() < 1e-9) {
+                snaps.push((s, x));
             }
         }
     }
@@ -6684,7 +6710,7 @@ fn analytic_nurbs_intersection(
         }
         FaceSurface::Cone(c) => {
             let (v0, v1) = v_range.unwrap_or_else(|| axial_range(c.apex(), c.axis()));
-            c.to_nurbs(v0, v1)
+            c.to_rational_nurbs(v0, v1)
         }
         FaceSurface::Sphere(s) => s.to_nurbs(),
         FaceSurface::Torus(t) => t.to_rational_nurbs(),
