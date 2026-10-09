@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.43](https://github.com/andymai/brepkit/compare/v4.1.42...v4.1.43) (2026-10-09)
+
+
+### Bug Fixes
+
+* **algo:** close kumiko lattice cuts at the corner cylinders ([#2015](https://github.com/andymai/brepkit/issues/2015)) ([a7ccee8](https://github.com/andymai/brepkit/commit/a7ccee8001912bf51e67aebed0e130acf69b4b85))
+* **algo:** keep a spindle torus corner's sections on its own tube ([#2014](https://github.com/andymai/brepkit/issues/2014)) ([68ed1d4](https://github.com/andymai/brepkit/commit/68ed1d401d96925f1ea53819402f9e47a2b1fdbb))
+
 ## [4.1.42](https://github.com/andymai/brepkit/compare/v4.1.41...v4.1.42) (2026-10-08)
 
 
