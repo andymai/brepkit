@@ -686,6 +686,9 @@ fn a_turned_surface_reads_its_points_a_turn_on() {
                 (*turned - *original).length() < 1e-12,
                 "surface {k} at ({u}, {v})"
             );
+        }
+    }
+}
 
 /// The cone's rational NURBS lies on the cone: each point stands its height
 /// times the half-angle's cotangent from the axis, where the sampled
