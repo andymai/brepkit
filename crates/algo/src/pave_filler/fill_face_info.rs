@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::FaceId;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::vertex::VertexId;
 
 use crate::ds::{GfaArena, Interference, PaveBlockId};
@@ -417,7 +417,16 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                     // calibrated socket-loft corner arcs) hugs via curvature
                     // and legitimately reaches larger absolute deviations at
                     // its span ends; it keeps the pure ratio gate.
-                    let band = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                    //
+                    // A straight leaf lies in a plane only within the weld
+                    // scale its vertices were widened to: a short leaf
+                    // between a lattice strut edge's crossings of a wall and
+                    // a notch ceiling stands 0.0026 off the ceiling at 20% of
+                    // its chord, crossing it at 11 degrees.
+                    let straight = matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line);
+                    let band = if straight && matches!(surface, FaceSurface::Plane { .. }) {
+                        (IN_FACE_MAX_DEVIATION_RATIO * chord).min(crate::ds::shape_store::MAX_WIDEN)
+                    } else if straight {
                         (IN_FACE_MAX_DEVIATION_RATIO * chord).min(IN_FACE_MAX_DEVIATION_ABS)
                     } else {
                         IN_FACE_MAX_DEVIATION_RATIO * chord

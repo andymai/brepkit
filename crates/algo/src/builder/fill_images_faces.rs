@@ -2931,6 +2931,15 @@ fn section_on_existing_boundary(
     // closed boundary already, so re-threading ANY of its edges — whole or
     // partial — recreates the zero-area annulus this guard exists for (the
     // 2×1/1×2 stacking-lip fuse).
+    //
+    // Only the planar arrangement welds the duplicate. A curved face's
+    // splitter traces it beside the boundary edge, one copy each way, and
+    // the loop through them swallows the region the face's other sections
+    // close (a corner band notched by one lattice strut, the next strut's
+    // top plane flush with the notch's ceiling).
+    if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+        return true;
+    }
     if let Some((ss, se)) = sec_endpoints {
         let weld = tol * 100.0;
         // Endpoint matching uses a wider band than the closed-section test: a

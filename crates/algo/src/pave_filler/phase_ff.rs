@@ -490,6 +490,28 @@ pub fn perform(
                         }
                         let clip_a = clip_line_to_face(topo, fa, &raw);
                         let clip_b = clip_line_to_face(topo, fb, &raw);
+                        // A face with arcs builds no polygon, but its own
+                        // lines and arcs give its runs along the line
+                        // exactly; trim to where those meet the other face's.
+                        // A face's tiny corner arc otherwise left a lattice
+                        // strut's section running on past the strut face's
+                        // edge onto the next wall, planting a vertex off the
+                        // faces it bounds.
+                        if let Some(mutual) =
+                            exact_mutual_runs(topo, (fa, &clip_a), (fb, &clip_b), &raw, tol)
+                        {
+                            let FaceClip::Range((f0, f1)) = mutual else {
+                                return None;
+                            };
+                            return trim_raw_line(&raw, f0, f1, tol).and_then(|mut piece| {
+                                piece.p_start =
+                                    junction_registry.resolve(topo, fa, fb, piece.p_start, tol);
+                                piece.p_end =
+                                    junction_registry.resolve(topo, fa, fb, piece.p_end, tol);
+                                ((piece.p_start - piece.p_end).length() > tol.linear * 10.0)
+                                    .then_some(piece)
+                            });
+                        }
                         match (clip_a, clip_b) {
                             // A face's polygon was built but the line lies
                             // entirely outside it: the mutual overlap is
@@ -8270,6 +8292,44 @@ fn line_face_intervals(
         }
     }
     Some(runs)
+}
+
+/// The span of a plane x plane line where both faces run along it, from the
+/// first to the last fraction they share, when at least one face's polygon
+/// clip was indeterminate and that face reads exactly on its own lines and
+/// arcs. A determinate clip stands as its range, a superset of the face's
+/// runs. `None` when an indeterminate face cannot be read (a NURBS edge),
+/// else the span as a range, or empty when the runs never meet.
+fn exact_mutual_runs(
+    topo: &Topology,
+    (fa, clip_a): (FaceId, &FaceClip),
+    (fb, clip_b): (FaceId, &FaceClip),
+    raw: &RawCurve,
+    tol: Tolerance,
+) -> Option<FaceClip> {
+    if !matches!(clip_a, FaceClip::Indeterminate) && !matches!(clip_b, FaceClip::Indeterminate) {
+        return None;
+    }
+    let runs = |fid: FaceId, clip: &FaceClip| -> Option<Vec<(f64, f64)>> {
+        match clip {
+            FaceClip::Range(r) => Some(vec![*r]),
+            FaceClip::Empty => Some(Vec::new()),
+            FaceClip::Indeterminate => {
+                line_face_intervals(topo, fid, raw.p_start, raw.p_end, tol.linear)
+            }
+        }
+    };
+    let (ra, rb) = (runs(fa, clip_a)?, runs(fb, clip_b)?);
+    let mut span: Option<(f64, f64)> = None;
+    for a in &ra {
+        for b in &rb {
+            let (lo, hi) = (a.0.max(b.0), a.1.min(b.1));
+            if hi > lo {
+                span = Some(span.map_or((lo, hi), |(s0, s1)| (s0.min(lo), s1.max(hi))));
+            }
+        }
+    }
+    Some(span.map_or(FaceClip::Empty, FaceClip::Range))
 }
 
 /// Whether two plane faces, both read on their own lines and arcs, run along
