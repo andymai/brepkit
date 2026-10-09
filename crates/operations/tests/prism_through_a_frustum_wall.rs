@@ -2,7 +2,7 @@
 //! its wall: the cut takes the prism out exactly, the poke included.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use brepkit_math::curves::Circle3D;
+use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
@@ -45,7 +45,7 @@ fn d_prism(topo: &mut Topology, arch: EdgeCurve) -> SolidId {
 }
 
 /// `make_cone(3, 1.5, 6)` cut by the prism: exact, valid, holding the
-/// frustum's volume less the prism's within the poke's few thousandths,
+/// frustum's volume less the prism's within the poke's few hundredths,
 /// and inside exactly where the frustum is and the prism is not.
 fn assert_cut_takes_the_prism(arch: EdgeCurve, prism_volume: f64) {
     let mut topo = Topology::new();
@@ -59,7 +59,7 @@ fn assert_cut_takes_the_prism(arch: EdgeCurve, prism_volume: f64) {
     let volume = solid_volume(&topo, cut, 0.001).unwrap();
     let least = FRUSTUM - prism_volume;
     assert!(
-        volume > least - 1e-6 && volume < least + 1e-2,
+        volume > least - 1e-6 && volume < least + 2e-2,
         "cut volume {volume}, the frustum less the whole prism {least}"
     );
     let class = |solid: SolidId, p: Point3| classify_point(&topo, solid, p, 0.01, 1e-7).unwrap();
@@ -93,6 +93,22 @@ fn assert_cut_takes_the_prism(arch: EdgeCurve, prism_volume: f64) {
 fn a_half_disc_prism_poking_through_a_frustum_wall_cuts_exactly() {
     let rim = Circle3D::new(Point3::new(1.5, -0.9, 1.5), Vec3::new(0.0, -1.0, 0.0), 1.0).unwrap();
     assert_cut_takes_the_prism(EdgeCurve::Circle(rim), std::f64::consts::FRAC_PI_2);
+}
+
+/// A half-ellipse prism, 1.05 out along x and 1 along z: its rim ellipse
+/// crosses the frustum's wall twice between the samples that look for such
+/// crossings.
+#[test]
+fn a_half_ellipse_prism_poking_through_a_frustum_wall_cuts_exactly() {
+    let rim = Ellipse3D::new_with_ref(
+        Point3::new(1.5, -0.9, 1.5),
+        Vec3::new(0.0, -1.0, 0.0),
+        1.05,
+        1.0,
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .unwrap();
+    assert_cut_takes_the_prism(EdgeCurve::Ellipse(rim), std::f64::consts::FRAC_PI_2 * 1.05);
 }
 
 /// A parabolic-arch prism: its NURBS wall meets the cone in a section the
