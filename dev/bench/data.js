@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791567934247,
+  "lastUpdate": 1791569096856,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53729,6 +53729,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 40094424,
             "range": "± 313948",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4f83a7c2d373e880aa4d09bda03dbea2fc2a4368",
+          "message": "fix(algo): read a closed extrusion wall through its seam (#2025)\n\nThe boolean engine now classifies axis points inside the elliptic tube\nmade by laying `make_cylinder(0.6, 10)` along x through `(0, 0.3, 3)`\nand scaling it 1.5 along y about its axis. On main,\n`brepkit_algo::classifier::classify_point` read these points as outside,\nwhile `classify_point` in the operations crate read them as inside.\n\n## Changes\n\n- `ExtrusionTrim` now accepts a closed profile.\n- A closed profile's `u` spans a full turn instead of `[0, 1]`. `UvTrim`\nreads it as an angle wrapping at the seam, as it does on a cylinder,\nwith the profile's length over that turn as the radius. Open profiles\nkeep `[0, 1]`.\n- The transformed wall is a NURBS extrusion patch padded a twentieth\npast each rim by `face_v_range`. `extrusion_geom` does not read that\nface as its whole patch, and the seam jump made `ExtrusionTrim` reject\nit, so the wall fell through to a flat polygon.\n\n## Tests\n\n- `a_rod_scaled_across_its_axis_holds_its_own_axis` checks both\nclassifiers at three points inside the tube and three outside.\n- The engine classifier assertion fails on main.\n\n## Verification\n\n- The math, heal, algo, check, operations, io, and wasm suites under the\nprofiling profile passed 3,006 tests in parallel.\n- `frustum_half_space_in_any_pose` failed on the process-global mesh\nfallback counter. Another test in its file moves that counter on\npurpose. The file passes single-threaded.\n- `pose_sweep` (495 rows) and `truth_audit` (40 rows) are identical to\nmain.\n\n## Still open\n\n- Cuts by the scaled tube still fall back because the face splitter\ncannot split a closed NURBS face.\n- The roadmap row for NURBS faces closed on themselves remains open. The\nscaled-tube row moves to Closed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the boolean engine's classifier misreading a non-uniformly scaled\ncylinder's axis as outside it. `ExtrusionTrim` now accepts closed\nprofiles, reading the `u` parameter as a full turn that wraps at the\nseam like a cylinder's, so the wall is matched as a whole patch. Adds a\ntest covering both classifiers at six points.\n\n- Cuts by such a tube still fall back because the face splitter cannot\nsplit a closed NURBS face.\n\n<sup>Written for commit 165bbb2d4304e4c5bbe4433d3831ca5090d0c3c7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2025?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2025?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2025&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-09T18:01:56Z",
+          "tree_id": "2f953b6e4445fe6f1b0b1ac955f8de74d2451b93",
+          "url": "https://github.com/andymai/brepkit/commit/4f83a7c2d373e880aa4d09bda03dbea2fc2a4368"
+        },
+        "date": 1791569092362,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1069450,
+            "range": "± 1279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1148961,
+            "range": "± 2027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13162,
+            "range": "± 133",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 790800,
+            "range": "± 1188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47943816,
+            "range": "± 144700",
             "unit": "ns/iter"
           }
         ]
