@@ -6684,7 +6684,7 @@ fn analytic_nurbs_intersection(
         }
         FaceSurface::Cone(c) => {
             let (v0, v1) = v_range.unwrap_or_else(|| axial_range(c.apex(), c.axis()));
-            c.to_nurbs(v0, v1)
+            c.to_rational_nurbs(v0, v1)
         }
         FaceSurface::Sphere(s) => s.to_nurbs(),
         FaceSurface::Torus(t) => t.to_rational_nurbs(),

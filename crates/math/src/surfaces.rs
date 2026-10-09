@@ -404,6 +404,51 @@ impl ConicalSurface {
             (v_min, v_max),
         )
     }
+
+    /// The cone between `v_min` and `v_max` exactly, as a rational NURBS of
+    /// degree (2, 1): the 9-point rational circle at each end, ruled between
+    /// them (a cone's point is linear in `v` along each direction). Its `u`
+    /// is not the cone's angle. The sampled [`Self::to_nurbs`] (32 bilinear
+    /// spans round the axis) sags off the cone by half a percent of its
+    /// radius between columns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `NurbsSurface` construction fails.
+    pub fn to_rational_nurbs(&self, v_min: f64, v_max: f64) -> Result<NurbsSurface, MathError> {
+        let w1 = std::f64::consts::FRAC_1_SQRT_2;
+        let circle_weights = [1.0, w1, 1.0, w1, 1.0, w1, 1.0, w1, 1.0];
+        let dirs: [(f64, f64); 9] = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let (sin_a, cos_a) = self.half_angle.sin_cos();
+        let ring = |v: f64, dx: f64, dy: f64| {
+            let rho = v * cos_a;
+            self.apex
+                + self.axis * (v * sin_a)
+                + self.x_axis * (rho * dx)
+                + self.y_axis * (rho * dy)
+        };
+        let mut cps = Vec::with_capacity(9);
+        let mut ws = Vec::with_capacity(9);
+        for (i, &(dx, dy)) in dirs.iter().enumerate() {
+            cps.push(vec![ring(v_min, dx, dy), ring(v_max, dx, dy)]);
+            ws.push(vec![circle_weights[i], circle_weights[i]]);
+        }
+        let knots_u = vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ];
+        let knots_v = vec![0.0, 0.0, 1.0, 1.0];
+        NurbsSurface::new(2, 1, knots_u, knots_v, cps, ws)
+    }
 }
 
 /// An infinite spherical surface (actually a sphere).

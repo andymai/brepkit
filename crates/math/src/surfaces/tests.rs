@@ -686,6 +686,25 @@ fn a_turned_surface_reads_its_points_a_turn_on() {
                 (*turned - *original).length() < 1e-12,
                 "surface {k} at ({u}, {v})"
             );
+
+/// The cone's rational NURBS lies on the cone: each point stands its height
+/// times the half-angle's cotangent from the axis, where the sampled
+/// `to_nurbs` sags half a percent of the radius inside it between columns.
+#[test]
+fn rational_cone_lies_on_the_cone() {
+    let apex = Point3::new(1.0, -2.0, 0.5);
+    let cone = ConicalSurface::new(apex, Vec3::new(0.0, 0.0, 1.0), 0.6).unwrap();
+    let nurbs = cone.to_rational_nurbs(0.5, 4.0).unwrap();
+    let ((u0, u1), (v0, v1)) = (nurbs.domain_u(), nurbs.domain_v());
+    for i in 0..=40 {
+        for j in 0..=40 {
+            let p = nurbs.evaluate(
+                (u1 - u0).mul_add(f64::from(i) / 40.0, u0),
+                (v1 - v0).mul_add(f64::from(j) / 40.0, v0),
+            );
+            let d = p - apex;
+            let off = d.x().hypot(d.y()) - d.z() / 0.6_f64.tan();
+            assert!(off.abs() < 1e-9, "({i}, {j}) lies {off} off the cone");
         }
     }
 }
