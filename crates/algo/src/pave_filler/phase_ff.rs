@@ -4958,10 +4958,10 @@ fn trim_open_curve_to_plane_face_lines(
             dense_loops.push(loop_uv);
         }
     }
-    // A face with curved edges, none of them NURBS, as its own segments and
-    // conic arcs: a piece is read against the curves themselves rather than
-    // their chords, whose sag holds a sliver the face does not (a half-ellipse
-    // cap grazing a cone by less than that sag).
+    // A face with curved edges, none of them NURBS, has its boundary taken
+    // as its own segments and conic arcs: a piece is read against the curves
+    // themselves rather than their chords, whose sag holds a sliver the face
+    // does not (a half-ellipse cap grazing a cone by less than that sag).
     let exact_region = if has_curved_boundary {
         brepkit_topology::planar::face_boundary_2d(
             topo,
