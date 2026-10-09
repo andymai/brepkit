@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791535671510,
+  "lastUpdate": 1791548452336,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53297,6 +53297,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47482990,
             "range": "± 3789234",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d1522d0a035c3c84d9a62eda618a687daa0b8909",
+          "message": "fix(algo): close the mitsukude lattice cuts beside corner seam notches (#2017)\n\nOp 5915 of the gridfinity\n`binGenerator.scenario.dividerPatterns.test.ts` mitsukude lattice\ncapture now finishes natively in 55.3 s at a 233 MB peak. Main was\nstopped after 600 s at a 4.0 GB peak. The piecewise compound cut ships\nbecause it removes the 4 GB trap and completes the cut. The result\nremains a mesh because piece 260 is the remaining root. The tool-side\neffect is unmeasured because the generator suite was not run on this\nbuild.\n\n## Changes\n\n- The operation compound-cuts an 86-face base by nine lattice tools\ncontaining 438 connected pieces. The cluster fuse previously folded the\nstruts into one accumulator, fell back, and grew the mesh to 66,478\nfaces and 3.85 GB.\n\n- `compound_cut` now declines mesh fallback during the cluster fuse\nprobe. After a failed batched cut, `cut_piecewise` cuts each tool with\nthe fallback declined, splitting a tool whose cut needs it into\nconnected pieces and then halves. Pieces still requiring fallback wait\nuntil the end and are cut once, using the batch tool when available or\ngroups of pieces that at most touch.\n\n- Partial cylinder and cone `FaceExtent` values now carry outer and hole\npolygons in `(u, v)`, with `u` measured around the turn from the angular\ngap midpoint. This prevents notch and strut-window points from reading\nas on the face. Piece 82 had started a NURBS section at the seam inside\nthe notch and crossed its edge without a vertex.\n\n- Short FF restriction runs are refined sixteen times finer. They are\nretained only when at least two refined samples lie strictly inside both\nfaces and the midpoint is off both face edges. This recovers the 0.48\nwindow across a 19.7-long ellipse without regressing the torus and\ntapered scoop cases.\n\n- The face splitter traces section-only loops on partial bands both ways\nand distinguishes the island from its surrounding hole by winding.\n\n- On curved faces, a section duplicating an outer-wire edge end to end\nis dropped when another section exists. Duplicate-only faces retain it.\nThis prevents piece 86's retraced 0.05 notch arc from swallowing the\npatch while preserving `exact_coincident_lip_fuse_stays_analytic`.\n\n- EF plane containment now uses twice the largest curved-edge chord\nsagitta, measured at each chord midpoint, instead of half the longest\nchord. Straight leaves on plane faces are also capped at the `1e-3`\nvertex widening ceiling. These reject piece 354's wall crossing 0.0015\noutside a strut face and its strut edge leaf that crosses a notch\nceiling at 11 degrees.\n\n- `emit_curve_windows` brackets eligible ends from the outermost\nstrictly inside sample. Eligibility is limited to exact plane, cylinder,\ncone, or sampled band boundaries whose sag is at most `1e-6`, avoiding\nthe NURBS regressions while restoring piece 178's section chain.\n\n- Reversed open ellipse arcs now use their stored span converted to\ntraversal order. This removes piece 262's phantom detour through the\nseam.\n\n## Tests\n\n- `kumiko_lattice_piece_cut_inmem.rs` adds exact regressions for pieces\n82, 84, 86, 178, 262, and 354, plus a crossing strut facet and a\nprotruding strut.\n\n- Every added cut must avoid mesh fallback, close by position, and match\noperand point classification on a grid. All 11 file tests pass. On main,\nsingle threaded, all eight additions fail and the three existing tests\npass.\n\n- `ellipse_section_reverse_twin_ignores_other_window_points` now asserts\nthat the reversed ellipse receives no split. The test documentation\nnames the dividers scenario as the capture source.\n\n## Verification\n\n- Piecewise with fallback skipped cuts 437 of 438 pieces exactly. Main\nfalls back on 13: 82, 84 through 86, 176 through 178, 260, 262, and 354\nthrough 357. No exact cut removes more than the piece volume or less\nthan nothing.\n\n- The math, algo, check, operations, io, and wasm suites pass under the\nprofiling profile. `pose_sweep` and `truth_audit` are identical to main.\n\n## Still open\n\n- Op 5915 returns a 25,638-face mesh with 9 free and 19 over-shared\nedges because piece 260 falls back. Its top-plane circle lacks a split\nat a NURBS start, another NURBS section ends 0.011 off the cone, and\n`clip_line_to_face_boundary` drops an edge along a cone ruling. The\nruling-window work is parked on `wip/cone-ruling-windows`.\n\n- A corner cylinder notched at its tangent seam meshes short. The exact\nvolume is 243576.64, while `oriented_solid_volume` at deflection 0.01 is\n243534.13.\n\n- The roadmap records these pieces as closed and keeps op 5915 and the\nseam-notch mesh open.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the mitsukude lattice compound cut so op 5915's capture now\nfinishes natively in 55 s at a 233 MB peak, where main grew to 4 GB and\nwas stopped after 600 s. The previous cluster-fusing fallback expanded\nthe mesh to 66,478 faces and 3.85 GB; now only piece 260 still falls\nback.\n\n**Changes**\n- `compound_cut` declines mesh fallback during cluster fusing;\n`cut_piecewise` splits tools that need fallback into connected pieces,\nand tools that still need it are cut once at the end, in touching\ngroups.\n- Partial cylinder and cone `FaceExtent`s now carry outer and hole\npolygons in `(u, v)` measured around the turn from the angular gap\nmidpoint, so notch and strut-window points no longer read as on the\nface.\n- Short FF restriction runs are refined 16 times finer and kept only\nwhen two refined samples lie strictly inside both faces and the midpoint\nis off both face edges; a closed curve's samples wrap round the curve,\nand an open curve's end reads as its end.\n- The face splitter traces section-only loops on partial bands both\nways, distinguishing the island from its hole by winding, and curved\nfaces drop full-boundary-edge duplicate sections when a real section\nexists.\n- EF plane containment uses twice the largest curved-edge chord sagitta,\ncounted from each edge's first chord; straight leaves on plane faces are\ncapped at the vertex-widening ceiling, and `emit_curve_windows` brackets\nends from strictly-inside samples limited to exact boundaries with sag\nat most 1e-6.\n- Reversed open ellipse arcs use their stored span in traversal order.\n- Adds regression data and tests for pieces 82, 84, 86, 178, 262, and\n354 plus crossing and protruding struts, and a ring cut by a two-piece\ntool whose second piece takes the deferred fallback; all 11 file tests\npass, and the eight additions fail on main. Math, algo, check,\noperations, io, and wasm suites pass under the profiling profile.\n\n**Still open**\n- Piece 260's top-plane circle lacks a split at a NURBS start, a NURBS\nsection ends 0.011 off the cone, and `clip_line_to_face_boundary` drops\nan edge along a cone ruling; the resulting mesh has 9 free and 19\nover-shared edges.\n- A corner cylinder notched at its tangent seam meshes short: volume\n243,534.13 vs the exact 243,576.64.\n\n<sup>Written for commit 9b3824236de796d01ed2a4a8d6a623407bd1b9a7.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2017?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2017?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2017&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-09T12:17:41Z",
+          "tree_id": "f5aa11cbcf79da3ca659763624968d6b9d0bdb41",
+          "url": "https://github.com/andymai/brepkit/commit/d1522d0a035c3c84d9a62eda618a687daa0b8909"
+        },
+        "date": 1791548446646,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1027099,
+            "range": "± 5042",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1114620,
+            "range": "± 2905",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12937,
+            "range": "± 230",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 758898,
+            "range": "± 1105",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 46389283,
+            "range": "± 245863",
             "unit": "ns/iter"
           }
         ]
