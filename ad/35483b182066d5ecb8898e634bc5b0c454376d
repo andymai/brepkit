@@ -1,0 +1,21 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_d593b500b69108::t_43be4da790ee39 1667-1668,1854,1859-1866,1876,1966,1980-1982,1984-1989,2026,2037-2039,2041-2046,5053-5059,5065-5069,5073-5080,5097-5098,5102-5103,5114-5124,5127
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_d593b500b69108::t_2cb0c9be03cd50 836,838-841
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad35483b182066d5ecb8898e634bc5b0c454376d",
+  "prompts": {},
+  "sessions": {
+    "s_d593b500b69108": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1538ae9-01e3-45ed-8e7e-1487989721dd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}

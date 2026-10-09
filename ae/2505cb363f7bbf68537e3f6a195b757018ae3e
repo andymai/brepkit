@@ -1,0 +1,20 @@
+crates/algo/src/pave_filler/phase_ff.rs
+  s_d593b500b69108::t_716ed8a64a5eb0 1667,1840,1842-1843,1845-1852,1862,1933,1946,1985,1995,4951-4964,4966-5005,5041,5053-5058
+  s_d593b500b69108::t_e5b8c7ab17bad7 1665-1666,1841,1844,4965
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ae2505cb363f7bbf68537e3f6a195b757018ae3e",
+  "prompts": {},
+  "sessions": {
+    "s_d593b500b69108": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1538ae9-01e3-45ed-8e7e-1487989721dd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
