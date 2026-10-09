@@ -1662,6 +1662,9 @@ enum FaceExtent {
         /// trimmed patch ends across both parameters (a scoop clipped by a
         /// tapered envelope's corner curves), which a `v` window alone misses.
         uv_poly: Option<(Vec<brepkit_math::vec::Point2>, f64)>,
+        /// The angle `uv_poly`'s `u` is read round a turn from: the middle of
+        /// the angle a partial band leaves out.
+        uv_base: Option<f64>,
         /// A torus patch on its own side of the axis, whose points project
         /// onto themselves. A spindle torus's other sheet (the tube's far
         /// side swung across the axis) projects to a foot on this sheet's
@@ -1834,8 +1837,19 @@ impl FaceExtent {
                             })
                         })
                 });
-            let uv_poly = nurbs_face_uv_polygon(topo, face_id, surface)
-                .map(|(poly, sag)| (poly, 2.0f64.mul_add(sag, 1e-7)));
+            let uv_base = match (surface, u_gap) {
+                (FaceSurface::Cylinder(_) | FaceSurface::Cone(_), Some((lo, hi)))
+                    if topo.face(face_id).is_ok_and(|f| f.inner_wires().is_empty()) =>
+                {
+                    Some(0.5f64.mul_add((hi - lo).rem_euclid(std::f64::consts::TAU), lo))
+                }
+                _ => None,
+            };
+            let uv_poly = match uv_base {
+                Some(base) => lateral_face_uv_polygon(topo, face_id, surface, base),
+                None => nurbs_face_uv_polygon(topo, face_id, surface),
+            }
+            .map(|(poly, sag)| (poly, 2.0f64.mul_add(sag, 1e-7)));
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -1845,6 +1859,7 @@ impl FaceExtent {
                 exact_window,
                 periodic_v,
                 uv_poly,
+                uv_base,
                 own_sheet,
             })
         }
@@ -1915,6 +1930,7 @@ impl FaceExtent {
                 u_gap,
                 periodic_v,
                 uv_poly,
+                uv_base,
                 own_sheet,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
@@ -1927,7 +1943,7 @@ impl FaceExtent {
                 let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, _)| {
-                    let uv = brepkit_math::vec::Point2::new(u, v);
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
                     crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
                         && crate::builder::classify_2d::distance_to_polygon_boundary(uv, poly)
                             > depth
@@ -1966,6 +1982,7 @@ impl FaceExtent {
                 u_gap,
                 periodic_v,
                 uv_poly,
+                uv_base,
                 own_sheet,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
@@ -1975,7 +1992,7 @@ impl FaceExtent {
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
                 let in_u = u_gap.is_none_or(|gap| !crate::classifier::u_in_gap(u, gap));
                 let in_poly = uv_poly.as_ref().is_none_or(|(poly, band)| {
-                    let uv = brepkit_math::vec::Point2::new(u, v);
+                    let uv = brepkit_math::vec::Point2::new(rebase_u(u, *uv_base), v);
                     crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
                         || crate::builder::classify_2d::distance_to_polygon_boundary(uv, poly)
                             <= *band
@@ -4931,6 +4948,61 @@ fn nurbs_face_uv_polygon(
     if !matches!(surface, FaceSurface::Nurbs(_)) {
         return None;
     }
+    let (poly, sag) = outer_wire_uv_polygon(topo, face_id, surface, None)?;
+    // A boundary that crosses a closed surface's seam jumps across the
+    // parameter domain and is no polygon in (u, v).
+    let FaceSurface::Nurbs(n) = surface else {
+        return None;
+    };
+    let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
+    let seamless = poly.iter().zip(poly.iter().cycle().skip(1)).all(|(a, b)| {
+        (a.x() - b.x()).abs() < 0.5 * (u1 - u0) && (a.y() - b.y()).abs() < 0.5 * (v1 - v0)
+    });
+    (poly.len() >= 3 && seamless).then_some((poly, sag))
+}
+
+/// A partial cylinder or cone band's outer boundary in `(u, v)`, `u` read from
+/// `u_base` (inside the angle the band leaves out) round a turn, when that
+/// boundary is no rectangle: an earlier cut's notch in a corner cylinder's
+/// edge leaves its `v` window and angular gap whole while points in the notch
+/// are off the face.
+fn lateral_face_uv_polygon(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+    u_base: f64,
+) -> Option<(Vec<brepkit_math::vec::Point2>, f64)> {
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let (poly, sag) = outer_wire_uv_polygon(topo, face_id, surface, Some(u_base))?;
+    let (mut lo, mut hi) = (
+        brepkit_math::vec::Point2::new(f64::INFINITY, f64::INFINITY),
+        brepkit_math::vec::Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for p in &poly {
+        lo = brepkit_math::vec::Point2::new(lo.x().min(p.x()), lo.y().min(p.y()));
+        hi = brepkit_math::vec::Point2::new(hi.x().max(p.x()), hi.y().max(p.y()));
+    }
+    let area = poly
+        .iter()
+        .zip(poly.iter().cycle().skip(1))
+        .map(|(a, b)| a.x().mul_add(b.y(), -(b.x() * a.y())))
+        .sum::<f64>()
+        .abs()
+        * 0.5;
+    let rect = (hi.x() - lo.x()) * (hi.y() - lo.y());
+    (poly.len() >= 3 && area < rect * (1.0 - 1e-6)).then_some((poly, sag))
+}
+
+/// A face's outer wire sampled into its surface's `(u, v)` with the chords'
+/// largest sag, `u` taken round a turn from `u_base` when one is given.
+fn outer_wire_uv_polygon(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+    u_base: Option<f64>,
+) -> Option<(Vec<brepkit_math::vec::Point2>, f64)> {
     let face = topo.face(face_id).ok()?;
     if !face.inner_wires().is_empty() {
         return None;
@@ -4966,7 +5038,7 @@ fn nurbs_face_uv_polygon(
             .map(|p| {
                 surface
                     .project_point(*p)
-                    .map(|(u, v)| brepkit_math::vec::Point2::new(u, v))
+                    .map(|(u, v)| brepkit_math::vec::Point2::new(rebase_u(u, u_base), v))
             })
             .collect::<Option<_>>()?;
         for k in (0..n).step_by(2) {
@@ -4978,16 +5050,12 @@ fn nurbs_face_uv_polygon(
             poly.push(a);
         }
     }
-    // A boundary that crosses a closed surface's seam jumps across the
-    // parameter domain and is no polygon in (u, v).
-    let FaceSurface::Nurbs(n) = surface else {
-        return None;
-    };
-    let ((u0, u1), (v0, v1)) = (n.domain_u(), n.domain_v());
-    let seamless = poly.iter().zip(poly.iter().cycle().skip(1)).all(|(a, b)| {
-        (a.x() - b.x()).abs() < 0.5 * (u1 - u0) && (a.y() - b.y()).abs() < 0.5 * (v1 - v0)
-    });
-    (poly.len() >= 3 && seamless).then_some((poly, sag))
+    Some((poly, sag))
+}
+
+/// `u` read round a turn from `base`, or as projected without one.
+fn rebase_u(u: f64, base: Option<f64>) -> f64 {
+    base.map_or(u, |b| b + (u - b).rem_euclid(std::f64::consts::TAU))
 }
 
 /// Extract the `[t0, t1]` sub-curve of a NURBS curve, preserving the original
