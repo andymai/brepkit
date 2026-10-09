@@ -1,0 +1,23 @@
+crates/io/tests/kumiko_lattice_piece_cut_inmem.rs
+  s_a8677c67f85a06::t_a0b64dbb684f60 41-42,44,60-62,64-68,73
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a8677c67f85a06::t_a0b64dbb684f60 813,815,1382-1402
+  s_a8677c67f85a06::t_68c81f2d1a036f 810-812,814,816-818,820,822
+  s_a8677c67f85a06::t_78d4fe6718a4e8 1403-1404
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ece29f8398ba704ab715273727695d84ef4aac15",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
