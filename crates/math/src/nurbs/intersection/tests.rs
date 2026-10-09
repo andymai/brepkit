@@ -1581,3 +1581,147 @@ fn a_chord_takes_its_sag_on_the_side_its_arc_bulges() {
     };
     assert!(!near_existing_segment(&trace, &inner, 0.005));
 }
+
+/// A corner cylinder of radius 2.55 and the two strut facets of a lattice
+/// piece that meet at a corner poking 0.001 past it (piece 260 of the
+/// mitsukude lattice on dividers).
+fn corner_poke() -> (NurbsSurface, NurbsSurface, NurbsSurface) {
+    let cylinder = crate::surfaces::CylindricalSurface::with_ref_dir(
+        Point3::new(-38.0, 38.0, 1.2),
+        Vec3::new(0.0, 0.0, 1.0),
+        2.55,
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap()
+    .to_nurbs(2.25, 34.65)
+    .unwrap();
+    let corner = Point3::new(
+        -40.550_932_465_140_48,
+        38.033_270_787_110_52,
+        6.774_488_848_638_517,
+    );
+    let facet = |cps: [[Point3; 2]; 2]| {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            cps.iter().map(|row| row.to_vec()).collect(),
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap()
+    };
+    let near = Point3::new(
+        -39.528_148_878_129_32,
+        37.991_952_164_664_326,
+        7.400_752_775_094_245_5,
+    );
+    let corner_facet = facet([
+        [
+            Point3::new(
+                -40.347_425_683_831_744,
+                38.364_140_220_280_99,
+                6.507_244_192_471_161,
+            ),
+            corner,
+        ],
+        [
+            Point3::new(
+                -39.374_137_980_938_84,
+                38.242_315_874_207_48,
+                7.198_525_521_671_666,
+            ),
+            near,
+        ],
+    ]);
+    let side_facet = facet([
+        [
+            corner,
+            Point3::new(
+                -40.708_292_298_294_65,
+                37.657_112_719_831_07,
+                7.055_014_719_355_846,
+            ),
+        ],
+        [
+            near,
+            Point3::new(
+                -39.646_445_904_048_82,
+                37.709_272_227_529_18,
+                7.611_577_043_614_155,
+            ),
+        ],
+    ]);
+    (cylinder, corner_facet, side_facet)
+}
+
+/// Whether `p` lies on the radius-2.55 cylinder of [`corner_poke`].
+fn on_corner_cylinder(p: Point3) -> bool {
+    ((p.x() + 38.0).hypot(p.y() - 38.0) - 2.55).abs() < 1e-6
+}
+
+/// Distance from `p` to the segment `a b`.
+fn off_segment(p: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let f = ((p - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0);
+    (p - (a + ab * f)).length()
+}
+
+/// The corner facet meets the cylinder in a section 0.003 long between its
+/// two edges at the corner, closer to it than the march keeps from a patch's
+/// edges: neither crossing takes a step, and the curve comes back joining
+/// them.
+#[test]
+fn a_section_within_a_patch_corner_comes_back() {
+    let (cylinder, facet, _) = corner_poke();
+    let curves = intersect_nurbs_nurbs(&cylinder, &facet, 20, 0.01).unwrap();
+    assert_eq!(curves.len(), 1, "{} sections", curves.len());
+    let curve = &curves[0].curve;
+    let (t0, t1) = curve.domain();
+    let cps = facet.control_points();
+    let ends = [curve.evaluate(t0), curve.evaluate(t1)];
+    for (edge, (a, b)) in [(cps[0][0], cps[0][1]), (cps[0][1], cps[1][1])]
+        .into_iter()
+        .enumerate()
+    {
+        assert!(
+            ends.iter().any(|&e| off_segment(e, a, b) < 1e-6),
+            "no end on edge {edge}: {ends:?}"
+        );
+    }
+    for k in 0..=8 {
+        let p = curve.evaluate((t1 - t0).mul_add(f64::from(k) / 8.0, t0));
+        assert!(on_corner_cylinder(p), "{p:?} off the cylinder");
+        let foot = crate::nurbs::projection::project_point_to_surface(&facet, p, 1e-12).unwrap();
+        assert!(
+            foot.distance < 1e-6,
+            "{p:?} {} off the facet",
+            foot.distance
+        );
+    }
+}
+
+/// The side facet's section leaves it 0.0011 from the corner, through its
+/// edge along the corner facet: the march stalls a margin inside the patch
+/// with both of its parameters near their edges, and the end lies on that
+/// one edge rather than 0.0004 inside it.
+#[test]
+fn a_section_leaving_beside_a_patch_corner_ends_on_its_edge() {
+    let (cylinder, _, facet) = corner_poke();
+    let curves = intersect_nurbs_nurbs(&cylinder, &facet, 20, 0.01).unwrap();
+    assert_eq!(curves.len(), 1, "{} sections", curves.len());
+    let curve = &curves[0].curve;
+    let (t0, t1) = curve.domain();
+    let cps = facet.control_points();
+    let (a, b) = (cps[0][0], cps[1][0]);
+    let end = [curve.evaluate(t0), curve.evaluate(t1)]
+        .into_iter()
+        .min_by(|p, q| off_segment(*p, a, b).total_cmp(&off_segment(*q, a, b)))
+        .unwrap();
+    assert!(
+        off_segment(end, a, b) < 1e-7,
+        "{end:?} stands {} off the edge",
+        off_segment(end, a, b)
+    );
+    assert!(on_corner_cylinder(end), "{end:?} off the cylinder");
+}
