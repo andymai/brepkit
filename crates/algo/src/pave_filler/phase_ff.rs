@@ -1077,6 +1077,11 @@ fn section_end_vertex(
     {
         return vid;
     }
+    if let Some(vid) = super::helpers::ef_crossing_vertex(topo, arena, (fa, fb), p)
+        .or_else(|| super::helpers::pave_vertex_within_tolerance(topo, arena, p, tol.linear, tol))
+    {
+        return vid;
+    }
     let Some(ends) = ends else {
         return topo.add_vertex(Vertex::new(p, tol.linear));
     };
@@ -1586,6 +1591,10 @@ fn emit_exact_arc(
         let vid = super::helpers::find_nearby_pave_vertex(topo, arena, p, tol)
             .or_else(|| find_nearby_face_vertex(topo, fa, p, tol))
             .or_else(|| find_nearby_face_vertex(topo, fb, p, tol))
+            .or_else(|| super::helpers::ef_crossing_vertex(topo, arena, (fa, fb), p))
+            .or_else(|| {
+                super::helpers::pave_vertex_within_tolerance(topo, arena, p, tol.linear, tol)
+            })
             .unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear)));
         registry.insert(key, vid);
         vid
@@ -4158,7 +4167,11 @@ fn analytic_signed_distance(surface: &FaceSurface, p: Point3) -> f64 {
 /// (cylinder or cone lateral). Returns the 3D crossing points whose parameter
 /// lies within the segment. Other surface types return an empty vec (the
 /// caller treats "no crossings" as "fall back to uniform-t").
-fn line_segment_surface_crossings(sp: Point3, ep: Point3, surface: &FaceSurface) -> Vec<Point3> {
+pub(super) fn line_segment_surface_crossings(
+    sp: Point3,
+    ep: Point3,
+    surface: &FaceSurface,
+) -> Vec<Point3> {
     match surface {
         FaceSurface::Cylinder(cyl) => line_segment_cylinder_crossings(sp, ep, cyl),
         FaceSurface::Cone(cone) => line_segment_cone_crossings(sp, ep, cone),
@@ -7593,6 +7606,10 @@ fn emit_split_circle_arcs(
             super::helpers::find_nearby_pave_vertex(topo, arena, p, tol)
                 .or_else(|| find_nearby_face_vertex(topo, face_a, p, tol))
                 .or_else(|| find_nearby_face_vertex(topo, face_b, p, tol))
+                .or_else(|| super::helpers::ef_crossing_vertex(topo, arena, (face_a, face_b), p))
+                .or_else(|| {
+                    super::helpers::pave_vertex_within_tolerance(topo, arena, p, tol.linear, tol)
+                })
                 .unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear)))
         };
 

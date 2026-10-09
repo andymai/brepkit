@@ -469,8 +469,9 @@ fn check_edge_face_pairs(
             // shows only as the side of the surface flipping. Its unbounded
             // surface meets far more of the edge than the face does, and this
             // face's containment is a box, so a flip counts only where the
-            // face's own wires hold it.
-            if matches!(curve, EdgeCurve::NurbsCurve(_))
+            // face's own wires hold it. A line's crossings are the roots of
+            // a quadratic, exact wherever they fall between two samples.
+            if matches!(curve, EdgeCurve::NurbsCurve(_) | EdgeCurve::Line)
                 && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
                 && let Some(trim) = trims[face_idx]
                     .get_or_insert_with(|| {
@@ -480,9 +481,24 @@ fn check_edge_face_pairs(
                     })
                     .as_ref()
             {
+                let found = if matches!(curve, EdgeCurve::Line) {
+                    // A chord standing in for a rim crosses the surface off
+                    // the faces it bounds.
+                    let on_faces = topo.edge(eid).is_ok_and(|e| {
+                        e.tolerance()
+                            .is_none_or(|t| t <= crate::ds::shape_store::MAX_WIDEN)
+                    });
+                    if on_faces {
+                        line_crossings(start_pos, end_pos, t0, t1, surface)
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)
+                };
                 // The sample scan may already hold this root; two roots a
                 // sample step apart are still two crossings.
-                for (t, p) in find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol) {
+                for (t, p) in found {
                     if trim.holds(p, 10.0 * tol.linear)
                         && !crossings
                             .iter()
@@ -635,7 +651,6 @@ fn check_edge_face_pairs(
                 }
 
                 let existing = find_nearby_vertex(topo, arena, pt, tol);
-
                 let (vertex_id, t) = if let Some(vid) = existing {
                     (vid, t)
                 } else if let Some((vid, t_new)) = snap {
@@ -645,7 +660,46 @@ fn check_edge_face_pairs(
                     );
                     (vid, t_new)
                 } else {
-                    (topo.add_vertex(Vertex::new(pt, tol.linear)), t)
+                    // The crossing is no closer to the faces than the edge
+                    // and its own ends are.
+                    let edge_tol = topo.edge(eid).ok().map_or(tol.linear, |e| {
+                        [e.start(), e.end()]
+                            .into_iter()
+                            .filter_map(|v| topo.vertex(v).ok())
+                            .map(Vertex::tolerance)
+                            .fold(
+                                e.tolerance()
+                                    .filter(|&t| t <= crate::ds::shape_store::MAX_WIDEN)
+                                    .unwrap_or(tol.linear),
+                                f64::max,
+                            )
+                    });
+                    let found = super::helpers::pave_vertex_within_tolerance(
+                        topo, arena, pt, edge_tol, tol,
+                    );
+                    match found {
+                        Some(vid) => {
+                            // The pave sits at the shared vertex's foot, so
+                            // the edge's pieces end where that vertex is.
+                            let foot =
+                                match (topo.edge(eid).map(|e| e.curve().clone()), topo.vertex(vid))
+                                {
+                                    (Ok(EdgeCurve::Line), Ok(v)) => {
+                                        let dir = end_pos - start_pos;
+                                        let len_sq = dir.dot(dir);
+                                        if len_sq > 0.0 {
+                                            let along = (v.point() - start_pos).dot(dir) / len_sq;
+                                            (t1 - t0).mul_add(along, t0)
+                                        } else {
+                                            t
+                                        }
+                                    }
+                                    _ => t,
+                                };
+                            (vid, foot)
+                        }
+                        None => (topo.add_vertex(Vertex::new(pt, edge_tol)), t),
+                    }
                 };
 
                 let pave = Pave::new(vertex_id, t);
@@ -705,6 +759,8 @@ pub(super) fn find_edge_plane_crossings(
         let pt = start_pos + dir * s_clamped;
         let t = s_clamped.mul_add(t1 - t0, t0);
         vec![(t, pt)]
+    } else if matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+        conic_plane_crossings(curve, start_pos, end_pos, t0, t1, normal, d, tol)
     } else {
         find_crossings_by_sampling(
             curve,
@@ -716,6 +772,66 @@ pub(super) fn find_edge_plane_crossings(
             tol.linear,
         )
     }
+}
+
+/// A circle or ellipse edge's crossings of the plane `normal·p = d`.
+///
+/// `normal·C(t) - d` is a sinusoid in the conic's angle, so three evaluations
+/// fix it and its roots are closed-form, exact where a sampled search lands a
+/// grazing sample's neighbourhood a few 1e-8 off the root. A contact within
+/// the tolerance of tangency counts once.
+#[allow(clippy::too_many_arguments)]
+fn conic_plane_crossings(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+    normal: Vec3,
+    d: f64,
+    tol: Tolerance,
+) -> Vec<(f64, Point3)> {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let at = |t: f64| curve.evaluate_with_endpoints(t, start_pos, end_pos);
+    let f = |t: f64| {
+        let p = at(t);
+        normal
+            .x()
+            .mul_add(p.x(), normal.y().mul_add(p.y(), normal.z() * p.z()))
+            - d
+    };
+    let (f0, fq, fp) = (f(0.0), f(FRAC_PI_2), f(PI));
+    let c = 0.5 * (f0 + fp);
+    let (a, b) = (0.5 * (f0 - fp), fq - c);
+    let amp = a.hypot(b);
+    if amp <= 1e-12 {
+        return Vec::new();
+    }
+    let ratio = -c / amp;
+    if ratio.abs() > 1.0 + tol.linear / amp {
+        return Vec::new();
+    }
+    let (phase, delta) = (b.atan2(a), ratio.clamp(-1.0, 1.0).acos());
+    // Near tangency `acos` parts the double root by its rounding, so roots
+    // whose points lie within the tolerance band are the one contact, at the
+    // sinusoid's extreme on the plane's side.
+    let extreme = if ratio < 0.0 { phase + PI } else { phase };
+    let (pair, tangent) = ([phase - delta, phase + delta], [extreme]);
+    let roots: &[f64] = if (at(pair[0]) - at(pair[1])).length() <= 10.0 * tol.linear {
+        &tangent
+    } else {
+        &pair
+    };
+    let mut out: Vec<(f64, Point3)> = Vec::new();
+    for &root in roots {
+        let t = t0 + (root - t0).rem_euclid(TAU);
+        if t > t1 + 1e-12 {
+            continue;
+        }
+        out.push((t, at(t)));
+    }
+    out.sort_by(|x, y| x.0.total_cmp(&y.0));
+    out
 }
 
 /// Find edge-surface crossings by sampling the distance to the surface and refining.
@@ -896,6 +1012,25 @@ fn find_edge_surface_crossings(
     }
 
     crossings
+}
+
+/// A line segment's crossings of a cylinder or cone, at their parameters.
+fn line_crossings(
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+    surface: &FaceSurface,
+) -> Vec<(f64, Point3)> {
+    let d = end_pos - start_pos;
+    let len_sq = d.dot(d);
+    if len_sq <= 0.0 {
+        return Vec::new();
+    }
+    super::phase_ff::line_segment_surface_crossings(start_pos, end_pos, surface)
+        .into_iter()
+        .map(|p| ((t1 - t0).mul_add((p - start_pos).dot(d) / len_sq, t0), p))
+        .collect()
 }
 
 /// Points where a curve passes from one side of a surface to the other,
@@ -1220,6 +1355,148 @@ mod tests {
                 Interference::EF { edge, face, parameter: None, .. } if *edge == ring && *face == band
             )
         })
+    }
+
+    /// A rim circle through a plane holding its centre crosses it twice,
+    /// exactly, though a sample of the circle lands on the plane.
+    #[test]
+    fn a_rim_crosses_a_plane_through_its_centre_twice_exactly() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let start = circle.evaluate(0.0);
+        let crossings = find_edge_plane_crossings(
+            &EdgeCurve::Circle(circle),
+            start,
+            start,
+            0.0,
+            std::f64::consts::TAU,
+            Vec3::new(1.0, 0.0, 0.0),
+            0.0,
+            Tolerance::new(),
+        );
+        assert_eq!(crossings.len(), 2, "{crossings:?}");
+        for (_, p) in &crossings {
+            assert!(
+                p.x().abs() < 1e-12 && (p.y().abs() - 3.0).abs() < 1e-12,
+                "{p:?}"
+            );
+        }
+    }
+
+    /// A rim circle touching a plane crosses it once, at the touch point.
+    #[test]
+    fn a_rim_touching_a_plane_crosses_it_once() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let start = circle.evaluate(0.0);
+        let crossings = find_edge_plane_crossings(
+            &EdgeCurve::Circle(circle),
+            start,
+            start,
+            0.0,
+            std::f64::consts::TAU,
+            Vec3::new(0.6, 0.8, 0.0),
+            3.0 * (1.0 - 2e-16),
+            Tolerance::new(),
+        );
+        assert_eq!(crossings.len(), 1, "{crossings:?}");
+        let p = crossings[0].1;
+        assert!((p - Point3::new(1.8, 2.4, 0.0)).length() < 1e-7, "{p:?}");
+    }
+
+    /// A rim touching a plane on the far side of its angle's phase crosses it
+    /// at that touch, not at the opposite extreme.
+    #[test]
+    fn a_rim_touching_a_plane_behind_it_crosses_it_there() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let start = circle.evaluate(0.0);
+        let crossings = find_edge_plane_crossings(
+            &EdgeCurve::Circle(circle),
+            start,
+            start,
+            0.0,
+            std::f64::consts::TAU,
+            Vec3::new(0.6, 0.8, 0.0),
+            -3.0 * (1.0 - 2e-16),
+            Tolerance::new(),
+        );
+        assert_eq!(crossings.len(), 1, "{crossings:?}");
+        let p = crossings[0].1;
+        assert!((p - Point3::new(-1.8, -2.4, 0.0)).length() < 1e-7, "{p:?}");
+    }
+
+    /// A straight edge through a cylinder band crosses it where no sample of
+    /// the edge lands on the surface; both crossings take vertices on it.
+    #[test]
+    fn a_line_through_a_band_crosses_it_between_samples() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let circle = |z: f64| {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, z), z_axis, 2.0).unwrap())
+        };
+        let v_bot = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), 1e-7));
+        let v_top = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 6.0), 1e-7));
+        let e_bot = topo.add_edge(Edge::new(v_bot, v_bot, circle(0.0)));
+        let e_top = topo.add_edge(Edge::new(v_top, v_top, circle(6.0)));
+        let e_seam = topo.add_edge(Edge::new(v_bot, v_top, EdgeCurve::Line));
+        let outer = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e_bot, true),
+                    OrientedEdge::new(e_seam, true),
+                    OrientedEdge::new(e_top, false),
+                    OrientedEdge::new(e_seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let surface = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis, 2.0).unwrap();
+        let band = topo.add_face(Face::new(outer, vec![], FaceSurface::Cylinder(surface)));
+        let a = topo.add_vertex(Vertex::new(Point3::new(-3.0, 0.37, 1.1), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(3.0, 0.41, 4.9), 1e-7));
+        let line = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+        let mut arena = GfaArena::new();
+        check_edge_face_pairs(
+            &mut topo,
+            &[line],
+            &[band],
+            &[HashSet::new()],
+            Tolerance::new(),
+            &mut arena,
+        )
+        .unwrap();
+        let radii: Vec<f64> = arena
+            .interference
+            .ef
+            .iter()
+            .filter_map(|i| match i {
+                Interference::EF {
+                    new_vertex: Some(v),
+                    ..
+                } => topo
+                    .vertex(*v)
+                    .ok()
+                    .map(|v| v.point().x().hypot(v.point().y())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(radii.len(), 2, "{radii:?}");
+        assert!(radii.iter().all(|r| (r - 2.0).abs() < 1e-9), "{radii:?}");
     }
 
     /// A circle on a cylinder face splits the face along it, unless it runs

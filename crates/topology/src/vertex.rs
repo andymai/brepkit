@@ -42,4 +42,9 @@ impl Vertex {
     pub const fn set_point(&mut self, point: Point3) {
         self.point = point;
     }
+
+    /// Sets the radius of this vertex's tolerance ball.
+    pub const fn set_tolerance(&mut self, tolerance: f64) {
+        self.tolerance = tolerance;
+    }
 }

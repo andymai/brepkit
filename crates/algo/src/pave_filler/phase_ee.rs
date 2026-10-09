@@ -65,7 +65,17 @@ pub fn perform(
                 let vertex_id = if let Some(vid) = existing {
                     vid
                 } else {
-                    topo.add_vertex(Vertex::new(point, tol.linear))
+                    // The crossing is no closer to either edge's faces than
+                    // those edges' own ends are.
+                    let ball = [ea_id, eb_id]
+                        .into_iter()
+                        .filter_map(|e| topo.edge(e).ok())
+                        .flat_map(|e| [e.start(), e.end()])
+                        .filter_map(|v| topo.vertex(v).ok())
+                        .map(Vertex::tolerance)
+                        .fold(tol.linear, f64::max);
+                    super::helpers::pave_vertex_within_tolerance(topo, arena, point, ball, tol)
+                        .unwrap_or_else(|| topo.add_vertex(Vertex::new(point, ball)))
                 };
 
                 add_pave_to_edge(arena, ea_id, Pave::new(vertex_id, t_a));

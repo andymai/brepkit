@@ -7,8 +7,10 @@
 
 use std::collections::HashMap;
 
+use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeId};
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::face::{Face, FaceId};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
@@ -45,6 +47,8 @@ impl GfaShapeStore {
 
         let (solid_a, map_a) = deep_copy_solid(source, &mut topo, orig_a)?;
         let (solid_b, map_b) = deep_copy_solid(source, &mut topo, orig_b)?;
+        widen_tolerances(&mut topo, solid_a)?;
+        widen_tolerances(&mut topo, solid_b)?;
 
         // Invert the caller-index -> store-face maps into store-face-index ->
         // caller-face-index so a store input face resolves to its caller origin.
@@ -128,6 +132,7 @@ impl GfaShapeStoreN {
 
         for (src_idx, &orig) in origs.iter().enumerate() {
             let (solid, map) = deep_copy_solid(source, &mut topo, orig)?;
+            widen_tolerances(&mut topo, solid)?;
             sources.push(solid);
             for (_caller_idx, store_face) in map {
                 face_source.insert(store_face, src_idx);
@@ -347,6 +352,82 @@ fn deep_copy_solid(
     let new_inner: Vec<_> = new_shell_ids[1..].to_vec();
 
     Ok((target.add_solid(Solid::new(new_outer, new_inner)), face_map))
+}
+
+/// The widest gap a vertex or edge keeps from a surface it bounds that still
+/// reads as fit error rather than misplaced geometry: the junction band. An
+/// edge farther off its faces (a chord standing in for a rim) records its gap
+/// as its tolerance but is not taken to lie on them.
+pub const MAX_WIDEN: f64 = 1e-3;
+
+/// Interior samples an edge is held to its faces' surfaces at.
+const EDGE_SAMPLES: u32 = 8;
+
+/// Widen each vertex's and edge's tolerance to reach the analytic surfaces of
+/// the faces it bounds. A vertex an earlier boolean computed on one face can
+/// stand off another face's surface by that boolean's fit error (a lattice
+/// strut's corner 2e-5 off its end face's plane), and an edge computed on one
+/// surface pair runs off a third face it bounds the same way; the widened
+/// tolerance then covers every point the phases compute there.
+fn widen_tolerances(topo: &mut Topology, solid: SolidId) -> Result<(), AlgoError> {
+    let mut vertex_reach: HashMap<VertexId, f64> = HashMap::new();
+    let mut edge_reach: HashMap<EdgeId, f64> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(fid)?;
+        let surface = face.surface();
+        if matches!(surface, FaceSurface::Nurbs(_)) {
+            continue;
+        }
+        let gap_to = |p: Point3| match surface {
+            FaceSurface::Plane { normal, d } => {
+                (normal.x() * p.x() + normal.y() * p.y() + normal.z() * p.z() - d).abs()
+            }
+            _ => surface
+                .project_point(p)
+                .and_then(|(u, v)| surface.evaluate(u, v))
+                .map_or(0.0, |q| (q - p).length()),
+        };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (sp, ep) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                for (vid, p) in [(edge.start(), sp), (edge.end(), ep)] {
+                    let gap = gap_to(p);
+                    if gap.is_finite() && gap <= MAX_WIDEN {
+                        let r = vertex_reach.entry(vid).or_insert(0.0);
+                        *r = r.max(gap);
+                    }
+                }
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                let gap = (1..EDGE_SAMPLES)
+                    .map(|k| {
+                        let t = (t1 - t0).mul_add(f64::from(k) / f64::from(EDGE_SAMPLES), t0);
+                        gap_to(edge.curve().evaluate_with_endpoints(t, sp, ep))
+                    })
+                    .fold(0.0, f64::max);
+                if gap.is_finite() {
+                    let r = edge_reach.entry(oe.edge()).or_insert(0.0);
+                    *r = r.max(gap);
+                }
+            }
+        }
+    }
+    for (vid, gap) in vertex_reach {
+        let v = topo.vertex_mut(vid)?;
+        if gap > v.tolerance() {
+            v.set_tolerance(gap);
+        }
+    }
+    for (eid, gap) in edge_reach {
+        let e = topo.edge_mut(eid)?;
+        if gap > e.tolerance().unwrap_or(0.0) && gap > 1e-7 {
+            e.set_tolerance(Some(gap));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
+use brepkit_topology::face::FaceId;
 use brepkit_topology::vertex::VertexId;
 
 use crate::ds::{GfaArena, Pave};
@@ -43,6 +44,108 @@ pub(super) fn find_nearby_pave_vertex(
         }
     }
     None
+}
+
+/// The nearest pave vertex whose tolerance ball, or a new vertex's ball of
+/// `reach`, holds `p`. A vertex carried over from an inexact operand covers
+/// the fit error of every point computed for its corner, so a crossing or a
+/// section end found there is that vertex's.
+pub(super) fn pave_vertex_within_tolerance(
+    topo: &Topology,
+    arena: &GfaArena,
+    p: Point3,
+    reach: f64,
+    tol: Tolerance,
+) -> Option<VertexId> {
+    let mut best: Option<(f64, VertexId)> = None;
+    for pbs in arena.edge_pave_blocks.values() {
+        for &pb_id in pbs {
+            let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                continue;
+            };
+            let ends = [pb.start.vertex, pb.end.vertex];
+            for vid in ends
+                .into_iter()
+                .chain(pb.extra_paves.iter().map(|pave| pave.vertex))
+            {
+                let resolved = arena.resolve_vertex(vid);
+                let Ok(v) = topo.vertex(resolved) else {
+                    continue;
+                };
+                let ball = v.tolerance().max(reach);
+                let d = (v.point() - p).length();
+                if ball > tol.linear && d <= ball && best.is_none_or(|(b, _)| d < b) {
+                    best = Some((d, resolved));
+                }
+            }
+        }
+    }
+    best.map(|(_, v)| v)
+}
+
+/// The gap below which two computations of one junction read as the same
+/// point.
+const WELD_BAND: f64 = 1e-5;
+
+/// The vertex where a boundary edge of one face crosses the other face,
+/// nearest `p` within ten times its tolerance or the weld band. A section of
+/// two faces leaves each one through its boundary, so its end there is that
+/// edge's crossing of the other face, however far the section's own end and
+/// the crossing drift apart: on operands whose vertices sit off their faces,
+/// or where the section's end was clipped against a curved boundary's
+/// chords. The vertex's tolerance grows to hold `p`.
+pub(super) fn ef_crossing_vertex(
+    topo: &mut Topology,
+    arena: &GfaArena,
+    (fa, fb): (FaceId, FaceId),
+    p: Point3,
+) -> Option<VertexId> {
+    let boundary = |f: FaceId| -> Vec<EdgeId> {
+        topo.face(f).ok().map_or_else(Vec::new, |face| {
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .filter_map(|w| topo.wire(w).ok())
+                .flat_map(|w| {
+                    w.edges()
+                        .iter()
+                        .map(brepkit_topology::wire::OrientedEdge::edge)
+                })
+                .collect()
+        })
+    };
+    let (edges_a, edges_b) = (boundary(fa), boundary(fb));
+    let mut best: Option<(f64, VertexId)> = None;
+    for i in &arena.interference.ef {
+        let crate::ds::Interference::EF {
+            edge,
+            face,
+            new_vertex: Some(v),
+            ..
+        } = i
+        else {
+            continue;
+        };
+        let across =
+            (*face == fb && edges_a.contains(edge)) || (*face == fa && edges_b.contains(edge));
+        if !across {
+            continue;
+        }
+        let v = arena.resolve_vertex(*v);
+        let Ok(vertex) = topo.vertex(v) else {
+            continue;
+        };
+        let d = (vertex.point() - p).length();
+        if d <= (10.0 * vertex.tolerance()).max(WELD_BAND) && best.is_none_or(|(b, _)| d < b) {
+            best = Some((d, v));
+        }
+    }
+    let (d, v) = best?;
+    if let Ok(vertex) = topo.vertex_mut(v)
+        && vertex.tolerance() < d
+    {
+        vertex.set_tolerance(d);
+    }
+    Some(v)
 }
 
 /// Widened variant of [`find_nearby_pave_vertex`] for tangential contacts.

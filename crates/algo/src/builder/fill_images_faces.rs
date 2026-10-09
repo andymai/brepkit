@@ -70,6 +70,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         faces: &input_faces,
         index: std::cell::OnceCell::new(),
     };
+    let face_loops = FaceLoopsCache::default();
     // Faces whose sections the splitter could not lay out.
     let mut unsplit: Vec<FaceId> = Vec::new();
     // Faces kept whole although a section runs across them from boundary to
@@ -356,6 +357,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             &section_map,
             &seam_anchors,
             &adjacency,
+            &face_loops,
             tol,
         );
 
@@ -2184,7 +2186,7 @@ const DEGENERATE_ARC_SPAN: f64 = 1e-6;
 ///
 /// For intersection curves, uses the complete curve geometry (not individual
 /// PaveBlock fragments). For IN edges, uses the individual PaveBlock edge.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn build_section_edges(
     topo: &Topology,
     arena: &GfaArena,
@@ -2192,6 +2194,7 @@ fn build_section_edges(
     section_map: &HashMap<FaceId, Vec<SectionSource>>,
     seam_anchors: &BTreeMap<usize, SeamAnchor>,
     adjacency: &InputAdjacency<'_>,
+    face_loops: &FaceLoopsCache,
     op_tol: Tolerance,
 ) -> Vec<SectionEdge> {
     use brepkit_math::vec::Point3;
@@ -2481,7 +2484,7 @@ fn build_section_edges(
                 let intervals: Vec<(Point3, Point3)> =
                     if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
                         let Some(clipped_list) = clip_line_to_face_boundary(
-                            topo, face_id, raw_start, raw_end, tol, None,
+                            topo, face_id, raw_start, raw_end, tol, face_loops, None,
                         ) else {
                             continue;
                         };
@@ -2496,6 +2499,21 @@ fn build_section_edges(
                         // stacking-lip fuse regression). Interior split points
                         // from a multi-window opposing clip are genuine and kept
                         // as-is.
+                        // A ruling split at a notch's mouth arrives in
+                        // windows along the curved face's whole band; a
+                        // window the planar partner's outline does not reach
+                        // belongs to no section of the pair.
+                        let windowed = clipped_list.len() > 1
+                            && matches!(
+                                face.surface(),
+                                FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+                            )
+                            && opposing_face.is_some_and(|of| {
+                                topo.face(of).is_ok_and(|f| {
+                                    matches!(f.surface(), FaceSurface::Plane { .. })
+                                        && f.inner_wires().is_empty()
+                                })
+                            });
                         let mut finals = Vec::new();
                         for (cs, ce) in clipped_list {
                             match opposing_face.and_then(|of| {
@@ -2527,6 +2545,7 @@ fn build_section_edges(
                                     cs,
                                     ce,
                                     tol,
+                                    face_loops,
                                     Some(&across_on_this),
                                 )
                             }) {
@@ -2546,6 +2565,7 @@ fn build_section_edges(
                                         finals.push((s, e));
                                     }
                                 }
+                                None if windowed => {}
                                 None => finals.push((cs, ce)),
                             }
                         }
@@ -3421,8 +3441,10 @@ fn arc_segment_crossings(
         // function s(t) = ((C(t) - S) x D) . n has a root at each crossing.
         // Bounded cost (33 evaluations plus ~48 bisection steps per root);
         // the bezier-clipping variant decomposed the same boundary edge once
-        // per section and regressed the honeycomb fixture 150x. A non-planar
-        // face keeps the chord fallback. Clipping such an edge by its CHORD
+        // per section and regressed the honeycomb fixture 150x. On a cylinder
+        // or cone the caller passes the surface normal along the ruling; any
+        // other curved face keeps the chord fallback. Clipping such an edge
+        // by its CHORD
         // put a coaxial revolve cut's section endpoints 0.75 mm inside the
         // face, where the splitter could not anchor them and declined every
         // split.
@@ -3517,6 +3539,31 @@ fn arc_segment_crossings(
     hits.into_iter().filter(|(_, t)| on_arc(*t)).collect()
 }
 
+/// Each input face's loops in its own parameter space, sampled the first
+/// time a section clip needs them.
+#[derive(Default)]
+struct FaceLoopsCache(
+    std::cell::RefCell<HashMap<FaceId, Option<std::rc::Rc<crate::classifier::FaceLoops2d>>>>,
+);
+
+impl FaceLoopsCache {
+    fn get(
+        &self,
+        topo: &Topology,
+        face: FaceId,
+    ) -> Option<std::rc::Rc<crate::classifier::FaceLoops2d>> {
+        self.0
+            .borrow_mut()
+            .entry(face)
+            .or_insert_with(|| {
+                crate::classifier::FaceLoops2d::new(topo, face)
+                    .ok()
+                    .map(std::rc::Rc::new)
+            })
+            .clone()
+    }
+}
+
 /// Which input faces share each input edge, built the first time a section
 /// needs it.
 struct InputAdjacency<'a> {
@@ -3578,6 +3625,7 @@ fn clip_line_to_face_boundary(
     line_start: Point3,
     line_end: Point3,
     tol: f64,
+    face_loops: &FaceLoopsCache,
     keep_run_along: Option<&dyn Fn(EdgeId) -> bool>,
 ) -> Option<Vec<(Point3, Point3)>> {
     let face = topo.face(face_id).ok()?;
@@ -3656,9 +3704,25 @@ fn clip_line_to_face_boundary(
             // original segment, so extension can never grow the section.
             let ext_start = line_start - line_dir;
             let ext_end = line_end + line_dir;
+            // A straight section on a cylinder or cone is a ruling, and the
+            // surface normal along it plays the plane normal's part: a curved
+            // boundary crosses the ruling where it passes through the plane
+            // of the ruling and the axis, which also holds the ruling across
+            // the axis (filtered below).
             let clip_plane_normal = match face.surface() {
                 FaceSurface::Plane { normal, .. } => Some(*normal),
+                surface @ (FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) => {
+                    let mid = line_start + line_dir * 0.5;
+                    surface
+                        .project_point(mid)
+                        .map(|(u, v)| surface.normal(u, v))
+                        .and_then(|n| n.normalize().ok())
+                }
                 _ => None,
+            };
+            let on_ruling = |p: Point3| {
+                matches!(face.surface(), FaceSurface::Plane { .. })
+                    || (p - line_start).cross(line_dir).length() <= 1e-3 * line_len
             };
             let arc_hits = arc_segment_crossings(
                 curve,
@@ -3671,7 +3735,7 @@ fn clip_line_to_face_boundary(
                 tol,
                 clip_plane_normal,
             );
-            for (p, _) in arc_hits {
+            for (p, _) in arc_hits.into_iter().filter(|&(p, _)| on_ruling(p)) {
                 let t = (p - line_start).dot(line_dir) / (line_len * line_len);
                 crossings_ext.push(t);
                 // The historical outermost path only ever saw crossings ON the
@@ -3937,6 +4001,51 @@ fn clip_line_to_face_boundary(
                 (in_outer && !in_hole).then_some((w[0], w[1]))
             })
             .collect()
+    } else if matches!(
+        face.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    ) && boundary_segments
+        .iter()
+        .zip(&boundary_arcs)
+        .any(|(&(a, b), arc)| {
+            let off = |p: Point3| (p - line_start).cross(line_dir).length() / line_len;
+            arc.is_none() && off(a) <= tol && off(b) <= tol
+        })
+        && let Some(loops) = face_loops.get(topo, face_id)
+        && loops.outer.len() >= 3
+    {
+        // A ruling along one of a cylinder's or cone's boundary lines leaves
+        // the face where a notch cut from that boundary takes the material
+        // beside it: the piece across the notch's mouth bounds no region of
+        // the face.
+        // Keep the windows whose midpoint is inside the outer wire or on it;
+        // a window over a hole stays, as the hole weave takes whole sections.
+        let mut borders: Vec<f64> = crossings
+            .iter()
+            .chain(crossings_ext.iter())
+            .map(|t| t.clamp(0.0, 1.0))
+            .collect();
+        borders.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        borders.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        let eps = crate::builder::classify_2d::boundary_eps(&loops.outer);
+        let in_face = |t: f64| {
+            loops.to_uv(line_start + line_dir * t).is_none_or(|q| {
+                crate::builder::classify_2d::point_in_polygon_2d(q, &loops.outer)
+                    || crate::builder::classify_2d::distance_to_polygon_boundary(q, &loops.outer)
+                        <= eps
+            })
+        };
+        let mut windows: Vec<(f64, f64)> = Vec::new();
+        for w in borders.windows(2) {
+            if !in_face(f64::midpoint(w[0], w[1])) {
+                continue;
+            }
+            match windows.last_mut() {
+                Some(last) if (last.1 - w[0]).abs() < 1e-9 => last.1 = w[1],
+                _ => windows.push((w[0], w[1])),
+            }
+        }
+        windows
     } else {
         // Non-plane fallback: the historical outermost pair — but over the
         // TRUE-arc crossings as well as the chord ones. A chord crossing sits
@@ -4810,7 +4919,7 @@ fn presplit_sections_at_registry(
 #[cfg(test)]
 mod clip_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::clip_line_to_face_boundary;
+    use super::{FaceLoopsCache, clip_line_to_face_boundary};
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -4836,6 +4945,136 @@ mod clip_tests {
         ))
     }
 
+    /// A ruling across a quarter cylinder whose top is a tilted plane's
+    /// ellipse ends on the ellipse, not on its chord.
+    #[test]
+    fn a_ruling_clips_to_a_curved_boundary_on_a_cylinder() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        let mut topo = Topology::new();
+        let r = 3.75;
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let top_z = |x: f64| 10.0 + 0.5 * x;
+        let corners = [
+            Point3::new(r, 0.0, 0.0),
+            Point3::new(0.0, r, 0.0),
+            Point3::new(0.0, r, top_z(0.0)),
+            Point3::new(r, 0.0, top_z(r)),
+        ];
+        let v = corners.map(|c| topo.add_vertex(Vertex::new(c, 1e-7)));
+        let bottom = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z_axis, r).unwrap();
+        let top = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(-0.5, 0.0, 1.0),
+            r * 1.25_f64.sqrt(),
+            r,
+            Vec3::new(1.0, 0.0, 0.5),
+        )
+        .unwrap();
+        let e_bottom = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Circle(bottom)));
+        let e_left = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+        let e_top = topo.add_edge(Edge::new(v[3], v[2], EdgeCurve::Ellipse(top)));
+        let e_right = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bottom, true),
+                OrientedEdge::new(e_left, true),
+                OrientedEdge::new(e_top, false),
+                OrientedEdge::new(e_right, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+        let c = r * std::f64::consts::FRAC_1_SQRT_2;
+        let out = clip_line_to_face_boundary(
+            &topo,
+            face,
+            Point3::new(c, c, -1.0),
+            Point3::new(c, c, 20.0),
+            1e-7,
+            &FaceLoopsCache::default(),
+            None,
+        )
+        .expect("the ruling crosses the face");
+        let high = out
+            .iter()
+            .flat_map(|&(a, b)| [a.z(), b.z()])
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!((high - top_z(c)).abs() < 1e-9, "{out:?}");
+    }
+
+    /// A ruling along a quarter cylinder's straight side crosses the mouth
+    /// of a notch cut into that side, where the face has no material.
+    #[test]
+    fn a_ruling_along_a_notched_side_skips_the_notch() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        let mut topo = Topology::new();
+        let r = 3.75;
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let at = |u: f64, z: f64| Point3::new(r * u.cos(), r * u.sin(), z);
+        let notch = 0.05 / r;
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let corners = [
+            at(0.0, 0.0),
+            at(quarter, 0.0),
+            at(quarter, 10.0),
+            at(0.0, 10.0),
+            at(0.0, 4.0),
+            at(notch, 4.0),
+            at(notch, 2.0),
+            at(0.0, 2.0),
+        ];
+        let v = corners.map(|c| topo.add_vertex(Vertex::new(c, 1e-7)));
+        let arc = |topo: &mut Topology, a: usize, b: usize, z: f64| {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, z), z_axis, r).unwrap();
+            topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Circle(circle)))
+        };
+        let line = |topo: &mut Topology, a: usize, b: usize| {
+            topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line))
+        };
+        let edges = [
+            arc(&mut topo, 0, 1, 0.0),
+            line(&mut topo, 1, 2),
+            arc(&mut topo, 3, 2, 10.0),
+            line(&mut topo, 4, 3),
+            arc(&mut topo, 4, 5, 4.0),
+            line(&mut topo, 6, 5),
+            arc(&mut topo, 7, 6, 2.0),
+            line(&mut topo, 0, 7),
+        ];
+        let forward = [true, true, false, false, true, false, false, false];
+        let wire = Wire::new(
+            edges
+                .iter()
+                .zip(forward)
+                .map(|(&e, fwd)| OrientedEdge::new(e, fwd))
+                .collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis, r).unwrap();
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+        let out = clip_line_to_face_boundary(
+            &topo,
+            face,
+            at(0.0, -1.0),
+            at(0.0, 11.0),
+            1e-7,
+            &FaceLoopsCache::default(),
+            None,
+        );
+        assert!(
+            out.iter()
+                .flatten()
+                .all(|&(a, b)| a.z().max(b.z()) <= 2.0 + 1e-9 || a.z().min(b.z()) >= 4.0 - 1e-9),
+            "{out:?}"
+        );
+    }
+
     #[test]
     fn through_chord_far_from_seam_clips_to_rim_crossings() {
         // A chord crossing the disc well away from its seam vertex (the seam
@@ -4853,6 +5092,7 @@ mod clip_tests {
             Point3::new(-20.0, 4.4, 0.0),
             Point3::new(20.0, 4.4, 0.0),
             1e-7,
+            &FaceLoopsCache::default(),
             None,
         );
         let segs = out.expect("a through-chord far from the seam must be kept");
@@ -4879,6 +5119,7 @@ mod clip_tests {
             Point3::new(5.0, 5.0, 0.0),
             Point3::new(12.0, 5.0, 0.0),
             1e-7,
+            &FaceLoopsCache::default(),
             None,
         );
         let segs = out.expect("single-crossing interior→rim chord must be kept");
@@ -4905,6 +5146,7 @@ mod clip_tests {
             Point3::new(20.0, 20.0, 0.0),
             Point3::new(20.0, -20.0, 0.0),
             1e-7,
+            &FaceLoopsCache::default(),
             None,
         );
         assert!(out.is_none());
