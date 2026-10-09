@@ -1,0 +1,28 @@
+crates/io/tests/data/kumiko_lattice_cut_corner_strut.bin
+  s_a8677c67f85a06::t_807a52842617f3 1
+crates/io/tests/data/kumiko_lattice_cut_wall_strut.bin
+  s_a8677c67f85a06::t_807a52842617f3 1
+crates/io/tests/kumiko_lattice_piece_cut_inmem.rs
+  s_a8677c67f85a06::t_373abc8f1a29f2 17-19
+  s_a8677c67f85a06::t_1f6f71388b01f0 121-122
+  s_a8677c67f85a06::t_ff2031e1fda358 134-144,147-152,161-162,167-202
+crates/operations/src/boolean/mod.rs
+  s_a8677c67f85a06::t_2fbd1e90a01c2c 1029-1033,1035-1041,1260-1261
+  s_a8677c67f85a06::t_789765a3f84e83 1169-1175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5194dee5224c0204dd2c4b7c31f8913dcad5b5da",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
