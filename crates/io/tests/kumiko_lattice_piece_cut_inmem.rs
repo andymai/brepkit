@@ -38,10 +38,10 @@ fn load(topo: &mut Topology, name: &str) -> SolidId {
     deserialize_solid(&std::fs::read(path).unwrap(), topo).unwrap()
 }
 
-/// Edge uses keyed by quantized endpoint positions, so two ids on one
-/// segment count as one edge.
+/// Edge uses keyed by quantized geometry (endpoints and midpoint), so two ids
+/// on one curve count as one edge.
 #[allow(clippy::cast_possible_truncation)]
-fn positional_edge_uses(topo: &Topology, solid: SolidId) -> HashMap<[i64; 6], usize> {
+fn positional_edge_uses(topo: &Topology, solid: SolidId) -> HashMap<[i64; 9], usize> {
     let q = |p: Point3| {
         [
             (p.x() * 1e6).round() as i64,
@@ -57,15 +57,20 @@ fn positional_edge_uses(topo: &Topology, solid: SolidId) -> HashMap<[i64; 6], us
         for wid in wires {
             for oe in topo.wire(wid).unwrap().edges() {
                 let e = topo.edge(oe.edge()).unwrap();
-                let (mut a, mut b) = (
-                    q(topo.vertex(e.start()).unwrap().point()),
-                    q(topo.vertex(e.end()).unwrap().point()),
+                let (start, end) = (
+                    topo.vertex(e.start()).unwrap().point(),
+                    topo.vertex(e.end()).unwrap().point(),
                 );
+                let (t0, t1) = e.curve().domain_with_endpoints(start, end);
+                let mid = q(e
+                    .curve()
+                    .evaluate_with_endpoints(0.5 * (t0 + t1), start, end));
+                let (mut a, mut b) = (q(start), q(end));
                 if a > b {
                     std::mem::swap(&mut a, &mut b);
                 }
                 *uses
-                    .entry([a[0], a[1], a[2], b[0], b[1], b[2]])
+                    .entry([a[0], a[1], a[2], b[0], b[1], b[2], mid[0], mid[1], mid[2]])
                     .or_insert(0) += 1;
             }
         }
