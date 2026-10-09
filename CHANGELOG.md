@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.47](https://github.com/andymai/brepkit/compare/v4.1.46...v4.1.47) (2026-10-09)
+
+
+### Bug Fixes
+
+* **algo:** read a closed extrusion wall through its seam ([#2025](https://github.com/andymai/brepkit/issues/2025)) ([4f83a7c](https://github.com/andymai/brepkit/commit/4f83a7c2d373e880aa4d09bda03dbea2fc2a4368))
+
 ## [4.1.46](https://github.com/andymai/brepkit/compare/v4.1.45...v4.1.46) (2026-10-09)
 
 
