@@ -1009,19 +1009,92 @@ fn ray_crossings_nurbs(
         return Ok(hits.len() as u32);
     }
 
-    let project = |p: Point3| -> (f64, f64) { surface.project_point(p) };
-    let uv_boundary = build_uv_boundary(&verts, &project, false);
+    let periods = nurbs_periods(surface);
+    let outer = nurbs_uv_polygon(&verts, surface, periods);
+    let mut holes = Vec::new();
+    for &iw in topo.face(face_id)?.inner_wires() {
+        let hole = crate::util::wire_polygon(topo, iw)?;
+        if hole.len() >= 3 {
+            holes.push(nurbs_uv_polygon(&hole, surface, periods));
+        }
+    }
 
     let mut crossings = 0u32;
-    for (_, hit_u, hit_v) in &hits {
-        if point_in_uv_boundary(*hit_u, *hit_v, &uv_boundary, false)
-            && !hit_in_inner_wire_uv(topo, face_id, *hit_u, *hit_v, &project, false)?
+    for &(_, hit_u, hit_v) in &hits {
+        if in_nurbs_uv_polygon(hit_u, hit_v, &outer, periods)
+            && !holes
+                .iter()
+                .any(|hole| in_nurbs_uv_polygon(hit_u, hit_v, hole, periods))
         {
             crossings += 1;
         }
     }
 
     Ok(crossings)
+}
+
+/// A closed NURBS patch's period in each direction: its parameter span
+/// where its first and last control rows coincide.
+fn nurbs_periods(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> (Option<f64>, Option<f64>) {
+    let span = |(lo, hi): (f64, f64)| hi - lo;
+    (
+        surface.is_periodic_u().then(|| span(surface.domain_u())),
+        surface.is_periodic_v().then(|| span(surface.domain_v())),
+    )
+}
+
+/// `next` moved by whole periods to lie within half a period of `prev`.
+fn unwrap_by(prev: f64, next: f64, period: Option<f64>) -> f64 {
+    period.map_or(next, |p| p.mul_add(-((next - prev) / p).round(), next))
+}
+
+/// A wire's polygon in a NURBS patch's parameters, each point unwrapped
+/// against the one before it, so a wire running along a closed patch's seam
+/// reads at both of its parameter ends rather than folding across the patch.
+fn nurbs_uv_polygon(
+    verts: &[Point3],
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    periods: (Option<f64>, Option<f64>),
+) -> Vec<Point2> {
+    let mut uv: Vec<Point2> = Vec::with_capacity(verts.len());
+    for &p in verts {
+        let (u, v) = surface.project_point(p);
+        let next = match uv.last() {
+            Some(prev) => Point2::new(
+                unwrap_by(prev.x(), u, periods.0),
+                unwrap_by(prev.y(), v, periods.1),
+            ),
+            None => Point2::new(u, v),
+        };
+        uv.push(next);
+    }
+    uv
+}
+
+/// Whether a patch point lies in an unwrapped polygon, read at the period
+/// copy nearest the polygon's centre.
+fn in_nurbs_uv_polygon(
+    u: f64,
+    v: f64,
+    poly: &[Point2],
+    periods: (Option<f64>, Option<f64>),
+) -> bool {
+    let middle = |of: fn(Point2) -> f64| {
+        let (lo, hi) = poly
+            .iter()
+            .map(|&q| of(q))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                (lo.min(x), hi.max(x))
+            });
+        f64::midpoint(lo, hi)
+    };
+    let test = Point2::new(
+        unwrap_by(middle(Point2::x), u, periods.0),
+        unwrap_by(middle(Point2::y), v, periods.1),
+    );
+    point_in_polygon(test, poly)
 }
 
 #[cfg(test)]
