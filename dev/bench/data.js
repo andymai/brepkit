@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791462916106,
+  "lastUpdate": 1791531113129,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53189,6 +53189,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 42969289,
             "range": "± 198761",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68ed1d401d96925f1ea53819402f9e47a2b1fdbb",
+          "message": "fix(algo): keep a spindle torus corner's sections on its own tube (#2014)\n\nThe captured gridfinity layout case now intersects exactly through\n`operations::boolean`: 57 faces, every edge used twice, valid, and\nwatertight. The `binGenerator.export.interiorFilletScoops` test \"a scoop\nbeside tapered side walls keeps the plain fillet\", run on a brepkit-wasm\ndevelopment build that rounds a rounded prism's rim, previously produced\n33 free edges for `intersect(fillet material, tapered envelope)` and 25\nwith mesh fallback. The three roots were torus-face filtering,\nspindle-torus root polishing and hit parameterization, and the edge-face\nendpoint window.\n\n## Roots\n\nThe pocket corners have radius 2.55 and the floor rim radius is 2.45.\nEach corner is therefore a spindle torus with major radius 0.1 and minor\nradius 2.45, whose tube swings across its axis. The leaning envelope\nwalls end at y = 17 and y = -17, each corner torus's meridian.\n\n- `trim_torus_oval_to_box_face` in `phase_ff.rs` kept every plane x\ntorus oval arc between box-face edge crossings whose midpoint lay inside\nthe plane face, without testing the torus face. A corner face at y >= 17\ntherefore took arcs at y 15.6 to 17. Kept arcs must now also lie in the\ntorus face's extent.\n- On a spindle torus, `intersect_line_torus` in\n`analytic_intersection.rs` finds swung-tube roots paired a few\nhundredths from near-tube roots. One Newton step against the near tube\nmoved a swung-tube root beside a true crossing, z 2.558 next to 2.5735\non the wall edge along the meridian. This cut a 0.017 mm lens and made a\nray from corner pocket air cross the face twice, classifying the point\ninside. Each root is now polished for up to eight Newton steps on its\nnearer tube. The classifier uses that tube's parameters through\n`torus_parameters` in `boundary.rs`, placing a swung-tube hit outside a\nface on the axis's near side.\n- In `phase_ef.rs`, the scoop's fitted NURBS rim ends 1.4e-6 from its\nvertex on a leaning wall plane. EF found the plane crossing 7e-6 from\nthe vertex, outside the approximately 1e-7 endpoint window, leaving a\nsliver pave. A NURBS endpoint window toward an end vertex on the crossed\nsurface is now at least 1e-5.\n\n## Tests\n\n- `torus_corners_beside_a_tapered_wall_take_no_section` builds both\ncorners beside the wall and requires no section. It fails without the\ntorus-face check or polish.\n- `line_spindle_torus_roots_lie_on_their_tubes` requires every\nclassifier-ray root to lie on one of the two tubes, including roots near\nt 0.124 and 0.398. `a_spindle_torus_point_takes_its_own_tube_parameters`\ncovers hit parameterization.\n- `pocket_air_in_a_spindle_torus_corner_is_outside` requires four\npocket-air points outside and three material points inside. It fails\nwithout either the polish or parameter change.\n- `a_scooped_fillet_material_clips_to_its_tapered_envelope_exactly`,\nusing `scoop_beside_taper_material.bin` and existing\n`taper_clip_envelope.bin`, requires the exact intersect. Closed-form\nslabs pin 234.306 mm3 trimmed between y -12 and 12 within 0.01,\nintegrated exactly, and 80.83 mm3 beyond y 12 within 0.1. It fails\nwithout the EF window, torus-face check, or polish.\n\nMesh volume reads each floor-rim cylinder face 27.4 mm3 low because a\ncylinder face whose ruling edge carries a vertex meshes as a fan (an\nopen roadmap row). The fixture instead slices with boxes and exactly\nintegrates the plane-and-cylinder slab.\n\n## Verification\n\n- Workspace clippy is clean with all targets and features. Nextest\npasses all 3037 tests across brepkit-topology, brepkit-math,\nbrepkit-algo, brepkit-blend, brepkit-operations, brepkit-io, and\nbrepkit-wasm. `pose_sweep` and `truth_audit` exactly match main.\n`approx_census` differs only for the face pair in an already failing\nNURBS loft offset error that also varies between main runs.\n- Tool A/B covered 3763 generator catalog tests with gridfinity layout\ntool a4945a2aab and brepjs 18.124.8. Main at #2012 against this branch\nreported, per catalog part, 62 against 62 failing, 135 against 134, 93\nagainst 93, and 58 against 58, totaling 348 against 347. No test newly\nfails. Only `binGenerator.scenario.kumikoWrapping` \"kumiko asanoha wraps\na 1x1x6 bin including corners\" passes exclusively here, also passing on\na separate branch and read as timing. Interior fillet files remain 39\nagainst 39 failing. Main does not build the interior fillet and\ntherefore does not reach this taper clip.\n\n## Roadmap\n\n`.claude/skills/roadmap/SKILL.md` closes an entry for these three roots.\nThe open point-classification row records that the ray classifier\nmatches an exact cross-section test for all 13,824 points of a 24^3 grid\nover `taper_clip_scoop.bin`, while brepkit-check's winding-number\nclassifier (`classify_point_winding`, on no operations path) misreads\n1,812.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the taper clip `intersect(fillet material, tapered envelope)` of a\npocket with a scoop beside tapered side walls so the result is valid and\nwatertight; it previously left 33 free edges at the pocket's\nspindle-torus corners (corner radius 2.55 under a floor rim of 2.45, so\nthe torus's major radius 0.1 swings its tube across the axis).\n\n**Bug fixes**\n- `trim_torus_oval_to_box_face` keeps a plane × torus oval arc only when\nit lies on the torus face, and keeps a whole oval only when it lies on\nboth faces throughout rather than at one point; a corner beside a wall\nending at that torus's meridian previously took the oval's far half, and\nan oval off the torus face now gets sample-clipped.\n- `intersect_line_torus` now polishes each root on the tube it lies\nnearer (up to eight Newton steps) and dedups them; polishing everything\nagainst the near tube carried a swung-tube root 0.017 mm beside a true\ncrossing, cutting a lens on the wall and making a ray from pocket air\ncross the corner face twice.\n- The ray classifier's torus hit now takes the parameters of the tube\nthe point actually lies on (`torus_parameters` in `boundary.rs`) rather\nthan the projection, which on a spindle torus places a swung-tube hit on\nthe far sheet.\n- EF treats a NURBS edge crossing within 1e-5 of an end vertex on the\ncrossed surface as that vertex; a fitted scoop rim ended 1.4e-6 off its\nvertex on a leaning wall and crossed that wall's plane 7e-6 away,\nleaving a sliver pave.\n\n**Tests and verification**\n- New tests require no section kept at either corner, a whole oval\ncrossing no edge to lie on both faces, every classifier-ray root on one\nof the two tubes, correct hit parameterization, pocket-air points\nclassified outside, and exact intersect volumes.\n- `a_scooped_fillet_material_clips_to_its_tapered_envelope_exactly` pins\nthe volume against closed-form plane-and-cylinder slabs (234.306 mm³\ntrimmed between y −12 and 12, 80.83 mm³ beyond y 12), since the mesh\nreads floor-rim cylinders 27.4 mm³ low each when a cylinder face's\nruling edge carries a vertex and meshes as a fan.\n- Clippy is clean with all targets and features; all 3037 tests pass;\ngridfinity tool A/B over 3763 catalog tests shows no new failures (347\npassing here against 346 on main), with `pose_sweep` and `truth_audit`\nexactly matching main.\n\n<sup>Written for commit 876db12083600bb7c68b9ac2f840f5f433f2e0ed.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2014?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2014?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2014&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-09T00:28:52-07:00",
+          "tree_id": "ac09964bc224558c305c73d12039e480adc4a164",
+          "url": "https://github.com/andymai/brepkit/commit/68ed1d401d96925f1ea53819402f9e47a2b1fdbb"
+        },
+        "date": 1791531106729,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1048338,
+            "range": "± 2758",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1132781,
+            "range": "± 5793",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13436,
+            "range": "± 158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771836,
+            "range": "± 1197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 43335916,
+            "range": "± 100106",
             "unit": "ns/iter"
           }
         ]
