@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791551182384,
+  "lastUpdate": 1791555203257,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53405,6 +53405,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47838646,
             "range": "± 98106",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5bffc6c78cbae2404e4becc3125221e12a0835f2",
+          "message": "fix: preserve interiors of solids converted to B-splines (#2019)\n\nSolids converted with `convert_to_bspline` now retain their interior\nclassification. On main, a converted rod cut from a cylinder returned\nthe uncut volume, 95.43, without mesh fallback, instead of the\nunconverted rod's exact result of 90.38. The equivalent frustum cut\nreturned 98.96 instead of 93.92. Both point classifiers also read the\nconverted rod's own axis as outside. They now read it as inside, and the\ncylinder cut falls back to the mesh boolean with volume 89.75.\n\n## Changes\n\n- Align revolution patches with face wires. `make_cylinder` places its\nseam at +x, while `CylindricalSurface::new` places the angle origin at\n+y for a z axis. Conversion and non-uniform scaling therefore put the\nseam through the patch interior.\n- Add `patch_start_angle` in heal. It starts a patch at a ruling or\nmeridian traversed twice by the face wires, or midway across the widest\nboundary-free angle.\n- Add `turned(angle)` to cylinder, cone, sphere, and torus surfaces. It\nmoves the angle origin around the axis without moving surface points.\n`convert_to_bspline` and the non-uniform-scale transform use it.\n- `extrusion_geom` reads a NURBS extrusion face exactly only when its\nwire runs along the patch's own edges. Otherwise it refuses a closed\nprofile's trim and falls through to a flat polygon. The aligned patch\nmeets that condition.\n- Unwrap periodic NURBS boundaries using their own parameter spans. The\ncheck classifier previously applied a 2 pi analytic-angle unwrap to unit\nknot spans, folding closed boundaries at their seams. Boundaries, holes,\nand ray hits now use the u or v span selected by `is_periodic_u` and\n`is_periodic_v`.\n\n## Tests\n\n- Add `a_converted_rod_holds_its_own_axis`, covering both classifiers at\nfour interior and two exterior points. On main, `classify_point` reports\n`(-4, 0.3, 3)` as outside.\n- Add `a_cylinder_cut_by_a_converted_rod_loses_the_rod`, requiring\nvolume within 2% of the exact unconverted cut. On main, it returns the\nuncut cylinder.\n- Add `a_turned_surface_reads_its_points_a_turn_on` for all four\nrevolution surfaces.\n- Existing `bspline_conversion_mesh.rs` tests pass.\n\n## Verification\n\n- Math, heal, algo, check, operations, io, and wasm pass under the\nprofiling profile, 3,002 tests.\n- Clippy is clean on the changed crates.\n- `pose_sweep` remains identical to main across 495 rows. `truth_audit`\nremains identical across 40 rows.\n- The gridfinity layout tool calls neither `convert_to_bspline` nor\nnon-uniform scaling. This is a public API correctness fix.\n\n## Still open\n\n- A converted rod cut through a box still uses the mesh fallback. The\nface splitter treats every NURBS face as non-periodic and leaves the rod\nface whole between the two closed sections.\n- A non-uniformly scaled tube still reads its axis as outside in the\nboolean classifier. The transform pads its patch a twentieth past each\nrim. That padding remains unchanged because it is a separate\ntransform-path choice. Its classifier consequence is recorded as a\nroadmap row.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes solids converted to B-splines reading their own interiors as\noutside. On main, a cylinder cut by a converted rod returned the full\nuncut cylinder, and both point classifiers read the rod's axis as\noutside; converted and non-uniformly scaled parts now classify\ncorrectly, and the cylinder cut returns the expected volume.\n\n- Starts a converted cylinder, cone, sphere, or torus patch at its\nface's seam, or midway across the widest angle the face leaves\nuncovered, so the patch's seam no longer runs through the face.\n- Adds `turned(angle)` to the four revolution surfaces, moving the angle\norigin without moving surface points; `convert_to_bspline` and the\nnon-uniform-scale transform use it.\n- The ray cast now unwraps a closed NURBS patch's boundary, holes, and\nhits by its own parameter span, where it previously applied a 2 pi\nunwrap that folded the boundary at its seam.\n\nNote that a converted rod cut through a box still falls back to the mesh\nboolean: the face splitter treats every NURBS face as non-periodic and\nleaves the rod face whole between the two closed sections.\n\n<sup>Written for commit 8a8ce969b8525c3441d64d6686cac79508da17db.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2019?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2019?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2019&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-09T14:10:42Z",
+          "tree_id": "5656cd8457a36a672142027c1f16e2094954baa3",
+          "url": "https://github.com/andymai/brepkit/commit/5bffc6c78cbae2404e4becc3125221e12a0835f2"
+        },
+        "date": 1791555199041,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 862118,
+            "range": "± 4844",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 931998,
+            "range": "± 5844",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11072,
+            "range": "± 120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 631123,
+            "range": "± 13829",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 39422144,
+            "range": "± 584830",
             "unit": "ns/iter"
           }
         ]
