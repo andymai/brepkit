@@ -1,0 +1,85 @@
+crates/io/tests/data/kumiko_lattice_cut_wall_strut.bin
+  s_a8677c67f85a06::t_807a52842617f3 1
+crates/io/tests/data/kumiko_lattice_cut_holed_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/algo/src/builder/fill_images_faces.rs
+  s_d593b500b69108::t_053d69ec25a314 364-372,2977-3024
+  s_d593b500b69108::t_e57836329e3689 373,3025-3026
+crates/io/tests/data/kumiko_lattice_cut_holed_base.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_top_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+.claude/skills/roadmap/SKILL.md
+  s_d593b500b69108::t_b9b86138726602 145-147,206
+crates/algo/src/builder/face_splitter/edge_splitting.rs
+  s_d593b500b69108::t_2cb0c9be03cd50 836,838-841
+  s_d593b500b69108::t_729c815bb7fe39 644-653,656,669-674
+crates/io/tests/data/kumiko_lattice_cut_notch_lip.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_notch_low.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/kumiko_lattice_piece_cut_inmem.rs
+  s_a8677c67f85a06::t_1f6f71388b01f0 136-137
+  s_a8677c67f85a06::t_373abc8f1a29f2 18-19
+  s_a8677c67f85a06::t_ff2031e1fda358 159-169,172-177,186-187,192-207,233-252
+  s_d593b500b69108::t_e4ad2a3195e4c8 1-5,20-27,101-112,138-147,208-232,253,255-325
+  s_d593b500b69108::t_42bb719f1679ec 254
+crates/io/tests/data/kumiko_lattice_cut_seam_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_corner_strut.bin
+  s_a8677c67f85a06::t_807a52842617f3 1
+crates/algo/src/pave_filler/fill_face_info.rs
+  s_d593b500b69108::t_611c980e393f7c 420-429
+  s_d593b500b69108::t_e5c810e36ae2f2 14
+crates/io/tests/data/kumiko_lattice_cut_facet_strut.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_notch_top.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/io/tests/data/kumiko_lattice_cut_shard.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a8677c67f85a06::t_5379e3f4010242 8299-8310
+crates/algo/src/pave_filler/phase_ef.rs
+  s_d593b500b69108::t_08b0f91aeda8ee 128,139-144,150,160-164,168,212-214,240-248
+  s_d593b500b69108::t_3e74157c9f0504 249-250
+crates/algo/src/pave_filler/phase_ff.rs
+  s_d593b500b69108::t_ddb2342672c7aa 1906-1919,3111-3122,3125-3133
+  s_d593b500b69108::t_f855cbb35249bf 1642-1643,1757-1764,1770,1905,1920-1922
+  s_d593b500b69108::t_43be4da790ee39 1667-1668,1854,1859-1866,1876,1966,1980-1982,1984-1989,2026,2037-2039,2041-2046,5053-5059,5065-5069,5073-5080,5097-5098,5102-5103,5114-5124,5127
+  s_d593b500b69108::t_c8b413c203c59c 2516-2518,2530-2538,2541
+  s_a8677c67f85a06::t_81363ac3e75437 2539
+  s_a8677c67f85a06::t_26467d7d9aace1 2548-2553
+  s_a8677c67f85a06::t_f2456af9ea1626 2499-2508,2510-2515,2521-2523,2545-2547
+  s_d593b500b69108::t_e5b8c7ab17bad7 1669-1670,1855
+  s_d593b500b69108::t_a198140f6c6345 3110,3123-3124,3134-3136,3138,3158-3159
+  s_a8677c67f85a06::t_4574f470ad5c84 2519-2520,2524-2529,2540,2542-2544
+  s_d593b500b69108::t_716ed8a64a5eb0 1671,1853,1856-1858,1877,1967,1983,2027,2040,5040-5052,5060-5064,5070-5072,5081-5096,5099-5101,5104-5109,5156,5168-5173
+  s_d593b500b69108::t_bf4069e38fdd84 2003
+  s_d593b500b69108::t_1a31e29b3cb0cd 3137,3147-3150,3155-3157,3168-3169
+crates/io/tests/data/kumiko_lattice_cut_notch_inner.bin
+  s_d593b500b69108::t_36c8aaf567714e 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f73ec245f666d4ea1781448bf7d37dbddb85b8e",
+  "prompts": {},
+  "sessions": {
+    "s_a8677c67f85a06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b17417-28bf-4293-9803-4c3b96f3617d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_d593b500b69108": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1538ae9-01e3-45ed-8e7e-1487989721dd",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
