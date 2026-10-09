@@ -951,14 +951,17 @@ pub fn boolean_with_options(
     Ok(result)
 }
 
-/// Sequential compound cut via GFA.
+/// Compound cut via GFA: `target` less the union of `tools`.
 ///
-/// Cuts the `target` solid by each tool in order using sequential
-/// `boolean(Cut)` calls.
+/// Cuts once by the tools merged into one solid where that cut stays exact.
+/// Otherwise cuts by each tool with the mesh fallback declined, splitting a
+/// tool whose cut needs it into its connected pieces and then into halves, and
+/// cuts the pieces that still need the fallback last, once (by the merged
+/// tool when there is one, else once per group of pieces that at most touch).
 ///
 /// # Errors
 ///
-/// Returns an error if any individual cut fails.
+/// Returns an error if a cut fails outright.
 pub fn compound_cut(
     topo: &mut Topology,
     target: SolidId,

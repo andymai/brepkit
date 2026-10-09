@@ -155,6 +155,9 @@ fn build_face_containment(
             let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
             if let Some(p) = prev {
                 if (pt - p).length() <= tol.linear {
+                    // The shared vertex's sample still starts this edge's
+                    // first chord.
+                    prev_t = Some(t);
                     continue;
                 }
                 if is_curved && let Some(tp) = prev_t {

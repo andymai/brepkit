@@ -2521,18 +2521,22 @@ fn restrict_curves_to_faces(
                 let n_finer = (n_fine * 16).min(4096);
                 let inb_finer = inboth_samples(n_finer);
                 let (g0, g1) = longest_inboth_run(&inb_finer, closed);
+                // A run on a closed curve can wrap past its last sample; its
+                // indices are read round the curve, as a clamped NURBS
+                // evaluated past its domain is garbage.
                 #[allow(clippy::cast_precision_loss)]
-                let mid = {
-                    let f = 0.5 * (g0 + g1) as f64 / n_finer as f64;
-                    let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                let point_at = |i: f64| {
+                    let n = n_finer as f64;
+                    let i = if closed { i.rem_euclid(n) } else { i };
+                    let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * (i / n);
                     raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
                 };
                 #[allow(clippy::cast_precision_loss)]
+                let mid = point_at(0.5 * (g0 + g1) as f64);
+                #[allow(clippy::cast_precision_loss)]
                 let strict = (g0..=g1)
                     .filter(|&i| {
-                        let f = (i % n_finer) as f64 / n_finer as f64;
-                        let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
-                        let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                        let p = point_at(i as f64);
                         ext_a.contains_strict(p, 0.0) && ext_b.contains_strict(p, 0.0)
                     })
                     .count();

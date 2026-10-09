@@ -2279,6 +2279,46 @@ fn compound_cut_single_tool_matches_boolean() {
     assert_volume_near(&topo, result, box_vol - cyl_vol, 0.05);
 }
 
+/// One tool of two disjoint pieces, a dent in the tube's top whose cut stays
+/// exact and a ball beside the ring whose cut needs the mesh fallback, is cut
+/// piece by piece: the dent exactly, the ball last, and the result holds what
+/// cutting by the dent and then the ball leaves.
+#[test]
+fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let parts = |topo: &mut Topology| {
+        let torus = crate::primitives::make_torus(topo, 4.0, 1.5, 32).unwrap();
+        let dent = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
+        crate::transform::transform_solid(topo, dent, &Mat4::translation(-4.5, -0.5, 1.0)).unwrap();
+        let ball = crate::primitives::make_sphere(topo, 1.0, 32).unwrap();
+        crate::transform::transform_solid(topo, ball, &Mat4::translation(5.0, 0.0, 0.0)).unwrap();
+        (torus, dent, ball)
+    };
+
+    let (torus, dent, ball) = parts(&mut topo);
+    let dented = boolean(&mut topo, BooleanOp::Cut, torus, dent).unwrap();
+    let torus_faces = brepkit_topology::explorer::solid_faces(&topo, dented)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
+        .count();
+    assert!(torus_faces > 0, "the dent's cut stays exact");
+    let reference = boolean(&mut topo, BooleanOp::Cut, dented, ball).unwrap();
+    let expected = crate::measure::solid_volume(&topo, reference, 0.05).unwrap();
+
+    let (torus, dent, ball) = parts(&mut topo);
+    let tool = crate::compound_ops::merge_disjoint_solids(&mut topo, &[dent, ball]).unwrap();
+    let before = super::mesh_fallback_count();
+    let result = compound_cut(&mut topo, torus, &[tool], BooleanOptions::default()).unwrap();
+    assert!(
+        super::mesh_fallback_count() > before,
+        "the ball's cut takes the mesh fallback"
+    );
+    assert_volume_near(&topo, result, expected, 1e-3);
+}
+
 #[test]
 fn compound_cut_two_disjoint_cylinders() {
     use brepkit_math::mat::Mat4;
