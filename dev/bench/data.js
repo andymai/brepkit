@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791563350075,
+  "lastUpdate": 1791565160603,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53621,6 +53621,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 48661941,
             "range": "± 158237",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "24f59fd9bf5341560c7821bcc21966e874eb970c",
+          "message": "fix(algo): read plane sections against curved edges, not chords (#2023)\n\nThe D-shaped prism of\n`crates/operations/tests/prism_through_a_frustum_wall.rs` with a\nhalf-ellipse profile 1.1 out along x and 1 along z now cuts\n`make_cone(3, 1.5, 6)` exactly and produces a valid 8-face solid. The\nprevious cut fell back on an open 5-face hole shell because the near cap\nsection was classified against chordal approximations instead of the\nface's curved boundary.\n\n## Changes\n\n- `trim_open_curve_to_plane_face_lines` previously classified each\nsection piece by its midpoint in a boundary polygon using 16 chords per\ncurved edge. It declined the whole call when a piece strayed outside\nthat polygon mid-span.\n- The near cap at y = 0.1 extended past the wall by less than the chord\nsag. Its piece occupied the sliver between chord and curve, so the cap's\nhyperbola reached the face splitter whole, from z -0.8 to 7.3 across a\ncap 2 high.\n- For plane faces with curved edges and no NURBS edges,\n`face_boundary_2d` now builds segments and circle or ellipse arcs.\n`point_in_region` reads each midpoint and the 31-point mid-span stray\ncheck against that boundary.\n- Faces containing only straight edges, and faces with a NURBS edge,\nretain the polygon path.\n\n## Tests\n\n-\n`a_half_ellipse_prism_grazing_the_wall_through_its_near_cap_cuts_exactly`\nrequires no mesh fallback, a valid solid, a volume between the frustum\nless the whole prism and 0.05 more, and operand agreement on a 7 by 7 by\n12 point grid.\n- The test fails without this change.\n- The shared helper now accepts the volume bound per test. The existing\nthree tests retain 0.02.\n\n## Verification\n\n- Half-ellipse prisms extending 1.1, 1.15, and 1.2 along x cut exactly,\nvalidate, and produce 8 faces.\n- The math, heal, algo, check, operations, io, and wasm suites pass\nunder the profiling profile, totaling 3,007 tests.\n- `pose_sweep` has 495 rows identical to main. `truth_audit` has 40 rows\nidentical to main.\n- The roadmap row for this case is Closed.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes plane section classification for faces with curved edges so a\npiece grazing a cone by less than a chord's sag is no longer misread,\nletting the half-ellipse prism cut `make_cone(3, 1.5, 6)` exactly\ninstead of falling back on an open 5-face hole shell.\n\n- Reads section pieces against the face's actual circle and ellipse arcs\n(`face_boundary_2d`, `point_in_region`) for the midpoint and mid-span\nstray checks, instead of a 16-chord-per-curve polygon.\n- Faces with only straight edges, or with NURBS edges, keep the previous\npolygon path.\n- Adds\n`a_half_ellipse_prism_grazing_the_wall_through_its_near_cap_cuts_exactly`,\nwhich fails without this change; the shared assertion helper now takes a\nper-test volume bound.\n\n<sup>Written for commit 0498902d8a434f15d26048156575a51062c59bdb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2023?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2023?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2023&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-09T16:56:09Z",
+          "tree_id": "f9e001121e48bd4aeba83c611a9261d940686e25",
+          "url": "https://github.com/andymai/brepkit/commit/24f59fd9bf5341560c7821bcc21966e874eb970c"
+        },
+        "date": 1791565154237,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1160074,
+            "range": "± 5380",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1205355,
+            "range": "± 2903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14275,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 813112,
+            "range": "± 1878",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 51299536,
+            "range": "± 88526",
             "unit": "ns/iter"
           }
         ]
