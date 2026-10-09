@@ -2449,12 +2449,23 @@ fn restrict_curves_to_faces(
             // crossing a corner cylinder takes a 0.48 window of a 19.7
             // ellipse, two samples at the box-scaled density. A run that
             // short is a graze only if it stays that short sixteen times
-            // finer.
-            if f1 - f0 < 2 && inb_fine.contains(&true) {
+            // finer, or runs along either face's edges.
+            if f1 - f0 < 2 && inb_fine.contains(&true) && !matches!(raw.curve, EdgeCurve::Circle(_))
+            {
                 let n_finer = (n_fine * 16).min(4096);
                 let inb_finer = inboth_samples(n_finer);
                 let (g0, g1) = longest_inboth_run(&inb_finer, closed);
-                if g1 - g0 >= 2 {
+                #[allow(clippy::cast_precision_loss)]
+                let mid = {
+                    let f = 0.5 * (g0 + g1) as f64 / n_finer as f64;
+                    let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                    raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+                };
+                let near = 1e-5 * (1.0 + approx_len / std::f64::consts::TAU);
+                if g1 - g0 >= 4
+                    && !point_on_face_edges(topo, fa, mid, near)
+                    && !point_on_face_edges(topo, fb, mid, near)
+                {
                     (n_fine, inb_fine, f0, f1) = (n_finer, inb_finer, g0, g1);
                 }
             }
