@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.1.45](https://github.com/andymai/brepkit/compare/v4.1.44...v4.1.45) (2026-10-09)
+
+
+### Bug Fixes
+
+* cut a prism poking through a frustum wall exactly ([#2020](https://github.com/andymai/brepkit/issues/2020)) ([1419a01](https://github.com/andymai/brepkit/commit/1419a014286ec7255363432d3690c1ecd09639b4))
+* preserve interiors of solids converted to B-splines ([#2019](https://github.com/andymai/brepkit/issues/2019)) ([5bffc6c](https://github.com/andymai/brepkit/commit/5bffc6c78cbae2404e4becc3125221e12a0835f2))
+
 ## [4.1.44](https://github.com/andymai/brepkit/compare/v4.1.43...v4.1.44) (2026-10-09)
 
 
