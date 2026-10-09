@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791558268908,
+  "lastUpdate": 1791561006229,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53513,6 +53513,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 48060951,
             "range": "± 108970",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a20b7eeefba9e5a7dcd5d28979335aaab640908",
+          "message": "chore(main): release 4.1.45 (#2021)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.45](https://github.com/andymai/brepkit/compare/v4.1.44...v4.1.45)\n(2026-10-09)\n\n\n### Bug Fixes\n\n* cut a prism poking through a frustum wall exactly\n([#2020](https://github.com/andymai/brepkit/issues/2020))\n([1419a01](https://github.com/andymai/brepkit/commit/1419a014286ec7255363432d3690c1ecd09639b4))\n* preserve interiors of solids converted to B-splines\n([#2019](https://github.com/andymai/brepkit/issues/2019))\n([5bffc6c](https://github.com/andymai/brepkit/commit/5bffc6c78cbae2404e4becc3125221e12a0835f2))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-09T15:47:10Z",
+          "tree_id": "ca1896f5a47720ced35aff8d50b1d6af5de99440",
+          "url": "https://github.com/andymai/brepkit/commit/6a20b7eeefba9e5a7dcd5d28979335aaab640908"
+        },
+        "date": 1791561000907,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1069461,
+            "range": "± 2904",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1157052,
+            "range": "± 3654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13078,
+            "range": "± 568",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 790658,
+            "range": "± 1797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47751602,
+            "range": "± 212123",
             "unit": "ns/iter"
           }
         ]
