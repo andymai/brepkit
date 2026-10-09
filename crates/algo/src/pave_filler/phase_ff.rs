@@ -1639,6 +1639,8 @@ enum FaceExtent {
         poly: Vec<brepkit_math::vec::Point2>,
         holes: Vec<Vec<brepkit_math::vec::Point2>>,
         margin: f64,
+        /// Every boundary edge is a line, so the polygons are the face.
+        exact: bool,
     },
     /// Analytic lateral face (cylinder/cone/sphere/torus): bound by the
     /// axial `v` parameter range of the face and, for a partial-arc patch
@@ -1750,11 +1752,20 @@ impl FaceExtent {
             );
             let extent = bb.max - bb.min;
             let smaller = extent.x().abs().min(extent.y().abs());
+            let exact = std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .filter_map(|w| topo.wire(w).ok())
+                .flat_map(|w| w.edges().to_vec())
+                .all(|oe| {
+                    topo.edge(oe.edge())
+                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+                });
             Some(Self::Plane {
                 frame,
                 poly,
                 holes,
                 margin: (smaller * 0.01).max(tol.linear),
+                exact,
             })
         } else {
             // A whole, untrimmed torus has no `v_range` (its boundary is the
@@ -1887,6 +1898,24 @@ impl FaceExtent {
         }
     }
 
+    /// Whether the strict test reads the face itself rather than a sampled
+    /// stand-in for a curved boundary: a plane bounded by lines, a cylinder
+    /// or cone band between rulings and coaxial circles, or a face whose
+    /// sampled `(u, v)` boundary sags off its edges by no more than 1e-6.
+    fn is_exact(&self) -> bool {
+        match self {
+            Self::Plane { exact, .. } => *exact,
+            Self::Analytic {
+                exact_window,
+                uv_poly,
+                ..
+            } => match uv_poly {
+                Some((_, band)) => *band <= 1e-6,
+                None => *exact_window,
+            },
+        }
+    }
+
     /// Whether `p` lies past a face's `v` window by more than `depth`: in
     /// its boundary margin at most, never on the face. Only a window known to
     /// be exact answers (a plane's is a sampled polygon an arc bulges past).
@@ -1960,6 +1989,7 @@ impl FaceExtent {
                 poly,
                 holes,
                 margin,
+                ..
             } => {
                 let uv = frame.project(p);
                 let in_outer = crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
@@ -3060,17 +3090,29 @@ fn emit_curve_windows(
             }
         }
         // The run's own end samples can pass on the margin alone, standing
-        // outside the face by up to the margin: bisect each end from the
-        // outermost sample the strict test holds, or the end stays there (a
-        // strut facet's section ran 0.018 past the facet's edge onto the
-        // cylinder it crosses, and the chain it closes was pruned).
+        // outside the face by up to the margin: where every face whose strict
+        // test rejects an end sample reads the face itself, bisect that end
+        // from the outermost sample the strict test holds, or the end stays
+        // there (a strut facet's section ran 0.018 past the facet's edge onto
+        // the cylinder it crosses, and the chain it closes was pruned). A
+        // sampled boundary sags inside a curved edge, so there the strict
+        // bracket would stop short of it.
+        let exact_rejects = |i: usize| {
+            let p = point_at(t_at(i));
+            (ext_a.is_exact() || ext_a.contains_strict(p, 0.0))
+                && (ext_b.is_exact() || ext_b.contains_strict(p, 0.0))
+        };
         let (first_in, last_in) = match anchor {
             Some(a) => (
-                a,
-                (a..=r1.min(n))
-                    .rev()
-                    .find(|&i| strict_inside(t_at(i)))
-                    .unwrap_or(a),
+                if exact_rejects(r0) { a } else { r0 },
+                if r1 <= n && exact_rejects(r1) {
+                    (a..=r1)
+                        .rev()
+                        .find(|&i| strict_inside(t_at(i)))
+                        .unwrap_or(a)
+                } else {
+                    r1
+                },
             ),
             None => (r0, r1),
         };
