@@ -481,15 +481,21 @@ fn check_edge_face_pairs(
                     &curve, start_pos, end_pos, t0, t1, surface, hull, tol,
                 ),
             };
-            // A NURBS edge crossing a cylinder or cone between two samples
-            // (an envelope's corner curve through a pocket's floor fillet)
-            // shows only as the side of the surface flipping. Its unbounded
-            // surface meets far more of the edge than the face does, and this
-            // face's containment is a box, so a flip counts only where the
-            // face's own wires hold it. A line's crossings are the roots of
-            // a quadratic, exact wherever they fall between two samples.
-            if matches!(curve, EdgeCurve::NurbsCurve(_) | EdgeCurve::Line)
-                && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+            // A curved edge crossing a cylinder or cone between two samples
+            // (an envelope's corner curve through a pocket's floor fillet, a
+            // half-disc's rim just poking through a frustum's wall) shows only
+            // as the side of the surface flipping. Its unbounded surface
+            // meets far more of the edge than the face does, and this face's
+            // containment is a box, so a flip counts only where the face's
+            // own wires hold it. A line's crossings are the roots of a
+            // quadratic, exact wherever they fall between two samples.
+            if matches!(
+                curve,
+                EdgeCurve::NurbsCurve(_)
+                    | EdgeCurve::Line
+                    | EdgeCurve::Circle(_)
+                    | EdgeCurve::Ellipse(_)
+            ) && matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
                 && let Some(trim) = trims[face_idx]
                     .get_or_insert_with(|| {
                         crate::classifier::LateralTrim::new(topo, fid)
@@ -515,8 +521,18 @@ fn check_edge_face_pairs(
                 };
                 // The sample scan may already hold this root; two roots a
                 // sample step apart are still two crossings.
+                // A rim meeting the face only on one of the face's own wires
+                // (a knuckle neck's rim in the plane of a lid knuckle's end)
+                // is the coplanar-rim configuration the splitters handle from
+                // the faces' boundaries; such a flip adds no crossing.
+                let rim = matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
                 for (t, p) in found {
-                    if trim.holds(p, 10.0 * tol.linear)
+                    let held = if rim {
+                        trim.holds_clear(p, 10.0 * tol.linear)
+                    } else {
+                        trim.holds(p, 10.0 * tol.linear)
+                    };
+                    if held
                         && !crossings
                             .iter()
                             .any(|&(_, cp)| (p - cp).length() < tol.linear * 100.0)
