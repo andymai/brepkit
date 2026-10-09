@@ -1513,18 +1513,25 @@ fn seam_anchor_on_winding_loop(
     face: &Face,
     nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
 ) -> Option<(Point3, f64)> {
-    use std::f64::consts::{PI, TAU};
     const SAMPLES: u32 = 64;
     let surface = face.surface();
-    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
-        return None;
-    }
+    // A cylinder's or cone's angle, or a NURBS tube's `u` closed over its
+    // knot span.
+    let period = match surface {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => std::f64::consts::TAU,
+        FaceSurface::Nurbs(n) if n.is_periodic_u() => {
+            let (u0, u1) = n.domain_u();
+            u1 - u0
+        }
+        _ => return None,
+    };
+    let half = 0.5 * period;
     let (t0, t1) = nurbs.domain();
     if (nurbs.evaluate(t0) - nurbs.evaluate(t1)).length() > SEAM_ON_CIRCLE_TOL {
         return None;
     }
     let seam_u = face_seam_u(topo, face)?;
-    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let wrap = |d: f64| (d + half).rem_euclid(period) - half;
     let delta = |t: f64| {
         surface
             .project_point(nurbs.evaluate(t))
@@ -1537,12 +1544,12 @@ fn seam_anchor_on_winding_loop(
     for k in 1..=SAMPLES {
         let d = delta(param(k))?;
         winding += wrap(d - prev);
-        if crossing.is_none() && prev * d < 0.0 && (prev - d).abs() < PI {
+        if crossing.is_none() && prev * d < 0.0 && (prev - d).abs() < half {
             crossing = Some((param(k - 1), param(k), prev));
         }
         prev = d;
     }
-    if (winding.abs() - TAU).abs() > 0.5 {
+    if (winding.abs() - period).abs() > 0.5 * period / std::f64::consts::TAU {
         return None;
     }
     let (mut lo, mut hi, d_lo) = crossing?;

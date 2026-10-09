@@ -1722,8 +1722,6 @@ fn split_periodic_face_by_winding_chain(
     face_id: FaceId,
     tol: f64,
 ) -> Option<Vec<SplitSubFace>> {
-    use std::f64::consts::{PI, TAU};
-
     struct Separator {
         v_seam: f64,
         v_opposite: f64,
@@ -1731,9 +1729,8 @@ fn split_periodic_face_by_winding_chain(
         upper: Vec<OrientedPCurveEdge>,
     }
 
-    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
-        return None;
-    }
+    let (u_start, period) = special_cases::band_period(surface)?;
+    let half = 0.5 * period;
     let close_tol = tol * 100.0;
 
     // Every section must belong to some winding chain; any other section
@@ -1742,7 +1739,7 @@ fn split_periodic_face_by_winding_chain(
     let mut free: Vec<usize> = (0..sections.len()).collect();
     while !free.is_empty() {
         let subset: Vec<SectionEdge> = free.iter().map(|&i| sections[i].clone()).collect();
-        let (chain, _winding) = winding_section_chain(&subset, surface, tol, true)?;
+        let (chain, _winding) = winding_chain_in(&subset, surface, tol, true, period)?;
         let used: Vec<usize> = chain.iter().map(|&(k, _)| free[k]).collect();
         chains.push(chain.iter().map(|&(k, fwd)| (free[k], fwd)).collect());
         free.retain(|i| !used.contains(i));
@@ -1761,8 +1758,8 @@ fn split_periodic_face_by_winding_chain(
         q_top,
         lower_tan: ref_tan,
     } = special_cases::band_stack(surface, boundary_edges, close_tol)?;
-    let wrap_pi = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
-    let u_opposite = (seam_u + PI).rem_euclid(TAU);
+    let wrap_pi = |d: f64| -> f64 { (d + half).rem_euclid(period) - half };
+    let u_opposite = (seam_u + half - u_start).rem_euclid(period) + u_start;
 
     let traversal_start = |&(idx, fwd): &(usize, bool)| -> Point3 {
         let s = &sections[idx];
@@ -2417,12 +2414,23 @@ fn winding_section_chain(
     tol: f64,
     along_pieces: bool,
 ) -> Option<(Vec<(usize, bool)>, f64)> {
-    use std::collections::HashMap;
-    use std::f64::consts::{PI, TAU};
-
     let (Some(_), _) = super::pcurve_compute::surface_periods(surface) else {
         return None;
     };
+    winding_chain_in(sections, surface, tol, along_pieces, std::f64::consts::TAU)
+}
+
+/// [`winding_section_chain`] on a lateral whose `u` turns over `period`.
+fn winding_chain_in(
+    sections: &[SectionEdge],
+    surface: &FaceSurface,
+    tol: f64,
+    along_pieces: bool,
+    period: f64,
+) -> Option<(Vec<(usize, bool)>, f64)> {
+    use std::collections::HashMap;
+
+    let half = 0.5 * period;
     if sections.len() < if along_pieces { 1 } else { 2 } {
         return None;
     }
@@ -2435,7 +2443,7 @@ fn winding_section_chain(
             (p.z() * qscale).round() as i64,
         )
     };
-    let wrap_pi = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
+    let wrap_pi = |d: f64| -> f64 { (d + half).rem_euclid(period) - half };
 
     // Endpoint-keyed adjacency: (piece index, leaves-from-start).
     let mut adj: HashMap<(i64, i64, i64), Vec<(usize, bool)>> = HashMap::new();
@@ -2490,7 +2498,7 @@ fn winding_section_chain(
             forward = next.1;
             cur = next.0;
         }
-        if closed && winding.abs() > PI {
+        if closed && winding.abs() > half {
             return Some((chain, winding));
         }
     }
@@ -6037,7 +6045,11 @@ fn split_face_2d_impl(
     // into stacked bands, not discs. Requires seam-anchored circles (see
     // the seam-anchor pre-pass in fill_images_faces); falls through to the
     // generic paths when preconditions don't hold.
-    if u_periodic
+    // A NURBS tube closed in `u` (swept, lofted, or converted from a
+    // cylinder) reads its `u` as non-periodic everywhere else, but its rims
+    // and winding sections stack into bands just the same.
+    let closed_nurbs = matches!(&surface, FaceSurface::Nurbs(n) if n.is_periodic_u());
+    if (u_periodic || closed_nurbs)
         && !is_plane
         && original_inner_wires.is_empty()
         && let Some(bands) = split_periodic_face_into_bands(
@@ -6059,7 +6071,7 @@ fn split_face_2d_impl(
     // cone∪box fuse: 4 corner ring-arcs + 4 wall arches). The greedy and
     // DCEL both mistrace the chain's identical-tangent parallel twins, so
     // the bands are emitted directly.
-    if u_periodic
+    if (u_periodic || closed_nurbs)
         && !is_plane
         && original_inner_wires.is_empty()
         && let Some(bands) = split_periodic_face_by_winding_chain(

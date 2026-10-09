@@ -1788,6 +1788,46 @@ impl BandEnd<'_> {
     }
 }
 
+/// Where a lateral's `u` starts and the turn it spans: a cylinder's or
+/// cone's angle, or a NURBS patch closed in `u` (a tube swept, lofted or
+/// converted from a cylinder), whose turn is its knot span.
+pub(super) fn band_period(surface: &FaceSurface) -> Option<(f64, f64)> {
+    match surface {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => Some((0.0, std::f64::consts::TAU)),
+        FaceSurface::Nurbs(n) if n.is_periodic_u() => {
+            let (u0, u1) = n.domain_u();
+            (u1 > u0).then_some((u0, u1 - u0))
+        }
+        _ => None,
+    }
+}
+
+/// Whether a closed curve winds a lateral of `u` period `period` once.
+fn winds_once(
+    surface: &FaceSurface,
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    period: f64,
+) -> Option<bool> {
+    const SAMPLES: u32 = 64;
+    let half = 0.5 * period;
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let us: Vec<f64> = (0..=SAMPLES)
+        .map(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            surface
+                .project_point(curve.evaluate_with_endpoints(t, start, end))
+                .map(|(u, _)| u)
+        })
+        .collect::<Option<_>>()?;
+    let turn: f64 = us
+        .windows(2)
+        .map(|w| (w[1] - w[0] + half).rem_euclid(period) - half)
+        .sum();
+    Some(turn.abs() > half)
+}
+
 /// Read a lateral's boundary as a band stack: closed rims plus seam lines on
 /// one meridian, where a pointed cone's seam runs up to its apex in place of
 /// a second rim. A rim is a circle or a closed curve that winds the lateral
@@ -1798,9 +1838,10 @@ pub(super) fn band_stack<'a>(
     boundary_edges: &'a [OrientedPCurveEdge],
     close_tol: f64,
 ) -> Option<BandStack<'a>> {
-    use std::f64::consts::{PI, TAU};
     const RIM_SAMPLES: u32 = 64;
-    let wrap = |d: f64| (d + PI).rem_euclid(TAU) - PI;
+    let (u_start, period) = band_period(surface)?;
+    let half = 0.5 * period;
+    let wrap = |d: f64| (d + half).rem_euclid(period) - half;
     // A closed curve's `(u, v)` samples along its own domain, in its sense.
     let rim_samples = |e: &OrientedPCurveEdge| -> Option<Vec<(f64, f64)>> {
         let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
@@ -1813,9 +1854,6 @@ pub(super) fn band_stack<'a>(
     };
     let turn_of = |uv: &[(f64, f64)]| -> f64 { uv.windows(2).map(|w| wrap(w[1].0 - w[0].0)).sum() };
 
-    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
-        return None;
-    }
     let apex = match surface {
         FaceSurface::Cone(c) => Some(c.apex()),
         _ => None,
@@ -1830,7 +1868,7 @@ pub(super) fn band_stack<'a>(
         match (&e.curve_3d, is_closed) {
             (EdgeCurve::Circle(_), true) => rims.push(e),
             (EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_), true)
-                if turn_of(&rim_samples(e)?).abs() > PI =>
+                if turn_of(&rim_samples(e)?).abs() > half =>
             {
                 rims.push(e);
             }
@@ -1850,7 +1888,7 @@ pub(super) fn band_stack<'a>(
     let (seam_u, _) = surface.project_point(*seam_points.first()?)?;
     for &p in &seam_points {
         let (u, _) = surface.project_point(p)?;
-        if ((u - seam_u + PI).rem_euclid(TAU) - PI).abs() > 1e-6 {
+        if wrap(u - seam_u).abs() > 1e-6 {
             return None;
         }
     }
@@ -1873,7 +1911,7 @@ pub(super) fn band_stack<'a>(
         };
         Some(if e.forward { t } else { -t })
     };
-    let u_opposite = (seam_u + PI).rem_euclid(TAU);
+    let u_opposite = (seam_u + half - u_start).rem_euclid(period) + u_start;
     // A rim's `v` on the meridian opposite the seam.
     let rim_q = |e: &OrientedPCurveEdge, v: f64| -> Option<f64> {
         if matches!(e.curve_3d, EdgeCurve::Circle(_)) {
@@ -2613,9 +2651,10 @@ pub(super) fn split_periodic_face_into_bands(
 ) -> Option<Vec<SplitSubFace>> {
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::vec::{Point2, Vec2};
-    use std::f64::consts::{PI, TAU};
 
     let close_tol = tol * 100.0;
+    let (u_start, period) = band_period(surface)?;
+    let half = 0.5 * period;
     let BandStack {
         seam_u,
         v_bot,
@@ -2643,16 +2682,48 @@ pub(super) fn split_periodic_face_into_bands(
     // Collect section circles with their v and natural-direction alignment.
     struct BandCircle {
         v: f64,
+        /// Its `v` on the meridian opposite the seam: a winding loop on a
+        /// NURBS tube need not keep one `v` round it.
+        q: f64,
         lower: OrientedPCurveEdge,
         upper: OrientedPCurveEdge,
     }
+    let u_opposite = (seam_u + half - u_start).rem_euclid(period) + u_start;
+    let q_of = |s: &SectionEdge, v: f64| -> Option<f64> {
+        if matches!(s.curve_3d, EdgeCurve::Circle(_)) {
+            return Some(v);
+        }
+        let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        (0..=64)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(f64::from(k) / 64.0, t0);
+                surface.project_point(s.curve_3d.evaluate_with_endpoints(t, s.start, s.end))
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .min_by(|a, b| {
+                let off = |u: f64| ((u - u_opposite + half).rem_euclid(period) - half).abs();
+                off(a.0).total_cmp(&off(b.0))
+            })
+            .map(|(_, q)| q)
+    };
     let mut mids: Vec<BandCircle> = Vec::with_capacity(sections.len());
     for s in sections {
         if (s.start - s.end).length() > close_tol {
             return None;
         }
-        let EdgeCurve::Circle(c) = &s.curve_3d else {
-            return None;
+        // On a NURBS tube a section winding it once is a marched or fitted
+        // loop rather than a circle, and runs its own sense from its start.
+        let natural_tan = match &s.curve_3d {
+            EdgeCurve::Circle(c) => c.tangent(c.project(s.start)),
+            EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_)
+                if matches!(surface, FaceSurface::Nurbs(_))
+                    && winds_once(surface, &s.curve_3d, s.start, s.end, period)? =>
+            {
+                let (t0, _) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+                s.curve_3d.tangent_with_endpoints(t0, s.start, s.end)
+            }
+            _ => return None,
         };
         let (_, v) = surface.project_point(s.start)?;
         let on_seam = surface.evaluate(seam_u, v)?;
@@ -2667,7 +2738,6 @@ pub(super) fn split_periodic_face_into_bands(
         if v < v_bot || v > v_top {
             return None;
         }
-        let natural_tan = c.tangent(c.project(s.start));
         let lower_fwd = natural_tan.dot(ref_tan) > 0.0;
         let pcurve = match rank {
             Rank::A => &s.pcurve_a,
@@ -2686,6 +2756,7 @@ pub(super) fn split_periodic_face_into_bands(
         };
         mids.push(BandCircle {
             v,
+            q: q_of(s, v)?,
             lower: mk(lower_fwd),
             upper: mk(!lower_fwd),
         });
@@ -2727,7 +2798,7 @@ pub(super) fn split_periodic_face_into_bands(
     let mut levels: Vec<Level> = Vec::new();
     levels.push((v_bot, q_bot, bot.edges(), bot.edges()));
     for m in mids {
-        levels.push((m.v, m.v, vec![m.lower], vec![m.upper]));
+        levels.push((m.v, m.q, vec![m.lower], vec![m.upper]));
     }
     levels.push((v_top, q_top, top.edges(), top.edges()));
 
@@ -2740,7 +2811,7 @@ pub(super) fn split_periodic_face_into_bands(
         wire.push(mk_seam(va, vb)?);
         wire.extend(upper.iter().cloned());
         wire.push(mk_seam(vb, va)?);
-        let interior = surface.evaluate((seam_u + PI).rem_euclid(TAU), f64::midpoint(*qa, *qb))?;
+        let interior = surface.evaluate(u_opposite, f64::midpoint(*qa, *qb))?;
         bands.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
