@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791565160603,
+  "lastUpdate": 1791567934247,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53675,6 +53675,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 51299536,
             "range": "± 88526",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c5ebacbba9f456c784785ce3925f10e6941c526c",
+          "message": "chore(main): release 4.1.46 (#2024)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.1.46](https://github.com/andymai/brepkit/compare/v4.1.45...v4.1.46)\n(2026-10-09)\n\n\n### Bug Fixes\n\n* **algo:** read plane sections against curved edges, not chords\n([#2023](https://github.com/andymai/brepkit/issues/2023))\n([24f59fd](https://github.com/andymai/brepkit/commit/24f59fd9bf5341560c7821bcc21966e874eb970c))\n* **math:** find corner NURBS sections and end them on edges\n([#2022](https://github.com/andymai/brepkit/issues/2022))\n([b6d2d36](https://github.com/andymai/brepkit/commit/b6d2d36354c50cd602646cea78efe17c400a6735))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-09T17:42:58Z",
+          "tree_id": "ec85343284138bc0052b72dfe09c8d4916b34972",
+          "url": "https://github.com/andymai/brepkit/commit/c5ebacbba9f456c784785ce3925f10e6941c526c"
+        },
+        "date": 1791567927812,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 858369,
+            "range": "± 1263",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 930953,
+            "range": "± 1937",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11132,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 630001,
+            "range": "± 840",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 40094424,
+            "range": "± 313948",
             "unit": "ns/iter"
           }
         ]
