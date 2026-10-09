@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.48](https://github.com/andymai/brepkit/compare/v4.1.47...v4.1.48) (2026-10-09)
+
+
+### Bug Fixes
+
+* **algo:** split closed NURBS tubes into bands ([#2027](https://github.com/andymai/brepkit/issues/2027)) ([5963769](https://github.com/andymai/brepkit/commit/59637690c4d7430b897de36274fa31a718ddbc0d))
+
 ## [4.1.47](https://github.com/andymai/brepkit/compare/v4.1.46...v4.1.47) (2026-10-09)
 
 
