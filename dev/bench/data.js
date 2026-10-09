@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791571329848,
+  "lastUpdate": 1791573934124,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53837,6 +53837,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47572435,
             "range": "± 39184",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "59637690c4d7430b897de36274fa31a718ddbc0d",
+          "message": "fix(algo): split closed NURBS tubes into bands (#2027)\n\nCuts by a rod converted with `convert_to_bspline` through a box, a\ncylinder and a frustum, and by a rod scaled across its axis through a\nbox, are now exact and valid: eight cases, all of which fell back to the\nmesh on main. The converted rod cuts match the unconverted rod cuts\nwithin a part in ten thousand. The box cut measures 116.4123, compared\nwith 116.4106 for the unconverted rod.\n\n## Changes\n\n- The face splitter previously read every NURBS face as non-periodic.\nThe converted rod wall is closed in `u`, so its seam, rims, and closed\nexit loops all appeared at `u` 0 in `(u, v)`, and the wall split into\nnothing.\n- `split_periodic_face_into_bands`,\n`split_periodic_face_by_winding_chain`, `band_stack`, and\n`seam_anchor_on_winding_loop` now accept a NURBS face closed in `u`. Its\nknot span supplies the turn that a cylinder or cone receives from its\nangle.\n- A NURBS band separator may be a closed loop of any curve type that\nwinds once around the face. Cylinders and cones retain their angle and\ncircle-only band sections.\n- `winding_section_chain` retains its analytic gate for other callers.\nIts shared walk now takes the period as a parameter.\n\n## Tests\n\n- `a_converted_rod_cuts_a_box_a_cylinder_and_a_frustum_exactly` covers\n`make_cylinder(0.6, 10)` along x through `(0, y, 3)` at y 0 and 0.3,\nconverted with `convert_to_bspline`, and cut from a 4.5 by 4.5 by 6 box,\n`make_cylinder(2.25, 6)`, and `make_cone(3, 1.5, 6)`.\n- Each case checks no mesh fallback, a valid solid, volume within a part\nin a thousand of the unconverted rod cut, and four point probes.\n- `a_box_cut_by_a_rod_scaled_across_its_axis_loses_the_tube` covers the\nrod scaled 1.5 along y about its axis. It checks no fallback, validity,\nand the box less the 4.5 long elliptic tube within a part in a thousand.\n- Both tests fail on main, where every reproduced cut falls back to the\nmesh.\n\n## Verification\n\n- The math, heal, algo, check, operations, io, and wasm suites pass\nunder the profiling profile, totaling 3,011 tests.\n- `pose_sweep` has 495 rows and `truth_audit` has 40 rows. Both are\nidentical to main.\n\n## Still open\n\n- The roadmap row for NURBS faces closed on themselves records that a\nsolid mesh can leave a row unjoined, and that splits other than bands\nare unmeasured.\n- A Closed entry records this fix.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes cuts by a rod converted with `convert_to_bspline` or scaled across\nits axis so they stay exact instead of falling back to the mesh. The\nface splitter read every NURBS face as non-periodic, so a NURBS tube\nclosed in `u` had its seam, rims, and section loops all at `u` 0 and\nsplit into nothing; the band splitters now take such a face and use its\nknot span as the turn. Eight cases — a converted or scaled rod through a\nbox, a cylinder, and a frustum — now match the unconverted rod cuts\nwithin a part in ten thousand.\n\n- `split_periodic_face_into_bands`,\n`split_periodic_face_by_winding_chain`, `band_stack`, and\n`seam_anchor_on_winding_loop` now accept a NURBS face closed in `u`.\n- On a NURBS face a band separator may be a closed loop of any curve\ntype winding once; cylinders and cones keep their angle and circle-only\nsections.\n- A winding separator's `v` on the meridian opposite the seam is now\nsampled at that meridian, since a loop binding a NURBS tube need not\nhold one `v` round it.\n- `winding_section_chain` keeps its analytic gate; the shared walk takes\nthe period as a parameter.\n- Both new tests fail on main, where every reproduced cut falls back to\nthe mesh.\n\n<sup>Written for commit f69eb43a1176bbd5c86d335b3a5aa00d8e171282.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2027?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2027?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2027&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-09T19:22:37Z",
+          "tree_id": "d19d6ebbb50b81a21cc81e9039f631c778759b5c",
+          "url": "https://github.com/andymai/brepkit/commit/59637690c4d7430b897de36274fa31a718ddbc0d"
+        },
+        "date": 1791573925388,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1062799,
+            "range": "± 12177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1145835,
+            "range": "± 1115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13104,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 796076,
+            "range": "± 1166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47764645,
+            "range": "± 243366",
             "unit": "ns/iter"
           }
         ]
