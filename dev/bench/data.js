@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791573934124,
+  "lastUpdate": 1791576338892,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53891,6 +53891,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47764645,
             "range": "± 243366",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0eb66dffe15098913ebaac28a6a0c69ff26cfe34",
+          "message": "test(operations): pin revolved elliptic ring point classification (#2029)\n\nThe roadmap row \"The ray-cast classifier misreads points inside a\nrevolved elliptic ring\" said `classify_point` read the points at radius\n3 and height 0.3, at 90 and 180 degrees, as outside the ring\n`an_ellipse_revolves_to_an_elliptic_ring` builds. That no longer\nreproduces. On main, `classify_point` reads all 648 probed points of the\nrevolved elliptic ring as the tube does. The probe covers nine radius\nand height pairs at every 5 degrees, including radius 3 and height 0.3.\n\n`an_ellipse_revolves_to_an_elliptic_ring` now pins 96 points: four\nradius and height pairs at every 15 degrees, with two inside the tube\nand two outside. The ring is built from an ellipse with semi-axes 1 and\n0.5, centred 3 from the axis, and revolved a full turn. The roadmap row\nmoves to Closed.\n\n## Tests\n\n- The test file passes.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a stale roadmap row about the ray-cast classifier misreading\npoints inside a revolved elliptic ring. Re-measuring on main shows\n`classify_point` correctly reads all 648 probed points, so the test now\npins 96 points at four radius/height pairs every 15 degrees to guard\nagainst regression, and the row moves to Closed.\n\n<sup>Written for commit 5a463a5af5971c4d589f305842731ff427d15a65.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2029?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2029?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2029&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-09T20:02:34Z",
+          "tree_id": "ec8aa44644819064093a41472556a0e07ba8e871",
+          "url": "https://github.com/andymai/brepkit/commit/0eb66dffe15098913ebaac28a6a0c69ff26cfe34"
+        },
+        "date": 1791576332472,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1068420,
+            "range": "± 23157",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1153727,
+            "range": "± 24985",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13004,
+            "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 794184,
+            "range": "± 7374",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47857236,
+            "range": "± 69825",
             "unit": "ns/iter"
           }
         ]
