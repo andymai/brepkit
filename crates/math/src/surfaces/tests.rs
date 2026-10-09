@@ -649,3 +649,43 @@ fn rational_torus_lies_on_the_torus() {
         }
     }
 }
+
+/// A turned surface is the same surface read from another angle: each
+/// point a quarter turn on at the same `u` here sits at `u` plus the turn.
+#[test]
+fn a_turned_surface_reads_its_points_a_turn_on() {
+    let axis = Vec3::new(0.3, -0.5, 0.8);
+    let origin = Point3::new(1.0, 2.0, -0.5);
+    let cylinder = CylindricalSurface::new(origin, axis, 1.25).unwrap();
+    let cone = ConicalSurface::new(origin, axis, 0.6).unwrap();
+    let sphere =
+        SphericalSurface::with_axis_and_ref_dir(origin, 2.0, axis, Vec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+    let torus =
+        ToroidalSurface::with_axis_and_ref_dir(origin, 3.0, 0.75, axis, Vec3::new(1.0, 0.0, 0.0))
+            .unwrap();
+    let turn = 1.9;
+    for (u, v) in [(0.0, 0.4), (2.5, 1.1), (5.9, 0.2)] {
+        let pairs = [
+            (
+                cylinder.turned(turn).evaluate(u, v),
+                cylinder.evaluate(u + turn, v),
+            ),
+            (cone.turned(turn).evaluate(u, v), cone.evaluate(u + turn, v)),
+            (
+                sphere.turned(turn).evaluate(u, v),
+                sphere.evaluate(u + turn, v),
+            ),
+            (
+                torus.turned(turn).evaluate(u, v),
+                torus.evaluate(u + turn, v),
+            ),
+        ];
+        for (k, (turned, original)) in pairs.iter().enumerate() {
+            assert!(
+                (*turned - *original).length() < 1e-12,
+                "surface {k} at ({u}, {v})"
+            );
+        }
+    }
+}

@@ -17,13 +17,14 @@
 //! silently misalign without re-projection. Callers that need pcurves should
 //! recompute them after this op.
 
-use std::f64::consts::TAU;
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use crate::construct::convert_surface::{
     cone_to_nurbs, cylinder_to_nurbs, sphere_to_nurbs, torus_to_nurbs,
 };
 use brepkit_geometry::convert::curve_to_nurbs::{circle_to_nurbs, ellipse_to_nurbs, line_to_nurbs};
 use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::surfaces::{ConicalSurface, SphericalSurface};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -72,18 +73,26 @@ fn convert_face_surface(topo: &mut Topology, fid: FaceId) -> Result<bool, HealEr
     let nurbs = match surface {
         FaceSurface::Plane { normal, d } => plane_face_to_nurbs(topo, fid, normal, d)?,
         FaceSurface::Cylinder(c) => {
+            let c = c.turned(patch_start_angle(topo, fid, |p| {
+                Some(c.project_point(p).0)
+            })?);
             let v_range = surface_v_range(topo, fid, |p| c.project_point(p).1)?;
             cylinder_to_nurbs(&c, v_range)?
         }
         FaceSurface::Cone(c) => {
+            let c = c.turned(patch_start_angle(topo, fid, |p| cone_angle(&c, p))?);
             let (mut v_lo, v_hi) = surface_v_range(topo, fid, |p| c.project_point(p).1)?;
             // The rational form needs a nonzero radius row, so a face that
             // reaches the apex keeps a vanishing ring there.
             v_lo = v_lo.max((1e-9 * v_hi.abs().max(1.0)).min(0.1 * Tolerance::new().linear));
             cone_to_nurbs(&c, (v_lo, v_hi.max(v_lo * 2.0)))?
         }
-        FaceSurface::Sphere(s) => sphere_to_nurbs(&s)?,
-        FaceSurface::Torus(t) => torus_to_nurbs(&t)?,
+        FaceSurface::Sphere(s) => {
+            sphere_to_nurbs(&s.turned(patch_start_angle(topo, fid, |p| sphere_angle(&s, p))?))?
+        }
+        FaceSurface::Torus(t) => torus_to_nurbs(&t.turned(patch_start_angle(topo, fid, |p| {
+            Some(t.project_point(p).0)
+        })?))?,
         FaceSurface::Nurbs(_) => return Ok(false),
     };
 
@@ -197,6 +206,87 @@ fn boundary_points(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>, Heal
         }
     }
     Ok(points)
+}
+
+/// The angle about a surface of revolution's axis at which a closed NURBS
+/// patch of the face should start.
+///
+/// The face then never straddles the patch's own seam: the patch starts at
+/// the face's seam when it winds the whole turn (a ruling or meridian its
+/// wires run twice), else at the middle of the widest angle its boundary
+/// leaves uncovered. `angle_of` reads a point's angle, `None` on the axis.
+///
+/// # Errors
+///
+/// Returns [`HealError`] if a topology lookup fails.
+pub fn patch_start_angle(
+    topo: &Topology,
+    face_id: FaceId,
+    angle_of: impl Fn(Point3) -> Option<f64>,
+) -> Result<f64, HealError> {
+    let apart = |a: f64, b: f64| ((a - b + PI).rem_euclid(TAU) - PI).abs();
+    let face = topo.face(face_id)?;
+    // A seam is one segment the wires run twice: the same edge, or two
+    // edges joining the same pair of points. Two rulings at one angle that
+    // only share it (the sides of two holes) leave material between them.
+    let mut rulings: Vec<(EdgeId, Point3, Point3)> = Vec::new();
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let at = |f: f64| {
+                angle_of(
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), start, end),
+                )
+            };
+            let (Some(a), Some(b), Some(c)) = (at(0.25), at(0.5), at(0.75)) else {
+                continue;
+            };
+            if apart(a, b) > 1e-7 || apart(b, c) > 1e-7 {
+                continue;
+            }
+            let near = |p: Point3, q: Point3| (p - q).length() <= Tolerance::new().linear;
+            if rulings.iter().any(|&(eid, p, q)| {
+                eid == oe.edge()
+                    || (near(p, start) && near(q, end))
+                    || (near(p, end) && near(q, start))
+            }) {
+                return Ok(b.rem_euclid(TAU));
+            }
+            rulings.push((oe.edge(), start, end));
+        }
+    }
+    let mut angles: Vec<f64> = boundary_points(topo, face_id)?
+        .into_iter()
+        .filter_map(&angle_of)
+        .map(|a| a.rem_euclid(TAU))
+        .collect();
+    angles.sort_by(f64::total_cmp);
+    let (Some(&first), Some(&last)) = (angles.first(), angles.last()) else {
+        return Ok(0.0);
+    };
+    let (mut width, mut from) = (first + TAU - last, last);
+    for w in angles.windows(2) {
+        if w[1] - w[0] > width {
+            (width, from) = (w[1] - w[0], w[0]);
+        }
+    }
+    Ok(width.mul_add(0.5, from).rem_euclid(TAU))
+}
+
+fn cone_angle(cone: &ConicalSurface, p: Point3) -> Option<f64> {
+    let (u, v) = cone.project_point(p);
+    (v.abs() > 1e-9).then_some(u)
+}
+
+fn sphere_angle(sphere: &SphericalSurface, p: Point3) -> Option<f64> {
+    let (u, v) = sphere.project_point(p);
+    (v.abs() < FRAC_PI_2 - 1e-9).then_some(u)
 }
 
 /// The span of a surface parameter over a face's boundary. The patch ends

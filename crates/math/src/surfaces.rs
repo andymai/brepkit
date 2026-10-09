@@ -134,6 +134,19 @@ impl CylindricalSurface {
         }
     }
 
+    /// This surface with its `u` origin turned `angle` about the axis: the
+    /// same points, its `evaluate(u, v)` being this one's
+    /// `evaluate(u + angle, v)`.
+    #[must_use]
+    pub fn turned(&self, angle: f64) -> Self {
+        let (sin_a, cos_a) = angle.sin_cos();
+        Self {
+            x_axis: self.x_axis * cos_a + self.y_axis * sin_a,
+            y_axis: self.y_axis * cos_a - self.x_axis * sin_a,
+            ..self.clone()
+        }
+    }
+
     /// Project a 3D point onto the cylinder surface, returning (u, v) parameters.
     ///
     /// `u` is the angular parameter [0, 2π), `v` is the axial parameter.
@@ -322,6 +335,19 @@ impl ConicalSurface {
     pub fn translated(&self, offset: Vec3) -> Self {
         Self {
             apex: self.apex + offset,
+            ..self.clone()
+        }
+    }
+
+    /// This surface with its `u` origin turned `angle` about the axis: the
+    /// same points, its `evaluate(u, v)` being this one's
+    /// `evaluate(u + angle, v)`.
+    #[must_use]
+    pub fn turned(&self, angle: f64) -> Self {
+        let (sin_a, cos_a) = angle.sin_cos();
+        Self {
+            x_axis: self.x_axis * cos_a + self.y_axis * sin_a,
+            y_axis: self.y_axis * cos_a - self.x_axis * sin_a,
             ..self.clone()
         }
     }
@@ -524,6 +550,19 @@ impl SphericalSurface {
     pub fn translated(&self, offset: Vec3) -> Self {
         Self {
             center: self.center + offset,
+            ..self.clone()
+        }
+    }
+
+    /// This surface with its `u` origin turned `angle` about the axis: the
+    /// same points, its `evaluate(u, v)` being this one's
+    /// `evaluate(u + angle, v)`.
+    #[must_use]
+    pub fn turned(&self, angle: f64) -> Self {
+        let (sin_a, cos_a) = angle.sin_cos();
+        Self {
+            x_axis: self.x_axis * cos_a + self.y_axis * sin_a,
+            y_axis: self.y_axis * cos_a - self.x_axis * sin_a,
             ..self.clone()
         }
     }
@@ -780,6 +819,19 @@ impl ToroidalSurface {
     pub fn translated(&self, offset: Vec3) -> Self {
         Self {
             center: self.center + offset,
+            ..self.clone()
+        }
+    }
+
+    /// This surface with its `u` origin turned `angle` about the axis: the
+    /// same points, its `evaluate(u, v)` being this one's
+    /// `evaluate(u + angle, v)`.
+    #[must_use]
+    pub fn turned(&self, angle: f64) -> Self {
+        let (sin_a, cos_a) = angle.sin_cos();
+        Self {
+            x_axis: self.x_axis * cos_a + self.y_axis * sin_a,
+            y_axis: self.y_axis * cos_a - self.x_axis * sin_a,
             ..self.clone()
         }
     }

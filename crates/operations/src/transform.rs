@@ -303,6 +303,7 @@ pub(crate) fn surface_image(
     use brepkit_heal::construct::convert_surface::{
         cone_to_nurbs, cylinder_to_nurbs, sphere_band_to_nurbs, torus_to_nurbs,
     };
+    use brepkit_heal::custom::convert_to_bspline::patch_start_angle;
     use brepkit_math::surfaces::{
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
     };
@@ -349,7 +350,9 @@ pub(crate) fn surface_image(
                 )
             } else {
                 let v_range = face_v_range(topo, fid, |pt| cyl.project_point(pt).1, None)?;
-                let nurbs = cylinder_to_nurbs(&cyl, v_range)
+                let start = patch_start_angle(topo, fid, |pt| Some(cyl.project_point(pt).0))
+                    .map_err(|e| heal_err("patch_start_angle", e))?;
+                let nurbs = cylinder_to_nurbs(&cyl.turned(start), v_range)
                     .map_err(|e| heal_err("cylinder_to_nurbs", e))?;
                 (
                     FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
@@ -376,8 +379,13 @@ pub(crate) fn surface_image(
                 )
             } else {
                 let v_range = face_v_range(topo, fid, |pt| cone.project_point(pt).1, Some(0.0))?;
-                let nurbs =
-                    cone_to_nurbs(&cone, v_range).map_err(|e| heal_err("cone_to_nurbs", e))?;
+                let start = patch_start_angle(topo, fid, |pt| {
+                    let (u, v) = cone.project_point(pt);
+                    (v.abs() > 1e-9).then_some(u)
+                })
+                .map_err(|e| heal_err("patch_start_angle", e))?;
+                let nurbs = cone_to_nurbs(&cone.turned(start), v_range)
+                    .map_err(|e| heal_err("cone_to_nurbs", e))?;
                 (
                     FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
                     false,
@@ -395,7 +403,12 @@ pub(crate) fn surface_image(
                 (FaceSurface::Sphere(image), !mirrored)
             } else {
                 let (v_min, v_max) = sphere_face_v_range(topo, fid, &sph)?;
-                let nurbs = sphere_band_to_nurbs(&sph, v_min, v_max)
+                let start = patch_start_angle(topo, fid, |pt| {
+                    let (u, v) = sph.project_point(pt);
+                    (v.abs() < std::f64::consts::FRAC_PI_2 - 1e-9).then_some(u)
+                })
+                .map_err(|e| heal_err("patch_start_angle", e))?;
+                let nurbs = sphere_band_to_nurbs(&sph.turned(start), v_min, v_max)
                     .map_err(|e| heal_err("sphere_band_to_nurbs", e))?;
                 (
                     FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
@@ -414,7 +427,10 @@ pub(crate) fn surface_image(
                 )?;
                 (FaceSurface::Torus(image), !mirrored)
             } else {
-                let nurbs = torus_to_nurbs(&tor).map_err(|e| heal_err("torus_to_nurbs", e))?;
+                let start = patch_start_angle(topo, fid, |pt| Some(tor.project_point(pt).0))
+                    .map_err(|e| heal_err("patch_start_angle", e))?;
+                let nurbs = torus_to_nurbs(&tor.turned(start))
+                    .map_err(|e| heal_err("torus_to_nurbs", e))?;
                 (
                     FaceSurface::Nurbs(transform_nurbs_surface(&nurbs, matrix)?),
                     false,
