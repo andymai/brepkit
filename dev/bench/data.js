@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1791555203257,
+  "lastUpdate": 1791558268908,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -53459,6 +53459,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 39422144,
             "range": "± 584830",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1419a014286ec7255363432d3690c1ecd09639b4",
+          "message": "fix: cut a prism poking through a frustum wall exactly (#2020)\n\nCutting `make_cone(3, 1.5, 6)` with a D-shaped prism that pokes through\nthe frustum wall now returns exact, valid, watertight solids without\nmesh fallback. The prism runs 1 deep along y from y = -0.9. Its profile\nhas a chord at x = 1.5 from z = 0.5 to 2.5 and an arch reaching x = 2.5.\nAt z = 1.5, its end reaches radius 2.66 past the wall at 2.625.\n\nOn main, the parabolic NURBS arch produced a valid watertight solid with\nvolume 98.027 instead of 97.627. The poke remained and one end cap was\nmissing. A half-disc arch produced eight faces, but `validate_solid`\nrejected three shared edges with inconsistent face orientations.\n\n## Changes\n\n- `analytic_nurbs_intersection` now marches against\n`ConicalSurface::to_rational_nurbs`, the exact rational NURBS formed by\na 9-point rational circle at each end and ruled between them.\nPreviously, the cone's 32 sampled bilinear spans sagged about half a\npercent inside the cone. Section ends missed the EF vertices by about\n0.02, beyond the splitter's 1e-5 threshold, so the arch face did not\nsplit.\n\n- `trim_open_curve_to_plane_face_lines` moves a boundary crossing to the\nregistered EF vertex on the section through\n`JunctionRegistry::crossing_on_curve`. Polygon chord bisection had left\nend-cap sections 0.0045 to 0.0076 off the curved arch edge.\n\n- The EF side-flip scan now covers circle and ellipse edges crossing\ncylinders or cones, not only NURBS edges. Crossings are retained only\nwhen `LateralTrim::holds_clear` keeps them clear of the face's own\nwires. This excludes the hinge seat contact on the end rim that made\n`hinge_lid_on_its_bin_overlaps_the_lip_exactly` fall back.\n\n## Tests\n\n- `crates/operations/tests/prism_through_a_frustum_wall.rs` adds\n`a_half_disc_prism_poking_through_a_frustum_wall_cuts_exactly`,\n`a_half_ellipse_prism_poking_through_a_frustum_wall_cuts_exactly`, and\n`an_arch_prism_poking_through_a_frustum_wall_cuts_exactly`. Each\nrequires no mesh fallback, a valid solid, a volume between the frustum\nless the whole prism and 0.02 more, and operand agreement on a 7 by 7 by\n12 point grid. The half-disc and arch tests fail on main.\n\n- With one fix reverted at a time: without the exact cone the arch test\nfails, without the section end move the half-disc and arch tests fail,\nwithout the rim scan the half-disc test fails, and with circles but not\nellipses in the scan the half-ellipse test fails.\n`rational_cone_lies_on_the_cone` checks 41 by 41 points within 1e-9.\n\n## Verification\n\n- The arch result is 97.628 against 97.627 for the frustum less the\nwhole prism. The half-disc result is 97.392 against 97.389.\n\n- The math, heal, algo, check, operations, io, and wasm suites pass\nunder the profiling profile, totaling 3,002 tests. `pose_sweep` matches\nmain across 495 rows. `truth_audit` matches across 40 rows except four\nexact-row error columns, all at or below 1e-12.\n\n## Still open\n\n- Widening the half-ellipse to 1.1 along x grazes the wall through its\nnear cap by less than the sag of the 16 boundary chords. The unclipped\nsection reaches the splitter and falls back on an open hole shell. This\nis a new roadmap row.\n\n- Mitsukude lattice piece 260 still falls back on an open hole shell\nwhere a strut meets the stacking lip's chamfer cone.\n\n- The cone ruling in-face window change stays on\n`wip/cone-ruling-windows` and is not in this PR, because none of the new\ntests needs it. Both open cases are in the roadmap's Mitsukude row.",
+          "timestamp": "2026-10-09T15:01:25Z",
+          "tree_id": "34673b1a03ae625bcf36c93f0fbefa9d33331df1",
+          "url": "https://github.com/andymai/brepkit/commit/1419a014286ec7255363432d3690c1ecd09639b4"
+        },
+        "date": 1791558263809,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1071832,
+            "range": "± 3965",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1155229,
+            "range": "± 901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12932,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 792657,
+            "range": "± 1737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 48060951,
+            "range": "± 108970",
             "unit": "ns/iter"
           }
         ]
