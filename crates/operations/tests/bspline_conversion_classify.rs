@@ -123,7 +123,16 @@ fn a_box_cut_by_a_rod_scaled_across_its_axis_loses_the_tube() {
         * Mat4::translation(0.0, -0.3, -3.0);
     transform_solid(&mut topo, rod, &stretch).unwrap();
     let volume = 4.5f64.mul_add(4.5 * 6.0, -(std::f64::consts::PI * 0.6 * 0.9 * 4.5));
-    assert_exact_cut(&mut topo, b, rod, volume);
+    let cut = assert_exact_cut(&mut topo, b, rod, volume);
+    for (p, want) in [
+        (Point3::new(0.0, 1.1, 3.0), PointClassification::Outside),
+        (Point3::new(2.0, 0.3, 3.5), PointClassification::Outside),
+        (Point3::new(0.0, 1.5, 3.0), PointClassification::Inside),
+        (Point3::new(1.5, 0.3, 4.0), PointClassification::Inside),
+    ] {
+        let class = classify_point(&topo, cut, p, 0.01, 1e-7).unwrap();
+        assert_eq!(class, want, "the cut at {p:?}");
+    }
 }
 
 /// A rod scaled 1.5 across its axis is an elliptic tube, its wall a NURBS

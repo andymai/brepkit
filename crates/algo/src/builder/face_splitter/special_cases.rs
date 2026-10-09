@@ -2682,9 +2682,31 @@ pub(super) fn split_periodic_face_into_bands(
     // Collect section circles with their v and natural-direction alignment.
     struct BandCircle {
         v: f64,
+        /// Its `v` on the meridian opposite the seam: a winding loop on a
+        /// NURBS tube need not keep one `v` round it.
+        q: f64,
         lower: OrientedPCurveEdge,
         upper: OrientedPCurveEdge,
     }
+    let u_opposite = (seam_u + half - u_start).rem_euclid(period) + u_start;
+    let q_of = |s: &SectionEdge, v: f64| -> Option<f64> {
+        if matches!(s.curve_3d, EdgeCurve::Circle(_)) {
+            return Some(v);
+        }
+        let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        (0..=64)
+            .map(|k| {
+                let t = (t1 - t0).mul_add(f64::from(k) / 64.0, t0);
+                surface.project_point(s.curve_3d.evaluate_with_endpoints(t, s.start, s.end))
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .min_by(|a, b| {
+                let off = |u: f64| ((u - u_opposite + half).rem_euclid(period) - half).abs();
+                off(a.0).total_cmp(&off(b.0))
+            })
+            .map(|(_, q)| q)
+    };
     let mut mids: Vec<BandCircle> = Vec::with_capacity(sections.len());
     for s in sections {
         if (s.start - s.end).length() > close_tol {
@@ -2734,6 +2756,7 @@ pub(super) fn split_periodic_face_into_bands(
         };
         mids.push(BandCircle {
             v,
+            q: q_of(s, v)?,
             lower: mk(lower_fwd),
             upper: mk(!lower_fwd),
         });
@@ -2775,7 +2798,7 @@ pub(super) fn split_periodic_face_into_bands(
     let mut levels: Vec<Level> = Vec::new();
     levels.push((v_bot, q_bot, bot.edges(), bot.edges()));
     for m in mids {
-        levels.push((m.v, m.v, vec![m.lower], vec![m.upper]));
+        levels.push((m.v, m.q, vec![m.lower], vec![m.upper]));
     }
     levels.push((v_top, q_top, top.edges(), top.edges()));
 
@@ -2788,10 +2811,7 @@ pub(super) fn split_periodic_face_into_bands(
         wire.push(mk_seam(va, vb)?);
         wire.extend(upper.iter().cloned());
         wire.push(mk_seam(vb, va)?);
-        let interior = surface.evaluate(
-            (seam_u + half - u_start).rem_euclid(period) + u_start,
-            f64::midpoint(*qa, *qb),
-        )?;
+        let interior = surface.evaluate(u_opposite, f64::midpoint(*qa, *qb))?;
         bands.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
