@@ -1,0 +1,22 @@
+crates/operations/tests/prism_through_a_frustum_wall.rs
+  s_d593b500b69108::t_59ab9a4e0d456b 1-114
+crates/algo/src/pave_filler/phase_ef.rs
+  s_d593b500b69108::t_2f6f6f6c210688 524-528,530-535
+  s_d593b500b69108::t_88139fb2151d1d 484-498
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7b6db3518783b05b0584dda710c81d882122fb21",
+  "prompts": {},
+  "sessions": {
+    "s_d593b500b69108": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b1538ae9-01e3-45ed-8e7e-1487989721dd",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
