@@ -361,6 +361,16 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             tol,
         );
 
+        // Only the planar arrangement welds a section duplicating a boundary
+        // edge end to end (the exemption in `section_on_existing_boundary`).
+        // A curved face's splitter traces it beside the boundary edge, one
+        // copy each way, and the loop through them swallows the region the
+        // face's other sections close (a corner band notched by one lattice
+        // strut, the next strut's top plane flush with the notch's ceiling).
+        // A face whose only sections are such duplicates keeps them: they
+        // route it through the split that adopts the shared edges.
+        let sections =
+            drop_boundary_duplicates_beside_real_sections(topo, face_id, sections, tol.linear);
         log::debug!(
             "fill_images_faces: face {:?} has_sections={} sections={}",
             face_id,
@@ -2931,15 +2941,6 @@ fn section_on_existing_boundary(
     // closed boundary already, so re-threading ANY of its edges — whole or
     // partial — recreates the zero-area annulus this guard exists for (the
     // 2×1/1×2 stacking-lip fuse).
-    //
-    // Only the planar arrangement welds the duplicate. A curved face's
-    // splitter traces it beside the boundary edge, one copy each way, and
-    // the loop through them swallows the region the face's other sections
-    // close (a corner band notched by one lattice strut, the next strut's
-    // top plane flush with the notch's ceiling).
-    if !matches!(face.surface(), FaceSurface::Plane { .. }) {
-        return true;
-    }
     if let Some((ss, se)) = sec_endpoints {
         let weld = tol * 100.0;
         // Endpoint matching uses a wider band than the closed-section test: a
@@ -2971,6 +2972,56 @@ fn section_on_existing_boundary(
     }
 
     true
+}
+
+/// `sections` less those duplicating one of a curved face's outer-wire edges
+/// end to end, when at least one section is not such a duplicate.
+fn drop_boundary_duplicates_beside_real_sections(
+    topo: &Topology,
+    face_id: FaceId,
+    sections: Vec<SectionEdge>,
+    tol: f64,
+) -> Vec<SectionEdge> {
+    let Ok(face) = topo.face(face_id) else {
+        return sections;
+    };
+    if matches!(face.surface(), FaceSurface::Plane { .. }) || sections.len() < 2 {
+        return sections;
+    }
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return sections;
+    };
+    let band = (tol * 1e5).max(tol * 100.0);
+    let duplicate = |s: &SectionEdge| {
+        if (s.start - s.end).length() < band {
+            return false;
+        }
+        let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        let mid = s
+            .curve_3d
+            .evaluate_with_endpoints(0.5 * (t0 + t1), s.start, s.end);
+        wire.edges().iter().any(|oe| {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                return false;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                return false;
+            };
+            let (bs, be) = (sv.point(), ev.point());
+            let ends = ((s.start - bs).length() < band && (s.end - be).length() < band)
+                || ((s.start - be).length() < band && (s.end - bs).length() < band);
+            ends && point_on_edge(edge.curve(), bs, be, mid, tol * 100.0)
+        })
+    };
+    let flags: Vec<bool> = sections.iter().map(duplicate).collect();
+    if flags.iter().all(|&d| d) || !flags.iter().any(|&d| d) {
+        return sections;
+    }
+    sections
+        .into_iter()
+        .zip(flags)
+        .filter_map(|(s, d)| (!d).then_some(s))
+        .collect()
 }
 
 /// Whether `p` lies on the edge's true geometry within `tol` (perpendicular

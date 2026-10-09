@@ -490,28 +490,6 @@ pub fn perform(
                         }
                         let clip_a = clip_line_to_face(topo, fa, &raw);
                         let clip_b = clip_line_to_face(topo, fb, &raw);
-                        // A face with arcs builds no polygon, but its own
-                        // lines and arcs give its runs along the line
-                        // exactly; trim to where those meet the other face's.
-                        // A face's tiny corner arc otherwise left a lattice
-                        // strut's section running on past the strut face's
-                        // edge onto the next wall, planting a vertex off the
-                        // faces it bounds.
-                        if let Some(mutual) =
-                            exact_mutual_runs(topo, (fa, &clip_a), (fb, &clip_b), &raw, tol)
-                        {
-                            let FaceClip::Range((f0, f1)) = mutual else {
-                                return None;
-                            };
-                            return trim_raw_line(&raw, f0, f1, tol).and_then(|mut piece| {
-                                piece.p_start =
-                                    junction_registry.resolve(topo, fa, fb, piece.p_start, tol);
-                                piece.p_end =
-                                    junction_registry.resolve(topo, fa, fb, piece.p_end, tol);
-                                ((piece.p_start - piece.p_end).length() > tol.linear * 10.0)
-                                    .then_some(piece)
-                            });
-                        }
                         match (clip_a, clip_b) {
                             // A face's polygon was built but the line lies
                             // entirely outside it: the mutual overlap is
@@ -2487,8 +2465,9 @@ fn restrict_curves_to_faces(
             // A face's box is no measure of how narrow it is: a strut's facet
             // crossing a corner cylinder takes a 0.48 window of a 19.7
             // ellipse, two samples at the box-scaled density. A run that
-            // short is a graze only if it stays that short sixteen times
-            // finer, or runs along either face's edges.
+            // short is a graze if it stays that short sixteen times finer,
+            // rides the faces' boundary margins (a torus corner's oval
+            // beside a tapered wall), or runs along either face's edges.
             if f1 - f0 < 2 && inb_fine.contains(&true) && !matches!(raw.curve, EdgeCurve::Circle(_))
             {
                 let n_finer = (n_fine * 16).min(4096);
@@ -2500,8 +2479,18 @@ fn restrict_curves_to_faces(
                     let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
                     raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
                 };
+                #[allow(clippy::cast_precision_loss)]
+                let strict = (g0..=g1)
+                    .filter(|&i| {
+                        let f = (i % n_finer) as f64 / n_finer as f64;
+                        let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                        let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                        ext_a.contains_strict(p, 0.0) && ext_b.contains_strict(p, 0.0)
+                    })
+                    .count();
                 let near = 1e-5 * (1.0 + approx_len / std::f64::consts::TAU);
                 if g1 - g0 >= 4
+                    && strict >= 2
                     && !point_on_face_edges(topo, fa, mid, near)
                     && !point_on_face_edges(topo, fb, mid, near)
                 {
@@ -3070,9 +3059,23 @@ fn emit_curve_windows(
                 continue;
             }
         }
-        let mut t_lo = t_at(r0);
-        if r0 > 0 {
-            let (mut out_t, mut in_t) = (t_at(r0 - 1), t_lo);
+        // The run's own end samples can pass on the margin alone, standing
+        // outside the face by up to the margin: bisect each end from the
+        // outermost sample the strict test holds, or the end stays there (a
+        // strut facet's section ran 0.018 past the facet's edge onto the
+        // cylinder it crosses, and the chain it closes was pruned).
+        let (first_in, last_in) = match anchor {
+            Some(a) => (
+                a,
+                (a..=r1.min(n))
+                    .rev()
+                    .find(|&i| strict_inside(t_at(i)))
+                    .unwrap_or(a),
+            ),
+            None => (r0, r1),
+        };
+        let mut t_lo = if r0 > 0 {
+            let (mut out_t, mut in_t) = (t_at(r0 - 1), t_at(first_in));
             for _ in 0..48 {
                 let mid = 0.5 * (out_t + in_t);
                 if inside(mid) {
@@ -3081,15 +3084,19 @@ fn emit_curve_windows(
                     out_t = mid;
                 }
             }
-            t_lo = in_t;
-        }
-        let mut t_hi = t_at(r1);
+            in_t
+        } else {
+            t_at(r0)
+        };
         // `r1 == n` ends exactly at the seam duplicate (no out-sample to
         // bisect against in-domain); `r1 > n` is the wrapped-Ellipse
         // fall-through, whose periodic evaluation makes the out-of-domain
         // bisection valid.
-        if r1 != n {
-            let (mut in_t, mut out_t) = (t_hi, t_at(r1 + 1));
+        let mut t_hi = if r1 == n {
+            t_at(r1)
+        } else {
+            let in_end = if r1 > n { r1 } else { last_in };
+            let (mut in_t, mut out_t) = (t_at(in_end), t_at(r1 + 1));
             for _ in 0..48 {
                 let mid = 0.5 * (in_t + out_t);
                 if inside(mid) {
@@ -3098,8 +3105,8 @@ fn emit_curve_windows(
                     out_t = mid;
                 }
             }
-            t_hi = in_t;
-        }
+            in_t
+        };
         // A bisected end sits on the sampled polygon of a curved boundary,
         // up to its chord sag off the boundary itself: where that boundary
         // edge crosses the partner face lies on this curve, so the window
@@ -8292,44 +8299,6 @@ fn line_face_intervals(
         }
     }
     Some(runs)
-}
-
-/// The span of a plane x plane line where both faces run along it, from the
-/// first to the last fraction they share, when at least one face's polygon
-/// clip was indeterminate and that face reads exactly on its own lines and
-/// arcs. A determinate clip stands as its range, a superset of the face's
-/// runs. `None` when an indeterminate face cannot be read (a NURBS edge),
-/// else the span as a range, or empty when the runs never meet.
-fn exact_mutual_runs(
-    topo: &Topology,
-    (fa, clip_a): (FaceId, &FaceClip),
-    (fb, clip_b): (FaceId, &FaceClip),
-    raw: &RawCurve,
-    tol: Tolerance,
-) -> Option<FaceClip> {
-    if !matches!(clip_a, FaceClip::Indeterminate) && !matches!(clip_b, FaceClip::Indeterminate) {
-        return None;
-    }
-    let runs = |fid: FaceId, clip: &FaceClip| -> Option<Vec<(f64, f64)>> {
-        match clip {
-            FaceClip::Range(r) => Some(vec![*r]),
-            FaceClip::Empty => Some(Vec::new()),
-            FaceClip::Indeterminate => {
-                line_face_intervals(topo, fid, raw.p_start, raw.p_end, tol.linear)
-            }
-        }
-    };
-    let (ra, rb) = (runs(fa, clip_a)?, runs(fb, clip_b)?);
-    let mut span: Option<(f64, f64)> = None;
-    for a in &ra {
-        for b in &rb {
-            let (lo, hi) = (a.0.max(b.0), a.1.min(b.1));
-            if hi > lo {
-                span = Some(span.map_or((lo, hi), |(s0, s1)| (s0.min(lo), s1.max(hi))));
-            }
-        }
-    }
-    Some(span.map_or(FaceClip::Empty, FaceClip::Range))
 }
 
 /// Whether two plane faces, both read on their own lines and arcs, run along
