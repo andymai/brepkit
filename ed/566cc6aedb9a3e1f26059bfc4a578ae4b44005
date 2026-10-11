@@ -1,0 +1,24 @@
+crates/math/src/nurbs/fitting.rs
+  s_55cdc949180f67::t_46088612537205 337
+  s_55cdc949180f67::t_a4ca0a90790954 331-336,339,341-344,364,367,370-373,377-380,387-393
+  s_55cdc949180f67::t_46194b3078f77f 867-879
+  s_55cdc949180f67::t_9ce9535552b25c 229-230,232
+  s_55cdc949180f67::t_ed163b50729541 298-299,301
+  s_55cdc949180f67::t_69ded34caae6cf 866
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed566cc6aedb9a3e1f26059bfc4a578ae4b44005",
+  "prompts": {},
+  "sessions": {
+    "s_55cdc949180f67": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ddbc95ec-d411-4a44-a145-f2cb92852375",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
