@@ -205,7 +205,6 @@ pub(crate) fn build_approximation_knots(params: &[f64], p: usize, m: usize, n: u
 /// Solve the interpolation linear system for control points.
 ///
 /// Sets up `N[i][j] = B_{j,p}(t_i)` and solves `N * P = Q`.
-/// Uses simple Gaussian elimination (sufficient for typical point counts).
 #[allow(clippy::cast_precision_loss, clippy::needless_range_loop)]
 fn solve_interpolation(
     points: &[Point3],
@@ -227,44 +226,10 @@ fn solve_interpolation(
         }
     }
 
-    let mut rhs_x: Vec<f64> = points.iter().map(|p| p.x()).collect();
-    let mut rhs_y: Vec<f64> = points.iter().map(|p| p.y()).collect();
-    let mut rhs_z: Vec<f64> = points.iter().map(|p| p.z()).collect();
+    let mut rhs: Vec<[f64; 3]> = points.iter().map(|p| [p.x(), p.y(), p.z()]).collect();
+    gauss_solve(&mut matrix, &mut rhs)?;
 
-    gauss_solve(&mut matrix, &mut rhs_x)?;
-    // Re-build matrix (it was modified in-place).
-    let mut matrix2 = vec![vec![0.0; n]; n];
-    for (i, &t) in params.iter().enumerate() {
-        let span = find_span(t, degree, knots, n);
-        let basis = basis_funs(span, t, degree, knots);
-        for (k, &b) in basis.iter().enumerate() {
-            let col = span - degree + k;
-            if col < n {
-                matrix2[i][col] = b;
-            }
-        }
-    }
-    gauss_solve(&mut matrix2, &mut rhs_y)?;
-
-    let mut matrix3 = vec![vec![0.0; n]; n];
-    for (i, &t) in params.iter().enumerate() {
-        let span = find_span(t, degree, knots, n);
-        let basis = basis_funs(span, t, degree, knots);
-        for (k, &b) in basis.iter().enumerate() {
-            let col = span - degree + k;
-            if col < n {
-                matrix3[i][col] = b;
-            }
-        }
-    }
-    gauss_solve(&mut matrix3, &mut rhs_z)?;
-
-    Ok(rhs_x
-        .iter()
-        .zip(rhs_y.iter())
-        .zip(rhs_z.iter())
-        .map(|((&x, &y), &z)| Point3::new(x, y, z))
-        .collect())
+    Ok(rhs.iter().map(|&[x, y, z]| Point3::new(x, y, z)).collect())
 }
 
 /// Solve least-squares approximation for control points.
@@ -330,16 +295,10 @@ fn solve_approximation(
     ntq_y[m - 1] = points[n - 1].y();
     ntq_z[m - 1] = points[n - 1].z();
 
-    gauss_solve(&mut ntn.clone(), &mut ntq_x)?;
-    gauss_solve(&mut ntn.clone(), &mut ntq_y)?;
-    gauss_solve(&mut ntn, &mut ntq_z)?;
+    let mut rhs: Vec<[f64; 3]> = (0..m).map(|i| [ntq_x[i], ntq_y[i], ntq_z[i]]).collect();
+    gauss_solve(&mut ntn, &mut rhs)?;
 
-    Ok(ntq_x
-        .iter()
-        .zip(ntq_y.iter())
-        .zip(ntq_z.iter())
-        .map(|((&x, &y), &z)| Point3::new(x, y, z))
-        .collect())
+    Ok(rhs.iter().map(|&[x, y, z]| Point3::new(x, y, z)).collect())
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -369,10 +328,20 @@ pub(crate) fn find_span(t: f64, degree: usize, knots: &[f64], n: usize) -> usize
     mid
 }
 
-/// Solve a linear system `Ax = b` using Gaussian elimination with partial pivoting.
+/// Solve `A X = B` for three right-hand sides using Gaussian elimination
+/// with partial pivoting.
+///
+/// Fitting matrices are banded. Elimination skips rows already zero in the
+/// pivot column and stops each row update at the pivot row's last nonzero,
+/// so a band of width `w` costs O(n·w²) arithmetic instead of O(n³). Marched
+/// intersection curves reach a thousand points.
 #[allow(clippy::needless_range_loop)]
-fn gauss_solve(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<(), MathError> {
+fn gauss_solve(a: &mut [Vec<f64>], b: &mut [[f64; 3]]) -> Result<(), MathError> {
     let n = b.len();
+    let mut row_end: Vec<usize> = a
+        .iter()
+        .map(|row| row.iter().rposition(|&v| v != 0.0).map_or(0, |j| j + 1))
+        .collect();
 
     // Forward elimination.
     for k in 0..n {
@@ -392,25 +361,37 @@ fn gauss_solve(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<(), MathError> {
         if max_row != k {
             a.swap(k, max_row);
             b.swap(k, max_row);
+            row_end.swap(k, max_row);
         }
 
+        let end = row_end[k];
         for i in (k + 1)..n {
             let factor = a[i][k] / a[k][k];
-            for j in (k + 1)..n {
+            if factor == 0.0 {
+                continue;
+            }
+            for j in (k + 1)..end {
                 a[i][j] -= factor * a[k][j];
             }
             a[i][k] = 0.0;
-            b[i] -= factor * b[k];
+            row_end[i] = row_end[i].max(end);
+            for c in 0..3 {
+                b[i][c] -= factor * b[k][c];
+            }
         }
     }
 
     // Back substitution.
     for i in (0..n).rev() {
         let mut sum = b[i];
-        for j in (i + 1)..n {
-            sum -= a[i][j] * b[j];
+        for j in (i + 1)..row_end[i] {
+            for c in 0..3 {
+                sum[c] -= a[i][j] * b[j][c];
+            }
         }
-        b[i] = sum / a[i][i];
+        for c in 0..3 {
+            b[i][c] = sum[c] / a[i][i];
+        }
     }
 
     Ok(())
@@ -880,6 +861,20 @@ mod tests {
         assert!(tol.approx_eq(p0.x(), 0.0));
         assert!(tol.approx_eq(p1.x(), 2.0));
         assert!(tol.approx_eq(p1.z(), 2.0));
+    }
+
+    #[test]
+    fn interpolate_long_helix_hits_every_point() {
+        let pts: Vec<Point3> = (0..1500)
+            .map(|i| {
+                let t = i as f64 * 0.02;
+                Point3::new(t.cos(), t.sin(), 0.05 * t)
+            })
+            .collect();
+        let curve = interpolate(&pts, 3).unwrap();
+        for (p, t) in pts.iter().zip(chord_length_params(&pts)) {
+            assert!((curve.evaluate(t) - *p).length() < 1e-9, "missed {p:?}");
+        }
     }
 
     #[test]
