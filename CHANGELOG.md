@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.49](https://github.com/andymai/brepkit/compare/v4.1.48...v4.1.49) (2026-10-11)
+
+
+### Performance
+
+* **math:** solve banded fitting systems without dense elimination ([#2030](https://github.com/andymai/brepkit/issues/2030)) ([2be0a1a](https://github.com/andymai/brepkit/commit/2be0a1a5d8cc7d684770b6c7639c53833efd0988))
+
 ## [4.1.48](https://github.com/andymai/brepkit/compare/v4.1.47...v4.1.48) (2026-10-09)
 
 
