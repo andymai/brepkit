@@ -1,0 +1,19 @@
+.github/workflows/mutants.yml
+  s_55cdc949180f67::t_28b04d7d37d5be 31-32,34-37,43,53-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "381ff62677d16869d5c374ccb914906bc8c5cf5b",
+  "prompts": {},
+  "sessions": {
+    "s_55cdc949180f67": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ddbc95ec-d411-4a44-a145-f2cb92852375",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
