@@ -28,13 +28,19 @@ jobs:
           tool: nextest
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --locked
+      # The cutoff is HEAD's commit time, not the clock, so every shard
+      # derives the same diff and therefore the same mutant list.
       - name: Diff the past week of math changes
-        run: git diff "$(git rev-list -n1 --before='7 days ago' HEAD)" HEAD -- crates/math > week.diff
+        run: |
+          head_ts=$(git log -1 --format=%ct HEAD)
+          base=$(git rev-list -n1 --before="$((head_ts - 7 * 86400))" HEAD)
+          git diff "$base" HEAD -- crates/math > week.diff
       # Only brepkit-math: algo is tested mostly from brepkit-operations, and
       # cargo-mutants runs only the mutated crate's tests, so algo mutants
       # report as missed.
       - name: Run mutation testing on the week's math changes
         run: |
+          status=0
           cargo mutants \
             --test-tool=nextest \
             --timeout=120 \
@@ -44,7 +50,26 @@ jobs:
             -e 'tests/**' \
             -e 'benches/**' \
             -e 'examples/**' \
-            --output=mutants-output
+            --output=mutants-output || status=$?
+          # 2 (missed) and 3 (timed out) are findings, listed in the summary.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ] && [ "$status" -ne 3 ]; then
+            exit "$status"
+          fi
+      - name: Summarize findings
+        if: always()
+        run: |
+          {
+            echo "### Shard ${{ matrix.shard }}/8"
+            for kind in missed timeout; do
+              f="mutants-output/mutants.out/$kind.txt"
+              echo "**$kind:** $( [ -s "$f" ] && wc -l < "$f" || echo 0 )"
+              if [ -s "$f" ]; then
+                echo '```'
+                cat "$f"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
