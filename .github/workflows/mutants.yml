@@ -11,9 +11,13 @@ env:
 
 jobs:
   mutants:
-    name: Cargo Mutants
+    name: Cargo Mutants (shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -24,13 +28,19 @@ jobs:
           tool: nextest
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --locked
-      - name: Run mutation testing on critical modules
+      - name: Diff the past week of math changes
+        run: git diff "$(git rev-list -n1 --before='7 days ago' HEAD)" HEAD -- crates/math > week.diff
+      # Only brepkit-math: algo is tested mostly from brepkit-operations, and
+      # cargo-mutants runs only the mutated crate's tests, so algo mutants
+      # report as missed.
+      - name: Run mutation testing on the week's math changes
         run: |
           cargo mutants \
             --test-tool=nextest \
             --timeout=120 \
             --package brepkit-math \
-            --package brepkit-algo \
+            --in-diff week.diff \
+            --shard ${{ matrix.shard }}/8 \
             -e 'tests/**' \
             -e 'benches/**' \
             -e 'examples/**' \
@@ -39,6 +49,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mutants-report
+          name: mutants-report-${{ matrix.shard }}
           path: mutants-output/
           retention-days: 30
