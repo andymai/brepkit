@@ -2624,21 +2624,20 @@ fn circle_knots(lo: f64, hi: f64) -> Vec<f64> {
     ]
 }
 
-/// A rational NURBS surface revolving the `(radius, z, weight)` profile about
-/// the z axis, the turn running along u from +x over `[0, 1]`, or, with
-/// `turn_along_v`, along v from -x over `[-pi, pi]` (the profile then along
-/// u), as files carry surfaces of revolution.
+/// A rational NURBS surface revolving the `(radius, z, weight)` profile
+/// (its degree read off its knots) about the z axis, the turn running over
+/// `turn` along u from +x, or, with `turn_along_v`, along v from -x (the
+/// profile then along u), as files carry surfaces of revolution.
 fn revolved_nurbs(
     profile: &[(f64, f64, f64)],
     profile_knots: Vec<f64>,
     turn_along_v: bool,
+    turn: (f64, f64),
 ) -> NurbsSurface {
     use std::f64::consts::PI;
-    let (start, turn_knots) = if turn_along_v {
-        (PI, circle_knots(-PI, PI))
-    } else {
-        (0.0, circle_knots(0.0, 1.0))
-    };
+    let profile_degree = profile_knots.len() - profile.len() - 1;
+    let start = if turn_along_v { PI } else { 0.0 };
+    let turn_knots = circle_knots(turn.0, turn.1);
     let circle = unit_circle_polygon(start);
     let point = |&(cx, cy, cw): &(f64, f64, f64), &(r, z, pw): &(f64, f64, f64)| {
         (Point3::new(r * cx, r * cy, z), cw * pw)
@@ -2654,14 +2653,14 @@ fn revolved_nurbs(
             .map(|c| profile.iter().map(|p| point(c, p)).collect())
             .collect()
     };
-    let (knots_u, knots_v) = if turn_along_v {
-        (profile_knots, turn_knots)
+    let (knots_u, knots_v, degree_u, degree_v) = if turn_along_v {
+        (profile_knots, turn_knots, profile_degree, 2)
     } else {
-        (turn_knots, profile_knots)
+        (turn_knots, profile_knots, 2, profile_degree)
     };
     NurbsSurface::new(
-        2,
-        2,
+        degree_u,
+        degree_v,
         knots_u,
         knots_v,
         grid.iter()
@@ -2722,27 +2721,51 @@ fn deviation_and_area(
     (worst, area)
 }
 
-/// A rational NURBS hemisphere over a planar disc, its pole a collapsed v
-/// edge with no boundary on it. Its pole closure runs a virtual seam up a
-/// meridian; unsampled, the CDT spanned that meridian with one chord and
-/// left two fins through the dome's inside, 3.9 off the sphere.
-#[test]
-fn a_nurbs_dome_meshes_its_pole_closure_on_the_sphere() {
+/// The `(radius, z, weight)` profile of a hemisphere of radius `r`.
+fn hemisphere_profile(r: f64) -> [(f64, f64, f64); 3] {
+    [
+        (r, 0.0, 1.0),
+        (r, r, std::f64::consts::FRAC_1_SQRT_2),
+        (0.0, r, 1.0),
+    ]
+}
+
+/// A dome over a planar floor: the NURBS surface revolving `profile` (from
+/// the rim at z = 0 up to the axis) about z, its face bounded by the rim
+/// alone, or, with `seam`, by the rim and the meridian run up to the pole
+/// and back, as files carry it, the pole's vertex `seam` sideways off it.
+fn nurbs_dome(
+    profile: &[(f64, f64, f64)],
+    knots: Vec<f64>,
+    seam: Option<f64>,
+) -> (Topology, brepkit_topology::solid::SolidId) {
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
-    let r = 20.0;
     let mut topo = Topology::new();
-    let rim = nurbs_circle_edge(&mut topo, r, 0.0);
-    let dome = revolved_nurbs(
-        &[
-            (r, 0.0, 1.0),
-            (r, r, std::f64::consts::FRAC_1_SQRT_2),
-            (0.0, r, 1.0),
-        ],
-        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-        false,
-    );
-    let dome_wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+    let rim = nurbs_circle_edge(&mut topo, profile[0].0, 0.0);
+    let mut dome_edges = vec![OrientedEdge::new(rim, true)];
+    if let Some(off_pole) = seam {
+        let rim_vertex = topo.edge(rim).unwrap().start();
+        let top = profile[profile.len() - 1];
+        let pole = topo.add_vertex(Vertex::new(Point3::new(0.0, off_pole, top.1), 1e-7));
+        let meridian = brepkit_math::nurbs::curve::NurbsCurve::new(
+            knots.len() - profile.len() - 1,
+            knots.clone(),
+            profile
+                .iter()
+                .map(|&(r, z, _)| Point3::new(r, 0.0, z))
+                .collect(),
+            profile.iter().map(|&(_, _, w)| w).collect(),
+        )
+        .unwrap();
+        let seam = topo.add_edge(Edge::new(rim_vertex, pole, EdgeCurve::NurbsCurve(meridian)));
+        dome_edges.extend([
+            OrientedEdge::new(seam, true),
+            OrientedEdge::new(seam, false),
+        ]);
+    }
+    let dome = revolved_nurbs(profile, knots, false, (0.0, 1.0));
+    let dome_wire = topo.add_wire(Wire::new(dome_edges, true).unwrap());
     let base_wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, false)], true).unwrap());
     let dome_face = topo.add_face(Face::new(dome_wire, vec![], FaceSurface::Nurbs(dome)));
     let base_face = topo.add_face(Face::new(
@@ -2755,6 +2778,21 @@ fn a_nurbs_dome_meshes_its_pole_closure_on_the_sphere() {
     ));
     let shell = topo.add_shell(Shell::new(vec![base_face, dome_face]).unwrap());
     let solid = topo.add_solid(Solid::new(shell, vec![]));
+    (topo, solid)
+}
+
+/// A rational NURBS hemisphere over a planar disc, its pole a collapsed v
+/// edge with no boundary on it. Its pole closure runs a virtual seam up a
+/// meridian; unsampled, the CDT spanned that meridian with one chord and
+/// left two fins through the dome's inside, 3.9 off the sphere.
+#[test]
+fn a_nurbs_dome_meshes_its_pole_closure_on_the_sphere() {
+    let r = 20.0;
+    let (topo, solid) = nurbs_dome(
+        &hemisphere_profile(r),
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        None,
+    );
     let truth = 2.0 * std::f64::consts::PI * r * r;
     for deflection in [0.5, 0.1] {
         let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
@@ -2802,6 +2840,7 @@ fn a_nurbs_torus_band_meshes_its_joining_seam_within_deflection() {
         ],
         vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
         false,
+        (0.0, 1.0),
     );
     let wire = |topo: &mut Topology, edge, forward| {
         topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap())
@@ -2850,19 +2889,21 @@ fn a_nurbs_torus_band_meshes_its_joining_seam_within_deflection() {
     }
 }
 
+/// The radii of [`fillet_post`]'s post, fillet and top.
+const FILLET_POST_RADII: (f64, f64, f64) = (0.3, 0.25, 0.05);
+/// The heights of [`fillet_post`]'s base, shoulder and top.
+const FILLET_POST_HEIGHTS: (f64, f64, f64) = (1.7, 2.75, 3.0);
+
 /// A post rounded over by a revolved NURBS fillet whose profile runs along u
-/// and whose turn closes along v, seamed by its profile arc, up to a small
-/// flat top: an inch-unit part's pin. The CDT read the seam as running along
-/// v, folded the fillet over itself and left most of it, and the top disc
-/// the weld then collapsed, unmeshed.
-#[test]
-fn a_fillet_closed_along_v_meshes_with_its_top() {
+/// and whose turn closes along v over `turn`, seamed by its profile arc, up
+/// to a small flat top: an inch-unit part's pin.
+fn fillet_post(turn: (f64, f64)) -> (Topology, brepkit_topology::solid::SolidId) {
     use brepkit_math::curves::Circle3D;
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
-    use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI};
-    let (post, fillet, top) = (0.3, 0.25, 0.05);
-    let (z_base, z_shoulder, z_top) = (1.7, 2.75, 3.0);
+    use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
+    let (post, fillet, top) = FILLET_POST_RADII;
+    let (z_base, z_shoulder, z_top) = FILLET_POST_HEIGHTS;
     let mut topo = Topology::new();
     let vertex = |topo: &mut Topology, x: f64, z: f64| {
         topo.add_vertex(Vertex::new(Point3::new(x, 0.0, z), 1e-7))
@@ -2945,6 +2986,7 @@ fn a_fillet_closed_along_v_meshes_with_its_top() {
         ],
         vec![0.0, 0.0, 0.0, FRAC_PI_2, FRAC_PI_2, FRAC_PI_2],
         true,
+        turn,
     );
     let wall = topo.add_face(Face::new(
         wall_wire,
@@ -2981,7 +3023,18 @@ fn a_fillet_closed_along_v_meshes_with_its_top() {
     ));
     let shell = topo.add_shell(Shell::new(vec![wall, fillet_face, top_face, base_face]).unwrap());
     let solid = topo.add_solid(Solid::new(shell, vec![]));
+    (topo, solid)
+}
 
+/// [`fillet_post`] with its fillet's turn over `[-pi, pi]`, as files write
+/// it, and over `[0, 1]`, whose period is not a full turn's. The CDT read
+/// the seam as running along v, folded the fillet over itself and left most
+/// of it, and the top disc the weld then collapsed, unmeshed.
+#[test]
+fn a_fillet_closed_along_v_meshes_with_its_top() {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let (post, fillet, top) = FILLET_POST_RADII;
+    let (z_base, z_shoulder, _) = FILLET_POST_HEIGHTS;
     // Pappus over the profile: the wall's cylinder, the top's disc swept
     // down to the shoulder, and the quarter disc the fillet bounds.
     let quarter = PI * fillet * fillet / 4.0;
@@ -2990,37 +3043,42 @@ fn a_fillet_closed_along_v_meshes_with_its_top() {
         + 2.0 * PI * (top + 4.0 * fillet / (3.0 * PI)) * quarter;
     let fillet_area = 2.0 * PI * fillet * (top * FRAC_PI_2 + fillet);
     let top_area = PI * top * top;
-    for deflection in [0.5, 0.05, 0.0125] {
-        let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
-            &topo,
-            solid,
-            deflection,
-            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
-        )
-        .unwrap();
-        assert_eq!(boundary_edge_count(&mesh), 0, "deflection {deflection}");
-        let (worst, area) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 1), &|p| {
-            let ring = p.x().hypot(p.y()) - top;
-            (ring.hypot(p.z() - z_shoulder) - fillet).abs()
-        });
-        assert!(
-            worst <= deflection.min(0.01),
-            "deflection {deflection}: fillet mesh {worst} off the surface"
-        );
-        assert!(
-            area >= 0.98 * fillet_area && area <= fillet_area,
-            "deflection {deflection}: fillet mesh area {area}, truth {fillet_area}"
-        );
-        let (_, cap) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 2), &|_| 0.0);
-        assert!(
-            cap >= 0.97 * top_area && cap <= top_area,
-            "deflection {deflection}: top mesh area {cap}, truth {top_area}"
-        );
-        let meshed = signed_volume_raw(&mesh);
-        assert!(
-            (meshed - volume).abs() <= 0.03 * volume,
-            "deflection {deflection}: mesh volume {meshed}, truth {volume}"
-        );
+    for turn in [(-PI, PI), (0.0, 1.0)] {
+        let (topo, solid) = fillet_post(turn);
+        for deflection in [0.5, 0.05, 0.0125] {
+            let case = format!("turn {turn:?}, deflection {deflection}");
+            let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+                &topo,
+                solid,
+                deflection,
+                brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            )
+            .unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{case}");
+            let (worst, area) =
+                deviation_and_area(&face_group_triangles(&mesh, &offsets, 1), &|p| {
+                    let ring = p.x().hypot(p.y()) - top;
+                    (ring.hypot(p.z() - z_shoulder) - fillet).abs()
+                });
+            assert!(
+                worst <= deflection.min(0.01),
+                "{case}: fillet mesh {worst} off the surface"
+            );
+            assert!(
+                area >= 0.98 * fillet_area && area <= fillet_area,
+                "{case}: fillet mesh area {area}, truth {fillet_area}"
+            );
+            let (_, cap) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 2), &|_| 0.0);
+            assert!(
+                cap >= 0.97 * top_area && cap <= top_area,
+                "{case}: top mesh area {cap}, truth {top_area}"
+            );
+            let meshed = signed_volume_raw(&mesh);
+            assert!(
+                (meshed - volume).abs() <= 0.03 * volume,
+                "{case}: mesh volume {meshed}, truth {volume}"
+            );
+        }
     }
 }
 
@@ -3089,13 +3147,14 @@ fn a_seamed_sphere_cap_meshes_its_own_hemisphere() {
         .unwrap();
         assert_eq!(boundary_edge_count(&mesh), 0, "deflection {deflection}");
         let triangles = face_group_triangles(&mesh, &offsets, 1);
-        let (worst, meshed) = deviation_and_area(&triangles, &|p| (p - origin).length() - r);
+        let (worst, meshed) =
+            deviation_and_area(&triangles, &|p| ((p - origin).length() - r).abs());
         assert!(
             triangles.iter().flatten().all(|p| p.z() >= -1e-9),
             "deflection {deflection}: the cap reaches below its equator"
         );
         assert!(
-            worst.abs() <= deflection,
+            worst <= deflection,
             "deflection {deflection}: cap mesh {worst} off the sphere"
         );
         assert!(
