@@ -3855,7 +3855,7 @@ fn close_loop_at_pole(
                 angular_tol,
                 false,
             )
-            .max(2);
+            .clamp(2, MAX_PATH_SPANS);
             #[allow(clippy::cast_precision_loss)]
             (1..n).map(|k| k as f64 / n as f64).collect()
         }
@@ -4343,7 +4343,7 @@ fn route_through_poles(
             continue;
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let n = ((u_out - u_in).abs() / period * steps).ceil() as usize;
+        let n = (((u_out - u_in).abs() / period * steps).ceil() as usize).min(MAX_PATH_SPANS);
         routed.extend((0..=n).map(|k| {
             #[allow(clippy::cast_precision_loss)]
             let f = if n == 0 { 0.0 } else { k as f64 / n as f64 };
@@ -4648,8 +4648,6 @@ fn join_winding_hole(
     let (hole_u, hole_v, hole_gid) = hole_uv[0];
     let reach =
         (merged.positions[hole_gid as usize] - merged.positions[first_gid as usize]).length();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let spans = ((reach / spacing.max(1e-12)).ceil() as usize).max(2);
     let along = surface_path_parameters(
         &|t| {
             eval_surface_point(
@@ -4660,7 +4658,7 @@ fn join_winding_hole(
         },
         deflection,
         angular_tol,
-        spans,
+        seam_spans(reach, spacing),
     );
     let seam: Vec<(f64, f64, u32)> = along
         .iter()
@@ -4698,6 +4696,21 @@ fn join_winding_hole(
     true
 }
 
+/// The most spans a virtual boundary the mesher runs across a face is cut
+/// into, whatever its geometry asks: a degenerate or hostile face (rims whose
+/// samples all but coincide, a loop that winds without end) must not size
+/// the samples it allocates and evaluates from a ratio without bound.
+const MAX_PATH_SPANS: usize = 4096;
+
+/// Equal spans for a seam `reach` long beside boundary samples `spacing`
+/// apart: as many as the spacing asks, at least two and at most
+/// [`MAX_PATH_SPANS`].
+fn seam_spans(reach: f64, spacing: f64) -> usize {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let spans = (reach / spacing.max(1e-12)).ceil() as usize;
+    spans.clamp(2, MAX_PATH_SPANS)
+}
+
 /// Where to sample a path `point(t)` across a surface, as the parameters
 /// strictly inside `(0, 1)`, to the bounds an edge is sampled to: each chord
 /// within `deflection` of the path and turning by at most `angular_tol`. A
@@ -4710,7 +4723,8 @@ fn join_winding_hole(
 /// (a cornered or degree-one profile) keeps its turn however finely it is
 /// halved, so a span already within the deflection and shorter than it,
 /// whose halves keep most of its turn, stands as it is; the halving it took
-/// to get there stays beside the crease.
+/// to get there stays beside the crease. However the path behaves, it is cut
+/// into at most [`MAX_PATH_SPANS`] spans.
 fn surface_path_parameters(
     point: &dyn Fn(f64) -> Point3,
     deflection: f64,
@@ -4734,7 +4748,7 @@ fn surface_path_parameters(
         };
         (p - (a + chord * f)).length()
     };
-    let spans = min_spans.max(1);
+    let spans = min_spans.clamp(1, MAX_PATH_SPANS);
     let mut pending: Vec<(f64, Point3, f64, Point3, u32)> = Vec::new();
     for k in (0..spans).rev() {
         #[allow(clippy::cast_precision_loss)]
@@ -4757,7 +4771,8 @@ fn surface_path_parameters(
             && chord <= deflection
             && turn(p0, quarters[0], quarters[1]).max(turn(quarters[1], quarters[2], p1))
                 > 0.75 * bend;
-        if (within && (!bends || crease)) || depth >= MAX_DEPTH {
+        let room = along.len() + pending.len() + 2 <= MAX_PATH_SPANS;
+        if (within && (!bends || crease)) || depth >= MAX_DEPTH || !room {
             if t1 < 1.0 {
                 along.push(t1);
             }
@@ -5276,4 +5291,42 @@ pub(super) fn tessellate_nonplanar_snap(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_seam_beside_coinciding_samples_takes_bounded_spans() {
+        assert_eq!(seam_spans(10.0, 4.0), 3);
+        assert_eq!(seam_spans(1e-9, 4.0), 2);
+        assert_eq!(seam_spans(10.0, 0.0), MAX_PATH_SPANS);
+        assert_eq!(seam_spans(10.0, f64::NAN), MAX_PATH_SPANS);
+        assert_eq!(seam_spans(f64::INFINITY, 1.0), MAX_PATH_SPANS);
+        assert_eq!(seam_spans(f64::NAN, 1.0), 2);
+    }
+
+    #[test]
+    fn a_path_no_sampling_satisfies_takes_bounded_spans() {
+        let started = std::time::Instant::now();
+        // Straight but started from as many spans as a degenerate seam could
+        // ask for.
+        let straight =
+            surface_path_parameters(&|t| Point3::new(t, 0.0, 0.0), 1e-3, 0.35, usize::MAX);
+        assert_eq!(straight.len(), MAX_PATH_SPANS - 1);
+        // So wild that no span ever sits within the deflection, from the
+        // most spans allowed.
+        let wild = surface_path_parameters(
+            &|t| Point3::new(t, (1e9 * t).sin(), (3e9 * t).cos()),
+            1e-12,
+            1e-6,
+            MAX_PATH_SPANS,
+        );
+        assert!(wild.len() < MAX_PATH_SPANS);
+        assert!(wild.windows(2).all(|w| w[0] < w[1]));
+        let unknown = surface_path_parameters(&|_| Point3::new(f64::NAN, 0.0, 0.0), 1e-3, 0.35, 1);
+        assert!(unknown.len() < MAX_PATH_SPANS);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
 }
