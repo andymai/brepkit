@@ -21,15 +21,17 @@ Flow: `read_step` parses the `DATA;`..`ENDSEC;` block into a
 
 `rg -n 'MANIFOLD_SOLID_BREP|CLOSED_SHELL|ADVANCED_FACE|EDGE_LOOP|ORIENTED_EDGE|EDGE_CURVE' crates/io/src/step/reader.rs`
 
-- `MANIFOLD_SOLID_BREP` -> `Solid` with a single outer shell and no inner shells
-  (`Solid::new(shell_id, Vec::new())`). This is the only entity that becomes a solid.
-  Anything stored as `SHELL_BASED_SURFACE_MODEL`, `GEOMETRIC_SET`, `BREP_WITH_VOIDS`, or a
-  wireframe rep is filtered out with no error (`build_all_solids` filters
-  `entity_type == "MANIFOLD_SOLID_BREP"`).
-- `CLOSED_SHELL` -> `Shell`.
+- `MANIFOLD_SOLID_BREP` -> `Solid` with one outer shell; `BREP_WITH_VOIDS` adds an inner
+  shell per void (`ORIENTED_CLOSED_SHELL` flagged false turns its faces over).
+- `SHELL_BASED_SURFACE_MODEL` / `FACE_BASED_SURFACE_MODEL` -> one `Solid` per shell or
+  connected face set (`build_surface_model`); the shell may be open. `GEOMETRIC_SET` and
+  wireframe reps are filtered out with no error (`SHAPE_ITEMS`).
+- `CLOSED_SHELL` / `OPEN_SHELL` / `CONNECTED_FACE_SET` -> `Shell`; once its faces exist,
+  `seam::close_seams` adds the seam line a seamless cylinder or cone face lacks.
 - `ADVANCED_FACE` -> `build_face`. Reads the `.T.`/`.F.` reversed flag
   (`Face::new` vs `Face::new_reversed`). `FACE_OUTER_BOUND` gives the outer wire, other
-  bounds give inner wires; if none is flagged outer, the first bound is used as outer.
+  bounds give inner wires; if none is flagged outer, the first bound is used as outer. A
+  `VERTEX_LOOP` bound adds no wire; its vertex becomes a pointed cone's apex.
 - `EDGE_LOOP` -> `Wire`; `ORIENTED_EDGE` (`.T.` = forward) sets edge orientation in the
   wire.
 - `EDGE_CURVE` -> `build_edge_curve` -> `Edge::new(start_vp, end_vp, curve)` with a 3D
@@ -45,23 +47,34 @@ Flow: `read_step` parses the `DATA;`..`ENDSEC;` block into a
 `attrs.contains("RATIONAL")`). `build_curve_geometry` arms: `LINE` -> `Line`,
 `CIRCLE` -> `Circle`, `ELLIPSE` -> `Ellipse`, `B_SPLINE_CURVE_WITH_KNOTS` -> NURBS.
 
+`build_face` reads `SURFACE_OF_LINEAR_EXTRUSION` (`read_extrusion`) and
+`SURFACE_OF_REVOLUTION` (`read_revolution`, `step/revolution.rs`) itself: each returns its
+surface and whether that surface's normal runs against the STEP one's. A revolution is the
+exact analytic surface its line or circle profile sweeps where there is one, else the
+rational NURBS that turns every profile control point round a nine-point circle.
+
 Both functions end in `_ => Err(IoError::UnsupportedEntity { entity })`. There is no
-skip or substitute path: one unhandled type (for example `SURFACE_OF_REVOLUTION`,
-`SURFACE_OF_LINEAR_EXTRUSION`, an offset surface, or a bounded-curve subtype) fails the
-entire import.
+skip or substitute path: one unhandled type (for example an offset surface, a revolved
+ellipse, or a bounded-curve subtype) fails the entire import.
+
+### Units and placements
+
+`step/assembly.rs` (`Placements`) reads every representation's context unit and the
+placements between representations before any shape is built. Plain shape-representation
+relationships merge two representations into one frame; transformed ones and
+`MAPPED_ITEM`s link a child frame into a parent, oriented by the assembly usage
+(`NEXT_ASSEMBLY_USAGE_OCCURRENCE`) where the relationship's `rep_1`/`rep_2` order
+disagrees with it. `build_all_solids` builds each shape once in its own unit, then copies
+and transforms it once per chain of placements to a root, scaled to mm.
 
 ### What the reader does NOT do
 
 - No pcurve / seam-curve reading. STEP `PCURVE` / `SEAM_CURVE` records are ignored;
   trimming is topological only (vertex endpoints plus edge-loop order). Pcurves are
   recomputed downstream when an operation needs UV (`crates/algo/src/builder/pcurve_compute.rs`).
-- No unit handling. `GLOBAL_UNIT_ASSIGNED_CONTEXT` / `SI_UNIT` are not parsed; coordinates
-  are taken as authored (assumes mm). A file in inches or metres imports at wrong scale
-  silently.
-- No healing. Parse and build only.
-- Deterministic within a solid (shells/faces/edges follow file order via `parse_list_refs`),
-  but the returned `Vec<SolidId>` order across top-level solids is nondeterministic because
-  brep ids are collected by iterating a `HashMap`.
+- No healing beyond missing seams and anchoring each closed circle edge at its vertex.
+- Deterministic: shells/faces/edges follow file order via `parse_list_refs`, shapes come out
+  in record-id order, and each shape's placements in turn.
 
 ## 2. IGES limitations
 

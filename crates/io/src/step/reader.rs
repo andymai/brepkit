@@ -20,7 +20,12 @@ use crate::IoError;
 
 /// Read a STEP file and reconstruct topology.
 ///
-/// Returns the list of solid IDs created in the topology.
+/// Returns the list of solid IDs created in the topology: one per
+/// `MANIFOLD_SOLID_BREP` or `BREP_WITH_VOIDS`, and one per shell of a
+/// surface model (`SHELL_BASED_SURFACE_MODEL` or `FACE_BASED_SURFACE_MODEL`),
+/// whose shell may be open. Geometry comes out in millimetres whatever length
+/// unit the file uses, and placed where its assembly puts it: a shape the
+/// assembly places several times comes out once per placement.
 ///
 /// # Errors
 ///
@@ -39,13 +44,21 @@ pub fn read_step(input: &str, topo: &mut Topology) -> Result<Vec<SolidId>, IoErr
     builder.build_all_solids()
 }
 
+/// The records that are shapes in their own right.
+const SHAPE_ITEMS: [&str; 4] = [
+    "MANIFOLD_SOLID_BREP",
+    "BREP_WITH_VOIDS",
+    "SHELL_BASED_SURFACE_MODEL",
+    "FACE_BASED_SURFACE_MODEL",
+];
+
 // ── Parsing ─────────────────────────────────────────────────────────
 
 /// A parsed STEP entity: `#id = TYPE(attrs)`.
 #[derive(Debug)]
-struct StepEntity {
-    entity_type: String,
-    attrs: String,
+pub(super) struct StepEntity {
+    pub(super) entity_type: String,
+    pub(super) attrs: String,
 }
 
 /// Parse all entity instances from the DATA section.
@@ -110,6 +123,8 @@ struct StepBuilder<'a> {
     entities: &'a HashMap<u64, StepEntity>,
     vertex_cache: HashMap<u64, brepkit_topology::vertex::VertexId>,
     edge_cache: HashMap<u64, brepkit_topology::edge::EdgeId>,
+    /// The vertex a face's vertex loop names, such as a cone's apex.
+    vertex_loops: HashMap<brepkit_topology::face::FaceId, brepkit_topology::vertex::VertexId>,
     /// An earlier brepkit export: its bounds already run about the surface's
     /// normal.
     legacy_bounds: bool,
@@ -129,28 +144,84 @@ impl<'a> StepBuilder<'a> {
             entities,
             vertex_cache: HashMap::new(),
             edge_cache: HashMap::new(),
+            vertex_loops: HashMap::new(),
             legacy_bounds,
             legacy_cones: false,
         }
     }
 
     fn build_all_solids(&mut self) -> Result<Vec<SolidId>, IoError> {
-        let mut brep_ids: Vec<u64> = self
+        let placements = super::assembly::Placements::new(self.entities);
+        let mut shape_ids: Vec<u64> = self
             .entities
             .iter()
-            .filter(|(_, e)| {
-                e.entity_type == "MANIFOLD_SOLID_BREP" || e.entity_type == "BREP_WITH_VOIDS"
-            })
+            .filter(|(_, e)| SHAPE_ITEMS.contains(&e.entity_type.as_str()))
             .map(|(&id, _)| id)
             .collect();
-        brep_ids.sort_unstable();
+        shape_ids.sort_unstable();
 
         let mut solid_ids = Vec::new();
-        for brep_id in brep_ids {
-            let solid_id = self.build_solid(brep_id)?;
-            solid_ids.push(solid_id);
+        for shape_id in shape_ids {
+            let instances = placements.instances(shape_id)?;
+            let built = match self.get_entity(shape_id)?.entity_type.as_str() {
+                "MANIFOLD_SOLID_BREP" | "BREP_WITH_VOIDS" => vec![self.build_solid(shape_id)?],
+                _ => self.build_surface_model(shape_id)?,
+            };
+            if solid_ids.len() + built.len() * instances.len() > super::assembly::MAX_INSTANCES {
+                return Err(IoError::ParseError {
+                    reason: format!(
+                        "STEP assembly places more than {} shapes",
+                        super::assembly::MAX_INSTANCES
+                    ),
+                });
+            }
+            for solid in built {
+                // Copies come off the solid before it moves to its own
+                // placement, the last one.
+                for (k, placement) in instances.iter().enumerate() {
+                    let instance = if k + 1 < instances.len() {
+                        brepkit_operations::copy::copy_solid(self.topo, solid)?
+                    } else {
+                        solid
+                    };
+                    if !super::assembly::is_identity(placement) {
+                        brepkit_operations::transform::transform_solid(
+                            self.topo, instance, placement,
+                        )?;
+                    }
+                    solid_ids.push(instance);
+                }
+            }
         }
         Ok(solid_ids)
+    }
+
+    /// The shells of a surface model, each as a solid of that one shell:
+    /// `SHELL_BASED_SURFACE_MODEL('', (shell, ...))`, its shells open or
+    /// closed, or `FACE_BASED_SURFACE_MODEL('', (connected_face_set, ...))`.
+    fn build_surface_model(&mut self, model_ref: u64) -> Result<Vec<SolidId>, IoError> {
+        let attrs = self.get_entity(model_ref)?.attrs.clone();
+        let mut solids = Vec::new();
+        for shell_ref in parse_list_refs(&attrs) {
+            let shell = self.get_entity(shell_ref)?;
+            // ORIENTED_OPEN_SHELL('', *, open_shell, orientation): a false
+            // orientation turns every face of the shell over.
+            let (shell_ref, flip) = if shell.entity_type == "ORIENTED_OPEN_SHELL" {
+                let tail = shell.attrs.trim_end_matches(')').trim();
+                let flip = tail.ends_with(".F.") || tail.ends_with(".FALSE.");
+                let inner = parse_refs(&shell.attrs).first().copied().ok_or_else(|| {
+                    IoError::ParseError {
+                        reason: format!("ORIENTED_OPEN_SHELL #{shell_ref} missing its shell"),
+                    }
+                })?;
+                (inner, flip)
+            } else {
+                (shell_ref, false)
+            };
+            let shell_id = self.build_shell(shell_ref, flip)?;
+            solids.push(self.topo.add_solid(Solid::new(shell_id, Vec::new())));
+        }
+        Ok(solids)
     }
 
     fn build_solid(&mut self, brep_id: u64) -> Result<SolidId, IoError> {
@@ -203,6 +274,7 @@ impl<'a> StepBuilder<'a> {
             let face_id = self.build_face(face_ref, flip)?;
             face_ids.push(face_id);
         }
+        super::seam::close_seams(self.topo, &face_ids, &self.vertex_loops)?;
 
         let shell = Shell::new(face_ids).map_err(|e| IoError::ParseError {
             reason: format!("failed to build shell from STEP: {e}"),
@@ -235,15 +307,18 @@ impl<'a> StepBuilder<'a> {
                 reason: format!("ADVANCED_FACE #{face_ref} missing surface reference"),
             })?;
 
-        let (surface, inverted) =
-            if self.get_entity(surface_ref)?.entity_type == "SURFACE_OF_LINEAR_EXTRUSION" {
-                self.read_extrusion(surface_ref)?
-            } else {
-                (Extrusion::Surface(self.build_surface(surface_ref)?), false)
-            };
+        let (surface, inverted) = match self.get_entity(surface_ref)?.entity_type.as_str() {
+            "SURFACE_OF_LINEAR_EXTRUSION" => self.read_extrusion(surface_ref)?,
+            "SURFACE_OF_REVOLUTION" => {
+                let (surface, inverted) = self.read_revolution(surface_ref, face_ref)?;
+                (Extrusion::Surface(surface), inverted)
+            }
+            _ => (Extrusion::Surface(self.build_surface(surface_ref)?), false),
+        };
 
         let mut outer_wire = None;
         let mut inner_wires = Vec::new();
+        let mut loop_vertex = None;
 
         for &bound_ref in &list_refs {
             let bound_entity = self.get_entity(bound_ref)?;
@@ -257,6 +332,16 @@ impl<'a> StepBuilder<'a> {
             let reverse = (!self.legacy_bounds && bound_reversed != face_reversed) != inverted;
 
             if let Some(&loop_ref) = bound_refs.first() {
+                // A vertex loop bounds no area: it marks a point the face
+                // closes up to, such as a cone's apex.
+                if self.get_entity(loop_ref)?.entity_type == "VERTEX_LOOP" {
+                    let attrs = self.get_entity(loop_ref)?.attrs.clone();
+                    let vertex_ref = ref_after_name(&attrs).ok_or_else(|| IoError::ParseError {
+                        reason: format!("VERTEX_LOOP #{loop_ref} missing its vertex"),
+                    })?;
+                    loop_vertex = Some(self.build_vertex_point(vertex_ref)?);
+                    continue;
+                }
                 let wire_id = self.build_edge_loop(loop_ref, reverse)?;
                 if is_outer && outer_wire.is_none() {
                     outer_wire = Some(wire_id);
@@ -316,6 +401,9 @@ impl<'a> StepBuilder<'a> {
             self.topo
                 .add_face(Face::new_reversed(outer, inner_wires, surface))
         };
+        if let Some(vertex) = loop_vertex {
+            self.vertex_loops.insert(face_id, vertex);
+        }
         Ok(face_id)
     }
 
@@ -512,6 +600,7 @@ impl<'a> StepBuilder<'a> {
         }
 
         let edge_id = self.topo.add_edge(Edge::new(start_vp, end_vp, curve));
+        super::seam::anchor_circle(self.topo, edge_id)?;
 
         self.edge_cache.insert(ec_ref, edge_id);
         Ok(edge_id)
@@ -725,6 +814,119 @@ impl<'a> StepBuilder<'a> {
         }
     }
 
+    /// A `SURFACE_OF_REVOLUTION` under face `face_ref`: its surface, and
+    /// whether that surface's normal runs against the STEP surface's.
+    fn read_revolution(
+        &self,
+        surface_ref: u64,
+        face_ref: u64,
+    ) -> Result<(FaceSurface, bool), IoError> {
+        use super::revolution::{Axis, Profile, revolution};
+        let attrs = self.get_entity(surface_ref)?.attrs.clone();
+        let refs = refs_after_name(&attrs);
+        let (Some(&swept), Some(&placement)) = (refs.first(), refs.get(1)) else {
+            return Err(IoError::ParseError {
+                reason: format!("SURFACE_OF_REVOLUTION #{surface_ref} needs a curve and an axis"),
+            });
+        };
+        // AXIS1_PLACEMENT('', location, axis): an omitted axis is +Z.
+        let placement_refs = refs_after_name(&self.get_entity(placement)?.attrs);
+        let origin = placement_refs
+            .first()
+            .ok_or_else(|| IoError::ParseError {
+                reason: format!("AXIS1_PLACEMENT #{placement} missing its location"),
+            })
+            .and_then(|&p| self.build_cartesian_point(p))?;
+        let direction = match placement_refs.get(1) {
+            Some(&d) => self.build_direction(d)?,
+            None => Vec3::new(0.0, 0.0, 1.0),
+        };
+        let direction = direction.normalize().map_err(|e| IoError::ParseError {
+            reason: format!("AXIS1_PLACEMENT #{placement}: {e}"),
+        })?;
+
+        let swept = self.plain_curve_ref(swept)?;
+        let swept_entity = self.get_entity(swept)?;
+        let profile = if swept_entity.entity_type == "LINE" {
+            let line_refs = refs_after_name(&swept_entity.attrs);
+            let (Some(&point), Some(&vector)) = (line_refs.first(), line_refs.get(1)) else {
+                return Err(IoError::ParseError {
+                    reason: format!("LINE #{swept} needs a point and a vector"),
+                });
+            };
+            Profile::Line {
+                point: self.build_cartesian_point(point)?,
+                direction: self.build_vector_direction(vector)?,
+            }
+        } else {
+            match self.build_curve_geometry(swept)? {
+                EdgeCurve::Circle(c) => Profile::Circle(c),
+                EdgeCurve::NurbsCurve(n) => Profile::Spline(n),
+                EdgeCurve::Line | EdgeCurve::Ellipse(_) => {
+                    return Err(IoError::UnsupportedEntity {
+                        entity: format!("SURFACE_OF_REVOLUTION #{surface_ref} of this curve"),
+                    });
+                }
+            }
+        };
+        let boundary = self.revolution_boundary(face_ref, swept)?;
+        revolution(&profile, Axis { origin, direction }, &boundary).map_err(|e| {
+            IoError::ParseError {
+                reason: format!("SURFACE_OF_REVOLUTION #{surface_ref}: {e}"),
+            }
+        })
+    }
+
+    /// Where face `face_ref` lies on a surface of revolution of `profile`:
+    /// its boundary points, and the ends of its edges that run along the
+    /// profile curve itself (a seam, as some systems write it).
+    fn revolution_boundary(
+        &self,
+        face_ref: u64,
+        profile: u64,
+    ) -> Result<super::revolution::Boundary, IoError> {
+        let mut boundary = super::revolution::Boundary::default();
+        let point_of = |vertex: u64| -> Result<Point3, IoError> {
+            let refs = parse_refs(&self.get_entity(vertex)?.attrs);
+            let point = refs.first().copied().ok_or_else(|| IoError::ParseError {
+                reason: format!("VERTEX_POINT #{vertex} missing point reference"),
+            })?;
+            self.build_cartesian_point(point)
+        };
+        for bound in parse_list_refs(&self.get_entity(face_ref)?.attrs) {
+            let Some(&loop_ref) = parse_refs(&self.get_entity(bound)?.attrs).first() else {
+                continue;
+            };
+            let lp = self.get_entity(loop_ref)?;
+            if lp.entity_type == "VERTEX_LOOP" {
+                if let Some(vertex) = ref_after_name(&lp.attrs) {
+                    boundary.points.push(point_of(vertex)?);
+                }
+                continue;
+            }
+            for oe in parse_list_refs(&lp.attrs) {
+                let Some(&ec) = parse_refs(&self.get_entity(oe)?.attrs).last() else {
+                    continue;
+                };
+                let attrs = &self.get_entity(ec)?.attrs;
+                let refs = parse_refs(attrs);
+                if refs.len() < 3 {
+                    continue;
+                }
+                let (start, end) = (point_of(refs[0])?, point_of(refs[1])?);
+                boundary.points.extend([start, end]);
+                if self.plain_curve_ref(refs[2])? == profile {
+                    let tail = attrs.trim_end_matches(')').trim();
+                    let against = tail.ends_with(".F.") || tail.ends_with(".FALSE.");
+                    boundary
+                        .on_profile
+                        .push(if against { (end, start) } else { (start, end) });
+                }
+            }
+        }
+        Ok(boundary)
+    }
+
     /// The unit direction of a VECTOR entity.
     fn build_vector_direction(&self, vector_ref: u64) -> Result<Vec3, IoError> {
         let refs = refs_after_name(&self.get_entity(vector_ref)?.attrs);
@@ -860,7 +1062,7 @@ impl<'a> StepBuilder<'a> {
 // ── Attribute parsing helpers ───────────────────────────────────────
 
 /// Extract all `#NNN` references from an attribute string.
-fn parse_refs(attrs: &str) -> Vec<u64> {
+pub(super) fn parse_refs(attrs: &str) -> Vec<u64> {
     let mut refs = Vec::new();
     let mut i = 0;
     let bytes = attrs.as_bytes();
@@ -887,7 +1089,7 @@ fn parse_refs(attrs: &str) -> Vec<u64> {
 const CURVES_ON_SURFACES: [&str; 3] = ["SURFACE_CURVE", "SEAM_CURVE", "INTERSECTION_CURVE"];
 
 /// The `#NNN` references past a record's leading quoted name.
-fn refs_after_name(attrs: &str) -> Vec<u64> {
+pub(super) fn refs_after_name(attrs: &str) -> Vec<u64> {
     let mut quoted = false;
     for (i, ch) in attrs.char_indices() {
         if ch == '\'' {
@@ -1031,7 +1233,7 @@ fn parse_list_refs(attrs: &str) -> Vec<u64> {
 /// Extract floating-point numbers from an attribute string.
 ///
 /// Handles both nested `(1.0, 2.0)` and flat `'', #ref, 1.5E+00` formats.
-fn parse_floats(attrs: &str) -> Vec<f64> {
+pub(super) fn parse_floats(attrs: &str) -> Vec<f64> {
     let mut result = Vec::new();
     // Try nested parentheses first.
     if let Some(start) = attrs.find('(')
@@ -1105,7 +1307,7 @@ fn composite_bspline_parts<'a>(
 
 /// Split complex entity components at their own balanced parentheses, not at
 /// substrings of other component names or strings in REPRESENTATION_ITEM.
-fn composite_components(attrs: &str) -> Option<Vec<(&str, &str)>> {
+pub(super) fn composite_components(attrs: &str) -> Option<Vec<(&str, &str)>> {
     let mut rest = attrs.trim();
     let mut components = Vec::new();
     while rest != ")" && !rest.is_empty() {
@@ -1129,7 +1331,7 @@ fn composite_components(attrs: &str) -> Option<Vec<(&str, &str)>> {
 }
 
 /// Return the body of the first parenthesized expression and its unconsumed tail.
-fn take_parenthesized(s: &str) -> Option<(&str, &str)> {
+pub(super) fn take_parenthesized(s: &str) -> Option<(&str, &str)> {
     let rest = s.strip_prefix('(')?;
     let mut depth = 1_usize;
     let mut quoted = false;
