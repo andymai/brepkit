@@ -3863,7 +3863,6 @@ fn close_loop_at_pole(
             &|t| evaluate(first_u, first_v + (v_far - first_v) * t),
             deflection,
             angular_tol,
-            f64::INFINITY,
             1,
         ),
     };
@@ -4647,6 +4646,10 @@ fn join_winding_hole(
         / (boundary_3d.len() - 1) as f64;
     let (top_u, top_v) = (u0 + w_outer, v0);
     let (hole_u, hole_v, hole_gid) = hole_uv[0];
+    let reach =
+        (merged.positions[hole_gid as usize] - merged.positions[first_gid as usize]).length();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let spans = ((reach / spacing.max(1e-12)).ceil() as usize).max(2);
     let along = surface_path_parameters(
         &|t| {
             eval_surface_point(
@@ -4657,8 +4660,7 @@ fn join_winding_hole(
         },
         deflection,
         angular_tol,
-        spacing.max(1e-12),
-        2,
+        spans,
     );
     let seam: Vec<(f64, f64, u32)> = along
         .iter()
@@ -4698,10 +4700,9 @@ fn join_winding_hole(
 
 /// Where to sample a path `point(t)` across a surface, as the parameters
 /// strictly inside `(0, 1)`, to the bounds an edge is sampled to: each chord
-/// within `deflection` of the path and turning by at most `angular_tol`,
-/// and no longer than `max_chord`. A virtual boundary the mesher runs across
-/// a face (a pole closure's meridian, a seam joining two loops) borders
-/// triangles like an edge does.
+/// within `deflection` of the path and turning by at most `angular_tol`. A
+/// virtual boundary the mesher runs across a face (a pole closure's
+/// meridian, a seam joining two loops) borders triangles like an edge does.
 ///
 /// The path starts as `min_spans` equal spans and each span that fails is
 /// halved. A span is read at its quarter points: an inflected path can cross
@@ -4714,7 +4715,6 @@ fn surface_path_parameters(
     point: &dyn Fn(f64) -> Point3,
     deflection: f64,
     angular_tol: f64,
-    max_chord: f64,
     min_spans: usize,
 ) -> Vec<f64> {
     const MAX_DEPTH: u32 = 12;
@@ -4750,7 +4750,7 @@ fn surface_path_parameters(
             .map(|&q| off_chord(q, p0, p1))
             .fold(0.0, f64::max);
         let bend = turn(p0, quarters[1], p1);
-        let within = deviation <= deflection && chord <= max_chord;
+        let within = deviation <= deflection;
         let bends = angular_tol > 0.0 && bend > angular_tol;
         let crease = within
             && bends
