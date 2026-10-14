@@ -972,6 +972,20 @@ fn tessellate_solid_core(
         split_pinched_chords(&mut merged, tf, &on_face);
     }
 
+    // A face no mesher covered, or whose rim the weld collapsed beside a
+    // neighbour's crack, leaves a hole the caller cannot see from the mesh.
+    if let Some(tf) = tri_faces.as_ref() {
+        let mut meshed = vec![false; all_faces.len()];
+        for &fi in tf {
+            if let Some(flag) = meshed.get_mut(fi as usize) {
+                *flag = true;
+            }
+        }
+        for (&face_id, _) in all_faces.iter().zip(&meshed).filter(|(_, m)| !**m) {
+            log::warn!("{face_id:?} meshed to no triangles at deflection {deflection}");
+        }
+    }
+
     Ok((merged, tri_faces.filter(|_| track_faces), all_faces.len()))
 }
 
