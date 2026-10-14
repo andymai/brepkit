@@ -1845,11 +1845,107 @@ fn cdt_trace() -> bool {
 /// re-meshing the face with `tessellate_nonplanar_snap`, which is watertight
 /// but honours no deflection bound, so the stripe case logs a warning first
 /// and the sag leaves a trace.
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn tessellate_nonplanar_cdt(
     topo: &Topology,
     face_id: FaceId,
     face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    circle_floor: bool,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
+) -> Result<(), crate::OperationsError> {
+    // Every seam, pole and winding-loop rule below reads the closed direction
+    // as u. A NURBS face closed along v alone (a revolved fillet whose profile
+    // runs along u) is meshed on the same surface with its parameters
+    // exchanged, which leaves every point and normal where it was.
+    if let FaceSurface::Nurbs(nurbs) = face_data.surface()
+        && nurbs.is_periodic_v()
+        && !nurbs.is_periodic_u()
+    {
+        let (exchanged, mirror) = exchange_nurbs_parameters(nurbs)?;
+        let mut local = face_data.clone();
+        local.set_surface(FaceSurface::Nurbs(exchanged));
+        let pcurve_uv = |edge: brepkit_topology::edge::EdgeId, pt: Point3| {
+            topo.pcurves()
+                .get(edge, face_id)
+                .and_then(|pcurve| project_via_pcurve(pcurve, pt, face_data.surface()))
+                .map(|(u, v)| (v, mirror - u))
+        };
+        return cdt_in_surface_frame(
+            topo,
+            face_id,
+            &local,
+            &pcurve_uv,
+            deflection,
+            angular_tol,
+            circle_floor,
+            edge_global_indices,
+            merged,
+            point_to_global,
+        );
+    }
+    let pcurve_uv = |edge: brepkit_topology::edge::EdgeId, pt: Point3| {
+        topo.pcurves()
+            .get(edge, face_id)
+            .and_then(|pcurve| project_via_pcurve(pcurve, pt, face_data.surface()))
+    };
+    cdt_in_surface_frame(
+        topo,
+        face_id,
+        face_data,
+        &pcurve_uv,
+        deflection,
+        angular_tol,
+        circle_floor,
+        edge_global_indices,
+        merged,
+        point_to_global,
+    )
+}
+
+/// A NURBS surface with its parameters exchanged, `T(p, q) = S(mirror - q,
+/// p)`, and that `mirror`. Running the old u backwards keeps `dT/dp x dT/dq`
+/// equal to `dS/du x dS/dv`, so the normal does not flip, and keeps the new
+/// v on the old u's domain.
+fn exchange_nurbs_parameters(
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> Result<(brepkit_math::nurbs::surface::NurbsSurface, f64), crate::OperationsError> {
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let mirror = u_lo + u_hi;
+    let points = nurbs.control_points();
+    let weights = nurbs.weights();
+    let cols = points.first().map_or(0, Vec::len);
+    let control_points = (0..cols)
+        .map(|j| points.iter().rev().map(|row| row[j]).collect())
+        .collect();
+    let exchanged_weights = (0..cols)
+        .map(|j| weights.iter().rev().map(|row| row[j]).collect())
+        .collect();
+    let knots_v = nurbs.knots_u().iter().rev().map(|k| mirror - k).collect();
+    let exchanged = brepkit_math::nurbs::surface::NurbsSurface::new(
+        nurbs.degree_v(),
+        nurbs.degree_u(),
+        nurbs.knots_v().to_vec(),
+        knots_v,
+        control_points,
+        exchanged_weights,
+    )
+    .map_err(crate::OperationsError::Math)?;
+    Ok((exchanged, mirror))
+}
+
+/// The CDT mesher proper, for a face whose closed direction (if any) is u.
+/// `pcurve_uv` gives an edge sample's `(u, v)` from the edge's pcurve on the
+/// face, in this frame.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn cdt_in_surface_frame(
+    topo: &Topology,
+    face_id: FaceId,
+    face_data: &brepkit_topology::face::Face,
+    pcurve_uv: &dyn Fn(brepkit_topology::edge::EdgeId, Point3) -> Option<(f64, f64)>,
     deflection: f64,
     angular_tol: f64,
     circle_floor: bool,
@@ -1990,13 +2086,8 @@ pub(super) fn tessellate_nonplanar_cdt(
         boundary_3d
             .iter()
             .map(|(pt, _, edge_id_local, _)| {
-                if let Some(pcurve) = topo.pcurves().get(*edge_id_local, face_id) {
-                    let uv = project_via_pcurve(pcurve, *pt, face_data.surface());
-                    if let Some(uv) = uv {
-                        return Ok(uv);
-                    }
-                }
-                project_to_surface_uv(face_data.surface(), *pt)
+                pcurve_uv(*edge_id_local, *pt)
+                    .map_or_else(|| project_to_surface_uv(face_data.surface(), *pt), Ok)
             })
             .collect::<Result<Vec<_>, _>>()?
     };
@@ -2170,9 +2261,14 @@ pub(super) fn tessellate_nonplanar_cdt(
             // section winds round the off-seam samples would put a copy on
             // the section's sample nearest the seam.
             let seam_vertex_u = seam_vertex_u(topo, &edges, face_data.surface())?;
+            let u_period = surface_periods(face_data.surface())
+                .0
+                .map_or(TAU, |(_, period)| period);
             let (u_min_bnd, u_max_bnd) = seam_vertex_u.map_or((u_min_bnd, u_max_bnd), |seam_u| {
-                let lo = ((u_min_bnd - seam_u) / TAU).round().mul_add(TAU, seam_u);
-                (lo, lo + TAU)
+                let lo = ((u_min_bnd - seam_u) / u_period)
+                    .round()
+                    .mul_add(u_period, seam_u);
+                (lo, lo + u_period)
             });
             // A rim's seam vertex joins whichever run the wire reaches it in,
             // so when both rims hand theirs to the seam runs, the rims' span
@@ -2401,7 +2497,8 @@ pub(super) fn tessellate_nonplanar_cdt(
                 for i in (0..n_boundary).filter(|&i| off_seam(i)) {
                     if on_seam.contains(&boundary_3d[i].1) && !at_apex(boundary_3d[i].0) {
                         let u = boundary_uv[i].0;
-                        boundary_uv[i].0 = ((u - seam_u) / TAU).round().mul_add(TAU, seam_u);
+                        boundary_uv[i].0 =
+                            ((u - seam_u) / u_period).round().mul_add(u_period, seam_u);
                     }
                 }
             }
@@ -2523,6 +2620,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         topo,
         face_id,
         face_data,
+        pcurve_uv,
         (u_min, u_max, v_min, v_max),
         deflection,
         angular_tol,
@@ -3204,8 +3302,9 @@ fn notched_pointed_cone(
     Ok(false)
 }
 
-/// The u of a cylinder's or cone's seam, read off a vertex of an edge its
-/// wire runs both ways, away from a cone's apex.
+/// The u of a cylinder's, cone's or u-closed NURBS face's seam, read off a
+/// vertex of an edge its wire runs both ways, away from a cone's apex or a
+/// NURBS pole, where u means nothing.
 fn seam_vertex_u(
     topo: &Topology,
     edges: &[brepkit_topology::wire::OrientedEdge],
@@ -3214,8 +3313,10 @@ fn seam_vertex_u(
     let apex = match surface {
         FaceSurface::Cone(cone) => Some(cone.apex()),
         FaceSurface::Cylinder(_) => None,
+        FaceSurface::Nurbs(_) if surface_periods(surface).0.is_some() => None,
         _ => return Ok(None),
     };
+    let u_period = surface_periods(surface).0;
     for (i, oe) in edges.iter().enumerate() {
         if edges[i + 1..].iter().all(|other| other.edge() != oe.edge()) {
             continue;
@@ -3223,9 +3324,23 @@ fn seam_vertex_u(
         let edge = topo.edge(oe.edge())?;
         for v in [edge.start(), edge.end()] {
             let p = topo.vertex(v)?.point();
-            if apex.is_none_or(|a| (p - a).length() >= 1e-9)
-                && let Some((u, _)) = surface.project_point(p)
-            {
+            if apex.is_some_and(|a| (p - a).length() < 1e-9) {
+                continue;
+            }
+            let Ok((u, v)) = project_to_surface_uv(surface, p) else {
+                continue;
+            };
+            // Measured as `iso_divisions_over` measures a pole.
+            let on_pole = matches!(surface, FaceSurface::Nurbs(_))
+                && u_period.is_some_and(|(_, period)| {
+                    let at = eval_surface_point(surface, u, v);
+                    let reach = at.x().abs().max(at.y().abs()).max(at.z().abs());
+                    [1.0, 2.0].iter().all(|&k| {
+                        let other = eval_surface_point(surface, u + k * period / 3.0, v);
+                        (other - at).length() <= 1e3 * f64::EPSILON * (1.0 + reach)
+                    })
+                });
+            if !on_pole {
                 return Ok(Some(u));
             }
         }
@@ -3512,6 +3627,7 @@ fn inner_wire_uv_loops(
     topo: &Topology,
     face_id: FaceId,
     face_data: &brepkit_topology::face::Face,
+    pcurve_uv: &dyn Fn(brepkit_topology::edge::EdgeId, Point3) -> Option<(f64, f64)>,
     (u_min, u_max, v_min, v_max): (f64, f64, f64, f64),
     deflection: f64,
     angular_tol: f64,
@@ -3580,11 +3696,8 @@ fn inner_wire_uv_loops(
         let mut loop_uv: Vec<(f64, f64, u32)> = Vec::with_capacity(samples.len());
         for (gid, edge) in samples {
             let pt = merged.positions[gid as usize];
-            let (mut u, mut v) = match topo.pcurves().get(edge, face_id) {
-                Some(pcurve) => project_via_pcurve(pcurve, pt, face_data.surface()),
-                None => None,
-            }
-            .map_or_else(|| project_to_surface_uv(face_data.surface(), pt), Ok)?;
+            let (mut u, mut v) = pcurve_uv(edge, pt)
+                .map_or_else(|| project_to_surface_uv(face_data.surface(), pt), Ok)?;
             if let Some(&(pu, pv, _)) = loop_uv.last() {
                 if let Some((_, period)) = u_period {
                     u -= ((u - pu) / period).round() * period;

@@ -2587,3 +2587,409 @@ fn a_solid_meshes_in_the_same_order_after_any_history() {
         }
     }
 }
+
+/// The nine control points and weights of a rational quadratic full circle
+/// of unit radius in the xy plane, starting at angle `start` and running
+/// counter-clockwise.
+fn unit_circle_polygon(start: f64) -> Vec<(f64, f64, f64)> {
+    (0..9)
+        .map(|k| {
+            let angle = start + f64::from(k) * std::f64::consts::FRAC_PI_4;
+            let (scale, weight) = if k % 2 == 0 {
+                (1.0, 1.0)
+            } else {
+                (std::f64::consts::SQRT_2, std::f64::consts::FRAC_1_SQRT_2)
+            };
+            (scale * angle.cos(), scale * angle.sin(), weight)
+        })
+        .collect()
+}
+
+/// The knots of [`unit_circle_polygon`] over `[lo, hi]`.
+fn circle_knots(lo: f64, hi: f64) -> Vec<f64> {
+    let q = |k: f64| lo + (hi - lo) * k / 4.0;
+    vec![
+        q(0.0),
+        q(0.0),
+        q(0.0),
+        q(1.0),
+        q(1.0),
+        q(2.0),
+        q(2.0),
+        q(3.0),
+        q(3.0),
+        q(4.0),
+        q(4.0),
+        q(4.0),
+    ]
+}
+
+/// A rational NURBS surface revolving the `(radius, z, weight)` profile about
+/// the z axis, the turn running along u from +x over `[0, 1]`, or, with
+/// `turn_along_v`, along v from -x over `[-pi, pi]` (the profile then along
+/// u), as files carry surfaces of revolution.
+fn revolved_nurbs(
+    profile: &[(f64, f64, f64)],
+    profile_knots: Vec<f64>,
+    turn_along_v: bool,
+) -> NurbsSurface {
+    use std::f64::consts::PI;
+    let (start, turn_knots) = if turn_along_v {
+        (PI, circle_knots(-PI, PI))
+    } else {
+        (0.0, circle_knots(0.0, 1.0))
+    };
+    let circle = unit_circle_polygon(start);
+    let point = |&(cx, cy, cw): &(f64, f64, f64), &(r, z, pw): &(f64, f64, f64)| {
+        (Point3::new(r * cx, r * cy, z), cw * pw)
+    };
+    let grid: Vec<Vec<(Point3, f64)>> = if turn_along_v {
+        profile
+            .iter()
+            .map(|p| circle.iter().map(|c| point(c, p)).collect())
+            .collect()
+    } else {
+        circle
+            .iter()
+            .map(|c| profile.iter().map(|p| point(c, p)).collect())
+            .collect()
+    };
+    let (knots_u, knots_v) = if turn_along_v {
+        (profile_knots, turn_knots)
+    } else {
+        (turn_knots, profile_knots)
+    };
+    NurbsSurface::new(
+        2,
+        2,
+        knots_u,
+        knots_v,
+        grid.iter()
+            .map(|row| row.iter().map(|&(p, _)| p).collect())
+            .collect(),
+        grid.iter()
+            .map(|row| row.iter().map(|&(_, w)| w).collect())
+            .collect(),
+    )
+    .unwrap()
+}
+
+/// Every triangle of `faces`'s groups as its three corners.
+fn face_group_triangles(mesh: &TriangleMesh, offsets: &[u32], face: usize) -> Vec<[Point3; 3]> {
+    mesh.indices[offsets[face] as usize..offsets[face + 1] as usize]
+        .chunks_exact(3)
+        .map(|t| [0, 1, 2].map(|k| mesh.positions[t[k] as usize]))
+        .collect()
+}
+
+/// The largest distance from `surface_distance` of any corner or centroid of
+/// `triangles`, and their total area.
+fn deviation_and_area(
+    triangles: &[[Point3; 3]],
+    surface_distance: &dyn Fn(Point3) -> f64,
+) -> (f64, f64) {
+    let mut worst: f64 = 0.0;
+    let mut area = 0.0;
+    for &[a, b, c] in triangles {
+        let centroid = Point3::new(
+            (a.x() + b.x() + c.x()) / 3.0,
+            (a.y() + b.y() + c.y()) / 3.0,
+            (a.z() + b.z() + c.z()) / 3.0,
+        );
+        for p in [a, b, c, centroid] {
+            worst = worst.max(surface_distance(p));
+        }
+        area += 0.5 * (b - a).cross(c - a).length();
+    }
+    (worst, area)
+}
+
+/// A post rounded over by a revolved NURBS fillet whose profile runs along u
+/// and whose turn closes along v, seamed by its profile arc, up to a small
+/// flat top: an inch-unit part's pin. The CDT read the seam as running along
+/// v, folded the fillet over itself and left most of it, and the top disc
+/// the weld then collapsed, unmeshed.
+#[test]
+fn a_fillet_closed_along_v_meshes_with_its_top() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI};
+    let (post, fillet, top) = (0.3, 0.25, 0.05);
+    let (z_base, z_shoulder, z_top) = (1.7, 2.75, 3.0);
+    let mut topo = Topology::new();
+    let vertex = |topo: &mut Topology, x: f64, z: f64| {
+        topo.add_vertex(Vertex::new(Point3::new(x, 0.0, z), 1e-7))
+    };
+    let (v_base, v_shoulder, v_top) = (
+        vertex(&mut topo, -post, z_base),
+        vertex(&mut topo, -post, z_shoulder),
+        vertex(&mut topo, -top, z_top),
+    );
+    // The rims' parametric origins lie off the seam, so their samples
+    // straddle its vertices by half a step.
+    let rim = |z: f64, r: f64, normal_z: f64| {
+        Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, z),
+            Vec3::new(0.0, 0.0, normal_z),
+            r,
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap()
+    };
+    let e_base = topo.add_edge(Edge::new(
+        v_base,
+        v_base,
+        EdgeCurve::Circle(rim(z_base, post, -1.0)),
+    ));
+    let e_shoulder = topo.add_edge(Edge::new(
+        v_shoulder,
+        v_shoulder,
+        EdgeCurve::Circle(rim(z_shoulder, post, 1.0)),
+    ));
+    let e_top = topo.add_edge(Edge::new(
+        v_top,
+        v_top,
+        EdgeCurve::Circle(rim(z_top, top, -1.0)),
+    ));
+    let e_wall_seam = topo.add_edge(Edge::new(v_shoulder, v_base, EdgeCurve::Line));
+    let e_fillet_seam = topo.add_edge(Edge::new(
+        v_top,
+        v_shoulder,
+        EdgeCurve::Circle(
+            Circle3D::new(
+                Point3::new(-top, 0.0, z_shoulder),
+                Vec3::new(0.0, -1.0, 0.0),
+                fillet,
+            )
+            .unwrap(),
+        ),
+    ));
+    let mut wire = |edges: &[(brepkit_topology::edge::EdgeId, bool)]| {
+        topo.add_wire(
+            Wire::new(
+                edges
+                    .iter()
+                    .map(|&(e, forward)| OrientedEdge::new(e, forward))
+                    .collect(),
+                true,
+            )
+            .unwrap(),
+        )
+    };
+    let wall_wire = wire(&[
+        (e_shoulder, false),
+        (e_wall_seam, true),
+        (e_base, false),
+        (e_wall_seam, false),
+    ]);
+    let fillet_wire = wire(&[
+        (e_fillet_seam, true),
+        (e_shoulder, false),
+        (e_fillet_seam, false),
+        (e_top, false),
+    ]);
+    let top_wire = wire(&[(e_top, false)]);
+    let base_wire = wire(&[(e_base, true)]);
+    let fillet_surface = revolved_nurbs(
+        &[
+            (post, z_shoulder, 1.0),
+            (post, z_top, FRAC_1_SQRT_2),
+            (top, z_top, 1.0),
+        ],
+        vec![0.0, 0.0, 0.0, FRAC_PI_2, FRAC_PI_2, FRAC_PI_2],
+        true,
+    );
+    let wall = topo.add_face(Face::new(
+        wall_wire,
+        vec![],
+        FaceSurface::Cylinder(
+            brepkit_math::surfaces::CylindricalSurface::new(
+                Point3::new(0.0, 0.0, z_base),
+                Vec3::new(0.0, 0.0, 1.0),
+                post,
+            )
+            .unwrap(),
+        ),
+    ));
+    let fillet_face = topo.add_face(Face::new_reversed(
+        fillet_wire,
+        vec![],
+        FaceSurface::Nurbs(fillet_surface),
+    ));
+    let top_face = topo.add_face(Face::new(
+        top_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z_top,
+        },
+    ));
+    let base_face = topo.add_face(Face::new(
+        base_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: -z_base,
+        },
+    ));
+    let shell = topo.add_shell(Shell::new(vec![wall, fillet_face, top_face, base_face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+    // Pappus over the profile: the wall's cylinder, the top's disc swept
+    // down to the shoulder, and the quarter disc the fillet bounds.
+    let quarter = PI * fillet * fillet / 4.0;
+    let volume = PI * post * post * (z_shoulder - z_base)
+        + PI * top * top * fillet
+        + 2.0 * PI * (top + 4.0 * fillet / (3.0 * PI)) * quarter;
+    let fillet_area = 2.0 * PI * fillet * (top * FRAC_PI_2 + fillet);
+    let top_area = PI * top * top;
+    for deflection in [0.5, 0.05, 0.0125] {
+        let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+            &topo,
+            solid,
+            deflection,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        )
+        .unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "deflection {deflection}");
+        let (worst, area) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 1), &|p| {
+            let ring = p.x().hypot(p.y()) - top;
+            (ring.hypot(p.z() - z_shoulder) - fillet).abs()
+        });
+        assert!(
+            worst <= deflection.min(0.01),
+            "deflection {deflection}: fillet mesh {worst} off the surface"
+        );
+        assert!(
+            area >= 0.98 * fillet_area && area <= fillet_area,
+            "deflection {deflection}: fillet mesh area {area}, truth {fillet_area}"
+        );
+        let (_, cap) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 2), &|_| 0.0);
+        assert!(
+            cap >= 0.97 * top_area && cap <= top_area,
+            "deflection {deflection}: top mesh area {cap}, truth {top_area}"
+        );
+        let meshed = signed_volume_raw(&mesh);
+        assert!(
+            (meshed - volume).abs() <= 0.03 * volume,
+            "deflection {deflection}: mesh volume {meshed}, truth {volume}"
+        );
+    }
+}
+
+/// A cylinder whose wall is a rational NURBS surface of revolution with its
+/// straight profile along u and its turn closing along v, bounded by two rim
+/// circles and no seam: once with the surface spanning exactly the wall, and
+/// once running past both rims. The mesher read the rims as winding along v,
+/// which it never joins; it left the first open and covered the second's
+/// whole surface.
+#[test]
+fn a_nurbs_wall_closed_along_v_meshes_between_its_rims() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let (r, height) = (4.0, 10.0);
+    let z = Vec3::new(0.0, 0.0, 1.0);
+    for (z_lo, z_hi) in [(0.0, height), (-2.0, height + 2.0)] {
+        let circle = unit_circle_polygon(0.0);
+        let row = |level: f64| -> Vec<(Point3, f64)> {
+            circle
+                .iter()
+                .map(|&(cx, cy, w)| (Point3::new(r * cx, r * cy, level), w))
+                .collect()
+        };
+        let grid = [row(z_lo), row(z_hi)];
+        let wall_surface = NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            circle_knots(0.0, 1.0),
+            grid.iter()
+                .map(|row| row.iter().map(|&(p, _)| p).collect())
+                .collect(),
+            grid.iter()
+                .map(|row| row.iter().map(|&(_, w)| w).collect())
+                .collect(),
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let mut rim = |level: f64| {
+            let vertex = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, level), 1e-7));
+            let circle = Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, level),
+                z,
+                r,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap();
+            topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Circle(circle)))
+        };
+        let (bottom, top) = (rim(0.0), rim(height));
+        let mut wire = |edge, forward| {
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap())
+        };
+        let (wall_outer, wall_inner, floor_wire, roof_wire) = (
+            wire(bottom, true),
+            wire(top, false),
+            wire(bottom, false),
+            wire(top, true),
+        );
+        let wall = topo.add_face(Face::new_reversed(
+            wall_outer,
+            vec![wall_inner],
+            FaceSurface::Nurbs(wall_surface),
+        ));
+        let floor = topo.add_face(Face::new(
+            floor_wire,
+            vec![],
+            FaceSurface::Plane { normal: -z, d: 0.0 },
+        ));
+        let roof = topo.add_face(Face::new(
+            roof_wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: z,
+                d: height,
+            },
+        ));
+        let shell = topo.add_shell(Shell::new(vec![floor, wall, roof]).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+        let area = 2.0 * std::f64::consts::PI * r * height;
+        let volume = std::f64::consts::PI * r * r * height;
+        for deflection in [0.1, 0.01] {
+            let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+                &topo,
+                solid,
+                deflection,
+                brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            )
+            .unwrap();
+            let case = format!("profile {z_lo}..{z_hi}, deflection {deflection}");
+            assert_eq!(boundary_edge_count(&mesh), 0, "{case}");
+            let triangles = face_group_triangles(&mesh, &offsets, 1);
+            let (worst, meshed) =
+                deviation_and_area(&triangles, &|p| (p.x().hypot(p.y()) - r).abs());
+            assert!(
+                triangles
+                    .iter()
+                    .flatten()
+                    .all(|p| p.z() >= -1e-9 && p.z() <= height + 1e-9),
+                "{case}: the wall runs past its rims"
+            );
+            assert!(
+                worst <= deflection,
+                "{case}: wall mesh {worst} off the cylinder"
+            );
+            assert!(
+                (meshed - area).abs() <= 0.02 * area,
+                "{case}: wall mesh area {meshed}, truth {area}"
+            );
+            let enclosed = signed_volume_raw(&mesh);
+            assert!(
+                (enclosed - volume).abs() <= 0.03 * volume,
+                "{case}: mesh volume {enclosed}, truth {volume}"
+            );
+        }
+    }
+}
