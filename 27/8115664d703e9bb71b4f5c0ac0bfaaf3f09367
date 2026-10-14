@@ -1,0 +1,21 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_bd847bc77902c4::t_aef54d2b148fba 2354-2366
+crates/operations/src/tessellate/tests.rs
+  s_bd847bc77902c4::t_cd11ba76acd6cc 3027-3112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "278115664d703e9bb71b4f5c0ac0bfaaf3f09367",
+  "prompts": {},
+  "sessions": {
+    "s_bd847bc77902c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6a4190db-d96e-44be-9855-5edfe2535a58",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
