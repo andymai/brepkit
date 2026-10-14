@@ -2634,6 +2634,8 @@ fn cdt_in_surface_frame(
         &mut holes,
         &mut boundary_uv,
         &mut boundary_3d,
+        deflection,
+        angular_tol,
         merged,
         point_to_global,
     );
@@ -3772,7 +3774,11 @@ fn close_loop_at_pole(
     let mut meridian_radius = None;
     let (evaluate, (v_lo, v_hi)): (SurfacePoint<'_>, (f64, f64)) = match face_data.surface() {
         FaceSurface::Nurbs(nurbs) if face_data.inner_wires().is_empty() => {
-            (Box::new(|u, v| nurbs.evaluate(u, v)), nurbs.domain_v())
+            let surface = face_data.surface();
+            (
+                Box::new(move |u, v| eval_surface_point(surface, u, v)),
+                nurbs.domain_v(),
+            )
         }
         FaceSurface::Sphere(sphere) => {
             let Some(spans) = hole_u_spans(topo, face_data, sphere)? else {
@@ -3836,38 +3842,41 @@ fn close_loop_at_pole(
     let first_v = boundary_uv[0].1;
     boundary_uv.push((first_u + winding, first_v));
     boundary_3d.push((first_pt, first_gid, edge, true));
-    // A sphere's closing meridian is a real arc: sampled, one side's points
-    // welding to the other's, so no triangle chords it from rim to pole.
-    let side: Vec<(f64, Point3, u32)> = match meridian_radius {
-        Some(radius) => {
-            let n = segments_for_chord_deviation_a(
-                radius,
-                (v_far - first_v).abs(),
-                deflection,
-                angular_tol,
-                false,
-            )
-            .max(2);
-            (1..n)
-                .map(|k| {
-                    #[allow(clippy::cast_precision_loss)]
-                    let v = first_v + (v_far - first_v) * k as f64 / n as f64;
-                    let p = evaluate(first_u, v);
-                    let id = *point_to_global
-                        .entry(point_merge_key(p, MERGE_GRID))
-                        .or_insert_with(|| {
-                            #[allow(clippy::cast_possible_truncation)]
-                            let idx = merged.positions.len() as u32;
-                            merged.positions.push(p);
-                            merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
-                            idx
-                        });
-                    (v, p, id)
-                })
-                .collect()
-        }
-        None => Vec::new(),
+    // The closing meridian is a real curve on the surface: sampled like an
+    // edge, one side's points welding to the other's, so no triangle chords
+    // it from rim to pole.
+    let n = match meridian_radius {
+        Some(radius) => segments_for_chord_deviation_a(
+            radius,
+            (v_far - first_v).abs(),
+            deflection,
+            angular_tol,
+            false,
+        )
+        .max(2),
+        None => surface_path_divisions(
+            &|t| evaluate(first_u, first_v + (v_far - first_v) * t),
+            deflection,
+            angular_tol,
+        ),
     };
+    let side: Vec<(f64, Point3, u32)> = (1..n)
+        .map(|k| {
+            #[allow(clippy::cast_precision_loss)]
+            let v = first_v + (v_far - first_v) * k as f64 / n as f64;
+            let p = evaluate(first_u, v);
+            let id = *point_to_global
+                .entry(point_merge_key(p, MERGE_GRID))
+                .or_insert_with(|| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let idx = merged.positions.len() as u32;
+                    merged.positions.push(p);
+                    merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                    idx
+                });
+            (v, p, id)
+        })
+        .collect();
     for &(v, p, id) in &side {
         boundary_uv.push((first_u + winding, v));
         boundary_3d.push((p, id, edge, true));
@@ -4418,11 +4427,14 @@ fn nurbs_speeds(
 /// starts at the one keeping farthest from every boundary sample, and the
 /// other holes move by whole periods into the rotated loop's span.
 /// Returns whether the loops were joined.
+#[allow(clippy::too_many_arguments)]
 fn join_winding_hole(
     face_data: &brepkit_topology::face::Face,
     holes: &mut Vec<HoleLoop>,
     boundary_uv: &mut Vec<(f64, f64)>,
     boundary_3d: &mut Vec<(Point3, u32, brepkit_topology::edge::EdgeId, bool)>,
+    deflection: f64,
+    angular_tol: f64,
     merged: &mut TriangleMesh,
     point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> bool {
@@ -4561,7 +4573,9 @@ fn join_winding_hole(
         prev_u = u;
     }
 
-    // Seam samples, spaced like the outer loop's.
+    // Seam samples, spaced like the outer loop's, and as finely as the seam
+    // bends: across a tightly curved band (a torus's tube) the rims' spacing
+    // leaves chords that cut far inside the surface.
     let (_, first_gid, _, _) = boundary_3d[0];
     let spacing = boundary_3d
         .windows(2)
@@ -4573,7 +4587,19 @@ fn join_winding_hole(
     let reach =
         (merged.positions[hole_gid as usize] - merged.positions[first_gid as usize]).length();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let steps = ((reach / spacing.max(1e-12)).ceil() as usize).max(2);
+    let steps = ((reach / spacing.max(1e-12)).ceil() as usize)
+        .max(2)
+        .max(surface_path_divisions(
+            &|t| {
+                eval_surface_point(
+                    surface,
+                    top_u + (hole_u - top_u) * t,
+                    top_v + (hole_v - top_v) * t,
+                )
+            },
+            deflection,
+            angular_tol,
+        ));
     let seam: Vec<(f64, f64, u32)> = (1..steps)
         .map(|k| {
             #[allow(clippy::cast_precision_loss)]
@@ -4609,6 +4635,42 @@ fn join_winding_hole(
         push(u - w_outer, v, gid);
     }
     true
+}
+
+/// Uniform divisions of a path `point(t)`, `t` in `[0, 1]`, across a surface
+/// that keep each chord within `deflection` of the path at its middle and
+/// turning by at most `angular_tol`, the bounds an edge is sampled to. A
+/// virtual boundary the mesher runs across a face (a pole closure's meridian,
+/// a seam joining two loops) borders triangles like an edge does.
+fn surface_path_divisions(
+    point: &dyn Fn(f64) -> Point3,
+    deflection: f64,
+    angular_tol: f64,
+) -> usize {
+    const MAX_DIVISIONS: usize = 4096;
+    let fits = |n: usize| {
+        (0..n).all(|k| {
+            #[allow(clippy::cast_precision_loss)]
+            let (t0, t1) = (k as f64 / n as f64, (k + 1) as f64 / n as f64);
+            let (p0, mid, p1) = (point(t0), point(0.5 * (t0 + t1)), point(t1));
+            let chord_mid = Point3::new(
+                0.5 * (p0.x() + p1.x()),
+                0.5 * (p0.y() + p1.y()),
+                0.5 * (p0.z() + p1.z()),
+            );
+            // The half-chords of an arc meet at half its turn.
+            let turn = match ((mid - p0).normalize(), (p1 - mid).normalize()) {
+                (Ok(a), Ok(b)) => 2.0 * a.dot(b).clamp(-1.0, 1.0).acos(),
+                _ => 0.0,
+            };
+            (mid - chord_mid).length() <= deflection && (angular_tol <= 0.0 || turn <= angular_tol)
+        })
+    };
+    let mut n = 1;
+    while n < MAX_DIVISIONS && !fits(n) {
+        n *= 2;
+    }
+    n
 }
 
 /// Whether the open segments `a b` and `c d` cross in the plane.

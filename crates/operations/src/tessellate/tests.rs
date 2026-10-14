@@ -2674,6 +2674,24 @@ fn revolved_nurbs(
     .unwrap()
 }
 
+/// A closed rational NURBS circle of radius `r` about the z axis at height
+/// `z`, starting on +x.
+fn nurbs_circle_edge(topo: &mut Topology, r: f64, z: f64) -> brepkit_topology::edge::EdgeId {
+    let polygon = unit_circle_polygon(0.0);
+    let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+        2,
+        circle_knots(0.0, 1.0),
+        polygon
+            .iter()
+            .map(|&(x, y, _)| Point3::new(r * x, r * y, z))
+            .collect(),
+        polygon.iter().map(|&(_, _, w)| w).collect(),
+    )
+    .unwrap();
+    let vertex = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, z), 1e-7));
+    topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::NurbsCurve(curve)))
+}
+
 /// Every triangle of `faces`'s groups as its three corners.
 fn face_group_triangles(mesh: &TriangleMesh, offsets: &[u32], face: usize) -> Vec<[Point3; 3]> {
     mesh.indices[offsets[face] as usize..offsets[face + 1] as usize]
@@ -2702,6 +2720,134 @@ fn deviation_and_area(
         area += 0.5 * (b - a).cross(c - a).length();
     }
     (worst, area)
+}
+
+/// A rational NURBS hemisphere over a planar disc, its pole a collapsed v
+/// edge with no boundary on it. Its pole closure runs a virtual seam up a
+/// meridian; unsampled, the CDT spanned that meridian with one chord and
+/// left two fins through the dome's inside, 3.9 off the sphere.
+#[test]
+fn a_nurbs_dome_meshes_its_pole_closure_on_the_sphere() {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let r = 20.0;
+    let mut topo = Topology::new();
+    let rim = nurbs_circle_edge(&mut topo, r, 0.0);
+    let dome = revolved_nurbs(
+        &[
+            (r, 0.0, 1.0),
+            (r, r, std::f64::consts::FRAC_1_SQRT_2),
+            (0.0, r, 1.0),
+        ],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        false,
+    );
+    let dome_wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+    let base_wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, false)], true).unwrap());
+    let dome_face = topo.add_face(Face::new(dome_wire, vec![], FaceSurface::Nurbs(dome)));
+    let base_face = topo.add_face(Face::new(
+        base_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    ));
+    let shell = topo.add_shell(Shell::new(vec![base_face, dome_face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let truth = 2.0 * std::f64::consts::PI * r * r;
+    for deflection in [0.5, 0.1] {
+        let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+            &topo,
+            solid,
+            deflection,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        )
+        .unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "deflection {deflection}");
+        let (worst, area) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 1), &|p| {
+            ((p - Point3::new(0.0, 0.0, 0.0)).length() - r).abs()
+        });
+        assert!(
+            worst <= deflection,
+            "deflection {deflection}: dome mesh {worst} off the sphere"
+        );
+        assert!(
+            (area - truth).abs() <= 0.01 * truth,
+            "deflection {deflection}: dome mesh area {area}, truth {truth}"
+        );
+    }
+}
+
+/// A rational NURBS half torus between two rim circles, joined by the mesher
+/// along a virtual seam across the tube. Spaced like the rims (four times the
+/// tube's radius), the seam's samples cut chords half a millimetre inside
+/// the tube at any deflection.
+#[test]
+fn a_nurbs_torus_band_meshes_its_joining_seam_within_deflection() {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use std::f64::consts::FRAC_1_SQRT_2;
+    let (major, minor) = (20.0, 5.0);
+    let mut topo = Topology::new();
+    let outer = nurbs_circle_edge(&mut topo, major + minor, 0.0);
+    let inner = nurbs_circle_edge(&mut topo, major - minor, 0.0);
+    let band = revolved_nurbs(
+        &[
+            (major + minor, 0.0, 1.0),
+            (major + minor, minor, FRAC_1_SQRT_2),
+            (major, minor, 1.0),
+            (major - minor, minor, FRAC_1_SQRT_2),
+            (major - minor, 0.0, 1.0),
+        ],
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        false,
+    );
+    let wire = |topo: &mut Topology, edge, forward| {
+        topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap())
+    };
+    let band_outer = wire(&mut topo, outer, true);
+    let band_inner = wire(&mut topo, inner, false);
+    let base_outer = wire(&mut topo, outer, false);
+    let base_inner = wire(&mut topo, inner, true);
+    let band_face = topo.add_face(Face::new(
+        band_outer,
+        vec![band_inner],
+        FaceSurface::Nurbs(band),
+    ));
+    let base_face = topo.add_face(Face::new(
+        base_outer,
+        vec![base_inner],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    ));
+    let shell = topo.add_shell(Shell::new(vec![base_face, band_face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let truth = 2.0 * std::f64::consts::PI.powi(2) * major * minor;
+    for deflection in [0.5, 0.1, 0.05] {
+        let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+            &topo,
+            solid,
+            deflection,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        )
+        .unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "deflection {deflection}");
+        let (worst, area) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 1), &|p| {
+            let ring = p.x().hypot(p.y()) - major;
+            (ring.hypot(p.z()) - minor).abs()
+        });
+        assert!(
+            worst <= deflection,
+            "deflection {deflection}: band mesh {worst} off the torus"
+        );
+        assert!(
+            (area - truth).abs() <= 0.01 * truth,
+            "deflection {deflection}: band mesh area {area}, truth {truth}"
+        );
+    }
 }
 
 /// A post rounded over by a revolved NURBS fillet whose profile runs along u
