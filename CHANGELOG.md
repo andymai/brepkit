@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.0](https://github.com/andymai/brepkit/compare/v4.1.49...v4.2.0) (2026-10-14)
+
+
+### Features
+
+* **io:** read STEP units, assembly placements, surface models and seamless faces ([#2035](https://github.com/andymai/brepkit/issues/2035)) ([3405058](https://github.com/andymai/brepkit/commit/3405058e1e159f1cb0718d5966d22e06d49ea5a3))
+
 ## [4.1.49](https://github.com/andymai/brepkit/compare/v4.1.48...v4.1.49) (2026-10-11)
 
 
