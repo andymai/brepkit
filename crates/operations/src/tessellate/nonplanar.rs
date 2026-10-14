@@ -2351,6 +2351,19 @@ fn cdt_in_surface_frame(
                 _ => None,
             };
             for run in &seam_runs {
+                // A sphere's seam up to a pole and back is one run, which
+                // `route_through_poles` has already laid out: each half on
+                // its own copy of the seam, at the u its unwrap reached, and
+                // the pole opened into the stretch of its row between them.
+                // One u for the whole run would fold it onto a line.
+                if matches!(face_data.surface(), FaceSurface::Sphere(_))
+                    && run
+                        .indices
+                        .iter()
+                        .any(|&i| sphere_pole_v(face_data.surface(), boundary_3d[i].0).is_some())
+                {
+                    continue;
+                }
                 // The rim sample just before the run is the seam's own vertex
                 // on that rim, already unwrapped to the seam's side of the
                 // span; the edge's sense only says which side for one wire

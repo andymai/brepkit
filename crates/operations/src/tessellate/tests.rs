@@ -3024,6 +3024,92 @@ fn a_fillet_closed_along_v_meshes_with_its_top() {
     }
 }
 
+/// A hemisphere written with a seam: its one face bounded by the equator
+/// and a meridian run up to the pole and back, as files carry sphere caps.
+/// The seam's two copies meet at the pole, so they are one run of seam
+/// samples; given one u, the run folded onto a line, the cap bounded nothing
+/// in (u, v) and the face fell back to a grid over the other hemisphere.
+#[test]
+fn a_seamed_sphere_cap_meshes_its_own_hemisphere() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let r = 5.0;
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let (x, y, z) = (
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+    let mut topo = Topology::new();
+    let on_equator = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, 0.0), 1e-7));
+    let pole = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, r), 1e-7));
+    let equator = topo.add_edge(Edge::new(
+        on_equator,
+        on_equator,
+        EdgeCurve::Circle(Circle3D::new_with_ref(origin, z, r, x).unwrap()),
+    ));
+    let seam = topo.add_edge(Edge::new(
+        on_equator,
+        pole,
+        EdgeCurve::Circle(Circle3D::with_axes(origin, -y, r, x, z).unwrap()),
+    ));
+    let cap_wire = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(equator, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let floor_wire =
+        topo.add_wire(Wire::new(vec![OrientedEdge::new(equator, false)], true).unwrap());
+    let sphere = SphericalSurface::with_axis_and_ref_dir(origin, r, z, x).unwrap();
+    let cap = topo.add_face(Face::new(cap_wire, vec![], FaceSurface::Sphere(sphere)));
+    let floor = topo.add_face(Face::new(
+        floor_wire,
+        vec![],
+        FaceSurface::Plane { normal: -z, d: 0.0 },
+    ));
+    let shell = topo.add_shell(Shell::new(vec![floor, cap]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let area = 2.0 * std::f64::consts::PI * r * r;
+    let volume = 2.0 / 3.0 * std::f64::consts::PI * r.powi(3);
+    for deflection in [0.1, 0.01] {
+        let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+            &topo,
+            solid,
+            deflection,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        )
+        .unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "deflection {deflection}");
+        let triangles = face_group_triangles(&mesh, &offsets, 1);
+        let (worst, meshed) = deviation_and_area(&triangles, &|p| (p - origin).length() - r);
+        assert!(
+            triangles.iter().flatten().all(|p| p.z() >= -1e-9),
+            "deflection {deflection}: the cap reaches below its equator"
+        );
+        assert!(
+            worst.abs() <= deflection,
+            "deflection {deflection}: cap mesh {worst} off the sphere"
+        );
+        assert!(
+            (meshed - area).abs() <= 0.01 * area,
+            "deflection {deflection}: cap mesh area {meshed}, truth {area}"
+        );
+        let enclosed = signed_volume_raw(&mesh);
+        assert!(
+            (enclosed - volume).abs() <= 0.01 * volume,
+            "deflection {deflection}: mesh volume {enclosed}, truth {volume}"
+        );
+    }
+}
+
 /// A cylinder whose wall is a rational NURBS surface of revolution with its
 /// straight profile along u and its turn closing along v, bounded by two rim
 /// circles and no seam: once with the surface spanning exactly the wall, and
