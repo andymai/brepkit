@@ -111,3 +111,63 @@ fn a_face_set_reads_as_a_shape() {
     );
     assert_cup(&s.finish(), true, "face set");
 }
+
+#[test]
+fn shells_sharing_an_edge_are_each_placed_once() {
+    // An inch file whose floor and wall are separate shells meeting on one
+    // edge: each shell is its own solid, and both are scaled to millimetres
+    // once.
+    let mut s = StepText::with_unit(step_text::Unit::Inch);
+    let (floor, wall) = cup(&mut s);
+    let floor_shell = s.add(format!("OPEN_SHELL('',(#{floor}))"));
+    let wall_shell = s.add(format!("OPEN_SHELL('',(#{wall}))"));
+    let model = s.add(format!(
+        "SHELL_BASED_SURFACE_MODEL('',(#{floor_shell},#{wall_shell}))"
+    ));
+    s.representation("MANIFOLD_SURFACE_SHAPE_REPRESENTATION", &[model]);
+    let mut topo = Topology::new();
+    let shapes = read_step(&s.finish(), &mut topo).unwrap();
+    assert_eq!(shapes.len(), 2, "one shape per shell");
+    for shape in shapes {
+        for f in solid_faces(&topo, shape).unwrap() {
+            let face = topo.face(f).unwrap();
+            for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+                let e = topo.edge(oe.edge()).unwrap();
+                for v in [e.start(), e.end()] {
+                    let p = topo.vertex(v).unwrap().point();
+                    let radius = p.x().hypot(p.y());
+                    assert!(
+                        (radius - R * 25.4).abs() < 1e-9,
+                        "vertex {p:?} scaled other than once"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_sheet_the_reader_cannot_build_leaves_the_solids() {
+    // A cup and, beside it, a sheet on a surface the reader does not know:
+    // the cup still comes through.
+    let mut s = StepText::new();
+    let (floor, wall) = cup(&mut s);
+    let solid_shell = s.add(format!("OPEN_SHELL('',(#{floor},#{wall}))"));
+    let solid_model = s.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{solid_shell}))"));
+    let basis = s.plane([0.0, 0.0, 50.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let offset = s.add(format!("OFFSET_SURFACE('',#{basis},2.,.F.)"));
+    let sheet_vertex = s.vertex([5.0, 0.0, 52.0]);
+    let sheet_circle = s.circle([0.0, 0.0, 52.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], 5.0);
+    let sheet_edge = s.edge(sheet_vertex, sheet_vertex, sheet_circle);
+    let sheet_loop = s.edge_loop(&[(sheet_edge, true)]);
+    let sheet = s.face(&[sheet_loop], offset, true);
+    let sheet_shell = s.add(format!("OPEN_SHELL('',(#{sheet}))"));
+    let sheet_model = s.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{sheet_shell}))"));
+    s.representation(
+        "MANIFOLD_SURFACE_SHAPE_REPRESENTATION",
+        &[solid_model, sheet_model],
+    );
+    let mut topo = Topology::new();
+    let shapes = read_step(&s.finish(), &mut topo).unwrap();
+    assert_eq!(shapes.len(), 1, "the cup comes through, the sheet does not");
+}

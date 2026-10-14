@@ -162,21 +162,27 @@ impl<'a> StepBuilder<'a> {
 
         let mut solid_ids = Vec::new();
         let mut placed = super::assembly::MAX_INSTANCES;
-        let mut placed_faces = super::assembly::MAX_PLACED_FACES;
+        let mut placed_size = super::assembly::MAX_PLACED_SIZE;
         for shape_id in shape_ids {
             let instances = placements.instances(shape_id, &mut placed)?;
             let built = match self.get_entity(shape_id)?.entity_type.as_str() {
                 "MANIFOLD_SOLID_BREP" | "BREP_WITH_VOIDS" => vec![self.build_solid(shape_id)?],
-                _ => self.build_surface_model(shape_id)?,
+                // A sheet the reader cannot build costs the file's solids
+                // nothing.
+                _ => match self.build_surface_model(shape_id) {
+                    Ok(built) => built,
+                    Err(e) => {
+                        log::warn!("STEP surface model #{shape_id} skipped: {e}");
+                        continue;
+                    }
+                },
             };
             // Every copy is paid for before the first is made.
-            let mut faces = 0_usize;
+            let mut size = 0_usize;
             for &solid in &built {
-                faces = faces.saturating_add(
-                    brepkit_topology::explorer::solid_faces(self.topo, solid)?.len(),
-                );
+                size = size.saturating_add(super::assembly::size_of(self.topo, solid)?);
             }
-            super::assembly::spend(&mut placed_faces, faces.saturating_mul(instances.len()))?;
+            super::assembly::spend(&mut placed_size, size.saturating_mul(instances.len()))?;
             super::assembly::spend(
                 &mut placed,
                 (built.len().saturating_sub(1)).saturating_mul(instances.len()),
@@ -274,6 +280,11 @@ impl<'a> StepBuilder<'a> {
     ) -> Result<brepkit_topology::shell::ShellId, IoError> {
         let attrs = self.get_entity(shell_ref)?.attrs.clone();
         let face_refs = parse_list_refs(&attrs);
+        // Each shell gets vertices and edges of its own: shells become
+        // separate solids, and a solid placed in an assembly is moved in
+        // place, which would carry a shared vertex along twice.
+        self.vertex_cache.clear();
+        self.edge_cache.clear();
 
         let mut face_ids = Vec::new();
         for face_ref in face_refs {

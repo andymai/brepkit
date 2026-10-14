@@ -51,7 +51,11 @@ Flow: `read_step` parses the `DATA;`..`ENDSEC;` block into a
 `SURFACE_OF_REVOLUTION` (`read_revolution`, `step/revolution.rs`) itself: each returns its
 surface and whether that surface's normal runs against the STEP one's. A revolution is the
 exact analytic surface its line or circle profile sweeps where there is one, else the
-rational NURBS that turns every profile control point round a nine-point circle.
+rational NURBS that turns every profile control point round a nine-point circle. STEP
+parameterizes a surface of revolution with the turn in u and the profile in v, so its normal
+is the turn crossed with the profile's tangent (seam pcurves sit at u = 0 and 2π); a
+profile that crosses the axis sweeps a plane, cone or sphere twice with opposite normals,
+and the face's own boundary decides which side it is on.
 
 Both functions end in `_ => Err(IoError::UnsupportedEntity { entity })`. There is no
 skip or substitute path: one unhandled type (for example an offset surface, a revolved

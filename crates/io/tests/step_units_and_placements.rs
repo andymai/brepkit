@@ -361,8 +361,11 @@ fn an_assembly_that_doubles_at_every_level_is_refused() {
     }
     let mut topo = Topology::new();
     let started = std::time::Instant::now();
-    let refused = read_step(&s.finish(), &mut topo);
-    assert!(refused.is_err(), "a placement bomb is refused");
+    let refused = read_step(&s.finish(), &mut topo).expect_err("a placement bomb is refused");
+    assert!(
+        refused.to_string().contains("places more shapes"),
+        "{refused}"
+    );
     assert!(
         started.elapsed().as_secs() < 5,
         "refused without listing the placements"
@@ -392,8 +395,34 @@ fn an_assembly_wider_than_the_allowance_is_refused() {
         child = (pd, rep, origin);
     }
     let mut topo = Topology::new();
+    let refused = read_step(&s.finish(), &mut topo).expect_err("too many copies are refused");
     assert!(
-        read_step(&s.finish(), &mut topo).is_err(),
-        "too many copies are refused"
+        refused.to_string().contains("places more shapes"),
+        "{refused}"
     );
+}
+
+#[test]
+fn a_placement_without_a_reference_direction_takes_the_standard_one() {
+    // Along +X with no reference direction, a placement's x axis is +Y.
+    let mut s = StepText::new();
+    let solid = cylinder(&mut s);
+    let part_origin = s.placement([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let part_rep = s.representation("ADVANCED_BREP_SHAPE_REPRESENTATION", &[part_origin, solid]);
+    let part_pd = product(&mut s, "part", part_rep);
+    let asm_origin = s.placement([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let (o, z) = (s.point([5.0, 0.0, 0.0]), s.direction([1.0, 0.0, 0.0]));
+    let at = s.add(format!("AXIS2_PLACEMENT_3D('',#{o},#{z},$)"));
+    let asm_rep = s.representation("SHAPE_REPRESENTATION", &[asm_origin, at]);
+    let asm_pd = product(&mut s, "assembly", asm_rep);
+    use_component(
+        &mut s,
+        (asm_pd, asm_rep),
+        (part_pd, part_rep, part_origin),
+        at,
+        false,
+    );
+    let (topo, solids) = read(&s.finish());
+    let along_x: Frame = ([5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    assert_cylinder(&topo, solids[0], 1.0, &[along_x], "default reference");
 }

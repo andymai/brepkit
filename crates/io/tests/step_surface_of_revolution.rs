@@ -163,9 +163,10 @@ fn assert_solid(step: &str, expected: &str, volume: f64, label: &str, closed: bo
 #[test]
 fn a_line_along_the_axis_sweeps_a_cylinder() {
     let step = export(|t| make_cylinder(t, 4.0, 10.0).unwrap());
-    // Up the wall, the profile crossed with the turn points into the axis.
+    // STEP turns the profile in u and runs along it in v: the turn crossed
+    // with a profile running up the wall points out of the axis.
     for d in [1.0, -1.0] {
-        let step = revolve_instead(&step, "CYLINDRICAL_SURFACE", d > 0.0, |n| {
+        let step = revolve_instead(&step, "CYLINDRICAL_SURFACE", d < 0.0, |n| {
             line(n, [4.0, 0.0, 3.0], [0.0, 0.0, d])
         });
         assert_solid(
@@ -182,7 +183,7 @@ fn a_line_along_the_axis_sweeps_a_cylinder() {
 fn a_line_through_the_axis_sweeps_a_cone() {
     let step = export(|t| make_cone(t, 4.0, 0.0, 10.0).unwrap());
     for d in [1.0, -1.0] {
-        let step = revolve_instead(&step, "CONICAL_SURFACE", d > 0.0, |n| {
+        let step = revolve_instead(&step, "CONICAL_SURFACE", d < 0.0, |n| {
             line(n, [4.0, 0.0, 0.0], [-0.4 * d, 0.0, d])
         });
         assert_solid(
@@ -201,7 +202,7 @@ fn a_line_through_the_axis_sweeps_the_cone_its_face_is_on() {
     // the face does not use.
     let step = export(|t| make_cone(t, 4.0, 0.0, 10.0).unwrap());
     for d in [1.0, -1.0] {
-        let step = revolve_instead(&step, "CONICAL_SURFACE", d > 0.0, |n| {
+        let step = revolve_instead(&step, "CONICAL_SURFACE", d < 0.0, |n| {
             line(n, [-2.0, 0.0, 15.0], [-0.4 * d, 0.0, d])
         });
         assert_solid(
@@ -233,9 +234,9 @@ fn dome_step(about_plus_y: bool) -> String {
     let axis = s.add(format!("AXIS1_PLACEMENT('',#{origin},#{up})"));
     let surface = s.add(format!("SURFACE_OF_REVOLUTION('',#{profile},#{axis})"));
     let wall_loop = s.edge_loop(&[(equator, true), (seam, true), (seam, false)]);
-    // Turning down about +Y the circle's tangent crossed with the turn
-    // points out of the dome; turning up, into it.
-    let wall = s.face(&[wall_loop], surface, about_plus_y);
+    // The turn crossed with a circle turning up the dome (about -Y) points
+    // out of it; with one turning down, into it.
+    let wall = s.face(&[wall_loop], surface, !about_plus_y);
     let floor_loop = s.edge_loop(&[(equator, false)]);
     let floor_plane = s.plane([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
     let floor = s.face(&[floor_loop], floor_plane, false);
@@ -289,7 +290,7 @@ fn a_circle_about_a_point_of_the_axis_sweeps_a_sphere() {
 fn a_circle_off_the_axis_sweeps_a_torus() {
     let step = export(|t| make_torus(t, 10.0, 3.0, 32).unwrap());
     for about_plus_y in [true, false] {
-        let step = revolve_instead(&step, "TOROIDAL_SURFACE", !about_plus_y, |n| {
+        let step = revolve_instead(&step, "TOROIDAL_SURFACE", about_plus_y, |n| {
             circle(n, [10.0, 0.0, 0.0], 3.0, about_plus_y)
         });
         assert_solid(
@@ -322,8 +323,8 @@ fn spline_band_step(a: f64, b: f64) -> String {
     let floor_plane = s.plane([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
     let floor = s.face(&[floor_loop], floor_plane, false);
     let (low, high) = (s.edge_loop(&[(e0, true)]), s.edge_loop(&[(e1, false)]));
-    // Up the wall, the profile crossed with the turn points into the axis.
-    let wall = s.face(&[low, high], surface, a > b);
+    // The turn crossed with a profile running up the wall points out of it.
+    let wall = s.face(&[low, high], surface, a < b);
     let roof_loop = s.edge_loop(&[(e1, true)]);
     let roof_plane = s.plane([0.0, 0.0, 10.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
     let roof = s.face(&[roof_loop], roof_plane, true);
@@ -361,7 +362,73 @@ fn a_spline_profile_sweeps_a_spline_surface() {
             "nurbs",
             PI * 160.0,
             &format!("spline, profile {a}..{b}"),
-            false,
+            true,
+        );
+    }
+}
+
+/// A band round the outside of a torus tube, laid out as the issue's
+/// `bowl_01.step` lays out its rolled rim: a surface of revolution of a
+/// circle in the XZ plane, bounded by its bottom rim, a seam up the outside
+/// of the tube along that circle, its top rim backwards and the seam back
+/// down. `about_plus_y` turns the circle the other way, with the seam and
+/// the face's sense written to match.
+fn rim_band_step(about_plus_y: bool) -> String {
+    let (major, minor, height) = (20.0, 2.0, 2.0);
+    let mut s = StepText::new();
+    let low = s.vertex([major, 0.0, height - minor]);
+    let high = s.vertex([major, 0.0, height + minor]);
+    let bottom_circle = s.circle(
+        [0.0, 0.0, height - minor],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        major,
+    );
+    let top_circle = s.circle(
+        [0.0, 0.0, height + minor],
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        major,
+    );
+    let bottom = s.edge(low, low, bottom_circle);
+    let top = s.edge(high, high, top_circle);
+    let y = if about_plus_y { 1.0 } else { -1.0 };
+    let profile = s.circle([major, 0.0, height], [0.0, y, 0.0], [1.0, 0.0, 0.0], minor);
+    // About -Y the circle runs from the bottom rim up the outside.
+    let seam = s.add(format!(
+        "EDGE_CURVE('',#{low},#{high},#{profile},{})",
+        if about_plus_y { ".F." } else { ".T." }
+    ));
+    let (origin, up) = (s.point([0.0; 3]), s.direction([0.0, 0.0, 1.0]));
+    let axis = s.add(format!("AXIS1_PLACEMENT('',#{origin},#{up})"));
+    let surface = s.add(format!("SURFACE_OF_REVOLUTION('',#{profile},#{axis})"));
+    let band_loop = s.edge_loop(&[(bottom, true), (seam, true), (top, false), (seam, false)]);
+    let band = s.face(&[band_loop], surface, !about_plus_y);
+    let shell = s.add(format!("OPEN_SHELL('',(#{band}))"));
+    let model = s.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{shell}))"));
+    s.representation("MANIFOLD_SURFACE_SHAPE_REPRESENTATION", &[model]);
+    s.finish()
+}
+
+#[test]
+fn a_revolved_face_faces_the_way_its_bound_winds() {
+    // Bottom rim forward, up the seam, top rim back, down the seam: the bound
+    // winds counterclockwise about +X at the outside of the tube, so that is
+    // where the face faces, whatever way its surface's own normal runs.
+    for about_plus_y in [true, false] {
+        let label = format!("rim band, circle about +y {about_plus_y}");
+        let mut topo = Topology::new();
+        let shapes = read_step(&rim_band_step(about_plus_y), &mut topo).unwrap();
+        let band = solid_faces(&topo, shapes[0]).unwrap()[0];
+        assert_eq!(
+            topo.face(band).unwrap().surface().type_tag(),
+            "torus",
+            "{label}"
+        );
+        let out = facing(&topo, band, Point3::new(22.0, 0.0, 2.0));
+        assert!(
+            out.x() > 0.99,
+            "{label}: faces {out:?} at the outside of the tube"
         );
     }
 }

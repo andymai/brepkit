@@ -36,9 +36,37 @@ const MAX_DEPTH: usize = 64;
 /// refused rather than built.
 pub(super) const MAX_INSTANCES: usize = 100_000;
 
-/// How many faces the placed copies of a file's shapes may hold between
-/// them: a large part placed many times is the same blow-up.
-pub(super) const MAX_PLACED_FACES: usize = 10_000_000;
+/// How large the placed copies of a file's shapes may be between them, in
+/// faces, edge uses and B-spline control points: a large part placed many
+/// times is the same blow-up.
+pub(super) const MAX_PLACED_SIZE: usize = 20_000_000;
+
+/// The size of `solid` as [`MAX_PLACED_SIZE`] counts it.
+pub(super) fn size_of(
+    topo: &brepkit_topology::Topology,
+    solid: brepkit_topology::solid::SolidId,
+) -> Result<usize, IoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+    let mut size = 0_usize;
+    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(face)?;
+        size = size.saturating_add(1);
+        if let FaceSurface::Nurbs(n) = face.surface() {
+            let points: usize = n.control_points().iter().map(Vec::len).sum();
+            size = size.saturating_add(points);
+        }
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                size = size.saturating_add(1);
+                if let EdgeCurve::NurbsCurve(c) = topo.edge(oe.edge())?.curve() {
+                    size = size.saturating_add(c.control_points().len());
+                }
+            }
+        }
+    }
+    Ok(size)
+}
 
 /// Spend `n` of `allowance`, or fail when it runs short.
 pub(super) fn spend(allowance: &mut usize, n: usize) -> Result<(), IoError> {
@@ -533,10 +561,11 @@ impl File<'_> {
         let reference = direction(fields.get(2))
             .filter(|r| r.cross(z).length() > 1e-12)
             .unwrap_or_else(|| {
+                // ISO 10303-42's default: +X, or +Y for an axis along X.
                 if Vec3::new(1.0, 0.0, 0.0).cross(z).length() > 1e-12 {
                     Vec3::new(1.0, 0.0, 0.0)
                 } else {
-                    Vec3::new(0.0, 0.0, 1.0)
+                    Vec3::new(0.0, 1.0, 0.0)
                 }
             });
         let x = (reference - z * reference.dot(z)).normalize().ok()?;

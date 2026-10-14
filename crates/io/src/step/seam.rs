@@ -26,16 +26,75 @@ const WINDING_SAMPLES: u32 = 16;
 const CROSSING_SAMPLES: u32 = 64;
 
 /// Add the missing seam to every face of `faces` that needs one. `apexes`
-/// holds the vertex a face's vertex loop puts at its cone's apex.
+/// holds the vertex a face's vertex loop puts at its cone's apex. A face the
+/// seam cannot be fitted to is left as written, with a warning.
 pub(super) fn close_seams(
     topo: &mut Topology,
     faces: &[FaceId],
     apexes: &HashMap<FaceId, VertexId>,
 ) -> Result<(), IoError> {
+    let mut uses = Uses::of(topo, faces)?;
     for &fid in faces {
-        close_seam(topo, faces, fid, apexes.get(&fid).copied())?;
+        if let Err(e) = close_seam(topo, &mut uses, fid, apexes.get(&fid).copied()) {
+            log::warn!("STEP face {fid:?} left without a seam: {e}");
+        }
     }
     Ok(())
+}
+
+/// Which edges meet at each vertex of a shell and which faces use each edge,
+/// kept up to date as seams go in and rims split.
+struct Uses {
+    at_vertex: HashMap<VertexId, HashSet<EdgeId>>,
+    faces_of: HashMap<EdgeId, HashSet<FaceId>>,
+}
+
+impl Uses {
+    fn of(topo: &Topology, faces: &[FaceId]) -> Result<Self, IoError> {
+        let mut uses = Self {
+            at_vertex: HashMap::new(),
+            faces_of: HashMap::new(),
+        };
+        for &fid in faces {
+            let face = topo.face(fid)?;
+            for w in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+                for oe in topo.wire(w)?.edges() {
+                    uses.add(topo, oe.edge(), fid)?;
+                }
+            }
+        }
+        Ok(uses)
+    }
+
+    fn add(&mut self, topo: &Topology, edge: EdgeId, face: FaceId) -> Result<(), IoError> {
+        let e = topo.edge(edge)?;
+        for v in [e.start(), e.end()] {
+            self.at_vertex.entry(v).or_default().insert(edge);
+        }
+        self.faces_of.entry(edge).or_default().insert(face);
+        Ok(())
+    }
+
+    /// `edge` is now `head` then `tail`, in every face it was in.
+    fn split(
+        &mut self,
+        topo: &Topology,
+        edge: EdgeId,
+        head: EdgeId,
+        tail: EdgeId,
+    ) -> Result<(), IoError> {
+        let e = topo.edge(edge)?;
+        for v in [e.start(), e.end()] {
+            if let Some(edges) = self.at_vertex.get_mut(&v) {
+                edges.remove(&edge);
+            }
+        }
+        for face in self.faces_of.remove(&edge).unwrap_or_default() {
+            self.add(topo, head, face)?;
+            self.add(topo, tail, face)?;
+        }
+        Ok(())
+    }
 }
 
 /// The axis a cylinder or cone turns about, and its frame for angles.
@@ -141,7 +200,7 @@ fn has_seam(topo: &Topology, wire: WireId) -> Result<bool, IoError> {
 #[allow(clippy::too_many_lines)]
 fn close_seam(
     topo: &mut Topology,
-    faces: &[FaceId],
+    uses: &mut Uses,
     fid: FaceId,
     apex_vertex: Option<VertexId>,
 ) -> Result<(), IoError> {
@@ -175,13 +234,14 @@ fn close_seam(
                 None => topo.add_vertex(Vertex::new(apex, 1e-7)),
             };
             let seam = topo.add_edge(Edge::new(a, apex_vertex, EdgeCurve::Line));
+            uses.add(topo, seam, fid)?;
             let mut edges = rim_edges;
             edges.push(OrientedEdge::new(seam, true));
             edges.push(OrientedEdge::new(seam, false));
             edges
         }
         (&[first, second], _) => {
-            let (a, b) = seam_ends(topo, faces, &rev, first, second)?;
+            let (a, b) = seam_ends(topo, uses, &rev, first, second)?;
             // Splitting a rim edge gives its loop a new id; the holes keep
             // theirs.
             let face = topo.face(fid)?;
@@ -208,6 +268,7 @@ fn close_seam(
                 });
             };
             let seam = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+            uses.add(topo, seam, fid)?;
             let mut edges = rim_a;
             edges.push(OrientedEdge::new(seam, true));
             edges.extend(rim_b);
@@ -234,7 +295,7 @@ fn close_seam(
 /// made by moving or splitting a rim edge where the rims share none.
 fn seam_ends(
     topo: &mut Topology,
-    faces: &[FaceId],
+    uses: &mut Uses,
     rev: &Revolution,
     first: WireId,
     second: WireId,
@@ -264,7 +325,7 @@ fn seam_ends(
     // Put the new vertex on whichever rim takes it without a split.
     let movable = |topo: &Topology, w: WireId| -> Result<bool, IoError> {
         let edges = topo.wire(w)?.edges();
-        Ok(edges.len() == 1 && closed_conic_alone(topo, faces, edges[0].edge())?)
+        Ok(edges.len() == 1 && closed_conic_alone(topo, uses, edges[0].edge())?)
     };
     let (fixed, onto) = if movable(topo, second)? || !movable(topo, first)? {
         (va[0], second)
@@ -272,7 +333,7 @@ fn seam_ends(
         (vb[0], first)
     };
     let at = topo.vertex(fixed)?.point();
-    let new = vertex_on_rim(topo, faces, rev, onto, at)?;
+    let new = vertex_on_rim(topo, uses, rev, onto, at)?;
     Ok(if onto == second {
         (fixed, new)
     } else {
@@ -282,24 +343,15 @@ fn seam_ends(
 
 /// Whether `edge` is a closed circle or ellipse whose vertex no other edge
 /// of the shell uses, so the vertex can slide round it.
-fn closed_conic_alone(topo: &Topology, faces: &[FaceId], edge: EdgeId) -> Result<bool, IoError> {
+fn closed_conic_alone(topo: &Topology, uses: &Uses, edge: EdgeId) -> Result<bool, IoError> {
     let e = topo.edge(edge)?;
     if e.start() != e.end() || !matches!(e.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
         return Ok(false);
     }
-    let v = e.start();
-    for &fid in faces {
-        let face = topo.face(fid)?;
-        for w in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            for oe in topo.wire(w)?.edges() {
-                let other = topo.edge(oe.edge())?;
-                if oe.edge() != edge && (other.start() == v || other.end() == v) {
-                    return Ok(false);
-                }
-            }
-        }
-    }
-    Ok(true)
+    Ok(uses
+        .at_vertex
+        .get(&e.start())
+        .is_none_or(|edges| edges.iter().all(|&other| other == edge)))
 }
 
 /// A vertex of rim `rim` on the generator through `at`: its existing vertex
@@ -307,7 +359,7 @@ fn closed_conic_alone(topo: &Topology, faces: &[FaceId], edge: EdgeId) -> Result
 /// splitting the rim edge that crosses the generator.
 fn vertex_on_rim(
     topo: &mut Topology,
-    faces: &[FaceId],
+    uses: &mut Uses,
     rev: &Revolution,
     rim: WireId,
     at: Point3,
@@ -353,7 +405,7 @@ fn vertex_on_rim(
         });
     };
 
-    if closed_conic_alone(topo, faces, edge)? {
+    if closed_conic_alone(topo, uses, edge)? {
         let v = topo.edge(edge)?.start();
         topo.vertex_mut(v)?.set_point(point);
         anchor_circle(topo, edge)?;
@@ -381,7 +433,7 @@ fn vertex_on_rim(
     let v = topo.add_vertex(Vertex::new(point, 1e-7));
     let head = topo.add_edge(Edge::new(start, v, head_curve));
     let tail = topo.add_edge(Edge::new(v, end, tail_curve));
-    split_in_wires(topo, faces, edge, head, tail)?;
+    split_in_wires(topo, uses, edge, head, tail)?;
     Ok(v)
 }
 
@@ -407,15 +459,20 @@ pub(super) fn anchor_circle(topo: &mut Topology, edge: EdgeId) -> Result<(), IoE
     Ok(())
 }
 
-/// Replace `edge` by `head` then `tail` in every loop of `faces` that uses it.
+/// Replace `edge` by `head` then `tail` in every loop that uses it.
 fn split_in_wires(
     topo: &mut Topology,
-    faces: &[FaceId],
+    uses: &mut Uses,
     edge: EdgeId,
     head: EdgeId,
     tail: EdgeId,
 ) -> Result<(), IoError> {
-    for &fid in faces {
+    let faces: Vec<FaceId> = uses
+        .faces_of
+        .get(&edge)
+        .map(|f| f.iter().copied().collect())
+        .unwrap_or_default();
+    for fid in faces {
         let face = topo.face(fid)?;
         let wires: Vec<WireId> = std::iter::once(face.outer_wire())
             .chain(face.inner_wires().iter().copied())
@@ -450,5 +507,5 @@ fn split_in_wires(
             }
         }
     }
-    Ok(())
+    uses.split(topo, edge, head, tail)
 }

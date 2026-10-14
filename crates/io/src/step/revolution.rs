@@ -1,10 +1,12 @@
 //! STEP surfaces of revolution as brepkit surfaces.
 //!
 //! A `SURFACE_OF_REVOLUTION` turns a profile curve a full turn about an axis.
-//! Where that sweeps a plane, cylinder, cone, sphere or torus, brepkit keeps
-//! the exact analytic surface. Any other profile becomes the rational
-//! B-spline surface that carries each of the profile's control points round
-//! a full rational circle, which is the same surface exactly.
+//! STEP parameterizes it by the turn in u and the profile in v, so its normal
+//! is the direction of turning crossed with the profile's tangent. Where the
+//! profile sweeps a plane, cylinder, cone, sphere or torus, brepkit keeps the
+//! exact analytic surface. Any other profile becomes the rational B-spline
+//! surface that carries each of the profile's control points round a full
+//! rational circle, which is the same surface exactly.
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, TAU};
 
@@ -30,6 +32,19 @@ impl Profile {
             Self::Line { point, direction } => *point + *direction * t,
             Self::Circle(c) => c.evaluate(t),
             Self::Spline(n) => n.evaluate(t),
+        }
+    }
+
+    /// The profile's direction at `t`, unnormalized.
+    fn tangent_at(&self, t: f64) -> Vec3 {
+        match self {
+            Self::Line { direction, .. } => *direction,
+            Self::Circle(_) => self.point_at(t + 1e-6) - self.point_at(t - 1e-6),
+            Self::Spline(n) => {
+                let (d0, d1) = n.domain();
+                let h = 1e-6 * (d1 - d0);
+                self.point_at((t + h).min(d1)) - self.point_at((t - h).max(d0))
+            }
         }
     }
 
@@ -86,13 +101,13 @@ impl Axis {
 }
 
 /// The surface the profile sweeps where `boundary` bounds a face, and
-/// whether its normal runs against the STEP surface's: the profile's tangent
-/// crossed with the way it turns.
+/// whether its normal runs against the STEP surface's.
 ///
 /// # Errors
 ///
-/// Returns an error if the profile sweeps no surface (it lies on the axis)
-/// or the swept surface cannot be built.
+/// Returns an error if the profile sweeps no surface (it lies on the axis),
+/// sweeps a hyperboloid (a line that misses the axis at a slant), or the
+/// swept surface cannot be built.
 pub(super) fn revolution(
     profile: &Profile,
     axis: Axis,
@@ -103,8 +118,9 @@ pub(super) fn revolution(
             let inverted = inverted(&surface, profile, axis, boundary)?;
             Ok((surface, inverted))
         }
-        // The B-spline surface runs along the profile in u and round the axis
-        // in v, as the STEP surface does: its Su x Sv is the STEP normal.
+        // The B-spline surface turns about the axis in u and runs along the
+        // profile in v, as the STEP surface does: its Su x Sv is the STEP
+        // normal.
         None => Ok((FaceSurface::Nurbs(spline(profile, axis)?), false)),
     }
 }
@@ -113,6 +129,9 @@ pub(super) fn revolution(
 fn tolerance(scale: f64) -> f64 {
     1e-6 * (1.0 + scale)
 }
+
+/// Below this sine a line runs along, or square to, the axis.
+const PARALLEL: f64 = 1e-8;
 
 /// The analytic surface the profile sweeps, if it sweeps one.
 fn analytic(
@@ -126,8 +145,14 @@ fn analytic(
             let d = direction.normalize()?;
             let (foot, offset) = axis.foot(*point);
             let tol = tolerance(offset.length());
-            let across = d.cross(k);
-            if across.length() < 1e-12 {
+            let (rise, across) = (d.dot(k), d.cross(k).length());
+            // Square to the axis, a line sweeps a plane whether or not it
+            // passes through the axis.
+            if rise.abs() < PARALLEL {
+                let d = k.dot(Vec3::new(point.x(), point.y(), point.z()));
+                return Ok(Some(FaceSurface::Plane { normal: k, d }));
+            }
+            if across < PARALLEL {
                 if offset.length() < tol {
                     return Err(MathError::ZeroVector);
                 }
@@ -135,17 +160,13 @@ fn analytic(
                 return Ok(Some(FaceSurface::Cylinder(cylinder)));
             }
             // The line meets the axis when the gap between them is nothing.
-            let gap = (*point - axis.origin).dot(across) / across.length();
+            let gap = (*point - axis.origin).dot(d.cross(k)) / across;
             if gap.abs() > tol {
                 return Ok(None);
             }
-            if d.dot(k).abs() < 1e-12 {
-                let d = k.dot(Vec3::new(point.x(), point.y(), point.z()));
-                return Ok(Some(FaceSurface::Plane { normal: k, d }));
-            }
             // Where the line crosses the axis: along it from `point` until
             // its offset from the axis is gone.
-            let out = d - k * d.dot(k);
+            let out = d - k * rise;
             let t = -offset.dot(out) / out.dot(out);
             let apex = axis.foot(*point + d * t).0;
             // The line sweeps two cones, apex to apex; the face is on one.
@@ -157,7 +178,7 @@ fn analytic(
                 .find(|v| v.length() > tol)
                 .unwrap_or(d);
             let opening = if toward.dot(k) >= 0.0 { k } else { -k };
-            let half_angle = d.dot(k).abs().clamp(0.0, 1.0).asin();
+            let half_angle = rise.abs().atan2(across);
             let cone = ConicalSurface::new(apex, opening, half_angle)?;
             Ok(Some(FaceSurface::Cone(cone)))
         }
@@ -202,9 +223,9 @@ const CIRCLE_KNOTS: [f64; 12] = [
     0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
 ];
 
-/// The nine control points and weights that carry `p` round the axis: on its
-/// circle at each quarter turn, and pushed out to the quarter arcs' corners
-/// between them.
+/// The nine control points that carry `p` round the axis: on its circle at
+/// each quarter turn, and pushed out to the quarter arcs' corners between
+/// them.
 fn circle_row(p: Point3, axis: Axis) -> Vec<Point3> {
     (0..9)
         .map(|k| {
@@ -225,8 +246,8 @@ fn circle_weights(w: f64) -> Vec<f64> {
         .collect()
 }
 
-/// The B-spline surface the profile sweeps: along the profile in `u`, round
-/// the axis in `v`.
+/// The B-spline surface the profile sweeps: round the axis in `u`, along the
+/// profile in `v`.
 fn spline(profile: &Profile, axis: Axis) -> Result<NurbsSurface, MathError> {
     let curve = match profile {
         Profile::Spline(n) => n.clone(),
@@ -235,11 +256,10 @@ fn spline(profile: &Profile, axis: Axis) -> Result<NurbsSurface, MathError> {
                 origin: c.center(),
                 direction: c.normal(),
             };
-            let start = c.evaluate(0.0);
             NurbsCurve::new(
                 2,
                 CIRCLE_KNOTS.to_vec(),
-                circle_row(start, around),
+                circle_row(c.evaluate(0.0), around),
                 circle_weights(1.0),
             )?
         }
@@ -247,23 +267,29 @@ fn spline(profile: &Profile, axis: Axis) -> Result<NurbsSurface, MathError> {
         // finite span to fit until a face bounds it.
         Profile::Line { .. } => return Err(MathError::ZeroVector),
     };
+    let turned: Vec<Vec<Point3>> = curve
+        .control_points()
+        .iter()
+        .map(|&p| circle_row(p, axis))
+        .collect();
+    let round = circle_weights(1.0);
     NurbsSurface::new(
-        curve.degree(),
         2,
-        curve.knots().to_vec(),
+        curve.degree(),
         CIRCLE_KNOTS.to_vec(),
-        curve
-            .control_points()
-            .iter()
-            .map(|&p| circle_row(p, axis))
+        curve.knots().to_vec(),
+        (0..9)
+            .map(|i| turned.iter().map(|row| row[i]).collect())
             .collect(),
-        curve.weights().iter().map(|&w| circle_weights(w)).collect(),
+        round
+            .iter()
+            .map(|&r| curve.weights().iter().map(|&w| w * r).collect())
+            .collect(),
     )
 }
 
-/// Whether `surface`'s normal runs against the STEP surface's, read where
-/// the profile lies off the axis: anywhere, unless the profile crosses the
-/// axis, and then where `boundary` puts the face.
+/// Whether the analytic `surface`'s normal runs against the STEP surface's,
+/// read where the face lies.
 fn inverted(
     surface: &FaceSurface,
     profile: &Profile,
@@ -273,11 +299,13 @@ fn inverted(
     let against_at = |t: f64| -> Option<bool> {
         let p = profile.point_at(t);
         let (_, offset) = axis.foot(p);
-        let h = 1e-6;
-        let along = profile.point_at(t + h) - profile.point_at(t - h);
-        let turning = axis.direction.cross(offset);
-        let step_normal = along.cross(turning);
-        if step_normal.length() < 1e-9 * (1.0 + offset.length()).powi(2) {
+        if offset.length() < 1e-9 * (1.0 + (p - axis.origin).length()) {
+            return None;
+        }
+        let turning = axis.direction.cross(offset).normalize().ok()?;
+        let along = profile.tangent_at(t).normalize().ok()?;
+        let step_normal = turning.cross(along);
+        if step_normal.length() < 1e-9 {
             return None;
         }
         let normal = if let FaceSurface::Plane { normal, .. } = surface {
@@ -288,32 +316,45 @@ fn inverted(
         };
         Some(normal.dot(step_normal) < 0.0)
     };
-    let senses: Vec<bool> = profile
-        .sample_parameters()
-        .into_iter()
-        .filter_map(against_at)
-        .collect();
-    let Some(&first) = senses.first() else {
-        return Err(MathError::ZeroVector);
-    };
-    if senses.iter().all(|&s| s == first) {
-        return Ok(first);
+    let samples = profile.sample_parameters();
+    let on_face = face_parameters(profile, axis, boundary);
+    match surface {
+        // A line through the axis sweeps two cones point to point; brepkit
+        // keeps the one the face is on, so only points on it count.
+        FaceSurface::Cone(cone) => {
+            let on_cone = |t: &f64| (profile.point_at(*t) - cone.apex()).dot(cone.axis()) > 0.0;
+            on_face
+                .into_iter()
+                .chain(samples)
+                .filter(on_cone)
+                .find_map(against_at)
+                .ok_or(MathError::ZeroVector)
+        }
+        // The profile sweeps these from both sides of the axis, with
+        // opposite normals.
+        FaceSurface::Plane { .. } | FaceSurface::Sphere(_) => {
+            if let Some(sense) = on_face.into_iter().find_map(against_at) {
+                return Ok(sense);
+            }
+            log::warn!(
+                "STEP surface of revolution: its profile crosses the axis and its face does not \
+                 say which side it is on"
+            );
+            samples
+                .into_iter()
+                .find_map(against_at)
+                .ok_or(MathError::ZeroVector)
+        }
+        _ => samples
+            .into_iter()
+            .find_map(against_at)
+            .ok_or(MathError::ZeroVector),
     }
-    if let Some(sense) = face_parameters(profile, axis, boundary)
-        .into_iter()
-        .find_map(against_at)
-    {
-        return Ok(sense);
-    }
-    log::warn!(
-        "STEP surface of revolution: its profile crosses the axis and its face does not say which side it is on"
-    );
-    Ok(first)
 }
 
 /// Profile parameters where the face lies: for a line, at the height of a
-/// boundary point (each height is one point of the line); for a curve,
-/// midway along a boundary edge that runs on the curve itself.
+/// boundary point (each height is one point of a slanted line); for any
+/// profile, midway along a boundary edge that runs on the profile itself.
 fn face_parameters(profile: &Profile, axis: Axis, boundary: &Boundary) -> Vec<f64> {
     let k = axis.direction;
     match profile {
@@ -325,7 +366,7 @@ fn face_parameters(profile: &Profile, axis: Axis, boundary: &Boundary) -> Vec<f6
                 .map(|&(a, b)| 0.5 * (along(a) + along(b)))
                 .collect();
             let rise = direction.dot(k);
-            if rise.abs() > 1e-12 {
+            if rise.abs() > PARALLEL * direction.length() {
                 out.extend(boundary.points.iter().map(|&q| (q - *point).dot(k) / rise));
             }
             out
@@ -365,13 +406,15 @@ mod tests {
         direction: Vec3::new(0.0, 0.0, 1.0),
     };
 
-    /// The STEP normal of the revolution at profile parameter `t`, angle `v`.
-    fn step_normal(profile: &Profile, t: f64, v: f64) -> (Point3, Vec3) {
+    /// The STEP surface at turn `u` and profile parameter `v`, and its normal
+    /// there: the derivative along the turn crossed with the one along the
+    /// profile.
+    fn step_normal(profile: &Profile, u: f64, v: f64) -> (Point3, Vec3) {
         let h = 1e-6;
-        let at = |t: f64, v: f64| Z.turn(profile.point_at(t), v);
-        let su = (at(t + h, v) - at(t - h, v)) * (0.5 / h);
-        let sv = (at(t, v + h) - at(t, v - h)) * (0.5 / h);
-        (at(t, v), su.cross(sv))
+        let at = |u: f64, v: f64| Z.turn(profile.point_at(v), u);
+        let su = (at(u + h, v) - at(u - h, v)) * (0.5 / h);
+        let sv = (at(u, v + h) - at(u, v - h)) * (0.5 / h);
+        (at(u, v), su.cross(sv))
     }
 
     /// The revolution of `profile` is a `kind`, holds the profile turned to
@@ -381,40 +424,40 @@ mod tests {
         let (surface, inverted) = revolution(profile, Z, boundary).expect(kind);
         assert_eq!(surface.type_tag(), kind);
         if let FaceSurface::Nurbs(n) = &surface {
-            // At angle zero the surface is the profile itself.
+            // At no turn the surface is the profile itself.
             assert!(!inverted, "{kind}: a spline surface keeps the STEP sense");
-            let (u0, u1) = n.domain_u();
+            let (v0, v1) = n.domain_v();
             for k in 1..16 {
-                let u = (u1 - u0).mul_add(f64::from(k) / 16.0, u0);
-                let p = n.evaluate(u, 0.0);
+                let v = (v1 - v0).mul_add(f64::from(k) / 16.0, v0);
+                let p = n.evaluate(0.0, v);
                 let t = match profile {
                     Profile::Circle(c) => c.project(p),
-                    _ => u,
+                    _ => v,
                 };
-                let (q, step) = step_normal(profile, t, 0.0);
+                let (q, step) = step_normal(profile, 0.0, t);
                 assert!((q - p).length() < 1e-9, "{kind}: {p:?} is not the profile");
                 if step.length() > 1e-6 {
-                    assert!(n.normal(u, 0.0).unwrap().dot(step) > 0.0, "{kind} at u {u}");
+                    assert!(n.normal(0.0, v).unwrap().dot(step) > 0.0, "{kind} at v {v}");
                 }
             }
             return;
         }
         let mut checked = 0;
         for &t in on_face {
-            for v in [0.1, 2.0, 4.0] {
-                let (p, n) = step_normal(profile, t, v);
-                assert!(n.length() > 1e-6, "{kind}: t {t} on the axis");
+            for u in [0.1, 2.0, 4.0] {
+                let (p, n) = step_normal(profile, u, t);
+                assert!(n.length() > 1e-12, "{kind}: t {t} on the axis");
                 let normal = if let FaceSurface::Plane { normal, d } = &surface {
                     let height = normal.dot(Vec3::new(p.x(), p.y(), p.z()));
                     assert!((height - d).abs() < 1e-9, "{kind}: {p:?} off the plane");
                     *normal
                 } else {
-                    let (u, w) = surface.project_point(p).unwrap();
-                    let q = surface.evaluate(u, w).unwrap();
+                    let (a, b) = surface.project_point(p).unwrap();
+                    let q = surface.evaluate(a, b).unwrap();
                     assert!((q - p).length() < 1e-9, "{kind}: {p:?} off the surface");
-                    surface.normal(u, w)
+                    surface.normal(a, b)
                 };
-                assert_eq!(normal.dot(n) > 0.0, !inverted, "{kind} at t {t}, v {v}");
+                assert_eq!(normal.dot(n) > 0.0, !inverted, "{kind} at t {t}, u {u}");
                 checked += 1;
             }
         }
@@ -446,6 +489,13 @@ mod tests {
         }
     }
 
+    fn heights(profile: &Profile, ts: &[f64]) -> Boundary {
+        Boundary {
+            points: ts.iter().map(|&t| profile.point_at(t)).collect(),
+            on_profile: Vec::new(),
+        }
+    }
+
     #[test]
     fn a_profile_off_the_axis_keeps_its_side_everywhere() {
         let none = Boundary::default();
@@ -467,7 +517,10 @@ mod tests {
                 )
                 .unwrap(),
             );
-            assert_sense(&spline, "nurbs", &none, &spline.sample_parameters());
+            assert_sense(&spline, "nurbs", &none, &[]);
+            // A line a hair off the axis's direction sweeps a cylinder.
+            let nearly = line([4.0, 0.0, 3.0], [1e-9, 0.0, s]);
+            assert_sense(&nearly, "cylinder", &none, &[0.0]);
         }
     }
 
@@ -475,24 +528,24 @@ mod tests {
     fn a_profile_across_the_axis_takes_the_side_its_face_is_on() {
         for s in [1.0, -1.0] {
             // A line through the axis sweeps two cones; a face's height
-            // says which.
-            let cone = line([4.0, 0.0, 0.0], [-0.4 * s, 0.0, s]);
-            for (near, far) in [(2.0, 5.0), (15.0, 20.0)] {
-                let boundary = Boundary {
-                    points: vec![cone.point_at(near * s), cone.point_at(far * s)],
-                    on_profile: Vec::new(),
-                };
-                assert_sense(&cone, "cone", &boundary, &[near * s, far * s]);
+            // says which. Steep and shallow lines both.
+            for (point, slope, apex) in
+                [([4.0, 0.0, 0.0], -0.4, 10.0), ([12.0, 0.0, 0.0], -2.0, 6.0)]
+            {
+                let cone = line(point, [slope * s, 0.0, s]);
+                for (near, far) in [(apex * 0.2, apex * 0.5), (apex * 1.5, apex * 2.0)] {
+                    let ts = [near * s, far * s];
+                    assert_sense(&cone, "cone", &heights(&cone, &ts), &ts);
+                }
             }
-            // A line square to the axis sweeps the plane twice.
-            let plane = line([4.0, 0.0, 2.0], [s, 0.0, 0.0]);
-            for (a, b) in [(-1.0, 3.0), (-9.0, -6.0)] {
-                assert_sense(
-                    &plane,
-                    "plane",
-                    &arc(&plane, a * s, b * s),
-                    &[0.5 * (a + b) * s],
-                );
+            // A line square to the axis sweeps the plane twice, whether it
+            // crosses the axis or passes it by.
+            for y in [0.0, 1.0] {
+                let plane = line([4.0, y, 2.0], [s, 0.0, 0.0]);
+                for (a, b) in [(-1.0, 3.0), (-9.0, -6.0)] {
+                    let span = arc(&plane, a * s, b * s);
+                    assert_sense(&plane, "plane", &span, &[0.5 * (a + b) * s]);
+                }
             }
             // A circle about a point of the axis sweeps the sphere twice.
             let sphere = circle([0.0, 0.0, 1.0], [0.0, s, 0.0], 5.0);
@@ -501,13 +554,22 @@ mod tests {
             }
             // A circle reaching over the axis sweeps a torus through itself.
             let spindle = circle([2.0, 0.0, 0.0], [0.0, s, 0.0], 3.0);
-            for (a, b) in [(-0.5, 0.5), (2.8, 3.4)] {
-                let t = spindle.point_at(0.5 * (a + b));
-                let (_, offset) = Z.foot(t);
-                assert!(offset.length() > 0.5, "sample clear of the axis");
-                assert_sense(&spindle, "nurbs", &arc(&spindle, a, b), &[0.5 * (a + b)]);
-            }
+            assert_sense(&spindle, "nurbs", &Boundary::default(), &[]);
         }
+    }
+
+    #[test]
+    fn small_parts_in_large_units_keep_their_side() {
+        // A 10 mm ball and a 5 mm fillet ring, written in metres.
+        let ball = circle([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.01);
+        assert_sense(&ball, "sphere", &arc(&ball, 0.3, 1.2), &[0.75]);
+        let ring = circle([0.05, 0.0, 0.0], [0.0, 1.0, 0.0], 0.005);
+        assert_sense(
+            &ring,
+            "torus",
+            &Boundary::default(),
+            &ring.sample_parameters(),
+        );
     }
 
     #[test]
