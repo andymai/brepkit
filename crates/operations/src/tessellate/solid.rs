@@ -72,8 +72,7 @@ pub fn tessellate_solid_for_boolean(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
-    tessellate_solid_core(topo, solid, deflection, angular_tol, false, true)
-        .map(|(mesh, _, _)| mesh)
+    tessellate_solid_core(topo, solid, deflection, angular_tol, false, true).map(|core| core.mesh)
 }
 
 /// Tessellate a solid with explicit linear and angular tolerances.
@@ -90,8 +89,7 @@ pub fn tessellate_solid_with_tolerance(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
-    tessellate_solid_core(topo, solid, deflection, angular_tol, false, false)
-        .map(|(mesh, _, _)| mesh)
+    tessellate_solid_core(topo, solid, deflection, angular_tol, false, false).map(|core| core.mesh)
 }
 
 /// Watertight solid tessellation with per-face triangle grouping.
@@ -112,8 +110,12 @@ pub fn tessellate_solid_grouped_with_tolerance(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<(TriangleMesh, Vec<u32>), crate::OperationsError> {
-    let (mut mesh, tri_faces, n_faces) =
-        tessellate_solid_core(topo, solid, deflection, angular_tol, true, false)?;
+    let CoreMesh {
+        mut mesh,
+        tri_faces,
+        n_faces,
+        ..
+    } = tessellate_solid_core(topo, solid, deflection, angular_tol, true, false)?;
     let tri_faces = tri_faces.unwrap_or_default();
     debug_assert_eq!(tri_faces.len() * 3, mesh.indices.len());
 
@@ -151,6 +153,21 @@ pub fn tessellate_solid_grouped_with_tolerance(
     Ok((mesh, face_offsets))
 }
 
+/// What [`tessellate_solid_core`] returns.
+pub(super) struct CoreMesh {
+    /// The solid's mesh.
+    pub(super) mesh: TriangleMesh,
+    /// The `tri -> face` array, when asked for.
+    pub(super) tri_faces: Option<Vec<u32>>,
+    /// How many faces the solid has.
+    pub(super) n_faces: usize,
+    /// The faces left without triangles by their meshers or by the boundary
+    /// weld. Two coincident faces of opposite sense, which cancel to nothing
+    /// by design, are not among them.
+    #[cfg(test)]
+    pub(super) unmeshed: Vec<FaceId>,
+}
+
 /// Core watertight tessellation pipeline.
 ///
 /// When `track_faces` is set, also returns a parallel `tri -> face` array (one
@@ -164,14 +181,14 @@ pub fn tessellate_solid_grouped_with_tolerance(
 /// Because the shared edge pool drives the cylinder/cone band density, this one
 /// flag governs every circular feature in the solid consistently.
 #[allow(clippy::too_many_lines, clippy::fn_params_excessive_bools)]
-fn tessellate_solid_core(
+pub(super) fn tessellate_solid_core(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
     angular_tol: f64,
     track_faces: bool,
     circle_floor: bool,
-) -> Result<(TriangleMesh, Option<Vec<u32>>, usize), crate::OperationsError> {
+) -> Result<CoreMesh, crate::OperationsError> {
     use brepkit_topology::explorer;
 
     let all_faces = explorer::solid_faces(topo, solid)?;
@@ -941,6 +958,28 @@ fn tessellate_solid_core(
     phase("normals", &mut phase_t);
     let repeated = weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
 
+    // A face no mesher covered, or whose rim the weld collapsed beside a
+    // neighbour's crack, leaves a hole the caller cannot see from the mesh.
+    // Read before the dedupe below, which empties two coincident faces of
+    // opposite sense on purpose.
+    let unmeshed: Vec<FaceId> = tri_faces.as_ref().map_or_else(Vec::new, |tf| {
+        let mut meshed = vec![false; all_faces.len()];
+        for &fi in tf {
+            if let Some(flag) = meshed.get_mut(fi as usize) {
+                *flag = true;
+            }
+        }
+        all_faces
+            .iter()
+            .zip(&meshed)
+            .filter(|(_, m)| !**m)
+            .map(|(&face_id, _)| face_id)
+            .collect()
+    });
+    for face_id in &unmeshed {
+        log::warn!("{face_id:?} meshed to no triangles at deflection {deflection}");
+    }
+
     // Drop coincident/cancelling triangles left by booleans that
     // produced overlapping coplanar faces (issue #696). Keyed on quantized
     // positions so position-coincident triangles with distinct vertex IDs
@@ -972,21 +1011,13 @@ fn tessellate_solid_core(
         split_pinched_chords(&mut merged, tf, &on_face);
     }
 
-    // A face no mesher covered, or whose rim the weld collapsed beside a
-    // neighbour's crack, leaves a hole the caller cannot see from the mesh.
-    if let Some(tf) = tri_faces.as_ref() {
-        let mut meshed = vec![false; all_faces.len()];
-        for &fi in tf {
-            if let Some(flag) = meshed.get_mut(fi as usize) {
-                *flag = true;
-            }
-        }
-        for (&face_id, _) in all_faces.iter().zip(&meshed).filter(|(_, m)| !**m) {
-            log::warn!("{face_id:?} meshed to no triangles at deflection {deflection}");
-        }
-    }
-
-    Ok((merged, tri_faces.filter(|_| track_faces), all_faces.len()))
+    Ok(CoreMesh {
+        mesh: merged,
+        tri_faces: tri_faces.filter(|_| track_faces),
+        n_faces: all_faces.len(),
+        #[cfg(test)]
+        unmeshed,
+    })
 }
 
 /// `BK_TESS_PHASES` (any value): log per-phase wall clock of the solid

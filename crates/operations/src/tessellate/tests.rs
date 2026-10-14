@@ -3401,3 +3401,74 @@ fn a_nurbs_wall_closed_along_v_meshes_between_its_rims() {
         }
     }
 }
+
+/// Two triangular prisms stacked into one solid that keeps both copies of
+/// the triangle they share, as a boolean can leave them, plus a sliver face
+/// whose wire runs one edge there and back. The coincident pair of opposite
+/// sense cancels to nothing by design and is no hole; the sliver bounds
+/// nothing and meshes to nothing, which the mesher reports.
+#[test]
+fn only_a_face_left_genuinely_empty_is_reported_unmeshed() {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let mut topo = Topology::new();
+    let triangle = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)];
+    let lower = build_prism(&mut topo, &triangle, 0.0, 1.0);
+    let upper = build_prism(&mut topo, &triangle, 1.0, 2.0);
+    let mut faces = brepkit_topology::explorer::solid_faces(&topo, lower).unwrap();
+    faces.extend(brepkit_topology::explorer::solid_faces(&topo, upper).unwrap());
+    let shared: Vec<_> = faces
+        .iter()
+        .copied()
+        .filter(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                if normal.x().abs() < 1e-12 && normal.y().abs() < 1e-12 && (d.abs() - 1.0).abs() < 1e-12)
+        })
+        .collect();
+    assert_eq!(shared.len(), 2, "the prisms share one triangle, kept twice");
+    let (a, b) = (
+        topo.add_vertex(Vertex::new(Point3::new(3.0, 0.0, 0.0), 1e-7)),
+        topo.add_vertex(Vertex::new(Point3::new(4.0, 0.0, 0.0), 1e-7)),
+    );
+    let there = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+    let sliver_wire = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(there, true),
+                OrientedEdge::new(there, false),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let sliver = topo.add_face(Face::new(
+        sliver_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    faces.push(sliver);
+    let shell = topo.add_shell(Shell::new(faces).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let core = super::solid::tessellate_solid_core(
+        &topo,
+        solid,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        true,
+        false,
+    )
+    .unwrap();
+    let tri_faces = core.tri_faces.unwrap();
+    let all = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    for &face in &shared {
+        let index = all.iter().position(|&f| f == face).unwrap();
+        assert!(
+            !tri_faces.iter().any(|&f| f as usize == index),
+            "the coincident pair cancels in the mesh"
+        );
+    }
+    assert_eq!(core.unmeshed, vec![sliver]);
+}
