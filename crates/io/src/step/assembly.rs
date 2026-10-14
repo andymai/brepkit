@@ -530,54 +530,146 @@ impl File<'_> {
         Some((*refs.first()?, *refs.get(1)?))
     }
 
-    /// An `AXIS2_PLACEMENT_3D` as the transform from its frame to its
-    /// representation's, with its origin scaled to millimetres.
+    /// An `AXIS2_PLACEMENT_3D` or `CARTESIAN_TRANSFORMATION_OPERATOR_3D` as
+    /// the transform from its frame to its representation's, with its origin
+    /// scaled to millimetres.
     fn placement(&self, id: u64, scale: f64) -> Option<Mat4> {
         let e = self.entities.get(&id)?;
-        if e.entity_type != "AXIS2_PLACEMENT_3D" {
-            return None;
+        if e.entity_type == "AXIS2_PLACEMENT_3D" {
+            // ('', location, axis, ref_direction): either direction may be `$`.
+            let fields = fields(after_name(&e.attrs));
+            let (z, x) = base_axes(
+                self.direction(fields.get(1).copied()),
+                self.direction(fields.get(2).copied()),
+            )?;
+            let y = z.cross(x);
+            return Some(frame_matrix(
+                x,
+                y,
+                z,
+                self.point(fields.first().copied())?,
+                1.0,
+                scale,
+            ));
         }
-        // ('', location, axis, ref_direction): either direction may be `$`.
-        let fields: Vec<&str> = after_name(&e.attrs)
-            .trim_end()
-            .trim_end_matches(')')
-            .split(',')
-            .map(str::trim)
-            .collect();
-        let point_of = |field: Option<&&str>| -> Option<Vec<f64>> {
-            let r = parse_refs(field?).first().copied()?;
-            Some(parse_floats(&self.entities.get(&r)?.attrs))
+        // (names..., axis1, axis2, local_origin, scale, axis3) as one record,
+        // or split across the operator's components in a complex one; the
+        // names vary between schemas, the last fields do not.
+        let (planar, axis3) = if e.entity_type == "CARTESIAN_TRANSFORMATION_OPERATOR_3D" {
+            let all = fields(&e.attrs);
+            let n = all.len();
+            if n < 5 {
+                return None;
+            }
+            (all[n - 5..n - 1].to_vec(), all.get(n - 1).copied())
+        } else if e.entity_type.is_empty() {
+            let operator = fields(self.component(id, "CARTESIAN_TRANSFORMATION_OPERATOR")?);
+            let three = self.component(id, "CARTESIAN_TRANSFORMATION_OPERATOR_3D")?;
+            let n = operator.len();
+            if n < 4 {
+                return None;
+            }
+            (operator[n - 4..].to_vec(), fields(three).last().copied())
+        } else {
+            return None;
         };
-        let location = point_of(fields.first()).filter(|c| c.len() >= 3)?;
-        let direction = |field: Option<&&str>| {
-            point_of(field)
-                .filter(|c| c.len() >= 3)
-                .map(|c| Vec3::new(c[0], c[1], c[2]))
+        let (z, x) = base_axes(
+            self.direction(axis3),
+            self.direction(planar.first().copied()),
+        )?;
+        // ISO 10303-42 second_proj_axis: the given (or +Y) direction made
+        // square to the other two, which may leave the frame mirrored.
+        let given = self
+            .direction(planar.get(1).copied())
+            .unwrap_or_else(|| Vec3::new(0.0, 1.0, 0.0));
+        let y = {
+            let v = given - z * given.dot(z);
+            (v - x * v.dot(x))
+                .normalize()
+                .unwrap_or_else(|_| z.cross(x))
         };
-        let z = direction(fields.get(1))
-            .unwrap_or_else(|| Vec3::new(0.0, 0.0, 1.0))
-            .normalize()
-            .ok()?;
-        let reference = direction(fields.get(2))
-            .filter(|r| r.cross(z).length() > 1e-12)
-            .unwrap_or_else(|| {
-                // ISO 10303-42's default: +X, or +Y for an axis along X.
-                if Vec3::new(1.0, 0.0, 0.0).cross(z).length() > 1e-12 {
-                    Vec3::new(1.0, 0.0, 0.0)
-                } else {
-                    Vec3::new(0.0, 1.0, 0.0)
-                }
-            });
-        let x = (reference - z * reference.dot(z)).normalize().ok()?;
-        let y = z.cross(x);
-        let o = Point3::new(location[0], location[1], location[2]);
-        Some(Mat4([
-            [x.x(), y.x(), z.x(), o.x() * scale],
-            [x.y(), y.y(), z.y(), o.y() * scale],
-            [x.z(), y.z(), z.z(), o.z() * scale],
-            [0.0, 0.0, 0.0, 1.0],
-        ]))
+        let factor = planar
+            .get(3)
+            .and_then(|f| f.trim().parse::<f64>().ok())
+            .unwrap_or(1.0);
+        Some(frame_matrix(
+            x,
+            y,
+            z,
+            self.point(planar.get(2).copied())?,
+            factor,
+            scale,
+        ))
     }
+
+    /// The point a `CARTESIAN_POINT` field names.
+    fn point(&self, field: Option<&str>) -> Option<Point3> {
+        let r = parse_refs(field?).first().copied()?;
+        let c = parse_floats(&self.entities.get(&r)?.attrs);
+        (c.len() >= 3).then(|| Point3::new(c[0], c[1], c[2]))
+    }
+
+    /// The direction a `DIRECTION` field names, or `None` for `$`.
+    fn direction(&self, field: Option<&str>) -> Option<Vec3> {
+        let r = parse_refs(field?).first().copied()?;
+        let c = parse_floats(&self.entities.get(&r)?.attrs);
+        (c.len() >= 3).then(|| Vec3::new(c[0], c[1], c[2]))
+    }
+}
+
+/// The z and x axes of ISO 10303-42's `base_axis` for a 3D frame: `z` as
+/// given or +Z, and `x` the given direction made square to it, or by
+/// default +X (+Y when `z` runs along X).
+fn base_axes(z: Option<Vec3>, x: Option<Vec3>) -> Option<(Vec3, Vec3)> {
+    let z = z
+        .unwrap_or_else(|| Vec3::new(0.0, 0.0, 1.0))
+        .normalize()
+        .ok()?;
+    let reference = x
+        .filter(|r| r.cross(z).length() > 1e-12)
+        .unwrap_or_else(|| {
+            if Vec3::new(1.0, 0.0, 0.0).cross(z).length() > 1e-12 {
+                Vec3::new(1.0, 0.0, 0.0)
+            } else {
+                Vec3::new(0.0, 1.0, 0.0)
+            }
+        });
+    Some((z, (reference - z * reference.dot(z)).normalize().ok()?))
+}
+
+/// The transform taking a frame's coordinates (axes `x`, `y`, `z` scaled by
+/// `factor`, at `origin`) into its parent's, the origin in a unit `unit`
+/// millimetres long.
+fn frame_matrix(x: Vec3, y: Vec3, z: Vec3, origin: Point3, factor: f64, unit: f64) -> Mat4 {
+    let (x, y, z) = (x * factor, y * factor, z * factor);
+    Mat4([
+        [x.x(), y.x(), z.x(), origin.x() * unit],
+        [x.y(), y.y(), z.y(), origin.y() * unit],
+        [x.z(), y.z(), z.z(), origin.z() * unit],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+/// A record's top-level fields, split at commas outside quotes and
+/// parentheses, its closing parenthesis dropped.
+fn fields(attrs: &str) -> Vec<&str> {
+    let body = attrs.trim_end();
+    let body = body.strip_suffix(')').unwrap_or(body);
+    let (mut out, mut start, mut depth, mut quoted) = (Vec::new(), 0, 0_i32, false);
+    for (i, ch) in body.char_indices() {
+        match ch {
+            '\'' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth -= 1,
+            ',' if !quoted && depth == 0 => {
+                out.push(body[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(body[start..].trim());
+    out
 }
 
 /// Factors of the SI prefixes.

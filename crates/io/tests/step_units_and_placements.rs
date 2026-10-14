@@ -426,3 +426,44 @@ fn a_placement_without_a_reference_direction_takes_the_standard_one() {
     let along_x: Frame = ([5.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
     assert_cylinder(&topo, solids[0], 1.0, &[along_x], "default reference");
 }
+
+#[test]
+fn a_mapped_item_may_target_a_transformation_operator() {
+    // The same placement as TILTED, written as a 3D transformation operator,
+    // once as a plain record and once as a complex one.
+    for complex in [false, true] {
+        let mut s = StepText::new();
+        let solid = cylinder(&mut s);
+        let part_origin = s.placement([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let part_rep =
+            s.representation("ADVANCED_BREP_SHAPE_REPRESENTATION", &[part_origin, solid]);
+        let map = s.add(format!("REPRESENTATION_MAP(#{part_origin},#{part_rep})"));
+        let x = s.direction([1.0, -1.0, 0.0]);
+        let y = s.direction([1.0, 1.0, -2.0]);
+        let o = s.point(TILTED.0);
+        let z = s.direction([1.0, 1.0, 1.0]);
+        let target = if complex {
+            s.add(format!(
+                "( CARTESIAN_TRANSFORMATION_OPERATOR(#{x},#{y},#{o},1.) \
+                 CARTESIAN_TRANSFORMATION_OPERATOR_3D(#{z}) \
+                 FUNCTIONALLY_DEFINED_TRANSFORMATION('','') GEOMETRIC_REPRESENTATION_ITEM() \
+                 REPRESENTATION_ITEM('') )"
+            ))
+        } else {
+            s.add(format!(
+                "CARTESIAN_TRANSFORMATION_OPERATOR_3D('','',#{x},#{y},#{o},1.,#{z})"
+            ))
+        };
+        let item = s.add(format!("MAPPED_ITEM('',#{map},#{target})"));
+        s.representation("SHAPE_REPRESENTATION", &[item]);
+        let (topo, solids) = read(&s.finish());
+        assert_eq!(solids.len(), 1);
+        assert_cylinder(
+            &topo,
+            solids[0],
+            1.0,
+            &[TILTED],
+            &format!("operator, complex {complex}"),
+        );
+    }
+}

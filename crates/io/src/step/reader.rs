@@ -216,14 +216,17 @@ impl<'a> StepBuilder<'a> {
         let mut solids = Vec::new();
         for shell_ref in parse_list_refs(&attrs) {
             let shell = self.get_entity(shell_ref)?;
-            // ORIENTED_OPEN_SHELL('', *, open_shell, orientation): a false
-            // orientation turns every face of the shell over.
-            let (shell_ref, flip) = if shell.entity_type == "ORIENTED_OPEN_SHELL" {
+            // ORIENTED_OPEN_SHELL('', *, shell, orientation), or its closed
+            // kin: a false orientation turns every face of the shell over.
+            let (shell_ref, flip) = if matches!(
+                shell.entity_type.as_str(),
+                "ORIENTED_OPEN_SHELL" | "ORIENTED_CLOSED_SHELL"
+            ) {
                 let tail = shell.attrs.trim_end_matches(')').trim();
                 let flip = tail.ends_with(".F.") || tail.ends_with(".FALSE.");
                 let inner = parse_refs(&shell.attrs).first().copied().ok_or_else(|| {
                     IoError::ParseError {
-                        reason: format!("ORIENTED_OPEN_SHELL #{shell_ref} missing its shell"),
+                        reason: format!("oriented shell #{shell_ref} missing its shell"),
                     }
                 })?;
                 (inner, flip)
@@ -879,7 +882,14 @@ impl<'a> StepBuilder<'a> {
             match self.build_curve_geometry(swept)? {
                 EdgeCurve::Circle(c) => Profile::Circle(c),
                 EdgeCurve::NurbsCurve(n) => Profile::Spline(n),
-                EdgeCurve::Line | EdgeCurve::Ellipse(_) => {
+                EdgeCurve::Ellipse(e) => {
+                    Profile::Spline(super::revolution::ellipse_profile(&e).map_err(|err| {
+                        IoError::ParseError {
+                            reason: format!("SURFACE_OF_REVOLUTION #{surface_ref}: {err}"),
+                        }
+                    })?)
+                }
+                EdgeCurve::Line => {
                     return Err(IoError::UnsupportedEntity {
                         entity: format!("SURFACE_OF_REVOLUTION #{surface_ref} of this curve"),
                     });

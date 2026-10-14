@@ -11,7 +11,7 @@
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, TAU};
 
 use brepkit_math::MathError;
-use brepkit_math::curves::Circle3D;
+use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::nurbs::{NurbsCurve, NurbsSurface};
 use brepkit_math::surfaces::{
     ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
@@ -244,6 +244,24 @@ fn circle_weights(w: f64) -> Vec<f64> {
     (0..9)
         .map(|k| if k % 2 == 0 { w } else { w * FRAC_1_SQRT_2 })
         .collect()
+}
+
+/// An ellipse as the rational B-spline it is: the nine-point circle
+/// stretched along its axes, from its parameter origin round the way it runs.
+pub(super) fn ellipse_profile(e: &Ellipse3D) -> Result<NurbsCurve, MathError> {
+    let points = (0..9)
+        .map(|k| {
+            let (s, c) = (f64::from(k) * FRAC_PI_4).sin_cos();
+            let reach = if k % 2 == 0 {
+                1.0
+            } else {
+                std::f64::consts::SQRT_2
+            };
+            e.center()
+                + (e.u_axis() * (e.semi_major() * c) + e.v_axis() * (e.semi_minor() * s)) * reach
+        })
+        .collect();
+    NurbsCurve::new(2, CIRCLE_KNOTS.to_vec(), points, circle_weights(1.0))
 }
 
 /// The B-spline surface the profile sweeps: round the axis in `u`, along the
@@ -570,6 +588,31 @@ mod tests {
             &Boundary::default(),
             &ring.sample_parameters(),
         );
+    }
+
+    #[test]
+    fn an_ellipse_is_its_rational_spline() {
+        let e = Ellipse3D::new_with_ref(
+            Point3::new(6.0, 0.0, 1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            3.0,
+            1.5,
+            Vec3::new(1.0, 0.0, 1.0),
+        )
+        .unwrap();
+        let n = ellipse_profile(&e).unwrap();
+        for k in 0..=64 {
+            let p = n.evaluate(f64::from(k) / 64.0);
+            let d = p - e.center();
+            let (x, y) = (d.dot(e.u_axis()) / 3.0, d.dot(e.v_axis()) / 1.5);
+            assert!((x.hypot(y) - 1.0).abs() < 1e-12, "{p:?} off the ellipse");
+            assert!(d.dot(e.normal()).abs() < 1e-12, "{p:?} off its plane");
+        }
+        // It starts where the ellipse does and runs the same way.
+        assert!((n.evaluate(0.0) - e.evaluate(0.0)).length() < 1e-12);
+        assert!((n.evaluate(0.01) - e.evaluate(0.0)).dot(e.tangent(0.0)) > 0.0);
+        let profile = Profile::Spline(n);
+        assert_sense(&profile, "nurbs", &Boundary::default(), &[]);
     }
 
     #[test]

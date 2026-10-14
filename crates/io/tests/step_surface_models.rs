@@ -171,3 +171,14 @@ fn a_sheet_the_reader_cannot_build_leaves_the_solids() {
     let shapes = read_step(&s.finish(), &mut topo).unwrap();
     assert_eq!(shapes.len(), 1, "the cup comes through, the sheet does not");
 }
+
+#[test]
+fn a_reversed_closed_shell_in_a_surface_model_turns_its_faces_over() {
+    let mut s = StepText::new();
+    let (floor, wall) = cup(&mut s);
+    let shell = s.add(format!("CLOSED_SHELL('',(#{floor},#{wall}))"));
+    let oriented = s.add(format!("ORIENTED_CLOSED_SHELL('',*,#{shell},.F.)"));
+    let model = s.add(format!("SHELL_BASED_SURFACE_MODEL('',(#{oriented}))"));
+    s.representation("MANIFOLD_SURFACE_SHAPE_REPRESENTATION", &[model]);
+    assert_cup(&s.finish(), false, "reversed closed shell");
+}
