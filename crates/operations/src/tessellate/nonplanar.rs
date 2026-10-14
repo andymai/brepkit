@@ -3858,25 +3858,31 @@ fn close_loop_at_pole(
     // The closing meridian is a real curve on the surface: sampled like an
     // edge, one side's points welding to the other's, so no triangle chords
     // it from rim to pole.
-    let n = match meridian_radius {
-        Some(radius) => segments_for_chord_deviation_a(
-            radius,
-            (v_far - first_v).abs(),
-            deflection,
-            angular_tol,
-            false,
-        )
-        .max(2),
-        None => surface_path_divisions(
+    let along: Vec<f64> = match meridian_radius {
+        Some(radius) => {
+            let n = segments_for_chord_deviation_a(
+                radius,
+                (v_far - first_v).abs(),
+                deflection,
+                angular_tol,
+                false,
+            )
+            .max(2);
+            #[allow(clippy::cast_precision_loss)]
+            (1..n).map(|k| k as f64 / n as f64).collect()
+        }
+        None => surface_path_parameters(
             &|t| evaluate(first_u, first_v + (v_far - first_v) * t),
             deflection,
             angular_tol,
+            f64::INFINITY,
+            1,
         ),
     };
-    let side: Vec<(f64, Point3, u32)> = (1..n)
-        .map(|k| {
-            #[allow(clippy::cast_precision_loss)]
-            let v = first_v + (v_far - first_v) * k as f64 / n as f64;
+    let side: Vec<(f64, Point3, u32)> = along
+        .iter()
+        .map(|&t| {
+            let v = first_v + (v_far - first_v) * t;
             let p = evaluate(first_u, v);
             let id = *point_to_global
                 .entry(point_merge_key(p, MERGE_GRID))
@@ -4597,26 +4603,22 @@ fn join_winding_hole(
         / (boundary_3d.len() - 1) as f64;
     let (top_u, top_v) = (u0 + w_outer, v0);
     let (hole_u, hole_v, hole_gid) = hole_uv[0];
-    let reach =
-        (merged.positions[hole_gid as usize] - merged.positions[first_gid as usize]).length();
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let steps = ((reach / spacing.max(1e-12)).ceil() as usize)
-        .max(2)
-        .max(surface_path_divisions(
-            &|t| {
-                eval_surface_point(
-                    surface,
-                    top_u + (hole_u - top_u) * t,
-                    top_v + (hole_v - top_v) * t,
-                )
-            },
-            deflection,
-            angular_tol,
-        ));
-    let seam: Vec<(f64, f64, u32)> = (1..steps)
-        .map(|k| {
-            #[allow(clippy::cast_precision_loss)]
-            let t = k as f64 / steps as f64;
+    let along = surface_path_parameters(
+        &|t| {
+            eval_surface_point(
+                surface,
+                top_u + (hole_u - top_u) * t,
+                top_v + (hole_v - top_v) * t,
+            )
+        },
+        deflection,
+        angular_tol,
+        spacing.max(1e-12),
+        2,
+    );
+    let seam: Vec<(f64, f64, u32)> = along
+        .iter()
+        .map(|&t| {
             let (u, v) = (top_u + (hole_u - top_u) * t, top_v + (hole_v - top_v) * t);
             let pt = eval_surface_point(surface, u, v);
             let gid = *point_to_global
@@ -4650,40 +4652,78 @@ fn join_winding_hole(
     true
 }
 
-/// Uniform divisions of a path `point(t)`, `t` in `[0, 1]`, across a surface
-/// that keep each chord within `deflection` of the path at its middle and
-/// turning by at most `angular_tol`, the bounds an edge is sampled to. A
-/// virtual boundary the mesher runs across a face (a pole closure's meridian,
-/// a seam joining two loops) borders triangles like an edge does.
-fn surface_path_divisions(
+/// Where to sample a path `point(t)` across a surface, as the parameters
+/// strictly inside `(0, 1)`, to the bounds an edge is sampled to: each chord
+/// within `deflection` of the path and turning by at most `angular_tol`,
+/// and no longer than `max_chord`. A virtual boundary the mesher runs across
+/// a face (a pole closure's meridian, a seam joining two loops) borders
+/// triangles like an edge does.
+///
+/// The path starts as `min_spans` equal spans and each span that fails is
+/// halved. A span is read at its quarter points: an inflected path can cross
+/// its chord at the middle and still stand far off it either side. A crease
+/// (a cornered or degree-one profile) keeps its turn however finely it is
+/// halved, so a span already within the deflection and shorter than it,
+/// whose halves keep most of its turn, stands as it is; the halving it took
+/// to get there stays beside the crease.
+fn surface_path_parameters(
     point: &dyn Fn(f64) -> Point3,
     deflection: f64,
     angular_tol: f64,
-) -> usize {
-    const MAX_DIVISIONS: usize = 4096;
-    let fits = |n: usize| {
-        (0..n).all(|k| {
-            #[allow(clippy::cast_precision_loss)]
-            let (t0, t1) = (k as f64 / n as f64, (k + 1) as f64 / n as f64);
-            let (p0, mid, p1) = (point(t0), point(0.5 * (t0 + t1)), point(t1));
-            let chord_mid = Point3::new(
-                0.5 * (p0.x() + p1.x()),
-                0.5 * (p0.y() + p1.y()),
-                0.5 * (p0.z() + p1.z()),
-            );
-            // The half-chords of an arc meet at half its turn.
-            let turn = match ((mid - p0).normalize(), (p1 - mid).normalize()) {
-                (Ok(a), Ok(b)) => 2.0 * a.dot(b).clamp(-1.0, 1.0).acos(),
-                _ => 0.0,
-            };
-            (mid - chord_mid).length() <= deflection && (angular_tol <= 0.0 || turn <= angular_tol)
-        })
+    max_chord: f64,
+    min_spans: usize,
+) -> Vec<f64> {
+    const MAX_DEPTH: u32 = 12;
+    // The half-chords of an arc meet at half its turn.
+    let turn =
+        |a: Point3, mid: Point3, b: Point3| match ((mid - a).normalize(), (b - mid).normalize()) {
+            (Ok(x), Ok(y)) => 2.0 * x.dot(y).clamp(-1.0, 1.0).acos(),
+            _ => 0.0,
+        };
+    let off_chord = |p: Point3, a: Point3, b: Point3| {
+        let chord = b - a;
+        let len2 = chord.dot(chord);
+        let f = if len2 > 0.0 {
+            ((p - a).dot(chord) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + chord * f)).length()
     };
-    let mut n = 1;
-    while n < MAX_DIVISIONS && !fits(n) {
-        n *= 2;
+    let spans = min_spans.max(1);
+    let mut pending: Vec<(f64, Point3, f64, Point3, u32)> = Vec::new();
+    for k in (0..spans).rev() {
+        #[allow(clippy::cast_precision_loss)]
+        let (t0, t1) = (k as f64 / spans as f64, (k + 1) as f64 / spans as f64);
+        pending.push((t0, point(t0), t1, point(t1), 0));
     }
-    n
+    let mut along = Vec::new();
+    while let Some((t0, p0, t1, p1, depth)) = pending.pop() {
+        let quarters = [1.0, 2.0, 3.0].map(|k| point(t0 + (t1 - t0) * k / 4.0));
+        let chord = (p1 - p0).length();
+        let deviation = quarters
+            .iter()
+            .map(|&q| off_chord(q, p0, p1))
+            .fold(0.0, f64::max);
+        let bend = turn(p0, quarters[1], p1);
+        let within = deviation <= deflection && chord <= max_chord;
+        let bends = angular_tol > 0.0 && bend > angular_tol;
+        let crease = within
+            && bends
+            && chord <= deflection
+            && turn(p0, quarters[0], quarters[1]).max(turn(quarters[1], quarters[2], p1))
+                > 0.75 * bend;
+        if (within && (!bends || crease)) || depth >= MAX_DEPTH {
+            if t1 < 1.0 {
+                along.push(t1);
+            }
+            continue;
+        }
+        let tm = 0.5 * (t0 + t1);
+        pending.push((tm, quarters[1], t1, p1, depth + 1));
+        pending.push((t0, p0, tm, quarters[1], depth + 1));
+    }
+    along
 }
 
 /// Whether the open segments `a b` and `c d` cross in the plane.

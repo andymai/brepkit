@@ -2817,6 +2817,75 @@ fn a_nurbs_dome_meshes_its_pole_closure_on_the_sphere() {
     }
 }
 
+/// A dense polyline along the planar cubic Bezier `(radius, z)` profile.
+fn cubic_profile_polyline(profile: [(f64, f64); 4]) -> Vec<(f64, f64)> {
+    const SAMPLES: u32 = 4000;
+    (0..=SAMPLES)
+        .map(|k| {
+            let t = f64::from(k) / f64::from(SAMPLES);
+            let s = 1.0 - t;
+            let b = [s * s * s, 3.0 * s * s * t, 3.0 * s * t * t, t * t * t];
+            (0..4).fold((0.0, 0.0), |(r, z), i| {
+                (r + b[i] * profile[i].0, z + b[i] * profile[i].1)
+            })
+        })
+        .collect()
+}
+
+/// The distance from `p` to the surface revolving the profile `polyline`
+/// about the z axis: the nearest of a coarse pass over its vertices, then
+/// every segment beside it.
+fn distance_to_revolved_polyline(polyline: &[(f64, f64)], p: Point3) -> f64 {
+    const STRIDE: usize = 20;
+    let q = (p.x().hypot(p.y()), p.z());
+    let to_segment = |a: (f64, f64), b: (f64, f64)| {
+        let (dr, dz) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dr.mul_add(dr, dz * dz);
+        let f = if len2 > 0.0 {
+            ((q.0 - a.0).mul_add(dr, (q.1 - a.1) * dz) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (q.0 - f.mul_add(dr, a.0)).hypot(q.1 - f.mul_add(dz, a.1))
+    };
+    let near = (0..polyline.len())
+        .step_by(STRIDE)
+        .min_by(|&i, &j| {
+            let d = |k: usize| (polyline[k].0 - q.0).hypot(polyline[k].1 - q.1);
+            d(i).total_cmp(&d(j))
+        })
+        .unwrap_or(0);
+    let lo = near.saturating_sub(2 * STRIDE);
+    let hi = (near + 2 * STRIDE).min(polyline.len() - 1);
+    (lo..hi)
+        .map(|k| to_segment(polyline[k], polyline[k + 1]))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// A NURBS dome whose cubic profile is inflected so that its middle lies on
+/// the chord from rim to pole while its quarter points stand 0.63 off it.
+/// Read only at its middle, the pole closure's meridian looked straight,
+/// took no samples, and the triangles beside it cut through the dome.
+#[test]
+fn a_nurbs_dome_samples_an_inflected_pole_closure() {
+    let profile = [(4.0, 0.0), (4.0, 6.0), (0.0, 4.0), (0.0, 10.0)];
+    let weighted: Vec<(f64, f64, f64)> = profile.iter().map(|&(r, z)| (r, z, 1.0)).collect();
+    let (topo, solid) = nurbs_dome(
+        &weighted,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        None,
+    );
+    let deflection = 0.01;
+    let (mesh, offsets) =
+        tessellate_solid_grouped_with_tolerance(&topo, solid, deflection, 0.5).unwrap();
+    assert_eq!(boundary_edge_count(&mesh), 0);
+    let polyline = cubic_profile_polyline(profile);
+    let (worst, _) = deviation_and_area(&face_group_triangles(&mesh, &offsets, 1), &|p| {
+        distance_to_revolved_polyline(&polyline, p)
+    });
+    assert!(worst <= deflection, "dome mesh {worst} off its surface");
+}
+
 /// A rational NURBS half torus between two rim circles, joined by the mesher
 /// along a virtual seam across the tube. Spaced like the rims (four times the
 /// tube's radius), the seam's samples cut chords half a millimetre inside

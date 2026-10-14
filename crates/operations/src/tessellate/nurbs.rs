@@ -851,6 +851,16 @@ pub(super) fn iso_divisions_over(
         (b - a).length().max((c - a).length()) <= 1e3 * f64::EPSILON * (1.0 + reach)
     };
     let (pole_lo, pole_hi) = (pole(lo), pole(hi));
+    let off_chord = |p: Point3, a: Point3, b: Point3| {
+        let chord = b - a;
+        let len2 = chord.dot(chord);
+        let f = if len2 > 0.0 {
+            ((p - a).dot(chord) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + chord * f)).length()
+    };
     let fits = |n: usize| {
         (0..ROWS).all(|row| {
             #[allow(clippy::cast_precision_loss)]
@@ -867,7 +877,12 @@ pub(super) fn iso_divisions_over(
                     0.5 * (p0.y() + p1.y()),
                     0.5 * (p0.z() + p1.z()),
                 );
-                let sag = (point(0.5 * (t0 + t1), o) - chord_mid).length();
+                // An inflected span can cross its chord at its middle and
+                // stand off it either side, so its quarter points count too.
+                let sag = [0.25, 0.75]
+                    .iter()
+                    .map(|&f| off_chord(point(t0 + (t1 - t0) * f, o), p0, p1))
+                    .fold((point(0.5 * (t0 + t1), o) - chord_mid).length(), f64::max);
                 let at_pole = (k == 0 && pole_lo) || (k + 1 == n && pole_hi);
                 let turned = angular_tol > 0.0
                     && !at_pole
