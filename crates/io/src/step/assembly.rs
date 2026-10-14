@@ -34,7 +34,21 @@ const MAX_DEPTH: usize = 64;
 /// that uses a subassembly twice doubles its count, so a short file can
 /// name more placements than any machine holds; past this the file is
 /// refused rather than built.
-pub(super) const MAX_INSTANCES: usize = 1_000_000;
+pub(super) const MAX_INSTANCES: usize = 100_000;
+
+/// How many faces the placed copies of a file's shapes may hold between
+/// them: a large part placed many times is the same blow-up.
+pub(super) const MAX_PLACED_FACES: usize = 10_000_000;
+
+/// Spend `n` of `allowance`, or fail when it runs short.
+pub(super) fn spend(allowance: &mut usize, n: usize) -> Result<(), IoError> {
+    *allowance = allowance
+        .checked_sub(n)
+        .ok_or_else(|| IoError::ParseError {
+            reason: "STEP assembly places more shapes than brepkit reads from one file".into(),
+        })?;
+    Ok(())
+}
 
 /// The placements of every shape item in a file.
 pub(super) struct Placements {
@@ -171,72 +185,48 @@ impl Placements {
 
     /// Every placement of shape item `item`, scaled to millimetres: one per
     /// chain of placements from its representation up to one nothing places.
+    /// Each placement spends one of `allowance`.
     ///
     /// # Errors
     ///
-    /// Returns an error if there are more than [`MAX_INSTANCES`] chains.
-    pub(super) fn instances(&self, item: u64) -> Result<Vec<Mat4>, IoError> {
+    /// Returns an error if the placements outrun `allowance`.
+    pub(super) fn instances(&self, item: u64, allowance: &mut usize) -> Result<Vec<Mat4>, IoError> {
         let Some(&rep) = self.owner.get(&item) else {
+            spend(allowance, 1)?;
             return Ok(vec![uniform(self.default_scale)]);
         };
         let unit = uniform(self.scale.get(&rep).copied().unwrap_or(self.default_scale));
         let frame = self.frame.get(&rep).copied().unwrap_or(rep);
-        let count = self.chain_count(frame, &mut HashMap::new(), &mut HashSet::new(), 0);
-        if count > MAX_INSTANCES {
-            return Err(IoError::ParseError {
-                reason: format!(
-                    "STEP shape #{item} is placed {count} times, more than {MAX_INSTANCES}"
-                ),
-            });
-        }
-        let mut path = HashSet::new();
-        Ok(self
-            .chains(frame, &mut path, 0)
-            .into_iter()
-            .map(|m| m * unit)
-            .collect())
+        let mut out = Vec::new();
+        self.chains(frame, unit, &mut HashSet::new(), 0, allowance, &mut out)?;
+        Ok(out)
     }
 
-    /// How many chains [`Self::chains`] finds from `frame`, counted without
-    /// listing them and saturating at `usize::MAX`.
-    fn chain_count(
+    /// Push `below` carried up every chain of placements from `frame` onto
+    /// `out`. Each chain ends in one push, which spends one of `allowance`,
+    /// and runs at most `MAX_DEPTH` links, so the walk does at most that much
+    /// work per unit spent whatever the placements' shape.
+    fn chains(
         &self,
         frame: u64,
-        memo: &mut HashMap<u64, usize>,
+        below: Mat4,
         path: &mut HashSet<u64>,
         depth: usize,
-    ) -> usize {
-        if let Some(&n) = memo.get(&frame) {
-            return n;
-        }
+        allowance: &mut usize,
+        out: &mut Vec<Mat4>,
+    ) -> Result<(), IoError> {
         let parents = self.parents.get(&frame).map_or(&[][..], Vec::as_slice);
-        if parents.is_empty() || depth > MAX_DEPTH || !path.insert(frame) {
-            return 1;
+        if parents.is_empty() || depth > MAX_DEPTH || path.contains(&frame) {
+            spend(allowance, 1)?;
+            out.push(below);
+            return Ok(());
         }
-        let mut n = 0_usize;
-        for &(parent, _) in parents {
-            n = n.saturating_add(self.chain_count(parent, memo, path, depth + 1));
-        }
-        path.remove(&frame);
-        memo.insert(frame, n);
-        n
-    }
-
-    fn chains(&self, frame: u64, path: &mut HashSet<u64>, depth: usize) -> Vec<Mat4> {
-        let parents = self.parents.get(&frame).map_or(&[][..], Vec::as_slice);
-        if parents.is_empty() || depth > MAX_DEPTH || !path.insert(frame) {
-            return vec![Mat4::identity()];
-        }
-        let mut out = Vec::new();
+        path.insert(frame);
         for &(parent, to_parent) in parents {
-            out.extend(
-                self.chains(parent, path, depth + 1)
-                    .into_iter()
-                    .map(|m| m * to_parent),
-            );
+            self.chains(parent, to_parent * below, path, depth + 1, allowance, out)?;
         }
         path.remove(&frame);
-        out
+        Ok(())
     }
 }
 

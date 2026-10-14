@@ -368,3 +368,32 @@ fn an_assembly_that_doubles_at_every_level_is_refused() {
         "refused without listing the placements"
     );
 }
+
+#[test]
+fn an_assembly_wider_than_the_allowance_is_refused() {
+    // 400 uses of a part in a subassembly used 300 times: 120,000 copies.
+    let mut s = StepText::new();
+    let solid = cylinder(&mut s);
+    let part_origin = s.placement([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let part_rep = s.representation("ADVANCED_BREP_SHAPE_REPRESENTATION", &[part_origin, solid]);
+    let mut child = (product(&mut s, "part", part_rep), part_rep, part_origin);
+    for (level, uses) in [400, 300].into_iter().enumerate() {
+        let origin = s.placement([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let ats: Vec<u64> = (0..uses)
+            .map(|k| s.placement([f64::from(k), 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]))
+            .collect();
+        let mut items = vec![origin];
+        items.extend(&ats);
+        let rep = s.representation("SHAPE_REPRESENTATION", &items);
+        let pd = product(&mut s, &format!("level {level}"), rep);
+        for at in ats {
+            use_component(&mut s, (pd, rep), child, at, false);
+        }
+        child = (pd, rep, origin);
+    }
+    let mut topo = Topology::new();
+    assert!(
+        read_step(&s.finish(), &mut topo).is_err(),
+        "too many copies are refused"
+    );
+}

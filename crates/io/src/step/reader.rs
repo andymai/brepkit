@@ -161,20 +161,26 @@ impl<'a> StepBuilder<'a> {
         shape_ids.sort_unstable();
 
         let mut solid_ids = Vec::new();
+        let mut placed = super::assembly::MAX_INSTANCES;
+        let mut placed_faces = super::assembly::MAX_PLACED_FACES;
         for shape_id in shape_ids {
-            let instances = placements.instances(shape_id)?;
+            let instances = placements.instances(shape_id, &mut placed)?;
             let built = match self.get_entity(shape_id)?.entity_type.as_str() {
                 "MANIFOLD_SOLID_BREP" | "BREP_WITH_VOIDS" => vec![self.build_solid(shape_id)?],
                 _ => self.build_surface_model(shape_id)?,
             };
-            if solid_ids.len() + built.len() * instances.len() > super::assembly::MAX_INSTANCES {
-                return Err(IoError::ParseError {
-                    reason: format!(
-                        "STEP assembly places more than {} shapes",
-                        super::assembly::MAX_INSTANCES
-                    ),
-                });
+            // Every copy is paid for before the first is made.
+            let mut faces = 0_usize;
+            for &solid in &built {
+                faces = faces.saturating_add(
+                    brepkit_topology::explorer::solid_faces(self.topo, solid)?.len(),
+                );
             }
+            super::assembly::spend(&mut placed_faces, faces.saturating_mul(instances.len()))?;
+            super::assembly::spend(
+                &mut placed,
+                (built.len().saturating_sub(1)).saturating_mul(instances.len()),
+            )?;
             for solid in built {
                 // Copies come off the solid before it moves to its own
                 // placement, the last one.
