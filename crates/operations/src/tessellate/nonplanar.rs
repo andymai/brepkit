@@ -2350,17 +2350,18 @@ fn cdt_in_surface_frame(
                 }
                 _ => None,
             };
+            let poles = SurfacePoles::of(face_data.surface());
             for run in &seam_runs {
-                // A sphere's seam up to a pole and back is one run, which
-                // `route_through_poles` has already laid out: each half on
-                // its own copy of the seam, at the u its unwrap reached, and
-                // the pole opened into the stretch of its row between them.
-                // One u for the whole run would fold it onto a line.
-                if matches!(face_data.surface(), FaceSurface::Sphere(_))
-                    && run
-                        .indices
-                        .iter()
-                        .any(|&i| sphere_pole_v(face_data.surface(), boundary_3d[i].0).is_some())
+                // A seam up to a sphere's or NURBS cap's pole and back is one
+                // run, which `route_through_poles` has already laid out: each
+                // half on its own copy of the seam, at the u its unwrap
+                // reached, and the pole opened into the stretch of its row
+                // between them. One u for the whole run would fold it onto a
+                // line.
+                if run
+                    .indices
+                    .iter()
+                    .any(|&i| poles.v_of(boundary_3d[i].0).is_some())
                 {
                     continue;
                 }
@@ -3331,7 +3332,7 @@ fn seam_vertex_u(
         FaceSurface::Nurbs(_) if surface_periods(surface).0.is_some() => None,
         _ => return Ok(None),
     };
-    let u_period = surface_periods(surface).0;
+    let poles = SurfacePoles::of(surface);
     for (i, oe) in edges.iter().enumerate() {
         if edges[i + 1..].iter().all(|other| other.edge() != oe.edge()) {
             continue;
@@ -3339,23 +3340,10 @@ fn seam_vertex_u(
         let edge = topo.edge(oe.edge())?;
         for v in [edge.start(), edge.end()] {
             let p = topo.vertex(v)?.point();
-            if apex.is_some_and(|a| (p - a).length() < 1e-9) {
+            if apex.is_some_and(|a| (p - a).length() < 1e-9) || poles.v_of(p).is_some() {
                 continue;
             }
-            let Ok((u, v)) = project_to_surface_uv(surface, p) else {
-                continue;
-            };
-            // Measured as `iso_divisions_over` measures a pole.
-            let on_pole = matches!(surface, FaceSurface::Nurbs(_))
-                && u_period.is_some_and(|(_, period)| {
-                    let at = eval_surface_point(surface, u, v);
-                    let reach = at.x().abs().max(at.y().abs()).max(at.z().abs());
-                    [1.0, 2.0].iter().all(|&k| {
-                        let other = eval_surface_point(surface, u + k * period / 3.0, v);
-                        (other - at).length() <= 1e3 * f64::EPSILON * (1.0 + reach)
-                    })
-                });
-            if !on_pole {
+            if let Ok((u, _)) = project_to_surface_uv(surface, p) {
                 return Ok(Some(u));
             }
         }
@@ -4203,13 +4191,68 @@ fn hole_u_spans(
 
 /// The v of the sphere pole `point` lies on, if it lies on one.
 fn sphere_pole_v(surface: &FaceSurface, point: Point3) -> Option<f64> {
-    let FaceSurface::Sphere(sphere) = surface else {
-        return None;
-    };
-    let tol = MERGE_GRID.max(1e-9 * sphere.radius());
-    [std::f64::consts::FRAC_PI_2, -std::f64::consts::FRAC_PI_2]
-        .into_iter()
-        .find(|&v| (sphere.evaluate(0.0, v) - point).length() <= tol)
+    SurfacePoles::of(surface).v_of(point)
+}
+
+/// The poles of a surface whose u closes: each `(v, point)` at which a whole
+/// u iso-line collapses to one point (a sphere's two, a revolved NURBS
+/// profile's ends on the axis), and how near a point must lie to one to be
+/// on it, where its u means nothing.
+struct SurfacePoles {
+    poles: Vec<(f64, Point3)>,
+    tol: f64,
+}
+
+impl SurfacePoles {
+    fn of(surface: &FaceSurface) -> Self {
+        match surface {
+            FaceSurface::Sphere(sphere) => Self {
+                poles: [std::f64::consts::FRAC_PI_2, -std::f64::consts::FRAC_PI_2]
+                    .into_iter()
+                    .map(|v| (v, sphere.evaluate(0.0, v)))
+                    .collect(),
+                tol: MERGE_GRID.max(1e-9 * sphere.radius()),
+            },
+            FaceSurface::Nurbs(nurbs) if surface_periods(surface).0.is_some() => {
+                // A vertex a file puts on the pole sits there only to its
+                // own tolerance, so the pole is read geometrically.
+                let reach = nurbs
+                    .control_points()
+                    .iter()
+                    .flatten()
+                    .fold(0.0_f64, |m, p| {
+                        m.max(p.x().abs()).max(p.y().abs()).max(p.z().abs())
+                    });
+                let tol = 1e-6 * (1.0 + reach);
+                let (u_lo, u_hi) = nurbs.domain_u();
+                let (v_lo, v_hi) = nurbs.domain_v();
+                let poles = [v_lo, v_hi]
+                    .into_iter()
+                    .filter_map(|v| {
+                        let at = nurbs.evaluate(u_lo, v);
+                        (1..8)
+                            .all(|k| {
+                                let u = u_lo + (u_hi - u_lo) * f64::from(k) / 8.0;
+                                (nurbs.evaluate(u, v) - at).length() <= tol
+                            })
+                            .then_some((v, at))
+                    })
+                    .collect();
+                Self { poles, tol }
+            }
+            _ => Self {
+                poles: Vec::new(),
+                tol: 0.0,
+            },
+        }
+    }
+
+    fn v_of(&self, point: Point3) -> Option<f64> {
+        self.poles
+            .iter()
+            .find(|(_, pole)| (point - *pole).length() <= self.tol)
+            .map(|&(v, _)| v)
+    }
 }
 
 /// The parameters strictly inside a circle edge's domain `(t0, t1)` at which
@@ -4281,7 +4324,8 @@ fn route_through_poles(
     points: &[Point3],
     period: f64,
 ) -> Option<Vec<(usize, f64, f64)>> {
-    let pole_v: Vec<Option<f64>> = points.iter().map(|&p| sphere_pole_v(surface, p)).collect();
+    let poles = SurfacePoles::of(surface);
+    let pole_v: Vec<Option<f64>> = points.iter().map(|&p| poles.v_of(p)).collect();
     if pole_v.iter().all(Option::is_none) || pole_v.iter().all(Option::is_some) {
         return None;
     }

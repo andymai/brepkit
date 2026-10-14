@@ -2817,6 +2817,54 @@ fn a_nurbs_dome_meshes_its_pole_closure_on_the_sphere() {
     }
 }
 
+/// A NURBS hemisphere written with a seam, its face bounded by the rim and a
+/// meridian run up to the pole and back, the pole's vertex where it falls
+/// and one a file put 1e-5 off it. The seam's two copies meet at the pole,
+/// so they are one run of seam samples; given one u, the run folded onto a
+/// line and the face fell to the snap mesher, which meshes the surface's
+/// whole domain and welds it to the rim by proximity.
+#[test]
+fn a_seamed_nurbs_dome_meshes_through_its_pole() {
+    let r = 20.0;
+    let area = 2.0 * std::f64::consts::PI * r * r;
+    let volume = 2.0 / 3.0 * std::f64::consts::PI * r.powi(3);
+    for off_pole in [0.0, 1e-5] {
+        let (topo, solid) = nurbs_dome(
+            &hemisphere_profile(r),
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            Some(off_pole),
+        );
+        for deflection in [0.5, 0.1] {
+            let case = format!("pole vertex {off_pole} off, deflection {deflection}");
+            let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+                &topo,
+                solid,
+                deflection,
+                brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            )
+            .unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{case}");
+            let triangles = face_group_triangles(&mesh, &offsets, 1);
+            let (worst, meshed) = deviation_and_area(&triangles, &|p| {
+                ((p - Point3::new(0.0, 0.0, 0.0)).length() - r).abs()
+            });
+            assert!(
+                worst <= deflection,
+                "{case}: dome mesh {worst} off the sphere"
+            );
+            assert!(
+                (meshed - area).abs() <= 0.01 * area,
+                "{case}: dome mesh area {meshed}, truth {area}"
+            );
+            let enclosed = signed_volume_raw(&mesh);
+            assert!(
+                (enclosed - volume).abs() <= 0.02 * volume,
+                "{case}: mesh volume {enclosed}, truth {volume}"
+            );
+        }
+    }
+}
+
 /// A dense polyline along the planar cubic Bezier `(radius, z)` profile.
 fn cubic_profile_polyline(profile: [(f64, f64); 4]) -> Vec<(f64, f64)> {
     const SAMPLES: u32 = 4000;
