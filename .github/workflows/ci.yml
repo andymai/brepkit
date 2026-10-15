@@ -47,14 +47,17 @@ jobs:
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.62.30
         with:
           tool: nextest
-      - run: cargo nextest run --workspace
+      # The `ci` profile optimizes lightly and keeps debug assertions and
+      # overflow checks: the boolean scenarios run many times faster than
+      # unoptimized, with the same checks.
+      - run: cargo nextest run --workspace --cargo-profile ci
       # nextest doesn't run doc tests, so run them separately
       - run: cargo test --workspace --doc
       # Complexity-regression guards: deterministic work-counter tests that fail
       # if a boolean hot path regresses to O(N²) (issue #987). Gated behind the
       # `perf-counters` feature, so they need an explicit run.
       - name: Complexity guards
-        run: cargo nextest run -p brepkit-operations --features perf-counters -E 'test(scaling_)'
+        run: cargo nextest run -p brepkit-operations --cargo-profile ci --features perf-counters -E 'test(scaling_)'
 
   coverage:
     name: Coverage
@@ -69,9 +72,9 @@ jobs:
           tool: cargo-llvm-cov
       - name: Generate coverage
         run: |
-          cargo llvm-cov --workspace --no-report
-          cargo llvm-cov report --lcov --output-path lcov.info
-          COVERAGE=$(cargo llvm-cov report --json | jq -r '.data[0].totals.lines.percent // empty')
+          cargo llvm-cov --workspace --profile ci --no-report
+          cargo llvm-cov report --profile ci --lcov --output-path lcov.info
+          COVERAGE=$(cargo llvm-cov report --profile ci --json | jq -r '.data[0].totals.lines.percent // empty')
           if [ -z "$COVERAGE" ]; then
             echo "::error::Failed to extract coverage percentage from report"
             exit 1

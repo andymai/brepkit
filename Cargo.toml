@@ -123,3 +123,11 @@ debug = true
 inherits = "release"
 lto = false
 opt-level = 3
+
+[profile.ci]
+debug = "line-tables-only"
+debug-assertions = true
+incremental = false
+inherits = "dev"
+opt-level = 1
+overflow-checks = true
