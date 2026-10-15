@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.1](https://github.com/andymai/brepkit/compare/v4.2.0...v4.2.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **operations:** mesh v-closed NURBS faces, pole meridians and seamed sphere caps ([#2036](https://github.com/andymai/brepkit/issues/2036)) ([41c7e5f](https://github.com/andymai/brepkit/commit/41c7e5f10b9a6269a587a1cecdeffba07e3470dd))
+
 ## [4.2.0](https://github.com/andymai/brepkit/compare/v4.1.49...v4.2.0) (2026-10-14)
 
 
