@@ -17,9 +17,9 @@ use super::nonplanar::{
 };
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
-    cdt_triangulate_simple, collect_wire_global_vertices, project_by_normal,
-    remove_closing_duplicate_global, remove_closing_duplicate_ids, run_planar_cdt,
-    tessellate_planar_shared_with_holes, unproject_point,
+    cdt_triangulate_simple, collect_wire_global_vertices, cover_by_winding, polygon_self_crosses,
+    project_by_normal, remove_closing_duplicate_global, remove_closing_duplicate_ids,
+    run_planar_cdt, tessellate_planar_shared_with_holes, unproject_point,
 };
 use super::{MERGE_GRID, point_merge_key};
 
@@ -628,9 +628,7 @@ pub(super) fn tessellate_solid_core(
     for (fi, &face_id) in all_faces.iter().enumerate() {
         let face_data = topo.face(face_id)?;
         let has_inner = !face_data.inner_wires().is_empty();
-        if let FaceSurface::Plane { normal, .. } = face_data.surface()
-            && has_inner
-        {
+        if let FaceSurface::Plane { normal, .. } = face_data.surface() {
             let normal = *normal;
             let is_reversed = face_data.is_reversed();
             let wire = topo.wire(face_data.outer_wire())?;
@@ -644,6 +642,19 @@ pub(super) fn tessellate_solid_core(
                 &merged.positions,
                 tol,
             );
+            // A face without holes joins these jobs only when its sides
+            // cross: the job keeps the crossing vertices and hands them to
+            // the neighbours before they mesh.
+            if !has_inner {
+                let outline: Vec<brepkit_math::vec::Point2> = all_positions
+                    .iter()
+                    .map(|&p| project_by_normal(p, normal))
+                    .collect();
+                if !polygon_self_crosses(&outline) {
+                    other_face_indices.push(fi);
+                    continue;
+                }
+            }
             let outer_count = all_positions.len();
 
             let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
@@ -718,7 +729,10 @@ pub(super) fn tessellate_solid_core(
 
     phase("cdt_run", &mut phase_t);
     for (job, result) in cdt_jobs.iter().zip(cdt_results) {
-        let (tris, steiner) = result?;
+        let (mut tris, steiner) = result?;
+        if job.inner_wire_ranges.is_empty() {
+            cover_by_winding(&job.pts2d, job.outer_count, &steiner, &mut tris);
+        }
 
         // Lift constraint-recovery Steiner points to 3D and give them global
         // vertices. A Steiner point that lies ON a shared boundary edge is
@@ -771,29 +785,63 @@ pub(super) fn tessellate_solid_core(
                             .entry((i, j))
                             .or_default()
                             .push((t, steiner_gids[si]));
-                        break;
                     }
                 }
             }
-            for ((i, j), mut run) in per_segment {
-                run.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // A vertex where two sides cross lies on both, and each side's
+            // edge chain takes it, except a chain holding both sides: that
+            // edge's curve passes through the point twice, and its other
+            // face could not tell which pass a lone sample belongs to.
+            // (edge chain, segment ends, crossing vertices with their place
+            // along the segment)
+            #[allow(clippy::items_after_statements)]
+            type Splice = (usize, u32, u32, Vec<(f64, u32)>);
+            let mut placed: Vec<Splice> = Vec::new();
+            for ((i, j), run) in per_segment {
                 let (Some(gi), Some(gj)) = (job.all_global_ids[i], job.all_global_ids[j]) else {
                     continue;
                 };
-                'chains: for chain in edge_global_indices.values_mut() {
-                    for p in 0..chain.len().saturating_sub(1) {
-                        if chain[p] == gi && chain[p + 1] == gj {
-                            for (k, &(_, gid)) in run.iter().enumerate() {
-                                chain.insert(p + 1 + k, gid);
-                            }
-                            break 'chains;
+                let key = edge_global_indices.iter().find_map(|(&key, chain)| {
+                    chain
+                        .windows(2)
+                        .any(|w| (w[0] == gi && w[1] == gj) || (w[0] == gj && w[1] == gi))
+                        .then_some(key)
+                });
+                if let Some(key) = key {
+                    placed.push((key, gi, gj, run));
+                }
+            }
+            let twice = |key: usize, gid: u32| {
+                placed
+                    .iter()
+                    .filter(|(k, _, _, run)| *k == key && run.iter().any(|&(_, g)| g == gid))
+                    .count()
+                    > 1
+            };
+            let splices: Vec<Splice> = placed
+                .iter()
+                .map(|(key, gi, gj, run)| {
+                    let kept = run.iter().filter(|&&(_, g)| !twice(*key, g)).copied();
+                    (*key, *gi, *gj, kept.collect())
+                })
+                .collect();
+            for (key, gi, gj, mut run) in splices {
+                run.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let Some(chain) = edge_global_indices.get_mut(&key) else {
+                    continue;
+                };
+                for p in 0..chain.len().saturating_sub(1) {
+                    if chain[p] == gi && chain[p + 1] == gj {
+                        for (k, &(_, gid)) in run.iter().enumerate() {
+                            chain.insert(p + 1 + k, gid);
                         }
-                        if chain[p] == gj && chain[p + 1] == gi {
-                            for (k, &(_, gid)) in run.iter().rev().enumerate() {
-                                chain.insert(p + 1 + k, gid);
-                            }
-                            break 'chains;
+                        break;
+                    }
+                    if chain[p] == gj && chain[p + 1] == gi {
+                        for (k, &(_, gid)) in run.iter().rev().enumerate() {
+                            chain.insert(p + 1 + k, gid);
                         }
+                        break;
                     }
                 }
             }

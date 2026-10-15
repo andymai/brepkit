@@ -8,9 +8,10 @@
 //! followed by Newton–Raphson refinement.
 
 use crate::MathError;
+use crate::aabb::Aabb3;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::surface::NurbsSurface;
-use crate::vec::Point3;
+use crate::vec::{Point3, Vec3};
 
 /// Maximum Newton iterations before declaring convergence failure.
 const MAX_ITERATIONS: usize = 50;
@@ -298,13 +299,32 @@ fn curve_newton_refine(
 /// Find the closest point on a NURBS surface to the given point.
 ///
 /// Uses grid evaluation for initial guess, then 2D Newton–Raphson
-/// refinement (NURBS Book A6.2 + A6.5–A6.6).
+/// refinement (NURBS Book A6.2 + A6.5–A6.6). A result off the surface is
+/// then checked against every knot-span patch: each lies within the box of
+/// its own control points, so only a patch whose box comes nearer than the
+/// result can hold a nearer point, and those are searched nearest box first.
 ///
 /// # Errors
 ///
 /// Returns [`MathError::ConvergenceFailure`] if Newton iteration does not
-/// converge within the maximum number of iterations.
+/// converge within the maximum number of iterations and no patch search
+/// reaches a point either.
 pub fn project_point_to_surface(
+    surface: &NurbsSurface,
+    point: Point3,
+    tolerance: f64,
+) -> Result<SurfaceProjection, MathError> {
+    let seeded = project_from_coarse_grid(surface, point, tolerance);
+    if seeded.as_ref().is_ok_and(|p| p.distance <= tolerance) {
+        return seeded;
+    }
+    match search_span_patches(surface, point, tolerance, seeded.as_ref().ok().copied()) {
+        Some(found) => Ok(found),
+        None => seeded,
+    }
+}
+
+fn project_from_coarse_grid(
     surface: &NurbsSurface,
     point: Point3,
     tolerance: f64,
@@ -401,18 +421,6 @@ fn surface_newton_refine(
 ) -> Result<(f64, f64, Point3), MathError> {
     let mut u = u_init;
     let mut v = v_init;
-    // Along a closed direction the step wraps across the seam instead of
-    // stopping at the domain end: a seed on the far copy of the seam (the
-    // coarse grid samples both ends) must still reach a point just short of
-    // it.
-    let advance = |x: f64, delta: f64, lo: f64, hi: f64, closed: bool| -> (f64, f64) {
-        if closed && hi > lo {
-            (lo + (x + delta - lo).rem_euclid(hi - lo), delta)
-        } else {
-            let next = (x + delta).clamp(lo, hi);
-            (next, next - x)
-        }
-    };
     let (closed_u, closed_v) = (
         wrap_closed && surface.is_periodic_u(),
         wrap_closed && surface.is_periodic_v(),
@@ -444,54 +452,13 @@ fn surface_newton_refine(
             }
         }
 
-        // Build the 2×2 Jacobian and right-hand side.
-        // J = [S_u · S_u,  S_u · S_v]
-        //     [S_v · S_u,  S_v · S_v]
-        let j00 = deriv_u.dot(deriv_u);
-        let j01 = deriv_u.dot(deriv_v);
-        let j11 = deriv_v.dot(deriv_v);
-        // rhs = [-S_u · r, -S_v · r]
-        let rhs0 = -dot_du_r;
-        let rhs1 = -dot_dv_r;
-
-        // Solve 2×2 system via Cramer's rule: det = j00*j11 - j01²
-        // Use a relative threshold so the singularity test stays meaningful
-        // near surface poles / cone apex where both derivatives shrink to zero.
-        let det = j00.mul_add(j11, -(j01 * j01));
-        let (delta_u, delta_v) = if det.abs() < (j00 + j11).max(1e-30) * 1e-12 {
-            // Near-singular: apply Tikhonov (Levenberg–Marquardt) regularisation
-            // by adding λI to the normal equations.  This yields a step biased
-            // toward zero rather than blowing up, preserving convergence near
-            // poles and cone apices.
-            let lambda = (j00 + j11).max(1e-10) * 1e-4;
-            let j00r = j00 + lambda;
-            let j11r = j11 + lambda;
-            let det_r = j00r.mul_add(j11r, -(j01 * j01));
-            if det_r.abs() < 1e-30 {
-                // Still singular even after regularisation — fall back to a 1-D
-                // search along whichever parameter axis has more gradient.
-                if j00 > j11 {
-                    (rhs0 / j00.max(1e-30), 0.0)
-                } else if j11 > 1e-30 {
-                    (0.0, rhs1 / j11.max(1e-30))
-                } else {
-                    return Ok((u, v, s_pt));
-                }
-            } else {
-                (
-                    rhs0.mul_add(j11r, -(rhs1 * j01)) / det_r,
-                    j00r.mul_add(rhs1, -(j01 * rhs0)) / det_r,
-                )
-            }
-        } else {
-            (
-                rhs0.mul_add(j11, -(rhs1 * j01)) / det,
-                j00.mul_add(rhs1, -(j01 * rhs0)) / det,
-            )
+        let Some((delta_u, delta_v)) = gauss_newton_step(deriv_u, deriv_v, dot_du_r, dot_dv_r)
+        else {
+            return Ok((u, v, s_pt));
         };
 
-        let (u_new, step_u) = advance(u, delta_u, u_min, u_max, closed_u);
-        let (v_new, step_v) = advance(v, delta_v, v_min, v_max, closed_v);
+        let (u_new, step_u) = advance_param(u, delta_u, u_min, u_max, closed_u);
+        let (v_new, step_v) = advance_param(v, delta_v, v_min, v_max, closed_v);
 
         // Convergence check 3: parameter step negligible.
         let step = (deriv_u * step_u + deriv_v * step_v).length();
@@ -507,6 +474,245 @@ fn surface_newton_refine(
     Err(MathError::ConvergenceFailure {
         iterations: MAX_ITERATIONS,
     })
+}
+
+/// Along a closed direction the step wraps across the seam instead of
+/// stopping at the domain end: a seed on the far copy of the seam (the
+/// coarse grid samples both ends) must still reach a point just short of
+/// it. Returns the new parameter and the step taken to it.
+fn advance_param(x: f64, delta: f64, lo: f64, hi: f64, closed: bool) -> (f64, f64) {
+    if closed && hi > lo {
+        (lo + (x + delta - lo).rem_euclid(hi - lo), delta)
+    } else {
+        let next = (x + delta).clamp(lo, hi);
+        (next, next - x)
+    }
+}
+
+/// The Gauss–Newton step toward the foot of the normal, from the partials
+/// and their dot products with `S - P`, or `None` where both partials
+/// vanish and there is no step to take.
+#[allow(clippy::similar_names)]
+fn gauss_newton_step(
+    deriv_u: Vec3,
+    deriv_v: Vec3,
+    dot_du_r: f64,
+    dot_dv_r: f64,
+) -> Option<(f64, f64)> {
+    // J = [S_u · S_u,  S_u · S_v]
+    //     [S_v · S_u,  S_v · S_v]
+    let j00 = deriv_u.dot(deriv_u);
+    let j01 = deriv_u.dot(deriv_v);
+    let j11 = deriv_v.dot(deriv_v);
+    let rhs0 = -dot_du_r;
+    let rhs1 = -dot_dv_r;
+
+    // Use a relative threshold so the singularity test stays meaningful
+    // near surface poles / cone apex where both derivatives shrink to zero.
+    let det = j00.mul_add(j11, -(j01 * j01));
+    if det.abs() >= (j00 + j11).max(1e-30) * 1e-12 {
+        return Some((
+            rhs0.mul_add(j11, -(rhs1 * j01)) / det,
+            j00.mul_add(rhs1, -(j01 * rhs0)) / det,
+        ));
+    }
+    // Near-singular: Tikhonov (Levenberg–Marquardt) regularisation biases
+    // the step toward zero rather than blowing up near poles and apices.
+    let lambda = (j00 + j11).max(1e-10) * 1e-4;
+    let j00r = j00 + lambda;
+    let j11r = j11 + lambda;
+    let det_r = j00r.mul_add(j11r, -(j01 * j01));
+    if det_r.abs() >= 1e-30 {
+        Some((
+            rhs0.mul_add(j11r, -(rhs1 * j01)) / det_r,
+            j00r.mul_add(rhs1, -(j01 * rhs0)) / det_r,
+        ))
+    } else if j00 > j11 {
+        Some((rhs0 / j00.max(1e-30), 0.0))
+    } else if j11 > 1e-30 {
+        Some((0.0, rhs1 / j11.max(1e-30)))
+    } else {
+        None
+    }
+}
+
+/// One knot span of each direction: its parameter box, and the distance
+/// to the box of the control points that shape it, which bounds how near
+/// any point of the patch can come.
+struct SpanPatch {
+    u: (f64, f64),
+    v: (f64, f64),
+    reach: f64,
+}
+
+impl SpanPatch {
+    fn holds(&self, (u, v): (f64, f64)) -> bool {
+        (self.u.0..=self.u.1).contains(&u) && (self.v.0..=self.v.1).contains(&v)
+    }
+
+    /// The nearest of a 3 x 3 grid of samples over the patch.
+    fn nearest_sample(&self, surface: &NurbsSurface, point: Point3) -> (f64, f64) {
+        let mut best = (f64::INFINITY, self.u.0, self.v.0);
+        for fu in [0.0_f64, 0.5, 1.0] {
+            let u = fu.mul_add(self.u.1 - self.u.0, self.u.0);
+            for fv in [0.0_f64, 0.5, 1.0] {
+                let v = fv.mul_add(self.v.1 - self.v.0, self.v.0);
+                let d = (surface.evaluate(u, v) - point).length_squared();
+                if d < best.0 {
+                    best = (d, u, v);
+                }
+            }
+        }
+        (best.1, best.2)
+    }
+}
+
+/// The knot-span patches whose control box comes nearer than `bound`,
+/// nearest first, leaving out any that holds `settled`. `None` for a weight
+/// that is not positive, which can carry the surface outside its control
+/// points' hull.
+fn span_patches(
+    surface: &NurbsSurface,
+    point: Point3,
+    bound: f64,
+    settled: Option<(f64, f64)>,
+) -> Option<Vec<SpanPatch>> {
+    if surface
+        .weights()
+        .iter()
+        .flatten()
+        .any(|&w| w.is_nan() || w <= 0.0)
+    {
+        return None;
+    }
+    let spans = |knots: &[f64], p: usize| -> Vec<usize> {
+        (p..knots.len() - p - 1)
+            .filter(|&k| knots[k] < knots[k + 1])
+            .collect()
+    };
+    let (knots_u, knots_v) = (surface.knots_u(), surface.knots_v());
+    let (pu, pv) = (surface.degree_u(), surface.degree_v());
+    let rows = surface.control_points();
+    let spans_v = spans(knots_v, pv);
+    let mut patches = Vec::new();
+    for i in spans(knots_u, pu) {
+        for &j in &spans_v {
+            let hull = Aabb3::from_points(
+                rows[i - pu..=i]
+                    .iter()
+                    .flat_map(|row| row[j - pv..=j].iter().copied()),
+            );
+            let reach = hull.distance_squared_to_point(point).sqrt();
+            let patch = SpanPatch {
+                u: (knots_u[i], knots_u[i + 1]),
+                v: (knots_v[j], knots_v[j + 1]),
+                reach,
+            };
+            if reach < bound && !settled.is_some_and(|uv| patch.holds(uv)) {
+                patches.push(patch);
+            }
+        }
+    }
+    patches.sort_by(|a, b| a.reach.total_cmp(&b.reach));
+    Some(patches)
+}
+
+/// Search the patches that could hold a point nearer than `start` by more
+/// than `tolerance`, skipping those that hold `start` itself, whose valley
+/// its refinement already settled.
+fn search_span_patches(
+    surface: &NurbsSurface,
+    point: Point3,
+    tolerance: f64,
+    start: Option<SurfaceProjection>,
+) -> Option<SurfaceProjection> {
+    let bound = start.map_or(f64::INFINITY, |b| b.distance - tolerance);
+    let Some(patches) = span_patches(surface, point, bound, start.map(|b| (b.u, b.v))) else {
+        return start;
+    };
+    let (knots_u, knots_v) = (surface.knots_u(), surface.knots_v());
+    let (pu, pv) = (surface.degree_u(), surface.degree_v());
+    let domain = [
+        knots_u[pu],
+        knots_u[knots_u.len() - pu - 1],
+        knots_v[pv],
+        knots_v[knots_v.len() - pv - 1],
+    ];
+    let closed = (surface.is_periodic_u(), surface.is_periodic_v());
+    let mut best = start;
+    for patch in &patches {
+        if best.is_some_and(|b| patch.reach >= b.distance - tolerance) {
+            break;
+        }
+        let (u, v) = patch.nearest_sample(surface, point);
+        let found = surface_descend(surface, point, (u, v), domain, closed, tolerance);
+        if best.is_none_or(|b| found.distance < b.distance - tolerance) {
+            best = Some(found);
+        }
+    }
+    best
+}
+
+/// Gauss–Newton from `seed`, halving any step that does not bring the
+/// point nearer: it settles where the undamped iteration can circle a
+/// valley, and never ends farther than it began.
+#[allow(clippy::similar_names)]
+fn surface_descend(
+    surface: &NurbsSurface,
+    point: Point3,
+    seed: (f64, f64),
+    [u_min, u_max, v_min, v_max]: [f64; 4],
+    (closed_u, closed_v): (bool, bool),
+    tolerance: f64,
+) -> SurfaceProjection {
+    let (mut u, mut v) = seed;
+    let mut at = surface.evaluate(u, v);
+    let mut dist = (at - point).length();
+    for _ in 0..MAX_ITERATIONS {
+        if dist < tolerance {
+            break;
+        }
+        let ders = surface.derivatives(u, v, 1);
+        let (deriv_u, deriv_v) = (ders[1][0], ders[0][1]);
+        let r = at - point;
+        let (dot_du_r, dot_dv_r) = (deriv_u.dot(r), deriv_v.dot(r));
+        let (du_len, dv_len) = (deriv_u.length(), deriv_v.length());
+        if du_len > 0.0
+            && dv_len > 0.0
+            && dot_du_r.abs() < tolerance * du_len * dist
+            && dot_dv_r.abs() < tolerance * dv_len * dist
+        {
+            break;
+        }
+        let Some((delta_u, delta_v)) = gauss_newton_step(deriv_u, deriv_v, dot_du_r, dot_dv_r)
+        else {
+            break;
+        };
+        let mut scale = 1.0;
+        let moved = loop {
+            let (u_new, step_u) = advance_param(u, scale * delta_u, u_min, u_max, closed_u);
+            let (v_new, step_v) = advance_param(v, scale * delta_v, v_min, v_max, closed_v);
+            if (deriv_u * step_u + deriv_v * step_v).length() < tolerance {
+                break false;
+            }
+            let next = surface.evaluate(u_new, v_new);
+            let d = (next - point).length();
+            if d < dist {
+                (u, v, at, dist) = (u_new, v_new, next, d);
+                break true;
+            }
+            scale *= 0.5;
+        };
+        if !moved {
+            break;
+        }
+    }
+    SurfaceProjection {
+        u,
+        v,
+        point: at,
+        distance: dist,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -944,5 +1150,48 @@ mod tests {
             "nearest point z should be ≈ 0.05, got z={:.4}",
             res.point.z()
         );
+    }
+
+    /// A closed cubic wall about 940 mm round, its control net wiggling in
+    /// and out across 117 knot spans: the coarse grid samples it about every
+    /// fifteenth span, 120 mm apart, and Newton from there settles in a
+    /// valley of the wiggle or fails to settle at all. Every point on the
+    /// wall must project back onto it.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn points_on_a_wall_of_many_spans_project_onto_it() {
+        let columns = 120;
+        let mut knots_u = vec![0.0; 4];
+        knots_u.extend((1..columns - 3).map(|k| k as f64));
+        knots_u.extend([(columns - 3) as f64; 4]);
+        let ring = |i: usize, z: f64| {
+            let a = std::f64::consts::TAU * (i % (columns - 1)) as f64 / (columns - 1) as f64;
+            let r = if i.is_multiple_of(2) { 150.0 } else { 140.0 } + 0.2 * z;
+            Point3::new(r * a.cos(), r * a.sin(), z)
+        };
+        let wall = NurbsSurface::new(
+            3,
+            3,
+            knots_u,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            (0..columns)
+                .map(|i| (0..4).map(|j| ring(i, 15.0 * j as f64 - 10.0)).collect())
+                .collect(),
+            vec![vec![1.0; 4]; columns],
+        )
+        .expect("valid wall");
+        for k in 0..400 {
+            let u = 117.0 * (k as f64 + 0.5) / 400.0;
+            let v = 0.2 + 0.6 * f64::from(k % 7) / 6.0;
+            let on = wall.evaluate(u, v);
+            let res = project_point_to_surface(&wall, on, 1e-6).expect("projects");
+            assert!(
+                res.distance < 1e-5,
+                "S({u}, {v}) projects {} away, to ({}, {})",
+                res.distance,
+                res.u,
+                res.v
+            );
+        }
     }
 }

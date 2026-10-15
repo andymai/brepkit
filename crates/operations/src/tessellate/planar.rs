@@ -447,8 +447,26 @@ pub(super) fn tessellate_planar(
     }
 
     if face_data.inner_wires().is_empty() {
-        let normals_out = vec![normal; n];
-        let mut indices = cdt_triangulate_simple(&positions, normal);
+        let pts2d: Vec<brepkit_math::vec::Point2> = positions
+            .iter()
+            .map(|&p| project_by_normal(p, normal))
+            .collect();
+        // A boundary whose sides cross (a rim curve that loops through
+        // itself) is triangulated with a vertex at each crossing; without
+        // them no triangulation covers the face without overlapping.
+        let mut indices = if polygon_self_crosses(&pts2d) {
+            let (mut tris, steiner) = run_planar_cdt(&pts2d, n, &[])?;
+            cover_by_winding(&pts2d, n, &steiner, &mut tris);
+            let origin = positions[0];
+            positions.extend(steiner.iter().map(|&p| unproject_point(p, normal, &origin)));
+            #[allow(clippy::cast_possible_truncation)]
+            tris.iter()
+                .flat_map(|&(a, b, c)| [a as u32, b as u32, c as u32])
+                .collect()
+        } else {
+            cdt_triangulate_simple(&positions, normal)
+        };
+        let normals_out = vec![normal; positions.len()];
 
         // Ensure triangle winding matches the face normal.
         // cdt_triangulate_simple forces CCW in 2D projection, which may
@@ -973,6 +991,135 @@ pub(super) fn cdt_triangulate_simple(positions: &[Point3], normal: Vec3) -> Vec<
     }
 
     indices
+}
+
+/// Whether two sides of the closed polygon `pts` cross each other, each
+/// passing strictly through the other. Sides that share a corner or only
+/// touch are not crossings: the pinch peeling in
+/// [`cdt_triangulate_simple`] handles a loop that revisits a vertex.
+pub(super) fn polygon_self_crosses(pts: &[brepkit_math::vec::Point2]) -> bool {
+    let n = pts.len();
+    if n < 4 {
+        return false;
+    }
+    let side = |i: usize| (pts[i], pts[(i + 1) % n]);
+    let orient = |a: brepkit_math::vec::Point2,
+                  b: brepkit_math::vec::Point2,
+                  c: brepkit_math::vec::Point2| {
+        (b.x() - a.x()).mul_add(c.y() - a.y(), -((b.y() - a.y()) * (c.x() - a.x())))
+    };
+    // Sweep the sides by their x extent, testing only those that overlap.
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&i, &j| {
+        let (a, b) = side(i);
+        let (c, d) = side(j);
+        a.x().min(b.x()).total_cmp(&c.x().min(d.x()))
+    });
+    let mut active: Vec<usize> = Vec::new();
+    for &i in &order {
+        let (a, b) = side(i);
+        let (lo_x, lo_y, hi_y) = (a.x().min(b.x()), a.y().min(b.y()), a.y().max(b.y()));
+        active.retain(|&j| {
+            let (c, d) = side(j);
+            c.x().max(d.x()) >= lo_x
+        });
+        for &j in &active {
+            if j.abs_diff(i) == 1 || j.abs_diff(i) == n - 1 {
+                continue;
+            }
+            let (c, d) = side(j);
+            if c.y().max(d.y()) < lo_y || c.y().min(d.y()) > hi_y {
+                continue;
+            }
+            let (o1, o2) = (orient(a, b, c), orient(a, b, d));
+            let (o3, o4) = (orient(c, d, a), orient(c, d, b));
+            if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
+                return true;
+            }
+        }
+        active.push(i);
+    }
+    false
+}
+
+/// Keep the triangles of a crossing outline's triangulation where the
+/// outline winds round an odd number of times, turned over where it winds
+/// round backwards. A loop the outline turns against its own sense bounds a
+/// lobe it winds round once backwards: kept, and turned so its sides run
+/// against their walls like the rest of the rim. A loop turned inside the
+/// face with its sense is wound round twice: a notch out of the face, which
+/// the triangulation otherwise fills. Turned triangles go last, so the
+/// first still gives the face's sense. `pts2d` holds the outline's corners
+/// first, then the crossing vertices.
+pub(super) fn cover_by_winding(
+    pts2d: &[brepkit_math::vec::Point2],
+    outline: usize,
+    steiner: &[brepkit_math::vec::Point2],
+    tris: &mut Vec<(usize, usize, usize)>,
+) {
+    let at = |i: usize| {
+        if i < pts2d.len() {
+            pts2d[i]
+        } else {
+            steiner[i - pts2d.len()]
+        }
+    };
+    let side = |i: usize| (pts2d[i], pts2d[(i + 1) % outline]);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut area = 0.0;
+    for i in 0..outline {
+        let (a, b) = side(i);
+        lo = lo.min(a.y());
+        hi = hi.max(a.y());
+        area += a.x().mul_add(b.y(), -(b.x() * a.y()));
+    }
+    let sense = if area < 0.0 { -1 } else { 1 };
+    // Sides bucketed by the rows of y they span, so each test reads a few.
+    let rows = outline.clamp(1, 1024);
+    let row_of = |y: f64| -> usize {
+        if hi > lo {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let r = ((y - lo) / (hi - lo) * rows as f64) as usize;
+            r.min(rows - 1)
+        } else {
+            0
+        }
+    };
+    let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); rows];
+    for i in 0..outline {
+        let (a, b) = side(i);
+        for bucket in &mut buckets[row_of(a.y().min(b.y()))..=row_of(a.y().max(b.y()))] {
+            bucket.push(i);
+        }
+    }
+    let winding = |x: f64, y: f64| -> i32 {
+        let mut w = 0;
+        for &s in &buckets[row_of(y)] {
+            let (p, q) = side(s);
+            if (p.y() > y) != (q.y() > y)
+                && (q.x() - p.x()).mul_add((y - p.y()) / (q.y() - p.y()), p.x()) > x
+            {
+                w += if q.y() > p.y() { 1 } else { -1 };
+            }
+        }
+        w * sense
+    };
+    let mut kept = Vec::with_capacity(tris.len());
+    let mut turned = Vec::new();
+    for &(i, j, k) in tris.iter() {
+        let (a, b, c) = (at(i), at(j), at(k));
+        let (x, y) = ((a.x() + b.x() + c.x()) / 3.0, (a.y() + b.y() + c.y()) / 3.0);
+        if y < lo || y > hi {
+            continue;
+        }
+        match winding(x, y) {
+            w if w % 2 == 0 => {}
+            w if w > 0 => kept.push((i, j, k)),
+            _ => turned.push((i, k, j)),
+        }
+    }
+    kept.append(&mut turned);
+    *tris = kept;
 }
 
 /// Fan triangulation as a last-resort fallback.

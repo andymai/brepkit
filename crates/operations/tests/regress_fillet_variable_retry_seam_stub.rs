@@ -203,10 +203,10 @@ fn same_sense_pair_count(topo: &Topology, solid: SolidId) -> usize {
 /// though the B-Rep itself is closed. A plain single-edge fillet and a bare
 /// two-edge miter corner both mesh watertight, which
 /// `tessellation_watertight_controls` pins.
-const SEAM_PRISM_RUNOUT_PATCH_GAP: usize = 28;
+const SEAM_PRISM_RUNOUT_PATCH_GAP: usize = 4;
 /// Same class, the near-boundary fixture (`P4` at y = 12.0, a 12.05mm run
 /// against r = 8): the same support/patch contact sampling.
-const NEAR_BOUNDARY_RUNOUT_PATCH_GAP: usize = 36;
+const NEAR_BOUNDARY_RUNOUT_PATCH_GAP: usize = 10;
 /// Same class, the curved-continuation fixture (one runout patch, one arc trim).
 const CURVED_CONTINUATION_RUNOUT_PATCH_GAP: usize = 6;
 

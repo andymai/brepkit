@@ -493,10 +493,13 @@ pub(super) fn weld_boundary_vertices(
     }
     let repeated = half_edges.values().any(|&count| count > 1);
 
-    // Boundary vertices: incident on half-edges without a matching reverse.
+    // Boundary vertices: incident on an edge only one triangle uses. An edge
+    // two faces share the same way round is no crack: where a rim curls
+    // back through itself, the cap and the wall both run its loop that way,
+    // and welding its closely spaced samples would collapse the loop.
     let mut boundary_set: DetHashSet<u32> = DetHashSet::default();
-    for &(a, b) in half_edges.keys() {
-        if !half_edges.contains_key(&(b, a)) {
+    for (&(a, b), &count) in &half_edges {
+        if count == 1 && !half_edges.contains_key(&(b, a)) {
             boundary_set.insert(a);
             boundary_set.insert(b);
         }

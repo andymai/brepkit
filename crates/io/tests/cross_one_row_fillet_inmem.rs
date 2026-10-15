@@ -648,9 +648,12 @@ fn rolling_reference_diagnostic_result_is_measurable() {
     );
     assert_eq!(shell_audit::shell_health(&topo, diagnostic), (177, 0));
     assert_eq!(components(&topo, diagnostic), 10);
+    // Some of its planar faces have outlines that cross themselves, and each
+    // meshes only where its outline winds round once: this is the volume of
+    // that mesh, which no solid bounds.
     let volume = oriented_solid_volume(&topo, diagnostic, DEFLECTION).unwrap();
     assert!(
-        (volume - 27_435.644_932).abs() < 1e-3,
+        (volume - 32_006.274_577).abs() < 1e-3,
         "rolling volume {volume}"
     );
     let audit = shell_audit::audit_shell(&topo, diagnostic);

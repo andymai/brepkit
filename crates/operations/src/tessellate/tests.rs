@@ -2179,7 +2179,11 @@ fn build_prism(
 /// hole in the ledge (nonzero boundary edges). These two polygons are the exact
 /// self-intersecting ledge boundaries captured from the gridfinity "2x2 with
 /// stadium slot" cut at deflection 0.1 (28 pts) and 0.05 (34 pts). The prism
-/// meshing must stay watertight at both.
+/// meshing must stay watertight at both, with each cap covering the ledge's
+/// own area: a fan from one corner covers it twice over. The two walls whose
+/// bases cross pass through each other along the vertical line over the
+/// crossing, and both mesh it, so that line is the one edge more than two
+/// triangles may share.
 #[test]
 #[allow(clippy::unreadable_literal)]
 fn pinched_ledge_prism_is_watertight() {
@@ -2255,6 +2259,7 @@ fn pinched_ledge_prism_is_watertight() {
     for (label, poly) in [("28pt/defl0.1", &poly_28), ("34pt/defl0.05", &poly_34)] {
         let mut topo = Topology::new();
         let solid = build_prism(&mut topo, poly, 0.0, 4.0);
+        let outline_area = polygon_area(poly).abs();
         for defl in [0.1, 0.05] {
             let mesh = tessellate_solid(&topo, solid, defl).unwrap();
             assert_eq!(
@@ -2262,12 +2267,130 @@ fn pinched_ledge_prism_is_watertight() {
                 0,
                 "{label} defl={defl}: pinched ledge left boundary edges (crack)"
             );
-            assert_eq!(
-                non_manifold_edge_count(&mesh),
-                0,
-                "{label} defl={defl}: pinched ledge produced non-manifold edges"
+            for z in [0.0, 4.0] {
+                let cap = level_area(&mesh, z);
+                assert!(
+                    (cap - outline_area).abs() < 0.01 * outline_area,
+                    "{label} defl={defl}: cap at z={z} covers {cap}, the ledge {outline_area}"
+                );
+            }
+            let mut uses: DetHashMap<(u32, u32), u32> = DetHashMap::default();
+            for t in mesh.indices.chunks_exact(3) {
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+                }
+            }
+            for (&(a, b), _) in uses.iter().filter(|&(_, &n)| n > 2) {
+                let (pa, pb) = (mesh.positions[a as usize], mesh.positions[b as usize]);
+                assert!(
+                    (pa.x() - pb.x()).abs() < 1e-9 && (pa.y() - pb.y()).abs() < 1e-9,
+                    "{label} defl={defl}: a non-manifold edge off the walls' crossing"
+                );
+            }
+        }
+    }
+}
+
+/// Signed area of a closed polygon in the xy-plane.
+fn polygon_area(poly: &[(f64, f64)]) -> f64 {
+    let n = poly.len();
+    (0..n)
+        .map(|i| {
+            let ((x0, y0), (x1, y1)) = (poly[i], poly[(i + 1) % n]);
+            x0 * y1 - x1 * y0
+        })
+        .sum::<f64>()
+        / 2.0
+}
+
+/// Total area of the triangles lying in the plane `z`.
+fn level_area(mesh: &TriangleMesh, z: f64) -> f64 {
+    mesh.indices
+        .chunks_exact(3)
+        .map(|t| [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]))
+        .filter(|p| p.iter().all(|q| (q.z() - z).abs() < 1e-9))
+        .map(|[a, b, c]| 0.5 * (b - a).cross(c - a).length())
+        .sum()
+}
+
+/// A 40 x 30 rectangle whose base carries a trochoid that turns up into it
+/// and back across itself, sampled about 0.09 apart.
+fn curled_outline() -> Vec<(f64, f64)> {
+    use std::f64::consts::TAU;
+    let (a, r, steps) = (1.0, 3.0, 220);
+    let mut poly = vec![(0.0, 0.0)];
+    for k in 0..=steps {
+        let t = TAU * f64::from(k) / f64::from(steps);
+        poly.push((10.0 + a * t + r * t.sin(), r * (1.0 - t.cos())));
+    }
+    poly.extend([(40.0, 0.0), (40.0, 30.0), (0.0, 30.0)]);
+    poly
+}
+
+/// A rim that curls through itself the way it runs (a freeform wall folding
+/// over near its foot) winds twice round the inside of the curl: a notch out
+/// of the cap, which must cover only what the rim winds round once. Where it
+/// does, the cap and the wall both run the curl's sides the same way round,
+/// so they are no crack, and the curl's samples, closer than twice the
+/// deflection, must not be welded into one point.
+#[test]
+fn a_cap_whose_rim_curls_through_itself_leaves_the_curl_out() {
+    let poly = curled_outline();
+
+    // The curl is the loop between the two sides that cross.
+    let n = poly.len();
+    let cross = |p: (f64, f64), q: (f64, f64), o: (f64, f64)| {
+        (q.0 - p.0) * (o.1 - p.1) - (q.1 - p.1) * (o.0 - p.0)
+    };
+    let (i, j) = (0..n)
+        .flat_map(|i| (i + 2..n).map(move |j| (i, j)))
+        .find(|&(i, j)| {
+            let (p, q, s, t) = (poly[i], poly[(i + 1) % n], poly[j], poly[(j + 1) % n]);
+            cross(p, q, s) * cross(p, q, t) < 0.0 && cross(s, t, p) * cross(s, t, q) < 0.0
+        })
+        .unwrap();
+    let (p, q, s, t) = (poly[i], poly[i + 1], poly[j], poly[j + 1]);
+    let f = cross(s, t, p) / (cross(s, t, p) - cross(s, t, q));
+    let crossing = (p.0 + f * (q.0 - p.0), p.1 + f * (q.1 - p.1));
+    let mut curl = vec![crossing];
+    curl.extend_from_slice(&poly[i + 1..=j]);
+    let once_round = polygon_area(&poly) - 2.0 * polygon_area(&curl);
+    let walls: f64 = (0..n)
+        .map(|k| {
+            let ((x0, y0), (x1, y1)) = (poly[k], poly[(k + 1) % n]);
+            (x1 - x0).hypot(y1 - y0)
+        })
+        .sum::<f64>()
+        * 5.0;
+
+    let mut topo = Topology::new();
+    let solid = build_prism(&mut topo, &poly, 0.0, 5.0);
+    for defl in [0.1, 0.05] {
+        let mesh = tessellate_solid(&topo, solid, defl).unwrap();
+        for z in [0.0, 5.0] {
+            let cap = level_area(&mesh, z);
+            assert!(
+                (cap - once_round).abs() < 1e-6 * once_round,
+                "defl={defl}: cap at z={z} covers {cap}, the rim winds once round {once_round}"
             );
         }
+        let total: f64 = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]))
+            .map(|[a, b, c]| 0.5 * (b - a).cross(c - a).length())
+            .sum();
+        let side = total - level_area(&mesh, 0.0) - level_area(&mesh, 5.0);
+        assert!(
+            (side - walls).abs() < 1e-6 * walls,
+            "defl={defl}: walls mesh {side} of {walls}"
+        );
+        let base = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap()[1];
+        let alone = level_area(&tessellate(&topo, base, defl).unwrap(), 0.0);
+        assert!(
+            (alone - once_round).abs() < 1e-6 * once_round,
+            "defl={defl}: the base meshed alone covers {alone} of {once_round}"
+        );
     }
 }
 
