@@ -1623,13 +1623,12 @@ fn collect_var_v_ring(
     if gids.len() < 3 {
         return Ok(None);
     }
+    let poles = SurfacePoles::of(surface);
     let us: Vec<Option<f64>> = gids
         .iter()
         .map(|&g| {
             let point = merged.positions[g as usize];
-            sphere_pole_v(surface, point)
-                .is_none()
-                .then(|| project(point).0)
+            poles.v_of(point).is_none().then(|| project(point).0)
         })
         .collect();
     let (_, winding) = unwrap_loop_u(&us, TAU);
@@ -2136,9 +2135,10 @@ fn cdt_in_surface_frame(
                 u -= shifts * u_period;
                 boundary_uv[i].0 = u;
             }
-            // A sphere's pole has no u of its own: a loop through it runs
-            // along the pole's row, which also keeps a loop that opens a
-            // wedge at the pole from reading as a cap over it.
+            // A pole (a sphere's, or a u-closed NURBS cap's) has no u of its
+            // own: a loop through it runs along the pole's row, which also
+            // keeps a loop that opens a wedge at the pole from reading as a
+            // cap over it.
             let points: Vec<Point3> = boundary_3d.iter().map(|b| b.0).collect();
             if let Some(routed) =
                 route_through_poles(face_data.surface(), &boundary_uv, &points, u_period)
@@ -4136,7 +4136,7 @@ fn hole_u_spans(
     sphere: &brepkit_math::surfaces::SphericalSurface,
 ) -> Result<Option<Vec<(f64, f64)>>, crate::OperationsError> {
     const SAMPLES: u32 = 16;
-    let surface = face_data.surface();
+    let poles = SurfacePoles::of(face_data.surface());
     let mut spans = Vec::new();
     for &wire_id in face_data.inner_wires() {
         let mut us: Vec<Option<f64>> = Vec::new();
@@ -4164,7 +4164,8 @@ fn hole_u_spans(
                     .curve()
                     .evaluate_with_endpoints(t0 + (t1 - t0) * f, start, end);
                 us.push(
-                    sphere_pole_v(surface, point)
+                    poles
+                        .v_of(point)
                         .is_none()
                         .then(|| sphere.project_point(point).0),
                 );
@@ -4186,11 +4187,6 @@ fn hole_u_spans(
         spans.push((f64::midpoint(lo, hi), 0.5 * (hi - lo)));
     }
     Ok(Some(spans))
-}
-
-/// The v of the sphere pole `point` lies on, if it lies on one.
-fn sphere_pole_v(surface: &FaceSurface, point: Point3) -> Option<f64> {
-    SurfacePoles::of(surface).v_of(point)
 }
 
 /// The poles of a surface whose u closes: each `(v, point)` at which a whole
@@ -4312,11 +4308,11 @@ fn unwrap_loop_u(us: &[Option<f64>], period: f64) -> (Vec<(f64, f64)>, f64) {
     (out, last - first + wrap(first - last))
 }
 
-/// A sphere loop through a pole, unwrapped by `unwrap_loop_u` with each
-/// pole sample opened into the stretch of the pole's row the loop runs
-/// along, sampled as densely as the pole closure's row: `(source sample, u,
-/// v)` per routed sample. `None` when no sample, or every sample, lies on a
-/// pole.
+/// A loop through a pole of a sphere or a u-closed NURBS cap (see
+/// [`SurfacePoles`]), unwrapped by `unwrap_loop_u` with each pole sample
+/// opened into the stretch of the pole's row the loop runs along, sampled as
+/// densely as the pole closure's row: `(source sample, u, v)` per routed
+/// sample. `None` when no sample, or every sample, lies on a pole.
 fn route_through_poles(
     surface: &FaceSurface,
     uv: &[(f64, f64)],
@@ -5328,5 +5324,35 @@ mod tests {
         let unknown = surface_path_parameters(&|_| Point3::new(f64::NAN, 0.0, 0.0), 1e-3, 0.35, 1);
         assert!(unknown.len() < MAX_PATH_SPANS);
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn a_creased_path_is_not_halved_far_below_its_deflection() {
+        // A degree-one profile's corner turns as sharply however finely the
+        // span across it is halved, and sits off every dyadic parameter.
+        let creased = |t: f64| {
+            if t <= 1.0 / 3.0 {
+                Point3::new(3.0 * t, 0.0, 0.0)
+            } else {
+                Point3::new(1.0, 1.5 * (t - 1.0 / 3.0), 0.0)
+            }
+        };
+        let deflection = 0.01;
+        let along = surface_path_parameters(&creased, deflection, 0.35, 1);
+        let ts: Vec<f64> = std::iter::once(0.0)
+            .chain(along)
+            .chain(std::iter::once(1.0))
+            .collect();
+        for w in ts.windows(2) {
+            let (a, b) = (creased(w[0]), creased(w[1]));
+            let chord = (b - a).length();
+            assert!(chord > deflection / 8.0, "span {w:?} halved to {chord}");
+            for k in 1..8 {
+                let p = creased(w[0] + (w[1] - w[0]) * f64::from(k) / 8.0);
+                let f = ((p - a).dot(b - a) / chord.powi(2)).clamp(0.0, 1.0);
+                let off = (p - (a + (b - a) * f)).length();
+                assert!(off <= deflection, "span {w:?} stands {off} off its chord");
+            }
+        }
     }
 }
