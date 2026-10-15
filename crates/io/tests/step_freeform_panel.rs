@@ -53,7 +53,7 @@ fn the_folded_freeform_panel_meshes_within_four_deflections_of_its_faces() {
     assert_eq!(solids.len(), 1);
     let faces = solid_faces(&topo, solids[0]).unwrap();
     let tip = Point3::new(FOLD_TIP.0, FOLD_TIP.1, FOLD_TIP.2);
-    for deflection in [0.5, 0.1] {
+    for deflection in [0.5, 0.1, 0.05, 0.0125] {
         let reach = 4.0 * deflection;
         let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
             &topo,

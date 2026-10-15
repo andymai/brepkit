@@ -2086,6 +2086,18 @@ fn build_prism(
     z0: f64,
     z1: f64,
 ) -> brepkit_topology::solid::SolidId {
+    build_prism_with_holed_wall(topo, poly2d, z0, z1, None)
+}
+
+/// [`build_prism`] with a small rectangular hole through the wall over side
+/// `holed` (from vertex `holed` to the next), if given.
+fn build_prism_with_holed_wall(
+    topo: &mut Topology,
+    poly2d: &[(f64, f64)],
+    z0: f64,
+    z1: f64,
+    holed: Option<usize>,
+) -> brepkit_topology::solid::SolidId {
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
     let n = poly2d.len();
@@ -2161,9 +2173,24 @@ fn build_prism(
         )
         .unwrap();
         let quad_wire = topo.add_wire(quad);
+        let mut holes = Vec::new();
+        if holed == Some(i) {
+            let mut at = |t: f64, z: f64| {
+                let p = Point3::new(xi + t * dx, yi + t * dy, z0 + z * (z1 - z0));
+                topo.add_vertex(Vertex::new(p, tol))
+            };
+            let corners = [at(0.3, 0.4), at(0.3, 0.6), at(0.7, 0.6), at(0.7, 0.4)];
+            let edges: Vec<OrientedEdge> = (0..4)
+                .map(|k| {
+                    let e = Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line);
+                    OrientedEdge::new(topo.add_edge(e), true)
+                })
+                .collect();
+            holes.push(topo.add_wire(Wire::new(edges, true).unwrap()));
+        }
         faces.push(topo.add_face(Face::new(
             quad_wire,
-            vec![],
+            holes,
             FaceSurface::Plane { normal, d },
         )));
     }
@@ -2287,6 +2314,69 @@ fn pinched_ledge_prism_is_watertight() {
                     "{label} defl={defl}: a non-manifold edge off the walls' crossing"
                 );
             }
+        }
+    }
+}
+
+/// A wall with a hole meshes as a planar face with holes, in a batch of its
+/// own; when the cap beside it crosses itself on that wall's side, the wall
+/// must still take the crossing vertices or the two crack apart there. The
+/// ledge's side 25 crosses two others.
+#[test]
+#[allow(clippy::unreadable_literal)]
+fn a_holed_wall_beside_a_crossing_cap_takes_its_crossing_vertices() {
+    let poly: Vec<(f64, f64)> = vec![
+        (-34.56, -40.55),
+        (-16.54, -40.550000000000004),
+        (-15.738116168931496, -40.49608307905734),
+        (-14.950668099841263, -40.3353029453993),
+        (-14.191831677633331, -40.070554012967634),
+        (-13.475267711451144, -39.7066023743365),
+        (-12.813876008545115, -39.25000000003244),
+        (-15.240000000000073, -39.25000000000008),
+        (-35.8599999999999, -39.25000000000011),
+        (-38.0, -39.25000000000011),
+        (-38.38627124296872, -39.18882064536907),
+        (-38.73473156536566, -39.011271242968796),
+        (-39.01127124296875, -38.73473156536567),
+        (-39.188820645369, -38.386271242968725),
+        (-39.25000000000001, -38.0),
+        (-39.25000000000001, -35.85999999999999),
+        (-39.250000000000014, -33.240000000000016),
+        (-39.250000000000014, -30.813876008504252),
+        (-39.706602374315146, -31.475267711415285),
+        (-40.07055401295537, -32.19183167760453),
+        (-40.335302945393764, -32.950668099821144),
+        (-40.49608307905595, -33.73811616892115),
+        (-40.55, -34.54),
+        (-40.55, -34.56),
+        (-40.256828532607976, -36.411011796305935),
+        (-39.40601179630594, -38.080833661231914),
+        (-38.08083366123192, -39.40601179630594),
+        (-36.411011796305935, -40.256828532607976),
+    ];
+    let mut topo = Topology::new();
+    let solid = build_prism_with_holed_wall(&mut topo, &poly, 0.0, 4.0, Some(25));
+    // The hole has no faces behind it, so its own rim is open; nothing else
+    // may be.
+    for defl in [0.1, 0.05] {
+        let mesh = tessellate_solid(&topo, solid, defl).unwrap();
+        let mut half: DetHashSet<(u32, u32)> = DetHashSet::default();
+        for t in mesh.indices.chunks_exact(3) {
+            half.extend([(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]);
+        }
+        for &(a, b) in &half {
+            if half.contains(&(b, a)) {
+                continue;
+            }
+            let (za, zb) = (
+                mesh.positions[a as usize].z(),
+                mesh.positions[b as usize].z(),
+            );
+            assert!(
+                (1.5..=2.5).contains(&za) && (1.5..=2.5).contains(&zb),
+                "defl={defl}: an open edge at z = {za}..{zb} cracks the holed wall from the cap"
+            );
         }
     }
 }

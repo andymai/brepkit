@@ -16,6 +16,11 @@ use crate::vec::{Point3, Vec3};
 /// Maximum Newton iterations before declaring convergence failure.
 const MAX_ITERATIONS: usize = 50;
 
+/// Halvings of a damped descent step before it counts as no step: enough to
+/// shrink any step on a model of sane scale below its tolerance, and a bound
+/// where no step can meet the tolerance at all.
+const MAX_HALVINGS: usize = 64;
+
 /// Number of grid subdivisions per direction for surface coarse search.
 const SURFACE_GRID_SIZE: usize = 8;
 
@@ -315,7 +320,10 @@ pub fn project_point_to_surface(
     tolerance: f64,
 ) -> Result<SurfaceProjection, MathError> {
     let seeded = project_from_coarse_grid(surface, point, tolerance);
-    if seeded.as_ref().is_ok_and(|p| p.distance <= tolerance) {
+    if tolerance.is_nan()
+        || tolerance <= 0.0
+        || seeded.as_ref().is_ok_and(|p| p.distance <= tolerance)
+    {
         return seeded;
     }
     match search_span_patches(surface, point, tolerance, seeded.as_ref().ok().copied()) {
@@ -510,29 +518,33 @@ fn gauss_newton_step(
     // Use a relative threshold so the singularity test stays meaningful
     // near surface poles / cone apex where both derivatives shrink to zero.
     let det = j00.mul_add(j11, -(j01 * j01));
-    if det.abs() >= (j00 + j11).max(1e-30) * 1e-12 {
-        return Some((
+    if det.abs() < (j00 + j11).max(1e-30) * 1e-12 {
+        // Near-singular: Tikhonov (Levenberg–Marquardt) regularisation
+        // biases the step toward zero rather than blowing up near poles
+        // and apices.
+        let lambda = (j00 + j11).max(1e-10) * 1e-4;
+        let j00r = j00 + lambda;
+        let j11r = j11 + lambda;
+        let det_r = j00r.mul_add(j11r, -(j01 * j01));
+        if det_r.abs() < 1e-30 {
+            if j00 > j11 {
+                Some((rhs0 / j00.max(1e-30), 0.0))
+            } else if j11 > 1e-30 {
+                Some((0.0, rhs1 / j11.max(1e-30)))
+            } else {
+                None
+            }
+        } else {
+            Some((
+                rhs0.mul_add(j11r, -(rhs1 * j01)) / det_r,
+                j00r.mul_add(rhs1, -(j01 * rhs0)) / det_r,
+            ))
+        }
+    } else {
+        Some((
             rhs0.mul_add(j11, -(rhs1 * j01)) / det,
             j00.mul_add(rhs1, -(j01 * rhs0)) / det,
-        ));
-    }
-    // Near-singular: Tikhonov (Levenberg–Marquardt) regularisation biases
-    // the step toward zero rather than blowing up near poles and apices.
-    let lambda = (j00 + j11).max(1e-10) * 1e-4;
-    let j00r = j00 + lambda;
-    let j11r = j11 + lambda;
-    let det_r = j00r.mul_add(j11r, -(j01 * j01));
-    if det_r.abs() >= 1e-30 {
-        Some((
-            rhs0.mul_add(j11r, -(rhs1 * j01)) / det_r,
-            j00r.mul_add(rhs1, -(j01 * rhs0)) / det_r,
         ))
-    } else if j00 > j11 {
-        Some((rhs0 / j00.max(1e-30), 0.0))
-    } else if j11 > 1e-30 {
-        Some((0.0, rhs1 / j11.max(1e-30)))
-    } else {
-        None
     }
 }
 
@@ -646,7 +658,9 @@ fn search_span_patches(
         }
         let (u, v) = patch.nearest_sample(surface, point);
         let found = surface_descend(surface, point, (u, v), domain, closed, tolerance);
-        if best.is_none_or(|b| found.distance < b.distance - tolerance) {
+        if found.distance.is_finite()
+            && best.is_none_or(|b| found.distance < b.distance - tolerance)
+        {
             best = Some(found);
         }
     }
@@ -688,21 +702,23 @@ fn surface_descend(
         else {
             break;
         };
+        let mut moved = false;
         let mut scale = 1.0;
-        let moved = loop {
+        for _ in 0..MAX_HALVINGS {
             let (u_new, step_u) = advance_param(u, scale * delta_u, u_min, u_max, closed_u);
             let (v_new, step_v) = advance_param(v, scale * delta_v, v_min, v_max, closed_v);
             if (deriv_u * step_u + deriv_v * step_v).length() < tolerance {
-                break false;
+                break;
             }
             let next = surface.evaluate(u_new, v_new);
             let d = (next - point).length();
             if d < dist {
                 (u, v, at, dist) = (u_new, v_new, next, d);
-                break true;
+                moved = true;
+                break;
             }
             scale *= 0.5;
-        };
+        }
         if !moved {
             break;
         }
@@ -1153,13 +1169,9 @@ mod tests {
     }
 
     /// A closed cubic wall about 940 mm round, its control net wiggling in
-    /// and out across 117 knot spans: the coarse grid samples it about every
-    /// fifteenth span, 120 mm apart, and Newton from there settles in a
-    /// valley of the wiggle or fails to settle at all. Every point on the
-    /// wall must project back onto it.
-    #[test]
+    /// and out across 117 knot spans.
     #[allow(clippy::cast_precision_loss)]
-    fn points_on_a_wall_of_many_spans_project_onto_it() {
+    fn wavy_ring() -> NurbsSurface {
         let columns = 120;
         let mut knots_u = vec![0.0; 4];
         knots_u.extend((1..columns - 3).map(|k| k as f64));
@@ -1169,7 +1181,7 @@ mod tests {
             let r = if i.is_multiple_of(2) { 150.0 } else { 140.0 } + 0.2 * z;
             Point3::new(r * a.cos(), r * a.sin(), z)
         };
-        let wall = NurbsSurface::new(
+        NurbsSurface::new(
             3,
             3,
             knots_u,
@@ -1179,7 +1191,17 @@ mod tests {
                 .collect(),
             vec![vec![1.0; 4]; columns],
         )
-        .expect("valid wall");
+        .expect("valid wall")
+    }
+
+    /// The coarse grid samples the wavy ring about every fifteenth span,
+    /// 120 mm apart, and Newton from there settles in a valley of the
+    /// wiggle or fails to settle at all. Every point on the wall must
+    /// project back onto it.
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn points_on_a_wall_of_many_spans_project_onto_it() {
+        let wall = wavy_ring();
         for k in 0..400 {
             let u = 117.0 * (k as f64 + 0.5) / 400.0;
             let v = 0.2 + 0.6 * f64::from(k % 7) / 6.0;
@@ -1193,5 +1215,16 @@ mod tests {
                 res.v
             );
         }
+    }
+
+    /// A point with no position fails, and a tolerance nothing can meet
+    /// still returns, rather than searching the spans without end.
+    #[test]
+    fn a_nan_point_fails_and_a_zero_tolerance_returns() {
+        let wall = wavy_ring();
+        let nan = Point3::new(f64::NAN, 0.0, 0.0);
+        assert!(project_point_to_surface(&wall, nan, 1e-6).is_err());
+        let off = Point3::new(70.0, 0.0, 5.0);
+        let _ = project_point_to_surface(&wall, off, 0.0);
     }
 }

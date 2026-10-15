@@ -454,9 +454,13 @@ pub(super) fn tessellate_planar(
         // A boundary whose sides cross (a rim curve that loops through
         // itself) is triangulated with a vertex at each crossing; without
         // them no triangulation covers the face without overlapping.
-        let mut indices = if polygon_self_crosses(&pts2d) {
-            let (mut tris, steiner) = run_planar_cdt(&pts2d, n, &[])?;
-            cover_by_winding(&pts2d, n, &steiner, &mut tris);
+        let crossing = if polygon_self_crosses(&pts2d) {
+            run_planar_cdt(&pts2d, n, &[]).ok()
+        } else {
+            None
+        };
+        let mut indices = if let Some((mut tris, steiner)) = crossing {
+            cover_by_winding(&pts2d, n, &steiner, false, &mut tris);
             let origin = positions[0];
             positions.extend(steiner.iter().map(|&p| unproject_point(p, normal, &origin)));
             #[allow(clippy::cast_possible_truncation)]
@@ -1043,18 +1047,19 @@ pub(super) fn polygon_self_crosses(pts: &[brepkit_math::vec::Point2]) -> bool {
 }
 
 /// Keep the triangles of a crossing outline's triangulation where the
-/// outline winds round an odd number of times, turned over where it winds
-/// round backwards. A loop the outline turns against its own sense bounds a
-/// lobe it winds round once backwards: kept, and turned so its sides run
-/// against their walls like the rest of the rim. A loop turned inside the
-/// face with its sense is wound round twice: a notch out of the face, which
-/// the triangulation otherwise fills. Turned triangles go last, so the
-/// first still gives the face's sense. `pts2d` holds the outline's corners
-/// first, then the crossing vertices.
+/// outline winds round an odd number of times. A loop the outline turns
+/// against its own sense bounds a lobe it winds round once backwards, which
+/// stays; with `turn_backward` its triangles are turned over so its sides
+/// run against their walls like the rest of the rim, for a solid's mesh. A
+/// loop turned inside the face with its sense is wound round twice: a notch
+/// out of the face, which the triangulation otherwise fills. Turned
+/// triangles go last, so the first still gives the face's sense. `pts2d`
+/// holds the outline's corners first, then the crossing vertices.
 pub(super) fn cover_by_winding(
     pts2d: &[brepkit_math::vec::Point2],
     outline: usize,
     steiner: &[brepkit_math::vec::Point2],
+    turn_backward: bool,
     tris: &mut Vec<(usize, usize, usize)>,
 ) {
     let at = |i: usize| {
@@ -1114,7 +1119,7 @@ pub(super) fn cover_by_winding(
         }
         match winding(x, y) {
             w if w % 2 == 0 => {}
-            w if w > 0 => kept.push((i, j, k)),
+            w if w > 0 || !turn_backward => kept.push((i, j, k)),
             _ => turned.push((i, k, j)),
         }
     }
