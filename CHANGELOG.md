@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.2](https://github.com/andymai/brepkit/compare/v4.2.1...v4.2.2) (2026-10-15)
+
+
+### Bug Fixes
+
+* mesh the folded freeform panel within tolerance ([#2039](https://github.com/andymai/brepkit/issues/2039)) ([d50265d](https://github.com/andymai/brepkit/commit/d50265dcbcd252f5212b7ec596eb68ca7380bbad))
+
 ## [4.2.1](https://github.com/andymai/brepkit/compare/v4.2.0...v4.2.1) (2026-10-15)
 
 
