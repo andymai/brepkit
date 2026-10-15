@@ -1,0 +1,27 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_bd847bc77902c4::t_c9a60b1bc36a5e 5328-5348,5350-5357
+  s_bd847bc77902c4::t_4b3d17e1c1cd21 2138
+  s_bd847bc77902c4::t_c733cec39bc44e 5349
+  s_bd847bc77902c4::t_0481d467fbb548 4311
+  s_bd847bc77902c4::t_694a68324007e8 2139-2141
+  s_bd847bc77902c4::t_94861d63a69468 1626,1631
+  s_bd847bc77902c4::t_56cf79ac0d257b 4312-4315
+  s_bd847bc77902c4::t_807683e631b4dd 4167-4168
+  s_bd847bc77902c4::t_e64d59b41d8e05 4139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1eb544825602f63f124019da6fe60f60bbca0fdf",
+  "prompts": {},
+  "sessions": {
+    "s_bd847bc77902c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6a4190db-d96e-44be-9855-5edfe2535a58",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
