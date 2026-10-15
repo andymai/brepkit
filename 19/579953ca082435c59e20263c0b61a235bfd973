@@ -1,0 +1,37 @@
+crates/math/src/nurbs/projection.rs
+  s_bd847bc77902c4::t_c0847400325720 323-326
+  s_bd847bc77902c4::t_3c5f0cc7838162 521-544,705,707,711,717-718,721
+  s_bd847bc77902c4::t_23cc9083350405 19-23
+  s_bd847bc77902c4::t_f138c1627f8466 661-663
+  s_bd847bc77902c4::t_85ba9bee581cad 1172,1174,1184,1194-1204,1219-1229
+crates/operations/src/tessellate/planar.rs
+  s_bd847bc77902c4::t_c0847400325720 457-462
+  s_bd847bc77902c4::t_5c2662e6b616de 463,1050-1057,1062,1122
+crates/operations/src/tessellate/solid.rs
+  s_bd847bc77902c4::t_35a5de96248466 626-634,636-672,674-706,709-712,714-727,730-745,748,750-766,770-821,823-835,837-845,848-853,855,857-872,874-878,884-897,899-906,908-926
+  s_bd847bc77902c4::t_5c2662e6b616de 767
+  s_bd847bc77902c4::t_c0847400325720 768
+crates/io/tests/step_freeform_panel.rs
+  s_bd847bc77902c4::t_1d425a8eb0b34d 56
+crates/operations/src/tessellate/tests.rs
+  s_bd847bc77902c4::t_d19e2381d2470c 2360-2361,2364-2380
+  s_bd847bc77902c4::t_1d425a8eb0b34d 2089-2099,2176-2177,2179-2190,2193,2321-2359,2362-2363,2382
+  s_bd847bc77902c4::t_8d23878492b273 2178
+  s_bd847bc77902c4::t_04b740d61f8d54 2088,2381,2383
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19579953ca082435c59e20263c0b61a235bfd973",
+  "prompts": {},
+  "sessions": {
+    "s_bd847bc77902c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6a4190db-d96e-44be-9855-5edfe2535a58",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
