@@ -318,6 +318,9 @@ Quick reference — find the right file for any task:
 | Task | File(s) |
 |------|---------|
 | STEP read/write | `step/reader.rs`, `step/writer.rs` |
+| STEP length units and assembly placements | `step/assembly.rs` |
+| STEP surfaces of revolution | `step/revolution.rs` |
+| STEP seams missing from cylinder/cone faces | `step/seam.rs` |
 | IGES read/write | `iges/reader.rs`, `iges/writer.rs` |
 | STL read/write/import | `stl/reader.rs`, `stl/writer.rs`, `stl/import.rs` |
 | 3MF read/write | `threemf/reader.rs`, `threemf/writer.rs` |

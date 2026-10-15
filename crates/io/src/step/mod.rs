@@ -1,6 +1,9 @@
 //! STEP (ISO 10303) data exchange.
 
+mod assembly;
 pub mod reader;
+mod revolution;
+mod seam;
 pub mod writer;
 
 pub use reader::read_step;

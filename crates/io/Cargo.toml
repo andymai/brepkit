@@ -21,6 +21,7 @@ all-features = true
 brepkit-math = {workspace = true, features = ["serde"]}
 brepkit-operations.workspace = true
 brepkit-topology.workspace = true
+log.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -32,7 +33,6 @@ brepkit-algo.workspace = true
 brepkit-blend.workspace = true
 brepkit-geometry.workspace = true
 brepkit-topology = {workspace = true, features = ["test-utils"]}
-log.workspace = true
 proptest.workspace = true
 
 [lints]

@@ -56,21 +56,28 @@ are one enum `IoError` in `crates/io/src/lib.rs` (`ParseError`, `UnsupportedEnti
 
 Full anatomy in [reference.md](reference.md) section 1. The load-bearing facts:
 
-- **Only `MANIFOLD_SOLID_BREP` becomes a solid** (`rg -n 'MANIFOLD_SOLID_BREP'
-  crates/io/src/step/reader.rs`). `SHELL_BASED_SURFACE_MODEL`, `GEOMETRIC_SET`,
-  `BREP_WITH_VOIDS`, wireframe reps are silently dropped: the #1 "STEP dropped my solids"
-  cause. Fewer solids returned, no error.
+- **Shapes come back as solids** (`rg -n 'SHAPE_ITEMS' crates/io/src/step/reader.rs`).
+  `MANIFOLD_SOLID_BREP` and `BREP_WITH_VOIDS` become solids; each shell of a
+  `SHELL_BASED_SURFACE_MODEL` and each face set of a `FACE_BASED_SURFACE_MODEL` becomes a
+  solid of that one shell, which may be open (volume is meaningless there).
+  `GEOMETRIC_SET` and wireframe reps are dropped silently.
 - **Analytic surfaces round-trip as their exact type.** `PLANE`, `CYLINDRICAL_SURFACE`,
   `CONICAL_SURFACE`, `SPHERICAL_SURFACE`, `TOROIDAL_SURFACE` map to the matching
   `FaceSurface`; `LINE`/`CIRCLE`/`ELLIPSE` to `EdgeCurve`; `B_SPLINE_*` to NURBS.
+  `SURFACE_OF_REVOLUTION` (`step/revolution.rs`) becomes the exact plane, cylinder, cone,
+  sphere or torus its profile sweeps, else a rational NURBS revolution.
 - **Unsupported entity = hard error, whole import fails.** `build_surface` and
-  `build_curve_geometry` end in `_ => Err(IoError::UnsupportedEntity {..})`. One
-  `SURFACE_OF_REVOLUTION` or offset surface aborts the entire file. No best-effort mode.
-- **No pcurves, no units.** Trimming is topological (vertex endpoints + edge-loop order);
-  pcurve/seam records are ignored and recomputed downstream. Unit context is not parsed, so
-  an inches-authored file imports at wrong scale silently.
-- **Top-level solid order is nondeterministic** (brep ids from HashMap iteration). Sort if
-  you depend on order. The reader does **no healing**: parse and build only.
+  `build_curve_geometry` end in `_ => Err(IoError::UnsupportedEntity {..})`. One offset
+  surface aborts the entire file. No best-effort mode.
+- **Millimetres, placed** (`step/assembly.rs`). Each representation's length unit
+  (SI prefix or `CONVERSION_BASED_UNIT`) scales its shapes to mm, and assembly placements
+  (`ITEM_DEFINED_TRANSFORMATION` relationships, `MAPPED_ITEM`) put each shape where the
+  assembly does, one copy per use. No pcurves: trimming is topological (vertex endpoints +
+  edge-loop order); pcurve/seam records are ignored and recomputed downstream.
+- **Missing seams are added** (`step/seam.rs`): a cylinder or cone face bounded by its rims
+  alone, or a pointed cone by its base rim (with or without a `VERTEX_LOOP` apex), gets the
+  seam line brepkit's primitives carry. Beyond that the reader does **no healing**.
+- **Solid order follows the file**: shape records by id, each shape's placements in turn.
 
 ## Procedure: "this STEP imports wrong"
 
@@ -78,8 +85,8 @@ Goal is to separate three failure classes: reader bug/gap, unhealed geometry, ge
 bad file. Checkpoints in brackets.
 
 1. **Read and census.** `let solids = step::reader::read_step(&s, &mut topo)?;`
-   [If `solids.len()` is short of the file's `MANIFOLD_SOLID_BREP` count, the rest were
-   dropped reps: reader gap, not your geometry.] Census surface types by walking
+   [If `solids.len()` is short of the file's solid and surface-model count (times their
+   assembly uses), the rest were dropped reps: reader gap, not your geometry.] Census surface types by walking
    `brepkit_topology::explorer::solid_faces(&topo, sid)?` and matching `face.surface()`
    (or the `type_tag` / `is_analytic` delegates from `math/src/traits.rs`).
    [All-NURBS where you expected analytic means either a lossy source file or the file
@@ -162,14 +169,14 @@ wrong:
 
 | Observation | Wrong conclusion | Reality |
 |-------------|------------------|---------|
-| Import returned fewer solids than the file has | Reader lost geometry | Only `MANIFOLD_SOLID_BREP` becomes a solid; other reps are dropped silently. Grep the file for its solid rep type. |
+| Import returned fewer solids than the file has | Reader lost geometry | Only solids and surface models become shapes; `GEOMETRIC_SET` and wireframe reps are dropped silently. Grep the file for its shape rep type. |
 | OBJ/STL import is all planar triangles | Import degraded analytic surfaces | Mesh formats carry no analytic data; a faceted solid is correct output. |
 | STEP surfaces all came in as NURBS | Reader bug | The file likely stored B-splines. Confirm in a viewer, then `convert_to_elementary`. |
 | `UnsupportedEntity` error | The file is corrupt | The reader hit a surface/curve type with no arm. It is a reader gap; the file may be fine. |
 | Fixture volume matches, so the fixture is faithful | Fixture reproduces the bug | If it round-tripped to NURBS you are debugging a different solid. Assert the surface *type*, or use the arena dump. |
 | IGES import produced a shape | IGES import works | The reader only makes fixed unit squares (0.5 half-extent) from entity-108 planes. Use STEP or arena. |
-| Multi-solid order is stable in one run | Order is deterministic | Top-level order comes from HashMap iteration; sort if you depend on it. |
-| Coordinates look wrong scale | Reader has a bug | The reader ignores STEP unit context; a non-mm file imports unscaled. |
+| A part shows up several times | Reader duplicated geometry | The assembly uses it several times; each placement is its own solid. |
+| Coordinates look 25.4x off | Reader ignores units | Output is always mm; a tool that assumed the file's own unit needs converting. |
 
 ## Sibling skills
 
