@@ -2063,15 +2063,22 @@ fn excise_out_and_back_spurs(
     }
 }
 
-/// A pointed cone face's seam: the line its outer wire runs up to the apex
-/// and straight back down, which reads like a spur but is the cut the cone
-/// is opened along.
+/// A pointed cone face's seam, or a spherical cap's: the line or meridian
+/// its outer wire runs up to the apex or pole and straight back down, which
+/// reads like a spur but is the cut the surface is opened along.
 fn pointed_cone_seam(topo: &Topology, fid: FaceId) -> Option<brepkit_topology::edge::EdgeId> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+
     let face = topo.face(fid).ok()?;
-    let brepkit_topology::face::FaceSurface::Cone(cone) = face.surface() else {
-        return None;
+    let points: Vec<Point3> = match face.surface() {
+        FaceSurface::Cone(cone) => vec![cone.apex()],
+        FaceSurface::Sphere(sphere) => {
+            let pole = sphere.z_axis() * sphere.radius();
+            vec![sphere.center() + pole, sphere.center() - pole]
+        }
+        _ => return None,
     };
-    let apex = cone.apex();
     topo.wire(face.outer_wire())
         .ok()?
         .edges()
@@ -2079,10 +2086,14 @@ fn pointed_cone_seam(topo: &Topology, fid: FaceId) -> Option<brepkit_topology::e
         .map(OrientedEdge::edge)
         .find(|&eid| {
             topo.edge(eid).is_ok_and(|edge| {
-                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                matches!(edge.curve(), EdgeCurve::Line | EdgeCurve::Circle(_))
+                    && edge.start() != edge.end()
                     && [edge.start(), edge.end()].iter().any(|&v| {
-                        topo.vertex(v)
-                            .is_ok_and(|vertex| (vertex.point() - apex).length() < MERGE_TOL)
+                        topo.vertex(v).is_ok_and(|vertex| {
+                            points
+                                .iter()
+                                .any(|&p| (vertex.point() - p).length() < MERGE_TOL)
+                        })
                     })
             })
         })
