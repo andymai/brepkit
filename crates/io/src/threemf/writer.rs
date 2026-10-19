@@ -228,9 +228,17 @@ mod tests {
 
         let reader = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
         assert_eq!(reader.len(), 3);
-        assert!(reader.file_names().any(|n| n == "[Content_Types].xml"));
-        assert!(reader.file_names().any(|n| n == "_rels/.rels"));
-        assert!(reader.file_names().any(|n| n == "3D/3dmodel.model"));
+        assert!(
+            reader
+                .file_names()
+                .any(|n| n.unwrap() == "[Content_Types].xml")
+        );
+        assert!(reader.file_names().any(|n| n.unwrap() == "_rels/.rels"));
+        assert!(
+            reader
+                .file_names()
+                .any(|n| n.unwrap() == "3D/3dmodel.model")
+        );
     }
 
     #[test]
@@ -369,10 +377,10 @@ mod tests {
         let bytes = write_threemf(&topo, &[solid], 0.5).unwrap();
 
         let reader = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
-        let names: Vec<&str> = reader.file_names().collect();
+        let names: Vec<_> = reader.file_names().collect::<Result<_, _>>().unwrap();
 
-        assert!(names.contains(&"[Content_Types].xml"));
-        assert!(names.contains(&"_rels/.rels"));
-        assert!(names.contains(&"3D/3dmodel.model"));
+        assert!(names.iter().any(|n| n == "[Content_Types].xml"));
+        assert!(names.iter().any(|n| n == "_rels/.rels"));
+        assert!(names.iter().any(|n| n == "3D/3dmodel.model"));
     }
 }
