@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792426357937,
+  "lastUpdate": 1792428402026,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -54647,6 +54647,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 51443794,
             "range": "± 330858",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "237191b70918e2c195dab715cba771d00d797227",
+          "message": "build(deps-dev): bump prettier from 3.9.9 to 3.9.10 in the npm group across 1 directory (#2042)\n\nBumps the npm group with 1 update in the / directory:\n[prettier](https://github.com/prettier/prettier).\n\nUpdates `prettier` from 3.9.9 to 3.9.10\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/releases\">prettier's\nreleases</a>.</em></p>\n<blockquote>\n<h2>3.9.10</h2>\n<ul>\n<li>Markdown: Update <code>micromark-extension-gfm-table</code> to fix\nthe table parse issue on performance (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/20266\">#20266</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</li>\n</ul>\n<p>🔗 <a\nhref=\"https://github.com/prettier/prettier/blob/3.9.10/CHANGELOG.md#3910\">Changelog</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/prettier/prettier/blob/main/CHANGELOG.md\">prettier's\nchangelog</a>.</em></p>\n<blockquote>\n<h1>3.9.10</h1>\n<p><a\nhref=\"https://github.com/prettier/prettier/compare/3.9.9...3.9.10\">diff</a></p>\n<h4>Markdown: Update <code>micromark-extension-gfm-table</code> to fix\nthe table parse issue on performance (<a\nhref=\"https://redirect.github.com/prettier/prettier/pull/20266\">#20266</a>\nby <a href=\"https://github.com/fisker\"><code>@​fisker</code></a>)</h4>\n<p>See <a\nhref=\"https://github.com/micromark/micromark-extension-gfm-table/commit/4f43ead37b786bc531d924530d4ab4c714886267\">https://github.com/micromark/micromark-extension-gfm-table/commit/4f43ead37b786bc531d924530d4ab4c714886267</a>\nfor details.</p>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/1172b82c295c4f889fd787dc6c78c3e194ebf353\"><code>1172b82</code></a>\nRelease 3.9.10</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/d0142273aff2c76f8a69785d42ee2cedc4b0aaa3\"><code>d014227</code></a>\nUpdate <code>micromark-extension-gfm-table</code> to fix the table parse\nissue on perfor...</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/953b9084329dcd06ed1072a04b333f1e6e9371e8\"><code>953b908</code></a>\nBump Prettier dependency to 3.9.9</li>\n<li><a\nhref=\"https://github.com/prettier/prettier/commit/ad8a6bf4fa23c42fd114683fec43b28a11bd24af\"><code>ad8a6bf</code></a>\nClean changelog_unreleased</li>\n<li>See full diff in <a\nhref=\"https://github.com/prettier/prettier/compare/3.9.9...3.9.10\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-19T09:43:39-07:00",
+          "tree_id": "8d45f16d6bf354bcfd62e0be8c56d5717bc1f1cb",
+          "url": "https://github.com/andymai/brepkit/commit/237191b70918e2c195dab715cba771d00d797227"
+        },
+        "date": 1792428395262,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1066734,
+            "range": "± 4251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1156702,
+            "range": "± 3831",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12971,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 772389,
+            "range": "± 7582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 48220623,
+            "range": "± 554039",
             "unit": "ns/iter"
           }
         ]
