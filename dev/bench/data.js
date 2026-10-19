@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792090682236,
+  "lastUpdate": 1792426357937,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -54593,6 +54593,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47876336,
             "range": "± 172923",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d05a129766d91ab965f84822c251fc9c80625ccc",
+          "message": "build(deps): update zip requirement from 8 to 9 (#2043)\n\nUpdates the requirements on [zip](https://github.com/zip-rs/zip2) to\npermit the latest version.\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/zip-rs/zip2/blob/master/CHANGELOG.md\">zip's\nchangelog</a>.</em></p>\n<blockquote>\n<h2><a\nhref=\"https://github.com/zip-rs/zip2/compare/v9.0.1...v9.0.2\">9.0.2</a>\n- 2026-10-11</h2>\n<h3><!-- raw HTML omitted -->🐛 Bug Fixes</h3>\n<ul>\n<li>additional bug fixes for symlink extraction</li>\n</ul>\n<h2><a\nhref=\"https://github.com/zip-rs/zip2/compare/v9.0.0...v9.0.1\">9.0.1</a>\n- 2026-10-10</h2>\n<h3><!-- raw HTML omitted -->🐛 Bug Fixes</h3>\n<ul>\n<li>set_permissions was still following symlinks in non-streaming\nextraction (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1038\">#1038</a>)</li>\n<li>two arithmetic overflows in the implode decoder (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1028\">#1028</a>)</li>\n<li>reject an empty archive whose central directory offset is past the\nEOCD (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1025\">#1025</a>)</li>\n<li>don't panic when two entries extract to the same path (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1023\">#1023</a>)</li>\n<li>fail reads that exceed the declared uncompressed size (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1022\">#1022</a>)</li>\n<li>shrink decoder skipped LZW code 8191 (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1029\">#1029</a>)</li>\n<li>write only the sentinel-marked values in a central ZIP64 field (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1027\">#1027</a>)</li>\n</ul>\n<h2><a\nhref=\"https://github.com/zip-rs/zip2/compare/v9.0.0-pre3...v9.0.0\">9.0.0</a>\n- 2026-10-08</h2>\n<h3><!-- raw HTML omitted -->🚀 Features</h3>\n<ul>\n<li>add ZipFileBuilder for parallelizing compression (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/911\">#911</a>)</li>\n<li>add method <code>by_index_with_data_descriptor</code> (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/994\">#994</a>)</li>\n<li>add len, is_empty and entry to ZipArchiveMetadata (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1015\">#1015</a>)</li>\n<li>read data descriptor from binary (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/990\">#990</a>)</li>\n<li>add comment and test for ZipStreamReader and symlinks (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/985\">#985</a>)</li>\n<li><em>(write)</em> add <code>ZipWriter::hide_file</code> for in-place\nentry deletion (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/924\">#924</a>)</li>\n<li>add compression (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/948\">#948</a>)</li>\n<li>add test to in place modification (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/945\">#945</a>)</li>\n<li>move CustomExtraField to own file (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/941\">#941</a>)</li>\n<li>add a test on enum size (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/939\">#939</a>)</li>\n<li>use ZipFileEntry instead of ZipStreamFileMetadata (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/935\">#935</a>)</li>\n<li>add ZipFileEntry with no Reader (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/933\">#933</a>)</li>\n<li>change <code>aes_mode</code> to <code>aes_settings()</code> in\nZipFileData (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/925\">#925</a>)</li>\n<li>cleanup and harmonize extra fields (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/923\">#923</a>)</li>\n<li>Rewrite zip64 extra (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/913\">#913</a>)</li>\n</ul>\n<h3><!-- raw HTML omitted -->🐛 Bug Fixes</h3>\n<ul>\n<li>reading an empty AES entry again at EOF returns Ok(0) (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1024\">#1024</a>)</li>\n<li>reject ZIP64 sizes that overflow u64 when computing data end offsets\n(<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1036\">#1036</a>)</li>\n<li>apply central directory metadata in ZipStreamReader, only to written\nentries (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1030\">#1030</a>)</li>\n<li>consume the whole extended timestamp field in the central header (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1016\">#1016</a>)</li>\n<li>parse the central header of the extended timestamp (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/1002\">#1002</a>)</li>\n<li>don't pre-allocate the declared size in the legacy decoders (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/991\">#991</a>)</li>\n<li>Symlink with very large declared size could lead to out-of-memory\npanic (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/984\">#984</a>)</li>\n<li>copy extra fields in raw_copy_file (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/955\">#955</a>) (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/982\">#982</a>)</li>\n<li>add unix_mode when copy_raw_file (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/981\">#981</a>)</li>\n<li>rewrite documentation of add_symlink_from_path (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/pull/979\">#979</a>)</li>\n</ul>\n<!-- raw HTML omitted -->\n</blockquote>\n<p>... (truncated)</p>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/d4baac67d5d4fd5a4f25a6f43860fc3034180bd1\"><code>d4baac6</code></a>\ndoc: Manually update CHANGELOG for 9.0.2</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/bbb39b5bc23193821efa36704171668ed9f591ed\"><code>bbb39b5</code></a>\nchore: Bump version from 9.0.1 to 9.0.2 to force a release PR</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/5e0274b44b64d7067946bfb8397e3e7923cbb5d9\"><code>5e0274b</code></a>\ndoc: Update CHANGELOG with bug fixes for symlink extraction</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/5cd986fe7e9d0ce22caf9dfa06607ad606c08cf6\"><code>5cd986f</code></a>\nUpdate vulnerability reporting guidelines</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/649e50e10c908de4c884bd26aeb73d99c76c1287\"><code>649e50e</code></a>\ntest: fix conditionally-unused function and missing imports (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/issues/1053\">#1053</a>)</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/7fc44906564a5d8c5ca9de70a1f19d885e31d062\"><code>7fc4490</code></a>\nMerge commit from fork</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/25a4ccba2013ba6080bf99b964c25464c035366b\"><code>25a4ccb</code></a>\nci: explicit nightly in the command (nightly is already the default) (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/issues/1052\">#1052</a>)</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/22e8f8c87d18956b072ce4db76b23c63f891a04e\"><code>22e8f8c</code></a>\nchore(deps): bump rust from 1.95 to 1.99 in /.devcontainer (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/issues/1051\">#1051</a>)</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/b5326b2b42a19f6b5e861e3c726ac58eead521c7\"><code>b5326b2</code></a>\nchore(deps): update zstd requirement from ^0.13.3 to ^0.14.0 (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/issues/986\">#986</a>)</li>\n<li><a\nhref=\"https://github.com/zip-rs/zip2/commit/553f64ff08b6e07445617a0b76e1365ec86f1547\"><code>553f64f</code></a>\nci: Scope permissions to job level (<a\nhref=\"https://redirect.github.com/zip-rs/zip2/issues/1049\">#1049</a>)</li>\n<li>Additional commits viewable in <a\nhref=\"https://github.com/zip-rs/zip2/compare/v8.0.0...9.0.2\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore this major version` will close this PR and stop\nDependabot creating any more for this major version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this minor version` will close this PR and stop\nDependabot creating any more for this minor version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this dependency` will close this PR and stop\nDependabot creating any more for this dependency (unless you reopen the\nPR or upgrade to it yourself)\n\n\n</details>\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBumps the `zip` dependency from 8 to 9 so 3MF writing picks up the\nlatest bug fixes, including security fixes for decoders and improvements\nto symlink extraction.\n\n- `zip` 9 makes `file_names()` fallible, so the 3MF writer tests now\nunwrap the returned names.\n- The crate is used with `default-features = false` and `deflate` only,\nlimiting exposure to API changes.\n\n<sup>Written for commit 28b0dfa7066ff5067562853e30901a28b8356b15.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2043?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2043?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2043&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-10-19T09:09:08-07:00",
+          "tree_id": "c97dcbfa8ad67cebeedf0e99bd74730bfe39bf64",
+          "url": "https://github.com/andymai/brepkit/commit/d05a129766d91ab965f84822c251fc9c80625ccc"
+        },
+        "date": 1792426351348,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1117096,
+            "range": "± 22451",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1213302,
+            "range": "± 1459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13969,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 788647,
+            "range": "± 7096",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 51443794,
+            "range": "± 330858",
             "unit": "ns/iter"
           }
         ]
