@@ -1,0 +1,21 @@
+crates/io/src/threemf/writer.rs
+  s_24486dff31eaa6::t_dade971d837248 231-235,237-241
+  s_24486dff31eaa6::t_91346bd56f1442 236
+  s_24486dff31eaa6::t_0d34d5d88b523e 380,382-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "28b0dfa7066ff5067562853e30901a28b8356b15",
+  "prompts": {},
+  "sessions": {
+    "s_24486dff31eaa6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "36a3ce6c-b267-47f6-9695-4f1f9f2d7162",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
