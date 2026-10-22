@@ -336,6 +336,13 @@ impl<'a> StepBuilder<'a> {
             _ => (Extrusion::Surface(self.build_surface(surface_ref)?), false),
         };
 
+        // A plane reads as brepkit builds one: its normal outward and the
+        // face unreversed, its loops wound about that normal. A face turned
+        // against its plane instead takes the plane flipped; the reversed
+        // flag is kept for surfaces that cannot flip (a bore's cylinder).
+        let turned = (face_reversed != inverted) != flip;
+        let absorb = turned && matches!(surface, Extrusion::Surface(FaceSurface::Plane { .. }));
+
         let mut outer_wire = None;
         let mut inner_wires = Vec::new();
         let mut loop_vertex = None;
@@ -349,7 +356,8 @@ impl<'a> StepBuilder<'a> {
             let bound_reversed = bound_tail.ends_with(".F.") || bound_tail.ends_with(".FALSE.");
             // A bound runs about the face's normal (reversed when its flag is
             // false); brepkit stores every loop about the surface's normal.
-            let reverse = (!self.legacy_bounds && bound_reversed != face_reversed) != inverted;
+            let reverse =
+                ((!self.legacy_bounds && bound_reversed != face_reversed) != inverted) != absorb;
 
             if let Some(&loop_ref) = bound_refs.first() {
                 // A vertex loop bounds no area: it marks a point the face
@@ -415,7 +423,13 @@ impl<'a> StepBuilder<'a> {
 
         // Turning a face over flips its normal, not the side of its surface
         // its loops wind about.
-        let face_id = if (face_reversed != inverted) == flip {
+        let face_id = if let (true, FaceSurface::Plane { normal, d }) = (absorb, &surface) {
+            let plane = FaceSurface::Plane {
+                normal: -*normal,
+                d: -*d,
+            };
+            self.topo.add_face(Face::new(outer, inner_wires, plane))
+        } else if !turned {
             self.topo.add_face(Face::new(outer, inner_wires, surface))
         } else {
             self.topo
@@ -2472,6 +2486,125 @@ mod tests {
         let mut topo = Topology::new();
         let result = read_step("", &mut topo);
         assert!(result.is_err());
+    }
+
+    /// A box whose planes are written facing in, each face turned against its
+    /// plane (as some writers write the far sides of a part), reads as brepkit
+    /// builds a box: every plane facing out, no face reversed, each outer loop
+    /// counterclockwise about its plane. The boolean engine reads a planar
+    /// face's orientation from its loop, so a reversed plane read as inward.
+    #[test]
+    fn planes_written_facing_in_read_facing_out() {
+        let mut topo = Topology::new();
+        let block = brepkit_operations::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+        let plain = writer::write_step(&topo, &[block]).unwrap();
+
+        let record = |id: &str| {
+            plain
+                .lines()
+                .find(|l| l.starts_with(&format!("{id} =")))
+                .unwrap()
+                .to_string()
+        };
+        let mut next = plain
+            .lines()
+            .filter_map(|l| l.strip_prefix('#')?.split_once(' ')?.0.parse::<u64>().ok())
+            .max()
+            .unwrap()
+            + 1;
+        let mut extra = Vec::new();
+        let mut planes = Vec::new();
+        let mut out: Vec<String> = Vec::new();
+        for line in plain.lines() {
+            if !line.contains("= PLANE(") {
+                out.push(line.to_string());
+                continue;
+            }
+            // the plane's placement, its normal turned round
+            let id = line.split_once(' ').unwrap().0.to_string();
+            let axis = &line[line.rfind('#').unwrap()..line.rfind(')').unwrap()];
+            let refs: Vec<String> = record(axis)
+                .split('#')
+                .skip(2)
+                .map(|p| format!("#{}", p.trim_end_matches(|c: char| !c.is_ascii_digit())))
+                .collect();
+            let normal = record(&refs[1]);
+            let inner = &normal[normal.rfind('(').unwrap() + 1..normal.find(')').unwrap()];
+            let flipped: Vec<String> = inner
+                .split(',')
+                .map(|x| format!("{:?}", -x.trim().parse::<f64>().unwrap()))
+                .collect();
+            let (dir, place) = (next, next + 1);
+            next += 2;
+            extra.push(format!("#{dir} = DIRECTION('', ({}));", flipped.join(", ")));
+            extra.push(format!(
+                "#{place} = AXIS2_PLACEMENT_3D('', {}, #{dir}, {});",
+                refs[0], refs[2]
+            ));
+            out.push(format!("{id} = PLANE('', #{place});"));
+            planes.push(id);
+        }
+        assert_eq!(planes.len(), 6);
+        let step = out
+            .into_iter()
+            .map(|line| {
+                if line.contains("ADVANCED_FACE")
+                    && planes.iter().any(|p| line.contains(&format!("{p}, .T.)")))
+                {
+                    line.replace(".T.)", ".F.)")
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .replace(
+                "ENDSEC;\nEND-ISO",
+                &format!("{}\nENDSEC;\nEND-ISO", extra.join("\n")),
+            );
+        assert_eq!(
+            step.lines()
+                .filter(|l| l.contains("ADVANCED_FACE") && l.ends_with(".F.);"))
+                .count(),
+            6,
+            "every face turned"
+        );
+
+        let mut read = Topology::new();
+        let solids = read_step(&step, &mut read).unwrap();
+        let centre = Point3::new(1.0, 1.5, 2.0);
+        for fid in brepkit_topology::explorer::solid_faces(&read, solids[0]).unwrap() {
+            let face = read.face(fid).unwrap();
+            let &FaceSurface::Plane { normal, d } = face.surface() else {
+                unreachable!("a box face is a plane");
+            };
+            assert!(!face.is_reversed());
+            let c = Vec3::new(centre.x(), centre.y(), centre.z());
+            assert!(normal.dot(c) < d, "plane {normal:?} faces in");
+            let pts: Vec<Point3> = read
+                .wire(face.outer_wire())
+                .unwrap()
+                .edges()
+                .iter()
+                .map(|oe| {
+                    let e = read.edge(oe.edge()).unwrap();
+                    read.vertex(oe.oriented_start(e)).unwrap().point()
+                })
+                .collect();
+            let mut wound = Vec3::new(0.0, 0.0, 0.0);
+            for (i, p) in pts.iter().enumerate() {
+                let q = pts[(i + 1) % pts.len()];
+                wound += (*p - centre).cross(q - centre);
+            }
+            assert!(
+                wound.dot(normal) > 0.0,
+                "loop winds clockwise about {normal:?}"
+            );
+        }
+        let report = brepkit_operations::validate::validate_solid(&read, solids[0]).unwrap();
+        assert!(report.is_valid(), "{report:?}");
+        let volume = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
+        assert!((volume - 24.0).abs() < 1e-6 * 24.0, "{volume}");
     }
 
     #[test]
