@@ -8633,3 +8633,59 @@ fn cut_a_plug_touching_a_cavity_with_split_corners_leaves_the_box() {
         "box volume {vol:.3} != expected {expected:.3}"
     );
 }
+
+/// A cylinder cut through a plate, beside an L-shaped wall whose plane
+/// holds one of the cutter's generators: the generator runs through the
+/// wall's bounding box but not the wall, so it is no section of the pair.
+/// Kept, it cut the cutter's wall into a grid with the plate's two circles
+/// and the result came out open.
+#[test]
+fn cylinder_generator_in_an_l_walls_notch_is_no_section() {
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let boxed = |topo: &mut Topology, lo: [f64; 3], hi: [f64; 3]| {
+        let b =
+            crate::primitives::make_box(topo, hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]).unwrap();
+        transform_solid(topo, b, &Mat4::translation(lo[0], lo[1], lo[2])).unwrap();
+        b
+    };
+    let plate = boxed(&mut topo, [27.0, -50.0, -40.0], [33.0, 40.0, 40.0]);
+    // one L-shaped wall: its top face's box reaches under the cutter
+    let profile: Vec<Point3> = [
+        (-20.0, -50.0),
+        (30.0, -50.0),
+        (30.0, -42.0),
+        (10.0, -42.0),
+        (10.0, -15.0),
+        (-20.0, -15.0),
+    ]
+    .iter()
+    .map(|&(x, y)| Point3::new(x, y, -10.0))
+    .collect();
+    let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &profile, 1e-7).unwrap();
+    let floor = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+    let wall = crate::extrude::extrude(&mut topo, floor, Vec3::new(0.0, 0.0, 1.0), 5.0).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Fuse, plate, wall).unwrap();
+    check_result(&topo, body);
+    let body_volume = 6.0 * 90.0 * 80.0 + 30.0 * 35.0 * 5.0 + 20.0 * 8.0 * 5.0 - 3.0 * 8.0 * 5.0;
+    assert_volume_near(&topo, body, body_volume, 1e-6);
+
+    // along x through the plate, its lowest generators in the arm's plane
+    let cutter = crate::primitives::make_cylinder(&mut topo, 20.0, 20.0).unwrap();
+    transform_solid(
+        &mut topo,
+        cutter,
+        &Mat4::rotation_y(std::f64::consts::FRAC_PI_2),
+    )
+    .unwrap();
+    transform_solid(&mut topo, cutter, &Mat4::translation(14.0, 0.0, 0.0)).unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, body, cutter)
+            .unwrap();
+    check_result(&topo, result);
+    let bore = std::f64::consts::PI * 400.0 * 6.0;
+    assert_volume_near(&topo, result, body_volume - bore, 1e-3);
+}

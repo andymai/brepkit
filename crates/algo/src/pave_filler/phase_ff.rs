@@ -648,7 +648,21 @@ pub fn perform(
                         matches!(surf_a, FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
                             || matches!(surf_b, FaceSurface::Cylinder(_) | FaceSurface::Cone(_));
                     if banded_partner && matches!(raw.curve, EdgeCurve::Line) {
-                        return segment_meets_both_boxes(raw.p_start, raw.p_end, bb_a, bb_b);
+                        if !segment_meets_both_boxes(raw.p_start, raw.p_end, bb_a, bb_b) {
+                            return false;
+                        }
+                        // A planar partner's box covers more than its face:
+                        // an L-shaped wall's box spans its notch, and a
+                        // generator crossing only the notch is no section of
+                        // the pair. Read against the plane's true outline, a
+                        // line it misses entirely is dropped; one it meets is
+                        // kept whole, so the band splitting is unchanged.
+                        let misses = |f: FaceId, surf: &FaceSurface| {
+                            matches!(surf, FaceSurface::Plane { .. })
+                                && line_face_intervals(topo, f, raw.p_start, raw.p_end, tol.linear)
+                                    .is_some_and(|runs| runs.iter().all(|r| r.1 - r.0 <= 1e-9))
+                        };
+                        return !(misses(fa, surf_a) || misses(fb, surf_b));
                     }
                     // A disc or ellipse face (one closed conic bounding it) has
                     // an exact extent: a line missing that region misses the
