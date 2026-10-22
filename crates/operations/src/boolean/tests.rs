@@ -8633,3 +8633,48 @@ fn cut_a_plug_touching_a_cavity_with_split_corners_leaves_the_box() {
         "box volume {vol:.3} != expected {expected:.3}"
     );
 }
+
+/// A cylinder cut through a plate, ending inside a block above it: its wall
+/// is sectioned by two full circles (the plate's faces) and, apart from
+/// them, by a window (the block's sides and underside). The circles must
+/// split the wall into bands, so the band through the plate lines the hole;
+/// traced as one loop with the window, the band was lost and the plate's
+/// hole left open.
+#[test]
+fn cylinder_cut_wall_bands_split_by_full_circles_beside_a_window() {
+    use crate::transform::transform_solid;
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let boxed = |topo: &mut Topology, size: [f64; 3], at: [f64; 3]| {
+        let b = crate::primitives::make_box(topo, size[0], size[1], size[2]).unwrap();
+        transform_solid(topo, b, &Mat4::translation(at[0], at[1], at[2])).unwrap();
+        b
+    };
+    let plate = boxed(&mut topo, [200.0, 200.0, 1.0], [-100.0, -100.0, 1.0]);
+    let post = boxed(&mut topo, [10.0, 15.0, 5.5], [-5.0, -70.0, 1.5]);
+    let block = boxed(&mut topo, [20.0, 30.0, 3.0], [-10.0, -60.0, 5.0]);
+    let body = boolean(&mut topo, BooleanOp::Fuse, plate, post).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Fuse, body, block).unwrap();
+    check_result(&topo, body);
+    assert_volume_near(&topo, body, 42450.0, 1e-6);
+    let cutter = crate::primitives::make_cylinder(&mut topo, 39.0, 6.0).unwrap();
+
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, body, cutter)
+            .unwrap();
+    check_result(&topo, result);
+
+    // body: plate 40000, post above it 750, block 1800, less the post's
+    // 100 inside the block = 42450; the plate loses a disc, the block the circular segment
+    // of the cutter's top 1 between x = ±10 and y = -30
+    let disc = std::f64::consts::PI * 39.0 * 39.0;
+    let n = 20_000;
+    let segment: f64 = (0..n)
+        .map(|i| {
+            let x = -10.0 + 20.0 * (f64::from(i) + 0.5) / f64::from(n);
+            (39.0f64.mul_add(39.0, -x * x).sqrt() - 30.0) * 20.0 / f64::from(n)
+        })
+        .sum();
+    assert_volume_near(&topo, result, 42450.0 - disc - segment, 1e-3);
+}
