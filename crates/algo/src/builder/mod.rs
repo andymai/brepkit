@@ -1376,7 +1376,14 @@ fn sample_face_interior(
         let e = topo.edge(oe.edge())?;
         let sp = topo.vertex(e.start())?.point();
         let ep = topo.vertex(e.end())?.point();
-        for p in [sp, ep] {
+        // A curved edge's middle too: a loop of one closed circle has a
+        // single vertex, whose box is a point, and offsets scaled by it
+        // never leave the rim.
+        let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+        let mid = e
+            .curve()
+            .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
+        for p in [sp, ep, mid] {
             min_pt = Point3::new(
                 min_pt.x().min(p.x()),
                 min_pt.y().min(p.y()),
@@ -1502,6 +1509,43 @@ fn sample_face_interior(
             let frame = plane_frame::PlaneFrame::from_plane_face(*normal, &poly);
             let poly2d: Vec<_> = boundary.iter().map(|p| frame.project(*p)).collect();
             let eps = classify_2d::boundary_eps(&poly2d);
+            // The face's holes, sampled as its boundary is: a sample in one
+            // is off the face (a ring's centre).
+            let mut holes2d: Vec<Vec<brepkit_math::vec::Point2>> = Vec::new();
+            for &w in face.inner_wires() {
+                let mut hole = Vec::new();
+                for oe in topo.wire(w)?.edges() {
+                    let e = topo.edge(oe.edge())?;
+                    let (sp, ep) = (
+                        topo.vertex(oe.oriented_start(e))?.point(),
+                        topo.vertex(oe.oriented_end(e))?.point(),
+                    );
+                    hole.push(frame.project(sp));
+                    if matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                        continue;
+                    }
+                    let (ns, ne) = if oe.is_forward() { (sp, ep) } else { (ep, sp) };
+                    let (d0, d1) = e.curve().domain_with_endpoints(ns, ne);
+                    let mut samples: Vec<_> = (1..8)
+                        .map(|k| {
+                            let t = (d1 - d0).mul_add(f64::from(k) / 8.0, d0);
+                            frame.project(e.curve().evaluate_with_endpoints(t, ns, ne))
+                        })
+                        .collect();
+                    if !oe.is_forward() {
+                        samples.reverse();
+                    }
+                    hole.extend(samples);
+                }
+                if hole.len() >= 3 {
+                    holes2d.push(hole);
+                }
+            }
+            let in_hole = |c2| {
+                holes2d
+                    .iter()
+                    .any(|h| classify_2d::point_in_polygon_2d(c2, h))
+            };
             // Try LARGE offsets first, then shrink. The base offset is
             // diag·1e-4 — a sample that close to the boundary edge can hug a
             // coincident interface plane of the opposing solid (a frustum
@@ -1521,6 +1565,7 @@ fn sample_face_interior(
                     let c2 = frame.project(cand);
                     if classify_2d::point_in_polygon_2d(c2, &poly2d)
                         && classify_2d::distance_to_polygon_boundary(c2, &poly2d) > eps
+                        && !in_hole(c2)
                     {
                         return Ok(cand);
                     }
@@ -1676,5 +1721,44 @@ mod tests {
             r < 1.0 - 1e-9,
             "disc sample (r={r}) should be interior, not on the bounding circle"
         );
+    }
+
+    /// A ring, a planar face bounded by two concentric circles: its sample
+    /// lies on the ring, not at the centre in its hole, where the solid it
+    /// is classified against may have material (a disc fused into the ring:
+    /// the ring read Inside there and was dropped).
+    #[test]
+    fn sample_face_interior_planar_ring_lands_on_the_ring() {
+        use brepkit_topology::builder::make_circle_edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let circle = |topo: &mut Topology, r: f64, forward: bool| {
+            let edge = make_circle_edge(
+                topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                r,
+                1e-7,
+            )
+            .unwrap();
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap())
+        };
+        let outer = circle(&mut topo, 25.0, true);
+        let hole = circle(&mut topo, 14.0, false);
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            brepkit_topology::face::FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let pt = sample_face_interior(&topo, face, Tolerance::default()).unwrap();
+        let r = pt.x().hypot(pt.y());
+        assert!(r > 14.0 && r < 25.0, "ring sample at r={r}");
+        assert!(pt.z().abs() < 1e-9);
     }
 }
