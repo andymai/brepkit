@@ -291,6 +291,10 @@ impl<'a> StepBuilder<'a> {
 
         let mut face_ids = Vec::new();
         for face_ref in face_refs {
+            if let Some(halves) = self.build_whole_sphere(face_ref, flip)? {
+                face_ids.extend(halves);
+                continue;
+            }
             let face_id = self.build_face(face_ref, flip)?;
             face_ids.push(face_id);
         }
@@ -301,6 +305,86 @@ impl<'a> StepBuilder<'a> {
         })?;
         let shell_id = self.topo.add_shell(shell);
         Ok(shell_id)
+    }
+
+    /// A whole sphere written as one face bounded only by a VERTEX_LOOP (a
+    /// point on it, as some writers write a ball) has no edge to bound a
+    /// face with. It reads as `make_sphere` builds one: two hemispheres
+    /// meeting along a polygon inscribed in the equator about the sphere's
+    /// axis. `None` for any other face.
+    fn build_whole_sphere(
+        &mut self,
+        face_ref: u64,
+        flip: bool,
+    ) -> Result<Option<[brepkit_topology::face::FaceId; 2]>, IoError> {
+        const EQUATOR_SEGMENTS: u32 = 32;
+        let attrs = self.get_entity(face_ref)?.attrs.clone();
+        let list_refs = parse_list_refs(&attrs);
+        let [bound_ref] = list_refs[..] else {
+            return Ok(None);
+        };
+        let Some(&loop_ref) = parse_refs(&self.get_entity(bound_ref)?.attrs.clone()).first() else {
+            return Ok(None);
+        };
+        if self.get_entity(loop_ref)?.entity_type != "VERTEX_LOOP" {
+            return Ok(None);
+        }
+        let Some(&surface_ref) = parse_refs(&attrs).iter().rev().find(|r| **r != bound_ref) else {
+            return Ok(None);
+        };
+        if self.get_entity(surface_ref)?.entity_type != "SPHERICAL_SURFACE" {
+            return Ok(None);
+        }
+        let FaceSurface::Sphere(sphere) = self.build_surface(surface_ref)? else {
+            return Ok(None);
+        };
+        let orient_tail = attrs.trim_end_matches(')').trim();
+        let face_reversed = orient_tail.ends_with(".F.") || orient_tail.ends_with(".FALSE.");
+
+        let (c, r) = (sphere.center(), sphere.radius());
+        let (x, y) = (sphere.x_axis(), sphere.y_axis());
+        let vertices: Vec<_> = (0..EQUATOR_SEGMENTS)
+            .map(|i| {
+                let t = std::f64::consts::TAU * f64::from(i) / f64::from(EQUATOR_SEGMENTS);
+                let p = c + x * (r * t.cos()) + y * (r * t.sin());
+                self.topo.add_vertex(Vertex::new(p, 1e-7))
+            })
+            .collect();
+        let edges: Vec<_> = (0..vertices.len())
+            .map(|i| {
+                let j = (i + 1) % vertices.len();
+                self.topo
+                    .add_edge(Edge::new(vertices[i], vertices[j], EdgeCurve::Line))
+            })
+            .collect();
+        // Each loop runs counterclockwise about the outward normal: round
+        // the axis it bounds the upper half, the other way the lower.
+        let loops = [
+            edges
+                .iter()
+                .map(|&e| OrientedEdge::new(e, true))
+                .collect::<Vec<_>>(),
+            edges
+                .iter()
+                .rev()
+                .map(|&e| OrientedEdge::new(e, false))
+                .collect(),
+        ];
+        let mut halves = Vec::with_capacity(2);
+        for oriented in loops {
+            let wire = Wire::new(oriented, true).map_err(|e| IoError::ParseError {
+                reason: format!("ADVANCED_FACE #{face_ref}: {e}"),
+            })?;
+            let wire = self.topo.add_wire(wire);
+            let surface = FaceSurface::Sphere(sphere.clone());
+            halves.push(if face_reversed == flip {
+                self.topo.add_face(Face::new(wire, Vec::new(), surface))
+            } else {
+                self.topo
+                    .add_face(Face::new_reversed(wire, Vec::new(), surface))
+            });
+        }
+        Ok(Some([halves[0], halves[1]]))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2472,6 +2556,48 @@ mod tests {
         let mut topo = Topology::new();
         let result = read_step("", &mut topo);
         assert!(result.is_err());
+    }
+
+    /// A ball written as one spherical face bounded by a VERTEX_LOOP (as
+    /// some writers write one) reads as a closed solid of two hemispheres,
+    /// which fuses with a box on the exact path.
+    #[test]
+    fn vertex_loop_sphere_reads_as_hemispheres() {
+        let step = "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n\
+            #1 = MANIFOLD_SOLID_BREP('',#2);\n\
+            #2 = CLOSED_SHELL('',(#3));\n\
+            #3 = ADVANCED_FACE('',(#4),#8,.T.);\n\
+            #4 = FACE_BOUND('',#5,.T.);\n\
+            #5 = VERTEX_LOOP('',#6);\n\
+            #6 = VERTEX_POINT('',#7);\n\
+            #7 = CARTESIAN_POINT('',(-1.,2.,3.));\n\
+            #8 = SPHERICAL_SURFACE('',#9,2.);\n\
+            #9 = AXIS2_PLACEMENT_3D('',#10,#11,#12);\n\
+            #10 = CARTESIAN_POINT('',(1.,2.,3.));\n\
+            #11 = DIRECTION('',(1.,0.,0.));\n\
+            #12 = DIRECTION('',(0.,1.,0.));\n\
+            ENDSEC;\nEND-ISO-10303-21;\n";
+        let mut topo = Topology::new();
+        let solids = read_step(step, &mut topo).unwrap();
+        assert_eq!(solids.len(), 1);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solids[0]).unwrap();
+        assert_eq!(faces.len(), 2);
+        let report = brepkit_operations::validate::validate_solid(&topo, solids[0]).unwrap();
+        assert!(report.is_valid(), "{report:?}");
+        let ball = 4.0 / 3.0 * std::f64::consts::PI * 8.0;
+        let volume = brepkit_operations::measure::solid_volume(&topo, solids[0], 0.001).unwrap();
+        assert!((volume - ball).abs() < 1e-3 * ball, "{volume} vs {ball}");
+
+        let block = brepkit_operations::primitives::make_box(&mut topo, 2.0, 4.0, 6.0).unwrap();
+        let fused = brepkit_algo::gfa::boolean(
+            &mut topo,
+            brepkit_algo::bop::BooleanOp::Fuse,
+            solids[0],
+            block,
+        )
+        .unwrap();
+        let report = brepkit_operations::validate::validate_solid(&topo, fused).unwrap();
+        assert!(report.is_valid(), "{report:?}");
     }
 
     #[test]
