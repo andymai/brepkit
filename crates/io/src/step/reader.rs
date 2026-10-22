@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use brepkit_math::frame::Frame3;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -371,13 +372,30 @@ impl<'a> StepBuilder<'a> {
             }
         }
 
-        // If no FACE_OUTER_BOUND, use the first bound as outer.
+        // FACE_OUTER_BOUND is optional (ISO 10303-42), and some writers
+        // often writes every loop as a plain FACE_BOUND, the hole first. A
+        // planar face's outer loop encloses the others, so it is the one of
+        // largest area; other faces fall back to the first bound.
         let outer = outer_wire.or_else(|| {
             if inner_wires.is_empty() {
-                None
-            } else {
-                Some(inner_wires.remove(0))
+                return None;
             }
+            let mut first = 0;
+            if let Extrusion::Surface(FaceSurface::Plane { normal, .. }) = &surface
+                && inner_wires.len() > 1
+                && let Ok(frame) = Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), *normal)
+            {
+                let mut best = f64::NEG_INFINITY;
+                for (i, &wire) in inner_wires.iter().enumerate() {
+                    let area = planar_loop_area(self.topo, wire, frame.x, frame.y)
+                        .unwrap_or(f64::NEG_INFINITY);
+                    if area > best {
+                        best = area;
+                        first = i;
+                    }
+                }
+            }
+            Some(inner_wires.remove(first))
         });
 
         let outer = outer.ok_or_else(|| IoError::ParseError {
@@ -1135,6 +1153,50 @@ pub(super) fn refs_after_name(attrs: &str) -> Vec<u64> {
 enum Extrusion {
     Surface(FaceSurface),
     Spline(brepkit_math::nurbs::NurbsCurve, Vec3),
+}
+
+/// The area a loop encloses, flattened into the plane spanned by unit `x`
+/// and `y`: the shoelace area of its edges sampled along their curves.
+/// Approximate, but enough to tell a face's outer loop from its holes.
+fn planar_loop_area(
+    topo: &Topology,
+    wire: brepkit_topology::wire::WireId,
+    x: Vec3,
+    y: Vec3,
+) -> Result<f64, IoError> {
+    const SAMPLES: usize = 16;
+    let mut pts = Vec::new();
+    for oe in topo.wire(wire)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let n = if matches!(curve, EdgeCurve::Line) {
+            1
+        } else {
+            SAMPLES
+        };
+        for k in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let f = k as f64 / n as f64;
+            let f = if oe.is_forward() { f } else { 1.0 - f };
+            let p = curve.evaluate_with_endpoints(t0 + (t1 - t0) * f, a, b);
+            let v = Vec3::new(p.x(), p.y(), p.z());
+            pts.push((v.dot(x), v.dot(y)));
+        }
+    }
+    let Some(&(qx, qy)) = pts.first() else {
+        return Ok(0.0);
+    };
+    let mut area2 = 0.0;
+    for (i, &(ax, ay)) in pts.iter().enumerate() {
+        let (bx, by) = pts[(i + 1) % pts.len()];
+        area2 += (ax - qx) * (by - qy) - (bx - qx) * (ay - qy);
+    }
+    Ok(area2.abs() / 2.0)
 }
 
 /// The lowest and highest heights along unit `along` that an edge from
@@ -2074,6 +2136,63 @@ mod tests {
                 brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
             assert!((volume - 24.0).abs() < 1e-6 * 24.0, "{volume}");
         }
+    }
+
+    /// A planar face written with plain FACE_BOUNDs, its hole first (as some
+    /// writers write a drilled plate), reads back with the rim as the outer
+    /// loop: the face is the plate, not the hole's disc.
+    #[test]
+    fn hole_first_face_bounds_read_rim_as_outer() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_operations::boolean::{BooleanOp, boolean};
+
+        let mut topo = Topology::new();
+        let plate = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+        let pin = brepkit_operations::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        brepkit_operations::transform::transform_solid(
+            &mut topo,
+            pin,
+            &Mat4::translation(3.0, 4.0, -1.0),
+        )
+        .unwrap();
+        let drilled = boolean(&mut topo, BooleanOp::Cut, plate, pin).unwrap();
+        let written = writer::write_step(&topo, &[drilled]).unwrap();
+
+        let mut swapped = 0;
+        let step: String = written
+            .replace("FACE_OUTER_BOUND", "FACE_BOUND")
+            .lines()
+            .map(|line| {
+                let Some((head, rest)) = line.split_once("ADVANCED_FACE('', (") else {
+                    return line.to_string();
+                };
+                let (bounds, tail) = rest.split_once(')').unwrap();
+                let mut bounds: Vec<&str> = bounds.split(", ").collect();
+                if bounds.len() > 1 {
+                    bounds.reverse();
+                    swapped += 1;
+                }
+                format!("{head}ADVANCED_FACE('', ({}){tail}", bounds.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(swapped, 2, "the plate's two faces carry the hole");
+
+        let mut read = Topology::new();
+        let solids = read_step(&step, &mut read).unwrap();
+        assert_eq!(solids.len(), 1);
+        let report = brepkit_operations::validate::validate_solid(&read, solids[0]).unwrap();
+        assert!(report.is_valid(), "{report:?}");
+        for face in brepkit_topology::explorer::solid_faces(&read, solids[0]).unwrap() {
+            let area = brepkit_operations::measure::face_area(&read, face, 0.001).unwrap();
+            assert!(area > 0.0, "a face of negative area: its loops are swapped");
+        }
+        let volume = brepkit_operations::measure::solid_volume(&read, solids[0], 0.001).unwrap();
+        let expected = 2.0f64.mul_add(-std::f64::consts::PI, 200.0);
+        assert!(
+            (volume - expected).abs() < 1e-3 * expected,
+            "{volume} vs {expected}"
+        );
     }
 
     /// The span along a sweep that a face's edge reaches covers the whole
