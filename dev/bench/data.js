@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792902200096,
+  "lastUpdate": 1792902515840,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55511,6 +55511,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 50013100,
             "range": "± 219473",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eric@sparkpack.com",
+            "name": "Eric Vaughan",
+            "username": "SparkPack"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ccffd1ba9510150ab16f620c2ef3de9a8fc3c27a",
+          "message": "fix(io): take a planar face's largest loop as its outer bound (#2046)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-10-25T04:25:30Z",
+          "tree_id": "88e567f7a8a209eb8303c0d389597b991e489c7a",
+          "url": "https://github.com/andymai/brepkit/commit/ccffd1ba9510150ab16f620c2ef3de9a8fc3c27a"
+        },
+        "date": 1792902508951,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1080736,
+            "range": "± 4078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1164955,
+            "range": "± 2616",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13679,
+            "range": "± 302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663935,
+            "range": "± 6297",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 48033054,
+            "range": "± 184228",
             "unit": "ns/iter"
           }
         ]
