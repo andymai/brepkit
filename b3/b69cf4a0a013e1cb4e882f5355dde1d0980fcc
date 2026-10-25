@@ -1,0 +1,19 @@
+crates/operations/src/boolean/tests.rs
+  s_67c54077c4992b::t_d982a5395c302c 8689-8692
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b3b69cf4a0a013e1cb4e882f5355dde1d0980fcc",
+  "prompts": {},
+  "sessions": {
+    "s_67c54077c4992b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0eff747e-2cb5-4ce5-a067-d79d35a54638",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
