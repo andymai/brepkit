@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792891478956,
+  "lastUpdate": 1792891630218,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -54809,6 +54809,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47993659,
             "range": "± 76343",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5f7f48367bcba416cbb419e6109c0ae94e800d57",
+          "message": "perf(algo): measure distance to a cylinder or sphere directly (#2055)\n\nThe edge–face crossing scans in `phase_ef` ask for a point's distance to\nthe face's surface at every sample of every edge whose box meets the\nface (65 samples per edge, plus the on-surface check and the refinement\nsteps). For anything but a plane, `distance_to_surface` projected the\npoint onto the surface (`atan2` and friends) and evaluated the surface\nback at the foot, then measured.\n\nA cylinder's distance is the point's distance from the axis less the\nradius, and a sphere's is its distance from the centre less the radius.\nThose are the same values without the round trip, so\n`distance_to_surface` now computes them directly; other surfaces keep\nthe projection.\n\nMeasured on a benchmark of 147 booleans recorded from a downstream CAD\napp (single core, inputs already loaded), the median boolean got 13%\nfaster (a typical part is planes and cylinders, and these scans were\nabout a third of its time). Results are unchanged: the pose sweep and\ntruth audit match `main` line for line.\n\n## Tests\n\n- Added `closed_form_distances_match_the_projection` (a cylinder and a\nsphere placed off the axes; 30 points inside, outside and near each must\ngive the same distance both ways, within 1e-9).\n- `cargo test -p brepkit-algo -p brepkit-operations --lib` and `cargo\nclippy -p brepkit-algo --all-targets -- -D warnings` pass.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-24T18:23:36-07:00",
+          "tree_id": "e88d7d6e13111f4112528a4be9712dbb99a7d841",
+          "url": "https://github.com/andymai/brepkit/commit/5f7f48367bcba416cbb419e6109c0ae94e800d57"
+        },
+        "date": 1792891623008,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 619918,
+            "range": "± 8201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 678184,
+            "range": "± 7417",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8152,
+            "range": "± 102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 389312,
+            "range": "± 6070",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 32192191,
+            "range": "± 236036",
             "unit": "ns/iter"
           }
         ]
