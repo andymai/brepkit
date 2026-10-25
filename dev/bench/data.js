@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792903718528,
+  "lastUpdate": 1792913563189,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55619,6 +55619,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47623888,
             "range": "± 69029",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "17e56b4c0c79cfea1bd3dcad0fe45debe286e6eb",
+          "message": "fix(heal): merge coplanar faces whose holes are closed circles (#2053)\n\n`unify_same_domain` never merged a group of coplanar faces when any of\nthem had a loop made of a single closed edge (a round hole bounded by\none full circle). It deferred the whole group, so a plate's face stayed\nsplit around a box fused into it whenever the plate also had a round\nhole, and booleans reported more faces than the solid has.\n\nThree changes let such groups merge:\n\n- A closed edge (start vertex = end vertex) is a loop of its own, so a\nfull-circle hole survives the boundary rebuild instead of breaking the\nloop chaining.\n- Loops are classified as outer or hole by testing a point on each\nloop's own boundary (the true middle of one of its edges) against the\nother loops' exact boundaries, with `region2d::point_in_region` over\ntheir segments and conic arcs (a fitted curve keeps sampled chords). The\nold test used the loop's centroid against a polygon of its vertices: a\nmerged outline's centroid can sit inside one of its holes (the new\ntest's plate and tab average exactly to the hole's centre), and a chord\npolygon misreads anything between an arc and its chords.\n\nFound replaying a downstream CAD app's recorded booleans: 124 results\nthat had the right solid but too many faces now match the reference's\nface count.\n\n## Tests\n\n- Added `unify_keeps_a_round_hole_where_the_merged_outline_centres` (a 4\n× 2 plate with a full-circle hole and a tab beside it, sharing an edge;\nthe merged face must keep the hole as its one inner loop).\n- Added `unify_keeps_a_small_hole_close_inside_a_curved_outline` (from\nreview: a unit disc in three sectors with a 0.0002 hole at radius 0.999;\na sampled outline merged it into two overlapping faces).\n- `cargo test -p brepkit-heal`, `cargo test -p brepkit-operations --lib`\nand `cargo clippy -p brepkit-heal --all-targets -- -D warnings` pass.\nThe pose sweep and truth audit match `main` line for line.\n- `compound_cut_edge_tangent_tools_stays_analytic` fails now and then in\na full parallel `--lib` run, on unmodified `main` too (1 run in 3 here);\nit passes alone. It reads a process-wide fallback counter that other\ntests' fallbacks can bump.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-10-25T07:29:36Z",
+          "tree_id": "67e2aef1d46b7b5e479767250078687f290c8cb4",
+          "url": "https://github.com/andymai/brepkit/commit/17e56b4c0c79cfea1bd3dcad0fe45debe286e6eb"
+        },
+        "date": 1792913556410,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1063180,
+            "range": "± 20571",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1147334,
+            "range": "± 8849",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13210,
+            "range": "± 227",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663134,
+            "range": "± 3164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47648802,
+            "range": "± 138564",
             "unit": "ns/iter"
           }
         ]
