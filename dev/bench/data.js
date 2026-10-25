@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792900906108,
+  "lastUpdate": 1792901081113,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55403,6 +55403,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 31418331,
             "range": "± 550296",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eric@sparkpack.com",
+            "name": "Eric Vaughan",
+            "username": "SparkPack"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1dbe22bcfb2268f7ff3b0cb91a253664ed9d3ad9",
+          "message": "fix(io): read a plane written facing in as brepkit builds one (#2051)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-10-24T20:59:30-07:00",
+          "tree_id": "d9a358f06bc1076ce2644f8d7689223bc861f63b",
+          "url": "https://github.com/andymai/brepkit/commit/1dbe22bcfb2268f7ff3b0cb91a253664ed9d3ad9"
+        },
+        "date": 1792901075514,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1061027,
+            "range": "± 1632",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1147652,
+            "range": "± 2305",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13040,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 659246,
+            "range": "± 1521",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47778628,
+            "range": "± 174421",
             "unit": "ns/iter"
           }
         ]
