@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792428562709,
+  "lastUpdate": 1792891478956,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -54755,6 +54755,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 35011206,
             "range": "± 1141624",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3e6bccaf6418c8f08047ca68971516cbd825d0f9",
+          "message": "fix(io): write a NURBS edge running against its curve as same_sense .F. (#2052)\n\nThe STEP writer wrote every `EDGE_CURVE` with `same_sense = .T.`, even\nfor an edge stored against its curve.\n\nA fitted (NURBS) edge can run from its curve's end back to its start: a\npiece of a closed intersection loop stored that way, or any edge whose\nvertices are the other way round from the curve's parameterization.\nbrepkit reads such an edge correctly (`domain_with_endpoints` returns a\ndescending span), but written with `.T.` another reader takes the curve\nfrom the edge's start vertex onward. On a closed loop that is the other\nway round the loop, and the part it reads back is a different solid. The\nwriter now asks `domain_with_endpoints` for the edge's span and writes\n`.F.` when it runs down. Lines, circles and ellipses are unchanged\n(their vertex order already encodes the sense).\n\nFound replaying a downstream CAD app's recorded booleans: six results\nthat brepkit computed exactly read back wrong in another kernel until\nthis was fixed.\n\n## Tests\n\n- Added `nurbs_edge_against_its_curve_is_written_against_it` (the test\ncube with one edge replaced by a degree-1 NURBS running from the edge's\nend to its start; exactly one `EDGE_CURVE` must be written `.F.`). It\nfails without the fix.\n- `cargo test -p brepkit-io` and `cargo clippy -p brepkit-io\n--all-targets -- -D warnings` pass.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Fable 5.1 <noreply@anthropic.com>",
+          "timestamp": "2026-10-24T18:21:42-07:00",
+          "tree_id": "cc016346907a1ed27117dd0cd662e08725d03330",
+          "url": "https://github.com/andymai/brepkit/commit/3e6bccaf6418c8f08047ca68971516cbd825d0f9"
+        },
+        "date": 1792891474238,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1067689,
+            "range": "± 2498",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1152061,
+            "range": "± 3200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12972,
+            "range": "± 377",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 774932,
+            "range": "± 3322",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47993659,
+            "range": "± 76343",
             "unit": "ns/iter"
           }
         ]
