@@ -1,0 +1,14 @@
+crates/algo/src/builder/mod.rs
+  h_b755e1950659f4 1379-1386,1512-1548,1568,1725-1763
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e466384c2da5732b1a4763443094e9d8df0d16ef",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
