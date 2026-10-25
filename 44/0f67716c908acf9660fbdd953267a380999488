@@ -1,0 +1,14 @@
+crates/io/src/step/reader.rs
+  h_b755e1950659f4 10,375-378,381,383-398,1158-1201,2141-2197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "440f67716c908acf9660fbdd953267a380999488",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
