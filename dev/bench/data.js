@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792891630218,
+  "lastUpdate": 1792892667468,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -54863,6 +54863,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 32192191,
             "range": "± 236036",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eric@sparkpack.com",
+            "name": "Eric Vaughan",
+            "username": "SparkPack"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d3e0b88621ee3af6d69a73bde7336346df1a17af",
+          "message": "fix(io): read a VERTEX_LOOP-bounded sphere face as two hemispheres (#2047)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-10-24T18:41:49-07:00",
+          "tree_id": "ef7af43762e80094efe9b2258363f145b58ebc22",
+          "url": "https://github.com/andymai/brepkit/commit/d3e0b88621ee3af6d69a73bde7336346df1a17af"
+        },
+        "date": 1792892659084,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 885294,
+            "range": "± 20163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 925605,
+            "range": "± 3744",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11101,
+            "range": "± 146",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 517119,
+            "range": "± 940",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 39556689,
+            "range": "± 61127",
             "unit": "ns/iter"
           }
         ]
