@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792902515840,
+  "lastUpdate": 1792903718528,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55565,6 +55565,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 48033054,
             "range": "± 184228",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e2c883f8a1b021abd355ed83ff2be62545d6a05",
+          "message": "chore(main): release 4.2.8 (#2063)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.2.8](https://github.com/andymai/brepkit/compare/v4.2.7...v4.2.8)\n(2026-10-25)\n\n\n### Bug Fixes\n\n* **io:** take a planar face's largest loop as its outer bound\n([#2046](https://github.com/andymai/brepkit/issues/2046))\n([ccffd1b](https://github.com/andymai/brepkit/commit/ccffd1ba9510150ab16f620c2ef3de9a8fc3c27a))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-25T04:45:38Z",
+          "tree_id": "1f20af2c4fdc4c0bbe4506db9e190c34156291b9",
+          "url": "https://github.com/andymai/brepkit/commit/0e2c883f8a1b021abd355ed83ff2be62545d6a05"
+        },
+        "date": 1792903713464,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1055855,
+            "range": "± 1249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1143465,
+            "range": "± 1647",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13211,
+            "range": "± 26",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 655835,
+            "range": "± 11687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47623888,
+            "range": "± 69029",
             "unit": "ns/iter"
           }
         ]
