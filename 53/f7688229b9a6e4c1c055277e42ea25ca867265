@@ -1,0 +1,14 @@
+crates/math/src/nurbs/projection.rs
+  h_b755e1950659f4 127-168,170,172,179-189,220,228-231,797-839
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53f7688229b9a6e4c1c055277e42ea25ca867265",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
