@@ -1,0 +1,22 @@
+crates/topology/src/planar.rs
+  s_67c54077c4992b::t_067367ee1b4c50 260-309
+  s_67c54077c4992b::t_d7a60d3e10ac1e 5,14-65,83,105,310-411,615-716
+crates/algo/src/builder/mod.rs
+  s_67c54077c4992b::t_d7a60d3e10ac1e 1307,1379-1386,1504-1506,1511-1525,1532-1536,1540,1544-1575,1577,1635-1636,1691-1693,1720-1912
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c2ce02a0a201124f2845dd12045e1fd3eed3078a",
+  "prompts": {},
+  "sessions": {
+    "s_67c54077c4992b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0eff747e-2cb5-4ce5-a067-d79d35a54638",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
