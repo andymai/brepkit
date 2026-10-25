@@ -1,0 +1,14 @@
+crates/heal/src/upgrade/unify_same_domain.rs
+  h_b755e1950659f4 442-476,566-575,579-580,594,611-617,672-675,689,713,742,817-821,825-832,1289-1353
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b76ac919080700edd964ec4289c2ecbfeb1449ef",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
