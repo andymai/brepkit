@@ -1,0 +1,103 @@
+crates/operations/src/tessellate/solid.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 20-22,75,92,113-118,156-170,184,191,626-647,649-672,674-706,709-712,714-727,730-745,748,750-821,823-835,837-845,848-853,855-866,872,878,884-897,899-906,908-926,1044-1065,1097-1103
+.github/workflows/benchmark.yml
+  s_67c54077c4992b::t_978cb5d7c7c4ab 60,110
+crates/io/tests/step_surface_models.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-184
+CHANGELOG.md
+  s_67c54077c4992b::t_978cb5d7c7c4ab 3-37
+crates/operations/src/tessellate/nurbs.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 854-863,880-885
+crates/operations/src/tessellate/planar.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 450-473,1000-1128
+  s_67c54077c4992b::t_f3103b9bbafd5f 1129
+crates/io/src/threemf/writer.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 231-241,380,382-384
+crates/operations/tests/regress_fillet_variable_retry_seam_stub.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 206,209
+crates/io/Cargo.toml
+  s_67c54077c4992b::t_978cb5d7c7c4ab 24
+crates/io/src/step/seam.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-511
+crates/io/src/step/assembly.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-726
+package.json
+  s_67c54077c4992b::t_978cb5d7c7c4ab 12
+crates/io/tests/step_missing_seams.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-315
+.github/workflows/publish.yml
+  s_67c54077c4992b::t_978cb5d7c7c4ab 28,52,86,94
+.release-please-manifest.json
+  s_67c54077c4992b::t_978cb5d7c7c4ab 2
+crates/io/src/step/mod.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 3,5-6
+crates/io/src/step/revolution.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-623
+crates/io/tests/step_units_and_placements.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-469
+crates/io/src/step/writer.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 336-350,355-358,789-820
+  s_67c54077c4992b::t_f2116e44a64122 821
+.claude/skills/io-formats/reference.md
+  s_67c54077c4992b::t_978cb5d7c7c4ab 24-30,33-34,50-59,61-72,79-81
+crates/operations/src/tessellate/nonplanar.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1626,1631,1847,1858-1953,2088-2089,2138-2141,2264-2266,2268-2271,2353,2355-2367,2514-2515,2637,2651-2652,3321-3323,3332,3335,3343-3346,3633,3702-3703,3778-3782,3846-3849,3858-3860,3862-3867,3869-3885,4139,4167-4168,4192-4250,4311-4315,4322-4323,4342,4488,4494-4495,4634-4636,4647-4661,4695-4783,5291-5358
+crates/io/tests/data/freeform_panel.step
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-2148
+crates/operations/src/tessellate/tests.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 2089-2099,2176-2190,2193,2209-2213,2289,2297-2378,2384-2486,2803-3687
+  s_67c54077c4992b::t_bf3f0afbe3905e 2088
+crates/io/tests/step_freeform_panel.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-135
+crates/topology/src/edge.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 186-193,197,483-488,501-510
+crates/io/tests/support/step_text.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-174
+CLAUDE.md
+  s_67c54077c4992b::t_978cb5d7c7c4ab 321-323
+Cargo.toml
+  s_67c54077c4992b::t_978cb5d7c7c4ab 15,54,58-68,126-133
+crates/io/tests/cross_one_row_fillet_inmem.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 651-653,656
+crates/operations/src/tessellate/mesh_ops.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 496-499,501-502
+.claude/skills/io-formats/SKILL.md
+  s_67c54077c4992b::t_978cb5d7c7c4ab 59-63,67-68,70-80,88-89,172,178-179
+crates/io/src/step/reader.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 23-28,47-54,59-61,126-127,147,154-155,158,161,164-206,211-241,286-290,294-297,301,310-389,414-421,425,439-448,508-510,707,921-1040,1176,1203,1347,1421,1445,2561-2605
+  s_67c54077c4992b::t_94d8f8cbb262ea 2606
+crates/io/tests/step_surface_of_revolution.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1-434
+crates/math/src/nurbs/projection.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 11,14,19-23,307-310,315-316,321-338,463-465,468-469,487-733,1170-1229
+crates/algo/src/pave_filler/phase_ef.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 1233-1251,1324-1360
+  s_67c54077c4992b::t_4b5ab3d6b7a65b 1361
+.github/workflows/ci.yml
+  s_67c54077c4992b::t_978cb5d7c7c4ab 47,50-53,60,70,75-77,115,280
+.github/workflows/mutants.yml
+  s_67c54077c4992b::t_978cb5d7c7c4ab 26,75
+crates/algo/src/pave_filler/phase_ff.rs
+  s_67c54077c4992b::t_978cb5d7c7c4ab 651-662,8461-8476,9719-9737
+  s_67c54077c4992b::t_1d9f56ed8b56a6 9738-9741
+.github/workflows/osv-scan.yml
+  s_67c54077c4992b::t_978cb5d7c7c4ab 26,37
+package-lock.json
+  s_67c54077c4992b::t_8329f44c6288d3 12,1191-1193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86188180a51a9e7c61c653816879b23f566355db",
+  "prompts": {},
+  "sessions": {
+    "s_67c54077c4992b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0eff747e-2cb5-4ce5-a067-d79d35a54638",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
