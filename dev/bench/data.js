@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792895983957,
+  "lastUpdate": 1792897897709,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55133,6 +55133,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 49669897,
             "range": "± 149170",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eric@sparkpack.com",
+            "name": "Eric Vaughan",
+            "username": "SparkPack"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4ba0251105b6bd51d726fcd604dbfa7c12a3eb67",
+          "message": "fix(algo): sample a ring face on the ring, not in its hole (#2050)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-10-25T03:08:30Z",
+          "tree_id": "69b7b232930b0198ff58b6ef66846257b5645a0f",
+          "url": "https://github.com/andymai/brepkit/commit/4ba0251105b6bd51d726fcd604dbfa7c12a3eb67"
+        },
+        "date": 1792897890363,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1064422,
+            "range": "± 2168",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1152437,
+            "range": "± 2838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13015,
+            "range": "± 99",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 659408,
+            "range": "± 3001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47213632,
+            "range": "± 315920",
             "unit": "ns/iter"
           }
         ]
