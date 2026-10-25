@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792897897709,
+  "lastUpdate": 1792898084787,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55187,6 +55187,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47213632,
             "range": "± 315920",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eric@sparkpack.com",
+            "name": "Eric Vaughan",
+            "username": "SparkPack"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "acd51b148d49364737e6e9324747cf68d7f6631d",
+          "message": "fix(algo): split a cylinder wall notched at its rim into bands (#2048)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-10-25T03:11:02Z",
+          "tree_id": "fda571f449548b30a0c45c9dda6a2fa778de9f4e",
+          "url": "https://github.com/andymai/brepkit/commit/acd51b148d49364737e6e9324747cf68d7f6631d"
+        },
+        "date": 1792898077825,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1069341,
+            "range": "± 6404",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1158299,
+            "range": "± 1546",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13253,
+            "range": "± 307",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661064,
+            "range": "± 2466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 48151816,
+            "range": "± 414319",
             "unit": "ns/iter"
           }
         ]
