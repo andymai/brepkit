@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.7](https://github.com/andymai/brepkit/compare/v4.2.6...v4.2.7) (2026-10-25)
+
+
+### Bug Fixes
+
+* **io:** read a plane written facing in as brepkit builds one ([#2051](https://github.com/andymai/brepkit/issues/2051)) ([1dbe22b](https://github.com/andymai/brepkit/commit/1dbe22bcfb2268f7ff3b0cb91a253664ed9d3ad9))
+
 ## [4.2.6](https://github.com/andymai/brepkit/compare/v4.2.5...v4.2.6) (2026-10-25)
 
 
