@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792899425003,
+  "lastUpdate": 1792899608372,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55295,6 +55295,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 32788660,
             "range": "± 158046",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eric@sparkpack.com",
+            "name": "Eric Vaughan",
+            "username": "SparkPack"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b57c4053c9215d489c51411718110f14f0dae225",
+          "message": "fix(algo): count a planar face's holes in the shell orientation readings (#2045)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-10-25T03:35:51Z",
+          "tree_id": "6128f660e0da3b643c9693ac2475898b3129ad10",
+          "url": "https://github.com/andymai/brepkit/commit/b57c4053c9215d489c51411718110f14f0dae225"
+        },
+        "date": 1792899600716,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1063928,
+            "range": "± 14377",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1148807,
+            "range": "± 6814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13134,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 665001,
+            "range": "± 3788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47887261,
+            "range": "± 116015",
             "unit": "ns/iter"
           }
         ]
