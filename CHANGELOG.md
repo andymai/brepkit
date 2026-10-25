@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.2.5](https://github.com/andymai/brepkit/compare/v4.2.4...v4.2.5) (2026-10-25)
+
+
+### Bug Fixes
+
+* **algo:** sample a ring face on the ring, not in its hole ([#2050](https://github.com/andymai/brepkit/issues/2050)) ([4ba0251](https://github.com/andymai/brepkit/commit/4ba0251105b6bd51d726fcd604dbfa7c12a3eb67))
+* **algo:** split a cylinder wall notched at its rim into bands ([#2048](https://github.com/andymai/brepkit/issues/2048)) ([acd51b1](https://github.com/andymai/brepkit/commit/acd51b148d49364737e6e9324747cf68d7f6631d))
+
 ## [4.2.4](https://github.com/andymai/brepkit/compare/v4.2.3...v4.2.4) (2026-10-25)
 
 
