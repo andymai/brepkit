@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.2.4](https://github.com/andymai/brepkit/compare/v4.2.3...v4.2.4) (2026-10-25)
+
+
+### Bug Fixes
+
+* **algo:** drop a plane x cylinder line that misses the plane face ([#2049](https://github.com/andymai/brepkit/issues/2049)) ([f996fcf](https://github.com/andymai/brepkit/commit/f996fcfdabec35df944778f5b9e0e234046a8526))
+
+
+### Performance
+
+* **math:** project onto a NURBS curve's nearby spans only ([#2054](https://github.com/andymai/brepkit/issues/2054)) ([89195cc](https://github.com/andymai/brepkit/commit/89195ccd4057268b97e42f848ecd18e79a8c0af0))
+
 ## [4.2.3](https://github.com/andymai/brepkit/compare/v4.2.2...v4.2.3) (2026-10-25)
 
 
