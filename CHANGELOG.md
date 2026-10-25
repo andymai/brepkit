@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.6](https://github.com/andymai/brepkit/compare/v4.2.5...v4.2.6) (2026-10-25)
+
+
+### Bug Fixes
+
+* **algo:** count a planar face's holes in the shell orientation readings ([#2045](https://github.com/andymai/brepkit/issues/2045)) ([b57c405](https://github.com/andymai/brepkit/commit/b57c4053c9215d489c51411718110f14f0dae225))
+
 ## [4.2.5](https://github.com/andymai/brepkit/compare/v4.2.4...v4.2.5) (2026-10-25)
 
 
