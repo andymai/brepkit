@@ -1,0 +1,14 @@
+crates/io/src/step/writer.rs
+  h_b755e1950659f4 336-348,353-356,787-819
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "160eaf103e983e48ae513a0a793ebacd0ac1a5be",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
