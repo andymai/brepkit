@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792893916505,
+  "lastUpdate": 1792894076714,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -54971,6 +54971,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47513260,
             "range": "± 100648",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "eric@sparkpack.com",
+            "name": "Eric Vaughan",
+            "username": "SparkPack"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f996fcfdabec35df944778f5b9e0e234046a8526",
+          "message": "fix(algo): drop a plane x cylinder line that misses the plane face (#2049)\n\nCo-authored-by: Eric Vaughan <eric.d.vaughan@gmail.com>",
+          "timestamp": "2026-10-24T19:04:32-07:00",
+          "tree_id": "4b19ab42d1577b74079b5b909e4f09fbcf14fa1d",
+          "url": "https://github.com/andymai/brepkit/commit/f996fcfdabec35df944778f5b9e0e234046a8526"
+        },
+        "date": 1792894069943,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 645409,
+            "range": "± 7383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 697829,
+            "range": "± 4659",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8601,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 400092,
+            "range": "± 17212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 32417374,
+            "range": "± 678915",
             "unit": "ns/iter"
           }
         ]
