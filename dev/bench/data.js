@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792894076714,
+  "lastUpdate": 1792894604460,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55025,6 +55025,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 32417374,
             "range": "± 678915",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "89195ccd4057268b97e42f848ecd18e79a8c0af0",
+          "message": "perf(math): project onto a NURBS curve's nearby spans only (#2054)\n\n`project_point_to_curve` sampled every knot span of the curve in its\ncoarse search before refining. Fitted curves (marched intersection\nsections, fitted lofts) have dozens of spans, and\n`EdgeCurve::domain_with_endpoints` projects both ends of a NURBS\nsub-span edge onto its curve on every call, so these projections\ndominated booleans that create such sections.\n\nA span's piece of the curve lies inside the convex hull of its p + 1\ncontrol points while their weights are positive, so the distance from\nthe point to those control points' bounding box is a lower bound for\nevery point of that span. A span with any weight of zero or less can\nleave that box, so it gets a zero bound and is always sampled. The\ncoarse search now visits spans nearest box first and stops at the first\nspan whose box lies beyond the closest sample found so far: that span,\nand every one after it, cannot hold the closest point. For a point on or\nnear the curve, which is what edge domains ask for, this samples a\nhandful of spans instead of all of them. The seeds handed to Newton come\nfrom the same per-span samples as before, and a sample's neighbours\nacross a span that was skipped are simply not compared.\n\nMeasured on a benchmark of 147 booleans recorded from a downstream CAD\napp (single core, inputs already loaded): the slowest cases went from 27\nms to 6 ms and the total from 0.42 s to 0.32 s. Results are unchanged:\nthe pose sweep and truth audit match `main` line for line.\n\n## Tests\n\n- Added `projection_keeps_a_span_with_a_negative_weight` (from review: a\nquadratic with a negative weight whose exact hit lies outside its span's\ncontrol box).\n- Added `projection_on_a_many_span_curve_finds_the_closest_point` (a\nhelix fitted through 60 points; 40 points on, near and far from it must\nproject no farther than the closest of 20,000 samples along it).\n- `cargo test -p brepkit-math`, `cargo test -p brepkit-algo -p\nbrepkit-operations --lib` (apart from\n`compound_cut_edge_tangent_tools_stays_analytic`, which fails now and\nthen in a full parallel run on unmodified `main` too) and `cargo clippy\n-p brepkit-math --all-targets -- -D warnings` pass.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-10-25T02:13:48Z",
+          "tree_id": "2fc70b9835fcc23b0540bf78a3ca098c2f7bc236",
+          "url": "https://github.com/andymai/brepkit/commit/89195ccd4057268b97e42f848ecd18e79a8c0af0"
+        },
+        "date": 1792894596685,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1060279,
+            "range": "± 2740",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1139231,
+            "range": "± 2015",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13173,
+            "range": "± 73",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 647780,
+            "range": "± 55586",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47273637,
+            "range": "± 1089859",
             "unit": "ns/iter"
           }
         ]
