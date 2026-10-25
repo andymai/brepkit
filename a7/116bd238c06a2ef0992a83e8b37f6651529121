@@ -1,0 +1,20 @@
+crates/io/src/step/reader.rs
+  s_67c54077c4992b::t_706f3a7cf40743 376-379,391-393
+  s_67c54077c4992b::t_7612b241bf4875 2156-2201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7116bd238c06a2ef0992a83e8b37f6651529121",
+  "prompts": {},
+  "sessions": {
+    "s_67c54077c4992b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0eff747e-2cb5-4ce5-a067-d79d35a54638",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
