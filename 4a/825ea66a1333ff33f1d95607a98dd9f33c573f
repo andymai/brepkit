@@ -1,0 +1,24 @@
+crates/math/src/region2d.rs
+  s_67c54077c4992b::t_c317ef2a8ac12c 70-164,554
+  s_67c54077c4992b::t_61b69c6748a5ea 555-671
+crates/algo/src/builder/mod.rs
+  s_67c54077c4992b::t_3d969cafc30311 1526,1963-2039
+crates/topology/src/planar.rs
+  s_67c54077c4992b::t_3f603a8dd3d518 5,217-219,226-237,240-242,272,280-282,294,318-322,460,613-694
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4a825ea66a1333ff33f1d95607a98dd9f33c573f",
+  "prompts": {},
+  "sessions": {
+    "s_67c54077c4992b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0eff747e-2cb5-4ce5-a067-d79d35a54638",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
