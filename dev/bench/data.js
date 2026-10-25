@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792892667468,
+  "lastUpdate": 1792893916505,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -54917,6 +54917,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 39556689,
             "range": "± 61127",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7f58888714860185d6104328bb7e1dfad5416b90",
+          "message": "chore(main): release 4.2.3 (#2057)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.2.3](https://github.com/andymai/brepkit/compare/v4.2.2...v4.2.3)\n(2026-10-25)\n\n\n### Bug Fixes\n\n* **io:** read a VERTEX_LOOP-bounded sphere face as two hemispheres\n([#2047](https://github.com/andymai/brepkit/issues/2047))\n([d3e0b88](https://github.com/andymai/brepkit/commit/d3e0b88621ee3af6d69a73bde7336346df1a17af))\n* **io:** write a NURBS edge running against its curve as same_sense .F.\n([#2052](https://github.com/andymai/brepkit/issues/2052))\n([3e6bcca](https://github.com/andymai/brepkit/commit/3e6bccaf6418c8f08047ca68971516cbd825d0f9))\n* **topology:** read a reversed piece of a closed NURBS loop the shorter\nway ([#2056](https://github.com/andymai/brepkit/issues/2056))\n([330a3c0](https://github.com/andymai/brepkit/commit/330a3c08e2710e50e8b9bd573e7945fc954a1ac3))\n\n\n### Performance\n\n* **algo:** measure distance to a cylinder or sphere directly\n([#2055](https://github.com/andymai/brepkit/issues/2055))\n([5f7f483](https://github.com/andymai/brepkit/commit/5f7f48367bcba416cbb419e6109c0ae94e800d57))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-25T02:02:05Z",
+          "tree_id": "0141dfc44f76bcb0f59fda89fa290312cdc07447",
+          "url": "https://github.com/andymai/brepkit/commit/7f58888714860185d6104328bb7e1dfad5416b90"
+        },
+        "date": 1792893909021,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1060111,
+            "range": "± 21245",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1148003,
+            "range": "± 20123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13337,
+            "range": "± 43",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 655219,
+            "range": "± 2661",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47513260,
+            "range": "± 100648",
             "unit": "ns/iter"
           }
         ]
