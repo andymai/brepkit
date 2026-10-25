@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.9](https://github.com/andymai/brepkit/compare/v4.2.8...v4.2.9) (2026-10-25)
+
+
+### Bug Fixes
+
+* **heal:** merge coplanar faces whose holes are closed circles ([#2053](https://github.com/andymai/brepkit/issues/2053)) ([17e56b4](https://github.com/andymai/brepkit/commit/17e56b4c0c79cfea1bd3dcad0fe45debe286e6eb))
+
 ## [4.2.8](https://github.com/andymai/brepkit/compare/v4.2.7...v4.2.8) (2026-10-25)
 
 
