@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.2.12](https://github.com/andymai/brepkit/compare/v4.2.11...v4.2.12) (2026-10-26)
+
+
+### Bug Fixes
+
+* **blend:** round a plane-cylinder edge inside the cylinder when the plane caps it ([#2078](https://github.com/andymai/brepkit/issues/2078)) ([0d93b43](https://github.com/andymai/brepkit/commit/0d93b43aa6bff71e7350266ae9141cbf2bebcfe6))
+* **operations:** measure and classify a horn torus corner through its pinch ([#2080](https://github.com/andymai/brepkit/issues/2080)) ([2a6ea95](https://github.com/andymai/brepkit/commit/2a6ea95b1f949bcfd4bda83e69ff6ef9ca711b66))
+
 ## [4.2.11](https://github.com/andymai/brepkit/compare/v4.2.10...v4.2.11) (2026-10-26)
 
 
