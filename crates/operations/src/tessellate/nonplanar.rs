@@ -2741,10 +2741,14 @@ fn cdt_in_surface_frame(
     // across the dip Delaunay joins the loop's two sides. And so does any
     // patch a section bounds in part: raw `(u, v)` mixes radians with
     // lengths, and Delaunay there joins rim samples to section samples far
-    // round the wall, a sheared strip longer than the surface it spans.
+    // round the wall, a sheared strip longer than the surface it spans. And
+    // so does a wall whose ruling a neighbour's vertex splits: Delaunay fans
+    // that vertex to rim samples a quarter turn away, a flat chord through
+    // the solid.
     let notched_wall = is_notched_wall(topo, face_data)?
         || is_wound_wall(topo, face_data)?
-        || is_section_bound(topo, face_data)?;
+        || is_section_bound(topo, face_data)?
+        || is_split_ruling_wall(topo, face_data)?;
     let holed_wall_radius = if holes.is_empty() && !notched_wall {
         None
     } else {
@@ -4914,6 +4918,43 @@ pub(super) fn is_section_tip(
         );
     }
     Ok(apex && section)
+}
+
+/// Whether a cylinder or cone wall's outer wire puts a vertex part way along
+/// a ruling: a line edge ending strictly between the wall's lowest and
+/// highest rim, as when same-domain faces stacked along the axis merge and
+/// keep the vertices their side neighbours are still split at.
+pub(super) fn is_split_ruling_wall(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    let surface = face_data.surface();
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return Ok(false);
+    }
+    let edges = topo.wire(face_data.outer_wire())?.edges();
+    if edges.len() <= 4 {
+        return Ok(false);
+    }
+    let v_at = |id| -> Result<f64, crate::OperationsError> {
+        let p = topo.vertex(id)?.point();
+        Ok(surface.project_point(p).map_or(f64::NAN, |(_, v)| v))
+    };
+    let (mut v_min, mut v_max) = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut ruling_ends = Vec::new();
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        let (va, vb) = (v_at(edge.start())?, v_at(edge.end())?);
+        v_min = v_min.min(va).min(vb);
+        v_max = v_max.max(va).max(vb);
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            ruling_ends.extend([va, vb]);
+        }
+    }
+    let tol = 1e-7 * (1.0 + v_max.abs().max(v_min.abs()));
+    Ok(ruling_ends
+        .iter()
+        .any(|&v| v > v_min + tol && v < v_max - tol))
 }
 
 /// Whether a cylinder or cone face is bounded in part by a section: a NURBS
