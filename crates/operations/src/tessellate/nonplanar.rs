@@ -4951,7 +4951,9 @@ pub(super) fn is_split_ruling_wall(
             ruling_ends.extend([va, vb]);
         }
     }
-    let tol = 1e-7 * (1.0 + v_max.abs().max(v_min.abs()));
+    // Scaled by the wall's own span: `v` is measured from the surface's
+    // origin, which can sit anywhere along the axis.
+    let tol = 1e-7 * (1.0 + (v_max - v_min));
     Ok(ruling_ends
         .iter()
         .any(|&v| v > v_min + tol && v < v_max - tol))

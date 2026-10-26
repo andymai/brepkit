@@ -2491,19 +2491,23 @@ fn a_cap_whose_rim_curls_through_itself_leaves_the_curl_out() {
 /// the whole 70 degree span, and every mesh consumer (export, volume) then
 /// under-counts the bore by that span's sagitta.
 ///
-/// Ready repro, ignored until the display/export mesher seeds developable
-/// bands: an interior row alone still leaves fans (the Delaunay of a band
-/// whose length dwarfs its arc is anisotropic), and refining fat triangles
-/// by their centroids diverges on full-turn walls. See the roadmap row.
+/// The same band is meshed with its cylinder's origin moved far along the
+/// axis: the surface and every point are unchanged, only `v` is offset, so
+/// the mesh must not change with it.
 #[test]
-#[ignore = "ready repro: the export mesher fans a band whose ruling carries vertices"]
 fn band_with_split_ruling_keeps_triangles_on_the_arc() {
+    for origin_z in [0.0, -1.0e8] {
+        band_with_split_ruling_on_cylinder_at(origin_z);
+    }
+}
+
+fn band_with_split_ruling_on_cylinder_at(origin_z: f64) {
     use brepkit_math::curves::Circle3D;
     use brepkit_math::surfaces::CylindricalSurface;
 
     let mut topo = Topology::new();
     let axis = Vec3::new(0.0, 0.0, 1.0);
-    let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), axis, 1.0).unwrap();
+    let cyl = CylindricalSurface::new(Point3::new(0.0, 0.0, origin_z), axis, 1.0).unwrap();
     let u1 = 70.0_f64.to_radians();
     let (c, s) = (u1.cos(), u1.sin());
     let pts = [
@@ -2564,7 +2568,7 @@ fn band_with_split_ruling_keeps_triangles_on_the_arc() {
     for p in &merged.positions {
         assert!(
             (p.x().hypot(p.y()) - 1.0).abs() < 1e-6,
-            "vertex off the cylinder: {p:?}"
+            "origin z {origin_z}: vertex off the cylinder: {p:?}"
         );
     }
     let mut worst = (0.0_f64, String::new());
@@ -2604,7 +2608,7 @@ fn band_with_split_ruling_keeps_triangles_on_the_arc() {
     let one_step = 1.0 - ((2.0 + step.cos()).powi(2) + step.sin().powi(2)).sqrt() / 3.0;
     assert!(
         worst.0 < 1.5 * one_step,
-        "a triangle centroid sits {:.4} inside the cylinder at {} (one rim step allows {:.4}): the band was fanned across its arc",
+        "origin z {origin_z}: a triangle centroid sits {:.4} inside the cylinder at {} (one rim step allows {:.4}): the band was fanned across its arc",
         worst.0,
         worst.1,
         one_step
