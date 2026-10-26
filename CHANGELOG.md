@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.10](https://github.com/andymai/brepkit/compare/v4.2.9...v4.2.10) (2026-10-26)
+
+
+### Bug Fixes
+
+* **operations:** mesh a cylinder wall whose ruling a neighbour's vertex splits ([#2065](https://github.com/andymai/brepkit/issues/2065)) ([94f8f27](https://github.com/andymai/brepkit/commit/94f8f277fe75c377ce633b712fabe16d4afa0a98))
+
 ## [4.2.9](https://github.com/andymai/brepkit/compare/v4.2.8...v4.2.9) (2026-10-25)
 
 
