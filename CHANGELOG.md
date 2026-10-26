@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.11](https://github.com/andymai/brepkit/compare/v4.2.10...v4.2.11) (2026-10-26)
+
+
+### Bug Fixes
+
+* **algo:** trace a holed plane face's regions when no section reaches its holes ([#2076](https://github.com/andymai/brepkit/issues/2076)) ([f27b7b8](https://github.com/andymai/brepkit/commit/f27b7b8b6bea32429a58257ae72c66371cef523f))
+
 ## [4.2.10](https://github.com/andymai/brepkit/compare/v4.2.9...v4.2.10) (2026-10-26)
 
 
