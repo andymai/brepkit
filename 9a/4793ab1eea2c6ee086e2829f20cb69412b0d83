@@ -1,0 +1,23 @@
+crates/operations/tests/fillet_floor_outlines.rs
+  s_1bda5bdf139091::t_3e25411e08a618 1-168
+crates/blend/src/analytic.rs
+  s_1bda5bdf139091::t_5e384f6eb9b25a 769-781,958-961,964,966-968,970-972,974-995
+.claude/skills/roadmap/SKILL.md
+  s_1bda5bdf139091::t_7aca346ef6bd06 136-138,204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a4793ab1eea2c6ee086e2829f20cb69412b0d83",
+  "prompts": {},
+  "sessions": {
+    "s_1bda5bdf139091": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c0d29728-45fa-4adc-8766-3f212b0a36be",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
