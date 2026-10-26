@@ -9,7 +9,8 @@ use crate::tessellate;
 
 use super::helpers::{
     angular_range_from_wire_arcs, collect_solid_vertex_points, compute_angular_range,
-    planar_wire_signed_area2, torus_band_v_range, torus_sector_u_range, traversal_spans,
+    on_torus_axis, planar_wire_signed_area2, torus_band_v_range, torus_sector_u_range,
+    traversal_spans,
 };
 
 /// Whether a sphere face's outer wire lies on a single constant-`v` latitude
@@ -2981,7 +2982,9 @@ fn analytic_torus_signed_volume(
             for &vid in &[edge.start(), edge.end()] {
                 if let Ok(vtx) = topo.vertex(vid) {
                     let (u, v) = tor.project_point(vtx.point());
-                    u_vals.push(u);
+                    if !on_torus_axis(tor, vtx.point()) {
+                        u_vals.push(u);
+                    }
                     v_vals.push(v);
                 }
             }

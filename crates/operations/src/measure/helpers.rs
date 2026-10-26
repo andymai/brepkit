@@ -562,6 +562,18 @@ pub(super) fn traversal_spans(
     }
 }
 
+/// Whether `p` lies on a torus's axis, where its ring angle `u` is undefined:
+/// the pinch of a horn torus, where a fillet's corner patch closes, or a
+/// spindle torus's tube crossing the axis.
+pub(super) fn on_torus_axis(torus: &brepkit_math::surfaces::ToroidalSurface, p: Point3) -> bool {
+    let from_center = p - torus.center();
+    let axis = torus.z_axis();
+    let radial = from_center - axis * axis.dot(from_center);
+    radial.length()
+        <= brepkit_math::tolerance::Tolerance::new().linear
+            * (torus.major_radius() + torus.minor_radius()).max(1.0)
+}
+
 /// The tube-angle range `(v0, v1)`, `v0 < v1 < v0 + 2 pi`, of a torus band
 /// bounded by two closed rim circles at distinct `v` and seamed by open arcs
 /// along a meridian: of the two arcs of `v` between the rims, the one holding

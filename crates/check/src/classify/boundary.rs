@@ -333,6 +333,28 @@ enum UvRegion {
     Bounded(Vec<(f64, f64)>),
 }
 
+/// The vertex of a torus face's outer wire on the torus's axis, where its
+/// ring angle `u` is undefined: a horn torus's pinch, where a fillet's corner
+/// patch closes. Its wire closes along that point's tube angle there, as a
+/// pointed cone's does along its apex.
+fn torus_axis_vertex(
+    topo: &Topology,
+    face_id: FaceId,
+    tor: &brepkit_math::surfaces::ToroidalSurface,
+) -> Result<Option<Point3>, CheckError> {
+    let axis = tor.z_axis();
+    let reach = brepkit_math::tolerance::Tolerance::new().linear
+        * (tor.major_radius() + tor.minor_radius()).max(1.0);
+    for oe in topo.wire(topo.face(face_id)?.outer_wire())?.edges() {
+        let p = topo.vertex(topo.edge(oe.edge())?.start())?.point();
+        let from_center = p - tor.center();
+        if (from_center - axis * axis.dot(from_center)).length() <= reach {
+            return Ok(Some(p));
+        }
+    }
+    Ok(None)
+}
+
 /// The outer region of a cylinder, cone or torus face in its `(u, v)`.
 fn uv_region<F>(
     topo: &Topology,
@@ -460,7 +482,8 @@ pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool
         }
         FaceSurface::Torus(tor) => {
             let project = |q: Point3| torus_parameters(tor, q);
-            let region = uv_region(topo, face_id, &project, true, None)?;
+            let apex = torus_axis_vertex(topo, face_id, tor)?;
+            let region = uv_region(topo, face_id, &project, true, apex)?;
             uv_region_contains(&region, topo, face_id, project(p), &project, true)
         }
         FaceSurface::Sphere(_) => match SphereRegion::of(topo, face_id)? {
@@ -912,6 +935,7 @@ pub fn count_face_ray_crossings(
         FaceSurface::Torus(tor) => {
             let tor = tor.clone();
             let roots = ray_surface::ray_torus(origin, direction, &tor);
+            let apex = torus_axis_vertex(topo, face_id, &tor)?;
             count_analytic_crossings(
                 topo,
                 face_id,
@@ -920,7 +944,7 @@ pub fn count_face_ray_crossings(
                 &roots,
                 |p| torus_parameters(&tor, p),
                 true,
-                None,
+                apex,
             )
         }
         FaceSurface::Nurbs(surface) => {

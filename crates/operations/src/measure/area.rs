@@ -8,7 +8,7 @@ use brepkit_topology::solid::SolidId;
 use crate::tessellate;
 
 use super::helpers::{
-    collect_solid_face_ids, collect_wire_positions, compute_angular_range,
+    collect_solid_face_ids, collect_wire_positions, compute_angular_range, on_torus_axis,
     planar_wire_signed_area2, torus_band_v_range, torus_sector_u_range, traversal_spans,
 };
 
@@ -863,7 +863,9 @@ fn analytic_torus_face_area(
             for &vid in &[edge.start(), edge.end()] {
                 if let Ok(vtx) = topo.vertex(vid) {
                     let (u, v) = tor.project_point(vtx.point());
-                    u_vals.push(u);
+                    if !on_torus_axis(tor, vtx.point()) {
+                        u_vals.push(u);
+                    }
                     v_vals.push(v);
                 }
             }
