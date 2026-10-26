@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793040108519,
+  "lastUpdate": 1793041588348,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56159,6 +56159,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 48472664,
             "range": "± 211588",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2a6ea95b1f949bcfd4bda83e69ff6ef9ca711b66",
+          "message": "fix(operations): measure and classify a horn torus corner through its pinch (#2080)\n\nA fillet whose stripes meet at a reflex corner closes that corner with a\nhorn torus, and its area, volume and point classification now read\nright. Today an L-shaped prism with every floor edge filleted at radius\n2 measures 1433.957 by `solid_volume` against an exact 1434.560, while\nits own mesh measures 1434.551. `classify_point` misreads 50 of 43,200\ngrid points beside the reflex corner, and `face_area` can read a horn\ntorus at several times its area (7.17 against 1.12 on one corner of a\nprism with an arc side).\n\nA horn torus has its minor radius equal to its major radius, so its\ninner equator collapses to one point on its axis. The fillet's corner\npatch closes there, at the pinch on the corner's vertical edge, and the\nring angle `u` of a point on the axis is undefined. The torus area and\nvolume read a face's `u` range off its vertices' projections, so the\npinch's arbitrary `u` could widen the range. The check crate's\nclassifier reads the face's loop in `(u, v)` and took the pinch's `u`\nthe same way. The boolean engine's own classifier already gives an\non-axis sample its neighbour's `u`, and the mesh was right, which is why\nonly these three readings were off.\n\n## Change\n\n- `on_torus_axis` in `crates/operations/src/measure/helpers.rs` says\nwhether a point lies on a torus's axis. `analytic_torus_face_area` and\n`analytic_torus_signed_volume` leave such a vertex out of the `u` range.\n- The check crate's torus arms pass the outer-wire vertex on the torus's\naxis to `uv_region` as its apex, which closes the loop along that\npoint's tube angle, as it already does for a pointed cone's apex.\n- The roadmap row this closes becomes a Closed entry.\n\n## Tests\n\n- Added `an_l_rounds_off_with_a_horn_torus_at_its_reflex_corner` to\n`crates/operations/tests/fillet_floor_outlines.rs`, and every test there\nnow also checks `solid_volume` against the exact volume to `1e-6` of it.\nThe file's doc comment gives the volume formula. Without this change the\nL reads 1433.957 against 1434.560 and the arc-sided prism 2172.385\nagainst 2173.335.\n- `cargo test -p brepkit-check -p brepkit-operations -p brepkit-io -p\nbrepkit-wasm --profile profiling --no-fail-fast` passes 2149 tests with\n18 ignored. The pre-commit clippy and fmt checks pass.\n- The `pose_sweep` (495 lines) and `truth_audit` (40 lines) examples\nprint the same with and without this change.",
+          "timestamp": "2026-10-26T19:03:16Z",
+          "tree_id": "0760e70c90d0f9b7d2cf611f7ddf494de07d3ad9",
+          "url": "https://github.com/andymai/brepkit/commit/2a6ea95b1f949bcfd4bda83e69ff6ef9ca711b66"
+        },
+        "date": 1793041580272,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1064945,
+            "range": "± 8970",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1148313,
+            "range": "± 3993",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13063,
+            "range": "± 82",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661868,
+            "range": "± 639",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47653050,
+            "range": "± 213320",
             "unit": "ns/iter"
           }
         ]
