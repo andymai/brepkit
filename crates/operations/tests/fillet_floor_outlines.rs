@@ -156,15 +156,31 @@ fn segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
 /// reaches far past the arc's circle. The arc is split at `(10.5, 0)`.
 #[test]
 fn a_floor_reaching_past_its_arc_wall_rounds_off_inside_the_arc() {
+    assert_box_with_a_bulge_rounds_off(true);
+}
+
+/// The same box with its arc as one edge turning 236 degrees, so the stripe
+/// along it spans more than half a turn.
+#[test]
+fn a_stripe_along_an_arc_past_half_a_turn_faces_out() {
+    assert_box_with_a_bulge_rounds_off(false);
+}
+
+fn assert_box_with_a_bulge_rounds_off(split: bool) {
     let mut topo = Topology::new();
-    let corners = [
-        (-20.0, -7.5),
-        (-2.0, -7.5),
-        (10.5, 0.0),
-        (-2.0, 7.5),
-        (-20.0, 7.5),
-    ];
-    let solid = prism(&mut topo, &corners, &[(1, (2.0, 0.0)), (2, (2.0, 0.0))]);
+    let solid = if split {
+        let corners = [
+            (-20.0, -7.5),
+            (-2.0, -7.5),
+            (10.5, 0.0),
+            (-2.0, 7.5),
+            (-20.0, 7.5),
+        ];
+        prism(&mut topo, &corners, &[(1, (2.0, 0.0)), (2, (2.0, 0.0))])
+    } else {
+        let corners = [(-20.0, -7.5), (-2.0, -7.5), (-2.0, 7.5), (-20.0, 7.5)];
+        prism(&mut topo, &corners, &[(1, (2.0, 0.0))])
+    };
     // The arc's ends lie 4 from its center across the chord `x = -2`.
     let (radius, half_chord_angle) = (8.5_f64, (4.0_f64 / 8.5).acos());
     let arc_turn = 2.0f64.mul_add(-half_chord_angle, std::f64::consts::TAU);

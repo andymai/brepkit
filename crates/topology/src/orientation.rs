@@ -114,6 +114,71 @@ pub fn propagate_orientation(
     Ok(flipped)
 }
 
+/// The winding of a cylinder, cone or torus face's boundary samples about
+/// the surface's natural normal: the signed area of their loop in `(u, v)`,
+/// positive when it runs counterclockwise about `∂u × ∂v` taken along the
+/// normal. A sample on the axis (a cone's apex, a horn torus's pinch) has no
+/// `u` of its own and takes its neighbour's. `None` for other surfaces, and
+/// for a loop that does not close once unwrapped (a band around the axis).
+fn uv_winding(surface: &FaceSurface, points: &[Point3]) -> Option<f64> {
+    use std::f64::consts::{PI, TAU};
+    let v_periodic = match surface {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => false,
+        FaceSurface::Torus(_) => true,
+        FaceSurface::Plane { .. } | FaceSurface::Sphere(_) | FaceSurface::Nurbs(_) => return None,
+    };
+    let wrap = |d: f64| d - TAU * (d / TAU).round();
+    let h = 1e-6;
+    // `∂u` along the surface at a parameter pair; it vanishes on the axis.
+    let du = |(u, v): (f64, f64)| Some(surface.evaluate(u + h, v)? - surface.evaluate(u - h, v)?);
+    let raw: Vec<(f64, f64)> = points
+        .iter()
+        .map(|&p| surface.project_point(p))
+        .collect::<Option<_>>()?;
+    let speeds: Vec<f64> = raw
+        .iter()
+        .map(|&s| du(s).map(brepkit_math::vec::Vector::length))
+        .collect::<Option<_>>()?;
+    let scale = speeds.iter().copied().fold(0.0, f64::max);
+    if scale <= 0.0 {
+        return None;
+    }
+    let on_axis: Vec<bool> = speeds.iter().map(|&s| s <= 1e-6 * scale).collect();
+    let anchor = on_axis.iter().position(|&a| !a)?;
+    let mut loop_uv: Vec<(f64, f64)> = Vec::with_capacity(raw.len());
+    for k in 0..raw.len() {
+        let index = (anchor + k) % raw.len();
+        let (u, v) = raw[index];
+        let Some(&(pu, pv)) = loop_uv.last() else {
+            loop_uv.push((u, v));
+            continue;
+        };
+        let u = if on_axis[index] {
+            pu
+        } else {
+            pu + wrap(u - pu)
+        };
+        let v = if v_periodic { pv + wrap(v - pv) } else { v };
+        loop_uv.push((u, v));
+    }
+    let (first, last) = (loop_uv[0], loop_uv[loop_uv.len() - 1]);
+    let closes = |a: f64, b: f64, periodic: bool| !periodic || (a - b).abs() < PI;
+    if !closes(first.0, last.0, true) || !closes(first.1, last.1, v_periodic) {
+        return None;
+    }
+    let area = 0.5
+        * (0..loop_uv.len())
+            .map(|k| {
+                let (a, b) = (loop_uv[k], loop_uv[(k + 1) % loop_uv.len()]);
+                a.0.mul_add(b.1, -(b.0 * a.1))
+            })
+            .sum::<f64>();
+    let at = loop_uv[0];
+    let dv = surface.evaluate(at.0, at.1 + h)? - surface.evaluate(at.0, at.1 - h)?;
+    let sense = du(at)?.cross(dv).dot(surface.normal(at.0, at.1));
+    (sense != 0.0).then(|| area * sense.signum())
+}
+
 /// Align effective surface normals with the boundary-walk convention of seed faces.
 ///
 /// Orientation propagation can make edge senses consistent while leaving a
@@ -238,6 +303,15 @@ pub fn normalize_face_normals(
         if total_length < 1e-12 || integral.abs() < 1e-9 * total_length * total_length {
             continue;
         }
+        // Read against a reference point, the integral is a winding only on a
+        // plane: on a curved band spanning more than half a turn the samples'
+        // centroid falls outside the band and the sign can flip. A loop that
+        // closes in `(u, v)` reads its winding there instead.
+        let integral = match uv_winding(&surface, &points) {
+            Some(area) if reversed => -area,
+            Some(area) => area,
+            None => integral,
+        };
         if seed_set.contains(&face_id) {
             convention += integral.signum();
         } else if convention != 0.0 && integral.signum() != convention.signum() {
