@@ -8193,10 +8193,12 @@ fn split_face_2d_impl(
     // on its own reverse left the region it bounds unsplit. The DCEL face
     // trace partitions the arrangement itself; adopt it when it strictly
     // refines the greedy partition and is clean by every loop-health
-    // signature.
+    // signature. Holes no section reaches stay out of the arrangement and
+    // attach whole afterwards, so they do not bar the trace.
     if is_plane
         && !sections.is_empty()
-        && original_inner_wires.is_empty()
+        && woven_inner_wires.is_empty()
+        && !holes_promoted
         && (loops
             .iter()
             .any(|lp| split_loop_at_pinch_vertices(lp, tol.linear).len() != 1)
@@ -8211,6 +8213,7 @@ fn split_face_2d_impl(
             u_periodic,
             v_periodic,
             Some(&frame_area),
+            Some(!cw_loops),
         );
         if dcel.len() > greedy_region_count(&loops, tol.linear, Some(frame))
             && !dcel

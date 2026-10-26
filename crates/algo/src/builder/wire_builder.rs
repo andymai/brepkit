@@ -272,7 +272,7 @@ pub fn build_wire_loops_dcel(
     u_periodic: bool,
     v_periodic: bool,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
-    build_wire_loops_dcel_measured(edges, tol, u_periodic, v_periodic, None)
+    build_wire_loops_dcel_measured(edges, tol, u_periodic, v_periodic, None, None)
 }
 
 /// Reads a loop's signed area in its face's parameter plane.
@@ -282,12 +282,19 @@ pub type LoopArea<'a> = &'a dyn Fn(&[OrientedPCurveEdge]) -> f64;
 /// instead of its vertex polygon. A rim that is one closed curve has a single
 /// vertex, so its polygon encloses nothing and both the face's own region and
 /// its unbounded face would be dropped as out-and-back walks.
+///
+/// `rim_ccw` gives the rim's winding in UV when the caller knows it: every
+/// region then runs each rim edge forward (counter-clockwise) or reversed
+/// (clockwise), and an orbit running one the other way lies outside the face,
+/// the unbounded face among them, however its area reads (a section across
+/// the mouth of a notch in the rim closes the notch into a positive orbit).
 pub fn build_wire_loops_dcel_measured(
     edges: &[OrientedPCurveEdge],
     tol: f64,
     u_periodic: bool,
     v_periodic: bool,
     area_of: Option<LoopArea<'_>>,
+    rim_ccw: Option<bool>,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
     if edges.is_empty() {
         return Vec::new();
@@ -335,6 +342,7 @@ pub fn build_wire_loops_dcel_measured(
             }
         }
     }
+    let rim: Vec<bool> = twin.iter().map(Option::is_none).collect();
     // Synthetic reversed twins for the unpaired (boundary) halves.
     let mut twin_all: Vec<usize> = (0..n_real).map(|i| twin[i].unwrap_or(usize::MAX)).collect();
     for i in 0..n_real {
@@ -417,6 +425,14 @@ pub fn build_wire_loops_dcel_measured(
         if broken {
             continue;
         }
+        let against_rim = |&i: &usize| match rim_ccw {
+            Some(true) => i >= n_real,
+            Some(false) => i < n_real && rim[i],
+            None => false,
+        };
+        if orbit.iter().any(against_rim) {
+            continue;
+        }
         // Shoelace over LIFTED vertices: on a periodic surface the node keys
         // glue the seam (correct cylinder connectivity), but edge UVs are
         // stored at whichever period copy their pcurve produced — a raw
@@ -472,7 +488,7 @@ pub fn build_wire_loops_dcel_measured(
     // The planar unbounded face is the most-negative-area orbit. On a
     // u-periodic face the unbounded sides are the winding rim rings already
     // dropped above, so every surviving closed orbit is a genuine region.
-    let outer = if u_periodic || v_periodic {
+    let outer = if u_periodic || v_periodic || rim_ccw.is_some() {
         None
     } else {
         orbits
@@ -1166,6 +1182,39 @@ mod tests {
         for lp in &loops {
             assert_eq!(lp.len(), 4);
         }
+    }
+
+    #[test]
+    fn dcel_section_across_a_notch_mouth_is_no_region() {
+        let rim = [
+            (0.0, 0.0),
+            (4.0, 0.0),
+            (5.0, 2.0),
+            (6.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ];
+        let p = |(x, y): (f64, f64)| Point2::new(x, y);
+        let mut edges: Vec<OrientedPCurveEdge> = (0..rim.len())
+            .map(|i| make_line_edge(p(rim[i]), p(rim[(i + 1) % rim.len()])))
+            .collect();
+        edges.push(make_section_edge(p((4.0, 0.0)), p((6.0, 0.0)), 7));
+        edges.push(make_section_edge(p((6.0, 0.0)), p((4.0, 0.0)), 7));
+        let by_area = build_wire_loops_dcel(&edges, 1e-7, false, false);
+        assert_eq!(by_area.len(), 2, "the notch reads as a region by area");
+        let loops = build_wire_loops_dcel_measured(&edges, 1e-7, false, false, None, Some(true));
+        assert_eq!(loops.len(), 1, "only the face itself, got {}", loops.len());
+        assert_eq!(loops[0].len(), 7);
+
+        let mut cw: Vec<OrientedPCurveEdge> = edges[..rim.len()]
+            .iter()
+            .rev()
+            .map(|e| make_line_edge(e.end_uv, e.start_uv))
+            .collect();
+        cw.extend_from_slice(&edges[rim.len()..]);
+        let loops = build_wire_loops_dcel_measured(&cw, 1e-7, false, false, None, Some(false));
+        assert_eq!(loops.len(), 1, "a clockwise rim keeps only the face too");
     }
 
     #[test]

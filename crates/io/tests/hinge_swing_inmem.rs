@@ -568,7 +568,6 @@ fn hinge_lid_at_its_stop_overlaps_the_lip_exactly() {
 /// cove, whose own edge at the knuckle's end is the arc that closes the
 /// sliver there. The tool's overhang test ends on this same pair.
 #[test]
-#[ignore = "OPEN roadmap row: generator-suite hangs (hinge past-stop intersects)"]
 fn hinge_lid_past_its_stop_overlaps_the_lip_exactly() {
     let mut topo = Topology::new();
     let bin = load(&mut topo, "hinge_seat_bin.bin");
@@ -597,7 +596,6 @@ fn hinge_lid_past_its_stop_overlaps_the_lip_exactly() {
 
 /// The same past the stop on the left-wall bin, its lip along the wall.
 #[test]
-#[ignore = "OPEN roadmap row: generator-suite hangs (hinge past-stop intersects)"]
 fn hinge_left_lid_past_its_stop_overlaps_the_lip_exactly() {
     let mut topo = Topology::new();
     let bin = load(&mut topo, "hinge_left_seat_bin.bin");
