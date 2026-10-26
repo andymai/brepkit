@@ -1,0 +1,35 @@
+crates/operations/tests/fillet_floor_outlines.rs
+  s_1bda5bdf139091::t_3e25411e08a618 1-7,14-20,22-90,93-99,112-167,180-198
+  s_1bda5bdf139091::t_8d5108d594a401 8-13,21,91-92,100-111,168-179,199-222
+  s_1bda5bdf139091::t_23d4dcb72f5c3e 223-225
+crates/blend/src/analytic.rs
+  s_1bda5bdf139091::t_5e384f6eb9b25a 769-781,958-961,964,966-968,970-972,974-995
+.claude/skills/roadmap/SKILL.md
+  s_1bda5bdf139091::t_7aca346ef6bd06 136-137,203
+  s_1bda5bdf139091::t_6bacac2b2ab75c 205
+crates/operations/src/measure/area.rs
+  s_1bda5bdf139091::t_ebe735754970f9 11,866-868
+crates/operations/src/measure/volume.rs
+  s_1bda5bdf139091::t_ebe735754970f9 12-13,2985-2987
+crates/check/src/classify/boundary.rs
+  s_1bda5bdf139091::t_1fd5a3ef443100 336-357,485-486,938,947
+crates/operations/src/measure/helpers.rs
+  s_1bda5bdf139091::t_45988d91112017 565-571,575-576
+  s_1bda5bdf139091::t_ebe735754970f9 572-574
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff6f2b65bfe086d22a2660edcbf5043f883b01bd",
+  "prompts": {},
+  "sessions": {
+    "s_1bda5bdf139091": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c0d29728-45fa-4adc-8766-3f212b0a36be",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
