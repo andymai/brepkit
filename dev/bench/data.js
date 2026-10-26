@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793036325391,
+  "lastUpdate": 1793036529206,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55997,6 +55997,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47167288,
             "range": "± 46596",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a1a6a28c3b7b2fe3e31b962db62f2e83633db91a",
+          "message": "build(deps-dev): bump the npm group with 2 updates (#2074)\n\nBumps the npm group with 2 updates:\n[@commitlint/cli](https://github.com/conventional-changelog/commitlint/tree/HEAD/@commitlint/cli)\nand\n[@commitlint/config-conventional](https://github.com/conventional-changelog/commitlint/tree/HEAD/@commitlint/config-conventional).\n\nUpdates `@commitlint/cli` from 21.2.3 to 21.2.4\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/releases\">@​commitlint/cli's\nreleases</a>.</em></p>\n<blockquote>\n<h2>v21.2.4</h2>\n<h2><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4\">21.2.4</a>\n(2026-10-18)</h2>\n<h3>Bug Fixes</h3>\n<ul>\n<li>fix(load): replace config file arrays with seed arrays by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5056\">conventional-changelog/commitlint#5056</a></li>\n<li>fix: update dependency jsonc to v3 by <a\nhref=\"https://github.com/renovate\"><code>@​renovate</code></a>[bot] in\n<a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5020\">conventional-changelog/commitlint#5020</a></li>\n</ul>\n<h3>Performance Improvements</h3>\n<ul>\n<li>perf(load): load typescript configs with jiti directly by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5052\">conventional-changelog/commitlint#5052</a></li>\n</ul>\n<h3>Docs, etc</h3>\n<ul>\n<li>docs: add AGENTS.md with commit type guidance by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5053\">conventional-changelog/commitlint#5053</a></li>\n<li>test(ensure): pin case conversion of digits, punctuation and accents\nby <a href=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a>\nin <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5055\">conventional-changelog/commitlint#5055</a></li>\n</ul>\n<p><strong>Full Changelog</strong>: <a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4\">https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/blob/master/@commitlint/cli/CHANGELOG.md\">@​commitlint/cli's\nchangelog</a>.</em></p>\n<blockquote>\n<h2><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4\">21.2.4</a>\n(2026-10-18)</h2>\n<p><strong>Note:</strong> Version bump only for package\n<code>@​commitlint/cli</code></p>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/conventional-changelog/commitlint/commit/d8e36560a485c5e5a0a74ebbb48591b3e2e08ca7\"><code>d8e3656</code></a>\nv21.2.4</li>\n<li>See full diff in <a\nhref=\"https://github.com/conventional-changelog/commitlint/commits/v21.2.4/@commitlint/cli\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\nUpdates `@commitlint/config-conventional` from 21.2.3 to 21.2.4\n<details>\n<summary>Release notes</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/releases\">@​commitlint/config-conventional's\nreleases</a>.</em></p>\n<blockquote>\n<h2>v21.2.4</h2>\n<h2><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4\">21.2.4</a>\n(2026-10-18)</h2>\n<h3>Bug Fixes</h3>\n<ul>\n<li>fix(load): replace config file arrays with seed arrays by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5056\">conventional-changelog/commitlint#5056</a></li>\n<li>fix: update dependency jsonc to v3 by <a\nhref=\"https://github.com/renovate\"><code>@​renovate</code></a>[bot] in\n<a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5020\">conventional-changelog/commitlint#5020</a></li>\n</ul>\n<h3>Performance Improvements</h3>\n<ul>\n<li>perf(load): load typescript configs with jiti directly by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5052\">conventional-changelog/commitlint#5052</a></li>\n</ul>\n<h3>Docs, etc</h3>\n<ul>\n<li>docs: add AGENTS.md with commit type guidance by <a\nhref=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a> in <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5053\">conventional-changelog/commitlint#5053</a></li>\n<li>test(ensure): pin case conversion of digits, punctuation and accents\nby <a href=\"https://github.com/escapedcat\"><code>@​escapedcat</code></a>\nin <a\nhref=\"https://redirect.github.com/conventional-changelog/commitlint/pull/5055\">conventional-changelog/commitlint#5055</a></li>\n</ul>\n<p><strong>Full Changelog</strong>: <a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4\">https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4</a></p>\n</blockquote>\n</details>\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/conventional-changelog/commitlint/blob/master/@commitlint/config-conventional/CHANGELOG.md\">@​commitlint/config-conventional's\nchangelog</a>.</em></p>\n<blockquote>\n<h2><a\nhref=\"https://github.com/conventional-changelog/commitlint/compare/v21.2.3...v21.2.4\">21.2.4</a>\n(2026-10-18)</h2>\n<p><strong>Note:</strong> Version bump only for package\n<code>@​commitlint/config-conventional</code></p>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/conventional-changelog/commitlint/commit/d8e36560a485c5e5a0a74ebbb48591b3e2e08ca7\"><code>d8e3656</code></a>\nv21.2.4</li>\n<li>See full diff in <a\nhref=\"https://github.com/conventional-changelog/commitlint/commits/v21.2.4/@commitlint/config-conventional\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore <dependency name> major version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's major version (unless you unignore this specific\ndependency's major version or upgrade to it yourself)\n- `@dependabot ignore <dependency name> minor version` will close this\ngroup update PR and stop Dependabot creating any more for the specific\ndependency's minor version (unless you unignore this specific\ndependency's minor version or upgrade to it yourself)\n- `@dependabot ignore <dependency name>` will close this group update PR\nand stop Dependabot creating any more for the specific dependency\n(unless you unignore this specific dependency or upgrade to it yourself)\n- `@dependabot unignore <dependency name>` will remove all of the ignore\nconditions of the specified dependency\n- `@dependabot unignore <dependency name> <ignore condition>` will\nremove the ignore condition of the specified dependency and ignore\nconditions\n\n\n</details>\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-10-26T10:38:29-07:00",
+          "tree_id": "4b9521364e35a0287a68219ca27f95d094048bf7",
+          "url": "https://github.com/andymai/brepkit/commit/a1a6a28c3b7b2fe3e31b962db62f2e83633db91a"
+        },
+        "date": 1793036522785,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1064515,
+            "range": "± 2068",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1151583,
+            "range": "± 6690",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13025,
+            "range": "± 392",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661767,
+            "range": "± 1108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47581675,
+            "range": "± 223923",
             "unit": "ns/iter"
           }
         ]
