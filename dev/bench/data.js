@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793034822844,
+  "lastUpdate": 1793036325391,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55943,6 +55943,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47936301,
             "range": "± 107632",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f27b7b8b6bea32429a58257ae72c66371cef523f",
+          "message": "fix(algo): trace a holed plane face's regions when no section reaches its holes (#2076)\n\nThe hinge lid pushed past its stop now intersects its bin exactly. Today\n`boolean` falls back to a mesh on both captured pairs\n(`hinge_lid_past_its_stop_overlaps_the_lip_exactly` and its left-wall\ntwin, ignored until now), because the raw result leaves 24 and 27 free\nedges. With this change both raw intersects close with no free or\nover-shared edge, and both tests pass.\n\nAll the free edges sat on one face: the bin's knuckle end, a plane\nbounded by bracket lines and the knuckle's r = 1.8 circle, with the\npin's keyhole as its one hole. Sixteen sections from the lid cut it. One\ncorner of the sliver they enclose is a junction where a lid plane's\ntrace runs straight on and the lid's cove arc turns off it to the right.\nThe greedy walker in `build_wire_loops` ranks a straight continuation\nlast (2π against the arc's 90°), so it took the arc, and the\nneighbouring piece ran two sections both ways and took in the sliver.\nThe plane DCEL rescue in `split_face_2d_impl` exists for this kind of\ntrace, but it skipped any face with a hole.\n\n## Change\n\n- The rescue now skips only faces whose holes enter the arrangement,\nwoven by `integrate_holes_plane` or promoted. A hole no section reaches\nis attached whole after the split on either path, so the arrangement the\nDCEL traces is the same as on a face without holes.\n- `build_wire_loops_dcel_measured` takes the rim's winding (`rim_ccw`),\nand the rescue passes it. On a counter-clockwise rim every region runs\neach rim edge forward, so an orbit that runs one reversed lies outside\nthe face and is dropped. Widening the gate alone broke\n`a_strut_on_a_holed_corner_cylinder_cuts_exactly`: the kumiko base's\nwall with 63 holes has one section across the mouth of a notch in its\nrim, the DCEL counted the closed notch as a second region by its\npositive area, and the cut failed assembly.\n- The roadmap's inventory drops to the two pins of the two-stripe corner\nrow, the hinge part of the generator-hangs row is collapsed, and a\nClosed entry is added.\n\n## Tests\n\n- `hinge_lid_past_its_stop_overlaps_the_lip_exactly` and\n`hinge_left_lid_past_its_stop_overlaps_the_lip_exactly` now run. Each\nrequires the exact path, a valid solid, and agreement with both\noperands' point classification over a grid. Both fail on `main`.\n- Added `dcel_section_across_a_notch_mouth_is_no_region`, which pins the\nnew rule for both windings.\n- `cargo test -p brepkit-algo -p brepkit-operations -p brepkit-io -p\nbrepkit-wasm --profile profiling --no-fail-fast` passes 2396 tests with\n18 ignored. `cargo clippy --all-targets -- -D warnings` and `cargo fmt`\npass.\n- The `pose_sweep` (495 lines) and `truth_audit` (40 lines) examples\nprint the same on `main` and on this branch.\n- The tool's past-stop intersects in `hingeSwing.scenario` were not\nre-measured.",
+          "timestamp": "2026-10-26T17:35:31Z",
+          "tree_id": "e0483c74f0a3ff91231f3bf19c798c1f3c8d5755",
+          "url": "https://github.com/andymai/brepkit/commit/f27b7b8b6bea32429a58257ae72c66371cef523f"
+        },
+        "date": 1793036317913,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1055423,
+            "range": "± 2559",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1144296,
+            "range": "± 5618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13195,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 662382,
+            "range": "± 12194",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47167288,
+            "range": "± 46596",
             "unit": "ns/iter"
           }
         ]
