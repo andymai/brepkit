@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793043505190,
+  "lastUpdate": 1793044050801,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56267,6 +56267,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47513408,
             "range": "± 196460",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f9d55d9947ab6c615c64634e380befaf9285570f",
+          "message": "fix(topology): read a curved fillet band's winding in its (u, v) (#2081)\n\nA fillet stripe along an arc that turns more than half a turn now faces\nout of the solid. Today the fillet engine can turn such a band inside\nout: on a box whose side is one 236 degree arc, with every floor edge\nfilleted at radius 2, the band's mesh is wound against its neighbours\n(234 unmatched half-edges) and `solid_volume` reads 1795.300 against an\nexact 2173.335. The same box with its arc in two edges comes out right.\n\nAfter the fillet builds its faces, `normalize_face_normals` in\n`crates/topology/src/orientation.rs` checks each new face's winding\nagainst the input faces and flips the ones that disagree. It scores a\nface by integrating along its boundary against the centroid of its\nboundary samples. On a plane that score is twice the signed area\nwhatever the reference point, so it is exact. On a curved band it\ndepends on the reference point, and on a band spanning more than half a\nturn the centroid falls outside the band: the 236 degree band scored\n-133 where the input faces score positive, so a correctly built band was\nflipped.\n\n## Change\n\n- `uv_winding` reads the winding of a cylinder, cone or torus face from\nthe signed area of its boundary loop in `(u, v)`, unwrapped along the\nloop and signed by whether `∂u × ∂v` points along the surface normal. A\nsample on the axis (a cone's apex, a horn torus's pinch) takes its\nneighbour's `u`.\n- A loop that does not close once unwrapped (a band all the way round\nthe axis), and every plane, sphere and NURBS face, keep the existing\nscore.\n- The roadmap row this closes becomes a Closed entry.\n\n## Tests\n\n- Added `a_stripe_along_an_arc_past_half_a_turn_faces_out` to\n`crates/operations/tests/fillet_floor_outlines.rs`: the box with its arc\nas one edge must fillet to a valid solid with a watertight mesh, the\nexact volume, and every grid point classified as the erosion oracle\nsays. It fails on `main` with the band turned inside out.\n- `cargo test -p brepkit-topology -p brepkit-blend -p brepkit-operations\n-p brepkit-io -p brepkit-wasm --profile profiling --no-fail-fast` passes\n2315 tests with 22 ignored, run before rebasing onto #2080. The\npre-commit clippy and fmt checks pass.\n- The grouped scoop's tool still has 21 open mesh edges; its corners are\na separate roadmap row.",
+          "timestamp": "2026-10-26T19:44:49Z",
+          "tree_id": "2c18574448614c912e9e375a6501e5d4960ec29f",
+          "url": "https://github.com/andymai/brepkit/commit/f9d55d9947ab6c615c64634e380befaf9285570f"
+        },
+        "date": 1793044043095,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 863910,
+            "range": "± 3024",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 935796,
+            "range": "± 1432",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10981,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 536237,
+            "range": "± 7733",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 40153432,
+            "range": "± 285981",
             "unit": "ns/iter"
           }
         ]
