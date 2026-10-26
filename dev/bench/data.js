@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793038009794,
+  "lastUpdate": 1793040108519,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56105,6 +56105,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 31212823,
             "range": "± 453099",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0d93b43aa6bff71e7350266ae9141cbf2bebcfe6",
+          "message": "fix(blend): round a plane-cylinder edge inside the cylinder when the plane caps it (#2078)\n\nA fillet along the edge where a prism's floor meets a cylinder wall now\nrounds the edge inside the cylinder when the floor reaches past the\nwall's circle. Today the plane-cylinder fast path in\n`crates/blend/src/analytic.rs` builds that stripe on the wrong side: it\nsweeps a torus outside the wall and below the floor, and the filleted\nsolid meshes open.\n\nThe fast path has to tell a rim (the plane caps the cylinder, a convex\nedge) from a post standing on a plate (the plate surrounds the cylinder,\na concave edge). It decided with `plane_is_bounded_disc`, which calls\nthe plane a cap only when every vertex of the plane face lies within the\ncylinder's radius. A floor whose outline runs along part of the cylinder\nand then far past it, such as a box with an arc bulging past its sides,\nfails that test and reads as a plate. I found this while working through\nthe grouped scoop's corners: with its floor as one face, its circle's\nstripe would go the same way.\n\n## Change\n\n- `plane_inside_cylinder` replaces `plane_is_bounded_disc`. It steps a\nshort way (a thousandth of the cylinder's radius) from the middle of the\nshared edge toward the axis and away from it, and reads which point lies\non the plane face with `face_region_2d`. A primitive cylinder's end disc\nand a tube's mouth still read as rims, a plate around a post still reads\nas a plate, and when neither or both points lie on the face the edge\ngoes to the walking engine.\n- The roadmap's two-stripe corner row is rewritten from a fresh\nmeasurement: the grouped scoop's convex corners already close by the\nmitre, its corner D is reflex and fails because two flat edges between\nits coplanar floor pieces end there, and the notch corners are their own\nclass. Two rows record defects found on the way: a band spanning more\nthan half a turn comes back inside out, and horn torus corners are\nmeasured wrong by `solid_volume`, `face_area` and `classify_point`. A\nClosed entry covers this fix.\n\n## Tests\n\n- Added `crates/operations/tests/fillet_floor_outlines.rs`. Its oracle\nuses the fact that with every floor edge filleted at one radius, the\nsection at height `z` is the outline eroded by `r - sqrt(r^2 - (r -\nz)^2)`. `a_floor_reaching_past_its_arc_wall_rounds_off_inside_the_arc`\nfillets a box with an arc of radius 8.5 bulging past its sides and\nrequires a valid solid, a watertight mesh, and every point of a 30 x 30\nx 8 grid classified as the oracle says. It fails on `main` with an open\nmesh.\n- The test's arc is split in two. With the arc as one 236 degree edge\nthe stripe now lies on the right side, but its face comes back inside\nout; that is the new roadmap row.\n- `cargo test -p brepkit-blend -p brepkit-operations -p brepkit-io -p\nbrepkit-wasm --profile profiling --no-fail-fast` passes 2226 tests with\n23 ignored, run before rebasing onto #2076. The pre-commit clippy and\nfmt checks pass.\n- The grouped scoop's open mesh edges stay at 21: its circle's floor\npiece lies within the circle, so it already read as a rim.",
+          "timestamp": "2026-10-26T18:38:41Z",
+          "tree_id": "84d72cf3cebe78bc1adc44244b3b8daee975aa34",
+          "url": "https://github.com/andymai/brepkit/commit/0d93b43aa6bff71e7350266ae9141cbf2bebcfe6"
+        },
+        "date": 1793040101283,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1062767,
+            "range": "± 3729",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1149480,
+            "range": "± 3745",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12919,
+            "range": "± 144",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 665538,
+            "range": "± 1012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 48472664,
+            "range": "± 211588",
             "unit": "ns/iter"
           }
         ]
