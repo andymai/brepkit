@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.13](https://github.com/andymai/brepkit/compare/v4.2.12...v4.2.13) (2026-10-26)
+
+
+### Bug Fixes
+
+* **topology:** read a curved fillet band's winding in its (u, v) ([#2081](https://github.com/andymai/brepkit/issues/2081)) ([f9d55d9](https://github.com/andymai/brepkit/commit/f9d55d9947ab6c615c64634e380befaf9285570f))
+
 ## [4.2.12](https://github.com/andymai/brepkit/compare/v4.2.11...v4.2.12) (2026-10-26)
 
 
