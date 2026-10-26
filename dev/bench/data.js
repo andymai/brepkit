@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793041588348,
+  "lastUpdate": 1793043505190,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56213,6 +56213,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47653050,
             "range": "± 213320",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "def445deffbf8afbe235108d2fd579fa9f91201a",
+          "message": "chore(main): release 4.2.12 (#2079)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.2.12](https://github.com/andymai/brepkit/compare/v4.2.11...v4.2.12)\n(2026-10-26)\n\n\n### Bug Fixes\n\n* **blend:** round a plane-cylinder edge inside the cylinder when the\nplane caps it ([#2078](https://github.com/andymai/brepkit/issues/2078))\n([0d93b43](https://github.com/andymai/brepkit/commit/0d93b43aa6bff71e7350266ae9141cbf2bebcfe6))\n* **operations:** measure and classify a horn torus corner through its\npinch ([#2080](https://github.com/andymai/brepkit/issues/2080))\n([2a6ea95](https://github.com/andymai/brepkit/commit/2a6ea95b1f949bcfd4bda83e69ff6ef9ca711b66))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-26T19:35:15Z",
+          "tree_id": "a8c0e29cddae5a5ac5a6ff1f417ef701f511799d",
+          "url": "https://github.com/andymai/brepkit/commit/def445deffbf8afbe235108d2fd579fa9f91201a"
+        },
+        "date": 1793043496396,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1065027,
+            "range": "± 4714",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1150983,
+            "range": "± 2900",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12939,
+            "range": "± 155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 656489,
+            "range": "± 1204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47513408,
+            "range": "± 196460",
             "unit": "ns/iter"
           }
         ]
