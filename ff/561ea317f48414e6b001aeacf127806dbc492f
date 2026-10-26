@@ -1,0 +1,25 @@
+crates/operations/src/tessellate/tests.rs
+  s_cb5189120896c0::t_88351fab0a95c3 2611
+  s_cb5189120896c0::t_c256d0801d4350 2494-2496,2499-2504,2510
+  s_cb5189120896c0::t_78abd4d043af85 2571
+crates/operations/src/tessellate/nonplanar.rs
+  s_cb5189120896c0::t_3e51d6ac21e9a6 4954-4956
+.claude/skills/roadmap/SKILL.md
+  s_cb5189120896c0::t_816d160e7a132e 29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff561ea317f48414e6b001aeacf127806dbc492f",
+  "prompts": {},
+  "sessions": {
+    "s_cb5189120896c0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "772e2ff0-2c58-4904-948a-e63dad0372b8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
