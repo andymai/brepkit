@@ -766,13 +766,19 @@ pub fn plane_cylinder_fillet(
     // 2b) Among the convex (non-reversed-cylinder) configurations, distinguish
     //     the "post on a large plate" (the plate extends past the cylinder, so
     //     the fillet flares OUTWARD with plate contact at `r_c + r`) from the
-    //     "rim of a bare disc cap bounded BY the cylinder" (e.g. a primitive
-    //     cylinder's bottom/top rim — the cap *is* the circle of radius `r_c`,
-    //     so the fillet rounds INWARD with plate contact at `r_c - r`). The
-    //     discriminator: every boundary vertex of a bounded cap, its holes'
-    //     included, lies within `r_c` of the cylinder axis; a plate that the
-    //     post stands on has boundary vertices beyond `r_c`.
-    let rim = !concave && plane_is_bounded_disc(topo, face_plane, cyl, r_c)?;
+    //     "rim" where the plane caps the cylinder (a primitive cylinder's end
+    //     disc, a tube's mouth, or the floor of a prism whose outline runs
+    //     along part of the cylinder: the fillet rounds INWARD with plate
+    //     contact at `r_c - r`). The plane face itself says which: it lies on
+    //     one side of the cylinder where the two meet.
+    let rim = if concave {
+        false
+    } else {
+        match plane_inside_cylinder(topo, face_plane, n_p_inward, cyl, spine)? {
+            Some(inside) => inside,
+            None => return Ok(None),
+        }
+    };
 
     // 3) Only a bounded disc rim contracts toward the axis, to a spindle
     // torus once `r >= r_c / 2`. Post and hole contacts expand away from the
@@ -949,41 +955,44 @@ pub fn plane_cylinder_fillet(
     }))
 }
 
-/// Is the plane face a bounded disc cap whose rim is the cylinder (radius
-/// `r_c`), as opposed to a larger plate the cylinder stands on?
-///
-/// True when every boundary vertex, holes included, lies within `r_c` (plus a
-/// small tolerance) of the cylinder axis. For a primitive cylinder's end cap
-/// the only boundary is the rim circle of radius `r_c`, and a tube's mouth
-/// adds its bore inside it; for a plate that a post stands on, the plate
-/// corners lie beyond `r_c`.
-fn plane_is_bounded_disc(
+/// Whether the plane face lies inside the cylinder where the two meet: a
+/// short step from the spine's middle toward the axis lands on the face and
+/// the same step away from it does not. `None` when neither or both do.
+fn plane_inside_cylinder(
     topo: &Topology,
     face_plane: FaceId,
+    n_p_inward: Vec3,
     cyl: &brepkit_math::surfaces::CylindricalSurface,
-    r_c: f64,
-) -> Result<bool, BlendError> {
-    let face = topo.face(face_plane)?;
+    spine: &Spine,
+) -> Result<Option<bool>, BlendError> {
+    let mid = spine.evaluate(topo, 0.5 * spine.length())?;
     let axis = cyl.axis();
-    let o_c = cyl.origin();
-    // Radial distance from the cylinder axis to a point: |(p − o_c) − ((p − o_c)·axis)·axis|.
-    let radial = |p: Point3| -> f64 {
-        let d = p - o_c;
-        let along = axis * axis.dot(d);
-        (d - along).length()
+    let from_axis = mid - cyl.origin();
+    let Ok(out) = (from_axis - axis * axis.dot(from_axis)).normalize() else {
+        return Ok(None);
     };
-    let tol = r_c * 1e-6 + ANALYTIC_TOL_LIN;
-    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-        for oe in topo.wire(wire_id)?.edges() {
-            let edge = topo.edge(oe.edge())?;
-            let s = topo.vertex(edge.start())?.point();
-            let e = topo.vertex(edge.end())?.point();
-            if radial(s) > r_c + tol || radial(e) > r_c + tol {
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
+    let Ok(across) = n_p_inward.cross(out).normalize() else {
+        return Ok(None);
+    };
+    let Some(region) = brepkit_topology::planar::face_region_2d(
+        topo,
+        face_plane,
+        mid,
+        out,
+        across,
+        ANALYTIC_TOL_LIN,
+    )?
+    else {
+        return Ok(None);
+    };
+    let step = cyl.radius() * 1e-3;
+    let on_face =
+        |x: f64| region.contains_clear(brepkit_math::vec::Point2::new(x, 0.0), step * 0.5);
+    Ok(match (on_face(-step), on_face(step)) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    })
 }
 
 /// Recover the cylinder's axial v-parameter for a 3D point known to lie on
