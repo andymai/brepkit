@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792917094757,
+  "lastUpdate": 1792986848402,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -55781,6 +55781,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 39198186,
             "range": "± 147225",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "94f8f277fe75c377ce633b712fabe16d4afa0a98",
+          "message": "fix(operations): mesh a cylinder wall whose ruling a neighbour's vertex splits (#2065)\n\nA cylinder wall whose side lines carry interior vertices now meshes on\nits surface. Today the solid mesher triangulates such a wall in raw `(u,\nv)` and joins each side vertex to rim samples a quarter turn away, so\nthe mesh cuts flat chords through the solid.\n\nA boolean leaves walls like this when it merges same-domain cylinder\nfaces stacked along their axis and keeps the vertices the flat faces\nbeside them are still split at. The boundary is neither a full\nrevolution band nor a four-edge rectangle, so `tessellate_nonplanar_cdt`\ntakes it, and Delaunay over radians against model units picks the long\ndiagonals.\n\nThe gridfinity tool hit this on a 2×2×5 bin with back and side scoops\nand a round-hole floor pattern. Cutting the body with any one of the\npattern's 46 hole cutters left three outer corners meshed with hollows\nup to about 14mm tall, in the preview and in the exported STL. At the\ncorner I examined, the cut had merged the wall's three stacked cylinder\nfaces into one. The B-rep stayed exact and valid. It first shows in\n4.1.21, whose changelog lists only #1957.\n\n## Change\n\n- `is_split_ruling_wall` flags a cylinder or cone wall with a line edge\nending strictly between its lowest and highest rim. Such a wall now\ntakes the developed `(radius * u, v)` metric and angular refinement that\nholed, notched, wound and section-bound walls already use.\n- `is_split_ruling_wall` reads the split against the wall's own axial\nspan, so it does not depend on where the surface's origin sits along the\naxis.\n- A four-edge band does not match, so its path is unchanged.\n- The roadmap row for this defect and its pin in the inventory are\nremoved.\n\n## Tests\n\n- Added `floorscoop_corner_void_inmem`, which replays the captured bin\nbody and one of the floor pattern's 46 hole cutters.\n`cut_body_meshes_its_corners_solid` requires each corner column to cross\nonly the floor and the lip, and `corner_walls_stay_on_their_cylinders`\nrequires every triangle of each vertical corner cylinder to stay within\nthe deflection of its surface. Both run at deflections 0.01 and 0.1, and\nboth fail on `main`.\n- `band_with_split_ruling_keeps_triangles_on_the_arc`, the parked repro\nfor this defect, now runs. It meshes the band at its own origin and with\nthe cylinder's origin moved 1e8 along the axis; the moved case fails\nwith a tolerance scaled by `|v|`.\n- `cargo test --workspace --exclude brepkit-render --release` passes\n3554 tests, with 24 ignored, on the first commit. After the second,\n`brepkit-operations --lib` passes 929 with 8 ignored and `brepkit-io`\npasses 422 with 4 ignored. `brepkit-render`'s `compute_mesh_lod`\nsegfaults in this environment on unmodified `main` as well, so it was\nleft out.\n- `cargo clippy --all-targets --all-features -- -D warnings` and `cargo\nfmt --check` pass.\n- A Node build of this branch, used by the gridfinity tool under\n`BREPJS_KERNEL=brepkit`, meshes the bin's corners solid, and its\nsliding-lid scenarios still pass.",
+          "timestamp": "2026-10-25T20:51:42-07:00",
+          "tree_id": "ba2df0f6944d7b39a3d0acc26a002f716dc7e3b2",
+          "url": "https://github.com/andymai/brepkit/commit/94f8f277fe75c377ce633b712fabe16d4afa0a98"
+        },
+        "date": 1792986840663,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 623566,
+            "range": "± 7814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 679518,
+            "range": "± 2403",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8472,
+            "range": "± 122",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 390320,
+            "range": "± 2811",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 31644599,
+            "range": "± 377534",
             "unit": "ns/iter"
           }
         ]
