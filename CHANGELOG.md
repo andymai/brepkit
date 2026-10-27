@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.6](https://github.com/andymai/brepkit/compare/v4.3.5...v4.3.6) (2026-10-27)
+
+
+### Bug Fixes
+
+* **operations:** keep a solid's cavities through flat chamfers and fillets ([#2090](https://github.com/andymai/brepkit/issues/2090)) ([82f79f0](https://github.com/andymai/brepkit/commit/82f79f04275cc73d75253dc57e1752e9f267f57c))
+
 ## [4.3.5](https://github.com/andymai/brepkit/compare/v4.3.4...v4.3.5) (2026-10-27)
 
 
