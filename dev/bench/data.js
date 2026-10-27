@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793135382120,
+  "lastUpdate": 1793136447190,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57401,6 +57401,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47077956,
             "range": "± 796860",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "edeb88bafa93c2756a0d4956ce70e78182690f46",
+          "message": "perf(math): keep CDT hole removal and constraint insertion linear in hole count (#2096)\n\nMeshing a planar face with many holes is quadratic in its hole count\ntoday: on a plate with 900 holes through it, the slower of its two holed\nfaces takes 769 ms to mesh. With this change it meshes in 42 ms with the\nsame triangles, and the whole plate in 105 ms instead of 822 ms.\n\n## Change\n\n- `Cdt::flood_remove_from_point` copied the caller's constraints and the\nCDT's own into a fresh set on every call, and the planar mesher floods\nonce per hole. It now checks the two sets in place.\n- `Cdt::insert_constraint` read every vertex to find the ones lying on\nthe new segment, a scan its comment priced for fewer than 100\nconstraints. Once the CDT holds 64 points it reads a uniform grid\ninstead, with about one vertex per cell. The grid is laid out again when\nthe point count doubles, and points added since the last query are filed\nfirst. The query covers the segment's bounding box padded by 1e-5 of its\nlength (the on-segment test accepts within 1e-6), cells are clamped so a\npoint outside the grid is still reached, and the candidates are sorted\nby index, so the split points, and which of two points at the same\nparameter is kept, match the full scan. A box that spans more cells than\nthere are points reads every point, as before.\n\n## Measurements\n\nRelease build, a plate 2 thick with an n by n grid of radius 0.5 holes\ncut by `compound_cut`, meshed at deflection 0.05:\n\n| holes | slowest face, `main` | this branch | whole plate, `main` |\nthis branch |\n|---|---|---|---|---|\n| 400 | 162 ms | 18 ms | 193 ms | 48 ms |\n| 900 | 769 ms | 42 ms | 822 ms | 105 ms |\n\nTriangle counts are the same on both (30412 and 68412). Against `main`\nin criterion, `tessellate 64-hole plate` goes from 11.5 ms to 7.2 ms\n(40% faster), `tessellate box∩sphere` is 1.2% faster, and `mesh box` and\n`mesh sphere` are unchanged.\n\n## Tests\n\n- `constraint_splits_through_vertices_found_by_the_grid`: a diagonal\nacross a 10 by 10 grid of points splits at all eight points inside it. A\nconstraint between points inserted after the grid was laid out, outside\nits bounds, splits at the point between them.\n- `many_hole_constraints_match_a_full_scan`: among 100 square rings, a\nlong constraint along the bottom row of rings splits at exactly the\npoints a full scan finds, and every ring's edges then insert.\n- Returning nothing from the grid query fails both tests, and leaving\npoints added after layout out of the grid fails the first.\n- `cargo test -p brepkit-math --lib` passes 553, the `tessellate` lib\ntests in `brepkit-operations` pass 90, `mixed_socket_tess_inmem` and\n`cross_format` in `brepkit-io` pass, `cargo clippy -p brepkit-math\n--all-targets -- -D warnings` is clean, and the pose sweep's output\n(`cargo run --release --example pose_sweep -p brepkit-operations`) is\nidentical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the quadratic cost of meshing planar faces with many holes by\nkeeping the two expensive passes linear in the hole count: a 900-hole\nplate now meshes in 105 ms instead of 822 ms, and its slowest face in 42\nms instead of 769 ms, producing the same triangles.\n\nThe blow-up came from two scans that ran once per hole or constraint:\n- `flood_remove_from_point` copied the caller's constraints and the\nCDT's own into a fresh set per call; both sets are now consulted in\nplace.\n- `insert_constraint` scanned every vertex to find the ones on a new\nsegment; past 64 vertices it reads a uniform grid over the segment's\npadded bounding box instead. Candidates are sorted by index so the split\npoints, and which of two coincident points is kept, match the full scan.\n\nNew tests cover grid-based split finding matching the full scan on a\ndiagonal through a 10×10 point grid and on 100 square rings.\n\n<sup>Written for commit 915e6573519f5b7cca44a11b7a6fcfbcd6950a90.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2096?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2096?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2096&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-27T21:24:20Z",
+          "tree_id": "c539622cf1724b180c791524cfdc9e53ca94af03",
+          "url": "https://github.com/andymai/brepkit/commit/edeb88bafa93c2756a0d4956ce70e78182690f46"
+        },
+        "date": 1793136439390,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1030977,
+            "range": "± 5740",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1119301,
+            "range": "± 13237",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12978,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 646695,
+            "range": "± 1237",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47610747,
+            "range": "± 179292",
             "unit": "ns/iter"
           }
         ]
