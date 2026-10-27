@@ -3648,6 +3648,75 @@ fn torus_loop_interiors(
     Some((discs, best?.1))
 }
 
+/// The loops whose polygon may hold every point of a given set, in index
+/// order. An even-odd test reads a point outside a polygon's box as outside
+/// the polygon (bar rounding in its crossing abscissa, which the slack
+/// covers), so only loops whose box holds the set's box can, and a box query
+/// finds them without testing every loop against every other.
+struct LoopEnclosers {
+    bvh: brepkit_math::bvh::Bvh,
+    boxes: Vec<Option<brepkit_math::aabb::Aabb3>>,
+}
+
+impl LoopEnclosers {
+    fn new(polygons: &[Vec<Point2>]) -> Self {
+        let boxes: Vec<_> = polygons.iter().map(|p| Self::flat_box(p)).collect();
+        let indexed: Vec<_> = boxes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.map(|b| (i, b)))
+            .collect();
+        Self {
+            bvh: brepkit_math::bvh::Bvh::build(&indexed),
+            boxes,
+        }
+    }
+
+    fn flat_box(points: &[Point2]) -> Option<brepkit_math::aabb::Aabb3> {
+        let b = brepkit_math::aabb::Aabb3::try_from_points(
+            points.iter().map(|p| Point3::new(p.x(), p.y(), 0.0)),
+        )?;
+        [b.min.x(), b.min.y(), b.max.x(), b.max.y()]
+            .iter()
+            .all(|c| c.is_finite())
+            .then_some(b)
+    }
+
+    fn candidates(&self, points: &[Point2]) -> Vec<usize> {
+        let Some(inner) = Self::flat_box(points) else {
+            // Points the box cannot hold (none, or not finite) are tested
+            // against every loop.
+            return (0..self.boxes.len()).collect();
+        };
+        let reach = [inner.min, inner.max]
+            .iter()
+            .fold(1.0_f64, |m, p| m.max(p.x().abs()).max(p.y().abs()));
+        let slack = 1e-9 * reach;
+        let mut found: Vec<usize> = self
+            .bvh
+            .query_overlap(&inner.expanded(slack))
+            .into_iter()
+            .filter(|&i| {
+                self.boxes[i].is_some_and(|outer| {
+                    outer.min.x() - slack <= inner.min.x()
+                        && outer.min.y() - slack <= inner.min.y()
+                        && inner.max.x() <= outer.max.x() + slack
+                        && inner.max.y() <= outer.max.y() + slack
+                })
+            })
+            .collect();
+        found.extend(
+            self.boxes
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.is_none())
+                .map(|(i, _)| i),
+        );
+        found.sort_unstable();
+        found
+    }
+}
+
 /// Split a face when ALL section edges are interior (don't touch the boundary).
 ///
 /// Groups section edges into closed loops by chaining shared 3D endpoints.
@@ -4087,12 +4156,13 @@ pub(super) fn split_face_with_internal_loops(
                 .sum::<f64>()
                 .abs()
         };
+        let enclosers = LoopEnclosers::new(&polygons);
         for lj in 0..loops.len() {
             if polygons[lj].len() < 3 {
                 continue;
             }
             let mut best: Option<(f64, usize)> = None;
-            for li in 0..loops.len() {
+            for li in enclosers.candidates(&polygons[lj]) {
                 if li == lj || polygons[li].len() < 3 {
                     continue;
                 }
@@ -4129,7 +4199,8 @@ pub(super) fn split_face_with_internal_loops(
                 continue;
             }
             let mut best: Option<(f64, usize)> = None;
-            for (li, polygon) in polygons.iter().enumerate() {
+            for li in enclosers.candidates(&pts) {
+                let polygon = &polygons[li];
                 if polygon.len() < 3
                     || !pts
                         .iter()
@@ -7308,5 +7379,64 @@ mod tests {
         .unwrap();
         let floor = arc_edge(&circle, 1e-8, 1.0, true);
         assert!(notch_a_rim(r, from, 1.0_f64.to_degrees(), floor).is_none());
+    }
+
+    /// Every loop whose polygon holds all of a point set must be among the
+    /// set's encloser candidates, in index order: nested rings, rings that
+    /// share a box edge, far-off coordinates and degenerate loops included.
+    #[test]
+    fn loop_enclosers_hold_every_enclosing_loop() {
+        use super::LoopEnclosers;
+        use crate::builder::classify_2d::point_in_polygon_2d;
+        use brepkit_math::vec::Point2;
+        let ring = |cx: f64, cy: f64, r: f64, n: u32| -> Vec<Point2> {
+            (0..n)
+                .map(|k| {
+                    let t = std::f64::consts::TAU * f64::from(k) / f64::from(n);
+                    Point2::new(r.mul_add(t.cos(), cx), r.mul_add(t.sin(), cy))
+                })
+                .collect()
+        };
+        let mut polygons = Vec::new();
+        for (i, base) in [0.0, 1.0e6].into_iter().enumerate() {
+            for k in 0..6 {
+                let c = base + f64::from(k) * 3.0;
+                // Nested rings, the inner two sharing a box edge with the
+                // outer square below them.
+                polygons.push(ring(c, c, 1.0, 32));
+                polygons.push(ring(c, c, 0.5, 16));
+                polygons.push(ring(c + 0.25, c, 0.25, 8));
+                let sq = vec![
+                    Point2::new(c - 1.0, c - 1.0),
+                    Point2::new(c + 1.0, c - 1.0),
+                    Point2::new(c + 1.0, c + 1.0),
+                    Point2::new(c - 1.0, c + 1.0),
+                ];
+                polygons.push(sq);
+            }
+            if i == 0 {
+                polygons.push(vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0)]);
+                polygons.push(Vec::new());
+            }
+        }
+        let enclosers = LoopEnclosers::new(&polygons);
+        let mut nested = 0;
+        for (j, inner) in polygons.iter().enumerate() {
+            let got = enclosers.candidates(inner);
+            assert!(got.windows(2).all(|w| w[0] < w[1]));
+            for (i, outer) in polygons.iter().enumerate() {
+                if i == j || outer.len() < 3 || inner.is_empty() {
+                    continue;
+                }
+                if inner.iter().all(|p| point_in_polygon_2d(*p, outer)) {
+                    nested += 1;
+                    assert!(
+                        got.contains(&i),
+                        "loop {i} encloses loop {j} but is no candidate"
+                    );
+                }
+            }
+        }
+        assert!(nested >= 24, "too few nested pairs: {nested}");
     }
 }
