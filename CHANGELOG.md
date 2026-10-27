@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.1](https://github.com/andymai/brepkit/compare/v4.3.0...v4.3.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **blend:** close a chamfer past a straight edge left in pieces ([#2073](https://github.com/andymai/brepkit/issues/2073)) ([9140bce](https://github.com/andymai/brepkit/commit/9140bce599b951c8030164e45317b5031619013c))
+
 ## [4.3.0](https://github.com/andymai/brepkit/compare/v4.2.14...v4.3.0) (2026-10-27)
 
 
