@@ -280,3 +280,61 @@ fn a_long_reflex_trim_is_bounded_beside_another_cut() {
     let refused = chamfer(&mut topo, near, &[a, b, left], 1.0).unwrap_err();
     assert!(refused.to_string().contains("cavity"), "{refused}");
 }
+
+/// A block whose back rises into a tower with a sloped face on the plane
+/// z = y + 9, extruded 10 along x, less an optional box cavity; and its top
+/// front edge, whose 1 x 1 chamfer lies on that same plane at the front.
+fn block_with_a_sloped_tower(topo: &mut Topology, cavity: Option<Cavity>) -> (SolidId, EdgeId) {
+    use brepkit_math::vec::Vec3;
+    let profile: Vec<Point3> = [
+        (0.0, 0.0),
+        (20.0, 0.0),
+        (20.0, 23.0),
+        (14.0, 23.0),
+        (12.0, 21.0),
+        (12.0, 10.0),
+        (0.0, 10.0),
+    ]
+    .iter()
+    .map(|&(y, z)| Point3::new(0.0, y, z))
+    .collect();
+    let wire = brepkit_topology::builder::make_polygon_wire(topo, &profile, 1e-7).unwrap();
+    let face = brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap();
+    let mut block =
+        brepkit_operations::extrude::extrude(topo, face, Vec3::new(1.0, 0.0, 0.0), 10.0).unwrap();
+    if let Some((corner, size)) = cavity {
+        let cube = make_box(topo, size.0, size.1, size.2).unwrap();
+        transform_solid(topo, cube, &Mat4::translation(corner.0, corner.1, corner.2)).unwrap();
+        block = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
+        assert_eq!(topo.solid(block).unwrap().inner_shells().len(), 1);
+    }
+    let edge = solid_edges(topo, block)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()].iter().all(|&v| {
+                let p = topo.vertex(v).unwrap().point();
+                p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9
+            })
+        })
+        .unwrap();
+    (block, edge)
+}
+
+/// The chamfer face shares its plane with the tower's sloped face far
+/// behind it, but is no part of it: a cavity across the chamfer is refused.
+#[test]
+fn a_cut_on_the_plane_of_a_remote_face_still_bounds_its_cavity() {
+    let mut topo = Topology::new();
+    let (plain, edge) = block_with_a_sloped_tower(&mut topo, None);
+    let cut = chamfer(&mut topo, plain, &[edge], 1.0).unwrap();
+    let report = validate_solid(&topo, cut).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+
+    let mut topo = Topology::new();
+    let (near, edge) =
+        block_with_a_sloped_tower(&mut topo, Some(((4.0, 0.2, 9.0), (2.0, 0.6, 0.6))));
+    let refused = chamfer(&mut topo, near, &[edge], 1.0).unwrap_err();
+    assert!(refused.to_string().contains("cavity"), "{refused}");
+}

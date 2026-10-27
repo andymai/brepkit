@@ -135,12 +135,62 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
     }
 }
 
+/// Whether a face of the result lies on one of `source_faces`: on its
+/// surface and, for a plane, with every vertex in or on its region (a face
+/// the operation made can share the plane of a face far from it), for
+/// another surface within its box.
+fn on_source_face(
+    topo: &Topology,
+    face: FaceId,
+    source_faces: &[FaceId],
+) -> Result<bool, OperationsError> {
+    let surface = topo.face(face)?.surface().clone();
+    let vertices = brepkit_topology::explorer::face_vertices(topo, face)?
+        .into_iter()
+        .map(|v| topo.vertex(v).map(brepkit_topology::vertex::Vertex::point))
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(&origin) = vertices.first() else {
+        return Ok(false);
+    };
+    for &source_face in source_faces {
+        let source_surface = topo.face(source_face)?.surface();
+        if !same_surface(source_surface, &surface) {
+            continue;
+        }
+        let within = if let FaceSurface::Plane { normal, .. } = source_surface {
+            let frame = brepkit_math::frame::Frame3::from_normal(origin, *normal)?;
+            let Some(pieces) = brepkit_topology::planar::face_boundary_2d(
+                topo,
+                source_face,
+                origin,
+                frame.x,
+                frame.y,
+            )?
+            else {
+                continue;
+            };
+            vertices.iter().all(|&p| {
+                let d = p - origin;
+                let q = brepkit_math::vec::Point2::new(d.dot(frame.x), d.dot(frame.y));
+                brepkit_math::region2d::point_in_region(&pieces, q, 1e-7) != Some(false)
+            })
+        } else {
+            let bounds = face_bounds(topo, source_face)?.expanded(1e-7);
+            vertices.iter().all(|&p| bounds.contains_point(p))
+        };
+        if within {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// `result`, rebuilt from `source`'s outer shell alone, given copies of
 /// `source`'s cavities.
 ///
 /// The material taken off is bounded by parts of `source`'s outer faces,
 /// which a cavity, lying strictly inside, never reaches, and by the faces
-/// the operation made, those of `result` on no surface of `source`. A
+/// the operation made, those of `result` on no face of `source`. A
 /// cavity meets that material only by crossing one of those faces or by
 /// lying wholly in it, so one whose box meets such a face's box, or whose
 /// vertex is not inside `result`, refuses the operation, named `what` in
@@ -160,16 +210,13 @@ pub fn keep_cavities(
     if cavities.is_empty() {
         return Ok(result);
     }
-    let surfaces: Vec<FaceSurface> = topo
+    let source_faces = topo
         .shell(topo.solid(source)?.outer_shell())?
         .faces()
-        .iter()
-        .map(|&f| topo.face(f).map(|face| face.surface().clone()))
-        .collect::<Result<_, _>>()?;
+        .to_vec();
     let mut made = Vec::new();
     for &face in topo.shell(topo.solid(result)?.outer_shell())?.faces() {
-        let surface = topo.face(face)?.surface();
-        if !surfaces.iter().any(|s| same_surface(s, surface)) {
+        if !on_source_face(topo, face, &source_faces)? {
             made.push(face_bounds(topo, face)?);
         }
     }
