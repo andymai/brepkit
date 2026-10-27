@@ -135,11 +135,49 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
     }
 }
 
+/// Whether a planar face is convex, with straight edges and no holes.
+fn convex_without_holes(
+    topo: &Topology,
+    face: FaceId,
+    normal: Vec3,
+) -> Result<bool, OperationsError> {
+    let data = topo.face(face)?;
+    if !data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    let mut corners = Vec::new();
+    for oe in topo.wire(data.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            return Ok(false);
+        }
+        corners.push(topo.vertex(oe.oriented_start(edge))?.point());
+    }
+    let n = corners.len();
+    if n < 3 {
+        return Ok(false);
+    }
+    let mut left: Option<bool> = None;
+    for i in 0..n {
+        let (a, b, c) = (corners[i], corners[(i + 1) % n], corners[(i + 2) % n]);
+        let turn = (b - a).cross(c - b).dot(normal);
+        if turn.abs() <= 1e-12 * (b - a).length() * (c - b).length() {
+            continue;
+        }
+        match left {
+            None => left = Some(turn > 0.0),
+            Some(side) if side != (turn > 0.0) => return Ok(false),
+            Some(_) => {}
+        }
+    }
+    Ok(true)
+}
+
 /// Whether a face of the result lies on one of `source_faces`: on its
-/// surface and, for a plane, with every vertex on the plane and in or on
-/// its region and none of its vertices inside the face (a face the
-/// operation made can share the plane of a face far from it, or span a
-/// hole of it), for another surface within its box.
+/// surface and, for a plane, a convex face without holes holding every
+/// vertex on the plane and in or on its region (a face the operation made
+/// can share the plane of a face far from it), for another surface within
+/// its box.
 fn on_source_face(
     topo: &Topology,
     face: FaceId,
@@ -169,6 +207,12 @@ fn on_source_face(
             {
                 continue;
             }
+            // Inside a convex face with straight edges and no holes, a face
+            // whose vertices all lie in it lies in it whole; inside any
+            // other it could span a hole or notch, and reads as made.
+            if !convex_without_holes(topo, source_face, *normal)? {
+                continue;
+            }
             let frame = brepkit_math::frame::Frame3::from_normal(origin, *normal)?;
             let Some(pieces) = brepkit_topology::planar::face_boundary_2d(
                 topo,
@@ -180,25 +224,10 @@ fn on_source_face(
             else {
                 continue;
             };
-            let flat = |p: Point3| {
-                let d = p - origin;
-                brepkit_math::vec::Point2::new(d.dot(frame.x), d.dot(frame.y))
-            };
-            // Every vertex in the source face still lets the face span a
-            // hole or notch of it, whose vertices then lie inside the face.
-            let Some(own) =
-                brepkit_topology::planar::face_boundary_2d(topo, face, origin, frame.x, frame.y)?
-            else {
-                continue;
-            };
-            let source_vertices = brepkit_topology::explorer::face_vertices(topo, source_face)?
-                .into_iter()
-                .map(|v| topo.vertex(v).map(brepkit_topology::vertex::Vertex::point))
-                .collect::<Result<Vec<_>, _>>()?;
             vertices.iter().all(|&p| {
-                brepkit_math::region2d::point_in_region(&pieces, flat(p), 1e-7) != Some(false)
-            }) && source_vertices.iter().all(|&p| {
-                brepkit_math::region2d::point_in_region(&own, flat(p), 1e-7) != Some(true)
+                let d = p - origin;
+                let q = brepkit_math::vec::Point2::new(d.dot(frame.x), d.dot(frame.y));
+                brepkit_math::region2d::point_in_region(&pieces, q, 1e-7) != Some(false)
             })
         } else {
             let bounds = face_bounds(topo, source_face)?.expanded(1e-7);
@@ -521,14 +550,15 @@ mod tests {
         assert!(!on_source_face(&topo, bevel, &[top_face]).unwrap());
     }
 
-    /// A square face over the plane of a source square with a hole in its
-    /// middle has every vertex on the source face, but spans its hole: no
-    /// face of the source.
+    /// Over a source square with a hole, a face can cross the hole with
+    /// every vertex on the face and none of the hole's inside it: a face
+    /// with holes proves nothing, and the rectangle reads as made. Over a
+    /// plain square it is the source's.
     #[test]
-    fn a_face_spanning_a_source_hole_is_no_source_face() {
+    fn a_face_over_a_holed_source_face_is_no_source_face() {
         let mut topo = Topology::new();
-        let square = |topo: &mut Topology, half: f64| {
-            let corners: Vec<Point3> = [(-half, -half), (half, -half), (half, half), (-half, half)]
+        let rectangle = |topo: &mut Topology, (x0, y0): (f64, f64), (x1, y1): (f64, f64)| {
+            let corners: Vec<Point3> = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
                 .iter()
                 .map(|&(x, y)| Point3::new(x, y, 0.0))
                 .collect();
@@ -538,12 +568,14 @@ mod tests {
             normal: Vec3::new(0.0, 0.0, 1.0),
             d: 0.0,
         };
-        let outer = square(&mut topo, 5.0);
-        let hole = square(&mut topo, 1.0);
+        let outer = rectangle(&mut topo, (-5.0, -5.0), (5.0, 5.0));
+        let hole = rectangle(&mut topo, (-1.0, -3.0), (1.0, 3.0));
         let holed = topo.add_face(Face::new(outer, vec![hole], plane.clone()));
-        let cover = square(&mut topo, 5.0);
-        let whole = topo.add_face(Face::new(cover, Vec::new(), plane));
-        assert!(!on_source_face(&topo, whole, &[holed]).unwrap());
-        assert!(on_source_face(&topo, holed, &[holed]).unwrap());
+        let plain_outer = rectangle(&mut topo, (-5.0, -5.0), (5.0, 5.0));
+        let plain = topo.add_face(Face::new(plain_outer, Vec::new(), plane.clone()));
+        let strip = rectangle(&mut topo, (-4.0, -1.0), (4.0, 1.0));
+        let crossing = topo.add_face(Face::new(strip, Vec::new(), plane));
+        assert!(!on_source_face(&topo, crossing, &[holed]).unwrap());
+        assert!(on_source_face(&topo, crossing, &[plain]).unwrap());
     }
 }
