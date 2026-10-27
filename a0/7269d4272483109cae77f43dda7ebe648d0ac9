@@ -1,0 +1,24 @@
+crates/blend/src/chamfer_builder.rs
+  s_02588738a4f2ed::t_a26efb46d8835c 478,480-483,485,493-503,506-515,524,526,531
+  s_02588738a4f2ed::t_5cd08b036dfa8c 414-424,441,443,445-447,467,476
+  s_02588738a4f2ed::t_39ae4214e29867 432-434
+  s_02588738a4f2ed::t_adbc60dcd9474d 250,312,326,328,336-339,341-353,444,448-466,468-475,477,479,484,516-522
+crates/operations/tests/two_distance_chamfers.rs
+  s_02588738a4f2ed::t_8cc8046723a648 214-238,298-404
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a07269d4272483109cae77f43dda7ebe648d0ac9",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
