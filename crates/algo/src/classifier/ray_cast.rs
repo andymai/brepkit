@@ -687,7 +687,6 @@ impl GeomIndex {
 /// which the hull holds when the band spans it. A trimmed band's ends are
 /// read from its wires' curves, which bound it on a ruled surface.
 fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3> {
-    use brepkit_math::aabb::Aabb3;
     let near = 10.0 * tol.linear;
     let raw = match geom {
         FaceGeom::Planar {
@@ -716,7 +715,7 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
                 return None;
             }
             let onto = |v: Point3| v + axis * ((d - dot_normal_point(*normal, v)) / along);
-            let mut b = Aabb3::try_from_points(
+            let mut b = finite_box(
                 verts
                     .iter()
                     .chain(holes.iter().flatten())
@@ -724,11 +723,11 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
                     .chain(verts.iter().map(|&v| onto(v))),
             )?;
             for &(c, r) in circle_holes {
-                b = b.union(ball_box(c, r));
+                b = b.union(ball_box(c, r)?);
             }
             for seg in arcs.iter().chain(hole_arcs.iter().flatten()) {
                 b = b.union(match seg {
-                    Segment::Arc(a) => ball_box(a.center, a.radius),
+                    Segment::Arc(a) => ball_box(a.center, a.radius)?,
                     Segment::Curve(c) => curve_box(&c.curve, c.start, c.end)?,
                 });
             }
@@ -747,7 +746,7 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
                 None => (*v_min, *v_max),
             };
             let r = surface.radius();
-            ball_box(origin + axis * lo, r).union(ball_box(origin + axis * hi, r))
+            ball_box(origin + axis * lo, r)?.union(ball_box(origin + axis * hi, r)?)
         }
         FaceGeom::Cone {
             surface,
@@ -774,10 +773,16 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
                 None => (*v_min, *v_max),
             };
             let ring = |v: f64| ball_box(apex + axis * (v * sin_a), v * cos_a);
-            ring(lo).union(ring(hi))
+            ring(lo)?.union(ring(hi)?)
         }
-        FaceGeom::Torus { surface, .. } | FaceGeom::TorusTrim { surface, .. } => surface.aabb(),
-        FaceGeom::Sphere { surface, .. } | FaceGeom::SphereTrim { surface, .. } => surface.aabb(),
+        FaceGeom::Torus { surface, .. } | FaceGeom::TorusTrim { surface, .. } => {
+            let b = surface.aabb();
+            finite_box([b.min, b.max])?
+        }
+        FaceGeom::Sphere { surface, .. } | FaceGeom::SphereTrim { surface, .. } => {
+            let b = surface.aabb();
+            finite_box([b.min, b.max])?
+        }
         FaceGeom::Extrusion { .. } => return None,
     };
     let coords = [
@@ -796,13 +801,29 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
     Some(raw.expanded(1e-4 + 1e-6 * size + 1e-9 * reach))
 }
 
-/// The cube about `center` holding the ball of radius `r`.
-fn ball_box(center: Point3, r: f64) -> brepkit_math::aabb::Aabb3 {
-    let r = r.abs();
-    brepkit_math::aabb::Aabb3 {
-        min: Point3::new(center.x() - r, center.y() - r, center.z() - r),
-        max: Point3::new(center.x() + r, center.y() + r, center.z() + r),
+/// The box over `points`, or `None` when there are none or a coordinate is
+/// not finite: a box's min and max skip a NaN, so a box built through one
+/// would bound the points it has without it.
+fn finite_box(points: impl IntoIterator<Item = Point3>) -> Option<brepkit_math::aabb::Aabb3> {
+    let mut b: Option<brepkit_math::aabb::Aabb3> = None;
+    for p in points {
+        if !(p.x().is_finite() && p.y().is_finite() && p.z().is_finite()) {
+            return None;
+        }
+        let at = brepkit_math::aabb::Aabb3 { min: p, max: p };
+        b = Some(b.map_or(at, |b| b.union(at)));
     }
+    b
+}
+
+/// The cube about `center` holding the ball of radius `r`, or `None` when
+/// it is not finite.
+fn ball_box(center: Point3, r: f64) -> Option<brepkit_math::aabb::Aabb3> {
+    let r = r.abs();
+    finite_box([
+        Point3::new(center.x() - r, center.y() - r, center.z() - r),
+        Point3::new(center.x() + r, center.y() + r, center.z() + r),
+    ])
 }
 
 /// A box holding the whole curve an edge runs on (and its ends), or `None`
@@ -814,21 +835,19 @@ fn curve_box(
     end: Point3,
 ) -> Option<brepkit_math::aabb::Aabb3> {
     use brepkit_topology::edge::EdgeCurve;
-    let ends = brepkit_math::aabb::Aabb3::from_points([start, end]);
+    let ends = finite_box([start, end])?;
     Some(match curve {
         EdgeCurve::Line => ends,
-        EdgeCurve::Circle(c) => ends.union(ball_box(c.center(), c.radius())),
+        EdgeCurve::Circle(c) => ends.union(ball_box(c.center(), c.radius())?),
         EdgeCurve::Ellipse(e) => ends.union(ball_box(
             e.center(),
             e.semi_major().abs().max(e.semi_minor().abs()),
-        )),
+        )?),
         EdgeCurve::NurbsCurve(n) => {
             if !n.weights().iter().all(|&w| w > 0.0) {
                 return None;
             }
-            ends.union(brepkit_math::aabb::Aabb3::try_from_points(
-                n.control_points().iter().copied(),
-            )?)
+            ends.union(finite_box(n.control_points().iter().copied())?)
         }
     })
 }
@@ -4304,5 +4323,51 @@ mod tests {
             }
         }
         assert!(keyed > 300, "too few keyed queries: {keyed}");
+    }
+
+    /// A face with a coordinate that is not a number has no box: the box's
+    /// min and max would skip it and bound the face without it.
+    #[test]
+    fn a_face_with_a_coordinate_that_is_not_a_number_has_no_box() {
+        let tol = Tolerance::new();
+        let square = |z: f64| {
+            vec![
+                Point3::new(0.0, 0.0, z),
+                Point3::new(1.0, 0.0, z),
+                Point3::new(1.0, 1.0, z),
+                Point3::new(0.0, 1.0, z),
+            ]
+        };
+        let planar = |verts: Vec<Point3>, circle_holes: Vec<(Point3, f64)>| FaceGeom::Planar {
+            verts,
+            holes: Vec::new(),
+            circle_holes,
+            arcs: Vec::new(),
+            hole_arcs: Vec::new(),
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        assert!(geom_box(&planar(square(0.0), Vec::new()), tol).is_some());
+        let mut verts = square(0.0);
+        verts.insert(2, Point3::new(f64::NAN, f64::NAN, 0.0));
+        assert!(geom_box(&planar(verts, Vec::new()), tol).is_none());
+        let hole = (Point3::new(0.5, 0.5, 0.0), f64::NAN);
+        assert!(geom_box(&planar(square(0.0), vec![hole]), tol).is_none());
+        let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        )
+        .unwrap();
+        let band = |v_min: f64, v_max: f64| FaceGeom::Cylinder {
+            surface: cyl.clone(),
+            v_min,
+            v_max,
+            hole_bands: Vec::new(),
+            u_gap: None,
+            trim: None,
+        };
+        assert!(geom_box(&band(0.0, 2.0), tol).is_some());
+        assert!(geom_box(&band(0.0, f64::NAN), tol).is_none());
     }
 }
