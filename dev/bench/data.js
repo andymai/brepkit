@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793045588226,
+  "lastUpdate": 1793061820808,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56375,6 +56375,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 40674829,
             "range": "± 44292",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7c42f65e1deaead14335c1b10bb0138fa35177c1",
+          "message": "perf(topology): dedupe a face's edges and vertices by scanning (#2068)\n\n`explorer::face_edges` and `face_vertices` deduplicated through a\n`HashSet` on every call. A face has a handful of edges, and these run in\nhot loops of the boolean pipeline, so the set's hashing and allocation\ncost more than the work: up to 32 items are now deduplicated by a linear\nscan, and a set is used beyond that. Results and their order are\nunchanged.\n\nAbout 1% off a typical boolean.\n\n## Tests\n\n- `cargo test -p brepkit-topology` and `cargo clippy -p brepkit-topology\n--all-targets -- -D warnings` pass.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-26T17:40:32-07:00",
+          "tree_id": "1756f875c54ba8c235b5fe63eb5c1040c5b93548",
+          "url": "https://github.com/andymai/brepkit/commit/7c42f65e1deaead14335c1b10bb0138fa35177c1"
+        },
+        "date": 1793061813897,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1025515,
+            "range": "± 10716",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1104350,
+            "range": "± 730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13091,
+            "range": "± 42",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 633942,
+            "range": "± 2684",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 49231907,
+            "range": "± 375206",
             "unit": "ns/iter"
           }
         ]
