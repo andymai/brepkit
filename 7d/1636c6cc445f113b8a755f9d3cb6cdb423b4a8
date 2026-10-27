@@ -1,0 +1,22 @@
+crates/operations/tests/flat_blends_keep_cavities.rs
+  s_02588738a4f2ed::t_1d9ea51df1fa92 342-343,346-349,351-358,360-363
+  s_02588738a4f2ed::t_c57155d132d094 341,344-345,350,359,364
+crates/operations/src/cavities.rs
+  s_02588738a4f2ed::t_56b21de241fd1c 88-91,245-292,354-356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7d1636c6cc445f113b8a755f9d3cb6cdb423b4a8",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
