@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.8](https://github.com/andymai/brepkit/compare/v4.3.7...v4.3.8) (2026-10-27)
+
+
+### Performance
+
+* **algo:** find nearby wire vertices through a grid when building sub-faces ([#2100](https://github.com/andymai/brepkit/issues/2100)) ([cadad40](https://github.com/andymai/brepkit/commit/cadad4086e4745d6e8e29360629d15acf72544ee))
+
 ## [4.3.7](https://github.com/andymai/brepkit/compare/v4.3.6...v4.3.7) (2026-10-27)
 
 
