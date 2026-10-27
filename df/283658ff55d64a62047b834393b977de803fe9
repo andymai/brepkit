@@ -1,0 +1,20 @@
+crates/operations/src/cavities.rs
+  s_02588738a4f2ed::t_90a2ebe071de67 140-142,183,185-201,523-547
+  s_02588738a4f2ed::t_9982b0890e1b2c 548
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df283658ff55d64a62047b834393b977de803fe9",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
