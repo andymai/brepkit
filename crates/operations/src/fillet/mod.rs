@@ -369,7 +369,14 @@ pub fn fillet(
         });
     }
 
-    crate::boolean::assemble_solid_mixed(topo, &result_specs, tol)
+    // Every bevel sets back `radius` along its faces from a filleted edge,
+    // so the material taken off lies that near one.
+    let removed = filtered_edges
+        .iter()
+        .map(|&edge| crate::cavities::edge_reach(topo, edge, radius))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = crate::boolean::assemble_solid_mixed(topo, &result_specs, tol)?;
+    crate::cavities::keep_cavities(topo, solid, result, &removed, "fillet")
 }
 
 /// Fillet edges with variable radius using canal surface generation.
@@ -412,6 +419,20 @@ pub fn fillet_variable(
             }
         }
     }
+
+    // Each contact sets back the law's radius along its face from the edge,
+    // and the blend's arc lies in the triangle the two contacts make with
+    // the edge, so the material taken off lies within an edge's largest
+    // radius of it.
+    let removed = edge_laws
+        .iter()
+        .map(|(edge, law)| {
+            let reach = (0..=16)
+                .map(|k| law.evaluate(f64::from(k) / 16.0))
+                .fold(0.0_f64, f64::max);
+            crate::cavities::edge_reach(topo, *edge, reach)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
@@ -932,7 +953,7 @@ pub fn fillet_variable(
         }
     }
 
-    Ok(solid_id)
+    crate::cavities::keep_cavities(topo, solid, solid_id, &removed, "fillet")
 }
 
 fn solid_has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {

@@ -179,6 +179,7 @@ pub mod tessellate;
 
 pub mod assembly;
 pub(crate) mod cap;
+pub(crate) mod cavities;
 pub mod compound_ops;
 pub mod evolution;
 pub mod sketch;
