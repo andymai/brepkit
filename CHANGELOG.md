@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.2](https://github.com/andymai/brepkit/compare/v4.3.1...v4.3.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **blend:** leave a chamfer's input solid as it was ([#2086](https://github.com/andymai/brepkit/issues/2086)) ([0a6110b](https://github.com/andymai/brepkit/commit/0a6110b7baf6574210642e5bb07983ec9397d283))
+
 ## [4.3.1](https://github.com/andymai/brepkit/compare/v4.3.0...v4.3.1) (2026-10-27)
 
 
