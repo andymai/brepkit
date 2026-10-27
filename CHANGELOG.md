@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.7](https://github.com/andymai/brepkit/compare/v4.3.6...v4.3.7) (2026-10-27)
+
+
+### Performance
+
+* **math:** keep CDT hole removal and constraint insertion linear in hole count ([#2096](https://github.com/andymai/brepkit/issues/2096)) ([edeb88b](https://github.com/andymai/brepkit/commit/edeb88bafa93c2756a0d4956ce70e78182690f46))
+
 ## [4.3.6](https://github.com/andymai/brepkit/compare/v4.3.5...v4.3.6) (2026-10-27)
 
 
