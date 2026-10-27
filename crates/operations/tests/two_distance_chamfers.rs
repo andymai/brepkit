@@ -422,6 +422,48 @@ fn a_hole_beyond_the_chamfer_refuses_it() {
     assert!(report.is_valid(), "{:?}", report.issues);
 }
 
+/// One edge that chamfers and one refused: the call fails, and the plate
+/// is left as it was though the first edge's bevel was already built. The
+/// bottom's far edge sets back to x = 26, clear of the hole; the top's back
+/// edge would set back past it.
+#[test]
+fn a_refused_edge_leaves_the_plate_as_it_was() {
+    let mut topo = Topology::new();
+    let plate = drilled_plate(&mut topo);
+    let volume = solid_volume(&topo, plate, 0.01).unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, plate)
+        .unwrap()
+        .len();
+    let far = edge_between(
+        &topo,
+        plate,
+        Point3::new(40.0, 0.0, 0.0),
+        Point3::new(40.0, 20.0, 0.0),
+    );
+    let back = edge_between(
+        &topo,
+        plate,
+        Point3::new(0.0, 20.0, 10.0),
+        Point3::new(40.0, 20.0, 10.0),
+    );
+    let bottom = plane_along(&topo, plate, far, [0.0, 0.0, -1.0]);
+    let top = plane_along(&topo, plate, back, [0.0, 0.0, 1.0]);
+    assert!(chamfer_two_on(&mut topo, plate, &[(far, bottom), (back, top)], 14.0, 2.0).is_err());
+    let report = validate_solid(&topo, plate).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert_eq!(
+        brepkit_topology::explorer::solid_faces(&topo, plate)
+            .unwrap()
+            .len(),
+        faces
+    );
+    let after = solid_volume(&topo, plate, 0.01).unwrap();
+    assert!(
+        (after - volume).abs() < 1e-9 * volume,
+        "{after} vs {volume}"
+    );
+}
+
 /// A rim and a straight edge in one call are refused before either is cut.
 #[test]
 fn rims_and_other_edges_are_refused_together() {
