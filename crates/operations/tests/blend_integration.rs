@@ -96,7 +96,6 @@ fn chamfer_box_symmetric() {
     );
 }
 
-/// Distance-angle chamfer on a single edge.
 /// A 10 cube less a 3 cube cavity at `corner`, and its top edge along x
 /// at y = 0.
 fn hollow_block(
@@ -174,6 +173,7 @@ fn fillet_refuses_to_reach_a_cavity() {
     );
 }
 
+/// Distance-angle chamfer on a single edge.
 #[test]
 fn chamfer_box_distance_angle() {
     let mut topo = Topology::new();
