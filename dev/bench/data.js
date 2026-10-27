@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793069347831,
+  "lastUpdate": 1793071258859,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56699,6 +56699,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 46914330,
             "range": "± 57987",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9140bce599b951c8030164e45317b5031619013c",
+          "message": "fix(blend): close a chamfer past a straight edge left in pieces (#2073)\n\nStacked on #2072 (two-distance chamfers); review that first. This PR\nadds one commit on top of it.\n\nA chamfer's end is closed by splicing its cross edge into the end face's\ndetour round the corner. Where an end face's straight edge was left in\npieces (as a boolean can leave it) and the chamfer reaches past the\npiece at the corner, that detour passes more vertices than the corner,\nand only a two-edge detour was accepted: the chamfer was refused as a\ntrimming failure. The shortest run between the two contact points is now\ntaken.\n\n## Tests\n\n- Added to `crates/operations/tests/two_distance_chamfers.rs`: a box\nwhose end edges are in pieces 4 from its front corners, both front\ncorners chamfered past those pieces; valid and at its closed-form\nvolume. It fails without the fix.\n- `cargo test -p brepkit-blend -p brepkit-operations` and `cargo clippy\n-p brepkit-blend -p brepkit-operations --all-targets -- -D warnings`\npass.\n- `compound_cut_edge_tangent_tools_stays_analytic` fails now and then in\na full parallel `--lib` run, on unmodified `main` too; it passes alone\n(it reads a process-wide fallback counter that other tests' fallbacks\ncan bump).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-10-26T20:18:16-07:00",
+          "tree_id": "6dfdb781b566eff5f7a6d3e3b8d4fd4e361cc7f4",
+          "url": "https://github.com/andymai/brepkit/commit/9140bce599b951c8030164e45317b5031619013c"
+        },
+        "date": 1793071251440,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 831998,
+            "range": "± 1524",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 903421,
+            "range": "± 1470",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11234,
+            "range": "± 170",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 510208,
+            "range": "± 5831",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 39026646,
+            "range": "± 49287",
             "unit": "ns/iter"
           }
         ]
