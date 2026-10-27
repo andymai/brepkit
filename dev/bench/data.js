@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793072855593,
+  "lastUpdate": 1793075835031,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56807,6 +56807,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 39051600,
             "range": "± 91553",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0a6110b7baf6574210642e5bb07983ec9397d283",
+          "message": "fix(blend): leave a chamfer's input solid as it was (#2086)\n\nA v2 chamfer now leaves the solid it was given as it was. Today\n`ChamferBuilder` edits faces that its input shares with its result:\ntrimming a face splits its boundary edges in every wire that uses them,\nand closing a chamfer's ends rewrites the end faces' wires in place.\nAfter a one-edge `chamfer_v2` on a 10 cube, the input box has 6 boundary\nedges. After a `chamfer_two_on` call that builds one edge and refuses\nanother, the call returns an error and the drilled plate it was given\nhas 6 boundary edges too.\n\n`FilletBuilder::build` already avoids this: it records the input's\ngraph, builds in place, gives the result its own copies of the faces it\nstill shares, and puts the input back. The chamfer builder now does the\nsame.\n\n## Change\n\n- `SolidGraph` and `SolidSnapshot` move from `fillet_builder.rs` to\n`builder_utils.rs`, unchanged apart from making `SolidSnapshot` and its\nmethods visible to the crate and giving them doc comments.\n- `ChamferBuilder::build` runs its old body, now `build_in_place`,\nbetween `SolidSnapshot::capture` and `restore`. On success it first\ngives the result copies of the faces it shares with the input. The input\nis restored whether the build succeeds or fails.\n\n## Tests\n\n- Added `chamfer_leaves_its_input_as_it_was` to\n`crates/operations/tests/blend_integration.rs`: the box keeps its faces,\nedges, validity and volume of 1000, and the result is valid at 995.\n- Added `a_refused_edge_leaves_the_plate_as_it_was` to\n`crates/operations/tests/two_distance_chamfers.rs`: the plate's far\nbottom edge chamfers, the top's back edge is refused, and the plate\nkeeps its face count, validity and volume.\n- Both fail without the snapshot, each on the input's validity.\n- `cargo test -p brepkit-blend` passes 141 tests. The 16 chamfer, fillet\nand blend integration test files in `brepkit-operations` pass 60, the\noperations lib tests matching chamfer, fillet or blend pass 84, and the\nwasm lib's chamfer tests pass. The pre-commit clippy and fmt checks\npass.",
+          "timestamp": "2026-10-26T21:34:04-07:00",
+          "tree_id": "8b2294d5efdeb1378a1a324d8866a11e5d50d697",
+          "url": "https://github.com/andymai/brepkit/commit/0a6110b7baf6574210642e5bb07983ec9397d283"
+        },
+        "date": 1793075828089,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1034460,
+            "range": "± 18438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1112877,
+            "range": "± 9265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12994,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 640812,
+            "range": "± 1065",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47226891,
+            "range": "± 36617",
             "unit": "ns/iter"
           }
         ]
