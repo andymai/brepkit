@@ -1149,6 +1149,52 @@ mod batch_tests {
         assert!(parsed[1]["ok"].is_number());
     }
 
+    /// The default fillet of an outer edge of a block with an enclosed
+    /// cavity keeps the cavity.
+    #[test]
+    fn batch_fillet_keeps_a_cavity() {
+        use crate::handles::{edge_id_to_u32, solid_id_to_u32};
+        use brepkit_operations::boolean::{BooleanOp, boolean};
+        let mut kernel = BrepKernel::new();
+        let topo = kernel.topo_mut();
+        let block = brepkit_operations::primitives::make_box(topo, 10.0, 10.0, 10.0).unwrap();
+        let cube = brepkit_operations::primitives::make_box(topo, 3.0, 3.0, 3.0).unwrap();
+        brepkit_operations::transform::transform_solid(
+            topo,
+            cube,
+            &brepkit_math::mat::Mat4::translation(3.5, 3.5, 3.5),
+        )
+        .unwrap();
+        let hollow = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
+        let edge = brepkit_topology::explorer::solid_edges(kernel.topo(), hollow)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = kernel.topo().edge(e).unwrap();
+                [edge.start(), edge.end()].iter().all(|&v| {
+                    let p = kernel.topo().vertex(v).unwrap().point();
+                    p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9
+                })
+            })
+            .unwrap();
+        let result = kernel.execute_batch(&format!(
+            r#"[{{"op": "fillet", "args": {{"solid": {}, "edges": [{}], "radius": 1.0}}}}]"#,
+            solid_id_to_u32(hollow),
+            edge_id_to_u32(edge),
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(parsed[0]["ok"].is_u64(), "{parsed}");
+        let handle = parsed[0]["ok"].as_u64().unwrap();
+        let filleted = kernel
+            .resolve_solid(u32::try_from(handle).unwrap())
+            .unwrap();
+        assert_ne!(filleted, hollow);
+        assert_eq!(
+            kernel.topo().solid(filleted).unwrap().inner_shells().len(),
+            1
+        );
+    }
+
     /// A v2 chamfer of an edge the blend engine leaves out (a cylinder's
     /// rim) is an error, not the input solid handed back as the result.
     #[test]
