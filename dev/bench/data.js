@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793144676960,
+  "lastUpdate": 1793145417703,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57617,6 +57617,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 34823748,
             "range": "± 72651",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6526fa671f73e98f8703ca88d6d49b70b41f528b",
+          "message": "perf(algo): find a section loop's enclosing loops through a box index (#2101)\n\nSplitting a face by loops that lie inside it is quadratic in the loop\ncount today: `split_face_with_internal_loops` tests every loop against\nevery other to find the smallest one enclosing it, and every existing\nhole against every loop. A plate face cut by 900 holes carries 900\nloops, so that pass makes about 810,000 polygon tests. With this change\nit tests only the loops whose box can hold the other, and the result is\nunchanged.\n\n## Change\n\nAn even-odd point-in-polygon test reads a point outside a polygon's box\nas outside the polygon, bar rounding in its crossing abscissa. So a loop\ncan hold every point of a set only when its box holds the set's box,\nwithin a 1e-9 relative slack that covers the rounding. `LoopEnclosers`\nkeeps a BVH of the loops' boxes and returns those loops in index order,\nso the smallest enclosing loop, and the first of equal ones, come out as\nbefore. A set or loop whose box is not finite is read against every\nloop.\n\n## Measurements\n\nRelease build, a plate 2 thick with a 30 by 30 grid of radius 0.5 holes\ncut by `compound_cut`, `BK_GFA_TIME`, three runs each back to back:\n`fill_images` takes 188 to 203 ms on this branch against 213 to 234 ms\non `main`. The resulting volume is identical.\n\n## Tests\n\n- `loop_enclosers_hold_every_enclosing_loop`: nested rings and squares\nnear the origin and a million units out, plus a two-point loop and an\nempty one. Every loop whose polygon holds all of another's points is\namong that loop's candidates, which come in index order. Filtering out\nevery box hit fails it.\n- `cargo test -p brepkit-algo --lib` passes 310 and `cargo test -p\nbrepkit-operations --lib` passes 937 with 8 ignored. The fixtures with\nloops inside loops pass: `bp64_pocket_compound_cut_inmem`,\n`circleinsert_interface_fuse_inmem`, `counterbore_cap_circle_cut_inmem`,\n`fracplate_seam_pocket_inmem`, `oring_nested_holes`,\n`ring_bin_cavity_cut_inmem`, `ring_bin_fillet_fuse_inmem`,\n`snapclip_deepened_notch_inmem`, `snapclip_slot_cut_inmem` and\n`spacer_foot_fuse_inmem`. The pose sweep and truth audit outputs are\nidentical to `main`'s, and `cargo clippy -p brepkit-algo --all-targets\n-- -D warnings` is clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSplitting a face by the loops inside it no longer tests every loop\nagainst every other, cutting the work from roughly quadratic to a\nfraction of it.\n\n`LoopEnclosers` builds a BVH over the loops' boxes and returns only the\nloops whose box can hold a given set's box, in index order. Each loop's\nbox is widened by a 1e-9 relative slack at that loop's scale to cover\nrounding in the even-odd crossing abscissa. The smallest enclosing loop\nand ties resolve exactly as before; loops or point sets with non-finite\ncoordinates have no box and fall back to testing against everything,\nwith those unboxed loops found once per query.\n\n**Performance**\n- `fill_images` on a plate with 900 holes drops from 213–234 ms to\n188–203 ms.\n- The resulting volume is identical, and pose sweep and truth audit\noutputs match `main`.\n\n**Verification**\n- New test `loop_enclosers_hold_every_enclosing_loop` covers nested\nrings, squares, far-off coordinates, degenerate loops, and\nNaN-coordinate loops; each added case fails on the previous code.\n- All algo and operations test suites pass; clippy is clean.\n\n<sup>Written for commit 2d030fbee23edf2d98df8ad24e2df7c835545dc1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2101?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2101?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2101&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-27T23:53:49Z",
+          "tree_id": "d89492a6fe3bf12e60f2c8fb037fad7826224f2a",
+          "url": "https://github.com/andymai/brepkit/commit/6526fa671f73e98f8703ca88d6d49b70b41f528b"
+        },
+        "date": 1793145410060,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1035436,
+            "range": "± 4221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1121401,
+            "range": "± 9424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12012,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 651865,
+            "range": "± 2710",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 32758846,
+            "range": "± 35053",
             "unit": "ns/iter"
           }
         ]
