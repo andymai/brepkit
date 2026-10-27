@@ -1,0 +1,22 @@
+crates/operations/tests/boolean_determinism.rs
+  s_a2dc21dbec3f2b::t_edb6c0b4bdbe2c 11
+  s_a2dc21dbec3f2b::t_1af3bfd6ddceba 69-82
+  s_a2dc21dbec3f2b::t_c809bd95b80ceb 1-10,12-68,83-164
+  s_a2dc21dbec3f2b::t_a9270e5616f0dc 165-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aee331b5b05ea1b558472f5434d7d5a0c78d80d1",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
