@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793138083413,
+  "lastUpdate": 1793143028068,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57509,6 +57509,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47162953,
             "range": "± 197258",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cadad4086e4745d6e8e29360629d15acf72544ee",
+          "message": "perf(algo): find nearby wire vertices through a grid when building sub-faces (#2100)\n\nBuilding a boolean's sub-faces is quadratic in the number of wire\nvertices today: for every edge end, `resolve_edge_vertices` scans every\nvertex the build has minted so far twice, once for the weld search and\nonce to skip a duplicate before recording the vertex. A face cut by many\nholes mints a vertex per hole rim, so on a plate cut by 900 holes the\n`fill_images` stage takes 242 ms. With this change it takes 113 ms, with\nthe same result.\n\n## Change\n\n`WireVertexPool` replaces the plain `Vec` and files its vertices in a\ngrid with cells as wide as the weld's reach. The weld takes the nearest\nvertex within its band only when the next nearest is at least ten times\nas far (squared), so no vertex beyond `√10` times the band can change\nits answer. `near` returns every vertex within a given reach in the\norder they arrived, so the weld, the duplicate check and ties between\ncoincident vertices read exactly as before.\n\n## Measurements\n\nRelease build, a plate 2 thick with an n by n grid of radius 0.5 holes\ncut by `compound_cut`, `BK_GFA_TIME`:\n\n| holes | `fill_images`, `main` | this branch |\n|---|---|---|\n| 400 | 56 ms | 36 ms |\n| 900 | 242 ms | 113 ms |\n\nThe resulting volumes are identical.\n\n## Tests\n\n- `wire_vertex_pool_finds_every_entry_within_reach_in_order`: 408\nvertices in clusters a few reaches wide, with exact duplicates and far\nfrom the origin. For every third vertex, `near` returns every vertex\nwithin the weld's reach and within the linear tolerance, in insertion\norder. Dropping the upper cell on one axis fails it.\n- `cargo test -p brepkit-algo --lib` passes 310 and `cargo test -p\nbrepkit-operations --lib` passes 937 with 8 ignored. The kumiko fixtures\n(`kumiko_strut_fuse_inmem`, `kumiko_wrap_strut_cut_inmem`,\n`kumiko_lattice_fuse_inmem`, `kumiko_wrap_lattice_cut_inmem`,\n`regress_kumiko_corner_wedge`), whose strut corners the weld exists for,\npass, as does `boolean_determinism`. The pose sweep and truth audit\noutputs are identical to `main`'s, and `cargo clippy -p brepkit-algo\n--all-targets -- -D warnings` is clean.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up boolean sub-face construction by replacing the linear scan of\nminted wire vertices with a grid lookup. The weld and duplicate checks\nnow only examine nearby vertices, which removes a quadratic bottleneck\non faces cut by many holes.\n\n`WireVertexPool` files vertices into grid cells as wide as the weld's\nreach; `near` returns every entry within a reach in arrival order, so\nweld answers and ties are unchanged (the weld ignores vertices beyond\n√10 times its band). `fill_images` on a plate cut by 900 holes goes from\n242 ms to 113 ms, and from 56 ms to 36 ms on 400 holes, with identical\nresults.\n\n<sup>Written for commit 7ad333d86887820dd4e097e864df5b9e27a0ae51.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2100?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2100?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2100&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-27T23:14:40Z",
+          "tree_id": "1aca841d6ac298780e0175c5134221493f4b5f5f",
+          "url": "https://github.com/andymai/brepkit/commit/cadad4086e4745d6e8e29360629d15acf72544ee"
+        },
+        "date": 1793143021427,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 649388,
+            "range": "± 4649",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 701336,
+            "range": "± 2519",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8732,
+            "range": "± 226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 400174,
+            "range": "± 5563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21774542,
+            "range": "± 71800",
             "unit": "ns/iter"
           }
         ]
