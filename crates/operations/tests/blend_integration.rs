@@ -96,7 +96,6 @@ fn chamfer_box_symmetric() {
     );
 }
 
-/// Distance-angle chamfer on a single edge.
 /// The chamfer builds on the input's faces in place; the input box must
 /// come out of it closed, at its own volume, with its own faces.
 #[test]
@@ -123,6 +122,7 @@ fn chamfer_leaves_its_input_as_it_was() {
     assert!(report.is_valid(), "result: {:?}", report.issues);
 }
 
+/// Distance-angle chamfer on a single edge.
 #[test]
 fn chamfer_box_distance_angle() {
     let mut topo = Topology::new();
