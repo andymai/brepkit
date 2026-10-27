@@ -85,8 +85,10 @@ fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, OperationsErro
 #[allow(clippy::many_single_char_names)]
 fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
     const EPS: f64 = 1e-9;
-    let origin = Point3::new(0.0, 0.0, 0.0);
-    let near = |p: Point3, q: Point3| (p - q).length() <= EPS * (1.0 + (p - origin).length());
+    // A face passed through keeps its surface as it was, so points match
+    // exactly; a margin growing with distance from the origin would let a
+    // different surface far away through.
+    let near = |p: Point3, q: Point3| (p - q).length() <= EPS;
     let close = |x: f64, y: f64| (x - y).abs() <= EPS * (1.0 + x.abs());
     let parallel = |u: Vec3, v: Vec3| u.cross(v).length() <= EPS;
     // A point on an axis through `origin` along `axis`.
@@ -240,6 +242,54 @@ fn on_source_face(
     Ok(false)
 }
 
+/// Registers on `copy`'s faces the pcurves of `original`'s, which
+/// `copy_shells` leaves behind: a curved cavity face keeps its UV trims.
+/// The copy lists faces, wires and edges in the original's order.
+fn copy_pcurves(
+    topo: &mut Topology,
+    original: ShellId,
+    copy: ShellId,
+) -> Result<(), OperationsError> {
+    let faces: Vec<(FaceId, FaceId)> = topo
+        .shell(original)?
+        .faces()
+        .iter()
+        .copied()
+        .zip(topo.shell(copy)?.faces().iter().copied())
+        .collect();
+    for (old_face, new_face) in faces {
+        let wires = |f: FaceId| -> Result<Vec<brepkit_topology::wire::WireId>, OperationsError> {
+            let face = topo.face(f)?;
+            Ok(std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .collect())
+        };
+        let mut edges = std::collections::HashMap::new();
+        for (old_wire, new_wire) in wires(old_face)?.into_iter().zip(wires(new_face)?) {
+            for (a, b) in topo
+                .wire(old_wire)?
+                .edges()
+                .iter()
+                .zip(topo.wire(new_wire)?.edges())
+            {
+                edges.insert(a.edge(), b.edge());
+            }
+        }
+        let pcurves: Vec<_> = topo
+            .pcurves()
+            .pcurves_for_face(old_face)
+            .into_iter()
+            .map(|(edge, pcurve)| (edge, pcurve.clone()))
+            .collect();
+        for (edge, pcurve) in pcurves {
+            if let Some(&new_edge) = edges.get(&edge) {
+                topo.pcurves_mut().set(new_edge, new_face, pcurve);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `result`, rebuilt from `source`'s outer shell alone, given copies of
 /// `source`'s cavities.
 ///
@@ -301,6 +351,9 @@ pub fn keep_cavities(
     // The result gets its own copy: a shell shared with the source would
     // move with it under an in-place transform of either.
     let copied = crate::copy::copy_shells(topo, &cavities)?;
+    for (&original, &copy) in cavities.iter().zip(&copied) {
+        copy_pcurves(topo, original, copy)?;
+    }
     let solid = topo.solid_mut(result)?;
     for cavity in copied {
         solid.add_inner_shell(cavity);

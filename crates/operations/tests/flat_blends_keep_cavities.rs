@@ -338,3 +338,27 @@ fn a_cut_on_the_plane_of_a_remote_face_still_bounds_its_cavity() {
     let refused = chamfer(&mut topo, near, &[edge], 1.0).unwrap_err();
     assert!(refused.to_string().contains("cavity"), "{refused}");
 }
+
+/// A cavity face's registered pcurve (the UV trim a curved face is
+/// meshed by) is kept, on the cavity's copy, through a chamfer elsewhere.
+#[test]
+fn a_kept_cavity_keeps_its_pcurves() {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    use brepkit_topology::pcurve::PCurve;
+
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, CLEAR);
+    let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+    let face = topo.shell(cavity).unwrap().faces()[0];
+    let rim = brepkit_topology::explorer::face_edges(&topo, face).unwrap()[0];
+    let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
+    topo.pcurves_mut()
+        .set(rim, face, PCurve::new(Curve2D::Line(line), 0.0, 1.0));
+
+    let cut = chamfer(&mut topo, hollow, &[edge], 1.0).unwrap();
+    let kept = topo.solid(cut).unwrap().inner_shells()[0];
+    assert_ne!(kept, cavity);
+    let copied_face = topo.shell(kept).unwrap().faces()[0];
+    assert_eq!(topo.pcurves().pcurves_for_face(copied_face).len(), 1);
+}
