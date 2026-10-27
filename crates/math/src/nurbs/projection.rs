@@ -444,6 +444,11 @@ fn project_from_coarse_grid(
 
 /// Coarse search: evaluate surface on a uniform grid and find the closest
 /// grid point.
+///
+/// Every grid point on a pole's row (or column) is the same point, so which
+/// of them comes nearest is down to rounding, and from a pole Newton cannot
+/// turn toward the point (the partial along the pole's row vanishes there).
+/// The row beside the pole decides instead.
 #[allow(clippy::cast_precision_loss)]
 fn surface_coarse_search(surface: &NurbsSurface, point: Point3) -> (f64, f64) {
     let knots_u = surface.knots_u();
@@ -455,26 +460,55 @@ fn surface_coarse_search(surface: &NurbsSurface, point: Point3) -> (f64, f64) {
     let v_min = knots_v[pv];
     let v_max = knots_v[knots_v.len() - pv - 1];
 
-    let mut best_u = u_min;
-    let mut best_v = v_min;
-    let mut best_dist_sq = f64::INFINITY;
-
     let n = SURFACE_GRID_SIZE;
+    let us: Vec<f64> = (0..=n)
+        .map(|i| (i as f64 / n as f64).mul_add(u_max - u_min, u_min))
+        .collect();
+    let vs: Vec<f64> = (0..=n)
+        .map(|j| (j as f64 / n as f64).mul_add(v_max - v_min, v_min))
+        .collect();
+    let grid: Vec<Vec<Point3>> = us
+        .iter()
+        .map(|&u| vs.iter().map(|&v| surface.evaluate(u, v)).collect())
+        .collect();
+    let dist_sq = |i: usize, j: usize| (grid[i][j] - point).length_squared();
+
+    let (mut best_i, mut best_j) = (0, 0);
     for i in 0..=n {
-        let u = (i as f64 / n as f64).mul_add(u_max - u_min, u_min);
         for j in 0..=n {
-            let v = (j as f64 / n as f64).mul_add(v_max - v_min, v_min);
-            let pt = surface.evaluate(u, v);
-            let d_sq = (pt - point).length_squared();
-            if d_sq < best_dist_sq {
-                best_dist_sq = d_sq;
-                best_u = u;
-                best_v = v;
+            if dist_sq(i, j) < dist_sq(best_i, best_j) {
+                (best_i, best_j) = (i, j);
             }
         }
     }
 
-    (best_u, best_v)
+    let extent = grid
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |m, p| m.max((*p - grid[0][0]).length()));
+    let one_point = |pts: &mut dyn Iterator<Item = Point3>| {
+        let mut pts = pts.peekable();
+        let first = pts.peek().copied();
+        first.is_some_and(|f| pts.all(|p| (p - f).length() <= 1e-9 * extent))
+    };
+    let beside = |k: usize| match k {
+        0 => Some(1),
+        k if k == n => n.checked_sub(1),
+        _ => None,
+    };
+    if one_point(&mut grid[best_i].iter().copied())
+        && let Some(inner) = beside(best_i)
+        && let Some(j) = (0..=n).min_by(|&a, &b| dist_sq(inner, a).total_cmp(&dist_sq(inner, b)))
+    {
+        best_j = j;
+    } else if one_point(&mut grid.iter().map(|row| row[best_j]))
+        && let Some(inner) = beside(best_j)
+        && let Some(i) = (0..=n).min_by(|&a, &b| dist_sq(a, inner).total_cmp(&dist_sq(b, inner)))
+    {
+        best_i = i;
+    }
+
+    (us[best_i], vs[best_j])
 }
 
 /// 2D Newton–Raphson refinement for surface point projection.
@@ -1416,5 +1450,77 @@ mod tests {
         assert!(project_point_to_surface(&wall, nan, 1e-6).is_err());
         let off = Point3::new(70.0, 0.0, 5.0);
         let _ = project_point_to_surface(&wall, off, 0.0);
+    }
+
+    /// A quarter of a ball of radius 5 stretched to 7.5 along z, between two
+    /// meridians, pole to pole in u, its v knots `scale` apart: one of the
+    /// lunes a ball written as one face is read as.
+    fn ball_lune(quarter: u8, scale: f64) -> NurbsSurface {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let (r, h) = (5.0, 7.5);
+        let meridian = [
+            (0.0, -h, 1.0),
+            (r, -h, w),
+            (r, 0.0, 1.0),
+            (r, h, w),
+            (0.0, h, 1.0),
+        ];
+        let round = [
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, w),
+            (0.0, 1.0, 1.0),
+            (-1.0, 1.0, w),
+            (-1.0, 0.0, 1.0),
+            (-1.0, -1.0, w),
+            (0.0, -1.0, 1.0),
+            (1.0, -1.0, w),
+            (1.0, 0.0, 1.0),
+        ];
+        let cols = &round[2 * usize::from(quarter)..=2 * usize::from(quarter) + 2];
+        let points = meridian
+            .iter()
+            .map(|&(x, z, _)| {
+                cols.iter()
+                    .map(|&(cx, cy, _)| Point3::new(x * cx, x * cy, z))
+                    .collect()
+            })
+            .collect();
+        let weights = meridian
+            .iter()
+            .map(|&(_, _, wm)| cols.iter().map(|&(_, _, wc)| wm * wc).collect())
+            .collect();
+        let (a, b) = (f64::from(quarter) * scale, f64::from(quarter + 1) * scale);
+        NurbsSurface::new(
+            2,
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            vec![a, a, a, b, b, b],
+            points,
+            weights,
+        )
+        .expect("lune")
+    }
+
+    /// A point beside a pole on either meridian of a lune projects onto the
+    /// lune, whichever v of the grid's pole row rounding puts nearest.
+    #[test]
+    fn a_point_beside_a_pole_projects_along_its_own_meridian() {
+        for scale in [1.0, 1e-9, 1e-10, 1e-13] {
+            for quarter in 0..4 {
+                let lune = ball_lune(quarter, scale);
+                let (v0, v1) = lune.domain_v();
+                for (u, v) in [(1.88, v0), (1.88, v1), (0.12, v0), (0.12, v1)] {
+                    let target = lune.evaluate(u, v);
+                    let found = project_point_to_surface(&lune, target, 1e-6).expect("projection");
+                    assert!(
+                        found.distance < 1e-6,
+                        "scale {scale} quarter {quarter} at ({u}, {v:e}): {} off at ({}, {:e})",
+                        found.distance,
+                        found.u,
+                        found.v
+                    );
+                }
+            }
+        }
     }
 }

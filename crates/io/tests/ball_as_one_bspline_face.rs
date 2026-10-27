@@ -137,21 +137,9 @@ fn a_spheroid_written_as_one_bspline_face_reads_as_lunes() {
     reads_closed(1.5, 1.0);
 }
 
-/// Knots 1e-13 apart are still distinct knots: the lunes split at each.
+/// Knots 1e-13 apart are still distinct knots: the lunes split at each,
+/// and the solid meshes closed.
 #[test]
 fn a_spheroid_on_a_tiny_parameter_domain_reads_as_lunes() {
-    let (r, stretch) = (5.0, 1.5);
-    let mut topo = brepkit_topology::Topology::new();
-    let solids = brepkit_io::step::read_step(&ball_step(r, stretch, 1e-13), &mut topo).unwrap();
-    assert_eq!(solids.len(), 1);
-    let report = brepkit_operations::validate::validate_solid(&topo, solids[0]).unwrap();
-    assert!(report.is_valid(), "{:?}", report.issues);
-    let faces = brepkit_topology::explorer::solid_faces(&topo, solids[0]).unwrap();
-    assert_eq!(faces.len(), 4, "one lune per quarter turn");
-    let want = 4.0 / 3.0 * PI * r * r * r * stretch;
-    let volume = brepkit_operations::measure::solid_volume(&topo, solids[0], 0.001).unwrap();
-    assert!(
-        (volume - want).abs() < 1e-3 * want,
-        "volume {volume}, want {want}"
-    );
+    reads_closed(1.5, 1e-13);
 }
