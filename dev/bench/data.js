@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793102888254,
+  "lastUpdate": 1793135382120,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57347,6 +57347,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 38718528,
             "range": "± 105056",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0118c67faffd581c4eb11c572e6f03a3896a8594",
+          "message": "test(operations): pin boolean results bit-identical across repeated runs (#2097)\n\nNothing checks today that a boolean gives the same result every time it\nruns. This adds `crates/operations/tests/boolean_determinism.rs`, which\nruns nine booleans six times each in one process and requires every run\nto give the same faces in the same order, bounded by the same edges at\nthe same bit-exact points. `std` hash maps seed each instance\ndifferently, so the repeats see the iteration orders a later process\nwould.\n\n## Cases\n\nBox fuse box, a plate cut by three cylinders, box intersect sphere,\ncrossed cylinders fuse, box cut cone, torus fuse box, sphere cut sphere,\nfive coplanar boxes fused in turn, and two coaxial cylinders fused then\nbored. Sphere cut sphere and torus fuse box come out of the mesh\nfallback (653 and 663 planar faces), so that path is held to the same\nrule.\n\n## Tests\n\n- All nine pass on `main` in about 3 seconds in a debug build, and\n`cargo clippy -p brepkit-operations --test boolean_determinism -- -D\nwarnings` is clean.\n- Fusing the coplanar boxes in `HashSet` order instead of a fixed order\nfails that case.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nNothing checks today that a boolean operation gives the same result\nevery time it runs. This adds\n`crates/operations/tests/boolean_determinism.rs`, which runs nine\nbooleans six times each in one process and requires bit-exact results\nacross runs; because `std` hash maps seed each instance differently, the\nrepeats see the iteration orders a later process would.\n\n**Cases**\n- Covers box, cylinder, cone, sphere, and torus operands, including\ncoplanar and coaxial same-domain inputs.\n- Sphere-cut-sphere and torus-fuse-box go through the mesh fallback (653\nand 663 planar faces) and are held to the same rule.\n- All nine pass on `main` in about 3 seconds in a debug build; fusing\nthe coplanar boxes in `HashSet` order instead of a fixed order fails\nthat case.\n\n<sup>Written for commit aee331b5b05ea1b558472f5434d7d5a0c78d80d1.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2097?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2097?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2097&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-27T21:06:00Z",
+          "tree_id": "8d95f2f9c02416e2133baf097c5bfdc45f663719",
+          "url": "https://github.com/andymai/brepkit/commit/0118c67faffd581c4eb11c572e6f03a3896a8594"
+        },
+        "date": 1793135372922,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1037684,
+            "range": "± 3158",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1116087,
+            "range": "± 3924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13313,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 649886,
+            "range": "± 8028",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47077956,
+            "range": "± 796860",
             "unit": "ns/iter"
           }
         ]
