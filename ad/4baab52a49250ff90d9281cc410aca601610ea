@@ -1,0 +1,27 @@
+crates/blend/src/chamfer_builder.rs
+  s_02588738a4f2ed::t_a89f3ed5715199 152-155,159-162,166-184,189-191,199-201,206,236,238-242,248-251,266-289,291-297,300-306,308-309,311-322,328,332-334,345-348,355,637-771
+crates/blend/src/trimmer.rs
+  s_02588738a4f2ed::t_45e55acb1ae58e 262-328,403,423-494,3138-3192
+crates/operations/src/chamfer.rs
+  s_02588738a4f2ed::t_747fef924617a6 94-98,103-105,123-131,133-145
+crates/operations/tests/blend_integration.rs
+  s_02588738a4f2ed::t_fa32e4988ed3cc 13,352-355,357,359-386
+crates/operations/tests/two_distance_chamfers.rs
+  s_02588738a4f2ed::t_512d321fe94800 12,287-434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad4baab52a49250ff90d9281cc410aca601610ea",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
