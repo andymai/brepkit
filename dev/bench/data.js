@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793080035426,
+  "lastUpdate": 1793082802665,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57023,6 +57023,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47159849,
             "range": "± 2124197",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38c7473910f77c88ba97e4854793a5c009257910",
+          "message": "fix(blend): keep a solid's cavities through a v2 fillet (#2087)\n\nFilleting an outer edge of a hollow solid now keeps its cavity. Today\n`FilletBuilder` returns `Solid::new(new_shell_id, Vec::new())`, a solid\nwith no inner shells, so the cavity is filled. This reaches brepjs: its\n`fillet` calls the wasm `fillet` binding, whose `try_fillet` tries\n`blend_ops::fillet_v2` first and accepts a result whose outer shell is\nclosed, which a solid missing its cavity still has.\n\nThe builder blends only outer-shell edges, because\n`AdjacencyIndex::build` reads only the outer shell. The inner shells are\nnever touched, so they now carry over to the result unchanged.\n\n## Change\n\n- `FilletBuilder` reads the input's inner shells next to its outer shell\nand gives the result copies of them. `builder_utils::copy_shells` copies\ntheir vertices, edges, wires, faces and pcurves, so moving either solid\nin place leaves the other's cavity where it was.\n- A fillet whose removed material could reach a cavity is refused, as\nthe assembly gates refuse one, and the input comes back as it was.\nAcross a stripe that material lies between the spine, the two\nneighbouring faces' curves out to the contacts, and the blend arc, each\nturning less than half a circle, so within its chord's length of its\nends. Each stripe's material is bounded by the box of its spine edges (a\ncircle or ellipse by its exact box) and its contact curves' control\npoints, grown by twice the farthest point of the contact curves from the\nspine edges. That distance is read from points on the contact curves,\nprojected onto each spine edge's own curve within the edge's span (the\nnearer end where the foot falls outside it), since a rational curve's\ncontrol points can stand well off it, a closed rim's spine runs from its\nvertex back to it, and sampled spine points stand far apart along a wide\nrim. A cavity whose box meets that bound refuses the fillet. Without\nthis, keeping the cavity would leave the new outer shell running through\nit.\n- `try_fillet`'s flat-bevel fallback, `fillet_variable` and the planar\n`chamfer` also rebuild only the outer shell, and a fillet this refuses\nfalls through to the bevel. #2090 keeps cavities through those three and\nrefuses the same case there.\n\n## Tests\n\n- Added `fillet_keeps_a_cavity` to\n`crates/operations/tests/blend_integration.rs`: a 10 cube less a 3 cube\ncavity, its top edge filleted at radius 1, keeps one inner shell,\nvalidates, and measures `1000 - 27 - (1 - pi/4) * 10` to within 1e-4 of\nit.\n- Added `batch_fillet_keeps_a_cavity` to `crates/wasm/src/kernel.rs`:\nthe same fillet through `executeBatch`'s `fillet` returns a new solid\nwith one inner shell.\n- Both fail on `main` with no inner shell.\n- Added `fillet_refuses_to_reach_a_cavity` to\n`crates/operations/tests/blend_integration.rs`: the cavity sits 0.05\nbehind the front face and 0.5 below the top, where a radius 1 fillet\nwould cut into it. The fillet is refused and the block keeps its\nvalidity, cavity and volume. Without the check it returns a new solid.\n- Added `fillet_of_a_rim_well_clear_of_a_cavity_keeps_it`: rods of\nradius 10 and 1000 and height 10 with a 3 cube cavity in their middle,\ntheir top rims filleted at radius 1, keep their cavities and validate.\nOn the radius 10 rod the ring taken off measures within 1% of its Pappus\nvolume at a deflection of 1e-4 (a coarse deflection reads the torus band\nshort). Reading the reach from the contact curves' control points, from\nthe rim's spine as one point, or from spine samples 257 to the turn each\nrefused one of them.\n- Added `a_filleted_blocks_cavity_is_its_own`: moving the filleted block\n100 up in place leaves the input's cavity between z 3.5 and 6.5. It\nfails when the result shares the input's cavity shell.\n- Added `a_trimmed_nurbs_edge_reads_distance_within_its_span` to\n`crates/blend/src/fillet_builder.rs`: a NURBS edge along half of a\nlonger line, forward and reversed, reads a point over the unused half at\nits distance from the edge's end (3.16), where projecting onto the whole\ncurve read 1.\n- `cargo test -p brepkit-blend` passes 142 tests. The 16 chamfer, fillet\nand blend integration test files in `brepkit-operations` pass 64, the\noperations lib tests matching chamfer or fillet pass 84, and the wasm\nlib tests matching fillet pass 13. The pre-commit clippy and fmt checks\npass.",
+          "timestamp": "2026-10-26T23:30:15-07:00",
+          "tree_id": "b7587223edc41d54fc0047212137560d70a14551",
+          "url": "https://github.com/andymai/brepkit/commit/38c7473910f77c88ba97e4854793a5c009257910"
+        },
+        "date": 1793082797413,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1035892,
+            "range": "± 3905",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1113819,
+            "range": "± 3499",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13136,
+            "range": "± 325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 643166,
+            "range": "± 2110",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47427682,
+            "range": "± 258080",
             "unit": "ns/iter"
           }
         ]
