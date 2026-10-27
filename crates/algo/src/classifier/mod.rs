@@ -351,7 +351,12 @@ pub fn classify_coincident_coplanar(
     // foot plate's ring around the open foot cavity, #1570) — probing there
     // reads air-air and wrongly declares the buried band Outside.
     let own_region = planar_face_polygons(topo, sub_face_id)?;
-    let faces = brepkit_topology::explorer::solid_faces(topo, opposing_solid)?;
+    // Only a face in this plane (or its flip) can pass the coincidence test
+    // below; the keyed faces come back in the solid's order.
+    let faces = match geoms.and_then(|g| g.planar_faces_near_plane(sub_normal, sub_d, plane_tol)) {
+        Some(near) => near,
+        None => brepkit_topology::explorer::solid_faces(topo, opposing_solid)?,
+    };
     for fid in faces {
         let face = topo.face(fid)?;
         let FaceSurface::Plane {

@@ -111,6 +111,30 @@ impl Bvh {
         }
     }
 
+    /// Primitives whose AABB the whole line through `origin` along `dir`
+    /// meets, both ways (see [`Aabb3::line_intersects`]).
+    ///
+    /// `results` is cleared before use.
+    pub fn query_line_into(&self, origin: Point3, dir: crate::vec::Vec3, results: &mut Vec<usize>) {
+        results.clear();
+        if self.nodes.is_empty() {
+            return;
+        }
+        let mut stack = vec![0usize];
+        while let Some(idx) = stack.pop() {
+            let node = &self.nodes[idx];
+            if !node.aabb.line_intersects(origin, dir) {
+                continue;
+            }
+            if node.primitive == usize::MAX {
+                stack.push(node.left);
+                stack.push(node.right);
+            } else {
+                results.push(node.primitive);
+            }
+        }
+    }
+
     /// Find the primitive whose AABB is closest to `point`.
     ///
     /// **Note**: This returns the primitive with the closest *AABB*, which is
@@ -324,6 +348,7 @@ fn centroid_axis(aabb: Aabb3, axis: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vec::Vec3;
 
     fn make_box(id: usize, x: f64, y: f64, z: f64, size: f64) -> (usize, Aabb3) {
         (
@@ -408,5 +433,44 @@ mod tests {
             hits.contains(&50),
             "expected primitive 50 in hits: {hits:?}"
         );
+    }
+
+    #[test]
+    fn line_query_reaches_both_ways_and_boxes_it_lies_on() {
+        let aabbs: Vec<_> = (0..20)
+            .map(|i| make_box(i, f64::from(i as u32) * 2.0 - 20.0, 0.0, 0.0, 1.0))
+            .collect();
+        let bvh = Bvh::build(&aabbs);
+        let mut hits = Vec::new();
+        // Along +x from the middle: boxes behind the origin count too.
+        bvh.query_line_into(
+            Point3::new(0.5, 0.5, 0.5),
+            Vec3::new(1.0, 0.0, 0.0),
+            &mut hits,
+        );
+        hits.sort_unstable();
+        assert_eq!(hits, (0..20).collect::<Vec<_>>());
+        // A line lying in the boxes' shared y = 0 face, with zero y and z
+        // components, still meets every box.
+        bvh.query_line_into(
+            Point3::new(-50.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            &mut hits,
+        );
+        assert_eq!(hits.len(), 20);
+        // Just off that face it meets none.
+        bvh.query_line_into(
+            Point3::new(-50.0, -1e-9, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            &mut hits,
+        );
+        assert!(hits.is_empty());
+        // A diagonal through one box only.
+        bvh.query_line_into(
+            Point3::new(0.5, 0.5, 0.5),
+            Vec3::new(0.0, 1.0, 1.0),
+            &mut hits,
+        );
+        assert_eq!(hits, vec![10]);
     }
 }
