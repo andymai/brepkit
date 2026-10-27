@@ -97,24 +97,25 @@ fn chamfer_box_symmetric() {
 }
 
 /// Distance-angle chamfer on a single edge.
-/// A block with an enclosed cubic cavity keeps the cavity when one of its
-/// outer edges is filleted.
-#[test]
-fn fillet_keeps_a_cavity() {
+/// A 10 cube less a 3 cube cavity at `corner`, and its top edge along x
+/// at y = 0.
+fn hollow_block(
+    topo: &mut Topology,
+    corner: (f64, f64, f64),
+) -> (
+    brepkit_topology::solid::SolidId,
+    brepkit_topology::edge::EdgeId,
+) {
     use brepkit_math::mat::Mat4;
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::transform::transform_solid;
 
-    let radius = 1.0;
-    let mut topo = Topology::new();
-    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
-    let cube = make_box(&mut topo, 3.0, 3.0, 3.0).unwrap();
-    transform_solid(&mut topo, cube, &Mat4::translation(3.5, 3.5, 3.5)).unwrap();
-    let hollow = boolean(&mut topo, BooleanOp::Cut, block, cube).unwrap();
+    let block = make_box(topo, 10.0, 10.0, 10.0).unwrap();
+    let cube = make_box(topo, 3.0, 3.0, 3.0).unwrap();
+    transform_solid(topo, cube, &Mat4::translation(corner.0, corner.1, corner.2)).unwrap();
+    let hollow = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
     assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
-
-    // The top edge along x at y = 0.
-    let edge = solid_edges(&topo, hollow)
+    let edge = solid_edges(topo, hollow)
         .unwrap()
         .into_iter()
         .find(|&e| {
@@ -128,6 +129,16 @@ fn fillet_keeps_a_cavity() {
                 .all(|p| p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9)
         })
         .unwrap();
+    (hollow, edge)
+}
+
+/// A block with an enclosed cubic cavity keeps the cavity when one of its
+/// outer edges is filleted.
+#[test]
+fn fillet_keeps_a_cavity() {
+    let radius = 1.0;
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
     let result = fillet_v2(&mut topo, hollow, &[edge], radius).unwrap();
     assert!(result.failed.is_empty(), "{:?}", result.failed);
     assert_eq!(topo.solid(result.solid).unwrap().inner_shells().len(), 1);
@@ -138,6 +149,28 @@ fn fillet_keeps_a_cavity() {
     assert!(
         (volume - want).abs() < 1e-4 * want,
         "volume {volume}, want {want}"
+    );
+}
+
+/// A cavity 0.05 behind the front face and 0.5 below the top: a fillet of
+/// radius 1 along their edge would cut into it, so it is refused and the
+/// block left as it was.
+#[test]
+fn fillet_refuses_to_reach_a_cavity() {
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, (3.5, 0.05, 6.5));
+    let volume = solid_volume(&topo, hollow, 0.001).unwrap();
+    let result = fillet_v2(&mut topo, hollow, &[edge], 1.0).unwrap();
+    assert_eq!(result.solid, hollow);
+    assert!(result.succeeded.is_empty());
+    assert_eq!(result.failed.len(), 1, "{:?}", result.failed);
+    let report = validate_solid(&topo, hollow).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let after = solid_volume(&topo, hollow, 0.001).unwrap();
+    assert!(
+        (after - volume).abs() < 1e-9 * volume,
+        "{after} vs {volume}"
     );
 }
 

@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::curves::Circle3D;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -261,6 +262,35 @@ impl<'a> FilletBuilder<'a> {
                 failed,
                 is_partial: false,
             });
+        }
+        // The cavities carry over untouched, so the material a stripe takes
+        // off must stay clear of them: a fillet reaching one would leave the
+        // new outer shell running through it.
+        if !inner_shells.is_empty() {
+            let cavities = inner_shells
+                .iter()
+                .map(|&shell| shell_bounds(topo, shell))
+                .collect::<Result<Vec<_>, _>>()?;
+            for sr in &stripe_results {
+                let removed = removed_material_bounds(topo, &sr.stripe)?;
+                if cavities.iter().any(|cavity| cavity.intersects(removed)) {
+                    for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges)
+                    {
+                        failed.push((
+                            edge_id,
+                            BlendError::PlanningFailure {
+                                reason: "the fillet reaches a cavity".to_owned(),
+                            },
+                        ));
+                    }
+                    return Ok(BlendResult {
+                        solid: self.solid,
+                        succeeded: Vec::new(),
+                        failed,
+                        is_partial: true,
+                    });
+                }
+            }
         }
         let setback_edges = if let Some(plan) = plan.as_ref() {
             // `original_faces` is this build's own solid's shell, captured
@@ -2424,6 +2454,108 @@ fn succeeded_candidates(
     result.dedup_by_key(|edge| edge.index());
     result
 }
+
+/// Two corners of the cube of half-width `half` about `center`.
+fn cube_about(center: Point3, half: f64) -> [Point3; 2] {
+    let d = Vec3::new(half, half, half);
+    [center - d, center + d]
+}
+
+/// Points whose box holds a NURBS curve: its control points, whose hull
+/// holds it while every weight is positive, or an unbounded box.
+fn nurbs_curve_hull(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Vec<Point3> {
+    if curve.weights().iter().all(|&w| w > 0.0) {
+        curve.control_points().to_vec()
+    } else {
+        cube_about(Point3::new(0.0, 0.0, 0.0), f64::INFINITY).to_vec()
+    }
+}
+
+/// Points whose box holds an edge: a line's ends, the cube about a circle
+/// or ellipse its whole curve lies in, a NURBS curve's hull.
+fn edge_hull_points(topo: &Topology, edge_id: EdgeId) -> Result<Vec<Point3>, BlendError> {
+    let edge = topo.edge(edge_id)?;
+    Ok(match edge.curve() {
+        EdgeCurve::Line => vec![
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        ],
+        EdgeCurve::Circle(c) => cube_about(c.center(), c.radius()).to_vec(),
+        EdgeCurve::Ellipse(e) => {
+            cube_about(e.center(), e.semi_major().max(e.semi_minor())).to_vec()
+        }
+        EdgeCurve::NurbsCurve(n) => nurbs_curve_hull(n),
+    })
+}
+
+/// A box holding every face of `shell`. A plane, cylinder or cone face lies
+/// within the hull of its boundary (each of its points is on a straight
+/// segment between two boundary points), a sphere or torus face within its
+/// whole surface's extent, a NURBS face within its control points.
+fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, BlendError> {
+    let mut points = Vec::new();
+    for &face_id in topo.shell(shell)?.faces() {
+        let face = topo.face(face_id)?;
+        match face.surface() {
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+            FaceSurface::Sphere(s) => points.extend(cube_about(s.center(), s.radius())),
+            FaceSurface::Torus(t) => {
+                points.extend(cube_about(t.center(), t.major_radius() + t.minor_radius()));
+            }
+            FaceSurface::Nurbs(n) => {
+                if n.weights().iter().flatten().all(|&w| w > 0.0) {
+                    points.extend(n.control_points().iter().flatten().copied());
+                } else {
+                    points.extend(cube_about(Point3::new(0.0, 0.0, 0.0), f64::INFINITY));
+                }
+            }
+        }
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                points.extend(edge_hull_points(topo, oe.edge())?);
+            }
+        }
+    }
+    Ok(Aabb3::from_points(points))
+}
+
+/// A box holding the material a stripe takes off. Across the stripe that
+/// material lies between the spine, the two neighbours' curves out to the
+/// contacts and the blend arc, each turning less than half a circle and so
+/// lying within its chord's length of its ends: the box of the spine and
+/// contacts, grown by twice the farthest contact's distance from the spine
+/// (a chord across a curved spine runs a little longer than that distance).
+fn removed_material_bounds(topo: &Topology, stripe: &Stripe) -> Result<Aabb3, BlendError> {
+    const SAMPLES: u32 = 32;
+    let mut points = Vec::new();
+    for &edge in stripe.spine.edges() {
+        points.extend(edge_hull_points(topo, edge)?);
+    }
+    let length = stripe.spine.length();
+    let spine = (0..=SAMPLES)
+        .map(|k| {
+            stripe
+                .spine
+                .evaluate(topo, length * f64::from(k) / f64::from(SAMPLES))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let contacts: Vec<Point3> = nurbs_curve_hull(&stripe.contact1)
+        .into_iter()
+        .chain(nurbs_curve_hull(&stripe.contact2))
+        .collect();
+    let reach = contacts
+        .iter()
+        .map(|c| {
+            spine
+                .iter()
+                .map(|s| (*c - *s).length())
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(0.0_f64, f64::max);
+    points.extend(contacts);
+    Ok(Aabb3::from_points(points).expanded(2.0 * reach))
+}
+
 /// Check the geometric constraints retained by a computed stripe.
 ///
 /// The walking solver already checks its Newton residual while marching. This
