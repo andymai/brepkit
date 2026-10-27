@@ -186,7 +186,10 @@ impl<'a> FilletBuilder<'a> {
 
         let topo = self.topo;
         let adjacency = topo.build_adjacency(self.solid)?;
-        let shell_id = topo.solid(self.solid)?.outer_shell();
+        let source = topo.solid(self.solid)?;
+        // Only the outer shell's edges are blended (the adjacency reads no
+        // other), so the cavities carry over as they are.
+        let (shell_id, inner_shells) = (source.outer_shell(), source.inner_shells().to_vec());
         let original_faces: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
         let mut touched_faces: HashSet<FaceId> = HashSet::new();
         let mut failed: Vec<(EdgeId, BlendError)> = Vec::new();
@@ -1522,7 +1525,7 @@ impl<'a> FilletBuilder<'a> {
             }
         };
         let new_shell_id = topo.add_shell(new_shell);
-        let new_solid = Solid::new(new_shell_id, Vec::new());
+        let new_solid = Solid::new(new_shell_id, inner_shells);
         let new_solid_id = topo.add_solid(new_solid);
         // A requested edge is successful only after every support, blend, and
         // shell-incidence step above has completed. Geometry-only success is

@@ -97,6 +97,50 @@ fn chamfer_box_symmetric() {
 }
 
 /// Distance-angle chamfer on a single edge.
+/// A block with an enclosed cubic cavity keeps the cavity when one of its
+/// outer edges is filleted.
+#[test]
+fn fillet_keeps_a_cavity() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::transform::transform_solid;
+
+    let radius = 1.0;
+    let mut topo = Topology::new();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let cube = make_box(&mut topo, 3.0, 3.0, 3.0).unwrap();
+    transform_solid(&mut topo, cube, &Mat4::translation(3.5, 3.5, 3.5)).unwrap();
+    let hollow = boolean(&mut topo, BooleanOp::Cut, block, cube).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+
+    // The top edge along x at y = 0.
+    let edge = solid_edges(&topo, hollow)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            let (a, b) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            [a, b]
+                .iter()
+                .all(|p| p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9)
+        })
+        .unwrap();
+    let result = fillet_v2(&mut topo, hollow, &[edge], radius).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    assert_eq!(topo.solid(result.solid).unwrap().inner_shells().len(), 1);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let want = BOX_VOLUME - 27.0 - (1.0 - std::f64::consts::FRAC_PI_4) * radius * radius * 10.0;
+    let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+    assert!(
+        (volume - want).abs() < 1e-4 * want,
+        "volume {volume}, want {want}"
+    );
+}
+
 #[test]
 fn chamfer_box_distance_angle() {
     let mut topo = Topology::new();
