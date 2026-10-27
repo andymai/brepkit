@@ -1,0 +1,23 @@
+crates/operations/src/copy.rs
+  s_02588738a4f2ed::t_0bfdc615291275 69-74
+  s_02588738a4f2ed::t_fe2b0fd6abecd4 12,65-66,68,75-76,78-88,98,183,239
+crates/operations/src/cavities.rs
+  s_02588738a4f2ed::t_0bfdc615291275 70-73,79-80,83-92,128
+  s_02588738a4f2ed::t_0162c1e6a7a2f3 188-265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b8adc4082211fd4cc97d95003f511b254c932170",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
