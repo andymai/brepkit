@@ -1545,8 +1545,8 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the solid or edge handles are invalid, or the
-    /// blend computation fails.
+    /// Returns an error if the solid or edge handles are invalid, the blend
+    /// computation fails, or any edge could not be blended.
     #[wasm_bindgen(js_name = "filletV2")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn fillet_v2(
@@ -1571,7 +1571,9 @@ impl BrepKernel {
                     &edge_ids,
                     radius,
                 )?;
-                Ok(solid_id_to_u32(result.solid))
+                Ok(solid_id_to_u32(brepkit_operations::blend_ops::all_blended(
+                    result,
+                )?))
             }));
         match outcome {
             Ok(inner) => inner,
@@ -1585,8 +1587,8 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the solid or edge handles are invalid, or the
-    /// blend computation fails.
+    /// Returns an error if the solid or edge handles are invalid, the blend
+    /// computation fails, or any edge could not be blended.
     #[wasm_bindgen(js_name = "chamferV2")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn chamfer_v2(
@@ -1614,7 +1616,9 @@ impl BrepKernel {
                     d1,
                     d2,
                 )?;
-                Ok(solid_id_to_u32(result.solid))
+                Ok(solid_id_to_u32(brepkit_operations::blend_ops::all_blended(
+                    result,
+                )?))
             }));
         match outcome {
             Ok(inner) => inner,
@@ -1628,8 +1632,8 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the solid or edge handles are invalid, or the
-    /// blend computation fails.
+    /// Returns an error if the solid or edge handles are invalid, the blend
+    /// computation fails, or any edge could not be blended.
     #[wasm_bindgen(js_name = "chamferDistanceAngle")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn chamfer_distance_angle(
@@ -1656,7 +1660,9 @@ impl BrepKernel {
             distance,
             angle,
         )?;
-        Ok(solid_id_to_u32(result.solid))
+        Ok(solid_id_to_u32(brepkit_operations::blend_ops::all_blended(
+            result,
+        )?))
     }
 }
 
