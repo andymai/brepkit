@@ -945,7 +945,11 @@ pub fn fillet_variable(
                     "fillet_variable v2 retry: failed_edges={} open={open}",
                     v2.failed.len()
                 );
-                if v2.failed.is_empty() && (!open || std::env::var("BK_FORCE_V2").is_ok()) {
+                // A walking-engine result without the input's cavities has
+                // filled them.
+                let kept = topo.solid(v2.solid)?.inner_shells().len()
+                    == topo.solid(solid)?.inner_shells().len();
+                if v2.failed.is_empty() && kept && (!open || std::env::var("BK_FORCE_V2").is_ok()) {
                     return Ok(v2.solid);
                 }
             }

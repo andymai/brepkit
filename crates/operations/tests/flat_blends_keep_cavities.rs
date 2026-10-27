@@ -132,3 +132,25 @@ fn a_bevel_fillet_that_would_reach_a_cavity_is_refused() {
     let (hollow, edge) = hollow_block(&mut topo, NEAR);
     assert!(brepkit_operations::fillet::fillet(&mut topo, hollow, &[edge], 1.0).is_err());
 }
+
+/// The result's cavity is its own: moving the result in place leaves the
+/// input's cavity where it was.
+#[test]
+fn a_kept_cavity_is_the_results_own() {
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, CLEAR);
+    let result = chamfer(&mut topo, hollow, &[edge], 1.0).unwrap();
+    transform_solid(&mut topo, result, &Mat4::translation(0.0, 0.0, 100.0)).unwrap();
+    let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+    for &face in topo.shell(cavity).unwrap().faces() {
+        for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+            let z = topo.vertex(v).unwrap().point().z();
+            assert!(
+                (3.5 - 1e-9..=6.5 + 1e-9).contains(&z),
+                "input cavity moved to z {z}"
+            );
+        }
+    }
+    let report = validate_solid(&topo, hollow).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}
