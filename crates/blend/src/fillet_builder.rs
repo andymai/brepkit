@@ -2310,8 +2310,8 @@ fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, BlendError> {
 }
 
 /// Distance from `p` to the stretch of curve an edge spans: exact for a
-/// line, the conic's own projection for a circle or ellipse (the nearer end
-/// where that falls outside the arc), a NURBS projection otherwise.
+/// line, the curve's own projection for a circle, ellipse or NURBS curve,
+/// or the nearer end where that falls outside the edge's span.
 fn distance_to_edge(topo: &Topology, edge_id: EdgeId, p: Point3) -> Result<f64, BlendError> {
     let edge = topo.edge(edge_id)?;
     let (sp, ep) = (
@@ -2342,8 +2342,13 @@ fn distance_to_edge(topo: &Topology, edge_id: EdgeId, p: Point3) -> Result<f64, 
         }
         EdgeCurve::Circle(c) => on_arc(c.project(p)),
         EdgeCurve::Ellipse(e) => on_arc(e.project(p)),
+        // A foot on the stored curve beyond the edge's span would read a
+        // stretch the edge does not run along.
         EdgeCurve::NurbsCurve(n) => {
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
             brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
+                .ok()
+                .filter(|found| (lo..=hi).contains(&found.parameter))
                 .map_or(ends, |found| found.distance.min(ends))
         }
     })
@@ -3431,6 +3436,31 @@ mod tests {
     use brepkit_topology::test_utils::make_unit_cube_manifold;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A NURBS edge running along the first half of a 10 long line, forward
+    /// and reversed: a point over the unused half reads its distance to the
+    /// edge's own end, not to the curve beyond it.
+    #[test]
+    fn a_trimmed_nurbs_edge_reads_distance_within_its_span() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(5.0, 0.0, 0.0), 1e-7));
+        let p = Point3::new(8.0, 1.0, 0.0);
+        let want = (p - Point3::new(5.0, 0.0, 0.0)).length();
+        for (start, end) in [(a, b), (b, a)] {
+            let edge = topo.add_edge(Edge::new(start, end, EdgeCurve::NurbsCurve(line.clone())));
+            let d = distance_to_edge(&topo, edge, p).unwrap();
+            assert!((d - want).abs() < 1e-9, "{d} vs {want}");
+        }
+    }
 
     #[test]
     fn fillet_builder_empty_edges_error() {
