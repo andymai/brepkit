@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793084087141,
+  "lastUpdate": 1793084725534,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57131,6 +57131,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47390847,
             "range": "± 206822",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "229a131b07b7ceb8ba169c2cb2ef7f624a7a5ef3",
+          "message": "fix(wasm): report edges the v2 fillet and chamfer could not blend (#2088)\n\nThe wasm `filletV2`, `chamferV2` and `chamferDistanceAngle` calls now\nreturn an error when the blend engine leaves any edge out. Today they\nreturn the blend result's solid whatever its list of failed edges holds.\nAn edge left out comes back as success, and a call that blends nothing\nhands back the input solid's handle. Since #2072 a cylinder's rim is one\nsuch edge: `chamferV2` on it returns the input.\n\n## Change\n\n- `blend_ops::all_blended` takes a `BlendResult` and returns its solid\nonly if no edge failed. Otherwise it returns `InvalidInput` naming how\nmany edges failed and why the first did.\n- The three bindings, called directly and through `executeBatch`, return\nthrough it. `chamfer_two_on` uses it in place of its own check, so its\nmessage changes from \"chamfer failed on N edge(s)\" to the new one.\n- A call where some edges blend and others fail now errors instead of\nreturning the partial solid. The caller gets one handle back and has no\nway to see which edges were left out, so a partial result reads as the\nwhole request.\n- brepjs calls the wasm `fillet`, `filletVariable`, `chamfer` and\n`chamferAsymmetric`, none of which change.\n- The roadmap's closed-rim chamfer row now says a rim is recorded as\nfailed and reported as an error.\n\n## Tests\n\n- Added `batch_chamfer_v2_reports_an_edge_it_could_not_blend` to\n`crates/wasm/src/kernel.rs`: `chamferV2` on a cylinder's rim returns an\nerror saying the edge could not be blended, and on a box edge returns a\nnew solid. It fails on `main`.\n- `cargo test -p brepkit-wasm --lib` passes 237 tests with 4 ignored,\nand the `blend_integration` and `two_distance_chamfers` tests pass. The\npre-commit clippy and fmt checks pass.",
+          "timestamp": "2026-10-27T00:02:19-07:00",
+          "tree_id": "d4f8eb03560463f5cf7c40b0d078fe77debe8197",
+          "url": "https://github.com/andymai/brepkit/commit/229a131b07b7ceb8ba169c2cb2ef7f624a7a5ef3"
+        },
+        "date": 1793084718129,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1031601,
+            "range": "± 1700",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1107662,
+            "range": "± 2282",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13887,
+            "range": "± 48",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 638977,
+            "range": "± 2226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47159717,
+            "range": "± 178280",
             "unit": "ns/iter"
           }
         ]
