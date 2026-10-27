@@ -139,6 +139,269 @@ fn a_holes_rim_countersinks_by_two_distances() {
     );
 }
 
+/// A planar face's loop of corners and its outward normal.
+type Loop<'a> = (&'a [(f64, f64, f64)], [f64; 3]);
+
+/// A 200 x 80 x 20 box, x from -100 to 100, y from -40 to 40, z from -20
+/// to 0, its four edges along y at the ends left in pieces at y = -36 (as
+/// a fuse can leave them): the end faces, top and bottom carry a vertex 4
+/// from the front corners.
+fn box_with_pieced_ends(topo: &mut Topology) -> SolidId {
+    let loops: [Loop<'_>; 6] = [
+        (
+            &[
+                (-100.0, -40.0, -20.0),
+                (-100.0, -36.0, -20.0),
+                (-100.0, 40.0, -20.0),
+                (100.0, 40.0, -20.0),
+                (100.0, -36.0, -20.0),
+                (100.0, -40.0, -20.0),
+            ],
+            [0.0, 0.0, -1.0],
+        ),
+        (
+            &[
+                (-100.0, -40.0, 0.0),
+                (100.0, -40.0, 0.0),
+                (100.0, -36.0, 0.0),
+                (100.0, 40.0, 0.0),
+                (-100.0, 40.0, 0.0),
+                (-100.0, -36.0, 0.0),
+            ],
+            [0.0, 0.0, 1.0],
+        ),
+        (
+            &[
+                (-100.0, -40.0, -20.0),
+                (100.0, -40.0, -20.0),
+                (100.0, -40.0, 0.0),
+                (-100.0, -40.0, 0.0),
+            ],
+            [0.0, -1.0, 0.0],
+        ),
+        (
+            &[
+                (-100.0, 40.0, -20.0),
+                (-100.0, 40.0, 0.0),
+                (100.0, 40.0, 0.0),
+                (100.0, 40.0, -20.0),
+            ],
+            [0.0, 1.0, 0.0],
+        ),
+        (
+            &[
+                (100.0, -40.0, -20.0),
+                (100.0, -36.0, -20.0),
+                (100.0, 40.0, -20.0),
+                (100.0, 40.0, 0.0),
+                (100.0, -36.0, 0.0),
+                (100.0, -40.0, 0.0),
+            ],
+            [1.0, 0.0, 0.0],
+        ),
+        (
+            &[
+                (-100.0, -40.0, -20.0),
+                (-100.0, -40.0, 0.0),
+                (-100.0, -36.0, 0.0),
+                (-100.0, 40.0, 0.0),
+                (-100.0, 40.0, -20.0),
+                (-100.0, -36.0, -20.0),
+            ],
+            [-1.0, 0.0, 0.0],
+        ),
+    ];
+    solid_from_loops(topo, &loops)
+}
+
+/// A solid bounded by planar faces, each a loop of corners running
+/// counterclockwise about its outward normal; loops share a corner given
+/// the same coordinates (to a thousandth) and an edge between the same two
+/// corners.
+fn solid_from_loops(topo: &mut Topology, loops: &[Loop<'_>]) -> SolidId {
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    use std::collections::HashMap;
+
+    let mut verts: HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> = HashMap::new();
+    let mut edges: HashMap<(usize, usize), EdgeId> = HashMap::new();
+    let mut faces = Vec::new();
+    #[allow(clippy::cast_possible_truncation)]
+    let key = |p: (f64, f64, f64)| {
+        let at = |c: f64| (c * 1000.0).round() as i64;
+        (at(p.0), at(p.1), at(p.2))
+    };
+    for &(pts, n) in loops {
+        let ids: Vec<_> = pts
+            .iter()
+            .map(|&p| {
+                *verts.entry(key(p)).or_insert_with(|| {
+                    topo.add_vertex(Vertex::new(Point3::new(p.0, p.1, p.2), 1e-7))
+                })
+            })
+            .collect();
+        let mut oriented = Vec::new();
+        for i in 0..ids.len() {
+            let (a, b) = (ids[i], ids[(i + 1) % ids.len()]);
+            let k = (a.index().min(b.index()), a.index().max(b.index()));
+            let e = *edges
+                .entry(k)
+                .or_insert_with(|| topo.add_edge(Edge::new(a, b, EdgeCurve::Line)));
+            let forward = topo.edge(e).unwrap().start() == a;
+            oriented.push(OrientedEdge::new(e, forward));
+        }
+        let wire = topo.add_wire(Wire::new(oriented, true).unwrap());
+        let normal = brepkit_math::vec::Vec3::new(n[0], n[1], n[2]);
+        let d = normal.dot(brepkit_math::vec::Vec3::new(pts[0].0, pts[0].1, pts[0].2));
+        faces.push(topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d })));
+    }
+    let shell = topo.add_shell(Shell::new(faces).unwrap());
+    topo.add_solid(Solid::new(shell, vec![]))
+}
+
+/// Both front vertical corners of a box whose end faces' edges are in
+/// pieces 4 from them, chamfered 28 along the front and 13 along the ends:
+/// the bevel sets back past the piece at the corner, so the top and
+/// bottom faces' detour round the corner runs through that piece's vertex
+/// too, and the chamfer must close it all the same.
+#[test]
+fn a_chamfer_past_a_pieced_edge_closes_its_ends() {
+    let (d1, d2) = (28.0, 13.0);
+    let mut topo = Topology::new();
+    let solid = box_with_pieced_ends(&mut topo);
+    assert!(validate_solid(&topo, solid).unwrap().is_valid());
+    let mut picks = Vec::new();
+    for x in [-100.0, 100.0] {
+        let edge = edge_between(
+            &topo,
+            solid,
+            Point3::new(x, -40.0, -20.0),
+            Point3::new(x, -40.0, 0.0),
+        );
+        picks.push((edge, plane_along(&topo, solid, edge, [0.0, -1.0, 0.0])));
+    }
+    let cut = chamfer_two_on(&mut topo, solid, &picks, d1, d2).unwrap();
+    let report = validate_solid(&topo, cut).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let want = 200.0 * 80.0 * 20.0 - 2.0 * 0.5 * d1 * d2 * 20.0;
+    let volume = solid_volume(&topo, cut, 0.001).unwrap();
+    assert!(
+        (volume - want).abs() < 1e-6 * want,
+        "volume {volume}, want {want}"
+    );
+}
+
+/// A 10-unit cube, corner at the origin, whose top and bottom faces' edges
+/// along x and y from the corner on the z axis are in pieces at 0.6 and
+/// 1.3 from it, shared with the front (y = 0) and left (x = 0) faces.
+fn cube_with_a_pieced_corner(topo: &mut Topology) -> SolidId {
+    let loops: [Loop<'_>; 6] = [
+        (
+            &[
+                (0.0, 0.0, 0.0),
+                (0.0, 0.6, 0.0),
+                (0.0, 1.3, 0.0),
+                (0.0, 10.0, 0.0),
+                (10.0, 10.0, 0.0),
+                (10.0, 0.0, 0.0),
+                (1.3, 0.0, 0.0),
+                (0.6, 0.0, 0.0),
+            ],
+            [0.0, 0.0, -1.0],
+        ),
+        (
+            &[
+                (0.0, 0.0, 10.0),
+                (0.6, 0.0, 10.0),
+                (1.3, 0.0, 10.0),
+                (10.0, 0.0, 10.0),
+                (10.0, 10.0, 10.0),
+                (0.0, 10.0, 10.0),
+                (0.0, 1.3, 10.0),
+                (0.0, 0.6, 10.0),
+            ],
+            [0.0, 0.0, 1.0],
+        ),
+        (
+            &[
+                (0.0, 0.0, 0.0),
+                (0.6, 0.0, 0.0),
+                (1.3, 0.0, 0.0),
+                (10.0, 0.0, 0.0),
+                (10.0, 0.0, 10.0),
+                (1.3, 0.0, 10.0),
+                (0.6, 0.0, 10.0),
+                (0.0, 0.0, 10.0),
+            ],
+            [0.0, -1.0, 0.0],
+        ),
+        (
+            &[
+                (0.0, 10.0, 0.0),
+                (0.0, 10.0, 10.0),
+                (10.0, 10.0, 10.0),
+                (10.0, 10.0, 0.0),
+            ],
+            [0.0, 1.0, 0.0],
+        ),
+        (
+            &[
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 10.0),
+                (0.0, 0.6, 10.0),
+                (0.0, 1.3, 10.0),
+                (0.0, 10.0, 10.0),
+                (0.0, 10.0, 0.0),
+                (0.0, 1.3, 0.0),
+                (0.0, 0.6, 0.0),
+            ],
+            [-1.0, 0.0, 0.0],
+        ),
+        (
+            &[
+                (10.0, 0.0, 0.0),
+                (10.0, 10.0, 0.0),
+                (10.0, 10.0, 10.0),
+                (10.0, 0.0, 10.0),
+            ],
+            [1.0, 0.0, 0.0],
+        ),
+    ];
+    solid_from_loops(topo, &loops)
+}
+
+/// The cube's edge up the pieced corner chamfered 2 each way: the top and
+/// bottom faces' run round the corner from (2, 0) to (0, 2) has six edges
+/// and their other run between the points four, and the corner's run is
+/// the one the chamfer replaces.
+#[test]
+fn a_chamfer_closes_its_ends_round_the_corner_not_the_shorter_way() {
+    let d = 2.0;
+    let mut topo = Topology::new();
+    let solid = cube_with_a_pieced_corner(&mut topo);
+    assert!(validate_solid(&topo, solid).unwrap().is_valid());
+    let edge = edge_between(
+        &topo,
+        solid,
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 10.0),
+    );
+    let front = plane_along(&topo, solid, edge, [0.0, -1.0, 0.0]);
+    let cut = chamfer_two_on(&mut topo, solid, &[(edge, front)], d, d).unwrap();
+    let report = validate_solid(&topo, cut).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let want = 1000.0 - 0.5 * d * d * 10.0;
+    let volume = solid_volume(&topo, cut, 0.001).unwrap();
+    assert!(
+        (volume - want).abs() < 1e-6 * want,
+        "volume {volume}, want {want}"
+    );
+}
+
 /// The plate's top edge chamfered 14 into the top face sets the top back
 /// past the whole hole (y 7 to 13): the hole would leave with the cut-off
 /// strip while its bore stayed, so the chamfer is refused and the plate

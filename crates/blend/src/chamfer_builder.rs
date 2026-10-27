@@ -247,7 +247,7 @@ impl<'a> ChamferBuilder<'a> {
 
         // Each stripe that trims both its faces, with the contact edges the
         // trims left on them.
-        let mut trimmed: Vec<(StripeResult, [Option<EdgeId>; 2])> = Vec::new();
+        let mut trimmed: Vec<(EdgeId, StripeResult, [Option<EdgeId>; 2])> = Vec::new();
         for (edge_id, sr) in stripe_results {
             let stripe = &sr.stripe;
 
@@ -309,7 +309,7 @@ impl<'a> ChamferBuilder<'a> {
                 continue;
             }
             succeeded.push(edge_id);
-            trimmed.push((sr, contacts));
+            trimmed.push((edge_id, sr, contacts));
         }
 
         // If no stripe trimmed, return the original solid with all failures.
@@ -323,9 +323,9 @@ impl<'a> ChamferBuilder<'a> {
         }
 
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
-        let mut cross_edges: Vec<(EdgeId, VertexId, VertexId, FaceId)> = Vec::new();
+        let mut cross_edges: Vec<CrossEdge> = Vec::new();
 
-        for (sr, [c1, c2]) in &trimmed {
+        for (edge_id, sr, [c1, c2]) in &trimmed {
             // Reuse the trimmed neighbours' contact edges (mirrors the fillet
             // builder): a freshly minted duplicate leaves both copies use-1
             // and opens the shell along the chamfer flanks.
@@ -333,10 +333,24 @@ impl<'a> ChamferBuilder<'a> {
                 topo, &sr.stripe, *c1, *c2,
             )?;
             orient_chamfer_face(topo, info.face, &sr.stripe)?;
-            // A closed rim has no end faces to take its cross edges.
+            // A closed rim has no end faces to take its cross edges. The
+            // spine runs the chamfered edge forward, so the cross edge at its
+            // end cuts off the edge's end vertex and the one at its start,
+            // the edge's start vertex.
             if !sr.stripe.spine.is_closed() {
-                for (edge, from, to) in info.cross_end.into_iter().chain(info.cross_start) {
-                    cross_edges.push((edge, from, to, info.face));
+                let chamfered = topo.edge(*edge_id)?;
+                let ends = [
+                    info.cross_end.map(|c| (c, chamfered.end())),
+                    info.cross_start.map(|c| (c, chamfered.start())),
+                ];
+                for ((edge, from, to), corner) in ends.into_iter().flatten() {
+                    cross_edges.push(CrossEdge {
+                        edge,
+                        from,
+                        to,
+                        corner,
+                        chamfer: info.face,
+                    });
                 }
             }
             blend_face_ids.push(info.face);
@@ -397,21 +411,78 @@ fn orient_chamfer_face(
     Ok(())
 }
 
+/// A chamfer's cross edge at one end: it runs `from` one contact point `to`
+/// the other on the chamfer face `chamfer`, across the corner vertex
+/// `corner` of the chamfered edge.
+struct CrossEdge {
+    edge: EdgeId,
+    from: VertexId,
+    to: VertexId,
+    corner: VertexId,
+    chamfer: FaceId,
+}
+
 /// A chamfer's end faces still run through the corner it cut off (or
 /// filled): their wires step from one contact point to the old vertex and on
 /// to the other contact point. Each such detour is replaced by the chamfer's
 /// cross edge between the two points, which the end face then shares with
 /// the chamfer face. That drops the corner triangle from the end face at a
-/// convex edge and adds it at a concave one. A cross edge with no detour to
+/// convex edge and adds it at a concave one. The detour can pass more
+/// vertices than the corner, where an end face's straight edge was left in
+/// pieces and the chamfer reaches past the piece at the corner: the detour
+/// is the run between the points that passes the corner, which can have
+/// more edges than the face's other run. A cross edge with no detour to
 /// take it (two chamfers meeting at the vertex, or a contact edge that
 /// could not be matched to the trimmer's) would leave the shell open, so
 /// the chamfer is refused.
 fn close_chamfer_ends(
     topo: &mut Topology,
     faces: &[FaceId],
-    cross_edges: &[(EdgeId, VertexId, VertexId, FaceId)],
+    cross_edges: &[CrossEdge],
 ) -> Result<(), BlendError> {
-    let ends = |topo: &Topology, oe: &OrientedEdge| -> Result<(VertexId, VertexId), BlendError> {
+    for cross in cross_edges {
+        let Some(detour) = corner_detour(topo, faces, cross)? else {
+            return Err(BlendError::TrimmingFailure {
+                face: cross.chamfer,
+            });
+        };
+        let edges = topo.wire(detour.wire)?.edges().to_vec();
+        let n = edges.len();
+        let (i, k) = (detour.first, detour.len);
+        let mut spliced: Vec<OrientedEdge> = (0..n - k).map(|j| edges[(i + k + j) % n]).collect();
+        spliced.push(OrientedEdge::new(cross.edge, detour.starts_at_from));
+        let new_wire = topo.add_wire(Wire::new(spliced, true)?);
+        let face = topo.face_mut(detour.face)?;
+        if face.outer_wire() == detour.wire {
+            face.set_outer_wire(new_wire);
+        } else if let Some(slot) = face
+            .inner_wires_mut()
+            .iter_mut()
+            .find(|w| **w == detour.wire)
+        {
+            *slot = new_wire;
+        }
+    }
+    Ok(())
+}
+
+/// A run of edges in an end face's wire: `len` edges from position `first`.
+struct Detour {
+    face: FaceId,
+    wire: WireId,
+    first: usize,
+    len: usize,
+    starts_at_from: bool,
+}
+
+/// The run in an end face's wire from one of `cross`'s contact points to
+/// the other through its corner.
+fn corner_detour(
+    topo: &Topology,
+    faces: &[FaceId],
+    cross: &CrossEdge,
+) -> Result<Option<Detour>, BlendError> {
+    let ends = |oe: &OrientedEdge| -> Result<(VertexId, VertexId), BlendError> {
         let e = topo.edge(oe.edge())?;
         Ok(if oe.is_forward() {
             (e.start(), e.end())
@@ -419,47 +490,45 @@ fn close_chamfer_ends(
             (e.end(), e.start())
         })
     };
-    for &(cross, from, to, chamfer) in cross_edges {
-        let mut spliced_one = false;
-        'faces: for &fid in faces {
-            let face = topo.face(fid)?;
-            let wires: Vec<WireId> = std::iter::once(face.outer_wire())
-                .chain(face.inner_wires().iter().copied())
-                .collect();
-            for wid in wires {
-                let edges = topo.wire(wid)?.edges().to_vec();
-                let n = edges.len();
-                if n < 3 {
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let edges = topo.wire(wid)?.edges();
+            let n = edges.len();
+            if n < 3 {
+                continue;
+            }
+            for i in 0..n {
+                let (a, _) = ends(&edges[i])?;
+                if a != cross.from && a != cross.to {
                     continue;
                 }
-                for i in 0..n {
-                    let (a, corner) = ends(topo, &edges[i])?;
-                    let (corner2, b) = ends(topo, &edges[(i + 1) % n])?;
-                    if corner != corner2 || !((a == from && b == to) || (a == to && b == from)) {
-                        continue;
+                let other = if a == cross.from {
+                    cross.to
+                } else {
+                    cross.from
+                };
+                let mut past_corner = false;
+                for k in 1..n {
+                    let (_, b) = ends(&edges[(i + k - 1) % n])?;
+                    if b == cross.from || b == cross.to {
+                        if b == other && past_corner {
+                            return Ok(Some(Detour {
+                                face: fid,
+                                wire: wid,
+                                first: i,
+                                len: k,
+                                starts_at_from: a == cross.from,
+                            }));
+                        }
+                        break;
                     }
-                    let mut spliced: Vec<OrientedEdge> =
-                        (0..n).map(|k| edges[(i + 2 + k) % n]).take(n - 2).collect();
-                    spliced.push(OrientedEdge::new(cross, a == from));
-                    let new_wire = topo.add_wire(Wire::new(spliced, true)?);
-                    let face = topo.face_mut(fid)?;
-                    if face.outer_wire() == wid {
-                        face.set_outer_wire(new_wire);
-                    } else if let Some(slot) =
-                        face.inner_wires_mut().iter_mut().find(|w| **w == wid)
-                    {
-                        *slot = new_wire;
-                    }
-                    spliced_one = true;
-                    break 'faces;
+                    past_corner |= b == cross.corner;
                 }
             }
         }
-        if !spliced_one {
-            return Err(BlendError::TrimmingFailure { face: chamfer });
-        }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Compute a chamfer stripe for a single edge using the adjacency index.
