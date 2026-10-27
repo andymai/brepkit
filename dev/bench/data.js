@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793063421270,
+  "lastUpdate": 1793067569469,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56537,6 +56537,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 39015575,
             "range": "± 83058",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "174a084cf2c9f0b3132930a0b0c29dce245d1c2c",
+          "message": "fix(math): evaluate curves and surfaces past degree 8 (#2067)\n\nCurve, surface and 2D-curve evaluation kept their basis functions in\nstack buffers sized for degree 8, and indexing past them panicked on a\nhigher degree: a degree-14 B-spline read from a STEP file brought the\nwhole import down. Past degree 8 they now use the heap; the cached\nsurface evaluator, whose buffers are sized the same way, defers to the\nsurface there.\n\n## Tests\n\n- Added `crates/math/tests/high_degree.rs`: a degree-14 curve and a\ndegree-10 surface whose control points are evenly spaced along a line or\nover a grid (so, by linear precision, each value and derivative is known\nexactly) evaluate and differentiate correctly instead of panicking.\n- `cargo test -p brepkit-math` and `cargo clippy -p brepkit-math\n--all-targets -- -D warnings` pass.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-10-26T19:16:54-07:00",
+          "tree_id": "c638c8ad467db3d77bfa3ac998f9a683182bfa55",
+          "url": "https://github.com/andymai/brepkit/commit/174a084cf2c9f0b3132930a0b0c29dce245d1c2c"
+        },
+        "date": 1793067561981,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 575122,
+            "range": "± 37290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 618275,
+            "range": "± 8298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7568,
+            "range": "± 179",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 367946,
+            "range": "± 9762",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29924366,
+            "range": "± 709881",
             "unit": "ns/iter"
           }
         ]
