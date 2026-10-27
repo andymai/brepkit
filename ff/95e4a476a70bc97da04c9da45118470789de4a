@@ -1,0 +1,27 @@
+crates/operations/src/chamfer.rs
+  s_02588738a4f2ed::t_429c39d3a75f4e 720
+crates/operations/src/fillet/mod.rs
+  s_02588738a4f2ed::t_429c39d3a75f4e 375,942
+crates/operations/tests/flat_blends_keep_cavities.rs
+  s_02588738a4f2ed::t_92cc2333f3fea3 167-179,181,183,189,245-282
+crates/operations/src/cavities.rs
+  s_02588738a4f2ed::t_429c39d3a75f4e 7-8,31-38,40-48,50-62,69-74,76-87,90-95,97-110,112-113,115-134,138-147,151,163-178,181-185,189-196,335
+  s_02588738a4f2ed::t_c7f9b408aa02d7 88-89,186-188
+  s_02588738a4f2ed::t_92cc2333f3fea3 381-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff95e4a476a70bc97da04c9da45118470789de4a",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
