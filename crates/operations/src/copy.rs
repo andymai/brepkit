@@ -9,7 +9,7 @@ use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
-use brepkit_topology::shell::Shell;
+use brepkit_topology::shell::{Shell, ShellId};
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
@@ -57,19 +57,35 @@ struct ShellSnap {
 /// # Errors
 ///
 /// Returns an error if any topology lookup fails.
-#[allow(clippy::too_many_lines)]
 pub fn copy_solid(
     topo: &mut Topology,
     solid_id: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
     let solid = topo.solid(solid_id)?;
-    let outer_shell_id = solid.outer_shell();
-    let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
-
-    let all_shell_ids: Vec<_> = std::iter::once(outer_shell_id)
-        .chain(inner_shell_ids.iter().copied())
+    let shells: Vec<ShellId> = std::iter::once(solid.outer_shell())
+        .chain(solid.inner_shells().iter().copied())
         .collect();
+    let copies = copy_shells(topo, &shells)?;
+    let (&new_outer, new_inner) =
+        copies
+            .split_first()
+            .ok_or(brepkit_topology::TopologyError::Empty {
+                entity: "solid shells",
+            })?;
+    Ok(topo.add_solid(Solid::new(new_outer, new_inner.to_vec())))
+}
 
+/// Deep copies of `shells`, in order, sharing their vertices, edges and
+/// wires among themselves as the originals do and nothing with them.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup fails.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn copy_shells(
+    topo: &mut Topology,
+    all_shell_ids: &[ShellId],
+) -> Result<Vec<ShellId>, crate::OperationsError> {
     let mut vertex_snaps: Vec<VertexSnap> = Vec::new();
     let mut edge_snaps: Vec<EdgeSnap> = Vec::new();
     let mut wire_snaps: Vec<WireSnap> = Vec::new();
@@ -79,7 +95,7 @@ pub fn copy_solid(
     let mut seen_edges = std::collections::HashSet::new();
     let mut seen_wires = std::collections::HashSet::new();
 
-    for &shell_id in &all_shell_ids {
+    for &shell_id in all_shell_ids {
         let shell = topo.shell(shell_id)?;
         let mut face_snaps = Vec::new();
 
@@ -164,7 +180,7 @@ pub fn copy_solid(
             .map(|s| s.faces.len())
             .fold(0usize, usize::saturating_add),
         shell_snaps.len(),
-        1,
+        0,
     );
 
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
@@ -220,10 +236,7 @@ pub fn copy_solid(
         new_shell_ids.push(topo.add_shell(new_shell));
     }
 
-    let new_outer = new_shell_ids[0];
-    let new_inner: Vec<_> = new_shell_ids[1..].to_vec();
-
-    Ok(topo.add_solid(Solid::new(new_outer, new_inner)))
+    Ok(new_shell_ids)
 }
 
 /// Create a deep copy of a solid with a simultaneous affine transform.

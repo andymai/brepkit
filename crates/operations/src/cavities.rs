@@ -67,18 +67,29 @@ pub fn edge_reach(topo: &Topology, edge: EdgeId, reach: f64) -> Result<Aabb3, Op
 }
 
 /// A box holding every face of `shell`: the measured box of its faces,
-/// which samples a NURBS face at a few points only, widened to a NURBS
-/// face's control points.
+/// widened to a NURBS face's control points (the measured box samples it at
+/// a few points only) and to a sphere's or torus's whole surface (it takes
+/// that only for a whole one, and a trimmed band can bulge past its
+/// boundary).
 fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, OperationsError> {
     let faces = topo.shell(shell)?.faces().to_vec();
     let measured = crate::measure::face_set_bounding_box(topo, &faces)?;
     let mut points = vec![measured.min, measured.max];
     for &face in &faces {
-        if let FaceSurface::Nurbs(n) = topo.face(face)?.surface() {
-            points.extend(hull_or_everything(
+        match topo.face(face)?.surface() {
+            FaceSurface::Nurbs(n) => points.extend(hull_or_everything(
                 n.control_points().iter().flatten(),
                 n.weights().iter().flatten().copied(),
-            ));
+            )),
+            FaceSurface::Sphere(sphere) => {
+                let whole = sphere.aabb();
+                points.extend([whole.min, whole.max]);
+            }
+            FaceSurface::Torus(torus) => {
+                let whole = torus.aabb();
+                points.extend([whole.min, whole.max]);
+            }
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
         }
     }
     Ok(Aabb3::from_points(points))
@@ -114,8 +125,7 @@ pub fn keep_cavities(
     }
     // The result gets its own copy: a shell shared with the source would
     // move with it under an in-place transform of either.
-    let copy = crate::copy::copy_solid(topo, source)?;
-    let copied = topo.solid(copy)?.inner_shells().to_vec();
+    let copied = crate::copy::copy_shells(topo, &cavities)?;
     let solid = topo.solid_mut(result)?;
     for cavity in copied {
         solid.add_inner_shell(cavity);
@@ -174,5 +184,83 @@ mod tests {
         assert!(measured.max.z() < 1e-9, "{measured:?}");
         let bounds = shell_bounds(&topo, shell).unwrap();
         assert!(bounds.max.z() >= 10.0, "{bounds:?}");
+    }
+
+    /// A band of a torus (major 10, minor 3) a quarter turn round its ring
+    /// and over the outer half of its tube: its boundary arcs stay within
+    /// x <= 10, but the band reaches x = 13 at its middle.
+    #[test]
+    fn a_trimmed_torus_band_bulging_past_its_boundary_is_inside_the_bounds() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use std::f64::consts::FRAC_PI_4;
+
+        let mut topo = Topology::new();
+        let corner = |u: f64, z: f64| Point3::new(10.0 * u.cos(), 10.0 * u.sin(), z);
+        let v: Vec<_> = [
+            (-FRAC_PI_4, -3.0),
+            (FRAC_PI_4, -3.0),
+            (FRAC_PI_4, 3.0),
+            (-FRAC_PI_4, 3.0),
+        ]
+        .iter()
+        .map(|&(u, z)| topo.add_vertex(Vertex::new(corner(u, z), 1e-7)))
+        .collect();
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let ring = |z: f64| Circle3D::new(Point3::new(0.0, 0.0, z), up, 10.0).unwrap();
+        let meridian = |u: f64| {
+            Circle3D::new(
+                Point3::new(10.0 * u.cos(), 10.0 * u.sin(), 0.0),
+                Vec3::new(-u.sin(), u.cos(), 0.0),
+                3.0,
+            )
+            .unwrap()
+        };
+        let curves = [
+            EdgeCurve::Circle(ring(-3.0)),
+            EdgeCurve::Circle(meridian(FRAC_PI_4)),
+            EdgeCurve::Circle(ring(3.0)),
+            EdgeCurve::Circle(meridian(-FRAC_PI_4)),
+        ];
+        let sides: Vec<_> = curves
+            .into_iter()
+            .enumerate()
+            .map(|(k, curve)| {
+                let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], curve));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+        let face = topo.add_face(Face::new(wire, Vec::new(), FaceSurface::Torus(torus)));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+
+        let measured = crate::measure::face_set_bounding_box(&topo, &[face]).unwrap();
+        assert!(measured.max.x() < 13.0 - 1e-6, "{measured:?}");
+        let bounds = shell_bounds(&topo, shell).unwrap();
+        assert!(bounds.max.x() >= 13.0, "{bounds:?}");
+    }
+
+    /// Keeping a hollow block's cavity copies its six faces and nothing
+    /// more.
+    #[test]
+    fn keeping_a_cavity_copies_only_it() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_topology::solid::Solid;
+
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let cube = crate::primitives::make_box(&mut topo, 3.0, 3.0, 3.0).unwrap();
+        crate::transform::transform_solid(&mut topo, cube, &Mat4::translation(3.5, 3.5, 3.5))
+            .unwrap();
+        let hollow =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, block, cube)
+                .unwrap();
+        let outer = topo.solid(hollow).unwrap().outer_shell();
+        let result = topo.add_solid(Solid::new(outer, Vec::new()));
+        let faces = topo.num_faces();
+        keep_cavities(&mut topo, hollow, result, &[], "test").unwrap();
+        assert_eq!(topo.num_faces() - faces, 6);
+        assert_eq!(topo.solid(result).unwrap().inner_shells().len(), 1);
     }
 }
