@@ -1557,7 +1557,8 @@ impl<'a> FilletBuilder<'a> {
             }
         };
         let new_shell_id = topo.add_shell(new_shell);
-        let new_solid = Solid::new(new_shell_id, inner_shells);
+        let cavities = crate::builder_utils::copy_shells(topo, &inner_shells)?;
+        let new_solid = Solid::new(new_shell_id, cavities);
         let new_solid_id = topo.add_solid(new_solid);
         // A requested edge is successful only after every support, blend, and
         // shell-incidence step above has completed. Geometry-only success is

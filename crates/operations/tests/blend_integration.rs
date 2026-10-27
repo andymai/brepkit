@@ -177,6 +177,29 @@ fn fillet_keeps_a_cavity() {
     );
 }
 
+/// The result's cavity is its own: moving the result in place leaves the
+/// input's cavity where it was.
+#[test]
+fn a_filleted_blocks_cavity_is_its_own() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::transform::transform_solid;
+
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+    let result = fillet_v2(&mut topo, hollow, &[edge], 1.0).unwrap();
+    transform_solid(&mut topo, result.solid, &Mat4::translation(0.0, 0.0, 100.0)).unwrap();
+    let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+    for &face in topo.shell(cavity).unwrap().faces() {
+        for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+            let z = topo.vertex(v).unwrap().point().z();
+            assert!(
+                (3.5 - 1e-9..=6.5 + 1e-9).contains(&z),
+                "input cavity moved to z {z}"
+            );
+        }
+    }
+}
+
 /// A cavity 0.05 behind the front face and 0.5 below the top: a fillet of
 /// radius 1 along their edge would cut into it, so it is refused and the
 /// block left as it was.
