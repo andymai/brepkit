@@ -137,8 +137,9 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
 
 /// Whether a face of the result lies on one of `source_faces`: on its
 /// surface and, for a plane, with every vertex on the plane and in or on
-/// its region (a face the operation made can share the plane of a face far
-/// from it), for another surface within its box.
+/// its region and none of its vertices inside the face (a face the
+/// operation made can share the plane of a face far from it, or span a
+/// hole of it), for another surface within its box.
 fn on_source_face(
     topo: &Topology,
     face: FaceId,
@@ -179,10 +180,25 @@ fn on_source_face(
             else {
                 continue;
             };
-            vertices.iter().all(|&p| {
+            let flat = |p: Point3| {
                 let d = p - origin;
-                let q = brepkit_math::vec::Point2::new(d.dot(frame.x), d.dot(frame.y));
-                brepkit_math::region2d::point_in_region(&pieces, q, 1e-7) != Some(false)
+                brepkit_math::vec::Point2::new(d.dot(frame.x), d.dot(frame.y))
+            };
+            // Every vertex in the source face still lets the face span a
+            // hole or notch of it, whose vertices then lie inside the face.
+            let Some(own) =
+                brepkit_topology::planar::face_boundary_2d(topo, face, origin, frame.x, frame.y)?
+            else {
+                continue;
+            };
+            let source_vertices = brepkit_topology::explorer::face_vertices(topo, source_face)?
+                .into_iter()
+                .map(|v| topo.vertex(v).map(brepkit_topology::vertex::Vertex::point))
+                .collect::<Result<Vec<_>, _>>()?;
+            vertices.iter().all(|&p| {
+                brepkit_math::region2d::point_in_region(&pieces, flat(p), 1e-7) != Some(false)
+            }) && source_vertices.iter().all(|&p| {
+                brepkit_math::region2d::point_in_region(&own, flat(p), 1e-7) != Some(true)
             })
         } else {
             let bounds = face_bounds(topo, source_face)?.expanded(1e-7);
@@ -503,5 +519,31 @@ mod tests {
             topo.face(bevel).unwrap().surface()
         ));
         assert!(!on_source_face(&topo, bevel, &[top_face]).unwrap());
+    }
+
+    /// A square face over the plane of a source square with a hole in its
+    /// middle has every vertex on the source face, but spans its hole: no
+    /// face of the source.
+    #[test]
+    fn a_face_spanning_a_source_hole_is_no_source_face() {
+        let mut topo = Topology::new();
+        let square = |topo: &mut Topology, half: f64| {
+            let corners: Vec<Point3> = [(-half, -half), (half, -half), (half, half), (-half, half)]
+                .iter()
+                .map(|&(x, y)| Point3::new(x, y, 0.0))
+                .collect();
+            brepkit_topology::builder::make_polygon_wire(topo, &corners, 1e-7).unwrap()
+        };
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let outer = square(&mut topo, 5.0);
+        let hole = square(&mut topo, 1.0);
+        let holed = topo.add_face(Face::new(outer, vec![hole], plane.clone()));
+        let cover = square(&mut topo, 5.0);
+        let whole = topo.add_face(Face::new(cover, Vec::new(), plane));
+        assert!(!on_source_face(&topo, whole, &[holed]).unwrap());
+        assert!(on_source_face(&topo, holed, &[holed]).unwrap());
     }
 }
