@@ -136,9 +136,9 @@ fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
 }
 
 /// Whether a face of the result lies on one of `source_faces`: on its
-/// surface and, for a plane, with every vertex in or on its region (a face
-/// the operation made can share the plane of a face far from it), for
-/// another surface within its box.
+/// surface and, for a plane, with every vertex on the plane and in or on
+/// its region (a face the operation made can share the plane of a face far
+/// from it), for another surface within its box.
 fn on_source_face(
     topo: &Topology,
     face: FaceId,
@@ -157,7 +157,17 @@ fn on_source_face(
         if !same_surface(source_surface, &surface) {
             continue;
         }
-        let within = if let FaceSurface::Plane { normal, .. } = source_surface {
+        let within = if let FaceSurface::Plane { normal, d } = source_surface {
+            // The surfaces match within a margin relative to the plane's
+            // offset, which far from the origin lets a slightly tilted cut
+            // through: every vertex must lie on the plane itself.
+            let length = normal.length();
+            if vertices
+                .iter()
+                .any(|p| ((normal.dot(*p - Point3::new(0.0, 0.0, 0.0)) - d) / length).abs() > 1e-7)
+            {
+                continue;
+            }
             let frame = brepkit_math::frame::Frame3::from_normal(origin, *normal)?;
             let Some(pieces) = brepkit_topology::planar::face_boundary_2d(
                 topo,
@@ -444,5 +454,54 @@ mod tests {
         let slab = crate::primitives::make_box(&mut topo, 10.0, 10.0, 3.0).unwrap();
         let refused = keep_cavities(&mut topo, hollow, slab, "test").unwrap_err();
         assert!(refused.to_string().contains("cavity"), "{refused}");
+    }
+
+    /// A cut a hair off a plane far from the origin matches the plane's
+    /// surface within its relative margin; its vertices 1e-5 below it make
+    /// it a face of its own.
+    #[test]
+    fn a_slightly_tilted_cut_far_from_the_origin_is_no_source_face() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(0.0, 0.0, 99_990.0))
+            .unwrap();
+        let top_face = topo
+            .shell(topo.solid(block).unwrap().outer_shell())
+            .unwrap()
+            .faces()
+            .iter()
+            .copied()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(),
+                    FaceSurface::Plane { normal, .. } if normal.z() > 0.5)
+            })
+            .unwrap();
+
+        let top = 100_000.0;
+        let corners = [
+            Point3::new(0.0, 0.0, top - 1e-5),
+            Point3::new(10.0, 0.0, top - 1e-5),
+            Point3::new(10.0, 1.0, top),
+            Point3::new(0.0, 1.0, top),
+        ];
+        let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+        let normal = (corners[1] - corners[0])
+            .cross(corners[3] - corners[0])
+            .normalize()
+            .unwrap();
+        let d = normal.dot(corners[0] - Point3::new(0.0, 0.0, 0.0));
+        let bevel = topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Plane { normal, d },
+        ));
+
+        assert!(same_surface(
+            topo.face(top_face).unwrap().surface(),
+            topo.face(bevel).unwrap().surface()
+        ));
+        assert!(!on_source_face(&topo, bevel, &[top_face]).unwrap());
     }
 }
