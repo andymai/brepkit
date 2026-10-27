@@ -213,9 +213,7 @@ fn pave_co_endpoint_curves(
                     .is_some_and(|pb| pb.extra_paves.is_empty());
                 if curved && unsplit {
                     let vertex = topo.add_vertex(Vertex::new(mid, tol.linear));
-                    if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {
-                        pb.add_extra_pave(Pave::new(vertex, tm));
-                    }
+                    arena.add_extra_pave(topo, pb_id, Pave::new(vertex, tm));
                 }
             }
         }

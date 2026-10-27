@@ -78,8 +78,8 @@ pub fn perform(
                         .unwrap_or_else(|| topo.add_vertex(Vertex::new(point, ball)))
                 };
 
-                add_pave_to_edge(arena, ea_id, Pave::new(vertex_id, t_a));
-                add_pave_to_edge(arena, eb_id, Pave::new(vertex_id, t_b));
+                add_pave_to_edge(arena, topo, ea_id, Pave::new(vertex_id, t_a));
+                add_pave_to_edge(arena, topo, eb_id, Pave::new(vertex_id, t_b));
 
                 arena.interference.ee.push(Interference::EE {
                     e1: ea_id,

@@ -40,6 +40,10 @@ pub struct GfaArena {
     /// lookup during intersection (built after VV, when `edge_pave_blocks` and
     /// the same-domain mapping are fixed). `None` falls back to a linear scan.
     pub pave_vertex_index: Option<super::PaveVertexIndex>,
+    /// Every pave-block vertex with its tolerance ball, for the nearest pave
+    /// vertex holding a point (built with `pave_vertex_index`). `None` falls
+    /// back to a linear scan.
+    pub pave_ball_index: Option<super::PaveBallIndex>,
     /// Faces a curve also sections beyond its own pair, by curve index: an
     /// arc two faces of one operand share with a face of the other (a
     /// faceted sphere's equator arc on a coplanar box face) is emitted once
@@ -65,6 +69,7 @@ impl GfaArena {
             common_blocks: Arena::new(),
             pb_to_cb: BTreeMap::new(),
             pave_vertex_index: None,
+            pave_ball_index: None,
             curve_extra_faces: BTreeMap::new(),
             curve_skip_faces: BTreeMap::new(),
         }
@@ -95,6 +100,52 @@ impl GfaArena {
             }
         }
         self.pave_vertex_index = Some(super::PaveVertexIndex::build(cell, entries.into_iter()));
+
+        // The ball index's cells are wide enough for the reaches its callers
+        // pass (a vertex's or an edge's tolerance); wider ones scan.
+        let mut balls = super::PaveBallIndex::new(cell * 1000.0);
+        let mut order: u32 = 0;
+        for pbs in self.edge_pave_blocks.values() {
+            for &pb_id in pbs {
+                let Some(pb) = self.pave_blocks.get(pb_id) else {
+                    continue;
+                };
+                balls.set_block_order(pb_id, order);
+                let vertices = [pb.start.vertex, pb.end.vertex]
+                    .into_iter()
+                    .chain(pb.extra_paves.iter().map(|pave| pave.vertex));
+                for (slot, vid) in (0_u32..).zip(vertices) {
+                    let resolved = self.resolve_vertex(vid);
+                    if let Ok(v) = topo.vertex(resolved) {
+                        balls.push((order, slot), resolved, v.point(), v.tolerance());
+                    }
+                }
+                order = order.saturating_add(1);
+            }
+        }
+        self.pave_ball_index = Some(balls);
+    }
+
+    /// Add `pave` to the pave block `pb_id`, keeping the ball index in step.
+    pub fn add_extra_pave(
+        &mut self,
+        topo: &brepkit_topology::Topology,
+        pb_id: super::PaveBlockId,
+        pave: super::Pave,
+    ) {
+        let Some(pb) = self.pave_blocks.get_mut(pb_id) else {
+            return;
+        };
+        pb.add_extra_pave(pave);
+        #[allow(clippy::cast_possible_truncation)]
+        let slot = (pb.extra_paves.len() + 1) as u32;
+        let resolved = self.resolve_vertex(pave.vertex);
+        if let Some(balls) = self.pave_ball_index.as_mut()
+            && let Some(order) = balls.block_order(pb_id)
+            && let Ok(v) = topo.vertex(resolved)
+        {
+            balls.push((order, slot), resolved, v.point(), v.tolerance());
+        }
     }
 
     /// Resolves a vertex to its same-domain canonical vertex.

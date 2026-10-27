@@ -736,7 +736,7 @@ fn check_edge_face_pairs(
                 };
 
                 let pave = Pave::new(vertex_id, t);
-                add_pave_to_edge(arena, eid, pave);
+                add_pave_to_edge(arena, topo, eid, pave);
 
                 arena.interference.ef.push(Interference::EF {
                     edge: eid,
