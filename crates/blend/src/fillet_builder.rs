@@ -2308,33 +2308,60 @@ fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, BlendError> {
     Ok(Aabb3::from_points(points))
 }
 
+/// Distance from `p` to the stretch of curve an edge spans: exact for a
+/// line, the conic's own projection for a circle or ellipse (the nearer end
+/// where that falls outside the arc), a NURBS projection otherwise.
+fn distance_to_edge(topo: &Topology, edge_id: EdgeId, p: Point3) -> Result<f64, BlendError> {
+    let edge = topo.edge(edge_id)?;
+    let (sp, ep) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let curve = edge.curve();
+    let ends = (p - sp).length().min((p - ep).length());
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let on_arc = |t: f64| {
+        let t = t0 + (t - t0).rem_euclid(std::f64::consts::TAU);
+        if t <= t1 {
+            (p - curve.evaluate_with_endpoints(t, sp, ep)).length()
+        } else {
+            ends
+        }
+    };
+    Ok(match curve {
+        EdgeCurve::Line => {
+            let d = ep - sp;
+            let len2 = d.dot(d);
+            let s = if len2 > 0.0 {
+                ((p - sp).dot(d) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (p - (sp + d * s)).length()
+        }
+        EdgeCurve::Circle(c) => on_arc(c.project(p)),
+        EdgeCurve::Ellipse(e) => on_arc(e.project(p)),
+        EdgeCurve::NurbsCurve(n) => {
+            brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
+                .map_or(ends, |found| found.distance.min(ends))
+        }
+    })
+}
+
 /// A box holding the material a stripe takes off. Across the stripe that
 /// material lies between the spine, the two neighbours' curves out to the
 /// contacts and the blend arc, each turning less than half a circle and so
 /// lying within its chord's length of its ends: the box of the spine and
 /// contact curves, grown by twice the farthest contact's distance from the
 /// spine (a chord across a curved spine runs a little longer than that
-/// distance). The distance is read between points on the curves, as a
-/// rational curve's control points can stand well off it.
+/// distance). The distance is read from points on the contact curves to
+/// the spine edges' own curves, as a rational curve's control points can
+/// stand well off it.
 fn removed_material_bounds(topo: &Topology, stripe: &Stripe) -> Result<Aabb3, BlendError> {
-    const SPINE_SAMPLES: u32 = 256;
     const CONTACT_SAMPLES: u32 = 64;
     let mut points = Vec::new();
-    // Read along each edge's own curve: a closed rim's spine runs from its
-    // vertex back to it.
-    let mut spine = Vec::new();
     for &edge_id in stripe.spine.edges() {
         points.extend(edge_hull_points(topo, edge_id)?);
-        let edge = topo.edge(edge_id)?;
-        let (sp, ep) = (
-            topo.vertex(edge.start())?.point(),
-            topo.vertex(edge.end())?.point(),
-        );
-        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        spine.extend((0..=SPINE_SAMPLES).map(|k| {
-            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SPINE_SAMPLES), t0);
-            edge.curve().evaluate_with_endpoints(t, sp, ep)
-        }));
     }
     let mut reach = 0.0_f64;
     for contact in [&stripe.contact1, &stripe.contact2] {
@@ -2343,10 +2370,10 @@ fn removed_material_bounds(topo: &Topology, stripe: &Stripe) -> Result<Aabb3, Bl
         for k in 0..=CONTACT_SAMPLES {
             let c =
                 contact.evaluate((t1 - t0).mul_add(f64::from(k) / f64::from(CONTACT_SAMPLES), t0));
-            let near = spine
-                .iter()
-                .map(|s| (c - *s).length())
-                .fold(f64::INFINITY, f64::min);
+            let mut near = f64::INFINITY;
+            for &edge_id in stripe.spine.edges() {
+                near = near.min(distance_to_edge(topo, edge_id, c)?);
+            }
             reach = reach.max(near);
         }
     }
