@@ -1,0 +1,34 @@
+crates/operations/tests/two_distance_chamfers.rs
+  s_02588738a4f2ed::t_be7bece23b9e76 426-428,437,441,449,451
+  s_02588738a4f2ed::t_66ed3e5bebd2af 425,429-436,438-440,442-448,450,452-460,465-466
+  s_02588738a4f2ed::t_00a36713dccd35 461-464
+crates/operations/tests/blend_integration.rs
+  s_02588738a4f2ed::t_4d2edb6d4361f7 100-125
+crates/blend/src/fillet_builder.rs
+  s_02588738a4f2ed::t_05875a3d7f0199 14,17
+  s_02588738a4f2ed::t_e0fcb52eefb8f6 22-24
+crates/blend/src/builder_utils.rs
+  s_02588738a4f2ed::t_ecf09a1b2f9809 705-945
+  s_02588738a4f2ed::t_05875a3d7f0199 946-948
+  s_02588738a4f2ed::t_84b2eac0ceba1e 5-8,14,16-17,19
+crates/blend/src/chamfer_builder.rs
+  s_02588738a4f2ed::t_4c8173df8fc20d 19
+  s_02588738a4f2ed::t_43f744f221a3bf 157-159,167-183,190-199
+  s_02588738a4f2ed::t_37cc291cc6e12e 184-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bccc9ba9a3113b2e7b494fdb17914faf90976332",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
