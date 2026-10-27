@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793086288028,
+  "lastUpdate": 1793101180886,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57239,6 +57239,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 45914962,
             "range": "± 57868",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "82f79f04275cc73d75253dc57e1752e9f267f57c",
+          "message": "fix(operations): keep a solid's cavities through flat chamfers and fillets (#2090)\n\nChamfering or filleting an outer edge of a hollow solid with the planar\nchamfer, the flat-bevel fillet or the variable-radius fillet now keeps\nits cavity. Today each rebuilds the outer shell alone through\n`assemble_solid_mixed` and returns a solid with no inner shells, so the\ncavity is filled. All three are on brepjs's paths: its `chamfer` reaches\n`chamfer_core` unless every selected edge is a circular rim, its\n`filletVariable` calls `fillet_variable`, and its `fillet` falls back to\nthe flat bevel when the walking engine's result is not accepted.\n\n## Change\n\n- `cavities::keep_cavities` gives the rebuilt solid copies of the\ninput's inner shells, so moving either solid in place leaves the other's\ncavity where it was, and registers each copied face's pcurves from its\noriginal's, so a curved cavity face keeps the UV trims it is meshed by.\n`copy::copy_shells` copies a list of shells, and `copy_solid` now copies\nthrough it.\n- A cavity the operation could cut into refuses it with `InvalidInput`.\nThe material taken off is bounded by parts of the input's outer faces,\nwhich a cavity, lying strictly inside, never reaches, and by the faces\nthe operation made: those of the result that lie on no face of the\ninput. A result face lies on an input face when it is on that face's\nsurface and its vertices are in or on that face's region (within its box\nfor a curved surface). For a plane the vertices must also lie within\n1e-7 of it, as the surfaces match within a margin relative to the\nplane's offset, and the input face must be convex with straight edges\nand no holes: only then does holding the vertices prove it holds the\nface, which over a hole or notch it need not (the planar chamfer's\nrebuilt faces span the holes they drop). A face over any other input\nface reads as made, which only adds a slab on that face's plane to the\ncheck; since a face the operation made can share the plane of an input\nface far from it. So a cavity meets that material only by crossing one\nof those faces or by lying wholly in it. A cavity whose box meets one of\nthose faces' boxes, or whose vertex `classify_point` does not find\ninside the result, refuses the operation.\n- A box holds its face conservatively: the measured box\n(`face_set_bounding_box`), widened to a NURBS face's control points (the\nmeasured box samples one at a few interior points), to a sphere's or\ntorus's whole surface (the measured box takes that only for a whole one,\nand a trimmed band can bulge past its boundary), and to everything where\na boundary NURBS edge has a weight at or below zero (such an edge can\nrun outside its control points). Surfaces are compared within 1e-9 of\ntheir defining values (points absolutely, since a face passed through\nkeeps its surface as it was), and a face reads as made by the operation\nwhere in doubt, which can only refuse more.\n- The variable fillet takes its walking-engine retry only when that\nresult kept every cavity.\n- The module map in `CLAUDE.md` lists `cavities.rs`.\n\n## Tests\n\n- Added `crates/operations/tests/flat_blends_keep_cavities.rs`, mostly\non a 10 cube less a 3 cube cavity with its top front edge cut. For each\nengine a cavity well inside is kept and the result validates, and a\ncavity 0.05 behind the front face, where the cut would reach it, is\nrefused. The chamfer's result measures 968, the bevel's lies between the\nchamfer's 968 and the uncut 973. All six fail on `main`.\n- The variable fillet's result on a plain 10 cube at a constant radius\nof 1 measures 995, what a 1 x 1 chamfer takes off, so its test checks\nthat the hollow block loses exactly what the plain block does.\n- `a_kept_cavity_keeps_its_pcurves`: a pcurve registered on a cavity\nface is on the copied face after a chamfer elsewhere; without the remap\nthe copy has none.\n- `a_kept_cavity_is_the_results_own`: moving the chamfered block 100 up\nleaves the input's cavity between z 3.5 and 6.5. It fails when the\nresult shares the input's cavity shell.\n- `a_chamfer_into_a_reflex_corner_is_bounded_by_its_trim`: a block with\na 30 degree notch, its two notch top edges chamfered at 1, trims its top\nface back to x = -3.86, past either edge's reach of 1. A cavity there is\nrefused, and a cavity well clear is kept.\n- `a_long_reflex_trim_is_bounded_beside_another_cut`: a 2 degree notch\ntrims back to x = -57.3 beside another chamfered edge at x = -60, and a\ncavity at x = -20 in the notch's long wedge is refused. Giving each trim\nvertex to the cut edge nearest it passed this cavity.\n- `a_cut_on_the_plane_of_a_remote_face_still_bounds_its_cavity`: a block\nwhose back tower has a sloped face on the plane of the top front edge's\n1 x 1 chamfer. A cavity across the chamfer is refused; matching faces by\nsurface alone took the chamfer face for the tower's and passed it.\n- `batch_fillet_refuses_to_reach_a_cavity` in\n`crates/wasm/src/kernel.rs`: the default `fillet` through `executeBatch`\non a block whose cavity sits 0.05 behind the front face returns an\nerror, and the block keeps its cavity. The walking engine refuses it\n(#2087) and the flat bevel it falls back to now refuses it too. With\n`main`'s bevel it returns a solid with the cavity filled.\n- In `crates/operations/src/cavities.rs`: a NURBS bump between the\nmeasured box's samples and a torus band reaching x = 13 past boundary\narcs within x <= 10 each lie inside the cavity's box, and a boundary\nNURBS edge with a weight of -0.5 leaves that box unbounded; a cavity\nleft wholly outside a result whose new face is clear of it is refused by\nits classified vertex; keeping a hollow block's cavity adds its 6 faces\nand no more (copying the whole solid added 12); a cut tilted 1e-5 off a\ntop face at z = 100000, which matches its plane's surface, is no face of\nthe source; and a rectangle crossing the hole of a coplanar source\nsquare, with every vertex on the square and none of the hole's inside\nit, is no face of the source, while over a plain square it is.\n- `cargo test -p brepkit-operations --lib` passes 937 with 8 ignored,\nthe chamfer, fillet and blend integration test files in\n`brepkit-operations` pass 75, and after merging `main` `cargo test -p\nbrepkit-wasm --lib` passes 239 with 4 ignored. The pre-commit clippy and\nfmt checks pass.",
+          "timestamp": "2026-10-27T04:37:08-07:00",
+          "tree_id": "10da6f12a1f00c3fe2060a751028746b4025f2c4",
+          "url": "https://github.com/andymai/brepkit/commit/82f79f04275cc73d75253dc57e1752e9f267f57c"
+        },
+        "date": 1793101172808,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 618424,
+            "range": "± 8781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 682915,
+            "range": "± 4026",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8746,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 426164,
+            "range": "± 25848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29951909,
+            "range": "± 561289",
             "unit": "ns/iter"
           }
         ]
