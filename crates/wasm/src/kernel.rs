@@ -1149,20 +1149,21 @@ mod batch_tests {
         assert!(parsed[1]["ok"].is_number());
     }
 
-    /// The default fillet of an outer edge of a block with an enclosed
-    /// cavity keeps the cavity.
-    #[test]
-    fn batch_fillet_keeps_a_cavity() {
+    /// A 10 cube less a 3 cube cavity at `corner`, its top edge along x at
+    /// y = 0, and the batch result of filleting that edge at radius 1.
+    fn fillet_hollow_block(
+        kernel: &mut BrepKernel,
+        corner: (f64, f64, f64),
+    ) -> (brepkit_topology::solid::SolidId, serde_json::Value) {
         use crate::handles::{edge_id_to_u32, solid_id_to_u32};
         use brepkit_operations::boolean::{BooleanOp, boolean};
-        let mut kernel = BrepKernel::new();
         let topo = kernel.topo_mut();
         let block = brepkit_operations::primitives::make_box(topo, 10.0, 10.0, 10.0).unwrap();
         let cube = brepkit_operations::primitives::make_box(topo, 3.0, 3.0, 3.0).unwrap();
         brepkit_operations::transform::transform_solid(
             topo,
             cube,
-            &brepkit_math::mat::Mat4::translation(3.5, 3.5, 3.5),
+            &brepkit_math::mat::Mat4::translation(corner.0, corner.1, corner.2),
         )
         .unwrap();
         let hollow = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
@@ -1182,7 +1183,15 @@ mod batch_tests {
             solid_id_to_u32(hollow),
             edge_id_to_u32(edge),
         ));
-        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        (hollow, serde_json::from_str(&result).unwrap())
+    }
+
+    /// The default fillet of an outer edge of a block with an enclosed
+    /// cavity keeps the cavity.
+    #[test]
+    fn batch_fillet_keeps_a_cavity() {
+        let mut kernel = BrepKernel::new();
+        let (hollow, parsed) = fillet_hollow_block(&mut kernel, (3.5, 3.5, 3.5));
         assert!(parsed[0]["ok"].is_u64(), "{parsed}");
         let handle = parsed[0]["ok"].as_u64().unwrap();
         let filleted = kernel
@@ -1193,6 +1202,17 @@ mod batch_tests {
             kernel.topo().solid(filleted).unwrap().inner_shells().len(),
             1
         );
+    }
+
+    /// A cavity 0.05 behind the front face, where the fillet would cut into
+    /// it: the walking engine refuses it, and so does the flat bevel it
+    /// falls back to, so the default fillet errors rather than fill it.
+    #[test]
+    fn batch_fillet_refuses_to_reach_a_cavity() {
+        let mut kernel = BrepKernel::new();
+        let (hollow, parsed) = fillet_hollow_block(&mut kernel, (3.5, 0.05, 6.5));
+        assert!(parsed[0]["error"].is_string(), "{parsed}");
+        assert_eq!(kernel.topo().solid(hollow).unwrap().inner_shells().len(), 1);
     }
 
     /// A v2 chamfer of an edge the blend engine leaves out (a cylinder's
