@@ -122,6 +122,158 @@ fn chamfer_leaves_its_input_as_it_was() {
     assert!(report.is_valid(), "result: {:?}", report.issues);
 }
 
+/// A 10 cube less a 3 cube cavity at `corner`, and its top edge along x
+/// at y = 0.
+fn hollow_block(
+    topo: &mut Topology,
+    corner: (f64, f64, f64),
+) -> (
+    brepkit_topology::solid::SolidId,
+    brepkit_topology::edge::EdgeId,
+) {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::transform::transform_solid;
+
+    let block = make_box(topo, 10.0, 10.0, 10.0).unwrap();
+    let cube = make_box(topo, 3.0, 3.0, 3.0).unwrap();
+    transform_solid(topo, cube, &Mat4::translation(corner.0, corner.1, corner.2)).unwrap();
+    let hollow = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let edge = solid_edges(topo, hollow)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            let (a, b) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            [a, b]
+                .iter()
+                .all(|p| p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9)
+        })
+        .unwrap();
+    (hollow, edge)
+}
+
+/// A block with an enclosed cubic cavity keeps the cavity when one of its
+/// outer edges is filleted.
+#[test]
+fn fillet_keeps_a_cavity() {
+    let radius = 1.0;
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+    let result = fillet_v2(&mut topo, hollow, &[edge], radius).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    assert_eq!(topo.solid(result.solid).unwrap().inner_shells().len(), 1);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let want = BOX_VOLUME - 27.0 - (1.0 - std::f64::consts::FRAC_PI_4) * radius * radius * 10.0;
+    let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+    assert!(
+        (volume - want).abs() < 1e-4 * want,
+        "volume {volume}, want {want}"
+    );
+}
+
+/// The result's cavity is its own: moving the result in place leaves the
+/// input's cavity where it was.
+#[test]
+fn a_filleted_blocks_cavity_is_its_own() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::transform::transform_solid;
+
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+    let result = fillet_v2(&mut topo, hollow, &[edge], 1.0).unwrap();
+    transform_solid(&mut topo, result.solid, &Mat4::translation(0.0, 0.0, 100.0)).unwrap();
+    let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+    for &face in topo.shell(cavity).unwrap().faces() {
+        for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+            let z = topo.vertex(v).unwrap().point().z();
+            assert!(
+                (3.5 - 1e-9..=6.5 + 1e-9).contains(&z),
+                "input cavity moved to z {z}"
+            );
+        }
+    }
+}
+
+/// A cavity 0.05 behind the front face and 0.5 below the top: a fillet of
+/// radius 1 along their edge would cut into it, so it is refused and the
+/// block left as it was.
+#[test]
+fn fillet_refuses_to_reach_a_cavity() {
+    let mut topo = Topology::new();
+    let (hollow, edge) = hollow_block(&mut topo, (3.5, 0.05, 6.5));
+    let volume = solid_volume(&topo, hollow, 0.001).unwrap();
+    let result = fillet_v2(&mut topo, hollow, &[edge], 1.0).unwrap();
+    assert_eq!(result.solid, hollow);
+    assert!(result.succeeded.is_empty());
+    assert_eq!(result.failed.len(), 1, "{:?}", result.failed);
+    let report = validate_solid(&topo, hollow).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let after = solid_volume(&topo, hollow, 0.001).unwrap();
+    assert!(
+        (after - volume).abs() < 1e-9 * volume,
+        "{after} vs {volume}"
+    );
+}
+
+/// A rod of height 10 with a 3 cube cavity at its middle: a radius 1
+/// fillet of its top rim takes material only within 1 of z = 10, so the
+/// cavity stays, however wide the rod. The ring taken off, a square corner
+/// less a quarter disc, sweeps round the axis at its centroid (Pappus).
+#[test]
+fn fillet_of_a_rim_well_clear_of_a_cavity_keeps_it() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::transform::transform_solid;
+    use std::f64::consts::{FRAC_PI_4, PI, TAU};
+
+    // The wide rod's reach is what is tested; its fine volume is slow.
+    for (radius, measure) in [(10.0, true), (1000.0, false)] {
+        let mut topo = Topology::new();
+        let rod = make_cylinder(&mut topo, radius, 10.0).unwrap();
+        let cube = make_box(&mut topo, 3.0, 3.0, 3.0).unwrap();
+        transform_solid(&mut topo, cube, &Mat4::translation(-1.5, -1.5, 3.5)).unwrap();
+        let hollow = boolean(&mut topo, BooleanOp::Cut, rod, cube).unwrap();
+        assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+        let rim = solid_edges(&topo, hollow)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                matches!(topo.edge(e).unwrap().curve(),
+                    EdgeCurve::Circle(c) if (c.center().z() - 10.0).abs() < 1e-9)
+            })
+            .unwrap();
+        let result = fillet_v2(&mut topo, hollow, &[rim], 1.0).unwrap();
+        assert!(
+            result.failed.is_empty(),
+            "radius {radius}: {:?}",
+            result.failed
+        );
+        assert_eq!(topo.solid(result.solid).unwrap().inner_shells().len(), 1);
+        let report = validate_solid(&topo, result.solid).unwrap();
+        assert!(report.is_valid(), "radius {radius}: {:?}", report.issues);
+        if !measure {
+            continue;
+        }
+        let centroid = (10.0 - 3.0 * PI) / (12.0 - 3.0 * PI);
+        let want = (1.0 - FRAC_PI_4) * TAU * (radius - centroid);
+        // The torus band's volume reads short at a coarse deflection, so
+        // the removed ring is measured fine.
+        let removed = solid_volume(&topo, hollow, 1e-4).unwrap()
+            - solid_volume(&topo, result.solid, 1e-4).unwrap();
+        assert!(
+            (removed - want).abs() < 1e-2 * want,
+            "radius {radius}: removed {removed}, want {want}"
+        );
+    }
+}
+
 /// Distance-angle chamfer on a single edge.
 #[test]
 fn chamfer_box_distance_angle() {

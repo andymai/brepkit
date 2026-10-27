@@ -946,6 +946,90 @@ impl SolidSnapshot {
     }
 }
 
+/// Copies of `shells` sharing no vertex, edge, wire or face with them,
+/// their pcurves carried over: a result given an input's shells as they
+/// are would move with the input under an in-place transform of either.
+///
+/// # Errors
+///
+/// Returns [`BlendError`] if a topology lookup fails.
+pub fn copy_shells(topo: &mut Topology, shells: &[ShellId]) -> Result<Vec<ShellId>, BlendError> {
+    let mut vertices: std::collections::HashMap<VertexId, VertexId> =
+        std::collections::HashMap::new();
+    let mut edges: std::collections::HashMap<EdgeId, EdgeId> = std::collections::HashMap::new();
+    let mut wires: std::collections::HashMap<WireId, WireId> = std::collections::HashMap::new();
+    let mut copies = Vec::with_capacity(shells.len());
+    for &shell in shells {
+        let mut faces = Vec::new();
+        for face_id in topo.shell(shell)?.faces().to_vec() {
+            let face = topo.face(face_id)?.clone();
+            let mut face_wires = Vec::new();
+            for wire_id in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                if let Some(&copy) = wires.get(&wire_id) {
+                    face_wires.push(copy);
+                    continue;
+                }
+                let wire = topo.wire(wire_id)?.clone();
+                let mut oriented = Vec::with_capacity(wire.edges().len());
+                for oe in wire.edges() {
+                    let copy = if let Some(&copy) = edges.get(&oe.edge()) {
+                        copy
+                    } else {
+                        let mut edge = topo.edge(oe.edge())?.clone();
+                        for (vertex, set) in [(edge.start(), true), (edge.end(), false)] {
+                            let copy = if let Some(&copy) = vertices.get(&vertex) {
+                                copy
+                            } else {
+                                let v = topo.vertex(vertex)?.clone();
+                                let copy = topo.add_vertex(v);
+                                vertices.insert(vertex, copy);
+                                copy
+                            };
+                            if set {
+                                edge.set_start(copy);
+                            } else {
+                                edge.set_end(copy);
+                            }
+                        }
+                        let copy = topo.add_edge(edge);
+                        edges.insert(oe.edge(), copy);
+                        copy
+                    };
+                    oriented.push(OrientedEdge::new(copy, oe.is_forward()));
+                }
+                let copy = topo.add_wire(Wire::new(oriented, wire.is_closed())?);
+                wires.insert(wire_id, copy);
+                face_wires.push(copy);
+            }
+            let (&outer, inner) =
+                face_wires
+                    .split_first()
+                    .ok_or(brepkit_topology::TopologyError::Empty {
+                        entity: "face wires",
+                    })?;
+            let mut copy = Face::new(outer, inner.to_vec(), face.surface().clone());
+            copy.set_reversed(face.is_reversed());
+            let copy_id = topo.add_face(copy);
+            let pcurves: Vec<(EdgeId, brepkit_topology::pcurve::PCurve)> = topo
+                .pcurves()
+                .pcurves_for_face(face_id)
+                .into_iter()
+                .map(|(edge, pcurve)| (edge, pcurve.clone()))
+                .collect();
+            for (edge, pcurve) in pcurves {
+                if let Some(&copy) = edges.get(&edge) {
+                    topo.pcurves_mut().set(copy, copy_id, pcurve);
+                }
+            }
+            faces.push(copy_id);
+        }
+        copies.push(topo.add_shell(Shell::new(faces)?));
+    }
+    Ok(copies)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

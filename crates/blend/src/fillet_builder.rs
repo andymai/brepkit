@@ -6,12 +6,13 @@
 
 use std::collections::HashSet;
 
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::curves::Circle3D;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
-use brepkit_topology::shell::Shell;
+use brepkit_topology::shell::{Shell, ShellId};
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire};
@@ -188,7 +189,10 @@ impl<'a> FilletBuilder<'a> {
 
         let topo = self.topo;
         let adjacency = topo.build_adjacency(self.solid)?;
-        let shell_id = topo.solid(self.solid)?.outer_shell();
+        let source = topo.solid(self.solid)?;
+        // Only the outer shell's edges are blended (the adjacency reads no
+        // other), so the cavities carry over as they are.
+        let (shell_id, inner_shells) = (source.outer_shell(), source.inner_shells().to_vec());
         let original_faces: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
         let mut touched_faces: HashSet<FaceId> = HashSet::new();
         let mut failed: Vec<(EdgeId, BlendError)> = Vec::new();
@@ -260,6 +264,35 @@ impl<'a> FilletBuilder<'a> {
                 failed,
                 is_partial: false,
             });
+        }
+        // The cavities carry over untouched, so the material a stripe takes
+        // off must stay clear of them: a fillet reaching one would leave the
+        // new outer shell running through it.
+        if !inner_shells.is_empty() {
+            let cavities = inner_shells
+                .iter()
+                .map(|&shell| shell_bounds(topo, shell))
+                .collect::<Result<Vec<_>, _>>()?;
+            for sr in &stripe_results {
+                let removed = removed_material_bounds(topo, &sr.stripe)?;
+                if cavities.iter().any(|cavity| cavity.intersects(removed)) {
+                    for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges)
+                    {
+                        failed.push((
+                            edge_id,
+                            BlendError::PlanningFailure {
+                                reason: "the fillet reaches a cavity".to_owned(),
+                            },
+                        ));
+                    }
+                    return Ok(BlendResult {
+                        solid: self.solid,
+                        succeeded: Vec::new(),
+                        failed,
+                        is_partial: true,
+                    });
+                }
+            }
         }
         let setback_edges = if let Some(plan) = plan.as_ref() {
             // `original_faces` is this build's own solid's shell, captured
@@ -1524,7 +1557,8 @@ impl<'a> FilletBuilder<'a> {
             }
         };
         let new_shell_id = topo.add_shell(new_shell);
-        let new_solid = Solid::new(new_shell_id, Vec::new());
+        let cavities = crate::builder_utils::copy_shells(topo, &inner_shells)?;
+        let new_solid = Solid::new(new_shell_id, cavities);
         let new_solid_id = topo.add_solid(new_solid);
         // A requested edge is successful only after every support, blend, and
         // shell-incidence step above has completed. Geometry-only success is
@@ -2191,6 +2225,167 @@ fn succeeded_candidates(
     result.dedup_by_key(|edge| edge.index());
     result
 }
+
+/// Two corners of the cube of half-width `half` about `center`.
+fn cube_about(center: Point3, half: f64) -> [Point3; 2] {
+    let d = Vec3::new(half, half, half);
+    [center - d, center + d]
+}
+
+/// Points whose box holds a NURBS curve: its control points, whose hull
+/// holds it while every weight is positive, or an unbounded box.
+fn nurbs_curve_hull(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Vec<Point3> {
+    if curve.weights().iter().all(|&w| w > 0.0) {
+        curve.control_points().to_vec()
+    } else {
+        cube_about(Point3::new(0.0, 0.0, 0.0), f64::INFINITY).to_vec()
+    }
+}
+
+/// Two corners of the box of the whole conic `center + a cos t u + b sin t
+/// v`, which reaches `hypot(a u_i, b v_i)` either side along each axis.
+fn conic_box(center: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)) -> [Point3; 2] {
+    let d = Vec3::new(
+        (a * u.x()).hypot(b * v.x()),
+        (a * u.y()).hypot(b * v.y()),
+        (a * u.z()).hypot(b * v.z()),
+    );
+    [center - d, center + d]
+}
+
+/// Points whose box holds an edge: a line's ends, the box of the whole
+/// circle or ellipse it runs along, a NURBS curve's hull.
+fn edge_hull_points(topo: &Topology, edge_id: EdgeId) -> Result<Vec<Point3>, BlendError> {
+    let edge = topo.edge(edge_id)?;
+    Ok(match edge.curve() {
+        EdgeCurve::Line => vec![
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        ],
+        EdgeCurve::Circle(c) => conic_box(
+            c.center(),
+            (c.radius(), c.u_axis()),
+            (c.radius(), c.v_axis()),
+        )
+        .to_vec(),
+        EdgeCurve::Ellipse(e) => conic_box(
+            e.center(),
+            (e.semi_major(), e.u_axis()),
+            (e.semi_minor(), e.v_axis()),
+        )
+        .to_vec(),
+        EdgeCurve::NurbsCurve(n) => nurbs_curve_hull(n),
+    })
+}
+
+/// A box holding every face of `shell`. A plane, cylinder or cone face lies
+/// within the hull of its boundary (each of its points is on a straight
+/// segment between two boundary points), a sphere or torus face within its
+/// whole surface's extent, a NURBS face within its control points.
+fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, BlendError> {
+    let mut points = Vec::new();
+    for &face_id in topo.shell(shell)?.faces() {
+        let face = topo.face(face_id)?;
+        match face.surface() {
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+            FaceSurface::Sphere(s) => points.extend(cube_about(s.center(), s.radius())),
+            FaceSurface::Torus(t) => {
+                points.extend(cube_about(t.center(), t.major_radius() + t.minor_radius()));
+            }
+            FaceSurface::Nurbs(n) => {
+                if n.weights().iter().flatten().all(|&w| w > 0.0) {
+                    points.extend(n.control_points().iter().flatten().copied());
+                } else {
+                    points.extend(cube_about(Point3::new(0.0, 0.0, 0.0), f64::INFINITY));
+                }
+            }
+        }
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                points.extend(edge_hull_points(topo, oe.edge())?);
+            }
+        }
+    }
+    Ok(Aabb3::from_points(points))
+}
+
+/// Distance from `p` to the stretch of curve an edge spans: exact for a
+/// line, the curve's own projection for a circle, ellipse or NURBS curve,
+/// or the nearer end where that falls outside the edge's span.
+fn distance_to_edge(topo: &Topology, edge_id: EdgeId, p: Point3) -> Result<f64, BlendError> {
+    let edge = topo.edge(edge_id)?;
+    let (sp, ep) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let curve = edge.curve();
+    let ends = (p - sp).length().min((p - ep).length());
+    let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+    let on_arc = |t: f64| {
+        let t = t0 + (t - t0).rem_euclid(std::f64::consts::TAU);
+        if t <= t1 {
+            (p - curve.evaluate_with_endpoints(t, sp, ep)).length()
+        } else {
+            ends
+        }
+    };
+    Ok(match curve {
+        EdgeCurve::Line => {
+            let d = ep - sp;
+            let len2 = d.dot(d);
+            let s = if len2 > 0.0 {
+                ((p - sp).dot(d) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (p - (sp + d * s)).length()
+        }
+        EdgeCurve::Circle(c) => on_arc(c.project(p)),
+        EdgeCurve::Ellipse(e) => on_arc(e.project(p)),
+        // A foot on the stored curve beyond the edge's span would read a
+        // stretch the edge does not run along.
+        EdgeCurve::NurbsCurve(n) => {
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
+                .ok()
+                .filter(|found| (lo..=hi).contains(&found.parameter))
+                .map_or(ends, |found| found.distance.min(ends))
+        }
+    })
+}
+
+/// A box holding the material a stripe takes off. Across the stripe that
+/// material lies between the spine, the two neighbours' curves out to the
+/// contacts and the blend arc, each turning less than half a circle and so
+/// lying within its chord's length of its ends: the box of the spine and
+/// contact curves, grown by twice the farthest contact's distance from the
+/// spine (a chord across a curved spine runs a little longer than that
+/// distance). The distance is read from points on the contact curves to
+/// the spine edges' own curves, as a rational curve's control points can
+/// stand well off it.
+fn removed_material_bounds(topo: &Topology, stripe: &Stripe) -> Result<Aabb3, BlendError> {
+    const CONTACT_SAMPLES: u32 = 64;
+    let mut points = Vec::new();
+    for &edge_id in stripe.spine.edges() {
+        points.extend(edge_hull_points(topo, edge_id)?);
+    }
+    let mut reach = 0.0_f64;
+    for contact in [&stripe.contact1, &stripe.contact2] {
+        points.extend(nurbs_curve_hull(contact));
+        let (t0, t1) = contact.domain();
+        for k in 0..=CONTACT_SAMPLES {
+            let c =
+                contact.evaluate((t1 - t0).mul_add(f64::from(k) / f64::from(CONTACT_SAMPLES), t0));
+            let mut near = f64::INFINITY;
+            for &edge_id in stripe.spine.edges() {
+                near = near.min(distance_to_edge(topo, edge_id, c)?);
+            }
+            reach = reach.max(near);
+        }
+    }
+    Ok(Aabb3::from_points(points).expanded(2.0 * reach))
+}
+
 /// Check the geometric constraints retained by a computed stripe.
 ///
 /// The walking solver already checks its Newton residual while marching. This
@@ -3241,6 +3436,31 @@ mod tests {
     use brepkit_topology::test_utils::make_unit_cube_manifold;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A NURBS edge running along the first half of a 10 long line, forward
+    /// and reversed: a point over the unused half reads its distance to the
+    /// edge's own end, not to the curve beyond it.
+    #[test]
+    fn a_trimmed_nurbs_edge_reads_distance_within_its_span() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(5.0, 0.0, 0.0), 1e-7));
+        let p = Point3::new(8.0, 1.0, 0.0);
+        let want = (p - Point3::new(5.0, 0.0, 0.0)).length();
+        for (start, end) in [(a, b), (b, a)] {
+            let edge = topo.add_edge(Edge::new(start, end, EdgeCurve::NurbsCurve(line.clone())));
+            let d = distance_to_edge(&topo, edge, p).unwrap();
+            assert!((d - want).abs() < 1e-9, "{d} vs {want}");
+        }
+    }
 
     #[test]
     fn fillet_builder_empty_edges_error() {
