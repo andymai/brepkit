@@ -128,6 +128,110 @@ pub struct Cdt {
     /// "Hash table capacity overflow" (#1517). The budget below turns that
     /// into a local `ConvergenceFailure`.
     recovery_inserts: usize,
+    /// Index for the on-segment vertex scan in `insert_constraint`.
+    vertex_grid: VertexGrid,
+}
+
+/// Uniform grid over the inserted vertices, so finding the vertices that lie
+/// on a new constraint costs the segment's neighbourhood instead of every
+/// vertex. A face with hundreds of holes inserts thousands of constraints.
+#[derive(Default)]
+struct VertexGrid {
+    origin: (f64, f64),
+    inv_cell: f64,
+    nx: usize,
+    ny: usize,
+    cells: Vec<Vec<usize>>,
+    /// Vertices below this index are in `cells`.
+    indexed: usize,
+    /// Number of vertices `cells` was laid out for.
+    laid_out_for: usize,
+}
+
+/// Below this many vertices the on-segment scan reads every vertex.
+const VERTEX_GRID_MIN: usize = 64;
+
+impl VertexGrid {
+    /// Index the vertices added since the last call, laying the grid out
+    /// again whenever the count has doubled so cells stay about one vertex.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    fn sync(&mut self, vertices: &[Point2], first: usize) {
+        let n = vertices.len().saturating_sub(first);
+        if n < VERTEX_GRID_MIN {
+            return;
+        }
+        if self.cells.is_empty() || n > 2 * self.laid_out_for {
+            let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            for p in &vertices[first..] {
+                if p.x().is_finite() && p.y().is_finite() {
+                    x0 = x0.min(p.x());
+                    y0 = y0.min(p.y());
+                    x1 = x1.max(p.x());
+                    y1 = y1.max(p.y());
+                }
+            }
+            if x0 > x1 {
+                (x0, y0, x1, y1) = (0.0, 0.0, 0.0, 0.0);
+            }
+            let (w, h) = (x1 - x0, y1 - y0);
+            let area_cell = (w * h / n as f64).sqrt();
+            let cell = if area_cell > 0.0 {
+                area_cell
+            } else if w.max(h) > 0.0 {
+                w.max(h) / n as f64
+            } else {
+                1.0
+            };
+            let cap = 4 * n;
+            self.nx = ((w / cell) as usize + 1).clamp(1, cap);
+            self.ny = ((h / cell) as usize + 1).clamp(1, (cap / self.nx).max(1));
+            self.origin = (x0, y0);
+            self.inv_cell = 1.0 / cell;
+            self.cells = vec![Vec::new(); self.nx * self.ny];
+            self.indexed = first;
+            self.laid_out_for = n;
+        }
+        for (vi, &p) in vertices.iter().enumerate().skip(self.indexed) {
+            let (ix, iy) = self.cell_of(p.x(), p.y());
+            self.cells[iy * self.nx + ix].push(vi);
+        }
+        self.indexed = vertices.len();
+    }
+
+    /// Cell holding `(x, y)`, clamped onto the grid. The clamp is monotonic,
+    /// so a box query still reaches vertices that fell outside the grid.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    fn cell_of(&self, x: f64, y: f64) -> (usize, usize) {
+        let ix = ((x - self.origin.0) * self.inv_cell).floor().max(0.0) as usize;
+        let iy = ((y - self.origin.1) * self.inv_cell).floor().max(0.0) as usize;
+        (ix.min(self.nx - 1), iy.min(self.ny - 1))
+    }
+
+    /// Every indexed vertex inside `[lo, hi]` (and possibly some outside), in
+    /// ascending order, or `None` when the grid is not in use or the box
+    /// spans more cells than reading every vertex would cost.
+    fn near(&self, lo: Point2, hi: Point2, first: usize) -> Option<Vec<usize>> {
+        if self.cells.is_empty() {
+            return None;
+        }
+        let (ix0, iy0) = self.cell_of(lo.x(), lo.y());
+        let (ix1, iy1) = self.cell_of(hi.x(), hi.y());
+        if (ix1 - ix0 + 1) * (iy1 - iy0 + 1) > self.indexed - first {
+            return None;
+        }
+        let mut out = Vec::new();
+        for iy in iy0..=iy1 {
+            for ix in ix0..=ix1 {
+                out.extend_from_slice(&self.cells[iy * self.nx + ix]);
+            }
+        }
+        out.sort_unstable();
+        Some(out)
+    }
 }
 
 /// Cap on points constraint recovery may mint for one triangulation.
@@ -204,6 +308,7 @@ impl Cdt {
             last_located: 0,
             vertex_tri,
             recovery_inserts: 0,
+            vertex_grid: VertexGrid::default(),
         }
     }
 
@@ -327,11 +432,6 @@ impl Cdt {
         // If found, recursively split the constraint through them so that
         // recover_edge never encounters a collinear interior vertex (which
         // causes flip-recovery deadlocks on full-revolution face seams).
-        //
-        // This is an O(V) scan per constraint. For typical tessellation CDTs
-        // (< 10K vertices, < 100 constraints) the cost is negligible. A spatial
-        // index could reduce this to O(k) but dup_grid's 1e-5 cell size makes
-        // AABB iteration pathological for long segments.
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
         let dx = p1.x() - p0.x();
@@ -339,22 +439,34 @@ impl Cdt {
         let seg_len_sq = dx * dx + dy * dy;
 
         if seg_len_sq > 0.0 {
+            // A vertex the test below accepts lies within 1e-6 of the
+            // segment's length of it; the pad leaves room for rounding.
+            let pad = 1e-5 * seg_len_sq.sqrt();
+            let lo = Point2::new(p0.x().min(p1.x()) - pad, p0.y().min(p1.y()) - pad);
+            let hi = Point2::new(p0.x().max(p1.x()) + pad, p0.y().max(p1.y()) + pad);
+            self.vertex_grid.sync(&self.vertices, self.super_count);
+            let near = self.vertex_grid.near(lo, hi, self.super_count);
+
             let mut collinear: Vec<(f64, usize)> = Vec::new();
-            for vi in self.super_count..self.vertices.len() {
+            let mut test = |vi: usize| {
                 if vi == v0 || vi == v1 {
-                    continue;
+                    return;
                 }
                 let px = self.vertices[vi].x() - p0.x();
                 let py = self.vertices[vi].y() - p0.y();
                 let t = (px * dx + py * dy) / seg_len_sq;
                 if t <= 1e-6 || t >= 1.0 - 1e-6 {
-                    continue;
+                    return;
                 }
                 let cross = px * dy - py * dx;
                 let dist_sq = cross * cross / seg_len_sq;
                 if dist_sq < 1e-12 * seg_len_sq {
                     collinear.push((t, vi));
                 }
+            };
+            match near {
+                Some(candidates) => candidates.into_iter().for_each(&mut test),
+                None => (self.super_count..self.vertices.len()).for_each(&mut test),
             }
 
             if !collinear.is_empty() {
@@ -471,10 +583,8 @@ impl Cdt {
         // The flood must also respect the CDT's OWN constraints: edge
         // recovery may have split a caller-known constraint into sub-pairs
         // (Steiner points), and the caller's set only carries the original
-        // endpoints. Without the union the flood crosses the sub-edges.
-        let barrier: DetHashSet<(usize, usize)> =
-            constraints.union(&self.constraints).copied().collect();
-        let constraints = &barrier;
+        // endpoints. Both sets are consulted in place: copying them into one
+        // per call made a face's hole removal quadratic in its hole count.
         // Use the walking point-location search (O(sqrt(n))) instead of
         // linear scan (O(n)) to find the seed triangle.
         let seed_tri = self.locate_point(seed).ok().map(|(i, _)| i).or_else(|| {
@@ -510,7 +620,7 @@ impl Cdt {
                 let va = self.triangles[ti].v[(local + 1) % 3];
                 let vb = self.triangles[ti].v[(local + 2) % 3];
                 let edge_key = sorted_pair(va, vb);
-                if constraints.contains(&edge_key) {
+                if constraints.contains(&edge_key) || self.constraints.contains(&edge_key) {
                     continue;
                 }
                 if let Some(adj) = self.triangles[ti].adj[local]

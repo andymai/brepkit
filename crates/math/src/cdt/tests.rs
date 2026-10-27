@@ -886,3 +886,93 @@ fn cdt_crossing_fan_stays_inside_the_recovery_budget() {
     );
     assert!(!cdt.triangles().is_empty());
 }
+
+#[test]
+fn constraint_splits_through_vertices_found_by_the_grid() {
+    let mut cdt = Cdt::new((Point2::new(-1.0, -1.0), Point2::new(6.0, 2.0)));
+    let mut at = std::collections::HashMap::new();
+    for i in 0..10 {
+        for j in 0..10 {
+            let (x, y) = (f64::from(i) * 0.1, f64::from(j) * 0.1);
+            at.insert((i, j), cdt.insert_point(Point2::new(x, y)).unwrap());
+        }
+    }
+    assert!(cdt.vertices.len() - cdt.super_count >= VERTEX_GRID_MIN);
+
+    // The diagonal passes through eight grid vertices and must be split at
+    // each of them.
+    cdt.insert_constraint(at[&(0, 0)], at[&(9, 9)]).unwrap();
+    assert!(!cdt.vertex_grid.cells.is_empty(), "grid not in use");
+    for k in 0..9 {
+        let key = sorted_pair(at[&(k, k)], at[&(k + 1, k + 1)]);
+        assert!(cdt.constraint_edges().contains(&key), "missing piece {k}");
+    }
+    assert!(
+        !cdt.constraint_edges()
+            .contains(&sorted_pair(at[&(0, 0)], at[&(9, 9)]))
+    );
+
+    // Vertices inserted after the grid was laid out, and outside its bounds,
+    // are still found on a later constraint.
+    let a = cdt.insert_point(Point2::new(2.0, 0.55)).unwrap();
+    let mid = cdt.insert_point(Point2::new(3.0, 0.55)).unwrap();
+    let b = cdt.insert_point(Point2::new(5.0, 0.55)).unwrap();
+    cdt.insert_constraint(a, b).unwrap();
+    assert!(cdt.constraint_edges().contains(&sorted_pair(a, mid)));
+    assert!(cdt.constraint_edges().contains(&sorted_pair(mid, b)));
+    assert!(!cdt.constraint_edges().contains(&sorted_pair(a, b)));
+}
+
+#[test]
+fn many_hole_constraints_match_a_full_scan() {
+    // Rings of points with shared x and y coordinates put many vertices on
+    // and beside each constraint's line; the indexed scan has to split every
+    // constraint exactly where reading every vertex would.
+    let mut cdt = Cdt::new((Point2::new(-1.0, -1.0), Point2::new(21.0, 21.0)));
+    let mut rings = Vec::new();
+    for i in 0..10 {
+        for j in 0..10 {
+            let (cx, cy) = (2.0 * f64::from(i) + 1.0, 2.0 * f64::from(j) + 1.0);
+            let ring: Vec<usize> = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
+                .iter()
+                .map(|&(dx, dy)| cdt.insert_point(Point2::new(cx + dx, cy + dy)).unwrap())
+                .collect();
+            rings.push(ring);
+        }
+    }
+    let expected = |cdt: &Cdt, a: usize, b: usize| -> Vec<usize> {
+        let (p0, p1) = (cdt.vertices[a], cdt.vertices[b]);
+        let (dx, dy) = (p1.x() - p0.x(), p1.y() - p0.y());
+        let len_sq = dx * dx + dy * dy;
+        let mut on: Vec<(f64, usize)> = (cdt.super_count..cdt.vertices.len())
+            .filter(|&vi| vi != a && vi != b)
+            .filter_map(|vi| {
+                let (px, py) = (cdt.vertices[vi].x() - p0.x(), cdt.vertices[vi].y() - p0.y());
+                let t = (px * dx + py * dy) / len_sq;
+                let cross = px * dy - py * dx;
+                (t > 1e-6 && t < 1.0 - 1e-6 && cross * cross / len_sq < 1e-12 * len_sq)
+                    .then_some((t, vi))
+            })
+            .collect();
+        on.sort_by(|x, y| x.0.total_cmp(&y.0));
+        on.into_iter().map(|(_, vi)| vi).collect()
+    };
+    // A long constraint along a row of ring corners, then every ring edge.
+    let first = rings[0][0];
+    let last = rings[90][1];
+    let through = expected(&cdt, first, last);
+    assert!(through.len() > 10);
+    cdt.insert_constraint(first, last).unwrap();
+    let mut chain = vec![first];
+    chain.extend(&through);
+    chain.push(last);
+    for w in chain.windows(2) {
+        assert!(cdt.constraint_edges().contains(&sorted_pair(w[0], w[1])));
+    }
+    for ring in &rings {
+        for k in 0..4 {
+            cdt.insert_constraint(ring[k], ring[(k + 1) % 4]).unwrap();
+        }
+    }
+    assert!(!cdt.vertex_grid.cells.is_empty(), "grid not in use");
+}
