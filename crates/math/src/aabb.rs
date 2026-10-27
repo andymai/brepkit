@@ -217,6 +217,37 @@ impl Aabb3 {
         )
     }
 
+    /// Whether the whole line through `origin` along `dir`, both ways,
+    /// meets this box (touching counts).
+    ///
+    /// A zero direction component is tested by the origin's coordinate
+    /// alone, so an origin lying on a face of the box with the line in that
+    /// face still meets it.
+    #[must_use]
+    pub fn line_intersects(self, origin: Point3, dir: Vec3) -> bool {
+        let mut lo = f64::NEG_INFINITY;
+        let mut hi = f64::INFINITY;
+        for (o, d, min, max) in [
+            (origin.x(), dir.x(), self.min.x(), self.max.x()),
+            (origin.y(), dir.y(), self.min.y(), self.max.y()),
+            (origin.z(), dir.z(), self.min.z(), self.max.z()),
+        ] {
+            if d == 0.0 {
+                if o < min || o > max {
+                    return false;
+                }
+                continue;
+            }
+            let (t1, t2) = ((min - o) / d, (max - o) / d);
+            lo = lo.max(t1.min(t2));
+            hi = hi.min(t1.max(t2));
+            if lo > hi {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Test whether a ray (origin + positive-t direction) intersects this box.
     ///
     /// Uses the slab method. Returns `true` if the ray hits the box at any

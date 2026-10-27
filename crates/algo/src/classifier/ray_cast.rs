@@ -450,7 +450,7 @@ pub fn ray_cast_inside_votes(
     point: Point3,
 ) -> Result<u8, AlgoError> {
     let face_data = collect_face_geoms(topo, solid)?;
-    votes_from_geoms(&face_data, point)
+    votes_from_geoms(&face_data, None, point)
 }
 
 /// Pre-collected ray-cast geometry for a solid, built once and reused across
@@ -466,6 +466,32 @@ pub struct RayCastGeoms {
     /// The solid's closed-form classifier, built once with the geometry
     /// (its convexity guard walks every vertex, too much per point).
     analytic: Option<super::analytic::AnalyticClassifier>,
+    /// Which faces a ray can meet, for a solid with many faces.
+    index: Option<GeomIndex>,
+    /// A solid with many faces' planar faces by plane; `None` otherwise.
+    planar_by_offset: Option<PlanarFaces>,
+}
+
+/// A solid's planar faces keyed by plane: `d` along the normal turned so its
+/// first component past one half in size is positive, which a plane and its
+/// flip share. Faces whose normal has a component too near one half for that
+/// to be stable are kept apart and returned for every plane.
+struct PlanarFaces {
+    /// `(key, position in the solid's faces, face)`, sorted by key.
+    keyed: Vec<(f64, usize, brepkit_topology::face::FaceId)>,
+    unkeyed: Vec<(usize, brepkit_topology::face::FaceId)>,
+}
+
+/// The sign that turns `normal` to its canonical orientation, or `None` when
+/// a component lies too near one half in size to read it stably.
+fn plane_turn(normal: Vec3) -> Option<f64> {
+    let c = [normal.x(), normal.y(), normal.z()];
+    if c.iter()
+        .any(|v| !v.is_finite() || (v.abs() - 0.5).abs() <= 1e-5)
+    {
+        return None;
+    }
+    c.iter().find(|v| v.abs() > 0.5).map(|v| v.signum())
 }
 
 impl RayCastGeoms {
@@ -475,9 +501,33 @@ impl RayCastGeoms {
     ///
     /// Returns [`AlgoError`] if a topology lookup fails.
     pub fn new(topo: &Topology, solid: SolidId) -> Result<Self, AlgoError> {
+        let face_ids = brepkit_topology::explorer::solid_faces(topo, solid)?;
+        let faces = collect_geoms_of(topo, &face_ids)?;
+        let planar_by_offset = if face_ids.len() >= GEOM_INDEX_MIN {
+            let mut planar = PlanarFaces {
+                keyed: Vec::new(),
+                unkeyed: Vec::new(),
+            };
+            for (pos, &fid) in face_ids.iter().enumerate() {
+                if let brepkit_topology::face::FaceSurface::Plane { normal, d } =
+                    topo.face(fid)?.surface()
+                {
+                    match plane_turn(*normal) {
+                        Some(turn) => planar.keyed.push((d * turn, pos, fid)),
+                        None => planar.unkeyed.push((pos, fid)),
+                    }
+                }
+            }
+            planar.keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
+            Some(planar)
+        } else {
+            None
+        };
         Ok(Self {
-            faces: collect_face_geoms(topo, solid)?,
+            index: GeomIndex::new(&faces),
+            faces,
             analytic: super::analytic::try_build_analytic_classifier(topo, solid),
+            planar_by_offset,
         })
     }
 
@@ -492,9 +542,12 @@ impl RayCastGeoms {
         topo: &Topology,
         faces: &[brepkit_topology::face::FaceId],
     ) -> Result<Self, AlgoError> {
+        let faces = collect_geoms_of(topo, faces)?;
         Ok(Self {
-            faces: collect_geoms_of(topo, faces)?,
+            index: GeomIndex::new(&faces),
+            faces,
             analytic: None,
+            planar_by_offset: None,
         })
     }
 
@@ -503,6 +556,300 @@ impl RayCastGeoms {
     pub const fn analytic(&self) -> Option<&super::analytic::AnalyticClassifier> {
         self.analytic.as_ref()
     }
+
+    /// The solid's planar faces that may lie in the plane `normal · p = d`,
+    /// its flip included: every face whose normal is within 1e-6 of
+    /// `±normal` and whose offset is within `tol` of the matching `±d`, and
+    /// possibly some others, in the solid's face order. `None` when the solid
+    /// has too few faces to key them, or `normal` cannot be keyed.
+    pub(crate) fn planar_faces_near_plane(
+        &self,
+        normal: Vec3,
+        d: f64,
+        tol: f64,
+    ) -> Option<Vec<brepkit_topology::face::FaceId>> {
+        let planar = self.planar_by_offset.as_ref()?;
+        let at = d * plane_turn(normal)?;
+        let slack = tol + 1e-9 * d.abs().max(1.0);
+        let from = planar.keyed.partition_point(|e| e.0 < at - slack);
+        let mut hits: Vec<(usize, brepkit_topology::face::FaceId)> = planar.keyed[from..]
+            .iter()
+            .take_while(|e| e.0 <= at + slack)
+            .map(|e| (e.1, e.2))
+            .chain(planar.unkeyed.iter().copied())
+            .collect();
+        hits.sort_unstable_by_key(|h| h.0);
+        Some(hits.into_iter().map(|h| h.1).collect())
+    }
+
+    /// The same geometry read face by face on every ray, as a solid with
+    /// few faces is: for tests that hold the index to the full scan.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn without_index(mut self) -> Self {
+        self.index = None;
+        self.planar_by_offset = None;
+        self
+    }
+
+    /// Whether rays read an index rather than every face.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn is_indexed(&self) -> bool {
+        self.index.is_some()
+    }
+}
+
+/// Below this many faces every ray reads every face.
+const GEOM_INDEX_MIN: usize = 32;
+
+/// Which faces a ray can meet. Outside its face's box a crossing test counts
+/// nothing and reports no graze, with two exceptions kept apart: faces whose
+/// test can report a graze anywhere along the ray are read on every ray, and
+/// a ray running in a planar face's plane is found through `planes`.
+struct GeomIndex {
+    bvh: brepkit_math::bvh::Bvh,
+    always: Vec<usize>,
+    /// Planar faces' offsets, sorted, under each distinct normal.
+    planes: Vec<(Vec3, Vec<f64>)>,
+}
+
+impl GeomIndex {
+    fn new(faces: &[FaceGeom]) -> Option<Self> {
+        if faces.len() < GEOM_INDEX_MIN {
+            return None;
+        }
+        let tol = Tolerance::new();
+        let mut boxed = Vec::with_capacity(faces.len());
+        let mut always = Vec::new();
+        let mut planes: Vec<(Vec3, Vec<f64>)> = Vec::new();
+        let mut by_normal: std::collections::HashMap<[u64; 3], usize> =
+            std::collections::HashMap::new();
+        for (i, geom) in faces.iter().enumerate() {
+            if let FaceGeom::Planar { normal, d, .. } = geom {
+                let key = [
+                    normal.x().to_bits(),
+                    normal.y().to_bits(),
+                    normal.z().to_bits(),
+                ];
+                let group = *by_normal.entry(key).or_insert_with(|| {
+                    planes.push((*normal, Vec::new()));
+                    planes.len() - 1
+                });
+                planes[group].1.push(*d);
+            }
+            match geom_box(geom, tol) {
+                Some(b) => boxed.push((i, b)),
+                None => always.push(i),
+            }
+        }
+        for (_, ds) in &mut planes {
+            ds.sort_by(f64::total_cmp);
+        }
+        Some(Self {
+            bvh: brepkit_math::bvh::Bvh::build(&boxed),
+            always,
+            planes,
+        })
+    }
+
+    /// The faces the line through `origin` along `dir` may meet, ascending.
+    fn candidates(&self, origin: Point3, dir: Vec3, out: &mut Vec<usize>) {
+        self.bvh.query_line_into(origin, dir, out);
+        out.extend_from_slice(&self.always);
+        out.sort_unstable();
+    }
+
+    /// Whether the ray runs in some planar face's plane, read exactly as
+    /// [`ray_face_crossing`] reads it.
+    fn runs_in_a_plane(&self, origin: Point3, dir: Vec3, tol: Tolerance) -> bool {
+        let near = 10.0 * tol.linear;
+        self.planes.iter().any(|(normal, ds)| {
+            normal.dot(dir).abs() < tol.angular && {
+                let x = dot_normal_point(*normal, origin);
+                let slack = near + 1e-9 * x.abs().max(1.0);
+                let from = ds.partition_point(|&d| d < x - slack);
+                ds[from..]
+                    .iter()
+                    .take_while(|&&d| d <= x + slack)
+                    .any(|&d| (d - x).abs() <= near)
+            }
+        })
+    }
+}
+
+/// A box outside which `geom`'s crossing test counts nothing and reports no
+/// graze (apart from a ray in a planar face's plane), or `None` when there
+/// is none to give.
+///
+/// A cylinder or cone band lies in the hull of its end circles: a linear
+/// function along each ruling peaks at the band's ends, or at the apex,
+/// which the hull holds when the band spans it. A trimmed band's ends are
+/// read from its wires' curves, which bound it on a ruled surface.
+fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3> {
+    let near = 10.0 * tol.linear;
+    let raw = match geom {
+        FaceGeom::Planar {
+            verts,
+            holes,
+            circle_holes,
+            arcs,
+            hole_arcs,
+            normal,
+            d,
+        } => {
+            // A hit counts where it falls in the polygon seen along the
+            // normal's largest axis, so the box also holds the polygon carried
+            // along that axis onto the plane: a curved face read as a polygon
+            // does not lie in its fitted plane.
+            let (ax, ay, az) = (normal.x().abs(), normal.y().abs(), normal.z().abs());
+            let axis = if az >= ax && az >= ay {
+                Vec3::new(0.0, 0.0, 1.0)
+            } else if ay >= ax {
+                Vec3::new(0.0, 1.0, 0.0)
+            } else {
+                Vec3::new(1.0, 0.0, 0.0)
+            };
+            let along = normal.dot(axis);
+            if along == 0.0 || !along.is_finite() {
+                return None;
+            }
+            let onto = |v: Point3| v + axis * ((d - dot_normal_point(*normal, v)) / along);
+            let mut b = finite_box(
+                verts
+                    .iter()
+                    .chain(holes.iter().flatten())
+                    .copied()
+                    .chain(verts.iter().map(|&v| onto(v))),
+            )?;
+            for &(c, r) in circle_holes {
+                b = b.union(ball_box(c, r)?);
+            }
+            for seg in arcs.iter().chain(hole_arcs.iter().flatten()) {
+                b = b.union(match seg {
+                    Segment::Arc(a) => ball_box(a.center, a.radius)?,
+                    Segment::Curve(c) => curve_box(&c.curve, c.start, c.end)?,
+                });
+            }
+            b
+        }
+        FaceGeom::Cylinder {
+            surface,
+            v_min,
+            v_max,
+            trim,
+            ..
+        } => {
+            let (axis, origin) = (surface.axis(), surface.origin());
+            let (lo, hi) = match trim {
+                Some(t) => t.extent_along(axis, origin)?,
+                None => (*v_min, *v_max),
+            };
+            let r = surface.radius();
+            ball_box(origin + axis * lo, r)?.union(ball_box(origin + axis * hi, r)?)
+        }
+        FaceGeom::Cone {
+            surface,
+            v_min,
+            v_max,
+            trim,
+            ..
+        } => {
+            // A trimmed face across both nappes reads every hit as a graze.
+            if trim.is_some() && *v_min < -near && *v_max > near {
+                return None;
+            }
+            let (sin_a, cos_a) = surface.half_angle().sin_cos();
+            let (axis, apex) = (surface.axis(), surface.apex());
+            let (lo, hi) = match trim {
+                Some(t) => {
+                    if sin_a.abs() < 1e-9 {
+                        return None;
+                    }
+                    let (h_lo, h_hi) = t.extent_along(axis, apex)?;
+                    let (a, b) = (h_lo / sin_a, h_hi / sin_a);
+                    (a.min(b), a.max(b))
+                }
+                None => (*v_min, *v_max),
+            };
+            let ring = |v: f64| ball_box(apex + axis * (v * sin_a), v * cos_a);
+            ring(lo)?.union(ring(hi)?)
+        }
+        FaceGeom::Torus { surface, .. } | FaceGeom::TorusTrim { surface, .. } => {
+            let b = surface.aabb();
+            finite_box([b.min, b.max])?
+        }
+        FaceGeom::Sphere { surface, .. } | FaceGeom::SphereTrim { surface, .. } => {
+            let b = surface.aabb();
+            finite_box([b.min, b.max])?
+        }
+        FaceGeom::Extrusion { .. } => return None,
+    };
+    let coords = [
+        raw.min.x(),
+        raw.min.y(),
+        raw.min.z(),
+        raw.max.x(),
+        raw.max.y(),
+        raw.max.z(),
+    ];
+    if !coords.iter().all(|c| c.is_finite()) {
+        return None;
+    }
+    let reach = coords.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    let size = (raw.max - raw.min).length();
+    Some(raw.expanded(1e-4 + 1e-6 * size + 1e-9 * reach))
+}
+
+/// The box over `points`, or `None` when there are none or a coordinate is
+/// not finite: a box's min and max skip a NaN, so a box built through one
+/// would bound the points it has without it.
+fn finite_box(points: impl IntoIterator<Item = Point3>) -> Option<brepkit_math::aabb::Aabb3> {
+    let mut b: Option<brepkit_math::aabb::Aabb3> = None;
+    for p in points {
+        if !(p.x().is_finite() && p.y().is_finite() && p.z().is_finite()) {
+            return None;
+        }
+        let at = brepkit_math::aabb::Aabb3 { min: p, max: p };
+        b = Some(b.map_or(at, |b| b.union(at)));
+    }
+    b
+}
+
+/// The cube about `center` holding the ball of radius `r`, or `None` when
+/// it is not finite.
+fn ball_box(center: Point3, r: f64) -> Option<brepkit_math::aabb::Aabb3> {
+    let r = r.abs();
+    finite_box([
+        Point3::new(center.x() - r, center.y() - r, center.z() - r),
+        Point3::new(center.x() + r, center.y() + r, center.z() + r),
+    ])
+}
+
+/// A box holding the whole curve an edge runs on (and its ends), or `None`
+/// for a NURBS curve with a weight that is not positive, which can leave its
+/// control points' hull.
+fn curve_box(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    start: Point3,
+    end: Point3,
+) -> Option<brepkit_math::aabb::Aabb3> {
+    use brepkit_topology::edge::EdgeCurve;
+    let ends = finite_box([start, end])?;
+    Some(match curve {
+        EdgeCurve::Line => ends,
+        EdgeCurve::Circle(c) => ends.union(ball_box(c.center(), c.radius())?),
+        EdgeCurve::Ellipse(e) => ends.union(ball_box(
+            e.center(),
+            e.semi_major().abs().max(e.semi_minor().abs()),
+        )?),
+        EdgeCurve::NurbsCurve(n) => {
+            if !n.weights().iter().all(|&w| w > 0.0) {
+                return None;
+            }
+            ends.union(finite_box(n.control_points().iter().copied())?)
+        }
+    })
 }
 
 /// Inside-vote count for `point` using pre-collected geometry.
@@ -514,7 +861,7 @@ impl RayCastGeoms {
 ///
 /// Returns [`AlgoError`] if no face geometry was collected.
 pub fn ray_cast_inside_votes_cached(geoms: &RayCastGeoms, point: Point3) -> Result<u8, AlgoError> {
-    votes_from_geoms(&geoms.faces, point)
+    votes_from_geoms(&geoms.faces, geoms.index.as_ref(), point)
 }
 
 /// Ray-cast classification for `point` using pre-collected geometry.
@@ -526,7 +873,7 @@ pub fn classify_ray_cast_cached(
     geoms: &RayCastGeoms,
     point: Point3,
 ) -> Result<FaceClass, AlgoError> {
-    if votes_from_geoms(&geoms.faces, point)? >= 2 {
+    if votes_from_geoms(&geoms.faces, geoms.index.as_ref(), point)? >= 2 {
         Ok(FaceClass::Inside)
     } else {
         Ok(FaceClass::Outside)
@@ -541,7 +888,16 @@ pub fn classify_ray_cast_cached(
 pub fn ray_parity_cached(geoms: &RayCastGeoms, point: Point3, dir: Vec3) -> (bool, bool) {
     let tol = Tolerance::new();
     let (mut crossings, mut suspicious) = (0_i32, false);
-    for geom in &geoms.faces {
+    let mut candidates = Vec::new();
+    let faces: Box<dyn Iterator<Item = &FaceGeom>> = match &geoms.index {
+        Some(index) => {
+            index.candidates(point, dir, &mut candidates);
+            suspicious = index.runs_in_a_plane(point, dir, tol);
+            Box::new(candidates.iter().map(|&i| &geoms.faces[i]))
+        }
+        None => Box::new(geoms.faces.iter()),
+    };
+    for geom in faces {
         let (c, s) = ray_geom_crossings(point, dir, geom, tol);
         crossings += c;
         suspicious |= s;
@@ -573,7 +929,11 @@ fn ray_trace_target() -> Option<(Point3, f64)> {
 /// Count the inside votes (of three rays) for a point against pre-collected
 /// face geometry: cardinal rays first, re-cast with fixed generic directions
 /// only when every cardinal ray grazed degenerate structure.
-fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoError> {
+fn votes_from_geoms(
+    face_data: &[FaceGeom],
+    index: Option<&GeomIndex>,
+    point: Point3,
+) -> Result<u8, AlgoError> {
     if face_data.is_empty() {
         return Err(AlgoError::ClassificationFailed(
             "no face polygons collected for ray-cast".into(),
@@ -619,12 +979,22 @@ fn votes_from_geoms(face_data: &[FaceGeom], point: Point3) -> Result<u8, AlgoErr
     // fires when ALL THREE cardinal rays are suspicious.
     let traced = ray_trace_target().is_some_and(|(t, r)| (point - t).length() <= r);
 
-    let vote = |dirs: &[Vec3; 3], label: &str| -> [(bool, bool); 3] {
+    let mut candidates = Vec::new();
+    let mut vote = |dirs: &[Vec3; 3], label: &str| -> [(bool, bool); 3] {
         let mut rays = [(false, false); 3];
         for (i, ray_dir) in dirs.iter().enumerate() {
             let mut crossings = 0i32;
-            let mut suspicious = false;
-            for (gi, geom) in face_data.iter().enumerate() {
+            let mut suspicious = index.is_some_and(|index| {
+                index.candidates(point, *ray_dir, &mut candidates);
+                index.runs_in_a_plane(point, *ray_dir, tol)
+            });
+            let faces: Box<dyn Iterator<Item = usize>> = if index.is_some() {
+                Box::new(candidates.iter().copied())
+            } else {
+                Box::new(0..face_data.len())
+            };
+            for gi in faces {
+                let geom = &face_data[gi];
                 let (c, s) = ray_geom_crossings(point, *ray_dir, geom, tol);
                 if traced && (c != 0 || s) {
                     let tag = match geom {
@@ -1567,6 +1937,25 @@ impl UvTrim {
         } else {
             Some(Self { edges })
         })
+    }
+
+    /// The lowest and highest `axis · (p - base)` over the wires' whole
+    /// curves, or `None` when a curve cannot be bounded.
+    fn extent_along(&self, axis: Vec3, base: Point3) -> Option<(f64, f64)> {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for e in &self.edges {
+            let b = curve_box(&e.curve, e.start, e.end)?;
+            for x in [b.min.x(), b.max.x()] {
+                for y in [b.min.y(), b.max.y()] {
+                    for z in [b.min.z(), b.max.z()] {
+                        let h = axis.dot(Point3::new(x, y, z) - base);
+                        lo = lo.min(h);
+                        hi = hi.max(h);
+                    }
+                }
+            }
+        }
+        (lo <= hi).then_some((lo, hi))
     }
 
     /// The lowest and highest `v` the wires' samples reach.
@@ -3873,5 +4262,112 @@ mod tests {
             FaceClass::Outside,
             "point far from box should be Outside"
         );
+    }
+
+    /// The coplanar candidates for a plane must hold every face the
+    /// coincidence test in `classify_coincident_coplanar` passes, in the
+    /// solid's face order: flips, offsets at the tolerance, and normals whose
+    /// components sit at one half included.
+    #[test]
+    fn planar_candidates_hold_every_coincident_face_in_order() {
+        let mut topo = Topology::new();
+        let mut faces = Vec::new();
+        for k in 0..48_u32 {
+            let theta = f64::from(k) * 7.5_f64.to_radians();
+            let n = Vec3::new(theta.cos(), theta.sin(), 0.0);
+            let u = Vec3::new(-theta.sin(), theta.cos(), 0.0);
+            let w = Vec3::new(0.0, 0.0, 1.0);
+            for (j, d) in [1.0, 1.0 + 5e-8, -2.0].into_iter().enumerate() {
+                let c = Point3::new(0.0, 0.0, 0.0) + n * d;
+                let mut square = vec![c - u - w, c + u - w, c + u + w, c - u + w];
+                if (k as usize + j) % 2 == 1 {
+                    square.reverse();
+                }
+                faces.push(
+                    brepkit_topology::builder::make_planar_face(&mut topo, &square, 1e-7).unwrap(),
+                );
+            }
+        }
+        let shell = topo.add_shell(Shell::new(faces).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+        let geoms = RayCastGeoms::new(&topo, solid).unwrap();
+        let order = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let planes: Vec<(Vec3, f64)> = order
+            .iter()
+            .map(|&f| match topo.face(f).unwrap().surface() {
+                FaceSurface::Plane { normal, d } => (*normal, *d),
+                _ => unreachable!(),
+            })
+            .collect();
+
+        let (plane_tol, n_tol) = (1e-7, 1e-6);
+        let mut keyed = 0;
+        for &(n, d) in &planes {
+            for (dn, dd) in [(0.0, 0.0), (5e-7, 0.0), (0.0, 9e-8), (-5e-7, -9e-8)] {
+                let (n, d) = (Vec3::new(n.x() + dn, n.y() - dn, n.z()), d + dd);
+                let Some(got) = geoms.planar_faces_near_plane(n, d, plane_tol) else {
+                    continue;
+                };
+                keyed += 1;
+                let mut at = got.iter();
+                for (i, &(fnv, fd)) in planes.iter().enumerate() {
+                    let same = (fnv - n).length() < n_tol && (fd - d).abs() < plane_tol;
+                    let flip = (fnv + n).length() < n_tol && (fd + d).abs() < plane_tol;
+                    if same || flip {
+                        assert!(
+                            at.any(|&g| g == order[i]),
+                            "face {i} missing for plane {n:?} {d}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(keyed > 300, "too few keyed queries: {keyed}");
+    }
+
+    /// A face with a coordinate that is not a number has no box: the box's
+    /// min and max would skip it and bound the face without it.
+    #[test]
+    fn a_face_with_a_coordinate_that_is_not_a_number_has_no_box() {
+        let tol = Tolerance::new();
+        let square = |z: f64| {
+            vec![
+                Point3::new(0.0, 0.0, z),
+                Point3::new(1.0, 0.0, z),
+                Point3::new(1.0, 1.0, z),
+                Point3::new(0.0, 1.0, z),
+            ]
+        };
+        let planar = |verts: Vec<Point3>, circle_holes: Vec<(Point3, f64)>| FaceGeom::Planar {
+            verts,
+            holes: Vec::new(),
+            circle_holes,
+            arcs: Vec::new(),
+            hole_arcs: Vec::new(),
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        assert!(geom_box(&planar(square(0.0), Vec::new()), tol).is_some());
+        let mut verts = square(0.0);
+        verts.insert(2, Point3::new(f64::NAN, f64::NAN, 0.0));
+        assert!(geom_box(&planar(verts, Vec::new()), tol).is_none());
+        let hole = (Point3::new(0.5, 0.5, 0.0), f64::NAN);
+        assert!(geom_box(&planar(square(0.0), vec![hole]), tol).is_none());
+        let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+        )
+        .unwrap();
+        let band = |v_min: f64, v_max: f64| FaceGeom::Cylinder {
+            surface: cyl.clone(),
+            v_min,
+            v_max,
+            hole_bands: Vec::new(),
+            u_gap: None,
+            trim: None,
+        };
+        assert!(geom_box(&band(0.0, 2.0), tol).is_some());
+        assert!(geom_box(&band(0.0, f64::NAN), tol).is_none());
     }
 }
