@@ -1,0 +1,27 @@
+crates/wasm/src/kernel.rs
+  s_02588738a4f2ed::t_4c7304e399529e 1152-1185,1191,1196-1197
+  s_02588738a4f2ed::t_550c2d9ce496f2 1186-1187
+  s_02588738a4f2ed::t_d9e8cbb873e45c 1188-1190,1192-1195
+crates/blend/src/fillet_builder.rs
+  s_02588738a4f2ed::t_9b9a3969d795ba 189-192
+  s_02588738a4f2ed::t_ae55f7df9747b4 1528
+crates/operations/tests/blend_integration.rs
+  s_02588738a4f2ed::t_1d302ecd8da68e 100-125,129-137,142-143
+  s_02588738a4f2ed::t_b7a7db1b9dc6ff 126-128,138-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "54445d9b3df71e15a3e1080c491bef51e089d63c",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
