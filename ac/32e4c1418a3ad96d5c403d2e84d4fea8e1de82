@@ -1,0 +1,22 @@
+crates/io/tests/ball_as_one_bspline_face.rs
+  s_02588738a4f2ed::t_9c08ddec9064b1 140-141,144
+crates/math/src/nurbs/projection.rs
+  s_02588738a4f2ed::t_8ea45c36b1a71e 447-451,464-476,479-480,485-511
+  s_02588738a4f2ed::t_b5d920edea6b7c 1454-1525
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac32e4c1418a3ad96d5c403d2e84d4fea8e1de82",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
