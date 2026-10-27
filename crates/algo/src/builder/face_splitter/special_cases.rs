@@ -3650,48 +3650,65 @@ fn torus_loop_interiors(
 
 /// The loops whose polygon may hold every point of a given set, in index
 /// order. An even-odd test reads a point outside a polygon's box as outside
-/// the polygon (bar rounding in its crossing abscissa, which the slack
-/// covers), so only loops whose box holds the set's box can, and a box query
-/// finds them without testing every loop against every other.
+/// the polygon, bar rounding in its crossing abscissa, which scales with the
+/// polygon's own coordinates. So only loops whose box, widened by that
+/// rounding, holds the set's box can, and a box query finds them without
+/// testing every loop against every other.
 struct LoopEnclosers {
     bvh: brepkit_math::bvh::Bvh,
+    /// Each loop's box widened by its slack; `None` for a loop with fewer
+    /// than one point or a coordinate that is not finite.
     boxes: Vec<Option<brepkit_math::aabb::Aabb3>>,
+    /// The loops with no box, which every set is read against.
+    unboxed: Vec<usize>,
 }
 
 impl LoopEnclosers {
     fn new(polygons: &[Vec<Point2>]) -> Self {
-        let boxes: Vec<_> = polygons.iter().map(|p| Self::flat_box(p)).collect();
+        let boxes: Vec<_> = polygons
+            .iter()
+            .map(|p| Self::flat_box(p).map(|(b, slack)| b.expanded(slack)))
+            .collect();
         let indexed: Vec<_> = boxes
             .iter()
             .enumerate()
             .filter_map(|(i, b)| b.map(|b| (i, b)))
             .collect();
+        let unboxed = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.is_none())
+            .map(|(i, _)| i)
+            .collect();
         Self {
             bvh: brepkit_math::bvh::Bvh::build(&indexed),
             boxes,
+            unboxed,
         }
     }
 
-    fn flat_box(points: &[Point2]) -> Option<brepkit_math::aabb::Aabb3> {
+    /// The points' box and the slack that covers rounding at their scale,
+    /// or `None` when there are none or a coordinate is not finite.
+    fn flat_box(points: &[Point2]) -> Option<(brepkit_math::aabb::Aabb3, f64)> {
+        if !points
+            .iter()
+            .all(|p| p.x().is_finite() && p.y().is_finite())
+        {
+            return None;
+        }
         let b = brepkit_math::aabb::Aabb3::try_from_points(
             points.iter().map(|p| Point3::new(p.x(), p.y(), 0.0)),
         )?;
-        [b.min.x(), b.min.y(), b.max.x(), b.max.y()]
+        let reach = [b.min, b.max]
             .iter()
-            .all(|c| c.is_finite())
-            .then_some(b)
+            .fold(1.0_f64, |m, p| m.max(p.x().abs()).max(p.y().abs()));
+        Some((b, 1e-9 * reach))
     }
 
     fn candidates(&self, points: &[Point2]) -> Vec<usize> {
-        let Some(inner) = Self::flat_box(points) else {
-            // Points the box cannot hold (none, or not finite) are tested
-            // against every loop.
+        let Some((inner, slack)) = Self::flat_box(points) else {
             return (0..self.boxes.len()).collect();
         };
-        let reach = [inner.min, inner.max]
-            .iter()
-            .fold(1.0_f64, |m, p| m.max(p.x().abs()).max(p.y().abs()));
-        let slack = 1e-9 * reach;
         let mut found: Vec<usize> = self
             .bvh
             .query_overlap(&inner.expanded(slack))
@@ -3705,13 +3722,7 @@ impl LoopEnclosers {
                 })
             })
             .collect();
-        found.extend(
-            self.boxes
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.is_none())
-                .map(|(i, _)| i),
-        );
+        found.extend_from_slice(&self.unboxed);
         found.sort_unstable();
         found
     }
@@ -7419,6 +7430,33 @@ mod tests {
                 polygons.push(Vec::new());
             }
         }
+        // A thin triangle reaching a trillion units out, whose crossings
+        // round enough to take in a small box left of its own box, and a
+        // polygon with a vertex that is not a number, beside a square.
+        polygons.push(vec![
+            Point2::new(1e-5, 0.0),
+            Point2::new(1e12, 1e12),
+            Point2::new(1e-5, 1e12),
+        ]);
+        polygons.push(vec![
+            Point2::new(3e-6, 1e-6),
+            Point2::new(6e-6, 1e-6),
+            Point2::new(6e-6, 3e-6),
+            Point2::new(3e-6, 3e-6),
+        ]);
+        polygons.push(vec![
+            Point2::new(1.0, 0.0),
+            Point2::new(2.0, 0.0),
+            Point2::new(f64::NAN, f64::NAN),
+            Point2::new(2.0, 2.0),
+            Point2::new(1.0, 2.0),
+        ]);
+        polygons.push(vec![
+            Point2::new(0.2, 0.8),
+            Point2::new(0.4, 0.8),
+            Point2::new(0.4, 1.2),
+            Point2::new(0.2, 1.2),
+        ]);
         let enclosers = LoopEnclosers::new(&polygons);
         let mut nested = 0;
         for (j, inner) in polygons.iter().enumerate() {
