@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.3.0](https://github.com/andymai/brepkit/compare/v4.2.14...v4.3.0) (2026-10-27)
+
+
+### Features
+
+* **operations:** two-distance chamfers with a reference face per edge ([#2072](https://github.com/andymai/brepkit/issues/2072)) ([75e0917](https://github.com/andymai/brepkit/commit/75e0917c9b9494963a98527e8264ff39a9ff4c66))
+
+
+### Bug Fixes
+
+* **algo:** drop a closed section lying wholly in a plane face's hole ([#2071](https://github.com/andymai/brepkit/issues/2071)) ([1f059f8](https://github.com/andymai/brepkit/commit/1f059f8b0c400ddb2a84efed31ef83b61016e834))
+* **io:** read a ball or lemon written as one B-spline face bounded by a vertex ([#2070](https://github.com/andymai/brepkit/issues/2070)) ([7b4aa51](https://github.com/andymai/brepkit/commit/7b4aa51f2ecbe9402a6d69fdefae4d5290515e3b))
+* **math:** evaluate curves and surfaces past degree 8 ([#2067](https://github.com/andymai/brepkit/issues/2067)) ([174a084](https://github.com/andymai/brepkit/commit/174a084cf2c9f0b3132930a0b0c29dce245d1c2c))
+
 ## [4.2.14](https://github.com/andymai/brepkit/compare/v4.2.13...v4.2.14) (2026-10-27)
 
 
