@@ -4,23 +4,12 @@
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{EdgeCurve, EdgeId};
-use brepkit_topology::face::FaceSurface;
+use brepkit_topology::edge::EdgeCurve;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::shell::ShellId;
 use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
-
-/// Two corners of the box of the whole conic `center + a cos t u + b sin t
-/// v`, which reaches `hypot(a u_i, b v_i)` either side along each axis.
-fn conic_box(center: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)) -> Vec<Point3> {
-    let d = Vec3::new(
-        (a * u.x()).hypot(b * v.x()),
-        (a * u.y()).hypot(b * v.y()),
-        (a * u.z()).hypot(b * v.z()),
-    );
-    vec![center - d, center + d]
-}
 
 /// Points whose box holds every point of a NURBS curve or surface: its
 /// control points while every weight is positive, else an unbounded box.
@@ -39,160 +28,172 @@ fn hull_or_everything<'a>(
     }
 }
 
-/// A box holding everything within `reach` of `edge`: the edge's own box (a
-/// line's ends, the box of the whole circle or ellipse it runs along, a
-/// NURBS curve's control points) grown by `reach`.
-pub fn edge_reach(topo: &Topology, edge: EdgeId, reach: f64) -> Result<Aabb3, OperationsError> {
-    let data = topo.edge(edge)?;
-    let points = match data.curve() {
-        EdgeCurve::Line => vec![
-            topo.vertex(data.start())?.point(),
-            topo.vertex(data.end())?.point(),
-        ],
-        EdgeCurve::Circle(c) => conic_box(
-            c.center(),
-            (c.radius(), c.u_axis()),
-            (c.radius(), c.v_axis()),
-        ),
-        EdgeCurve::Ellipse(e) => conic_box(
-            e.center(),
-            (e.semi_major(), e.u_axis()),
-            (e.semi_minor(), e.v_axis()),
-        ),
-        EdgeCurve::NurbsCurve(n) => {
-            hull_or_everything(n.control_points().iter(), n.weights().iter().copied())
-        }
-    };
-    Ok(Aabb3::from_points(points).expanded(reach))
-}
-
-/// A box holding every face of `shell`: the measured box of its faces,
-/// widened to a NURBS face's control points (the measured box samples it at
-/// a few points only) and to a sphere's or torus's whole surface (it takes
-/// that only for a whole one, and a trimmed band can bulge past its
-/// boundary).
-fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, OperationsError> {
-    let faces = topo.shell(shell)?.faces().to_vec();
-    let measured = crate::measure::face_set_bounding_box(topo, &faces)?;
+/// A box holding a face: its measured box, widened to a NURBS face's
+/// control points (the measured box samples it at a few points only), to a
+/// sphere's or torus's whole surface (it takes that only for a whole one,
+/// and a trimmed band can bulge past its boundary), and to everything where
+/// a boundary NURBS edge has a weight at or below zero (such an edge can
+/// run outside its control points).
+fn face_bounds(topo: &Topology, face: FaceId) -> Result<Aabb3, OperationsError> {
+    let measured = crate::measure::face_set_bounding_box(topo, &[face])?;
     let mut points = vec![measured.min, measured.max];
-    for &face in &faces {
-        match topo.face(face)?.surface() {
-            FaceSurface::Nurbs(n) => points.extend(hull_or_everything(
-                n.control_points().iter().flatten(),
-                n.weights().iter().flatten().copied(),
-            )),
-            FaceSurface::Sphere(sphere) => {
-                let whole = sphere.aabb();
-                points.extend([whole.min, whole.max]);
-            }
-            FaceSurface::Torus(torus) => {
-                let whole = torus.aabb();
-                points.extend([whole.min, whole.max]);
-            }
-            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+    let data = topo.face(face)?;
+    match data.surface() {
+        FaceSurface::Nurbs(n) => points.extend(hull_or_everything(
+            n.control_points().iter().flatten(),
+            n.weights().iter().flatten().copied(),
+        )),
+        FaceSurface::Sphere(sphere) => {
+            let whole = sphere.aabb();
+            points.extend([whole.min, whole.max]);
         }
-        // The measured box bounds a NURBS edge by its control points, which
-        // hold it only while every weight is positive.
-        let face_data = topo.face(face)?;
-        for wire in
-            std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
-        {
-            for oe in topo.wire(wire)?.edges() {
-                if let EdgeCurve::NurbsCurve(n) = topo.edge(oe.edge())?.curve() {
-                    points.extend(hull_or_everything(
-                        n.control_points().iter(),
-                        n.weights().iter().copied(),
-                    ));
-                }
+        FaceSurface::Torus(torus) => {
+            let whole = torus.aabb();
+            points.extend([whole.min, whole.max]);
+        }
+        FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+    }
+    for wire in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire)?.edges() {
+            if let EdgeCurve::NurbsCurve(n) = topo.edge(oe.edge())?.curve() {
+                points.extend(hull_or_everything(
+                    n.control_points().iter(),
+                    n.weights().iter().copied(),
+                ));
             }
         }
     }
     Ok(Aabb3::from_points(points))
 }
 
-/// Boxes holding the material an operation took off: each cut edge's box
-/// grown by its reach, joined by every vertex of the result that is no
-/// vertex of the source, at the cut edge nearest it. Where two cuts meet at
-/// a reflex corner their trims run past either edge's reach, and those
-/// vertices are where they end.
-#[allow(clippy::cast_possible_truncation)]
-fn removed_bounds(
-    topo: &Topology,
-    source: SolidId,
-    result: SolidId,
-    cuts: &[(EdgeId, f64)],
-) -> Result<Vec<Aabb3>, OperationsError> {
-    const CELL: f64 = 1e-5;
-    let key = |p: Point3| {
-        (
-            (p.x() / CELL).round() as i64,
-            (p.y() / CELL).round() as i64,
-            (p.z() / CELL).round() as i64,
-        )
-    };
-    let own = cuts
-        .iter()
-        .map(|&(edge, _)| edge_reach(topo, edge, 0.0))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut boxes: Vec<Aabb3> = own
-        .iter()
-        .zip(cuts)
-        .map(|(b, &(_, reach))| b.expanded(reach))
-        .collect();
-    let mut old = std::collections::HashSet::new();
-    for v in brepkit_topology::explorer::solid_vertices(topo, source)? {
-        old.insert(key(topo.vertex(v)?.point()));
+/// A box holding every face of `shell`.
+fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, OperationsError> {
+    let mut bounds: Option<Aabb3> = None;
+    for &face in topo.shell(shell)?.faces() {
+        let b = face_bounds(topo, face)?;
+        bounds = Some(bounds.map_or(b, |a| a.union(b)));
     }
-    let is_old = |p: Point3| {
-        let (x, y, z) = key(p);
-        (-1..=1)
-            .any(|dx| (-1..=1).any(|dy| (-1..=1).any(|dz| old.contains(&(x + dx, y + dy, z + dz)))))
-    };
-    for v in brepkit_topology::explorer::solid_vertices(topo, result)? {
-        let p = topo.vertex(v)?.point();
-        if is_old(p) {
-            continue;
-        }
-        let nearest = (0..own.len()).min_by(|&a, &b| {
-            own[a]
-                .distance_squared_to_point(p)
-                .total_cmp(&own[b].distance_squared_to_point(p))
-        });
-        if let Some(k) = nearest {
-            boxes[k] = boxes[k].union(Aabb3::from_points([p]).expanded(cuts[k].1));
-        }
-    }
-    Ok(boxes)
+    bounds.ok_or(OperationsError::Topology(
+        brepkit_topology::TopologyError::Empty {
+            entity: "cavity shell faces",
+        },
+    ))
 }
 
-/// `result`, rebuilt from `source`'s outer shell alone by cutting `cuts`
-/// (each edge with how far the cut sets back along its faces), given copies
-/// of `source`'s cavities. A cavity whose box meets the material the
-/// operation took off could be cut into, and refuses the operation, named
-/// `what` in the error.
+/// Whether `a` and `b` are one surface, within a little of each other's
+/// defining values. A surface reads as new where in doubt.
+#[allow(clippy::many_single_char_names)]
+fn same_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
+    const EPS: f64 = 1e-9;
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let near = |p: Point3, q: Point3| (p - q).length() <= EPS * (1.0 + (p - origin).length());
+    let close = |x: f64, y: f64| (x - y).abs() <= EPS * (1.0 + x.abs());
+    let parallel = |u: Vec3, v: Vec3| u.cross(v).length() <= EPS;
+    // A point on an axis through `origin` along `axis`.
+    let on_axis = |origin: Point3, axis: Vec3, p: Point3| {
+        let w = p - origin;
+        (w - axis * axis.dot(w)).length() <= EPS * (1.0 + w.length())
+    };
+    match (a, b) {
+        (FaceSurface::Plane { normal: n, d }, FaceSurface::Plane { normal: m, d: e }) => {
+            let dot = n.dot(*m);
+            (close(dot, 1.0) && close(*d, *e)) || (close(dot, -1.0) && close(*d, -*e))
+        }
+        (FaceSurface::Cylinder(x), FaceSurface::Cylinder(y)) => {
+            close(x.radius(), y.radius())
+                && parallel(x.axis(), y.axis())
+                && on_axis(x.origin(), x.axis(), y.origin())
+        }
+        (FaceSurface::Cone(x), FaceSurface::Cone(y)) => {
+            near(x.apex(), y.apex())
+                && x.axis().dot(y.axis()) > 1.0 - EPS
+                && close(x.half_angle(), y.half_angle())
+        }
+        (FaceSurface::Sphere(x), FaceSurface::Sphere(y)) => {
+            near(x.center(), y.center()) && close(x.radius(), y.radius())
+        }
+        (FaceSurface::Torus(x), FaceSurface::Torus(y)) => {
+            near(x.center(), y.center())
+                && parallel(x.z_axis(), y.z_axis())
+                && close(x.major_radius(), y.major_radius())
+                && close(x.minor_radius(), y.minor_radius())
+        }
+        (FaceSurface::Nurbs(x), FaceSurface::Nurbs(y)) => {
+            x.degree_u() == y.degree_u()
+                && x.degree_v() == y.degree_v()
+                && x.knots_u() == y.knots_u()
+                && x.knots_v() == y.knots_v()
+                && x.weights() == y.weights()
+                && x.control_points().len() == y.control_points().len()
+                && x.control_points()
+                    .iter()
+                    .flatten()
+                    .zip(y.control_points().iter().flatten())
+                    .all(|(p, q)| near(*p, *q))
+        }
+        _ => false,
+    }
+}
+
+/// `result`, rebuilt from `source`'s outer shell alone, given copies of
+/// `source`'s cavities.
+///
+/// The material taken off is bounded by parts of `source`'s outer faces,
+/// which a cavity, lying strictly inside, never reaches, and by the faces
+/// the operation made, those of `result` on no surface of `source`. A
+/// cavity meets that material only by crossing one of those faces or by
+/// lying wholly in it, so one whose box meets such a face's box, or whose
+/// vertex is not inside `result`, refuses the operation, named `what` in
+/// the error.
 ///
 /// # Errors
 ///
-/// Returns [`OperationsError::InvalidInput`] if a cavity comes within the
+/// Returns [`OperationsError::InvalidInput`] if a cavity could meet the
 /// material taken off, or a topology error if a lookup fails.
 pub fn keep_cavities(
     topo: &mut Topology,
     source: SolidId,
     result: SolidId,
-    cuts: &[(EdgeId, f64)],
     what: &str,
 ) -> Result<SolidId, OperationsError> {
     let cavities = topo.solid(source)?.inner_shells().to_vec();
     if cavities.is_empty() {
         return Ok(result);
     }
-    let removed = removed_bounds(topo, source, result, cuts)?;
+    let surfaces: Vec<FaceSurface> = topo
+        .shell(topo.solid(source)?.outer_shell())?
+        .faces()
+        .iter()
+        .map(|&f| topo.face(f).map(|face| face.surface().clone()))
+        .collect::<Result<_, _>>()?;
+    let mut made = Vec::new();
+    for &face in topo.shell(topo.solid(result)?.outer_shell())?.faces() {
+        let surface = topo.face(face)?.surface();
+        if !surfaces.iter().any(|s| same_surface(s, surface)) {
+            made.push(face_bounds(topo, face)?);
+        }
+    }
+    let refused = || OperationsError::InvalidInput {
+        reason: format!("the {what} would cut into a cavity of the solid"),
+    };
     for &cavity in &cavities {
         let bounds = shell_bounds(topo, cavity)?;
-        if removed.iter().any(|r| r.intersects(bounds)) {
-            return Err(OperationsError::InvalidInput {
-                reason: format!("the {what} would cut into a cavity of the solid"),
-            });
+        if made.iter().any(|m| m.intersects(bounds)) {
+            return Err(refused());
+        }
+        let face = topo.shell(cavity)?.faces().first().copied();
+        let vertex = match face {
+            Some(f) => brepkit_topology::explorer::face_vertices(topo, f)?
+                .first()
+                .copied(),
+            None => None,
+        };
+        if let Some(v) = vertex {
+            let p = topo.vertex(v)?.point();
+            let inside = crate::classify::classify_point(topo, result, p, 0.0, 1e-7)?;
+            if inside != crate::classify::PointClassification::Inside {
+                return Err(refused());
+            }
         }
     }
     // The result gets its own copy: a shell shared with the source would
@@ -331,7 +332,7 @@ mod tests {
         let outer = topo.solid(hollow).unwrap().outer_shell();
         let result = topo.add_solid(Solid::new(outer, Vec::new()));
         let faces = topo.num_faces();
-        keep_cavities(&mut topo, hollow, result, &[], "test").unwrap();
+        keep_cavities(&mut topo, hollow, result, "test").unwrap();
         assert_eq!(topo.num_faces() - faces, 6);
         assert_eq!(topo.solid(result).unwrap().inner_shells().len(), 1);
     }
@@ -376,5 +377,25 @@ mod tests {
         let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
         let bounds = shell_bounds(&topo, shell).unwrap();
         assert!(bounds.max.x().is_infinite(), "{bounds:?}");
+    }
+
+    /// A result that leaves the cavity out wholly, its new face (the top at
+    /// z = 3) well clear of it: the cavity's vertex outside the result
+    /// refuses it.
+    #[test]
+    fn a_cavity_wholly_in_the_material_taken_off_is_refused() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let cube = crate::primitives::make_box(&mut topo, 3.0, 3.0, 3.0).unwrap();
+        crate::transform::transform_solid(&mut topo, cube, &Mat4::translation(3.5, 3.5, 3.5))
+            .unwrap();
+        let hollow =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, block, cube)
+                .unwrap();
+        let slab = crate::primitives::make_box(&mut topo, 10.0, 10.0, 3.0).unwrap();
+        let refused = keep_cavities(&mut topo, hollow, slab, "test").unwrap_err();
+        assert!(refused.to_string().contains("cavity"), "{refused}");
     }
 }

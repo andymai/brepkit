@@ -164,16 +164,29 @@ type Cavity = ((f64, f64, f64), (f64, f64, f64));
 /// and the notch's two top edges, which meet at a reflex corner over the
 /// origin.
 fn notched_block(topo: &mut Topology, cavity: Option<Cavity>) -> (SolidId, [EdgeId; 2]) {
+    notched(topo, 15.0, -10.0, cavity)
+}
+
+/// A block from x = `left` to 10, y from -10 to 10 and z from 0 to 10, with
+/// a notch of `half_angle` degrees either side of the x axis cut in from
+/// its +x side to the origin, less an optional box cavity; and the notch's
+/// two top edges.
+fn notched(
+    topo: &mut Topology,
+    half_angle: f64,
+    left: f64,
+    cavity: Option<Cavity>,
+) -> (SolidId, [EdgeId; 2]) {
     use brepkit_math::vec::Vec3;
-    let t = 10.0 * 15f64.to_radians().tan();
+    let t = 10.0 * half_angle.to_radians().tan();
     let outline: Vec<Point3> = [
-        (-10.0, -10.0),
+        (left, -10.0),
         (10.0, -10.0),
         (10.0, -t),
         (0.0, 0.0),
         (10.0, t),
         (10.0, 10.0),
-        (-10.0, 10.0),
+        (left, 10.0),
     ]
     .iter()
     .map(|&(x, y)| Point3::new(x, y, 0.0))
@@ -228,4 +241,42 @@ fn a_chamfer_into_a_reflex_corner_is_bounded_by_its_trim() {
     let (clear, edges) = notched_block(&mut topo, Some(((-8.0, -0.5, 4.0), (1.0, 1.0, 1.0))));
     let cut = chamfer(&mut topo, clear, &edges, 1.0).unwrap();
     assert_eq!(topo.solid(cut).unwrap().inner_shells().len(), 1);
+}
+
+/// A 2 degree notch trims its top face back to x = -1 / sin 1 degree, about
+/// -57.3, so near another chamfered edge at x = -60: a cavity at x = -20 in
+/// the notch's long wedge refuses the chamfer.
+#[test]
+fn a_long_reflex_trim_is_bounded_beside_another_cut() {
+    let left_edge = |topo: &Topology, solid: SolidId| {
+        solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                [edge.start(), edge.end()].iter().all(|&v| {
+                    let p = topo.vertex(v).unwrap().point();
+                    (p.x() + 60.0).abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9
+                })
+            })
+            .unwrap()
+    };
+
+    let mut topo = Topology::new();
+    let (plain, [a, b]) = notched(&mut topo, 1.0, -60.0, None);
+    let left = left_edge(&topo, plain);
+    let cut = chamfer(&mut topo, plain, &[a, b, left], 1.0).unwrap();
+    let report = validate_solid(&topo, cut).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+
+    let mut topo = Topology::new();
+    let (near, [a, b]) = notched(
+        &mut topo,
+        1.0,
+        -60.0,
+        Some(((-20.5, -0.05, 9.45), (1.0, 0.1, 0.25))),
+    );
+    let left = left_edge(&topo, near);
+    let refused = chamfer(&mut topo, near, &[a, b, left], 1.0).unwrap_err();
+    assert!(refused.to_string().contains("cavity"), "{refused}");
 }
