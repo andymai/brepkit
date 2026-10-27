@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793061820808,
+  "lastUpdate": 1793061985798,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56429,6 +56429,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 49231907,
             "range": "± 375206",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "30ae460dd16ca6a4417f7ed86c41b76c0b376fe0",
+          "message": "fix(operations): refuse a revolve whose profile plane is normal to the axis (#2069)\n\nA planar profile whose plane is perpendicular to the revolve axis sweeps\nno volume (a rectangle in `z = 0` turned about Z), but `revolve` built\nan empty, degenerate solid from it. It now returns an error saying so.\n\n## Tests\n\n- Added `revolve_profile_normal_to_axis_error` in `revolve.rs`: a unit\nsquare revolved about an axis normal to its plane is refused.\n- `cargo test -p brepkit-operations --lib revolve` and `cargo clippy -p\nbrepkit-operations --all-targets -- -D warnings` pass.\n- `compound_cut_edge_tangent_tools_stays_analytic` fails now and then in\na full parallel `--lib` run, on unmodified `main` too; it passes alone\n(it reads a process-wide fallback counter that other tests' fallbacks\ncan bump).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-26T17:40:36-07:00",
+          "tree_id": "2f20785a1f6943fef1edb250ab07714c98f7d8a8",
+          "url": "https://github.com/andymai/brepkit/commit/30ae460dd16ca6a4417f7ed86c41b76c0b376fe0"
+        },
+        "date": 1793061978072,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 830996,
+            "range": "± 1001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 899617,
+            "range": "± 566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11037,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 507974,
+            "range": "± 11838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 39161018,
+            "range": "± 287211",
             "unit": "ns/iter"
           }
         ]
