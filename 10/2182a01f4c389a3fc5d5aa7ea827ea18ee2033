@@ -1,0 +1,23 @@
+crates/operations/tests/blend_integration.rs
+  s_02588738a4f2ed::t_1d302ecd8da68e 100-125,129-137,142-143
+  s_02588738a4f2ed::t_b7a7db1b9dc6ff 126-128,138-141
+crates/blend/src/fillet_builder.rs
+  s_02588738a4f2ed::t_9b9a3969d795ba 189-192
+  s_02588738a4f2ed::t_ae55f7df9747b4 1528
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "102182a01f4c389a3fc5d5aa7ea827ea18ee2033",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
