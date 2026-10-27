@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.3.3](https://github.com/andymai/brepkit/compare/v4.3.2...v4.3.3) (2026-10-27)
+
+
+### Bug Fixes
+
+* **math:** seed a projection beside a pole on the pole's own meridian ([#2089](https://github.com/andymai/brepkit/issues/2089)) ([46864cb](https://github.com/andymai/brepkit/commit/46864cb52e4b296196b7d8e3d5392c355bf7b0e6))
+
+## [4.3.2](https://github.com/andymai/brepkit/compare/v4.3.1...v4.3.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* **blend:** leave a chamfer's input solid as it was ([#2086](https://github.com/andymai/brepkit/issues/2086)) ([0a6110b](https://github.com/andymai/brepkit/commit/0a6110b7baf6574210642e5bb07983ec9397d283))
+
+## [4.3.1](https://github.com/andymai/brepkit/compare/v4.3.0...v4.3.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **blend:** close a chamfer past a straight edge left in pieces ([#2073](https://github.com/andymai/brepkit/issues/2073)) ([9140bce](https://github.com/andymai/brepkit/commit/9140bce599b951c8030164e45317b5031619013c))
+
 ## [4.3.0](https://github.com/andymai/brepkit/compare/v4.2.14...v4.3.0) (2026-10-27)
 
 
