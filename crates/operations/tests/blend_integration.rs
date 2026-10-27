@@ -199,6 +199,45 @@ fn fillet_refuses_to_reach_a_cavity() {
     );
 }
 
+/// A rod of radius 10 and height 10 with a 3 cube cavity at its middle:
+/// a radius 1 fillet of its top rim takes material only within 1 of
+/// z = 10, so the cavity stays. The ring taken off, a square corner less a
+/// quarter disc, sweeps round the axis at its centroid (Pappus).
+#[test]
+fn fillet_of_a_rim_well_clear_of_a_cavity_keeps_it() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::transform::transform_solid;
+    use std::f64::consts::{FRAC_PI_4, PI, TAU};
+
+    let mut topo = Topology::new();
+    let rod = make_cylinder(&mut topo, 10.0, 10.0).unwrap();
+    let cube = make_box(&mut topo, 3.0, 3.0, 3.0).unwrap();
+    transform_solid(&mut topo, cube, &Mat4::translation(-1.5, -1.5, 3.5)).unwrap();
+    let hollow = boolean(&mut topo, BooleanOp::Cut, rod, cube).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let rim = solid_edges(&topo, hollow)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            matches!(topo.edge(e).unwrap().curve(),
+                EdgeCurve::Circle(c) if (c.center().z() - 10.0).abs() < 1e-9)
+        })
+        .unwrap();
+    let result = fillet_v2(&mut topo, hollow, &[rim], 1.0).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    assert_eq!(topo.solid(result.solid).unwrap().inner_shells().len(), 1);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let centroid = (10.0 - 3.0 * PI) / (12.0 - 3.0 * PI);
+    let want = 1000.0f64.mul_add(PI, -27.0) - (1.0 - FRAC_PI_4) * TAU * (10.0 - centroid);
+    let volume = solid_volume(&topo, result.solid, 0.001).unwrap();
+    assert!(
+        (volume - want).abs() < 1e-4 * want,
+        "volume {volume}, want {want}"
+    );
+}
+
 /// Distance-angle chamfer on a single edge.
 #[test]
 fn chamfer_box_distance_angle() {

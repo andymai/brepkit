@@ -2241,8 +2241,19 @@ fn nurbs_curve_hull(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Vec<Point
     }
 }
 
-/// Points whose box holds an edge: a line's ends, the cube about a circle
-/// or ellipse its whole curve lies in, a NURBS curve's hull.
+/// Two corners of the box of the whole conic `center + a cos t u + b sin t
+/// v`, which reaches `hypot(a u_i, b v_i)` either side along each axis.
+fn conic_box(center: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)) -> [Point3; 2] {
+    let d = Vec3::new(
+        (a * u.x()).hypot(b * v.x()),
+        (a * u.y()).hypot(b * v.y()),
+        (a * u.z()).hypot(b * v.z()),
+    );
+    [center - d, center + d]
+}
+
+/// Points whose box holds an edge: a line's ends, the box of the whole
+/// circle or ellipse it runs along, a NURBS curve's hull.
 fn edge_hull_points(topo: &Topology, edge_id: EdgeId) -> Result<Vec<Point3>, BlendError> {
     let edge = topo.edge(edge_id)?;
     Ok(match edge.curve() {
@@ -2250,10 +2261,18 @@ fn edge_hull_points(topo: &Topology, edge_id: EdgeId) -> Result<Vec<Point3>, Ble
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         ],
-        EdgeCurve::Circle(c) => cube_about(c.center(), c.radius()).to_vec(),
-        EdgeCurve::Ellipse(e) => {
-            cube_about(e.center(), e.semi_major().max(e.semi_minor())).to_vec()
-        }
+        EdgeCurve::Circle(c) => conic_box(
+            c.center(),
+            (c.radius(), c.u_axis()),
+            (c.radius(), c.v_axis()),
+        )
+        .to_vec(),
+        EdgeCurve::Ellipse(e) => conic_box(
+            e.center(),
+            (e.semi_major(), e.u_axis()),
+            (e.semi_minor(), e.v_axis()),
+        )
+        .to_vec(),
         EdgeCurve::NurbsCurve(n) => nurbs_curve_hull(n),
     })
 }
@@ -2293,36 +2312,44 @@ fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, BlendError> {
 /// material lies between the spine, the two neighbours' curves out to the
 /// contacts and the blend arc, each turning less than half a circle and so
 /// lying within its chord's length of its ends: the box of the spine and
-/// contacts, grown by twice the farthest contact's distance from the spine
-/// (a chord across a curved spine runs a little longer than that distance).
+/// contact curves, grown by twice the farthest contact's distance from the
+/// spine (a chord across a curved spine runs a little longer than that
+/// distance). The distance is read between points on the curves, as a
+/// rational curve's control points can stand well off it.
 fn removed_material_bounds(topo: &Topology, stripe: &Stripe) -> Result<Aabb3, BlendError> {
-    const SAMPLES: u32 = 32;
+    const SPINE_SAMPLES: u32 = 256;
+    const CONTACT_SAMPLES: u32 = 64;
     let mut points = Vec::new();
-    for &edge in stripe.spine.edges() {
-        points.extend(edge_hull_points(topo, edge)?);
+    // Read along each edge's own curve: a closed rim's spine runs from its
+    // vertex back to it.
+    let mut spine = Vec::new();
+    for &edge_id in stripe.spine.edges() {
+        points.extend(edge_hull_points(topo, edge_id)?);
+        let edge = topo.edge(edge_id)?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        spine.extend((0..=SPINE_SAMPLES).map(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SPINE_SAMPLES), t0);
+            edge.curve().evaluate_with_endpoints(t, sp, ep)
+        }));
     }
-    let length = stripe.spine.length();
-    let spine = (0..=SAMPLES)
-        .map(|k| {
-            stripe
-                .spine
-                .evaluate(topo, length * f64::from(k) / f64::from(SAMPLES))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let contacts: Vec<Point3> = nurbs_curve_hull(&stripe.contact1)
-        .into_iter()
-        .chain(nurbs_curve_hull(&stripe.contact2))
-        .collect();
-    let reach = contacts
-        .iter()
-        .map(|c| {
-            spine
+    let mut reach = 0.0_f64;
+    for contact in [&stripe.contact1, &stripe.contact2] {
+        points.extend(nurbs_curve_hull(contact));
+        let (t0, t1) = contact.domain();
+        for k in 0..=CONTACT_SAMPLES {
+            let c =
+                contact.evaluate((t1 - t0).mul_add(f64::from(k) / f64::from(CONTACT_SAMPLES), t0));
+            let near = spine
                 .iter()
-                .map(|s| (*c - *s).length())
-                .fold(f64::INFINITY, f64::min)
-        })
-        .fold(0.0_f64, f64::max);
-    points.extend(contacts);
+                .map(|s| (c - *s).length())
+                .fold(f64::INFINITY, f64::min);
+            reach = reach.max(near);
+        }
+    }
     Ok(Aabb3::from_points(points).expanded(2.0 * reach))
 }
 
