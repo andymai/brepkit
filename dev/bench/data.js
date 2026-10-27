@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793067569469,
+  "lastUpdate": 1793067758377,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56591,6 +56591,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29924366,
             "range": "± 709881",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "66281732+Robokan@users.noreply.github.com",
+            "name": "Eric Vaughan",
+            "username": "Robokan"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "75e0917c9b9494963a98527e8264ff39a9ff4c66",
+          "message": "feat(operations): two-distance chamfers with a reference face per edge (#2072)\n\nAdds `chamfer::chamfer_two_on`: a two-distance chamfer where each edge\nnames the face its first distance is measured on (a distance-and-angle\nchamfer is `d2 = d1 * tan(angle)`). Closed circular rims between a cap\nand a coaxial wall are cut by the rim chamfer, which now takes a cap and\na wall distance; other edges go to the blend engine's chamfer, which\ngains `ChamferBuilder::add_edges_asymmetric_on` and\n`blend_ops::chamfer_v2_on`.\n\nTwo fixes it needed:\n\n- The blend trimmer dropped a trimmed planar face's holes, leaving a\ndrilled face's hole wall open after a chamfer of its outer edge. Holes\non the kept side of the contact line now stay with the face; a hole\nacross the line refuses the trim.\n- The original engine's asymmetric chamfer set both corner offsets on\nthe chamfered edge's end faces to the larger distance, leaving a wedge\nat each end; its volume test had locked in the wrong value (0.965 for a\nunit cube's edge at 0.2 x 0.3, which removes exactly 0.03). Each side\nnow sets back by its own face's distance.\n\n## Tests\n\n- Added `crates/operations/tests/two_distance_chamfers.rs`: a drilled\nplate's edge chamfered from either face (the hole kept, the reference\nface's setback checked) and a countersink at two distances, both at\nclosed-form volumes.\n- The asymmetric single-edge volume test now expects 0.97.\n- `cargo test -p brepkit-blend -p brepkit-operations` and `cargo clippy\n-p brepkit-blend -p brepkit-operations --all-targets -- -D warnings`\npass.\n- `compound_cut_edge_tangent_tools_stays_analytic` fails now and then in\na full parallel `--lib` run, on unmodified `main` too; it passes alone\n(it reads a process-wide fallback counter that other tests' fallbacks\ncan bump).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n---------\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>\nCo-authored-by: Andy Aragon <hi@andymai.com>",
+          "timestamp": "2026-10-26T19:17:07-07:00",
+          "tree_id": "b05783124915a2d4674251c9a00704baee4dbe9b",
+          "url": "https://github.com/andymai/brepkit/commit/75e0917c9b9494963a98527e8264ff39a9ff4c66"
+        },
+        "date": 1793067752554,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1035721,
+            "range": "± 3242",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1108618,
+            "range": "± 7206",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12951,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 640044,
+            "range": "± 1534",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 47418434,
+            "range": "± 127685",
             "unit": "ns/iter"
           }
         ]
