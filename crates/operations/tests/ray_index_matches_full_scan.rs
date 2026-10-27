@@ -7,6 +7,7 @@ use brepkit_algo::classifier::{RayCastGeoms, ray_cast_inside_votes_cached, ray_p
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOptions, compound_cut};
+use brepkit_operations::heal::convert_to_bspline;
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere, make_torus};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
@@ -61,20 +62,22 @@ fn directions() -> Vec<Vec3> {
     dirs
 }
 
-fn assert_index_matches(name: &str, t: &Topology, solid: SolidId, height: f64) {
+/// `stride` thins the grid in x and y, and the random points with it, for
+/// faces whose full scan is slow.
+fn assert_index_matches(name: &str, t: &Topology, solid: SolidId, height: f64, stride: usize) {
     let indexed = RayCastGeoms::new(t, solid).unwrap();
     assert!(indexed.is_indexed(), "{name}: too few faces to index");
     let full = RayCastGeoms::new(t, solid).unwrap().without_index();
 
     let mut points = Vec::new();
-    // On every grid line of the plate and its features' planes, where rays
-    // run in faces and graze edges.
-    for ix in -2..=26 {
-        for iy in -2..=26 {
+    // On the plate's planes and between them, where rays run in faces and
+    // graze edges.
+    for ix in (-1..=13).step_by(stride) {
+        for iy in (-1..=13).step_by(stride) {
             for iz in -2..=(2.0 * height) as i32 + 2 {
                 points.push(Point3::new(
-                    f64::from(ix) * 0.5,
-                    f64::from(iy) * 0.5,
+                    f64::from(ix),
+                    f64::from(iy),
                     f64::from(iz) * 0.5,
                 ));
             }
@@ -87,7 +90,7 @@ fn assert_index_matches(name: &str, t: &Topology, solid: SolidId, height: f64) {
         state ^= state << 17;
         (state >> 11) as f64 / (1u64 << 53) as f64
     };
-    for _ in 0..500 {
+    for _ in 0..1000 / (stride * stride) {
         points.push(Point3::new(
             next().mul_add(14.0, -1.0),
             next().mul_add(14.0, -1.0),
@@ -122,7 +125,7 @@ fn straight_and_tilted_cylinder_holes() {
         |x, y| Mat4::translation(x, y, -2.0),
     );
     assert!(kinds(&t, s).contains(&"cylinder"));
-    assert_index_matches("straight cylinders", &t, s, 2.0);
+    assert_index_matches("straight cylinders", &t, s, 2.0, 1);
 
     let mut t = Topology::default();
     let s = grid_cut(
@@ -137,7 +140,7 @@ fn straight_and_tilted_cylinder_holes() {
         },
     );
     assert!(kinds(&t, s).contains(&"cylinder"));
-    assert_index_matches("tilted cylinders", &t, s, 2.0);
+    assert_index_matches("tilted cylinders", &t, s, 2.0, 1);
 }
 
 #[test]
@@ -150,7 +153,7 @@ fn straight_and_tilted_cone_holes() {
         |x, y| Mat4::translation(x, y, -1.0),
     );
     assert!(kinds(&t, s).contains(&"cone"));
-    assert_index_matches("straight cones", &t, s, 2.0);
+    assert_index_matches("straight cones", &t, s, 2.0, 1);
 
     let mut t = Topology::default();
     let s = grid_cut(
@@ -162,7 +165,7 @@ fn straight_and_tilted_cone_holes() {
         },
     );
     assert!(kinds(&t, s).contains(&"cone"));
-    assert_index_matches("tilted cones", &t, s, 2.0);
+    assert_index_matches("tilted cones", &t, s, 2.0, 1);
 }
 
 #[test]
@@ -175,7 +178,7 @@ fn sphere_and_torus_pockets() {
         |x, y| Mat4::translation(x, y, 3.0),
     );
     assert!(kinds(&t, s).contains(&"sphere"));
-    assert_index_matches("spheres", &t, s, 3.0);
+    assert_index_matches("spheres", &t, s, 3.0, 1);
 
     let mut t = Topology::default();
     let s = grid_cut(
@@ -184,5 +187,30 @@ fn sphere_and_torus_pockets() {
         |t| make_torus(t, 0.6, 0.2, 16).unwrap(),
         |x, y| Mat4::translation(x, y, 3.0),
     );
-    assert_index_matches("tori", &t, s, 3.0);
+    assert_index_matches("tori", &t, s, 3.0, 1);
+}
+
+/// Curved faces the classifier reads as a polygon against a fitted plane:
+/// a hit counts where it lands inside the polygon seen along the plane's
+/// steepest axis, which can lie off the polygon's own points.
+#[test]
+fn curved_faces_read_as_polygons() {
+    for (name, tool) in [("nurbs spheres", 0), ("nurbs tori", 1)] {
+        let mut t = Topology::default();
+        let s = grid_cut(
+            &mut t,
+            3.0,
+            |t| {
+                if tool == 0 {
+                    make_sphere(t, 0.7, 16).unwrap()
+                } else {
+                    make_torus(t, 0.6, 0.2, 16).unwrap()
+                }
+            },
+            |x, y| Mat4::translation(x, y, 3.0),
+        );
+        convert_to_bspline(&mut t, s).unwrap();
+        assert!(kinds(&t, s).iter().all(|k| *k == "nurbs"), "{name}");
+        assert_index_matches(name, &t, s, 3.0, 2);
+    }
 }

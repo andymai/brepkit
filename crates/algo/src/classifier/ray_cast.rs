@@ -696,10 +696,33 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
             circle_holes,
             arcs,
             hole_arcs,
-            ..
+            normal,
+            d,
         } => {
-            let mut b =
-                Aabb3::try_from_points(verts.iter().chain(holes.iter().flatten()).copied())?;
+            // A hit counts where it falls in the polygon seen along the
+            // normal's largest axis, so the box also holds the polygon carried
+            // along that axis onto the plane: a curved face read as a polygon
+            // does not lie in its fitted plane.
+            let (ax, ay, az) = (normal.x().abs(), normal.y().abs(), normal.z().abs());
+            let axis = if az >= ax && az >= ay {
+                Vec3::new(0.0, 0.0, 1.0)
+            } else if ay >= ax {
+                Vec3::new(0.0, 1.0, 0.0)
+            } else {
+                Vec3::new(1.0, 0.0, 0.0)
+            };
+            let along = normal.dot(axis);
+            if along == 0.0 || !along.is_finite() {
+                return None;
+            }
+            let onto = |v: Point3| v + axis * ((d - dot_normal_point(*normal, v)) / along);
+            let mut b = Aabb3::try_from_points(
+                verts
+                    .iter()
+                    .chain(holes.iter().flatten())
+                    .copied()
+                    .chain(verts.iter().map(|&v| onto(v))),
+            )?;
             for &(c, r) in circle_holes {
                 b = b.union(ball_box(c, r));
             }
@@ -4220,5 +4243,66 @@ mod tests {
             FaceClass::Outside,
             "point far from box should be Outside"
         );
+    }
+
+    /// The coplanar candidates for a plane must hold every face the
+    /// coincidence test in `classify_coincident_coplanar` passes, in the
+    /// solid's face order: flips, offsets at the tolerance, and normals whose
+    /// components sit at one half included.
+    #[test]
+    fn planar_candidates_hold_every_coincident_face_in_order() {
+        let mut topo = Topology::new();
+        let mut faces = Vec::new();
+        for k in 0..48_u32 {
+            let theta = f64::from(k) * 7.5_f64.to_radians();
+            let n = Vec3::new(theta.cos(), theta.sin(), 0.0);
+            let u = Vec3::new(-theta.sin(), theta.cos(), 0.0);
+            let w = Vec3::new(0.0, 0.0, 1.0);
+            for (j, d) in [1.0, 1.0 + 5e-8, -2.0].into_iter().enumerate() {
+                let c = Point3::new(0.0, 0.0, 0.0) + n * d;
+                let mut square = vec![c - u - w, c + u - w, c + u + w, c - u + w];
+                if (k as usize + j) % 2 == 1 {
+                    square.reverse();
+                }
+                faces.push(
+                    brepkit_topology::builder::make_planar_face(&mut topo, &square, 1e-7).unwrap(),
+                );
+            }
+        }
+        let shell = topo.add_shell(Shell::new(faces).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+        let geoms = RayCastGeoms::new(&topo, solid).unwrap();
+        let order = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let planes: Vec<(Vec3, f64)> = order
+            .iter()
+            .map(|&f| match topo.face(f).unwrap().surface() {
+                FaceSurface::Plane { normal, d } => (*normal, *d),
+                _ => unreachable!(),
+            })
+            .collect();
+
+        let (plane_tol, n_tol) = (1e-7, 1e-6);
+        let mut keyed = 0;
+        for &(n, d) in &planes {
+            for (dn, dd) in [(0.0, 0.0), (5e-7, 0.0), (0.0, 9e-8), (-5e-7, -9e-8)] {
+                let (n, d) = (Vec3::new(n.x() + dn, n.y() - dn, n.z()), d + dd);
+                let Some(got) = geoms.planar_faces_near_plane(n, d, plane_tol) else {
+                    continue;
+                };
+                keyed += 1;
+                let mut at = got.iter();
+                for (i, &(fnv, fd)) in planes.iter().enumerate() {
+                    let same = (fnv - n).length() < n_tol && (fd - d).abs() < plane_tol;
+                    let flip = (fnv + n).length() < n_tol && (fd + d).abs() < plane_tol;
+                    if same || flip {
+                        assert!(
+                            at.any(|&g| g == order[i]),
+                            "face {i} missing for plane {n:?} {d}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(keyed > 300, "too few keyed queries: {keyed}");
     }
 }
