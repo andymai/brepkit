@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793061985798,
+  "lastUpdate": 1793063421270,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56483,6 +56483,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 39161018,
             "range": "± 287211",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f3d4f45b5689bfbca70d0275ca37f1d322566e1c",
+          "message": "chore(main): release 4.2.14 (#2083)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.2.14](https://github.com/andymai/brepkit/compare/v4.2.13...v4.2.14)\n(2026-10-27)\n\n\n### Bug Fixes\n\n* **operations:** refuse a revolve whose profile plane is normal to the\naxis ([#2069](https://github.com/andymai/brepkit/issues/2069))\n([30ae460](https://github.com/andymai/brepkit/commit/30ae460dd16ca6a4417f7ed86c41b76c0b376fe0))\n\n\n### Performance\n\n* **topology:** dedupe a face's edges and vertices by scanning\n([#2068](https://github.com/andymai/brepkit/issues/2068))\n([7c42f65](https://github.com/andymai/brepkit/commit/7c42f65e1deaead14335c1b10bb0138fa35177c1))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-27T01:07:42Z",
+          "tree_id": "67f5e50b1d17e725a7339d88596be0bd30456022",
+          "url": "https://github.com/andymai/brepkit/commit/f3d4f45b5689bfbca70d0275ca37f1d322566e1c"
+        },
+        "date": 1793063413549,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 828932,
+            "range": "± 4365",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 899994,
+            "range": "± 24138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11123,
+            "range": "± 108",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 504692,
+            "range": "± 1027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 39015575,
+            "range": "± 83058",
             "unit": "ns/iter"
           }
         ]
