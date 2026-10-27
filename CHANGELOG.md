@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.2.14](https://github.com/andymai/brepkit/compare/v4.2.13...v4.2.14) (2026-10-27)
+
+
+### Bug Fixes
+
+* **operations:** refuse a revolve whose profile plane is normal to the axis ([#2069](https://github.com/andymai/brepkit/issues/2069)) ([30ae460](https://github.com/andymai/brepkit/commit/30ae460dd16ca6a4417f7ed86c41b76c0b376fe0))
+
+
+### Performance
+
+* **topology:** dedupe a face's edges and vertices by scanning ([#2068](https://github.com/andymai/brepkit/issues/2068)) ([7c42f65](https://github.com/andymai/brepkit/commit/7c42f65e1deaead14335c1b10bb0138fa35177c1))
+
 ## [4.2.13](https://github.com/andymai/brepkit/compare/v4.2.12...v4.2.13) (2026-10-26)
 
 
