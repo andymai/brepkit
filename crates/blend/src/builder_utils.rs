@@ -2,16 +2,21 @@
 //!
 //! Functions used by both [`FilletBuilder`](crate::fillet_builder::FilletBuilder)
 //! and [`ChamferBuilder`](crate::chamfer_builder::ChamferBuilder) for creating
-//! blend faces and sampling contact curves.
+//! blend faces, sampling contact curves, and leaving the input solid as it
+//! was.
+
+use std::collections::HashSet;
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeCurve};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
+use brepkit_topology::shell::{Shell, ShellId};
+use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
-use brepkit_topology::wire::{OrientedEdge, Wire};
+use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::BlendError;
 use crate::stripe::Stripe;
@@ -694,6 +699,250 @@ pub fn surface_ref_or_adapter<'a>(
         FaceSurface::Sphere(s) => s as &dyn ParametricSurface,
         FaceSurface::Torus(t) => t as &dyn ParametricSurface,
         FaceSurface::Nurbs(n) => n as &dyn ParametricSurface,
+    }
+}
+
+struct SolidGraph {
+    solid_id: SolidId,
+    shell_ids: Vec<ShellId>,
+    face_ids: Vec<FaceId>,
+    wire_ids: Vec<WireId>,
+    edge_ids: Vec<EdgeId>,
+    vertex_ids: Vec<VertexId>,
+    pcurves: Vec<(EdgeId, FaceId, brepkit_topology::pcurve::PCurve)>,
+}
+
+impl SolidGraph {
+    fn capture(topo: &Topology, solid: SolidId) -> Result<Self, BlendError> {
+        let source = topo.solid(solid)?;
+        let mut shell_ids = vec![source.outer_shell()];
+        shell_ids.extend_from_slice(source.inner_shells());
+        shell_ids.sort_unstable();
+        shell_ids.dedup();
+
+        let mut face_ids = Vec::new();
+        let mut seen_faces = HashSet::new();
+        for &shell_id in &shell_ids {
+            for &face_id in topo.shell(shell_id)?.faces() {
+                if seen_faces.insert(face_id) {
+                    face_ids.push(face_id);
+                }
+            }
+        }
+
+        let mut wire_ids = Vec::new();
+        let mut seen_wires = HashSet::new();
+        for &face_id in &face_ids {
+            let face = topo.face(face_id)?;
+            for wire_id in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                if seen_wires.insert(wire_id) {
+                    wire_ids.push(wire_id);
+                }
+            }
+        }
+
+        let mut edge_ids = Vec::new();
+        let mut seen_edges = HashSet::new();
+        for &wire_id in &wire_ids {
+            for oriented_edge in topo.wire(wire_id)?.edges() {
+                if seen_edges.insert(oriented_edge.edge()) {
+                    edge_ids.push(oriented_edge.edge());
+                }
+            }
+        }
+
+        let mut vertex_ids = Vec::new();
+        let mut seen_vertices = HashSet::new();
+        for &edge_id in &edge_ids {
+            let edge = topo.edge(edge_id)?;
+            for vertex_id in [edge.start(), edge.end()] {
+                if seen_vertices.insert(vertex_id) {
+                    vertex_ids.push(vertex_id);
+                }
+            }
+        }
+
+        let mut pcurves = Vec::new();
+        for &face_id in &face_ids {
+            for (edge_id, pcurve) in topo.pcurves().pcurves_for_face(face_id) {
+                if seen_edges.contains(&edge_id) {
+                    pcurves.push((edge_id, face_id, pcurve.clone()));
+                }
+            }
+        }
+
+        Ok(Self {
+            solid_id: solid,
+            shell_ids,
+            face_ids,
+            wire_ids,
+            edge_ids,
+            vertex_ids,
+            pcurves,
+        })
+    }
+}
+/// A solid's whole graph as it stood, put back after a builder edits it
+/// in place, so the caller's solid comes through unchanged.
+pub struct SolidSnapshot {
+    graph: SolidGraph,
+    vertices: Vec<Vertex>,
+    edges: Vec<Edge>,
+    wires: Vec<Wire>,
+    faces: Vec<Face>,
+    shells: Vec<Shell>,
+    solid: Solid,
+}
+
+impl SolidSnapshot {
+    /// Record every entity of `solid`'s shells.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlendError`] if a topology lookup fails.
+    pub fn capture(topo: &Topology, solid: SolidId) -> Result<Self, BlendError> {
+        let graph = SolidGraph::capture(topo, solid)?;
+        let vertices = graph
+            .vertex_ids
+            .iter()
+            .map(|&id| topo.vertex(id).cloned())
+            .collect::<Result<_, _>>()?;
+        let edges = graph
+            .edge_ids
+            .iter()
+            .map(|&id| topo.edge(id).cloned())
+            .collect::<Result<_, _>>()?;
+        let wires = graph
+            .wire_ids
+            .iter()
+            .map(|&id| topo.wire(id).cloned())
+            .collect::<Result<_, _>>()?;
+        let faces = graph
+            .face_ids
+            .iter()
+            .map(|&id| topo.face(id).cloned())
+            .collect::<Result<_, _>>()?;
+        let shells = graph
+            .shell_ids
+            .iter()
+            .map(|&id| topo.shell(id).cloned())
+            .collect::<Result<_, _>>()?;
+        let solid = topo.solid(solid)?.clone();
+        Ok(Self {
+            graph,
+            vertices,
+            edges,
+            wires,
+            faces,
+            shells,
+            solid,
+        })
+    }
+
+    /// Put the recorded entities back as they were.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlendError`] if a topology lookup fails.
+    pub fn restore(&self, topo: &mut Topology) -> Result<(), BlendError> {
+        for (&id, value) in self.graph.vertex_ids.iter().zip(&self.vertices) {
+            *topo.vertex_mut(id)? = value.clone();
+        }
+        for (&id, value) in self.graph.edge_ids.iter().zip(&self.edges) {
+            *topo.edge_mut(id)? = value.clone();
+        }
+        for (&id, value) in self.graph.wire_ids.iter().zip(&self.wires) {
+            *topo.wire_mut(id)? = value.clone();
+        }
+        for (&id, value) in self.graph.face_ids.iter().zip(&self.faces) {
+            *topo.face_mut(id)? = value.clone();
+        }
+        for (&id, value) in self.graph.shell_ids.iter().zip(&self.shells) {
+            *topo.shell_mut(id)? = value.clone();
+        }
+        *topo.solid_mut(self.graph.solid_id)? = self.solid.clone();
+
+        for &edge_id in &self.graph.edge_ids {
+            for &face_id in &self.graph.face_ids {
+                topo.pcurves_mut().remove(edge_id, face_id);
+            }
+        }
+        for (edge_id, face_id, pcurve) in &self.graph.pcurves {
+            topo.pcurves_mut().set(*edge_id, *face_id, pcurve.clone());
+        }
+        Ok(())
+    }
+    /// Clone source faces that the result shell still references before the
+    /// source graph is restored. Trimming propagates boundary splits through
+    /// every wire using the split edge, so a result that carries an
+    /// untrimmed source face must retain that face's current wire while the
+    /// original face and wire are put back for the caller.
+    pub fn clone_result_source_faces(
+        &self,
+        topo: &mut Topology,
+        result_solid: SolidId,
+    ) -> Result<(), BlendError> {
+        if result_solid == self.graph.solid_id {
+            return Ok(());
+        }
+
+        let shell_id = topo.solid(result_solid)?.outer_shell();
+        let result_faces = topo.shell(shell_id)?.faces().to_vec();
+        let source_faces: HashSet<FaceId> = self.graph.face_ids.iter().copied().collect();
+        let mut replacements = std::collections::HashMap::new();
+
+        for face_id in result_faces {
+            if !source_faces.contains(&face_id) || replacements.contains_key(&face_id) {
+                continue;
+            }
+
+            let source_face = topo.face(face_id)?.clone();
+            let source_wires: Vec<WireId> = std::iter::once(source_face.outer_wire())
+                .chain(source_face.inner_wires().iter().copied())
+                .collect();
+            let wire_ids: Vec<WireId> = source_wires
+                .iter()
+                .map(|&wire_id| topo.wire(wire_id).cloned())
+                .collect::<Result<Vec<Wire>, _>>()?
+                .into_iter()
+                .map(|wire| topo.add_wire(wire))
+                .collect();
+            let (&outer_wire, inner_wires) =
+                wire_ids
+                    .split_first()
+                    .ok_or(brepkit_topology::TopologyError::Empty {
+                        entity: "face wires",
+                    })?;
+
+            let mut replacement = Face::new(
+                outer_wire,
+                inner_wires.to_vec(),
+                source_face.surface().clone(),
+            );
+            replacement.set_reversed(source_face.is_reversed());
+            let replacement_id = topo.add_face(replacement);
+
+            let pcurves: Vec<(EdgeId, brepkit_topology::pcurve::PCurve)> = topo
+                .pcurves()
+                .pcurves_for_face(face_id)
+                .into_iter()
+                .map(|(edge_id, pcurve)| (edge_id, pcurve.clone()))
+                .collect();
+            for (edge_id, pcurve) in pcurves {
+                topo.pcurves_mut().set(edge_id, replacement_id, pcurve);
+            }
+            replacements.insert(face_id, replacement_id);
+        }
+
+        let shell = topo.shell_mut(shell_id)?;
+        for face_id in shell.faces_mut() {
+            if let Some(&replacement_id) = replacements.get(face_id) {
+                *face_id = replacement_id;
+            }
+        }
+        Ok(())
     }
 }
 

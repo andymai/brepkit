@@ -16,7 +16,7 @@ use brepkit_topology::vertex::VertexId;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use crate::analytic;
-use crate::builder_utils::sample_nurbs_endpoints;
+use crate::builder_utils::{SolidSnapshot, sample_nurbs_endpoints};
 use crate::spine::Spine;
 use crate::stripe::StripeResult;
 use crate::trimmer::{self, TrimKeep};
@@ -154,14 +154,49 @@ impl<'a> ChamferBuilder<'a> {
     /// 6. Assemble new solid from trimmed faces, blend faces, untouched
     ///    original faces, and the input's inner shells.
     ///
+    /// The input solid comes through unchanged, whether the build succeeds
+    /// or fails.
+    ///
     /// # Errors
     ///
     /// Returns [`BlendError`] if no edges were specified, an edge lies on an
     /// inner shell, or topology lookups fail. Individual edge failures are
     /// recorded in [`BlendResult::failed`] rather than aborting the whole
     /// operation.
-    #[allow(clippy::too_many_lines)]
     pub fn build(self) -> Result<BlendResult, BlendError> {
+        let Self {
+            topo,
+            solid,
+            edge_sets,
+        } = self;
+        // Trimming splits edges in every wire that uses them and closing a
+        // chamfer's ends rewrites its end faces' wires, all in place on faces
+        // the input shares with the result.
+        let snapshot = SolidSnapshot::capture(topo, solid)?;
+        let result = ChamferBuilder {
+            topo: &mut *topo,
+            solid,
+            edge_sets,
+        }
+        .build_in_place();
+        match result {
+            Ok(result) => {
+                let preserve = snapshot.clone_result_source_faces(topo, result.solid);
+                let restore = snapshot.restore(topo);
+                match (preserve, restore) {
+                    (Ok(()), Ok(())) => Ok(result),
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                }
+            }
+            Err(error) => {
+                snapshot.restore(topo)?;
+                Err(error)
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn build_in_place(self) -> Result<BlendResult, BlendError> {
         let adjacency = self.topo.build_adjacency(self.solid)?;
         let solid = self.topo.solid(self.solid)?;
         let (shell_id, inner_shells) = (solid.outer_shell(), solid.inner_shells().to_vec());

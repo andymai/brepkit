@@ -96,6 +96,32 @@ fn chamfer_box_symmetric() {
     );
 }
 
+/// The chamfer builds on the input's faces in place; the input box must
+/// come out of it closed, at its own volume, with its own faces.
+#[test]
+fn chamfer_leaves_its_input_as_it_was() {
+    let mut topo = Topology::new();
+    let solid = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let (faces, edges) = (
+        solid_faces(&topo, solid).unwrap(),
+        solid_edges(&topo, solid).unwrap(),
+    );
+
+    let result = chamfer_v2(&mut topo, solid, &edges[..1], 1.0, 1.0).unwrap();
+    assert!(result.failed.is_empty());
+    let chamfered = solid_volume(&topo, result.solid, 0.01).unwrap();
+    assert!((chamfered - (BOX_VOLUME - 5.0)).abs() < 1e-6, "{chamfered}");
+
+    let report = validate_solid(&topo, solid).unwrap();
+    assert!(report.is_valid(), "input: {:?}", report.issues);
+    assert_eq!(solid_faces(&topo, solid).unwrap(), faces);
+    assert_eq!(solid_edges(&topo, solid).unwrap(), edges);
+    let volume = solid_volume(&topo, solid, 0.01).unwrap();
+    assert!((volume - BOX_VOLUME).abs() < 1e-6, "input volume {volume}");
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "result: {:?}", report.issues);
+}
+
 /// Distance-angle chamfer on a single edge.
 #[test]
 fn chamfer_box_distance_angle() {
