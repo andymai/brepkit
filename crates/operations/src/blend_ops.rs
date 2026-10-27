@@ -10,6 +10,28 @@ use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
 
+/// The blended solid, when every requested edge was blended.
+///
+/// A [`BlendResult`] that left edges out still carries a closed solid (the
+/// input itself when none was blended), which a caller expecting the whole
+/// request would take for success.
+///
+/// # Errors
+/// Returns [`OperationsError::InvalidInput`] naming how many edges failed
+/// and why the first did, if any edge failed.
+pub fn all_blended(result: BlendResult) -> Result<SolidId, OperationsError> {
+    match result.failed.first() {
+        None => Ok(result.solid),
+        Some((edge, error)) => Err(OperationsError::InvalidInput {
+            reason: format!(
+                "{} edge(s) could not be blended (edge {}: {error})",
+                result.failed.len(),
+                edge.index()
+            ),
+        }),
+    }
+}
+
 /// Fillet edges with constant radius — the production engine.
 ///
 /// Runs the corrected [`FilletBuilder`]: one ordered contour per G1 run,

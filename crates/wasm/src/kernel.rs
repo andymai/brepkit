@@ -1195,6 +1195,47 @@ mod batch_tests {
         );
     }
 
+    /// A v2 chamfer of an edge the blend engine leaves out (a cylinder's
+    /// rim) is an error, not the input solid handed back as the result.
+    #[test]
+    fn batch_chamfer_v2_reports_an_edge_it_could_not_blend() {
+        use crate::handles::{edge_id_to_u32, solid_id_to_u32};
+        let mut kernel = BrepKernel::new();
+        let cylinder =
+            brepkit_operations::primitives::make_cylinder(kernel.topo_mut(), 2.0, 5.0).unwrap();
+        let rim = brepkit_topology::explorer::solid_edges(kernel.topo(), cylinder)
+            .unwrap()
+            .into_iter()
+            .find(|&e| matches!(kernel.topo().edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
+            .unwrap();
+        let block =
+            brepkit_operations::primitives::make_box(kernel.topo_mut(), 2.0, 2.0, 2.0).unwrap();
+        let side = brepkit_topology::explorer::solid_edges(kernel.topo(), block).unwrap()[0];
+        let result = kernel.execute_batch(&format!(
+            r#"[
+                {{"op": "chamferV2", "args": {{"solid": {}, "edges": [{}], "d1": 0.5, "d2": 0.5}}}},
+                {{"op": "chamferV2", "args": {{"solid": {}, "edges": [{}], "d1": 0.5, "d2": 0.5}}}}
+            ]"#,
+            solid_id_to_u32(cylinder),
+            edge_id_to_u32(rim),
+            solid_id_to_u32(block),
+            edge_id_to_u32(side),
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(
+            parsed[0]["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("could not be blended")),
+            "{parsed}"
+        );
+        assert!(
+            parsed[1]["ok"]
+                .as_u64()
+                .is_some_and(|s| s != u64::from(solid_id_to_u32(block))),
+            "{parsed}"
+        );
+    }
+
     #[test]
     fn batch_invalid_json() {
         let mut kernel = BrepKernel::new();
