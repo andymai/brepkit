@@ -405,8 +405,6 @@ fn project_from_coarse_grid(
     point: Point3,
     tolerance: f64,
 ) -> Result<SurfaceProjection, MathError> {
-    let (u_guess, v_guess) = surface_coarse_search(surface, point);
-
     let knots_u = surface.knots_u();
     let knots_v = surface.knots_v();
     let pu = surface.degree_u();
@@ -420,26 +418,33 @@ fn project_from_coarse_grid(
     // the far copy of it; where the seam has a kink it can bounce across
     // without converging, so a failed wrapped solve retries clamped.
     let wraps = surface.is_periodic_u() || surface.is_periodic_v();
-    let (u_final, v_final, pt_final) = surface_newton_refine(
-        surface, point, u_guess, v_guess, u_min, u_max, v_min, v_max, tolerance, wraps,
-    )
-    .or_else(|err| {
-        if wraps {
-            surface_newton_refine(
-                surface, point, u_guess, v_guess, u_min, u_max, v_min, v_max, tolerance, false,
-            )
-        } else {
-            Err(err)
-        }
-    })?;
-    let dist = (pt_final - point).length();
-
-    Ok(SurfaceProjection {
-        u: u_final,
-        v: v_final,
-        point: pt_final,
-        distance: dist,
-    })
+    let refine = |(u_guess, v_guess): (f64, f64)| {
+        let (u, v, pt) = surface_newton_refine(
+            surface, point, u_guess, v_guess, u_min, u_max, v_min, v_max, tolerance, wraps,
+        )
+        .or_else(|err| {
+            if wraps {
+                surface_newton_refine(
+                    surface, point, u_guess, v_guess, u_min, u_max, v_min, v_max, tolerance, false,
+                )
+            } else {
+                Err(err)
+            }
+        })?;
+        Ok(SurfaceProjection {
+            u,
+            v,
+            point: pt,
+            distance: (pt - point).length(),
+        })
+    };
+    let (seed, beside_pole) = surface_coarse_search(surface, point);
+    let found = refine(seed);
+    match (found, beside_pole.map(refine)) {
+        (Ok(a), Some(Ok(b))) => Ok(if b.distance < a.distance { b } else { a }),
+        (Err(_), Some(Ok(b))) => Ok(b),
+        (found, _) => found,
+    }
 }
 
 /// Coarse search: evaluate surface on a uniform grid and find the closest
@@ -448,9 +453,13 @@ fn project_from_coarse_grid(
 /// Every grid point on a pole's row (or column) is the same point, so which
 /// of them comes nearest is down to rounding, and from a pole Newton cannot
 /// turn toward the point (the partial along the pole's row vanishes there).
-/// The row beside the pole decides instead.
+/// When the nearest point lies on such a row, the nearest point of the row
+/// beside it gives a second seed, for whichever refines nearer.
 #[allow(clippy::cast_precision_loss)]
-fn surface_coarse_search(surface: &NurbsSurface, point: Point3) -> (f64, f64) {
+fn surface_coarse_search(
+    surface: &NurbsSurface,
+    point: Point3,
+) -> ((f64, f64), Option<(f64, f64)>) {
     let knots_u = surface.knots_u();
     let knots_v = surface.knots_v();
     let pu = surface.degree_u();
@@ -496,19 +505,21 @@ fn surface_coarse_search(surface: &NurbsSurface, point: Point3) -> (f64, f64) {
         k if k == n => n.checked_sub(1),
         _ => None,
     };
-    if one_point(&mut grid[best_i].iter().copied())
+    let beside_pole = if one_point(&mut grid[best_i].iter().copied())
         && let Some(inner) = beside(best_i)
         && let Some(j) = (0..=n).min_by(|&a, &b| dist_sq(inner, a).total_cmp(&dist_sq(inner, b)))
     {
-        best_j = j;
+        Some((us[best_i], vs[j]))
     } else if one_point(&mut grid.iter().map(|row| row[best_j]))
         && let Some(inner) = beside(best_j)
         && let Some(i) = (0..=n).min_by(|&a, &b| dist_sq(a, inner).total_cmp(&dist_sq(b, inner)))
     {
-        best_i = i;
-    }
+        Some((us[i], vs[best_j]))
+    } else {
+        None
+    };
 
-    (us[best_i], vs[best_j])
+    ((us[best_i], vs[best_j]), beside_pole)
 }
 
 /// 2D Newton–Raphson refinement for surface point projection.
@@ -1522,5 +1533,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A bilinear patch between rows `a` (u = 0) and `b` (u = 1).
+    fn bilinear(a: [Point3; 2], b: [Point3; 2]) -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![a.to_vec(), b.to_vec()],
+            vec![vec![1.0; 2]; 2],
+        )
+        .expect("patch")
+    }
+
+    /// A row short beside the patch reads as one point to the pole test,
+    /// but the grid point on it nearest the target is exact.
+    #[test]
+    fn a_point_on_a_short_row_keeps_its_exact_seed() {
+        let patch = bilinear(
+            [Point3::new(0.0, 0.0, 0.0), Point3::new(5e-7, 0.0, 0.0)],
+            [Point3::new(0.0, 1000.0, 0.0), Point3::new(1.0, 1000.0, 0.0)],
+        );
+        let found = project_point_to_surface(&patch, Point3::new(2.5e-7, 0.0, 0.0), 1e-9)
+            .expect("projection");
+        assert!(found.distance < 1e-9, "{found:?}");
+    }
+
+    /// Beside a pole whose generators differ in length, the row beside it
+    /// can point to the wrong one; the seed on the pole's own row still
+    /// reaches the point.
+    #[test]
+    fn a_point_beside_a_pole_with_unequal_generators_projects_onto_it() {
+        let patch = bilinear(
+            [Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0)],
+            [Point3::new(100.0, 0.0, 0.0), Point3::new(-1.0, 0.0, 1.0)],
+        );
+        let found =
+            project_point_to_surface(&patch, Point3::new(0.1, 0.0, 0.0), 1e-6).expect("projection");
+        assert!(found.distance < 1e-6, "{found:?}");
     }
 }

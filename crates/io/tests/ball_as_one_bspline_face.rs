@@ -142,4 +142,8 @@ fn a_spheroid_written_as_one_bspline_face_reads_as_lunes() {
 #[test]
 fn a_spheroid_on_a_tiny_parameter_domain_reads_as_lunes() {
     reads_closed(1.5, 1e-13);
+    let mut topo = brepkit_topology::Topology::new();
+    let solids = brepkit_io::step::read_step(&ball_step(5.0, 1.5, 1e-13), &mut topo).unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solids[0]).unwrap();
+    assert_eq!(faces.len(), 4, "one lune per quarter turn");
 }
