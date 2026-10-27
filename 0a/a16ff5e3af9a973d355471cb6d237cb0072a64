@@ -1,0 +1,42 @@
+crates/io/tests/ball_as_one_bspline_face.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 140-141,144,146
+.release-please-manifest.json
+  s_02588738a4f2ed::t_72d90c51499ff8 2
+CHANGELOG.md
+  s_02588738a4f2ed::t_72d90c51499ff8 3-23
+crates/blend/src/fillet_builder.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 9,18,23-25,192-195,268-296,1560-1561,2228-2388,3440-3463
+  s_02588738a4f2ed::t_37e7b2bcf517f7 3464
+crates/operations/tests/blend_integration.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 99-276
+crates/operations/tests/two_distance_chamfers.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 425-466
+Cargo.toml
+  s_02588738a4f2ed::t_72d90c51499ff8 15,58-68
+crates/wasm/src/kernel.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 1152-1194
+  s_02588738a4f2ed::t_39b75067e8ed8b 1195-1197
+crates/blend/src/chamfer_builder.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 19,157-159,167-199
+crates/math/src/nurbs/projection.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 421-447,452-457,459-462,473-485,488-489,494-522,1465-1576
+crates/blend/src/builder_utils.rs
+  s_02588738a4f2ed::t_72d90c51499ff8 5-8,14,16-17,19,705-1031
+  s_02588738a4f2ed::t_48597f3b7546b9 1032
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0aa16ff5e3af9a973d355471cb6d237cb0072a64",
+  "prompts": {},
+  "sessions": {
+    "s_02588738a4f2ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d77f0bd1-dae7-4e29-892b-6c2f8f86297c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
