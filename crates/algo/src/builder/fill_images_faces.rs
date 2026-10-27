@@ -166,10 +166,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // their own marched endpoint drift (~1e-5 at the kumiko strut corner:
     // four distinct vertices minted at one junction), so the mint fallback
     // consults this pool with a weld-scale band before creating a vertex.
-    let mut wire_vertex_pool: Vec<(
-        brepkit_math::vec::Point3,
-        brepkit_topology::vertex::VertexId,
-    )> = Vec::new();
+    let mut wire_vertex_pool = WireVertexPool::new(tol);
     let mut pb_vertex_registry: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         BTreeMap::new();
 
@@ -4490,6 +4487,72 @@ pub(super) fn closed_curves_same_direction(
     Some(tangent_at(a)?.dot(tangent_at(b)?) > 0.0)
 }
 
+/// Wire vertices this build has resolved or minted, by position, in the
+/// order they arrived. A grid with cells as wide as the weld's reach answers
+/// the weld and the duplicate check from the entries near a point instead of
+/// every entry: a face cut by many holes mints a vertex per hole rim.
+struct WireVertexPool {
+    cell: f64,
+    entries: Vec<(Point3, brepkit_topology::vertex::VertexId)>,
+    cells: HashMap<(i64, i64, i64), Vec<usize>>,
+}
+
+impl WireVertexPool {
+    fn new(tol: Tolerance) -> Self {
+        Self {
+            cell: Self::weld_reach(tol).max(f64::MIN_POSITIVE),
+            entries: Vec::new(),
+            cells: HashMap::new(),
+        }
+    }
+
+    /// The distance past which an entry cannot change the weld's answer: it
+    /// takes the nearest entry within its band only when the next nearest is
+    /// at least ten times as far (squared), so nothing past `√10 · band`
+    /// counts.
+    fn weld_reach(tol: Tolerance) -> f64 {
+        tol.linear * 250.0 * 10.0_f64.sqrt() * (1.0 + 1e-9)
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn key(&self, p: Point3) -> (i64, i64, i64) {
+        (
+            (p.x() / self.cell).floor() as i64,
+            (p.y() / self.cell).floor() as i64,
+            (p.z() / self.cell).floor() as i64,
+        )
+    }
+
+    fn push(&mut self, p: Point3, vid: brepkit_topology::vertex::VertexId) {
+        let key = self.key(p);
+        self.cells.entry(key).or_default().push(self.entries.len());
+        self.entries.push((p, vid));
+    }
+
+    /// Every entry within `reach` of `p` (and possibly some farther), in the
+    /// order they arrived.
+    fn near(
+        &self,
+        p: Point3,
+        reach: f64,
+    ) -> impl Iterator<Item = (Point3, brepkit_topology::vertex::VertexId)> + '_ {
+        let lo = self.key(Point3::new(p.x() - reach, p.y() - reach, p.z() - reach));
+        let hi = self.key(Point3::new(p.x() + reach, p.y() + reach, p.z() + reach));
+        let mut found = Vec::new();
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                for z in lo.2..=hi.2 {
+                    if let Some(at) = self.cells.get(&(x, y, z)) {
+                        found.extend_from_slice(at);
+                    }
+                }
+            }
+        }
+        found.sort_unstable();
+        found.into_iter().map(|i| self.entries[i])
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_edge_vertices(
     topo: &mut Topology,
@@ -4497,10 +4560,7 @@ fn resolve_edge_vertices(
     seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
-    wire_pool: &mut Vec<(
-        brepkit_math::vec::Point3,
-        brepkit_topology::vertex::VertexId,
-    )>,
+    wire_pool: &mut WireVertexPool,
     edge: &super::split_types::OrientedPCurveEdge,
     arena: &crate::ds::GfaArena,
     quantize: &dyn Fn(Point3) -> (i64, i64, i64),
@@ -4584,16 +4644,13 @@ fn resolve_edge_vertices(
     // lets merge_duplicate_edges collapse the coincident seam copies.
     // Guarded by the 10x ambiguity rule so dense junction clusters never
     // adopt across genuinely distinct vertices.
-    let weld = |wire_pool: &[(
-        brepkit_math::vec::Point3,
-        brepkit_topology::vertex::VertexId,
-    )],
+    let weld = |wire_pool: &WireVertexPool,
                 p: brepkit_math::vec::Point3|
      -> Option<brepkit_topology::vertex::VertexId> {
         let band = (tol.linear * 250.0) * (tol.linear * 250.0);
         let mut best: Option<(f64, brepkit_topology::vertex::VertexId)> = None;
         let mut second = f64::INFINITY;
-        for &(q, vid) in wire_pool {
+        for (q, vid) in wire_pool.near(p, WireVertexPool::weld_reach(tol)) {
             let d = (q - p).length_squared();
             match best {
                 Some((bd, _)) if d < bd => {
@@ -4623,10 +4680,10 @@ fn resolve_edge_vertices(
             if let Ok(v) = topo.vertex(vid) {
                 let q = v.point();
                 if !wire_pool
-                    .iter()
-                    .any(|&(r, rv)| rv == vid && (r - q).length() < tol.linear)
+                    .near(q, tol.linear)
+                    .any(|(r, rv)| rv == vid && (r - q).length() < tol.linear)
                 {
-                    wire_pool.push((q, vid));
+                    wire_pool.push(q, vid);
                 }
             }
             vid
@@ -4651,10 +4708,7 @@ fn build_topology_face(
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_vertex_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
-    wire_vertex_pool: &mut Vec<(
-        brepkit_math::vec::Point3,
-        brepkit_topology::vertex::VertexId,
-    )>,
+    wire_vertex_pool: &mut WireVertexPool,
     arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
@@ -5360,7 +5414,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 &mut BTreeMap::new(),
-                &mut Vec::new(),
+                &mut WireVertexPool::new(Tolerance::new()),
                 &crate::ds::GfaArena::new(),
             )
             .unwrap();
@@ -5569,6 +5623,56 @@ mod tests {
         assert!((w0 - t0).abs() < 1e-12 && (w1 - t1).abs() < 1e-12);
         assert!((w.evaluate(w0) - a).length() < 1e-9);
         assert!((w.evaluate(w1) - b).length() < 1e-9);
+    }
+
+    /// The pool's grid must hand the weld every entry within its reach, in
+    /// the order the entries arrived, as reading the whole pool does.
+    #[test]
+    fn wire_vertex_pool_finds_every_entry_within_reach_in_order() {
+        let tol = Tolerance::new();
+        let mut topo = Topology::new();
+        let mut pool = WireVertexPool::new(tol);
+        let reach = WireVertexPool::weld_reach(tol);
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        // Clusters a few reaches wide, exact duplicates, and points far from
+        // the origin.
+        let mut points = Vec::new();
+        for k in 0..400 {
+            let base = Point3::new(f64::from(k % 7) * 1e-3, 5e3, -2.5);
+            let p = Point3::new(
+                base.x() + next() * 3.0 * reach,
+                base.y() + next() * 3.0 * reach,
+                base.z() + next() * 3.0 * reach,
+            );
+            points.push(p);
+            if k % 50 == 0 {
+                points.push(p);
+            }
+        }
+        for &p in &points {
+            pool.push(p, topo.add_vertex(Vertex::new(p, tol.linear)));
+        }
+        for &q in points.iter().step_by(3) {
+            for r in [reach, tol.linear] {
+                let got: Vec<_> = pool.near(q, r).map(|e| e.1).collect();
+                let want: Vec<_> = pool
+                    .entries
+                    .iter()
+                    .filter(|e| (e.0 - q).length() <= r)
+                    .map(|e| e.1)
+                    .collect();
+                let mut at = got.iter();
+                for w in &want {
+                    assert!(at.any(|g| g == w), "missing {w:?} near {q:?}");
+                }
+            }
+        }
     }
 }
 
