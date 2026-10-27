@@ -91,30 +91,102 @@ fn shell_bounds(topo: &Topology, shell: ShellId) -> Result<Aabb3, OperationsErro
             }
             FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
         }
+        // The measured box bounds a NURBS edge by its control points, which
+        // hold it only while every weight is positive.
+        let face_data = topo.face(face)?;
+        for wire in
+            std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+        {
+            for oe in topo.wire(wire)?.edges() {
+                if let EdgeCurve::NurbsCurve(n) = topo.edge(oe.edge())?.curve() {
+                    points.extend(hull_or_everything(
+                        n.control_points().iter(),
+                        n.weights().iter().copied(),
+                    ));
+                }
+            }
+        }
     }
     Ok(Aabb3::from_points(points))
 }
 
-/// `result`, rebuilt from `source`'s outer shell alone, given copies of
-/// `source`'s cavities. A cavity whose box meets one of `removed` (boxes
-/// holding the material the operation took off) could be cut into, and
-/// refuses the operation, named `what` in the error.
+/// Boxes holding the material an operation took off: each cut edge's box
+/// grown by its reach, joined by every vertex of the result that is no
+/// vertex of the source, at the cut edge nearest it. Where two cuts meet at
+/// a reflex corner their trims run past either edge's reach, and those
+/// vertices are where they end.
+#[allow(clippy::cast_possible_truncation)]
+fn removed_bounds(
+    topo: &Topology,
+    source: SolidId,
+    result: SolidId,
+    cuts: &[(EdgeId, f64)],
+) -> Result<Vec<Aabb3>, OperationsError> {
+    const CELL: f64 = 1e-5;
+    let key = |p: Point3| {
+        (
+            (p.x() / CELL).round() as i64,
+            (p.y() / CELL).round() as i64,
+            (p.z() / CELL).round() as i64,
+        )
+    };
+    let own = cuts
+        .iter()
+        .map(|&(edge, _)| edge_reach(topo, edge, 0.0))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut boxes: Vec<Aabb3> = own
+        .iter()
+        .zip(cuts)
+        .map(|(b, &(_, reach))| b.expanded(reach))
+        .collect();
+    let mut old = std::collections::HashSet::new();
+    for v in brepkit_topology::explorer::solid_vertices(topo, source)? {
+        old.insert(key(topo.vertex(v)?.point()));
+    }
+    let is_old = |p: Point3| {
+        let (x, y, z) = key(p);
+        (-1..=1)
+            .any(|dx| (-1..=1).any(|dy| (-1..=1).any(|dz| old.contains(&(x + dx, y + dy, z + dz)))))
+    };
+    for v in brepkit_topology::explorer::solid_vertices(topo, result)? {
+        let p = topo.vertex(v)?.point();
+        if is_old(p) {
+            continue;
+        }
+        let nearest = (0..own.len()).min_by(|&a, &b| {
+            own[a]
+                .distance_squared_to_point(p)
+                .total_cmp(&own[b].distance_squared_to_point(p))
+        });
+        if let Some(k) = nearest {
+            boxes[k] = boxes[k].union(Aabb3::from_points([p]).expanded(cuts[k].1));
+        }
+    }
+    Ok(boxes)
+}
+
+/// `result`, rebuilt from `source`'s outer shell alone by cutting `cuts`
+/// (each edge with how far the cut sets back along its faces), given copies
+/// of `source`'s cavities. A cavity whose box meets the material the
+/// operation took off could be cut into, and refuses the operation, named
+/// `what` in the error.
 ///
 /// # Errors
 ///
-/// Returns [`OperationsError::InvalidInput`] if a cavity comes within
-/// `removed`, or a topology error if a lookup fails.
+/// Returns [`OperationsError::InvalidInput`] if a cavity comes within the
+/// material taken off, or a topology error if a lookup fails.
 pub fn keep_cavities(
     topo: &mut Topology,
     source: SolidId,
     result: SolidId,
-    removed: &[Aabb3],
+    cuts: &[(EdgeId, f64)],
     what: &str,
 ) -> Result<SolidId, OperationsError> {
     let cavities = topo.solid(source)?.inner_shells().to_vec();
     if cavities.is_empty() {
         return Ok(result);
     }
+    let removed = removed_bounds(topo, source, result, cuts)?;
     for &cavity in &cavities {
         let bounds = shell_bounds(topo, cavity)?;
         if removed.iter().any(|r| r.intersects(bounds)) {
@@ -262,5 +334,47 @@ mod tests {
         keep_cavities(&mut topo, hollow, result, &[], "test").unwrap();
         assert_eq!(topo.num_faces() - faces, 6);
         assert_eq!(topo.solid(result).unwrap().inner_shells().len(), 1);
+    }
+
+    /// A boundary NURBS edge with a weight below zero can run outside its
+    /// control points, so a face it bounds leaves the cavity unbounded.
+    #[test]
+    fn a_nonpositive_weight_boundary_leaves_the_bounds_open() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(-1.0, 0.0, 0.0), 1e-7));
+        let arc = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(-1.0, 0.0, 0.0),
+            ],
+            vec![1.0, -0.5, 1.0],
+        )
+        .unwrap();
+        let curved = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(arc)));
+        let straight = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(curved, true),
+                    OrientedEdge::new(straight, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        let bounds = shell_bounds(&topo, shell).unwrap();
+        assert!(bounds.max.x().is_infinite(), "{bounds:?}");
     }
 }

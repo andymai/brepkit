@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Point3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::fillet::{FilletRadiusLaw, fillet_variable};
@@ -153,4 +154,78 @@ fn a_kept_cavity_is_the_results_own() {
     }
     let report = validate_solid(&topo, hollow).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
+}
+
+/// A box cavity's corner and size.
+type Cavity = ((f64, f64, f64), (f64, f64, f64));
+
+/// A 20 x 20 x 10 block, z from 0 to 10, with a 30 degree notch cut in
+/// from its +x side to its centre, less a box cavity at `corner` of `size`;
+/// and the notch's two top edges, which meet at a reflex corner over the
+/// origin.
+fn notched_block(topo: &mut Topology, cavity: Option<Cavity>) -> (SolidId, [EdgeId; 2]) {
+    use brepkit_math::vec::Vec3;
+    let t = 10.0 * 15f64.to_radians().tan();
+    let outline: Vec<Point3> = [
+        (-10.0, -10.0),
+        (10.0, -10.0),
+        (10.0, -t),
+        (0.0, 0.0),
+        (10.0, t),
+        (10.0, 10.0),
+        (-10.0, 10.0),
+    ]
+    .iter()
+    .map(|&(x, y)| Point3::new(x, y, 0.0))
+    .collect();
+    let wire = brepkit_topology::builder::make_polygon_wire(topo, &outline, 1e-7).unwrap();
+    let face = brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap();
+    let mut block =
+        brepkit_operations::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+    if let Some((corner, size)) = cavity {
+        let cube = make_box(topo, size.0, size.1, size.2).unwrap();
+        transform_solid(topo, cube, &Mat4::translation(corner.0, corner.1, corner.2)).unwrap();
+        block = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
+        assert_eq!(topo.solid(block).unwrap().inner_shells().len(), 1);
+    }
+    let along = |end: f64| {
+        solid_edges(topo, block)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                let ends = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
+                ends.iter()
+                    .any(|p| (*p - Point3::new(0.0, 0.0, 10.0)).length() < 1e-9)
+                    && ends
+                        .iter()
+                        .any(|p| (*p - Point3::new(10.0, end, 10.0)).length() < 1e-9)
+            })
+            .unwrap()
+    };
+    let edges = [along(-t), along(t)];
+    (block, edges)
+}
+
+/// Chamfered at 1, the notch's two top edges trim the top face back to
+/// x = -1 / sin 15 degrees, about -3.86, well past either edge's reach.
+#[test]
+fn a_chamfer_into_a_reflex_corner_is_bounded_by_its_trim() {
+    let mut topo = Topology::new();
+    let (plain, edges) = notched_block(&mut topo, None);
+    let cut = chamfer(&mut topo, plain, &edges, 1.0).unwrap();
+    let report = validate_solid(&topo, cut).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+
+    // In the trimmed corner, beyond either edge's reach: refused.
+    let mut topo = Topology::new();
+    let (near, edges) = notched_block(&mut topo, Some(((-2.5, -0.1, 9.75), (0.3, 0.2, 0.15))));
+    let refused = chamfer(&mut topo, near, &edges, 1.0).unwrap_err();
+    assert!(refused.to_string().contains("cavity"), "{refused}");
+
+    // Well clear of the corner: kept.
+    let mut topo = Topology::new();
+    let (clear, edges) = notched_block(&mut topo, Some(((-8.0, -0.5, 4.0), (1.0, 1.0, 1.0))));
+    let cut = chamfer(&mut topo, clear, &edges, 1.0).unwrap();
+    assert_eq!(topo.solid(cut).unwrap().inner_shells().len(), 1);
 }

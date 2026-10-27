@@ -716,12 +716,12 @@ fn chamfer_core(
 
     // Every cut sets back at most `max_distance` along its faces from a
     // chamfered edge, so the material taken off lies that near one.
-    let removed = filtered_edges
+    let cuts: Vec<(EdgeId, f64)> = filtered_edges
         .iter()
-        .map(|&edge| crate::cavities::edge_reach(topo, edge, distances.max_distance()))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|&edge| (edge, distances.max_distance()))
+        .collect();
     let result = assemble_solid_mixed(topo, &result_specs, tol)?;
-    crate::cavities::keep_cavities(topo, solid, result, &removed, "chamfer")
+    crate::cavities::keep_cavities(topo, solid, result, &cuts, "chamfer")
 }
 
 /// Per-face polygon data collected from the solid.
