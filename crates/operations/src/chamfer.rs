@@ -155,12 +155,7 @@ pub fn chamfer_two_on(
         return Ok(result);
     }
     let result = crate::blend_ops::chamfer_v2_on(topo, solid, edges, d1, d2)?;
-    if !result.failed.is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: format!("chamfer failed on {} edge(s)", result.failed.len()),
-        });
-    }
-    Ok(result.solid)
+    crate::blend_ops::all_blended(result)
 }
 
 /// How chamfer distances are assigned to edges.

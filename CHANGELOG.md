@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.3.5](https://github.com/andymai/brepkit/compare/v4.3.4...v4.3.5) (2026-10-27)
+
+
+### Bug Fixes
+
+* **wasm:** report edges the v2 fillet and chamfer could not blend ([#2088](https://github.com/andymai/brepkit/issues/2088)) ([229a131](https://github.com/andymai/brepkit/commit/229a131b07b7ceb8ba169c2cb2ef7f624a7a5ef3))
+
+## [4.3.4](https://github.com/andymai/brepkit/compare/v4.3.3...v4.3.4) (2026-10-27)
+
+
+### Bug Fixes
+
+* **blend:** keep a solid's cavities through a v2 fillet ([#2087](https://github.com/andymai/brepkit/issues/2087)) ([38c7473](https://github.com/andymai/brepkit/commit/38c7473910f77c88ba97e4854793a5c009257910))
+
 ## [4.3.3](https://github.com/andymai/brepkit/compare/v4.3.2...v4.3.3) (2026-10-27)
 
 
