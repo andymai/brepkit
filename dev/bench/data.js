@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793077416839,
+  "lastUpdate": 1793078400937,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -56915,6 +56915,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 47448165,
             "range": "± 221424",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46864cb52e4b296196b7d8e3d5392c355bf7b0e6",
+          "message": "fix(math): seed a projection beside a pole on the pole's own meridian (#2089)\n\nProjecting a point onto a NURBS surface with a pole now finds the point\nwhen it lies beside the pole. Today `project_point_to_surface` can\nreturn the pole instead: on a quarter of a spheroid between two\nmeridians, a point at `u = 1.88` on one meridian projects 0.88 away,\nonto the pole at `u = 2`. A ball read from STEP as lunes (#2070) shows\nit when its knots round the axis are 1e-9 apart: two of its boundary\nsamples land on the poles, and its mesh has 6 open edges there.\n\nThe projection seeds Newton from the nearest point of a coarse 9 x 9\ngrid over the parameter domain. All grid points on a pole's row are the\nsame point, so which `v` the nearest one takes comes down to rounding.\nFrom the pole on the other meridian, Newton cannot turn toward the\npoint, because the partial along the pole's row vanishes there. The pole\nis a local minimum along that meridian, so Newton settles on it. The\npatch search that follows skips the patch holding the settled result,\nwhich here is the patch holding the point too. Whether rounding picks\nthe right meridian depends on the knot values, which is why the lune\nmesh came out open at knot spacings of 1e-9, 1e-10 and 1e-13 but closed\nat 1e-11 and 1e-12.\n\n## Change\n\n- `surface_coarse_search` keeps its grid. When the nearest grid point\nlies on a row (or column) that is one point, the nearest grid point on\nthe row beside it gives a second seed. `project_from_coarse_grid`\nrefines from both and keeps the nearer result, so a short row that is no\npole keeps an exact seed, and a pole whose generators differ in length\nstill reaches the point from its own row.\n\n## Tests\n\n- Added `a_point_beside_a_pole_projects_along_its_own_meridian` to\n`crates/math/src/nurbs/projection.rs`: points beside both poles on both\nmeridians of each quarter of a spheroid, with knots round the axis 1,\n1e-9, 1e-10 and 1e-13 apart, all project onto the surface. It fails on\n`main`, first at knot spacing 1.\n- `a_spheroid_on_a_tiny_parameter_domain_reads_as_lunes` in\n`crates/io/tests/ball_as_one_bspline_face.rs` now also checks that the\nspheroid's mesh closes. On `main` it has 6 open edges. With this change\nit closes at every spacing I probed, from 1 down to 1e-15.\n- Added `a_point_on_a_short_row_keeps_its_exact_seed` and\n`a_point_beside_a_pole_with_unequal_generators_projects_onto_it`: a\nbilinear patch with a row 5e-7 long, and one with a pole between\ngenerators of lengths 100 and about 1.4. Both fail when only the row\nbeside the pole seeds the search.\n- `cargo test -p brepkit-math -p brepkit-algo` passes 881 tests, and the\nball tests in `brepkit-io` pass. The pre-commit clippy and fmt checks\npass.\n- The `pose_sweep` (495 lines) and `truth_audit` (40 lines) examples\nprint the same with and without this change.",
+          "timestamp": "2026-10-26T22:17:12-07:00",
+          "tree_id": "1b1d4f2b737d8c61f9d60200bd28bd1915a1609b",
+          "url": "https://github.com/andymai/brepkit/commit/46864cb52e4b296196b7d8e3d5392c355bf7b0e6"
+        },
+        "date": 1793078395513,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 776672,
+            "range": "± 24039",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 866738,
+            "range": "± 12663",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10206,
+            "range": "± 120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 513103,
+            "range": "± 12861",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 39376336,
+            "range": "± 120636",
             "unit": "ns/iter"
           }
         ]
