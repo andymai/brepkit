@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793148047082,
+  "lastUpdate": 1793149814941,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57833,6 +57833,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28502831,
             "range": "± 56217",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c72fc2dd0b3464d7e0596eb5bc3e47a80f2e1164",
+          "message": "chore(main): release 4.3.9 (#2103)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.3.9](https://github.com/andymai/brepkit/compare/v4.3.8...v4.3.9)\n(2026-10-28)\n\n\n### Performance\n\n* **algo:** find a section loop's enclosing loops through a box index\n([#2101](https://github.com/andymai/brepkit/issues/2101))\n([6526fa6](https://github.com/andymai/brepkit/commit/6526fa671f73e98f8703ca88d6d49b70b41f528b))\n* **algo:** find the pave vertex holding a point through a spatial index\n([#2104](https://github.com/andymai/brepkit/issues/2104))\n([4512542](https://github.com/andymai/brepkit/commit/4512542c432f5c218b0e500e26d869d310b37d33))\n* **algo:** index the boolean classifier's ray cast by face\n([#2099](https://github.com/andymai/brepkit/issues/2099))\n([ccbf66b](https://github.com/andymai/brepkit/commit/ccbf66b274d3c30d5a7ffeadb3af0a513b0e030c))\n* **algo:** leave closed rims out of the collinear section dedup\n([#2105](https://github.com/andymai/brepkit/issues/2105))\n([6cb7cdf](https://github.com/andymai/brepkit/commit/6cb7cdf29377fc88d25ae7f23b3a0967f21ed8df))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-28T01:07:03Z",
+          "tree_id": "a0774a9bc0d0b24a0e69aa5da21d549dceb5569d",
+          "url": "https://github.com/andymai/brepkit/commit/c72fc2dd0b3464d7e0596eb5bc3e47a80f2e1164"
+        },
+        "date": 1793149807212,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1087742,
+            "range": "± 11712",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1164819,
+            "range": "± 4208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13228,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670798,
+            "range": "± 16681",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28541694,
+            "range": "± 125799",
             "unit": "ns/iter"
           }
         ]
