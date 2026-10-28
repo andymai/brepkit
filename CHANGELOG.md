@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.12](https://github.com/andymai/brepkit/compare/v4.3.11...v4.3.12) (2026-10-28)
+
+
+### Bug Fixes
+
+* **operations:** accept a cut whose hole touches its face's rim at a vertex ([#2110](https://github.com/andymai/brepkit/issues/2110)) ([5e32188](https://github.com/andymai/brepkit/commit/5e321889b3de01326261b518bda3f92ab0028514))
+
 ## [4.3.11](https://github.com/andymai/brepkit/compare/v4.3.10...v4.3.11) (2026-10-28)
 
 
