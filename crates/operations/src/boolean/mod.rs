@@ -649,8 +649,32 @@ fn boolean_inner(
                         (false, None)
                     }
                 };
-                let needs_unify =
-                    !(euler_balanced_pre || multi_balanced_pre) || manifold_pre == Some(false);
+                // A boundary that touches itself at a vertex balances once
+                // that vertex counts once per sheet of faces meeting there (as
+                // the gate below reads it), and `unify_faces` would merge
+                // faces across the point where the sheets meet.
+                let (pinched_pre, manifold_pre) = if euler_balanced_pre || multi_balanced_pre {
+                    (false, manifold_pre)
+                } else {
+                    let manifold = match manifold_pre {
+                        Some(m) => m,
+                        None => is_closed_manifold(topo, result)?,
+                    };
+                    let balanced = manifold && {
+                        let faces = brepkit_topology::explorer::solid_faces(topo, result)?;
+                        let fans = crate::validate::extra_vertex_fans(topo, &faces)?;
+                        let pieces = crate::boolean::assembly::face_components(topo, result).len();
+                        fans > 0
+                            && euler_balanced(
+                                euler_pre2 - inner_shell_surplus + fans,
+                                inner_wire_count_pre,
+                                i64::try_from(pieces.max(1)).unwrap_or(i64::MAX),
+                            )
+                    };
+                    (balanced, Some(manifold))
+                };
+                let needs_unify = !(euler_balanced_pre || multi_balanced_pre || pinched_pre)
+                    || manifold_pre == Some(false);
                 let mut unified = false;
                 if needs_unify {
                     for _ in 0..3 {
@@ -713,13 +737,24 @@ fn boolean_inner(
                 // A hole whose rim shares a vertex with another of its face's
                 // wires (a tilted hole running along a wall, its rim touching
                 // the wall's edge) leaves the face's boundary in one piece, so
-                // it adds nothing to V-E+F; `validate_solid` counts inner
-                // loops the same way, and must find no error, as the gate
-                // below only logs its errors. Counted only when the plain
-                // balance fails, so it adds acceptances and removes none.
+                // it adds nothing to V-E+F. A boundary that touches itself at
+                // a vertex (a ring cut where its two ends meet at a point, two
+                // pieces sharing a corner) balances once that vertex counts
+                // once per sheet of faces meeting there. `validate_solid`
+                // counts both ways, and must find no error, as the gates
+                // below only log its errors. Counted only when the plain
+                // balance fails, so they add acceptances and remove none.
+                let extra_fans = if euler_ok || !closed_manifold {
+                    0
+                } else {
+                    let faces = brepkit_topology::explorer::solid_faces(topo, result)?;
+                    crate::validate::extra_vertex_fans(topo, &faces)?
+                };
                 if !euler_ok && hollow_ok && closed_manifold {
                     euler_ok =
-                        euler_balanced(euler_eff, solid_separate_inner_loops(topo, result)?, 1)
+                        (euler_balanced(euler_eff, solid_separate_inner_loops(topo, result)?, 1)
+                            || (extra_fans > 0
+                                && euler_balanced(euler_eff + extra_fans, inner_wire_count, 1)))
                             && crate::validate::validate_solid(topo, result)?.is_valid();
                 }
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
@@ -814,7 +849,17 @@ fn boolean_inner(
                 // legitimately yields N disjoint chunks.
                 if matches!(op, BooleanOp::Cut | BooleanOp::Fuse | BooleanOp::Intersect)
                     && components >= 2
-                    && euler_balanced(euler, inner_wire_count, i64::try_from(components).unwrap_or(i64::MAX))
+                    && (euler_balanced(
+                        euler,
+                        inner_wire_count,
+                        i64::try_from(components).unwrap_or(i64::MAX),
+                    ) || (extra_fans > 0
+                        && euler_balanced(
+                            euler + extra_fans,
+                            inner_wire_count,
+                            i64::try_from(components).unwrap_or(i64::MAX),
+                        )
+                        && crate::validate::validate_solid(topo, result)?.is_valid()))
                     && components_are_disjoint_pieces(topo, &components_vec)
                     && cut_safe
                     && intersect_safe

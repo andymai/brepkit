@@ -569,6 +569,102 @@ fn pinched_and_nested_pieces_are_invalid() {
     assert!(!report.is_valid(), "a block inside a block reads valid");
 }
 
+/// Two balls touching at a point, each with its own vertex there, gathered
+/// into one shell: neither reads as inside the other. Rays from the point
+/// where they touch run into the other ball.
+#[test]
+fn balls_touching_at_a_point_are_not_nested() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+    let b = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(2.0, 0.0, 0.0)).unwrap();
+    let both = crate::compound_ops::merge_disjoint_solids(&mut topo, &[a, b]).unwrap();
+    let report = validate_solid(&topo, both).unwrap();
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inside another")),
+        "{:?}",
+        report.issues
+    );
+}
+
+/// Blocks touching along an edge that one of them splits at its middle, the
+/// edge's ends welded: no two of their edges share both ends, but the two
+/// halves run along the other block's edge.
+#[test]
+fn blocks_touching_along_a_split_edge_are_invalid() {
+    use brepkit_math::vec::{Point3, Vec3};
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let profile = brepkit_topology::builder::make_planar_face(
+        &mut topo,
+        &[
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(1.0, 2.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 0.5),
+        ],
+        1e-7,
+    )
+    .unwrap();
+    let b = crate::extrude::extrude(&mut topo, profile, Vec3::new(1.0, 0.0, 0.0), 1.0).unwrap();
+    let both = crate::compound_ops::merge_disjoint_solids(&mut topo, &[a, b]).unwrap();
+    assert_eq!(
+        crate::heal::merge_coincident_vertices(&mut topo, both, 1e-7).unwrap(),
+        2
+    );
+    let report = validate_solid(&topo, both).unwrap();
+    assert!(!report.is_valid(), "{:?}", report.issues);
+}
+
+/// Two cylinders stacked rim to rim, their seam vertices welded: the rims
+/// are closed edges from that one vertex round to itself, lying on each other
+/// whole.
+#[test]
+fn cylinders_stacked_on_one_rim_are_invalid() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_cylinder(&mut topo, 1.0, 1.0).unwrap();
+    let b = crate::primitives::make_cylinder(&mut topo, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(0.0, 0.0, 1.0)).unwrap();
+    let both = crate::compound_ops::merge_disjoint_solids(&mut topo, &[a, b]).unwrap();
+    assert_eq!(
+        crate::heal::merge_coincident_vertices(&mut topo, both, 1e-7).unwrap(),
+        1
+    );
+    let report = validate_solid(&topo, both).unwrap();
+    assert!(!report.is_valid(), "{:?}", report.issues);
+}
+
+/// Blocks sharing a corner beside a ring: the ring's two seams, lines from
+/// its one vertex back to itself, lie on each other but have no length, so
+/// the blocks still touch only at a point.
+#[test]
+fn blocks_sharing_a_corner_beside_a_ring_are_valid() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(1.0, 1.0, 1.0)).unwrap();
+    let ring = crate::primitives::make_torus(&mut topo, 3.0, 1.0, 16).unwrap();
+    crate::transform::transform_solid(&mut topo, ring, &Mat4::translation(10.0, 0.0, 0.0)).unwrap();
+    let all = crate::compound_ops::merge_disjoint_solids(&mut topo, &[a, b, ring]).unwrap();
+    assert_eq!(
+        crate::heal::merge_coincident_vertices(&mut topo, all, 1e-7).unwrap(),
+        1
+    );
+    let report = validate_solid(&topo, all).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}
+
 #[test]
 fn validate_detects_redundant_face() {
     let mut topo = Topology::new();
