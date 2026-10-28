@@ -628,9 +628,9 @@ fn convex_hull_rejects_too_few_points() {
     assert!(make_convex_hull(&mut topo, &points).is_err());
 }
 
-/// A cap curving 5e-6 across, each of its triangles within 1e-7 of level
-/// with the next: merging neighbour by neighbour would put the cap on one
-/// plane its corners stray 3.6e-5 off, so each face keeps its own plane.
+/// A cap dipping 1e-5 at its corners, each of its triangles level with the
+/// next within the merge tolerance: merging neighbour by neighbour would put
+/// the cap on one plane its corners stray 3.6e-5 off.
 #[test]
 fn convex_hull_faces_hold_their_corners_on_their_planes() {
     let mut topo = Topology::new();
