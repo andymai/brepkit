@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793214918056,
+  "lastUpdate": 1793215094023,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58805,6 +58805,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28854633,
             "range": "± 108393",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d4d631dc8e9b677256442fbfb56cf5a6b67eab5f",
+          "message": "fix(operations): bound trimmed sphere and torus faces exactly (#2118)\n\n`solid_bounding_box` grows each sphere face to the whole sphere's box\ntoday, and takes a trimmed torus face's box from its edges alone. A\nquarter ball of radius 3 gets the whole ball's box, from -3 to 3 in x\nand y. The piece of the torus of radii 3 and 1 inside a box from x = 2\nto 4.5 with |y| <= 1 gets a box ending at x = 3.873, though the piece\nreaches x = 4 on the tube's outer equator between its edges, so the box\nis short of the solid. With this change both boxes hold exactly the\nsolid's extent.\n\n## Change\n\nA face's extreme along an axis lies on its boundary, whose edges already\ncount exactly, or at the surface's farthest point that way when the face\nholds it. Each sphere and trimmed torus face now adds those points it\nholds.\n\n- A sphere has one such point each way along an axis. A torus has one\ntoo, except along its own axis, where the farthest points form a circle,\nread at every whole degree. Each torus point is built on the torus from\nthe direction's parts along and across the torus's axis, and a part\nacross under 1e-9 counts as running along the axis.\n- `face_contains_each`, new in `brepkit_check::classify` beside\n`face_contains` (now public), reads the face's boundary once for all of\na face's points.\n- The classifier reads a curved edge as chords between 32 samples, so a\npoint the face holds between an edge and its chord can read outside. A\npoint within twice the farthest those chords stray from their edges\ncounts too: one barely off the face reaches past the face's extent by\nabout that distance squared over the surface's radius. A point the\nclassifier cannot read counts, so the box can only grow.\n\n## Tests\n\n- `a_quarter_ball_is_boxed_to_its_quarter`: a half-disc swept a quarter\nturn has the box (0, 0, -3) to (3, 3, 3) to 1e-9, and a whole ball keeps\nits box.\n- `a_torus_piece_is_boxed_to_its_tube`: the torus pieces past x = 2, 2.5\nand 3.5 have boxes holding x up to 4 and z up to 1, 1 and √3/2, reaching\nat most 1e-4 past (their section edges are bounded by Bezier control\npoints); a whole torus keeps its box. This and the test above fail on\n`main`.\n- `a_turned_torus_piece_is_boxed_in_the_frame_turning_it_back`: the\npiece past x = 2.5, turned about an oblique axis and boxed in the frame\nturning it back, has the unturned piece's box.\n- `torus_extremes_lie_on_the_torus`: for directions tilted 0, 1e-15,\n1e-12, 1e-6 and 0.3 from an oblique torus axis, every farthest point\nlies on the torus within 1e-12. Normalizing the part across the axis as\nit comes puts one 0.093 off at a tilt of 1e-15.\n- `a_candidate_beside_a_curved_trim_counts`: a point of the torus 1e-6\npast the piece's section at x = 2.5 reads outside the face and still\nenters the box. Counting only points the face holds leaves it out.\n- `cargo test -p brepkit-check -p brepkit-operations -p brepkit-io`\npasses 1979 with 14 ignored. The pose sweep and truth audit outputs are\nidentical to `main`'s, and `cargo clippy --all-targets --all-features --\n-D warnings` is clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes solid bounding boxes for trimmed sphere and torus faces so they\nhold the solid's exact extent. Sphere faces previously expanded to the\nwhole sphere's box; trimmed torus faces were bounded by their edges\nonly, which can fall short of the surface's farthest point.\n\n**Tests**\n- Adds tests for a quarter ball and torus pieces, both failing on\n`main`.\n- Whole sphere and whole torus keep their boxes.\n\n<sup>Written for commit 45390b3d78291970957bf91db94507409d65677c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2118?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2118?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2118&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T19:14:26Z",
+          "tree_id": "8f4b9f88b8a99e4bac31f2000bd8f717baa5b684",
+          "url": "https://github.com/andymai/brepkit/commit/d4d631dc8e9b677256442fbfb56cf5a6b67eab5f"
+        },
+        "date": 1793215083126,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 884292,
+            "range": "± 2764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 946775,
+            "range": "± 8040",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11246,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 529024,
+            "range": "± 13408",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23026355,
+            "range": "± 383290",
             "unit": "ns/iter"
           }
         ]
