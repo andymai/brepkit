@@ -459,48 +459,83 @@ fn uv_extent(loop_uv: &[(f64, f64)]) -> f64 {
 ///
 /// Returns an error if topology lookups fail.
 pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool, CheckError> {
+    Ok(face_contains_each(topo, face_id, &[p])?
+        .first()
+        .copied()
+        .unwrap_or(false))
+}
+
+/// [`face_contains`] for each of `points`, reading the face's boundary once.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn face_contains_each(
+    topo: &Topology,
+    face_id: FaceId,
+    points: &[Point3],
+) -> Result<Vec<bool>, CheckError> {
     let face = topo.face(face_id)?;
     match face.surface() {
-        FaceSurface::Plane { normal, .. } => {
-            if let Some(inside) = plane_hit_inside(topo, face_id, p, *normal)? {
-                return Ok(inside);
-            }
-            let verts = face_polygon(topo, face_id)?;
-            Ok(verts.len() >= 3
-                && point_in_polygon_3d(&p, &verts, normal)
-                && !hit_in_inner_wire_3d(topo, face_id, p, normal)?)
-        }
+        FaceSurface::Plane { normal, .. } => points
+            .iter()
+            .map(|&p| {
+                if let Some(inside) = plane_hit_inside(topo, face_id, p, *normal)? {
+                    return Ok(inside);
+                }
+                let verts = face_polygon(topo, face_id)?;
+                Ok(verts.len() >= 3
+                    && point_in_polygon_3d(&p, &verts, normal)
+                    && !hit_in_inner_wire_3d(topo, face_id, p, normal)?)
+            })
+            .collect(),
         FaceSurface::Cylinder(cyl) => {
             let project = |q: Point3| cyl.project_point(q);
             let region = uv_region(topo, face_id, &project, false, None)?;
-            uv_region_contains(&region, topo, face_id, project(p), &project, false)
+            points
+                .iter()
+                .map(|&p| uv_region_contains(&region, topo, face_id, project(p), &project, false))
+                .collect()
         }
         FaceSurface::Cone(cone) => {
             let project = |q: Point3| cone.project_point(q);
             let region = uv_region(topo, face_id, &project, false, Some(cone.apex()))?;
-            uv_region_contains(&region, topo, face_id, project(p), &project, false)
+            points
+                .iter()
+                .map(|&p| uv_region_contains(&region, topo, face_id, project(p), &project, false))
+                .collect()
         }
         FaceSurface::Torus(tor) => {
             let project = |q: Point3| torus_parameters(tor, q);
             let apex = torus_axis_vertex(topo, face_id, tor)?;
             let region = uv_region(topo, face_id, &project, true, apex)?;
-            uv_region_contains(&region, topo, face_id, project(p), &project, true)
+            points
+                .iter()
+                .map(|&p| uv_region_contains(&region, topo, face_id, project(p), &project, true))
+                .collect()
         }
         FaceSurface::Sphere(_) => match SphereRegion::of(topo, face_id)? {
-            Some(region) => region.contains(topo, face_id, p),
-            None => Ok(true),
+            Some(region) => points
+                .iter()
+                .map(|&p| region.contains(topo, face_id, p))
+                .collect(),
+            None => Ok(vec![true; points.len()]),
         },
         FaceSurface::Nurbs(surface) => {
             let project = |q: Point3| -> (f64, f64) { surface.project_point(q) };
             let verts = face_polygon(topo, face_id)?;
-            let (u, v) = project(p);
             let boundary = build_uv_boundary(&verts, &project, false);
             // A closed surface's seam copies project to one `u`, folding its
             // loop flat: such a face is the whole surface.
-            let in_outer = verts.len() < 3
-                || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary)
-                || point_in_uv_boundary(u, v, &boundary, false);
-            Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, &project, false)?)
+            let whole = verts.len() < 3 || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary);
+            points
+                .iter()
+                .map(|&p| {
+                    let (u, v) = project(p);
+                    let in_outer = whole || point_in_uv_boundary(u, v, &boundary, false);
+                    Ok(in_outer && !hit_in_inner_wire_uv(topo, face_id, u, v, &project, false)?)
+                })
+                .collect()
         }
     }
 }
