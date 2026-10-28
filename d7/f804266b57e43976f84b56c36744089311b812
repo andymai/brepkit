@@ -1,0 +1,21 @@
+crates/algo/src/classifier/mod.rs
+  s_a2dc21dbec3f2b::t_39167465b2fe0d 220
+  s_a2dc21dbec3f2b::t_18798d84d6d405 94-97,99,213-214,216,218-219,221-224,227,235,260,603-681
+  s_a2dc21dbec3f2b::t_000d2e8fe50af0 682
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d7f804266b57e43976f84b56c36744089311b812",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
