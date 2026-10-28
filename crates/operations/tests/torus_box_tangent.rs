@@ -59,51 +59,60 @@ fn a_box_touching_the_outer_equator_cuts_exactly() {
     }
 }
 
-/// The torus's volume past x = 2 within |y| <= 1. At a distance `rho` from
-/// the axis the tube stands `2 sqrt(1 - (rho - 3)^2)` tall, and the box holds
-/// the angles about the axis up to the lesser of `acos(2 / rho)` and
-/// `asin(1 / rho)`, which meet at `rho = sqrt(5)`. With `rho = 3 + sin(phi)`
-/// the integrand is smooth on either side of that.
-fn past_the_inner_face() -> f64 {
+/// The torus's volume past x = `x0` (2 or more) within |y| <= 1. At a
+/// distance `rho` from the axis the tube stands `2 sqrt(1 - (rho - 3)^2)`
+/// tall, and the box holds the angles about the axis up to the lesser of
+/// `acos(x0 / rho)` and `asin(1 / rho)`. With `rho = 3 + sin(phi)` the
+/// integrand is smooth between `rho = x0`, where the angle opens, and
+/// `rho = sqrt(x0^2 + 1)`, where the two limits meet, and past that.
+fn past_the_inner_face(x0: f64) -> f64 {
     let f = |phi: f64| {
         let rho = 3.0 + phi.sin();
-        let angle = (2.0 / rho).min(1.0).acos().min((1.0 / rho).min(1.0).asin());
+        let angle = (x0 / rho).min(1.0).acos().min((1.0 / rho).min(1.0).asin());
         4.0 * phi.cos().powi(2) * angle * rho
     };
     let simpson = |a: f64, b: f64| {
-        let n = 20_000;
+        let n = 200_000;
         let h = (b - a) / f64::from(n);
         let inner: f64 = (1..n)
             .map(|i| f64::from(2 + 2 * (i % 2)) * f(h.mul_add(f64::from(i), a)))
             .sum();
         (f(a) + f(b) + inner) * h / 3.0
     };
-    let kink = (5.0_f64.sqrt() - 3.0).asin();
-    simpson(-FRAC_PI_2, kink) + simpson(kink, FRAC_PI_2)
+    let opens = (x0 - 3.0).asin();
+    let kink = (x0.hypot(1.0) - 3.0).asin();
+    simpson(opens, kink) + simpson(kink, FRAC_PI_2)
 }
 
 #[test]
 fn a_box_face_on_the_inner_equator_cuts_exactly() {
     // The face x = 2 = R - r touches the tube's inner side at (2, 0, 0), a
-    // saddle, and meets the torus in a figure-eight crossing itself there.
-    // The box to x = 4 touches the outer equator too.
-    let shared = past_the_inner_face();
+    // saddle, and meets the torus in a figure-eight crossing itself there;
+    // the box to x = 4 touches the outer equator too. There the cut leaves
+    // the ring's two ends touching at the node and is not checked. A face
+    // at x = 2.0001 meets the torus in one loop turning either side of a
+    // gap 0.028 wide in tube angle.
     let torus = 2.0 * PI * PI * 3.0;
-    for x1 in [4.0, 4.5] {
-        let block = (x1 - 2.0) * 2.0 * 4.0;
-        for (op, want) in [
+    for (x0, x1) in [(2.0, 4.0), (2.0, 4.5), (2.0001, 4.5)] {
+        let shared = past_the_inner_face(x0);
+        let block = (x1 - x0) * 2.0 * 4.0;
+        let mut ops = vec![
             (BooleanOp::Intersect, shared),
             (BooleanOp::Fuse, torus + block - shared),
-        ] {
-            let (kinds, got) = run(op, 2.0, x1);
+        ];
+        if x0 > 2.0 {
+            ops.push((BooleanOp::Cut, torus - shared));
+        }
+        for (op, want) in ops {
+            let (kinds, got) = run(op, x0, x1);
             assert!(
                 kinds.contains(&"torus") && kinds.len() < 20,
-                "{op:?} to x = {x1}: {} faces {kinds:?}",
+                "{op:?} from x = {x0} to {x1}: {} faces {kinds:?}",
                 kinds.len()
             );
             assert!(
                 (got - want).abs() < 1e-6 * want,
-                "{op:?} to x = {x1}: volume {got} against {want}"
+                "{op:?} from x = {x0} to {x1}: volume {got} against {want}"
             );
         }
     }
