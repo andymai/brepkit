@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793203144588,
+  "lastUpdate": 1793208188582,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58481,6 +58481,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28782520,
             "range": "± 101515",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f0d52d0d8d725eb3b97a6543b123d4796683ba4e",
+          "message": "fix(operations): revolve a circle part way whichever way its profile faces (#2119)\n\nRevolving a circle part of a turn about an axis it clears gives an\ninvalid solid today when the profile's circle faces against the sweep. A\ncircle of radius 1.5 centred 5 from the z axis, its normal along -y,\nswept a quarter turn about z, fails `validate_solid` with \"2 shared\nedges have inconsistent face orientations\"; facing +y it is valid. The\nvolume and area are right either way. With this change both validate.\n\n## Cause\n\n`try_circle_revolution_torus` builds the trimmed torus band and two disc\ncaps. The band's wire always ran the profile circle forward and the end\ncircle backward, while each cap chose its direction from the circle's\nnormal. When the profile circle faced against the sweep, the band and\neach cap ran their shared circle the same way.\n\n## Change\n\nThe band runs each circle the opposite way to its cap, so the wire takes\nthe same path whichever way the profile circle faces.\n\n## Tests\n\n- `a_circle_revolved_part_way_is_valid_whichever_way_it_faces`: the\ncircle facing +y and -y, swept a quarter turn, a half turn and 4\nradians, validates and matches the torus band's volume and area to 1e-9.\nOn `main` it fails at the quarter turn facing -y.\n- `revolve_arc_profile` and `revolve_curved_profiles` pass, `cargo test\n-p brepkit-operations --lib` passes 938 with 8 ignored, and `cargo\nclippy --all-targets --all-features -- -D warnings` is clean.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes revolving a circle part of a turn about an axis it clears\nproducing an invalid solid when the profile's circle faces against the\nsweep. The band's wire now runs each circle opposite to its cap, so the\nswept solid validates with correct volume and area regardless of profile\nfacing. Adds tests covering both facings across a quarter turn, a half\nturn, and 4 radians.\n\n<sup>Written for commit 836f78b8d90ed9fdc245212d2bdaabf795f4f7a8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2119?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2119?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2119&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T10:19:45-07:00",
+          "tree_id": "52f926d1ad895759712d7f918ed795fa9b363884",
+          "url": "https://github.com/andymai/brepkit/commit/f0d52d0d8d725eb3b97a6543b123d4796683ba4e"
+        },
+        "date": 1793208181164,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1079509,
+            "range": "± 8178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1168561,
+            "range": "± 6192",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12531,
+            "range": "± 34",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 680106,
+            "range": "± 3690",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27742068,
+            "range": "± 547198",
             "unit": "ns/iter"
           }
         ]
