@@ -246,6 +246,32 @@ fn exact_plane_sphere(
     Ok(vec![ExactIntersectionCurve::Circle(circle)])
 }
 
+/// Exact sphere-sphere intersection: the circle where the first sphere
+/// meets the two spheres' radical plane. `None` for one sphere twice (the
+/// same surface, no curve).
+///
+/// # Errors
+///
+/// Returns an error if the circle cannot be built.
+pub fn exact_sphere_sphere(
+    s1: &SphericalSurface,
+    s2: &SphericalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let delta = s2.center() - s1.center();
+    let d = delta.length();
+    let (r1, r2) = (s1.radius(), s2.radius());
+    let scale = r1.max(r2);
+    if d <= 1e-12 * scale {
+        // Concentric spheres of different radii never meet.
+        return Ok(((r1 - r2).abs() > 1e-12 * scale).then(Vec::new));
+    }
+    let normal = delta * (1.0 / d);
+    // The radical plane lies `d1` from the first centre along the centre line.
+    let d1 = d.mul_add(d, r1.mul_add(r1, -(r2 * r2))) / (2.0 * d);
+    let offset = dot_np(normal, s1.center()) + d1;
+    exact_plane_sphere(s1, normal, offset).map(Some)
+}
+
 /// Exact plane-cone intersection.
 ///
 /// The conic type is set by the cone's half-opening angle from the axis
@@ -5388,5 +5414,50 @@ mod tests {
                 "hyperbola must be sampled Points, not a closed conic"
             );
         }
+    }
+
+    /// Two spheres meet in one circle on both of them; spheres apart, one
+    /// inside the other, or concentric of different radii meet in nothing,
+    /// and one sphere twice has no curve.
+    #[test]
+    fn sphere_sphere_meets_in_a_circle_on_both() {
+        let ball = |x: f64, y: f64, z: f64, r: f64| {
+            SphericalSurface::new(Point3::new(x, y, z), r).unwrap()
+        };
+        let (a, b) = (ball(0.0, 0.0, 0.0, 2.0), ball(1.6, 0.3, 0.2, 1.5));
+        let curves = exact_sphere_sphere(&a, &b).unwrap().unwrap();
+        assert_eq!(curves.len(), 1);
+        let circle = match &curves[0] {
+            ExactIntersectionCurve::Circle(circle) => circle,
+            other => unreachable!("expected a circle, got {other:?}"),
+        };
+        for k in 0..16 {
+            let p = circle.evaluate(std::f64::consts::TAU * f64::from(k) / 16.0);
+            assert!(((p - a.center()).length() - 2.0).abs() < 1e-12);
+            assert!(((p - b.center()).length() - 1.5).abs() < 1e-12);
+        }
+        assert!(
+            exact_sphere_sphere(&a, &ball(4.0, 0.0, 0.0, 1.5))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            exact_sphere_sphere(&a, &ball(0.2, 0.0, 0.0, 1.0))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            exact_sphere_sphere(&a, &ball(0.0, 0.0, 0.0, 1.0))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            exact_sphere_sphere(&a, &ball(0.0, 0.0, 0.0, 2.0))
+                .unwrap()
+                .is_none()
+        );
     }
 }
