@@ -1088,8 +1088,9 @@ const PLANE_TORUS_LOOP_SAMPLES: (f64, f64) = (24.0, 512.0);
 /// every `v` is two loops winding the tube, one per branch. Every point
 /// comes from the closed form, so the loops need no chaining.
 ///
-/// A loop whose branches touch inside its run (a plane tangent to an
-/// equator) is a self-touching section, not a simple loop, and is left open.
+/// Where the branches touch inside a run (a plane tangent to the tube's
+/// inner side, at a saddle) the section crosses itself: each branch passes
+/// through that node, and each loop there starts and ends on it.
 ///
 /// When `s ≈ 0` the plane is perpendicular to the axis and the section is up
 /// to two full circles at the `v` values solving `r·c·sin v = d − n·center`,
@@ -1158,9 +1159,9 @@ fn plane_torus_loops(
     let branch = |v: f64, sign: f64| point(sign.mul_add(rhs_at(v).clamp(-1.0, 1.0).acos(), phi), v);
     let inside = |v: f64| rhs_at(v).abs() <= 1.0;
     let scan: Vec<f64> = (0..n_v).map(|i| (i as f64).mul_add(step, v_off)).collect();
-    // Whether |rhs| reaches 1 between two scan samples inside the section:
+    // Where |rhs| reaches 1 between two scan samples inside the section:
     // the branches touch there.
-    let touches = |lo: f64, hi: f64| {
+    let touch_at = |lo: f64, hi: f64| {
         let golden = 0.5 * (5.0_f64.sqrt() - 1.0);
         let (mut lo, mut hi) = (lo, hi);
         for _ in 0..80 {
@@ -1171,7 +1172,17 @@ fn plane_torus_loops(
                 lo = m1;
             }
         }
-        1.0 - rhs_at(f64::midpoint(lo, hi)).abs() < 1e-12
+        let v = f64::midpoint(lo, hi);
+        (1.0 - rhs_at(v).abs() < 1e-12).then_some(v)
+    };
+    // Both branches meet at the node, where `acos` is 0 or π.
+    let node = |v: f64| {
+        let u = if rhs_at(v) > 0.0 {
+            phi
+        } else {
+            phi + std::f64::consts::PI
+        };
+        point(u, v)
     };
     // Where the section's run ends between an inside and an outside sample.
     let turn = |v_in: f64, v_out: f64| {
@@ -1188,12 +1199,16 @@ fn plane_torus_loops(
     };
     let in_scan: Vec<bool> = scan.iter().map(|&v| inside(v)).collect();
     if in_scan.iter().all(|&x| x) {
-        let touching = scan.iter().any(|&v| touches(v, v + step));
+        let at_node = scan.iter().find_map(|&v| touch_at(v, v + step));
         return [1.0, -1.0]
             .into_iter()
-            .map(|sign| {
-                let run: Vec<IntersectionPoint> = scan.iter().map(|&v| branch(v, sign)).collect();
-                if touching { run } else { closed(run) }
+            .map(|sign| match at_node {
+                Some(v_node) => {
+                    let mut run = vec![node(v_node)];
+                    run.extend((1..n_v).map(|i| branch((i as f64).mul_add(step, v_node), sign)));
+                    closed(run)
+                }
+                None => closed(scan.iter().map(|&v| branch(v, sign)).collect()),
             })
             .collect();
     }
@@ -1214,7 +1229,7 @@ fn plane_torus_loops(
         let v_b = ((len - 1) as f64).mul_add(step, v_a);
         let run_v = |j: usize| (j as f64).mul_add(step, v_a);
         let (t_lo, t_hi) = (turn(v_a, v_a - step), turn(v_b, v_b + step));
-        let touching = (0..len - 1).any(|j| touches(run_v(j), run_v(j + 1)));
+        let at_node = (0..len - 1).find_map(|j| touch_at(run_v(j), run_v(j + 1)));
         // `u` moves like the square root of the distance in `v` to a turn, so
         // the loop is sampled at `v = t_lo + (t_hi - t_lo) (1 - cos θ) / 2`
         // for even steps of `θ`: `v` then moves like `θ²` at each turn and the
@@ -1239,10 +1254,25 @@ fn plane_torus_loops(
             (t_hi - t_lo).mul_add(f, t_lo)
         };
         let steps = m as usize;
-        let mut pts: Vec<IntersectionPoint> =
-            (0..=steps).map(|k| branch(at(k as f64), 1.0)).collect();
-        pts.extend((1..steps).rev().map(|k| branch(at(k as f64), -1.0)));
-        loops.push(if touching { pts } else { closed(pts) });
+        if let Some(v_node) = at_node {
+            // Out along one branch from the node to a turn and back along the
+            // other, once each side of the node.
+            for (from, to) in [(v_node, t_lo), (v_node, t_hi)] {
+                let along = |k: usize| {
+                    let f = 0.5 * (1.0 - (std::f64::consts::PI * k as f64 / m).cos());
+                    (to - from).mul_add(f, from)
+                };
+                let mut pts = vec![node(v_node)];
+                pts.extend((1..=steps).map(|k| branch(along(k), 1.0)));
+                pts.extend((1..steps).rev().map(|k| branch(along(k), -1.0)));
+                loops.push(closed(pts));
+            }
+        } else {
+            let mut pts: Vec<IntersectionPoint> =
+                (0..=steps).map(|k| branch(at(k as f64), 1.0)).collect();
+            pts.extend((1..steps).rev().map(|k| branch(at(k as f64), -1.0)));
+            loops.push(closed(pts));
+        }
         k += len;
     }
     loops
@@ -4663,31 +4693,70 @@ mod tests {
         }
     }
 
+    /// A plane tangent to the inner equator (x = major - minor = 7) cuts a
+    /// figure-eight that crosses itself on that equator. It comes out as its
+    /// two lobes, each a loop that starts and ends on the node, one either
+    /// side of the plane y = 0, never as one loop sealed across the node.
     #[test]
-    fn plane_torus_inner_tangent_figure_eight_stays_open() {
-        use crate::traits::ParametricCurve;
+    fn plane_torus_inner_tangent_figure_eight_is_two_loops_through_its_node() {
         let (major, minor) = (10.0, 3.0);
         let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
-
-        // A plane tangent to the inner equator (x = major - minor = 7) cuts a
-        // self-touching figure-eight: its two branches touch at the node on
-        // the inner equator. It must stay OPEN so a self-touching curve is
-        // never sealed into a simple loop.
         let curves =
             intersect_plane_torus(&torus, Vec3::new(-1.0, 0.0, 0.0), -(major - minor)).unwrap();
-        assert!(!curves.is_empty(), "inner-tangent plane found no curves");
-        let max_gap = curves
-            .iter()
-            .map(|c| {
-                let p0 = ParametricCurve::evaluate(&c.curve, 0.0);
-                let p1 = ParametricCurve::evaluate(&c.curve, 1.0);
-                (p0 - p1).length()
-            })
-            .fold(0.0_f64, f64::max);
-        assert!(
-            max_gap > 1e-2,
-            "figure-eight chain was wrongly force-closed (max end-gap={max_gap})"
-        );
+        assert_eq!(curves.len(), 2, "one loop per lobe");
+        let node = Point3::new(major - minor, 0.0, 0.0);
+        let mut sides = Vec::new();
+        for c in &curves {
+            let (first, last) = (c.points[0].point, c.points[c.points.len() - 1].point);
+            assert!((first - node).length() < 1e-6, "starts at {first:?}");
+            assert_eq!(first, last, "closes on the node");
+            for p in c.points.iter().map(|p| p.point) {
+                assert!((p.x() - node.x()).abs() < 1e-9, "off the plane at {p:?}");
+                assert!(
+                    torus_implicit(p, major, minor).abs() < 1e-6,
+                    "off the torus at {p:?}"
+                );
+            }
+            let y: f64 = c.points.iter().map(|p| p.point.y()).sum();
+            sides.push(y > 0.0);
+            assert!(
+                c.points.iter().all(|p| p.point.y() * y >= -1e-9),
+                "a lobe crosses y = 0"
+            );
+        }
+        assert_ne!(sides[0], sides[1], "the lobes lie either side of y = 0");
+    }
+
+    /// A plane tangent to the tube's inner side off its equator, at a saddle,
+    /// cuts a figure-eight that crosses itself where it touches. Its lobes
+    /// come out as two loops, each starting and ending on that node.
+    #[test]
+    fn a_tilted_plane_tangent_inside_the_tube_cuts_two_loops_through_its_node() {
+        let (major, minor) = (3.0, 1.0);
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
+        for v0 in [1.7_f64, 2.0, 2.5, 4.0] {
+            let normal = Vec3::new(v0.cos(), 0.0, v0.sin());
+            let node = torus.evaluate(0.0, v0);
+            let d = normal.dot(Vec3::new(node.x(), node.y(), node.z()));
+            let curves = intersect_plane_torus(&torus, normal, d).unwrap();
+            assert_eq!(curves.len(), 2, "v0 {v0}: one loop per lobe");
+            for c in &curves {
+                let (first, last) = (c.points[0].point, c.points[c.points.len() - 1].point);
+                assert!(
+                    (first - node).length() < 1e-6,
+                    "v0 {v0}: starts at {first:?}, not {node:?}"
+                );
+                assert_eq!(first, last, "v0 {v0}: closes on the node");
+                for p in c.points.iter().map(|p| p.point) {
+                    let off = normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d;
+                    assert!(off.abs() < 1e-9, "v0 {v0}: off the plane at {p:?}");
+                    assert!(
+                        torus_implicit(p, major, minor).abs() < 1e-6,
+                        "v0 {v0}: off the torus at {p:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// A wall parallel to the axis cuts one loop from the ring past the
