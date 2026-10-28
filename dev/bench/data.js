@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793145417703,
+  "lastUpdate": 1793145638522,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57671,6 +57671,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 32758846,
             "range": "± 35053",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ccbf66b274d3c30d5a7ffeadb3af0a513b0e030c",
+          "message": "perf(algo): index the boolean classifier's ray cast by face (#2099)\n\nClassifying a boolean's sub-faces is quadratic in the opposing solid's\nface count today: each of a sub-face's rays tests every opposing face,\nand each planar sub-face compares its plane with every opposing face. On\na plate cut by 900 holes that stage (`classify_sub_faces`) takes 361 ms.\nWith this change it takes 29 ms, with the same result.\n\n## Change\n\nFor a solid of 32 faces or more, `RayCastGeoms` now carries two indexes.\nSmaller solids are read as before.\n\n- A BVH of one box per face, outside which that face's crossing test\ncounts nothing and reports no graze. It is queried with the ray's whole\nline, both ways, since some graze tests are not limited to the forward\nray. Plane boxes come from the face's polygon, its arc circles and curve\npieces, and the polygon carried onto the face's plane along the axis its\nin-polygon test reads (a curved face read as a polygon against a fitted\nplane counts hits on that plane, off its own points); cylinder and cone\nbands from the hull of their end circles (for a trimmed band, its ends\nare read from conservative bounds of its wires' curves); spheres and\ntori from the whole surface. Faces with no such box are read on every\nray: extrusion faces and a trimmed cone face spanning both nappes, whose\ntests can report a graze away from the face, a face whose wires cannot\nbe bounded (a NURBS edge with a weight that is not positive), and a face\nwith a coordinate that is not finite (a box's min and max skip NaN, so\nevery point and part box is checked before it joins). A ray running in a\nplanar face's infinite plane reads as a graze wherever the face lies, so\nthose faces' offsets are grouped by normal and searched for each ray\nwith the crossing test's own comparison.\n- The solid's planar faces keyed by plane: the offset along the normal\nturned to a canonical orientation (its first component past one half in\nsize made positive), which a plane and its flip share.\n`classify_coincident_coplanar` then reads only the faces that can lie in\nthe sub-face's plane, in the solid's face order. A normal with a\ncomponent within 1e-5 of one half has no stable key: such faces are\nreturned for every plane, and such a sub-face reads every face as\nbefore.\n- `Bvh::query_line_into` and `Aabb3::line_intersects` test a line\nagainst boxes, taking a zero direction component by the origin's\ncoordinate alone, so an origin on a box face is not lost to the slab\nmethod's NaN.\n\n## Measurements\n\nRelease build, a plate 2 thick with an n by n grid of radius 0.5 holes\ncut by `compound_cut`, `BK_GFA_TIME`:\n\n| holes | `classify_sub_faces`, `main` | this branch |\n|---|---|---|\n| 400 | 69 ms | 10 ms |\n| 900 | 361 ms | 29 ms |\n\nThe resulting volumes are identical. In `boolean_tracking` against\n`main`, `perforated_cut_36` is 3.7% faster and the other four benches\nare unchanged.\n\n## Tests\n\n- `crates/operations/tests/ray_index_matches_full_scan.rs`: eight plates\nwith at least 32 faces, cut by straight and tilted cylinders, straight\nand tilted cones, spheres and tori, and the sphere and torus plates\nagain converted to NURBS (read as polygons against fitted planes). At\nevery point of a grid on the plates' planes and between them, plus\nrandom points (thinner for the NURBS plates, whose full scan is slow),\nevery ray's parity and graze report along eight directions, and the\nvote, match the same geometry read face by face\n(`RayCastGeoms::without_index`). Dropping the in-plane search fails all\nfour tests, halving the cylinder boxes fails the cylinder one, and\nleaving the projected polygon out of the plane boxes fails the NURBS\none.\n- `planar_candidates_hold_every_coincident_face_in_order`: 144 planar\nfaces (48 normals at 7.5 degree steps, three offsets each, alternate\nwindings) in one solid. For every face's plane and three nudges of it,\nthe candidates hold every face the coincidence test in\n`classify_coincident_coplanar` passes, in the solid's order. Dropping\nthe guard near one half or the offset slack fails it.\n- `a_face_with_a_coordinate_that_is_not_a_number_has_no_box`: a polygon\nwith a NaN vertex, a NaN hole radius and a band with a NaN end get no\nbox; a box built through the NaN fails it.\n- `cargo test -p brepkit-algo --lib` passes 311, `cargo test -p\nbrepkit-operations --lib` passes 937 with 8 ignored, `sphere_ray_cast`,\n`cone_cylinder_trims` and `boolean_determinism` pass, and the pose sweep\nand truth audit outputs are identical to `main`'s. `cargo clippy -p\nbrepkit-algo --all-targets -- -D warnings` is clean.",
+          "timestamp": "2026-10-27T23:58:01Z",
+          "tree_id": "7124dd43a87e3b84e612f8a116eaca23e2588976",
+          "url": "https://github.com/andymai/brepkit/commit/ccbf66b274d3c30d5a7ffeadb3af0a513b0e030c"
+        },
+        "date": 1793145630819,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 868134,
+            "range": "± 1563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 936877,
+            "range": "± 5053",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11117,
+            "range": "± 130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 523485,
+            "range": "± 1348",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25843954,
+            "range": "± 152724",
             "unit": "ns/iter"
           }
         ]
