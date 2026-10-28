@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.15](https://github.com/andymai/brepkit/compare/v4.3.14...v4.3.15) (2026-10-28)
+
+
+### Bug Fixes
+
+* **operations:** revolve a circle part way whichever way its profile faces ([#2119](https://github.com/andymai/brepkit/issues/2119)) ([f0d52d0](https://github.com/andymai/brepkit/commit/f0d52d0d8d725eb3b97a6543b123d4796683ba4e))
+
 ## [4.3.14](https://github.com/andymai/brepkit/compare/v4.3.13...v4.3.14) (2026-10-28)
 
 
