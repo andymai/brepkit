@@ -8,7 +8,7 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::MathError;
 use crate::aabb::Aabb3;
-use crate::curves::{Circle3D, Ellipse3D};
+use crate::curves::{Circle3D, Ellipse3D, Line3D};
 use crate::frame::Frame3;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::fitting::interpolate;
@@ -24,6 +24,17 @@ pub enum ExactIntersectionCurve {
     Circle(Circle3D),
     /// An ellipse (plane oblique to cylinder/cone axis).
     Ellipse(Ellipse3D),
+    /// A straight section: a cylinder's ruling, running both ways from the
+    /// line's origin, or with `ray` a cone's ruling, running from the apex
+    /// at the line's origin along its direction only.
+    Line {
+        /// The ruling's line.
+        line: Line3D,
+        /// Whether the section runs one way only, from the line's origin.
+        ray: bool,
+    },
+    /// The one point where the surfaces touch.
+    Point(Point3),
     /// Fallback to sampled point chain (torus, degenerate cases).
     Points(Vec<Point3>),
 }
@@ -166,13 +177,7 @@ fn exact_plane_cylinder(
     let r = cyl.radius();
 
     if cos_theta < 1e-10 {
-        // Plane parallel to cylinder axis → 0 or 2 line segments.
-        // Fall back to sampled points.
-        let chains = sample_plane_cylinder(cyl, normal, d)?;
-        return Ok(chains
-            .into_iter()
-            .map(ExactIntersectionCurve::Points)
-            .collect());
+        return plane_cylinder_rulings(cyl, normal, d);
     }
 
     // Find where axis intersects the plane: axis_point + t*axis, dot(normal, P) = d
@@ -230,20 +235,112 @@ fn exact_plane_sphere(
 ) -> Result<Vec<ExactIntersectionCurve>, MathError> {
     let h = dot_np(normal, sphere.center()) - d;
     let r = sphere.radius();
-
-    if h.abs() > r - 1e-10 {
+    let depth = r - h.abs();
+    if depth < -TOUCH * r {
         return Ok(vec![]);
     }
-
-    let circle_r = (r.mul_add(r, -(h * h))).sqrt();
     let circle_center = Point3::new(
         h.mul_add(-normal.x(), sphere.center().x()),
         h.mul_add(-normal.y(), sphere.center().y()),
         h.mul_add(-normal.z(), sphere.center().z()),
     );
-
+    if depth <= TOUCH * r {
+        return Ok(vec![ExactIntersectionCurve::Point(circle_center)]);
+    }
+    // The depth, not r² − h², so a circle cut a hair below the top keeps
+    // its size.
+    let circle_r = (depth * (r + h.abs())).sqrt();
     let circle = Circle3D::new(circle_center, normal, circle_r)?;
     Ok(vec![ExactIntersectionCurve::Circle(circle)])
+}
+
+/// Rounding band, relative, within which a plane counts as touching a
+/// surface rather than cutting or missing it.
+const TOUCH: f64 = 4.0 * f64::EPSILON;
+
+/// The rulings a plane along a cylinder's axis cuts from it: two lines, the
+/// one it touches along, or none.
+fn plane_cylinder_rulings(
+    cyl: &CylindricalSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    // n·P(u, 0) = n·O + r·(a cos u + b sin u): the plane holds the ruling at
+    // u where cos(u − φ) = (d − n·O) / (r·√(a² + b²)).
+    let (a, b) = (normal.dot(cyl.x_axis()), normal.dot(cyl.y_axis()));
+    let amp = a.hypot(b);
+    if amp < 1e-12 {
+        return Ok(vec![]);
+    }
+    let ratio = (d - dot_np(normal, cyl.origin())) / (cyl.radius() * amp);
+    if ratio.abs() > 1.0 + TOUCH {
+        return Ok(vec![]);
+    }
+    let phi = b.atan2(a);
+    let spread = ratio.clamp(-1.0, 1.0).acos();
+    let at = if ratio.abs() >= 1.0 - TOUCH {
+        vec![phi + spread]
+    } else {
+        vec![phi + spread, phi - spread]
+    };
+    at.into_iter()
+        .map(|u| {
+            Ok(ExactIntersectionCurve::Line {
+                line: Line3D::new(cyl.evaluate(u, 0.0), cyl.axis())?,
+                ray: false,
+            })
+        })
+        .collect()
+}
+
+/// Whether a plane passes through a cone's apex, within the linear
+/// tolerance widened only by the rounding of far-off coordinates.
+fn plane_holds_apex(cone: &ConicalSurface, normal: Vec3, d: f64) -> bool {
+    let Ok(unit) = normal.normalize() else {
+        return false;
+    };
+    let apex = cone.apex() - Point3::new(0.0, 0.0, 0.0);
+    let tol = Tolerance::new().linear.max(1e-12 * apex.length());
+    (unit.dot(apex) - d / normal.length()).abs() <= tol
+}
+
+/// The rulings a plane through a cone's apex cuts from its nappe, as rays
+/// from the apex: two, the one it touches along, or none, when the plane
+/// meets the cone at the apex alone.
+fn plane_cone_apex_rulings(
+    cone: &ConicalSurface,
+    normal: Vec3,
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    // g(u) = cos a·(cos u·X + sin u·Y) + sin a·axis, so n·g(u) = 0 reads
+    // A cos u + B sin u = −C.
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    let a = cos_a * normal.dot(cone.x_axis());
+    let b = cos_a * normal.dot(cone.y_axis());
+    let c = sin_a * normal.dot(cone.axis());
+    let amp = a.hypot(b);
+    let apex = cone.apex();
+    if amp < 1e-12 * c.abs().max(1.0) {
+        return Ok(vec![ExactIntersectionCurve::Point(apex)]);
+    }
+    let ratio = -c / amp;
+    if ratio.abs() > 1.0 + TOUCH {
+        return Ok(vec![ExactIntersectionCurve::Point(apex)]);
+    }
+    let phi = b.atan2(a);
+    let spread = ratio.clamp(-1.0, 1.0).acos();
+    let at = if ratio.abs() >= 1.0 - TOUCH {
+        vec![phi + spread]
+    } else {
+        vec![phi + spread, phi - spread]
+    };
+    at.into_iter()
+        .map(|u| {
+            Ok(ExactIntersectionCurve::Line {
+                line: Line3D::new(apex, cone.evaluate(u, 1.0) - apex)?,
+                ray: true,
+            })
+        })
+        .collect()
 }
 
 /// Exact sphere-sphere intersection: the circle on the two spheres' radical
@@ -316,7 +413,7 @@ fn exact_plane_cone(
         // circle whose radius follows from the axial offset |t|.
         // |t| ≈ 0 means the plane passes through the apex → degenerate point.
         if t.abs() < 1e-10 {
-            return Ok(vec![]);
+            return Ok(vec![ExactIntersectionCurve::Point(cone.apex())]);
         }
 
         let center = Point3::new(
@@ -334,6 +431,10 @@ fn exact_plane_cone(
 
         let circle = Circle3D::new(center, normal, circle_r)?;
         return Ok(vec![ExactIntersectionCurve::Circle(circle)]);
+    }
+
+    if plane_holds_apex(cone, normal, d) {
+        return plane_cone_apex_rulings(cone, normal);
     }
 
     // Oblique plane. Classify the conic in the plane-aligned frame.
@@ -2322,7 +2423,9 @@ fn offset_parallel_cone_cone(
             ExactIntersectionCurve::Ellipse(e) => (0..4)
                 .map(|i| crate::traits::ParametricCurve::evaluate(e, TAU * f64::from(i) / 4.0))
                 .collect(),
-            ExactIntersectionCurve::Points(_) => return Ok(None),
+            ExactIntersectionCurve::Line { .. }
+            | ExactIntersectionCurve::Point(_)
+            | ExactIntersectionCurve::Points(_) => return Ok(None),
         };
         let on_real_nappe = |p: &Point3| {
             let rel = *p - apex2;
@@ -2428,7 +2531,9 @@ fn algebraic_cone_cone(
                 ExactIntersectionCurve::Ellipse(ellipse) => {
                     crate::traits::ParametricCurve::evaluate(ellipse, theta)
                 }
-                ExactIntersectionCurve::Points(_) => break,
+                ExactIntersectionCurve::Line { .. }
+                | ExactIntersectionCurve::Point(_)
+                | ExactIntersectionCurve::Points(_) => break,
             };
             positions.push(pt);
             points.push(IntersectionPoint {
@@ -5431,6 +5536,13 @@ mod tests {
             ExactIntersectionCurve::Ellipse(e) => (0..=64)
                 .map(|i| ParametricCurve::evaluate(e, TAU * f64::from(i) / 64.0))
                 .collect(),
+            ExactIntersectionCurve::Line { line, ray } => (0..=64)
+                .map(|i| {
+                    let t = 4.0 * f64::from(i) / 64.0;
+                    line.evaluate(if *ray { t } else { 2.0 * t - 4.0 })
+                })
+                .collect(),
+            ExactIntersectionCurve::Point(p) => vec![*p],
             ExactIntersectionCurve::Points(pts) => pts.clone(),
         }
     }
@@ -5634,5 +5746,138 @@ mod tests {
         );
         assert!(near > 1e-3);
         assert!((far - near).abs() < 1e-9 * near.max(1.0));
+    }
+
+    /// Each line among `curves`, and whether it is a ray; any other curve
+    /// fails the test.
+    #[allow(clippy::panic)]
+    fn lines_of(curves: &[ExactIntersectionCurve]) -> Vec<(Line3D, bool)> {
+        curves
+            .iter()
+            .map(|c| match c {
+                ExactIntersectionCurve::Line { line, ray } => (line.clone(), *ray),
+                other => panic!("expected a line, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// A plane along a cylinder's axis cuts its rulings: two through the
+    /// axis, two 2e-6 apart where it sinks a hair into the cylinder, the one
+    /// it touches along, and none past it.
+    #[test]
+    fn a_plane_along_a_cylinder_cuts_its_rulings() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, -2.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let y = Vec3::new(0.0, 1.0, 0.0);
+        let cut = |d: f64| exact_plane_cylinder(&cyl, y, d).unwrap();
+        let on_both = |p: Point3, d: f64| {
+            assert!((p.y() - d).abs() < 1e-12, "{p:?} off the plane y = {d}");
+            assert!(
+                (p.x().hypot(p.y()) - 1.0).abs() < 1e-12,
+                "{p:?} off the cylinder"
+            );
+        };
+        for (d, count) in [(0.0, 2), (1e-6_f64.cos(), 2), (1.0, 1), (1.5, 0)] {
+            let lines = lines_of(&cut(d));
+            assert_eq!(lines.len(), count, "plane y = {d}");
+            let mut xs = Vec::new();
+            for (line, ray) in lines {
+                assert!(!ray);
+                assert!(line.direction().cross(cyl.axis()).length() < 1e-12);
+                for t in [-3.0, 0.0, 3.0] {
+                    on_both(line.evaluate(t), d);
+                }
+                xs.push(line.evaluate(0.0).x());
+            }
+            if count == 2 {
+                let apart = (xs[0] - xs[1]).abs();
+                let want = 2.0 * (1.0 - d * d).sqrt();
+                assert!(
+                    (apart - want).abs() < 1e-9 * want.max(1e-6),
+                    "{apart} apart"
+                );
+            }
+        }
+    }
+
+    /// A plane through a cone's apex cuts rays from it: two for a plane
+    /// through the axis, one for a plane touching the cone along a ruling,
+    /// and the apex alone for a plane missing the nappe.
+    #[test]
+    fn a_plane_through_a_cone_apex_cuts_its_rulings() {
+        use std::f64::consts::FRAC_PI_4;
+
+        let cone = ConicalSurface::new(
+            Point3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            FRAC_PI_4,
+        )
+        .unwrap();
+        let apex = cone.apex();
+        let through = |n: Vec3| {
+            let n = n.normalize().unwrap();
+            let d = n.dot(apex - Point3::new(0.0, 0.0, 0.0));
+            (
+                n,
+                d,
+                exact_plane_analytic(AnalyticSurface::Cone(&cone), n, d).unwrap(),
+            )
+        };
+        for (n, count) in [
+            (Vec3::new(1.0, 0.0, 0.0), 2),
+            (Vec3::new(1.0, 0.0, -1.0), 1),
+        ] {
+            let (n, d, curves) = through(n);
+            let rays = lines_of(&curves);
+            assert_eq!(rays.len(), count, "plane normal {n:?}");
+            for (line, ray) in rays {
+                assert!(ray);
+                assert!((line.evaluate(0.0) - apex).length() < 1e-12);
+                let p = line.evaluate(2.0);
+                assert!((n.dot(p - Point3::new(0.0, 0.0, 0.0)) - d).abs() < 1e-12);
+                let rel = p - apex;
+                assert!(rel.z() > 0.0, "{p:?} on the phantom nappe");
+                assert!(
+                    (rel.x().hypot(rel.y()) - rel.z()).abs() < 1e-12,
+                    "{p:?} off the cone"
+                );
+            }
+        }
+        for n in [Vec3::new(0.1, 0.0, 1.0), Vec3::new(0.0, 0.0, 1.0)] {
+            let (_, _, curves) = through(n);
+            assert!(
+                matches!(curves[..], [ExactIntersectionCurve::Point(p)] if (p - apex).length() < 1e-12),
+                "{curves:?}"
+            );
+        }
+    }
+
+    /// A plane touching a sphere meets it at the point of contact, and one a
+    /// hair inside cuts the small circle there, however small.
+    #[test]
+    #[allow(clippy::panic)]
+    fn a_plane_touching_a_sphere_meets_it_at_a_point() {
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let curves = exact_plane_sphere(&sphere, z, 0.0).unwrap();
+        assert!(
+            matches!(curves[..], [ExactIntersectionCurve::Point(p)] if p.z().abs() < 1e-15 && p.x() == 0.0),
+            "{curves:?}"
+        );
+        assert!(exact_plane_sphere(&sphere, z, -1e-9).unwrap().is_empty());
+        for height in [5e-15, 1e-12, 1e-8] {
+            let curves = exact_plane_sphere(&sphere, z, height).unwrap();
+            let [ExactIntersectionCurve::Circle(circle)] = &curves[..] else {
+                panic!("{curves:?}");
+            };
+            let want = (height * (2.0 - height)).sqrt();
+            assert!(
+                (circle.radius() - want).abs() < 1e-3 * want,
+                "circle at z = {height}: radius {}, want {want}",
+                circle.radius()
+            );
+            assert!((circle.center().z() - height).abs() < 1e-15);
+        }
     }
 }

@@ -5979,7 +5979,9 @@ fn compute_raw_curves(
                                     p_end,
                                 });
                             }
-                            analytic_intersection::ExactIntersectionCurve::Points(_) => {}
+                            analytic_intersection::ExactIntersectionCurve::Line { .. }
+                            | analytic_intersection::ExactIntersectionCurve::Point(_)
+                            | analytic_intersection::ExactIntersectionCurve::Points(_) => {}
                         }
                     }
                     Ok(results)
@@ -6343,6 +6345,10 @@ fn plane_analytic_intersection(
     let mut results = Vec::new();
     for exact in exact_curves {
         match exact {
+            // A plane within 1e-10 of a sphere's top only grazes it.
+            analytic_intersection::ExactIntersectionCurve::Circle(circle)
+                if matches!(analytic, analytic_intersection::AnalyticSurface::Sphere(sphere)
+                    if sphere.radius() - (circle.center() - sphere.center()).length() < 1e-10) => {}
             analytic_intersection::ExactIntersectionCurve::Circle(circle) => {
                 let bbox = circle_bbox(&circle);
                 let domain = (0.0, std::f64::consts::TAU);
@@ -6369,6 +6375,34 @@ fn plane_analytic_intersection(
                     p_end,
                 });
             }
+            analytic_intersection::ExactIntersectionCurve::Line { line, ray } => {
+                let (base, dir) = (line.origin(), line.direction());
+                let (t0, t1) = trim_t_range_to_aabb(base, dir, bbox_a, bbox_b);
+                let t_range = (if ray { t0.max(0.0) } else { t0 }, t1);
+                if t_range.1 - t_range.0 < 1e-9 {
+                    continue;
+                }
+                let (p_start, p_end) = (base + dir * t_range.0, base + dir * t_range.1);
+                results.push(RawCurve {
+                    curve: EdgeCurve::Line,
+                    bbox: Aabb3 {
+                        min: Point3::new(
+                            p_start.x().min(p_end.x()),
+                            p_start.y().min(p_end.y()),
+                            p_start.z().min(p_end.z()),
+                        ),
+                        max: Point3::new(
+                            p_start.x().max(p_end.x()),
+                            p_start.y().max(p_end.y()),
+                            p_start.z().max(p_end.z()),
+                        ),
+                    },
+                    t_range,
+                    p_start,
+                    p_end,
+                });
+            }
+            analytic_intersection::ExactIntersectionCurve::Point(_) => {}
             analytic_intersection::ExactIntersectionCurve::Points(pts) => {
                 // The sampled chain spans the UNBOUNDED section conic (a
                 // hyperbola from a wall plane grazing a taper cone covers
@@ -6636,7 +6670,9 @@ fn exact_raw_curves(exacts: Vec<analytic_intersection::ExactIntersectionCurve>) 
                 curve: EdgeCurve::Ellipse(ellipse),
                 t_range: domain,
             }),
-            analytic_intersection::ExactIntersectionCurve::Points(_) => None,
+            analytic_intersection::ExactIntersectionCurve::Line { .. }
+            | analytic_intersection::ExactIntersectionCurve::Point(_)
+            | analytic_intersection::ExactIntersectionCurve::Points(_) => None,
         })
         .collect()
 }

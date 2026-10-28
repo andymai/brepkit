@@ -8949,3 +8949,31 @@ fn cone_cut_wall_keeps_a_rim_notch_beside_full_circles() {
         assert_volume_near(&topo, result, body - disc - notch, 1e-6);
     }
 }
+
+/// A box face within 1e-10 of a ball's top only grazes the ball: cutting the
+/// box away leaves the ball's two faces whole, with no sliver cap split off
+/// around the point where it touches.
+#[test]
+fn a_box_grazing_a_ball_leaves_it_whole() {
+    use brepkit_math::mat::Mat4;
+
+    for depth in [1e-11, 5e-11] {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+        let block = crate::primitives::make_box(&mut topo, 4.0, 4.0, 1.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            block,
+            &Mat4::translation(-2.0, -2.0, 1.0 - depth),
+        )
+        .unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, ball, block).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, cut).unwrap();
+        assert_eq!(faces.len(), 2, "depth {depth}");
+        assert!(
+            faces
+                .iter()
+                .all(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+        );
+    }
+}
