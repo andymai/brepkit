@@ -707,9 +707,21 @@ fn boolean_inner(
                 // inner-shell surplus and balance Euler by accident.
                 let hollow_ok = inner_shell_surplus == 0 || closed_manifold;
                 let euler_eff = euler - inner_shell_surplus;
-                let euler_ok = hollow_ok
+                let mut euler_ok = hollow_ok
                     && (euler_eff == 2
                         || (euler_balanced(euler_eff, inner_wire_count, 1) && closed_manifold));
+                // A hole whose rim shares a vertex with another of its face's
+                // wires (a tilted hole running along a wall, its rim touching
+                // the wall's edge) leaves the face's boundary in one piece, so
+                // it adds nothing to V-E+F; `validate_solid` counts inner
+                // loops the same way, and must find no error, as the gate
+                // below only logs its errors. Counted only when the plain
+                // balance fails, so it adds acceptances and removes none.
+                if !euler_ok && hollow_ok && closed_manifold {
+                    euler_ok =
+                        euler_balanced(euler_eff, solid_separate_inner_loops(topo, result)?, 1)
+                            && crate::validate::validate_solid(topo, result)?.is_valid();
+                }
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
                         "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
@@ -3724,6 +3736,22 @@ fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate:
         #[allow(clippy::cast_possible_wrap)]
         {
             count += face.inner_wires().len() as i64;
+        }
+    }
+    Ok(count)
+}
+
+/// Count a solid's inner loops as `validate_solid` does: a face's wires that
+/// share a vertex form one boundary piece, and each piece past the first is
+/// an inner loop.
+fn solid_separate_inner_loops(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<i64, crate::OperationsError> {
+    let mut count: i64 = 0;
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        if !topo.face(fid)?.inner_wires().is_empty() {
+            count += i64::try_from(crate::validate::boundary_pieces(topo, fid)?).unwrap_or(1) - 1;
         }
     }
     Ok(count)

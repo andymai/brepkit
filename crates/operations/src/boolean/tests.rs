@@ -7734,6 +7734,43 @@ fn euler_balance_allows_genus_across_components() {
     assert!(super::euler_balanced(20, 6, 7));
 }
 
+/// A hole whose rim touches its face's outer rim is no separate inner loop.
+///
+/// A plate cut by a tilted hole whose side runs along the wall x = 12 leaves
+/// each end's rim, where it stays inside its face, a wire that shares a vertex
+/// with the face's outer wire on that wall's edge. Moved 0.01 off the wall,
+/// the rims are separate loops again.
+#[test]
+fn inner_loops_touching_their_face_rim_are_not_separate() {
+    use brepkit_math::mat::Mat4;
+    let loops_at = |x: f64, y: f64| {
+        let mut topo = Topology::new();
+        let plate = crate::primitives::make_box(&mut topo, 12.0, 12.0, 2.0).unwrap();
+        let c = crate::primitives::make_cylinder(&mut topo, 0.5, 8.0).unwrap();
+        let place = Mat4::translation(x, y, 1.0)
+            * Mat4::rotation_x(0.2)
+            * Mat4::translation(0.0, 0.0, -4.0);
+        crate::transform::transform_solid(&mut topo, c, &place).unwrap();
+        let r = brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Cut, plate, c)
+            .unwrap();
+        (
+            super::solid_inner_wire_count(&topo, r).unwrap(),
+            super::solid_separate_inner_loops(&topo, r).unwrap(),
+        )
+    };
+    assert_eq!(
+        loops_at(11.5, 5.5),
+        (2, 0),
+        "both rims touch the wall's edges"
+    );
+    assert_eq!(
+        loops_at(11.5, 11.5),
+        (1, 0),
+        "the lower rim breaks out through y = 12"
+    );
+    assert_eq!(loops_at(11.49, 5.5), (2, 2), "neither rim reaches the wall");
+}
+
 /// A piece sitting in a RING's hole is disjoint, not nested.
 ///
 /// This is the case AABB containment alone cannot answer, and the reason the

@@ -315,7 +315,7 @@ pub fn validate_solid(
 
 /// How many connected pieces a face's wires form, two wires joining when
 /// they share a vertex.
-fn boundary_pieces(
+pub(crate) fn boundary_pieces(
     topo: &Topology,
     fid: brepkit_topology::face::FaceId,
 ) -> Result<usize, crate::OperationsError> {
