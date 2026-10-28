@@ -714,11 +714,13 @@ fn boolean_inner(
                 // wires (a tilted hole running along a wall, its rim touching
                 // the wall's edge) leaves the face's boundary in one piece, so
                 // it adds nothing to V-E+F; `validate_solid` counts inner
-                // loops the same way. Counted only when the plain balance
-                // fails, so it adds acceptances and removes none.
+                // loops the same way, and must find no error, as the gate
+                // below only logs its errors. Counted only when the plain
+                // balance fails, so it adds acceptances and removes none.
                 if !euler_ok && hollow_ok && closed_manifold {
                     euler_ok =
-                        euler_balanced(euler_eff, solid_separate_inner_loops(topo, result)?, 1);
+                        euler_balanced(euler_eff, solid_separate_inner_loops(topo, result)?, 1)
+                            && crate::validate::validate_solid(topo, result)?.is_valid();
                 }
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
