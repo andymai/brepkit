@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793145638522,
+  "lastUpdate": 1793147185922,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57725,6 +57725,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25843954,
             "range": "± 152724",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4512542c432f5c218b0e500e26d869d310b37d33",
+          "message": "perf(algo): find the pave vertex holding a point through a spatial index (#2104)\n\nFinding the pave vertex whose tolerance ball holds a point\n(`pave_vertex_within_tolerance`) scans every pave-block vertex today,\nonce per section end in the face-face phase and once per crossing in the\nedge-face phase. Both phases grow with the square of the number of tool\nedges: on a plate cut by 900 holes the face-face phase takes 136 to 158\nms, 93 ms of it in this scan, and the edge-face phase 102 to 112 ms.\nWith this change they take 44 ms and 18 ms, with the same result.\n\n## Change\n\n- `PaveBallIndex`, built alongside the pave-vertex index after VV, files\nevery pave-block vertex (ends and extra paves) by position with its\nplace in the scan, so ties resolve as before. A vertex qualifies within\nthe larger of its own tolerance and the caller's reach. For a reach up\nto one cell (a thousand linear tolerances) a query reads the cells\naround the point plus the vertices whose tolerance has passed a cell,\nwhich are kept apart. A wider reach, or a point that is not finite,\nscans as before.\n- The index stays in step with the two things that change during the\npasses. Extra paves join through `GfaArena::add_extra_pave`, which\nreplaces the three places that pushed onto a pave block directly\n(`add_pave_to_edge` now takes the topology). The one place a pass raises\na vertex's tolerance (`ef_crossing_vertex`) tells the index, which moves\nthat vertex to the kept-apart set once its tolerance passes a cell.\n- Debug builds compare every answer with the scan, so the whole test\nsuite holds the index to it.\n\n## Measurements\n\nRelease build, a plate 2 thick with a 30 by 30 grid of radius 0.5 holes\ncut by `compound_cut`, `BK_GFA_TIME`: `phase_ff` takes 44 ms and\n`phase_ef` 18 ms, against 136 to 158 ms and 102 to 112 ms on `main` over\nearlier runs. At 400 holes they take 17 ms and 7 ms, against 36 and 24\nms. The resulting volumes are identical.\n\n## Tests\n\n- `ball_index_matches_the_scan`: two vertices the same distance from the\nquery, a tight one beside them, a far vertex built with a wide\ntolerance, a vertex whose tolerance is raised after the build, and an\nextra pave added later, queried from two points at three reaches. Each\nanswer matches the scan, and a reach past one cell is refused. Ignoring\nthe tolerance raise fails it.\n- `kumiko_lattice_piece_cut_inmem`, whose operand vertices carry\ntolerances up to 6e-4, passes its 11 tests in a debug build with every\nanswer compared to the scan. Making the index always answer \"none\" fails\nthat comparison there.\n- In debug builds, `cargo test -p brepkit-algo --lib` passes 311 and\n`cargo test -p brepkit-operations --lib` passes 937 with 8 ignored.\n`kumiko_strut_fuse_inmem`, `kumiko_wrap_strut_cut_inmem`,\n`bp64_pocket_compound_cut_inmem`, `circleinsert_interface_fuse_inmem`,\n`counterbore_cap_circle_cut_inmem`, `snapclip_slot_cut_inmem`,\n`ring_bin_cavity_cut_inmem`, `mixed_socket_tess_inmem`,\n`boolean_determinism` and `cone_cylinder_trims` pass. The pose sweep and\ntruth audit outputs are identical to `main`'s, and `cargo clippy -p\nbrepkit-algo --all-targets -- -D warnings` is clean.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up finding the pave vertex whose tolerance ball holds a point by\nreplacing a scan of every pave-block vertex with a spatial index\n(`PaveBallIndex`).\n\n- On a plate cut by 900 holes, the face-face phase drops from 136-158 ms\nto 44 ms and the edge-face phase from 102-112 ms to 18 ms, with\nidentical output volumes.\n- The index is built alongside the pave-vertex index after VV; extra\npaves join through the new `GfaArena::add_extra_pave`, and the one place\na pass raises a vertex tolerance notifies the index.\n- Queries with a reach beyond one cell or a non-finite point fall back\nto the linear scan, and debug builds compare every index answer against\nit.\n\n<sup>Written for commit 79b9d44e73cbe093ada87bfbfe2780ca1458067e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2104?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2104?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2104&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T00:23:19Z",
+          "tree_id": "52e05921af2adc7fb197af32401ecbeb256258a3",
+          "url": "https://github.com/andymai/brepkit/commit/4512542c432f5c218b0e500e26d869d310b37d33"
+        },
+        "date": 1793147177853,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1091278,
+            "range": "± 1167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1171453,
+            "range": "± 8032",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13297,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 669585,
+            "range": "± 940",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28572628,
+            "range": "± 124714",
             "unit": "ns/iter"
           }
         ]
