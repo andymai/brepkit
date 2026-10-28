@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.10](https://github.com/andymai/brepkit/compare/v4.3.9...v4.3.10) (2026-10-28)
+
+
+### Bug Fixes
+
+* **algo:** section two spheres exactly on their radical plane ([#2106](https://github.com/andymai/brepkit/issues/2106)) ([dc8326f](https://github.com/andymai/brepkit/commit/dc8326f55d0f9bfedbcf8b06ec82b46fabbca6dc))
+
 ## [4.3.9](https://github.com/andymai/brepkit/compare/v4.3.8...v4.3.9) (2026-10-28)
 
 
