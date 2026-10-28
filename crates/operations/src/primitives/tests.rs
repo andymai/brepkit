@@ -429,6 +429,44 @@ fn convex_hull_unit_cube() {
     assert_volume_near(&topo, solid, 1.0, 1e-10);
 }
 
+/// Coplanar hull triangles merge into one face per facet: a square
+/// pyramid has its square base, a cube six squares, and two boxes' Minkowski
+/// sum the six faces of a box.
+#[test]
+fn convex_hull_faces_are_whole_facets() {
+    let counts = |topo: &Topology, solid| {
+        let report = crate::validate::validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap()
+    };
+    let mut topo = Topology::new();
+    let pyramid = make_convex_hull(
+        &mut topo,
+        &[
+            Point3::new(-2.5, -2.5, 0.0),
+            Point3::new(2.5, -2.5, 0.0),
+            Point3::new(2.5, 2.5, 0.0),
+            Point3::new(-2.5, 2.5, 0.0),
+            Point3::new(0.0, 0.0, 20.0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(counts(&topo, pyramid), (5, 8, 5));
+    assert_volume_near(&topo, pyramid, 25.0 * 20.0 / 3.0, 1e-10);
+
+    let corners: Vec<Point3> = (0..8)
+        .map(|i| Point3::new(f64::from(i & 1), f64::from((i >> 1) & 1), f64::from(i >> 2)))
+        .collect();
+    let cube = make_convex_hull(&mut topo, &corners).unwrap();
+    assert_eq!(counts(&topo, cube), (6, 12, 8));
+
+    let a = make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+    let b = make_box(&mut topo, 4.0, 5.0, 6.0).unwrap();
+    let sum = make_minkowski_sum(&mut topo, a, b).unwrap();
+    assert_eq!(counts(&topo, sum), (6, 12, 8));
+    assert_volume_near(&topo, sum, 5.0 * 7.0 * 9.0, 1e-9);
+}
+
 #[test]
 fn convex_hull_larger_box() {
     let mut topo = Topology::new();
