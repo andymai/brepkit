@@ -454,6 +454,22 @@ fn convex_hull_faces_are_whole_facets() {
     assert_eq!(counts(&topo, pyramid), (5, 8, 5));
     assert_volume_near(&topo, pyramid, 25.0 * 20.0 / 3.0, 1e-10);
 
+    // Sides tilted 2e-7 from level: their normals all but agree, but each
+    // side's far corner stands 0.2 off its neighbour's plane.
+    let flat = make_convex_hull(
+        &mut topo,
+        &[
+            Point3::new(-5e5, -5e5, 0.0),
+            Point3::new(5e5, -5e5, 0.0),
+            Point3::new(5e5, 5e5, 0.0),
+            Point3::new(-5e5, 5e5, 0.0),
+            Point3::new(0.0, 0.0, 0.1),
+        ],
+    )
+    .unwrap();
+    assert_eq!(counts(&topo, flat), (5, 8, 5));
+    assert_volume_near(&topo, flat, 1e12 * 0.1 / 3.0, 1e-6);
+
     let corners: Vec<Point3> = (0..8)
         .map(|i| Point3::new(f64::from(i & 1), f64::from((i >> 1) & 1), f64::from(i >> 2)))
         .collect();
@@ -610,4 +626,36 @@ fn convex_hull_rejects_too_few_points() {
         Point3::new(0.0, 1.0, 0.0),
     ];
     assert!(make_convex_hull(&mut topo, &points).is_err());
+}
+
+/// A cap curving 5e-6 across, each of its triangles within 1e-7 of level
+/// with the next: merging neighbour by neighbour would put the cap on one
+/// plane its corners stray 3.6e-5 off, so each face keeps its own plane.
+#[test]
+fn convex_hull_faces_hold_their_corners_on_their_planes() {
+    let mut topo = Topology::new();
+    let mut pts = vec![Point3::new(0.0, 0.0, -1000.0)];
+    for i in -10..=10 {
+        for j in -10..=10 {
+            let (x, y) = (f64::from(i) * 100.0, f64::from(j) * 100.0);
+            pts.push(Point3::new(x, y, -(x * x + y * y) / 2e11));
+        }
+    }
+    let solid = make_convex_hull(&mut topo, &pts).unwrap();
+    let report = crate::validate::validate_solid(&topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let &FaceSurface::Plane { normal, d } = face.surface() else {
+            unreachable!("hull faces are planes");
+        };
+        for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+            let p = topo
+                .vertex(topo.edge(oe.edge()).unwrap().start())
+                .unwrap()
+                .point();
+            let off = (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs();
+            assert!(off <= 1e-6, "corner {off:e} off its face's plane");
+        }
+    }
 }

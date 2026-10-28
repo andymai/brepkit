@@ -7,7 +7,7 @@
 //! the given [`Topology`]. The solids are built with correct manifold
 //! topology and outward-pointing face normals.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use brepkit_math::tolerance::Tolerance;
@@ -737,33 +737,44 @@ pub fn make_convex_hull(
 
     let tol = Tolerance::new();
 
-    // Each triangle's plane, and the facets: triangles joined across shared
-    // edges where their planes agree.
+    // Each triangle's plane and twice its area, and the facets: triangles
+    // joined across a shared edge where each one's far corner lies on the
+    // other's plane.
     let plane_of = |&[a, b, c]: &[usize; 3]| {
         let (pa, pb, pc) = (hull.vertices[a], hull.vertices[b], hull.vertices[c]);
-        let normal = (pb - pa)
-            .cross(pc - pa)
-            .normalize()
-            .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+        let cross = (pb - pa).cross(pc - pa);
+        let normal = cross.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
         let d = normal
             .x()
             .mul_add(pa.x(), normal.y().mul_add(pa.y(), normal.z() * pa.z()));
-        (normal, d)
+        (normal, d, cross.length())
     };
-    let planes: Vec<(Vec3, f64)> = hull.faces.iter().map(plane_of).collect();
+    let planes: Vec<(Vec3, f64, f64)> = hull.faces.iter().map(plane_of).collect();
     let scale = hull
         .vertices
         .iter()
         .map(|p| p.x().abs().max(p.y().abs()).max(p.z().abs()))
         .fold(1.0_f64, f64::max);
+    let on_plane = |t: usize, v: usize| {
+        let ((n, d, _), p) = (planes[t], hull.vertices[v]);
+        (n.x().mul_add(p.x(), n.y().mul_add(p.y(), n.z() * p.z())) - d).abs() <= 1e-9 * scale
+    };
+    let far_corner = |t: usize, a: usize, b: usize| {
+        hull.faces[t]
+            .into_iter()
+            .find(|&v| v != a && v != b)
+            .unwrap_or(a)
+    };
     let mut facet: Vec<usize> = (0..hull.faces.len()).collect();
     let mut by_edge: HashMap<(usize, usize), usize> = HashMap::new();
     for (t, tri) in hull.faces.iter().enumerate() {
         for k in 0..3 {
             let (a, b) = (tri[k], tri[(k + 1) % 3]);
             if let Some(&other) = by_edge.get(&(a.min(b), a.max(b))) {
-                let ((n1, d1), (n2, d2)) = (planes[t], planes[other]);
-                if n1.dot(n2) > 1.0 - 1e-12 && (d1 - d2).abs() <= 1e-9 * scale {
+                if planes[t].0.dot(planes[other].0) > 0.0
+                    && on_plane(t, far_corner(other, a, b))
+                    && on_plane(other, far_corner(t, a, b))
+                {
                     let (r1, r2) = (root(&mut facet, t), root(&mut facet, other));
                     facet[r1] = r2;
                 }
@@ -773,15 +784,22 @@ pub fn make_convex_hull(
         }
     }
     // Each facet's boundary: its triangles' edges less those two of them
-    // share, chained into one loop (a convex polygon). A facet whose edges
-    // do not chain into one loop keeps its triangles.
+    // share, chained into one loop (a convex polygon), on the plane of its
+    // largest triangle. A facet whose corners stray off that plane, merged
+    // through a chain of neighbours each nearly level with the next, or
+    // whose edges do not chain into one loop, keeps its triangles.
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); hull.faces.len()];
     for t in 0..hull.faces.len() {
         members[root(&mut facet, t)].push(t);
     }
     let mut loops: Vec<(Vec<usize>, usize)> = Vec::new();
     for tris in members.iter().filter(|m| !m.is_empty()) {
-        let directed: Vec<(usize, usize)> = tris
+        let largest = tris
+            .iter()
+            .copied()
+            .max_by(|&s, &t| planes[s].2.total_cmp(&planes[t].2))
+            .unwrap_or(tris[0]);
+        let directed: HashSet<(usize, usize)> = tris
             .iter()
             .flat_map(|&t| {
                 let [a, b, c] = hull.faces[t];
@@ -803,8 +821,11 @@ pub fn make_convex_hull(
                 break;
             }
         }
-        if ring.len() == rim.len() && rim.len() >= 3 {
-            loops.push((ring, tris[0]));
+        let level = tris
+            .iter()
+            .all(|&t| hull.faces[t].into_iter().all(|v| on_plane(largest, v)));
+        if level && ring.len() == rim.len() && rim.len() >= 3 {
+            loops.push((ring, largest));
         } else {
             loops.extend(tris.iter().map(|&t| (hull.faces[t].to_vec(), t)));
         }
@@ -870,7 +891,7 @@ pub fn make_convex_hull(
 
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
         let wid = topo.add_wire(wire);
-        let (normal, d) = planes[*tri];
+        let (normal, d, _) = planes[*tri];
         let fid = topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
         face_ids.push(fid);
     }
