@@ -1158,10 +1158,8 @@ fn plane_torus_loops(
     let rhs_at = |v: f64| (d_local - small_r * c * v.sin()) / (s * small_r.mul_add(v.cos(), big_r));
     let branch = |v: f64, sign: f64| point(sign.mul_add(rhs_at(v).clamp(-1.0, 1.0).acos(), phi), v);
     let inside = |v: f64| rhs_at(v).abs() <= 1.0;
-    let scan: Vec<f64> = (0..n_v).map(|i| (i as f64).mul_add(step, v_off)).collect();
-    // Where |rhs| reaches 1 between two scan samples inside the section:
-    // the branches touch there.
-    let touch_at = |lo: f64, hi: f64| {
+    // The largest |rhs| between two samples, and where.
+    let peak = |lo: f64, hi: f64| {
         let golden = 0.5 * (5.0_f64.sqrt() - 1.0);
         let (mut lo, mut hi) = (lo, hi);
         for _ in 0..80 {
@@ -1173,7 +1171,34 @@ fn plane_torus_loops(
             }
         }
         let v = f64::midpoint(lo, hi);
-        (1.0 - rhs_at(v).abs() < 1e-12).then_some(v)
+        (v, rhs_at(v).abs())
+    };
+    // A gap in the section narrower than a step (a plane just past tangent
+    // to the tube's inner side) can fall between two samples inside it:
+    // its peak joins the scan as a sample outside.
+    let mut scan: Vec<f64> = Vec::with_capacity(n_v + 2);
+    for i in 0..n_v {
+        let v = (i as f64).mul_add(step, v_off);
+        scan.push(v);
+        if inside(v) && inside(v + step) {
+            let (at, top) = peak(v, v + step);
+            if top > 1.0 + 1e-12 {
+                scan.push(at);
+            }
+        }
+    }
+    let n = scan.len();
+    // Sample `i` of the scan, its `v` carried a turn on for each pass round.
+    #[allow(clippy::cast_possible_wrap)]
+    let scan_v = |i: isize| {
+        let len = n as isize;
+        scan[i.rem_euclid(len) as usize] + TAU * (i.div_euclid(len) as f64)
+    };
+    // Where |rhs| reaches 1 between two samples inside the section, without
+    // passing it: the branches touch there.
+    let touch_at = |lo: f64, hi: f64| {
+        let (v, top) = peak(lo, hi);
+        ((top - 1.0).abs() < 1e-12).then_some(v)
     };
     // Both branches meet at the node, where `acos` is 0 or π.
     let node = |v: f64| {
@@ -1198,8 +1223,9 @@ fn plane_torus_loops(
         lo
     };
     let in_scan: Vec<bool> = scan.iter().map(|&v| inside(v)).collect();
+    #[allow(clippy::cast_possible_wrap)]
     if in_scan.iter().all(|&x| x) {
-        let at_node = scan.iter().find_map(|&v| touch_at(v, v + step));
+        let at_node = (0..n as isize).find_map(|i| touch_at(scan_v(i), scan_v(i + 1)));
         return [1.0, -1.0]
             .into_iter()
             .map(|sign| match at_node {
@@ -1212,24 +1238,28 @@ fn plane_torus_loops(
             })
             .collect();
     }
-    let Some(first) = (0..n_v).find(|&i| in_scan[i] && !in_scan[(i + n_v - 1) % n_v]) else {
+    let Some(first) = (0..n).find(|&i| in_scan[i] && !in_scan[(i + n - 1) % n]) else {
         return Vec::new();
     };
     let mut loops = Vec::new();
     let mut k = 0;
-    while k < n_v {
-        let i = (first + k) % n_v;
+    while k < n {
+        let i = (first + k) % n;
         if !in_scan[i] {
             k += 1;
             continue;
         }
         // The run from scan sample `i`, its `v` unwrapped past a turn.
-        let len = (0..n_v - k).take_while(|&j| in_scan[(i + j) % n_v]).count();
-        let v_a = scan[i];
-        let v_b = ((len - 1) as f64).mul_add(step, v_a);
-        let run_v = |j: usize| (j as f64).mul_add(step, v_a);
-        let (t_lo, t_hi) = (turn(v_a, v_a - step), turn(v_b, v_b + step));
-        let at_node = (0..len - 1).find_map(|j| touch_at(run_v(j), run_v(j + 1)));
+        let len = (0..n - k).take_while(|&j| in_scan[(i + j) % n]).count();
+        #[allow(clippy::cast_possible_wrap)]
+        let run_v = |j: isize| scan_v(i as isize + j);
+        #[allow(clippy::cast_possible_wrap)]
+        let last = len as isize - 1;
+        let (t_lo, t_hi) = (
+            turn(run_v(0), run_v(-1)),
+            turn(run_v(last), run_v(last + 1)),
+        );
+        let at_node = (0..last).find_map(|j| touch_at(run_v(j), run_v(j + 1)));
         // `u` moves like the square root of the distance in `v` to a turn, so
         // the loop is sampled at `v = t_lo + (t_hi - t_lo) (1 - cos θ) / 2`
         // for even steps of `θ`: `v` then moves like `θ²` at each turn and the
@@ -1237,7 +1267,7 @@ fn plane_torus_loops(
         // loop that sweeps far round the axis on a short run of `v` (a plane
         // through the centre, tilted a little) takes a step per half scan
         // step of `u` its branches sweep.
-        let (u_lo, u_hi) = (0..len)
+        let (u_lo, u_hi) = (0..=last)
             .map(run_v)
             .chain([t_lo, t_hi])
             .map(|v| rhs_at(v).clamp(-1.0, 1.0).acos())
@@ -4725,6 +4755,49 @@ mod tests {
             );
         }
         assert_ne!(sides[0], sides[1], "the lobes lie either side of y = 0");
+    }
+
+    /// A wall just off the inner tangent has no node. Just past it the
+    /// section has a gap 0.028 wide in tube angle about the inner equator,
+    /// between two samples inside it, and is one loop turning either side of
+    /// the gap; just short of it the section winds the tube twice. Every
+    /// point lies on the wall.
+    #[test]
+    fn a_wall_just_off_the_inner_tangent_cuts_no_node() {
+        let (major, minor) = (3.0, 1.0);
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), major, minor).unwrap();
+        for (x, loops) in [(2.0001, 1), (1.9999, 2)] {
+            let curves = intersect_plane_torus(&torus, Vec3::new(1.0, 0.0, 0.0), x).unwrap();
+            assert_eq!(curves.len(), loops, "x = {x}");
+            for c in &curves {
+                let (first, last) = (c.points[0].point, c.points[c.points.len() - 1].point);
+                assert_eq!(first, last, "x = {x}: the loop closes");
+                for p in c.points.iter().map(|p| p.point) {
+                    assert!((p.x() - x).abs() < 1e-9, "x = {x}: off the wall at {p:?}");
+                    assert!(
+                        torus_implicit(p, major, minor).abs() < 1e-6,
+                        "x = {x}: off the torus at {p:?}"
+                    );
+                }
+            }
+        }
+        // The loop past the tangent turns either side of the gap, 0.028 apart.
+        let curves = intersect_plane_torus(&torus, Vec3::new(1.0, 0.0, 0.0), 2.0001).unwrap();
+        let low = curves[0]
+            .points
+            .iter()
+            .map(|p| p.point)
+            .filter(|p| p.y().abs() < 1e-6)
+            .map(Point3::z)
+            .collect::<Vec<_>>();
+        let gap = (2.0001_f64 - 2.0)
+            .mul_add(2.0, -(2.0001_f64 - 2.0).powi(2))
+            .sqrt();
+        assert!(
+            low.iter().any(|z| (z - gap).abs() < 1e-6)
+                && low.iter().any(|z| (z + gap).abs() < 1e-6),
+            "turns at {low:?}, not at z = ±{gap}"
+        );
     }
 
     /// A plane tangent to the tube's inner side off its equator, at a saddle,
