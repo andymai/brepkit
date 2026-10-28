@@ -510,21 +510,17 @@ pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool
 ///
 /// The outer loop's Newell normal points to the face's side of the loop. A
 /// loop in one plane bounds exactly the sphere's part on that side; any
-/// other loop of lines and circles is read by the parity of great-circle
-/// arcs ([`SphereRims`]), and one with other curves bounds the points that
-/// project inside it along that normal. A wire that only runs a seam out
-/// and back bounds nothing, and the face is the whole sphere. Holes come
-/// off by [`hit_in_sphere_hole`] where the parity does not count them.
+/// other loop is read by the parity of great-circle arcs ([`SphereRims`]),
+/// and where that parity ties it bounds the points that project inside it
+/// along that normal. A wire that only runs a seam out and back bounds
+/// nothing, and the face is the whole sphere. Holes come off by
+/// [`hit_in_sphere_hole`] where the parity does not count them.
 pub struct SphereRegion {
     outer: Vec<Point3>,
     normal: Vec3,
-    /// The outer loop's point lowest along `normal`. Along any direction a
-    /// sphere's height has no minimum but its bottom, so a face that does
-    /// not hold that point is no lower than its rim.
-    lowest: Point3,
     whole: bool,
     planar: bool,
-    /// Set for a loop in no one plane whose edges are all lines and circles.
+    /// Set for a loop in no one plane.
     rims: Option<SphereRims>,
 }
 
@@ -538,15 +534,6 @@ impl SphereRegion {
         // The wire runs about the sphere's outward normal on a reversed face
         // too, so its polygon normal points to the face's side of the loop.
         let normal = polygon_normal(&outer);
-        let lowest = outer
-            .iter()
-            .copied()
-            .min_by(|a, b| {
-                (*a - outer[0])
-                    .dot(normal)
-                    .total_cmp(&(*b - outer[0]).dot(normal))
-            })
-            .unwrap_or(outer[0]);
         let whole = wire_runs_out_and_back(topo, topo.face(face_id)?.outer_wire())?;
         // A loop in one plane bounds exactly the sphere's part on its side,
         // at any size; a polygon test would only add the chords' sagitta and
@@ -560,7 +547,6 @@ impl SphereRegion {
         Ok(Some(Self {
             outer,
             normal,
-            lowest,
             whole,
             planar,
             rims,
@@ -581,7 +567,7 @@ impl SphereRegion {
         // a tilted face is not a graph over an axis plane, and the part of it
         // past the axis's silhouette projects outside its own boundary.
         let in_outer = self.whole
-            || ((p - self.lowest).dot(self.normal) >= -HALF_SPACE_EPS
+            || ((p - self.outer[0]).dot(self.normal) >= -HALF_SPACE_EPS
                 && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
         Ok(in_outer && !hit_in_sphere_hole(topo, face_id, p, &self.outer, self.normal)?)
     }
@@ -591,9 +577,15 @@ impl SphereRegion {
 /// end of the test arc or a rim tangentially, leaving its parity unread.
 const SPHERE_GRAZE: f64 = 1e-9;
 
+/// Chords an ellipse or NURBS edge on a sphere is read as: a quarter turn
+/// of a circle strays under 1e-4 of the radius from the arcs they stand for.
+const CURVE_CHORDS: u32 = 64;
+
 /// A sphere face's edges read on the sphere, holes included, and points
 /// just inside its outer wire. A circle is an arc of itself; a line is a
-/// chord standing for the great-circle arc it projects to from the centre.
+/// chord standing for the great-circle arc it projects to from the centre;
+/// an ellipse or NURBS curve, which lies on the sphere, is a run of such
+/// chords between points along it.
 struct SphereRims {
     center: Point3,
     radius: f64,
@@ -616,7 +608,7 @@ enum SphereRim {
 }
 
 impl SphereRims {
-    /// `None` when an edge is an ellipse or NURBS curve.
+    /// `None` when the face is not on a sphere.
     fn of(topo: &Topology, face_id: FaceId) -> Result<Option<Self>, CheckError> {
         use brepkit_topology::edge::EdgeCurve;
         let face = topo.face(face_id)?;
@@ -694,7 +686,43 @@ impl SphereRims {
                             }
                         }
                     }
-                    EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return Ok(None),
+                    curve @ (EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)) => {
+                        let (t0, t1) = curve.domain_with_endpoints(a, b);
+                        let at = |f: f64| (t1 - t0).mul_add(f, t0);
+                        let mut from = a;
+                        let mut length = 0.0;
+                        for i in 1..=CURVE_CHORDS {
+                            let to = if i == CURVE_CHORDS {
+                                b
+                            } else {
+                                curve.evaluate_with_endpoints(
+                                    at(f64::from(i) / f64::from(CURVE_CHORDS)),
+                                    a,
+                                    b,
+                                )
+                            };
+                            rims.push(SphereRim::Chord(from - center, to - center));
+                            length += (to - from).length();
+                            from = to;
+                        }
+                        if w == 0 {
+                            // Each mark at a chord's middle, clear of the
+                            // points between chords. A descending domain runs
+                            // the curve against its tangent.
+                            let n = f64::from(CURVE_CHORDS);
+                            let along = if t1 < t0 { -sign } else { sign };
+                            for f in [0.25, 0.5, 0.75] {
+                                let t = at(((f * n).floor() + 0.5) / n);
+                                if let Some(q) = on_sphere(curve.evaluate_with_endpoints(t, a, b)) {
+                                    marks.push((
+                                        length,
+                                        q,
+                                        curve.tangent_with_endpoints(t, a, b) * along,
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1163,5 +1191,64 @@ mod tests {
         let p = tor.evaluate(0.3, 5.5);
         let (pu, pv) = torus_parameters(&tor, p);
         assert!((pu - 0.3).abs() < 1e-9 && (pv - 5.5).abs() < 1e-9);
+    }
+
+    /// A patch round a unit sphere's pole whose rim dips below the equator is
+    /// no graph over the equator's plane: near a low corner a vertical line
+    /// meets it twice. Its rim is eight great-circle arcs held as NURBS,
+    /// between corners an eighth of a turn apart at heights 0.5 and -0.3 in
+    /// turn. A point below the rim, whose twin above it lies on the patch,
+    /// reads off it.
+    #[test]
+    fn a_patch_rimmed_by_nurbs_arcs_reads_both_sides_of_the_sphere() {
+        use std::f64::consts::{FRAC_PI_4, TAU};
+
+        use brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs;
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let corners: Vec<Point3> = (0..8)
+            .map(|k| {
+                let z: f64 = if k % 2 == 0 { 0.5 } else { -0.3 };
+                let (s, c) = (f64::from(k) * FRAC_PI_4).sin_cos();
+                let r = (1.0 - z * z).sqrt();
+                Point3::new(r * c, r * s, z)
+            })
+            .collect();
+        let vertices: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let mut edges = Vec::new();
+        for k in 0..8 {
+            let (a, b) = (corners[k], corners[(k + 1) % 8]);
+            let normal = (a - origin).cross(b - origin).normalize().unwrap();
+            let circle = Circle3D::new(origin, normal, 1.0).unwrap();
+            let t0 = circle.project(a);
+            let t1 = t0 + (circle.project(b) - t0).rem_euclid(TAU);
+            let arc = circle_to_nurbs(&circle, t0, t1).unwrap();
+            let e = topo.add_edge(Edge::new(
+                vertices[k],
+                vertices[(k + 1) % 8],
+                EdgeCurve::NurbsCurve(arc),
+            ));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let sphere = SphericalSurface::new(origin, 1.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
+
+        let below = Point3::new(0.897_531_44, 0.392_985_12, -0.2);
+        let above = Point3::new(below.x(), below.y(), 0.2);
+        assert!(!face_contains(&topo, face, below).unwrap());
+        assert!(face_contains(&topo, face, above).unwrap());
+        assert!(face_contains(&topo, face, Point3::new(0.0, 0.0, 1.0)).unwrap());
+        assert!(!face_contains(&topo, face, Point3::new(0.0, 0.0, -1.0)).unwrap());
     }
 }
