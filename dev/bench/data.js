@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793200726816,
+  "lastUpdate": 1793201559087,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58373,6 +58373,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28850868,
             "range": "± 104078",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "84491f7539f4437b3b231f6efff6c2024444518b",
+          "message": "fix(algo): split each rebuilt sphere seam arc at its middle (#2113)\n\nTwo balls whose equators lie in one plane fall back to a mesh today, as\nany two balls from `make_sphere` moved within the plane z = 0 do. Radius\n2 and 1.5 with the second at (1.2, 0, 0) cut to 746 planar faces 1.3%\nshort of the true volume, fuse to 680 faces 1.7% short, and intersect to\n366 faces 2.7% short. With this change all three keep 4 spherical faces\nand match the lens volume.\n\nWith the split, the classifier as it was before #2111 read the ball's\ncentre Outside in `a_ball_through_a_cylinder_wall_is_exact`.\n\n## Cause\n\nThe circle the balls share meets both seams at the same two points. Each\nhemisphere's splitter rebuilds its seam as the exact circle split at\nthose crossings, so each ball's seam arc between them shares both ends\nwith the other ball's. The assembler merges edges by their ends: it\nwelded the four arcs into one edge, both balls' caps then had the same\nedges, and all four faces were dropped as doubles, failing the boolean\nwith \"all faces avoided\".\n\n## Change\n\n- `split_noseam_by_arrangement` splits each rebuilt seam arc at its\nmiddle (`SeamSplit::Halve`), as the face-face phase already splits a\nsection span between two seam crossings for the same reason. Both\nhemispheres of a ball place the same middle, so their halves still merge\nwith each other.\n- That middle can sit at the pole of a plane cut's circle. The\nclassifier's crossing parity refused any test arc whose great circle met\na rim's end, however far from the arc, so every inside point it probed\non that circle was refused and `ball_cut_by_a_plane_across_its_equator`\nread a point Inside that lies outside. It now refuses only for a rim end\non the test arc.\n\n## Tests\n\n- `offset_spheres_sharing_an_equator_plane`, no longer ignored: offsets\n(1.2, 0, 0), (0, 1.2, 0), (-1.5, 0.7, 0) and (√2 + 0.5, 0, 0), where the\ncircle crosses the larger ball's 16-sided equator at a vertex, and equal\nradii at (1.2, 0, 0), each at 16 and 32 segments. Cut, fuse and\nintersect keep only spherical faces, validate, and match the lens volume\nwithin 1e-4. Splitting the seam only at the crossings fails it.\n- `ball_cut_by_a_plane_across_its_equator` fails with the split and\nwithout the parity change.\n- `cargo test -p brepkit-operations -p brepkit-io` passes 1910 with 14\nignored, and the `--lib` tests of `brepkit-algo`, `brepkit-check` and\n`brepkit-operations` pass 316, 59, and 937 with 8 ignored.\n- The pose sweep and truth audit outputs differ from `main`'s only in\nvolume errors, by at most 2.1e-12 (5.6e-12 to 7.7e-12 at the most), and\nthe largest error in each is unchanged. `cargo clippy --all-targets\n--all-features -- -D warnings` is clean.",
+          "timestamp": "2026-10-28T15:29:28Z",
+          "tree_id": "4e665c3f6f84081437da7abd3f715d80216d229a",
+          "url": "https://github.com/andymai/brepkit/commit/84491f7539f4437b3b231f6efff6c2024444518b"
+        },
+        "date": 1793201551612,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1092971,
+            "range": "± 3080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1169415,
+            "range": "± 3556",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13133,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 672472,
+            "range": "± 1241",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28550081,
+            "range": "± 192296",
             "unit": "ns/iter"
           }
         ]
