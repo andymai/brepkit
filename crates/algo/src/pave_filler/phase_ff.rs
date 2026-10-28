@@ -5901,6 +5901,25 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Sphere(s1), FaceSurface::Sphere(s2)) => {
+            // Two spheres meet in a circle on their radical plane. A fitted
+            // curve's ends land on the true equator, off a faceted sphere's
+            // chords, and no face can take it; the circle crosses the chords
+            // where the closed-circle path splits it.
+            match analytic_intersection::exact_sphere_sphere(s1, s2)? {
+                Some(exacts) => Ok(exact_raw_curves(exacts)),
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(
+                            &aa, &ab, v_range_a, v_range_b, bbox_a, bbox_b,
+                        )
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (FaceSurface::Sphere(sphere), FaceSurface::Torus(torus))
         | (FaceSurface::Torus(torus), FaceSurface::Sphere(sphere)) => {
             // A sphere centred on a torus's axis meets it in circles about
