@@ -82,11 +82,14 @@ fn offset_spheres_sharing_an_equator_plane() {
         check([1.2, 0.0, 0.0], segments);
         check([0.0, 1.2, 0.0], segments);
         check([-1.5, 0.7, 0.0], segments);
-        // The circle meets the larger sphere's seam on a vertex of its
-        // 16-sided equator, at 45 degrees.
+        // The circle meets the larger sphere's seam at 45 degrees, on a
+        // vertex of its equator at either segment count.
         check([2.0f64.sqrt() + 0.5, 0.0, 0.0], segments);
         // Equal radii: the two seams' arcs between the crossings are both
         // under half a turn.
         check_radii(2.0, [1.2, 0.0, 0.0], segments);
+        // A circle through the first ball's poles, which splits its
+        // hemispheres into lunes.
+        check_radii(1.2f64.hypot(2.0), [1.2, 0.0, 0.0], segments);
     }
 }

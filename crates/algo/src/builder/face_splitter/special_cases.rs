@@ -1246,8 +1246,10 @@ fn build_seam_arcs_split(
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let pieces = match split {
                 SeamSplit::HalveWide => (span / (0.999 * PI)).ceil().max(1.0) as usize,
-                SeamSplit::Halve => 2,
-                SeamSplit::AtCrossings => 1,
+                // Halves of an arc too short to halve would fall under the
+                // closeness at which the arcs below are skipped.
+                SeamSplit::Halve if seam_radius * span >= tol * 400.0 => 2,
+                SeamSplit::Halve | SeamSplit::AtCrossings => 1,
             };
             for k in 1..pieces {
                 #[allow(clippy::cast_precision_loss)]
