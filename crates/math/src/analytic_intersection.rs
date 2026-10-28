@@ -246,9 +246,13 @@ fn exact_plane_sphere(
     Ok(vec![ExactIntersectionCurve::Circle(circle)])
 }
 
-/// Exact sphere-sphere intersection: the circle where the first sphere
-/// meets the two spheres' radical plane. `None` for one sphere twice (the
-/// same surface, no curve).
+/// Exact sphere-sphere intersection: the circle on the two spheres' radical
+/// plane, its normal pointing from the first centre to the second. `None`
+/// for one sphere twice (the same surface, no curve).
+///
+/// The circle is built from the smaller sphere, whose radius bounds it, and
+/// from the centres' offset alone, so neither the operands' order nor where
+/// the pair sits in space decides whether a small circle survives.
 ///
 /// # Errors
 ///
@@ -266,10 +270,20 @@ pub fn exact_sphere_sphere(
         return Ok(((r1 - r2).abs() > 1e-12 * scale).then(Vec::new));
     }
     let normal = delta * (1.0 / d);
-    // The radical plane lies `d1` from the first centre along the centre line.
-    let d1 = d.mul_add(d, r1.mul_add(r1, -(r2 * r2))) / (2.0 * d);
-    let offset = dot_np(normal, s1.center()) + d1;
-    exact_plane_sphere(s1, normal, offset).map(Some)
+    // From the smaller sphere's centre toward the larger's, the radical plane
+    // lies `along` away.
+    let (centre, toward, r_small, r_big) = if r1 <= r2 {
+        (s1.center(), normal, r1, r2)
+    } else {
+        (s2.center(), -normal, r2, r1)
+    };
+    let along = d.mul_add(d, r_small.mul_add(r_small, -(r_big * r_big))) / (2.0 * d);
+    if along.abs() > r_small - 1e-10 * scale.max(1.0) {
+        return Ok(Some(Vec::new()));
+    }
+    let radius = r_small.mul_add(r_small, -(along * along)).sqrt();
+    let circle = Circle3D::new(centre + toward * along, normal, radius)?;
+    Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
 }
 
 /// Exact plane-cone intersection.
@@ -5459,5 +5473,24 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        // A tiny sphere nearly bisected by a large one, in either order, and a
+        // pair far from the origin: each meets in its small circle.
+        let radius = |p: &SphericalSurface, q: &SphericalSurface| -> f64 {
+            match exact_sphere_sphere(p, q).unwrap().unwrap().as_slice() {
+                [ExactIntersectionCurve::Circle(c)] => c.radius(),
+                other => unreachable!("expected one circle, got {other:?}"),
+            }
+        };
+        let tiny = ball(2.0, 0.0, 0.0, 1e-5);
+        assert!((radius(&a, &tiny) - 1e-5).abs() < 1e-9);
+        assert!((radius(&tiny, &a) - 1e-5).abs() < 1e-9);
+        let near = radius(&ball(0.0, 0.0, 0.0, 2.0), &ball(3.5, 0.0, 0.0, 1.500_001));
+        let far = radius(
+            &ball(1e10, 0.0, 0.0, 2.0),
+            &ball(1e10 + 3.5, 0.0, 0.0, 1.500_001),
+        );
+        assert!(near > 1e-3);
+        assert!((far - near).abs() < 1e-9 * near.max(1.0));
     }
 }
