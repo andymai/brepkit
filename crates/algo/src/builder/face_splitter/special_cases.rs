@@ -531,9 +531,13 @@ fn split_noseam_by_arrangement(
             .iter()
             .any(|a| off_vertex(a.start_3d) || off_vertex(a.end_3d))
     {
-        let Some(seam_arcs) =
-            build_seam_arcs_split(surface, boundary_edges, open_sections, tol, true)
-        else {
+        let Some(seam_arcs) = build_seam_arcs_split(
+            surface,
+            boundary_edges,
+            open_sections,
+            tol,
+            SeamSplit::HalveWide,
+        ) else {
             return Vec::new();
         };
         let Some(inside) = region_sample(surface, &seam_arcs, &[]) else {
@@ -567,7 +571,13 @@ fn split_noseam_by_arrangement(
 
     // Reconstruct the seam as its exact circle and split it at the crossings,
     // so the seam arcs share endpoints EXACTLY with the open arcs.
-    let Some(seam_arcs) = build_seam_arcs(surface, boundary_edges, open_sections, tol) else {
+    let Some(seam_arcs) = build_seam_arcs_split(
+        surface,
+        boundary_edges,
+        open_sections,
+        tol,
+        SeamSplit::Halve,
+    ) else {
         return Vec::new();
     };
 
@@ -1147,19 +1157,37 @@ fn build_seam_arcs(
     open_sections: &[OrientedPCurveEdge],
     tol: f64,
 ) -> Option<Vec<OrientedPCurveEdge>> {
-    build_seam_arcs_split(surface, boundary_edges, open_sections, tol, false)
+    build_seam_arcs_split(
+        surface,
+        boundary_edges,
+        open_sections,
+        tol,
+        SeamSplit::AtCrossings,
+    )
 }
 
-/// [`build_seam_arcs`], with `halve_wide` also splitting each arc spanning
-/// half a turn or more into pieces under half a turn: two seam arcs of one
-/// face sharing both ends would otherwise be welded into one edge by the
-/// assembler's endpoint-keyed merge.
+/// Where [`build_seam_arcs_split`] splits the seam circle besides the
+/// crossings. The assembler merges edges by their ends, so two arcs sharing
+/// both ends would be welded into one edge.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SeamSplit {
+    AtCrossings,
+    /// Into pieces under half a turn, as two seam arcs of one face can
+    /// share both ends.
+    HalveWide,
+    /// At the middle of each arc, as a second ball whose seam lies in the
+    /// same plane meets the same crossings, its arcs between them lying on
+    /// another circle.
+    Halve,
+}
+
+/// [`build_seam_arcs`], with the seam circle also split as `split` says.
 fn build_seam_arcs_split(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
     open_sections: &[OrientedPCurveEdge],
     tol: f64,
-    halve_wide: bool,
+    split: SeamSplit,
 ) -> Option<Vec<OrientedPCurveEdge>> {
     use brepkit_math::curves::Circle3D;
     use std::f64::consts::{PI, TAU};
@@ -1205,7 +1233,7 @@ fn build_seam_arcs_split(
         .map(|p| (seam_circle.project(p), p))
         .collect();
     by_angle.sort_by(|a, b| a.0.total_cmp(&b.0));
-    if halve_wide {
+    if split != SeamSplit::AtCrossings {
         for entry in &mut by_angle {
             entry.0 = entry.0.rem_euclid(TAU);
         }
@@ -1216,7 +1244,13 @@ fn build_seam_arcs_split(
             let span = (a1 - a0).rem_euclid(TAU);
             let span = if span <= 0.0 { TAU } else { span };
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let pieces = (span / (0.999 * PI)).ceil().max(1.0) as usize;
+            let pieces = match split {
+                SeamSplit::HalveWide => (span / (0.999 * PI)).ceil().max(1.0) as usize,
+                // Halves of an arc too short to halve would fall under the
+                // closeness at which the arcs below are skipped.
+                SeamSplit::Halve if seam_radius * span >= tol * 400.0 => 2,
+                SeamSplit::Halve | SeamSplit::AtCrossings => 1,
+            };
             for k in 1..pieces {
                 #[allow(clippy::cast_precision_loss)]
                 let at = (a0 + span * k as f64 / pieces as f64).rem_euclid(TAU);

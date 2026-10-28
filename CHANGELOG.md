@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.3.15](https://github.com/andymai/brepkit/compare/v4.3.14...v4.3.15) (2026-10-28)
+
+
+### Bug Fixes
+
+* **operations:** revolve a circle part way whichever way its profile faces ([#2119](https://github.com/andymai/brepkit/issues/2119)) ([f0d52d0](https://github.com/andymai/brepkit/commit/f0d52d0d8d725eb3b97a6543b123d4796683ba4e))
+
+## [4.3.14](https://github.com/andymai/brepkit/compare/v4.3.13...v4.3.14) (2026-10-28)
+
+
+### Bug Fixes
+
+* **algo:** section a torus through the node where a box face touches its tube's inner side ([#2115](https://github.com/andymai/brepkit/issues/2115)) ([3b15420](https://github.com/andymai/brepkit/commit/3b15420d4a2712959060fb2ac1987cd6846e0067))
+* **algo:** split each rebuilt sphere seam arc at its middle ([#2113](https://github.com/andymai/brepkit/issues/2113)) ([84491f7](https://github.com/andymai/brepkit/commit/84491f7539f4437b3b231f6efff6c2024444518b))
+
 ## [4.3.13](https://github.com/andymai/brepkit/compare/v4.3.12...v4.3.13) (2026-10-28)
 
 
