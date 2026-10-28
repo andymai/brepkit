@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793149814941,
+  "lastUpdate": 1793150420880,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57887,6 +57887,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28541694,
             "range": "± 125799",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc8326f55d0f9bfedbcf8b06ec82b46fabbca6dc",
+          "message": "fix(algo): section two spheres exactly on their radical plane (#2106)\n\nA sphere cut by an offset sphere falls back to a mesh today: radius 2\ncut by radius 1.5 moved to (1.6, 0.3, 0.2) comes out as 653 planar\nfaces. The two spheres' section is marched into a fitted curve whose\nends land on each sphere's true equator, off the straight chords of the\nfaceted equator that bound its hemisphere faces. No face can take the\nsection, both hemispheres split into nothing, and the boolean falls\nback. With this change cut, fuse and intersect keep only spherical faces\nand match the closed-form lens volume.\n\n## Change\n\n- `analytic_intersection::exact_sphere_sphere`: two spheres meet in a\ncircle on their radical plane. It builds that circle from the smaller\nsphere, whose radius bounds it, and from the centres' offset alone,\nadding the world position only to the circle's centre, so neither the\noperands' order nor the pair's place in space decides whether a small\ncircle survives. Concentric spheres of different radii meet in nothing.\nOne sphere twice returns `None`, which keeps the general path.\n- The face-face phase emits that circle as a closed `Circle3D` for a\nsphere-sphere pair. The closed-circle path then splits it where it\ncrosses either face's boundary, as it does for a plane through a sphere.\n\n## Tests\n\n- `offset_sphere_booleans_stay_spherical`: spheres of radius 2 and 1.5\noffset by (1.6, 0.3, 0.2), (2.2, 0.1, 0.7) and (0.5, 0.4, -0.9), with 16\nand 32 equator segments. Cut, fuse and intersect each keep only\nspherical faces, validate, and match the lens volume within 1e-4. The\nfirst two offsets fall back on `main` (the test fails there at the first\ncut).\n- `offset_spheres_sharing_an_equator_plane` (ignored): an offset of\n(1.2, 0, 0) puts both faceted equators in one plane, and those booleans\nstill fall back to a mesh, as they do on `main`.\n- `sphere_sphere_meets_in_a_circle_on_both`: the circle lies on both\nspheres to 1e-12; spheres apart, nested or concentric give nothing; one\nsphere twice gives `None`. A radius 1e-5 sphere nearly bisected by a\nradius 2 one gives its small circle in either order, and a pair at\n(1e10, 0, 0) gives the same circle as at the origin. Building the circle\nfrom the first sphere through a world-space plane offset fails both.\n- `cargo test -p brepkit-math --lib` passes 555, `-p brepkit-algo --lib`\n313, and `-p brepkit-operations --lib` 937 with 8 ignored.\n`sphere_classify`, `sphere_box_corner`, `sphere_plane_cut`,\n`sphere_reversed_cap`, `concentric_spheres` and `sphere_ray_cast` pass.\nThe pose sweep and truth audit outputs are identical to `main`'s, and\n`cargo clippy -p brepkit-math -p brepkit-algo --all-targets -- -D\nwarnings` is clean.",
+          "timestamp": "2026-10-28T01:17:17Z",
+          "tree_id": "de56206915e46e3a022be0f98fc73b8c7d8e6573",
+          "url": "https://github.com/andymai/brepkit/commit/dc8326f55d0f9bfedbcf8b06ec82b46fabbca6dc"
+        },
+        "date": 1793150413373,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1092856,
+            "range": "± 1707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1167460,
+            "range": "± 4423",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13078,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 667302,
+            "range": "± 5404",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29052819,
+            "range": "± 293051",
             "unit": "ns/iter"
           }
         ]
