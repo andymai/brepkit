@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793155346347,
+  "lastUpdate": 1793183664301,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58103,6 +58103,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17324728,
             "range": "± 413146",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5e321889b3de01326261b518bda3f92ab0028514",
+          "message": "fix(operations): accept a cut whose hole touches its face's rim at a vertex (#2110)\n\nA cut whose hole runs along one wall of a plate and breaks out through\nanother falls back to a mesh today. A 12 by 12 by 2 plate cut by a\nradius 0.5 hole tilted 0.2 about x at (11.5, 11.5), whose side runs\nalong x = 12 and whose lower end leaves through y = 12, comes out as 21\nplanar faces. With this change the cut keeps its cylinder, as 1 cylinder\nand 7 planes, and validates.\n\n## Cause\n\nThe hole's upper rim touches the top face's outer rim at one point on x\n= 12, so that face's inner wire shares a vertex with its outer wire. The\nacceptance gate counted the wire as a separate inner loop, which made\nthe Euler surplus odd (V - E + F = 0 with one inner wire), and rejected\na closed manifold result. That result's volume, 286.449205956, is the\none the same hole gives 0.01 off the wall. `validate_solid` already\ncounts inner loops by boundary piece, joining wires that share a vertex,\nand accepts it. A hole along a wall that does not break out has two such\nrims, whose shifts cancel, so only the breakout fell back.\n\n## Change\n\nWhen the plain balance fails on a closed manifold result, the gate\ncounts inner loops as `validate_solid` does\n(`validate::boundary_pieces`, now `pub(crate)`) and checks again, and\naccepts only if `validate_solid` also reports no error, since the later\ngate only logs its errors. It adds acceptances and removes none. Two\nsolids touching at one point still fall back, since `validate_solid`\nreports pieces joined at a vertex as an error.\n\n## Tests\n\n- `a_hole_along_one_wall_and_out_through_another_cuts_exactly`: at tilts\n0.2 and 0.35 the cut keeps 1 cylinder and 7 planes with no mesh\nfallback, validates, matches to 1e-6 the volume integrated from the\nhole's elliptical slices less their caps past y = 12, and classifies\npoints in the corner the hole cuts off, beside the line it runs along,\nand in the hole. Both tilts fall back on `main`.\n- `a_grid_of_tilted_holes_reaching_two_walls_cuts_exactly`: a 6 by 6\ngrid cut by `compound_cut`, its last column along x = 12 and its last\nrow out through y = 12, keeps 36 cylinders and 7 planes and matches the\nintegrated volume to 1e-5.\n- `inner_loops_touching_their_face_rim_are_not_separate`: the hole along\nthe wall leaves 2 inner wires and no separate loops, 1 and none once it\nbreaks out, and 2 and 2 moved 0.01 off the wall.\n- `cargo test -p brepkit-operations -p brepkit-io` passes 1911 with 15\nignored. With a marker on the added check, only the new tests reach an\nacceptance through it.\n- The pose sweep and truth audit outputs are identical to `main`'s, and\n`cargo clippy --all-targets --all-features -- -D warnings` is clean.",
+          "timestamp": "2026-10-28T03:31:35-07:00",
+          "tree_id": "927216ce153c34e6737aca166fe6cb7e49c0ff18",
+          "url": "https://github.com/andymai/brepkit/commit/5e321889b3de01326261b518bda3f92ab0028514"
+        },
+        "date": 1793183659159,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 882950,
+            "range": "± 2289",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 950373,
+            "range": "± 1974",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11086,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 534794,
+            "range": "± 1044",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23222690,
+            "range": "± 44890",
             "unit": "ns/iter"
           }
         ]
