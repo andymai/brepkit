@@ -91,9 +91,12 @@ pub struct FaceLoops2d {
     periodic: bool,
     u_mean: f64,
     /// A torus is periodic in `v` (round its tube) too, so a loop across its
-    /// outer equator is unwrapped in `v` as well, about `v_mean`.
+    /// outer equator is unwrapped in `v` as well, about `v_mid`, the middle of
+    /// the outer loop's `v` span (a mean of its samples drifts off it when
+    /// the edges are split unevenly, and a wide patch then wraps its own
+    /// points out of itself).
     v_periodic: bool,
-    v_mean: f64,
+    v_mid: f64,
     /// The outer loop, in traversal order.
     pub outer: Vec<brepkit_math::vec::Point2>,
     /// The inner loops (holes), each in traversal order.
@@ -207,18 +210,21 @@ impl FaceLoops2d {
         };
         let outer = sample_loop(face.outer_wire(), None, None)?;
         #[allow(clippy::cast_precision_loss)]
-        let (u_mean, v_mean) = if outer.is_empty() {
-            (0.0, 0.0)
+        let u_mean = if outer.is_empty() {
+            0.0
         } else {
-            let n = outer.len() as f64;
-            (
-                outer.iter().map(|q| q.x()).sum::<f64>() / n,
-                outer.iter().map(|q| q.y()).sum::<f64>() / n,
-            )
+            outer.iter().map(|q| q.x()).sum::<f64>() / outer.len() as f64
         };
+        let v_mid = outer
+            .iter()
+            .map(|q| q.y())
+            .fold(None, |span: Option<(f64, f64)>, v| {
+                Some(span.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))))
+            })
+            .map_or(0.0, |(lo, hi)| f64::midpoint(lo, hi));
         let mut holes = Vec::new();
         for &wid in face.inner_wires() {
-            holes.push(sample_loop(wid, Some(u_mean), Some(v_mean))?);
+            holes.push(sample_loop(wid, Some(u_mean), Some(v_mid))?);
         }
         Ok(Self {
             frame,
@@ -226,7 +232,7 @@ impl FaceLoops2d {
             periodic,
             u_mean,
             v_periodic,
-            v_mean,
+            v_mid,
             outer,
             holes,
             aabb,
@@ -251,7 +257,7 @@ impl FaceLoops2d {
             q.x()
         };
         let v = if self.v_periodic {
-            self.v_mean + (q.y() - self.v_mean + PI).rem_euclid(TAU) - PI
+            self.v_mid + (q.y() - self.v_mid + PI).rem_euclid(TAU) - PI
         } else {
             q.y()
         };
@@ -593,4 +599,84 @@ fn sub_face_outer_vertices(
         return Ok(None);
     }
     Ok(Some(verts))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ToroidalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A torus patch spanning u 0.2 to 0.8 and v 0.1 to 5.9, the long way
+    /// round its tube, with its v = 0.1 rim split in two: its loop holds its
+    /// own points near both ends of its v span and none past them.
+    #[test]
+    fn a_wide_torus_patch_holds_its_points_at_both_ends() {
+        let mut topo = Topology::new();
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let at = |u: f64, v: f64| torus.evaluate(u, v);
+        let mut vertex = |u: f64, v: f64| topo.add_vertex(Vertex::new(at(u, v), 1e-7));
+        let (a, b, c) = (vertex(0.2, 0.1), vertex(0.5, 0.1), vertex(0.8, 0.1));
+        let (d, e) = (vertex(0.8, 5.9), vertex(0.2, 5.9));
+        let parallel = |v: f64| {
+            let z = v.sin();
+            Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, z),
+                Vec3::new(0.0, 0.0, 1.0),
+                3.0 + v.cos(),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap()
+        };
+        let meridian = |u: f64| {
+            Circle3D::new_with_ref(
+                Point3::new(3.0 * u.cos(), 3.0 * u.sin(), 0.0),
+                Vec3::new(u.sin(), -u.cos(), 0.0),
+                1.0,
+                Vec3::new(u.cos(), u.sin(), 0.0),
+            )
+            .unwrap()
+        };
+        // Each arc runs anticlockwise about its normal from start to end.
+        for (circle, p, q) in [
+            (parallel(0.1), at(0.2, 0.1), at(0.8, 0.1)),
+            (parallel(5.9), at(0.2, 5.9), at(0.8, 5.9)),
+            (meridian(0.8), at(0.8, 0.1), at(0.8, 5.9)),
+            (meridian(0.2), at(0.2, 0.1), at(0.2, 5.9)),
+        ] {
+            let (t0, t1) = EdgeCurve::Circle(circle.clone()).domain_with_endpoints(p, q);
+            assert!((circle.evaluate(t0) - p).length() < 1e-9);
+            assert!((circle.evaluate(t1) - q).length() < 1e-9);
+        }
+        let ab = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(parallel(0.1))));
+        let bc = topo.add_edge(Edge::new(b, c, EdgeCurve::Circle(parallel(0.1))));
+        let cd = topo.add_edge(Edge::new(c, d, EdgeCurve::Circle(meridian(0.8))));
+        let ed = topo.add_edge(Edge::new(e, d, EdgeCurve::Circle(parallel(5.9))));
+        let ae = topo.add_edge(Edge::new(a, e, EdgeCurve::Circle(meridian(0.2))));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(ab, true),
+                OrientedEdge::new(bc, true),
+                OrientedEdge::new(cd, true),
+                OrientedEdge::new(ed, false),
+                OrientedEdge::new(ae, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Torus(torus.clone())));
+        let loops = FaceLoops2d::new(&topo, face).unwrap();
+        let holds = |u: f64, v: f64| loops.to_uv(at(u, v)).is_some_and(|q| loops.contains(q));
+        assert!(holds(0.5, 5.8));
+        assert!(holds(0.5, 0.2));
+        assert!(holds(0.5, 3.0));
+        assert!(!holds(0.5, 6.1));
+        assert!(!holds(0.9, 3.0));
+    }
 }
