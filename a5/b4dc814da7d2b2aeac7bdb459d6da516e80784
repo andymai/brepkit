@@ -1,0 +1,23 @@
+crates/check/src/classify/boundary.rs
+  s_a2dc21dbec3f2b::t_66a065298e279c 521-524,541-549,563,584
+crates/operations/tests/ball_through_a_cylinder_wall.rs
+  s_a2dc21dbec3f2b::t_853d3209c9080b 22,197-209,233-243,245-252
+  s_a2dc21dbec3f2b::t_ac50e8a21600ee 210-232,244,253
+  s_a2dc21dbec3f2b::t_8a27e3baf41fc2 254-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5b4dc814da7d2b2aeac7bdb459d6da516e80784",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
