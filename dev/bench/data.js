@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793147185922,
+  "lastUpdate": 1793148047082,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57779,6 +57779,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28572628,
             "range": "± 124714",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6cb7cdf29377fc88d25ae7f23b3a0967f21ed8df",
+          "message": "perf(algo): leave closed rims out of the collinear section dedup (#2105)\n\nDropping a section that lies inside a longer collinear one\n(`dedup_collinear_sections`) tests every pair of a face's sections\ntoday. A face cut by many holes carries one closed rim per hole, so a\nplate face with 900 holes makes about 400,000 pair tests, 6 ms per face,\nthough no rim can take part. With this change the rims are left out of\nthe pair loop and the kept sections are the same.\n\n## Change\n\nA section whose ends meet cannot change the outcome. As the first of a\npair, its chord is shorter than the tolerance, which the test already\nskips because it gives no line. As the second, its interval along any\nline is no longer than its chord, so the overlap stays under the\ntolerance the test needs. Sections whose ends lie within half the\ntolerance (half, for rounding room) are left out before the pair loop,\nwhich runs over the rest in the same order.\n\n## Measurements\n\nRelease build, a plate 2 thick with a 30 by 30 grid of radius 0.5 holes\ncut by `compound_cut`, `BK_GFA_TIME`, three runs each back to back:\n`fill_images` takes 58 to 60 ms on this branch against 70 to 73 ms on\n`main`. The resulting volume is identical.\n\n## Tests\n\n- `collinear_dedup_matches_every_pair`: 40 rounds of 80 sections mixing\nexactly closed rims, sections 0.4 and 0.8 tolerances long, collinear\nsegments along three shared lines with nested halves and exact copies,\nnear-collinear and crossing segments. Each round keeps the same sections\nas a copy of the previous all-pairs loop. Leaving out every section\nshorter than 5 fails it.\n- `cargo test -p brepkit-algo --lib` passes 314 and `cargo test -p\nbrepkit-operations --lib` passes 937 with 8 ignored. The slot and cutout\nfixtures `gridfinity_honeycomb_cut_inmem`, `deepcutout_cut_inmem`,\n`dovetail_key_slot_cut_inmem`, `slots_lipcone_cut_inmem`,\n`slotted_lip_base_fuse_inmem`, `slotted_nolip_fuse_inmem` and\n`snapclip_deepened_notch_inmem` pass. The pose sweep and truth audit\noutputs are identical to `main`'s, and `cargo clippy -p brepkit-algo\n--all-targets -- -D warnings` is clean.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSpeeds up the collinear section dedup by leaving closed rims (sections\nwhose ends meet) out of the pair loop — they can't affect the outcome,\nand a face cut by many holes carries one rim per hole. The kept sections\nare identical to before.\n\nSections whose ends lie within half the tolerance are now filtered out\nbefore the pair loop, which runs over the rest in the same order.\n\n**Measurements**\n- On a 2-thick plate with a 30 by 30 grid of radius 0.5 holes,\n`fill_images` drops from 70-73 ms to 58-60 ms per face; the resulting\nvolume is identical.\n\n**Tests**\n- New `collinear_dedup_matches_every_pair` test runs 40 rounds of 80\nmixed sections (closed rims, near-closed sections, and collinear\nsegments) and confirms the result matches the all-pairs reference;\nleaving out every section shorter than 5 fails it.\n- All lib suites, clippy, and fixture/truth-audit outputs pass\nunchanged.\n\n<sup>Written for commit bd7e42c6a0f8d3e4bc7718e40b06c20cc1a619d3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2105?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2105?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2105&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T00:37:43Z",
+          "tree_id": "390acf8493cb6b2f804a8bd9bb42b90791ab7ff8",
+          "url": "https://github.com/andymai/brepkit/commit/6cb7cdf29377fc88d25ae7f23b3a0967f21ed8df"
+        },
+        "date": 1793148037955,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1091011,
+            "range": "± 1992",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1166264,
+            "range": "± 2013",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13206,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 668657,
+            "range": "± 61648",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28502831,
+            "range": "± 56217",
             "unit": "ns/iter"
           }
         ]
