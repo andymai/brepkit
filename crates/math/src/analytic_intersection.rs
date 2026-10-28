@@ -247,9 +247,7 @@ fn exact_plane_sphere(
     if depth <= TOUCH * r {
         return Ok(vec![ExactIntersectionCurve::Point(circle_center)]);
     }
-    // The depth, not r² − h², so a circle cut a hair below the top keeps
-    // its size.
-    let circle_r = (depth * (r + h.abs())).sqrt();
+    let circle_r = (r.mul_add(r, -(h * h))).sqrt();
     let circle = Circle3D::new(circle_center, normal, circle_r)?;
     Ok(vec![ExactIntersectionCurve::Circle(circle)])
 }
