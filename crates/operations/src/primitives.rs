@@ -7,7 +7,7 @@
 //! the given [`Topology`]. The solids are built with correct manifold
 //! topology and outward-pointing face normals.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use brepkit_math::tolerance::Tolerance;
@@ -712,8 +712,8 @@ fn make_rect_xz_face(
 /// Create a solid from the 3D convex hull of a point cloud.
 ///
 /// Uses the Quickhull algorithm to compute the convex hull, then
-/// converts the resulting triangulated surface to a B-Rep solid with
-/// planar triangular faces.
+/// converts the resulting triangulated surface to a B-Rep solid with one
+/// planar face per facet, coplanar triangles merged into one polygon.
 ///
 /// # Errors
 ///
@@ -722,6 +722,13 @@ pub fn make_convex_hull(
     topo: &mut Topology,
     points: &[Point3],
 ) -> Result<SolidId, crate::OperationsError> {
+    fn root(facet: &mut [usize], mut i: usize) -> usize {
+        while facet[i] != i {
+            facet[i] = facet[facet[i]];
+            i = facet[i];
+        }
+        i
+    }
     let hull = brepkit_math::convex_hull::convex_hull_3d(points).ok_or_else(|| {
         crate::OperationsError::InvalidInput {
             reason: "points are coplanar or degenerate — cannot form a 3D convex hull".into(),
@@ -730,29 +737,152 @@ pub fn make_convex_hull(
 
     let tol = Tolerance::new();
 
-    let vertex_ids: Vec<_> = hull
+    // Each triangle's plane and twice its area, and the facets: triangles
+    // joined across a shared edge where each one's far corner lies on the
+    // other's plane.
+    let plane_of = |&[a, b, c]: &[usize; 3]| {
+        let (pa, pb, pc) = (hull.vertices[a], hull.vertices[b], hull.vertices[c]);
+        let cross = (pb - pa).cross(pc - pa);
+        let normal = cross.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+        let d = normal
+            .x()
+            .mul_add(pa.x(), normal.y().mul_add(pa.y(), normal.z() * pa.z()));
+        (normal, d, cross.length())
+    };
+    let planes: Vec<(Vec3, f64, f64)> = hull.faces.iter().map(plane_of).collect();
+    let scale = hull
         .vertices
         .iter()
-        .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
-        .collect();
+        .map(|p| p.x().abs().max(p.y().abs()).max(p.z().abs()))
+        .fold(1.0_f64, f64::max);
+    let on_plane = |t: usize, v: usize| {
+        let ((n, d, _), p) = (planes[t], hull.vertices[v]);
+        (n.x().mul_add(p.x(), n.y().mul_add(p.y(), n.z() * p.z())) - d).abs() <= 1e-9 * scale
+    };
+    let far_corner = |t: usize, a: usize, b: usize| {
+        hull.faces[t]
+            .into_iter()
+            .find(|&v| v != a && v != b)
+            .unwrap_or(a)
+    };
+    let mut facet: Vec<usize> = (0..hull.faces.len()).collect();
+    let mut by_edge: HashMap<(usize, usize), usize> = HashMap::new();
+    for (t, tri) in hull.faces.iter().enumerate() {
+        for k in 0..3 {
+            let (a, b) = (tri[k], tri[(k + 1) % 3]);
+            if let Some(&other) = by_edge.get(&(a.min(b), a.max(b))) {
+                if planes[t].0.dot(planes[other].0) > 0.0
+                    && on_plane(t, far_corner(other, a, b))
+                    && on_plane(other, far_corner(t, a, b))
+                {
+                    let (r1, r2) = (root(&mut facet, t), root(&mut facet, other));
+                    facet[r1] = r2;
+                }
+            } else {
+                by_edge.insert((a.min(b), a.max(b)), t);
+            }
+        }
+    }
+    // Each facet's boundary: its triangles' edges less those two of them
+    // share, chained into one loop (a convex polygon), on the plane of its
+    // largest triangle. A facet whose corners stray off that plane, merged
+    // through a chain of neighbours each nearly level with the next, or
+    // whose edges do not chain into one loop, keeps its triangles.
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); hull.faces.len()];
+    for t in 0..hull.faces.len() {
+        members[root(&mut facet, t)].push(t);
+    }
+    let mut loops: Vec<(Vec<usize>, usize)> = Vec::new();
+    for tris in members.iter().filter(|m| !m.is_empty()) {
+        let largest = tris
+            .iter()
+            .copied()
+            .max_by(|&s, &t| planes[s].2.total_cmp(&planes[t].2))
+            .unwrap_or(tris[0]);
+        let directed: HashSet<(usize, usize)> = tris
+            .iter()
+            .flat_map(|&t| {
+                let [a, b, c] = hull.faces[t];
+                [(a, b), (b, c), (c, a)]
+            })
+            .collect();
+        let rim: HashMap<usize, usize> = directed
+            .iter()
+            .filter(|&&(a, b)| !directed.contains(&(b, a)))
+            .copied()
+            .collect();
+        let first = rim.keys().copied().min();
+        let mut ring = Vec::with_capacity(rim.len());
+        let mut at = first;
+        while let Some(v) = at {
+            ring.push(v);
+            at = rim.get(&v).copied().filter(|&n| Some(n) != first);
+            if ring.len() > rim.len() {
+                break;
+            }
+        }
+        let level = tris
+            .iter()
+            .all(|&t| hull.faces[t].into_iter().all(|v| on_plane(largest, v)));
+        if level && ring.len() == rim.len() && rim.len() >= 3 {
+            loops.push((ring, largest));
+        } else {
+            loops.extend(tris.iter().map(|&t| (hull.faces[t].to_vec(), t)));
+        }
+    }
+
+    // A hull point on an edge between two facets (a vertex sum landing midway
+    // along a Minkowski sum's edge) leaves both facets' rims straight through
+    // it; it is no corner of the solid, and both rims drop it.
+    let mut facets_at: HashMap<usize, usize> = HashMap::new();
+    for (ring, _) in &loops {
+        for &v in ring {
+            *facets_at.entry(v).or_default() += 1;
+        }
+    }
+    let straight = |a: usize, v: usize, b: usize| {
+        let (pa, pv, pb) = (hull.vertices[a], hull.vertices[v], hull.vertices[b]);
+        (pa - pv).cross(pb - pv).length() <= 1e-12 * scale * scale
+    };
+    for (ring, _) in &mut loops {
+        let mut k = 0;
+        while ring.len() > 3 && k < ring.len() {
+            let n = ring.len();
+            let (a, v, b) = (ring[(k + n - 1) % n], ring[k], ring[(k + 1) % n]);
+            if facets_at.get(&v) == Some(&2) && straight(a, v, b) {
+                ring.remove(k);
+            } else {
+                k += 1;
+            }
+        }
+    }
+
+    let mut vertex_ids: HashMap<usize, brepkit_topology::vertex::VertexId> = HashMap::new();
+    for (ring, _) in &loops {
+        for &v in ring {
+            vertex_ids
+                .entry(v)
+                .or_insert_with(|| topo.add_vertex(Vertex::new(hull.vertices[v], tol.linear)));
+        }
+    }
 
     // Each undirected edge (min_vertex, max_vertex) is created once; the second
     // face that references it uses reverse orientation.
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
-    let mut face_ids = Vec::with_capacity(hull.faces.len());
-    for &[a, b, c] in &hull.faces {
-        let va = vertex_ids[a];
-        let vb = vertex_ids[b];
-        let vc = vertex_ids[c];
-
-        let pairs = [(a, b, va, vb), (b, c, vb, vc), (c, a, vc, va)];
-        let mut oriented_edges = Vec::with_capacity(3);
-        for (idx_a, idx_b, v_a, v_b) in pairs {
+    let mut face_ids = Vec::with_capacity(loops.len());
+    for (ring, tri) in &loops {
+        let mut oriented_edges = Vec::with_capacity(ring.len());
+        for (k, &idx_a) in ring.iter().enumerate() {
+            let idx_b = ring[(k + 1) % ring.len()];
             let key = (idx_a.min(idx_b), idx_a.max(idx_b));
             let (eid, forward) = if let Some(&existing) = edge_map.get(&key) {
                 (existing, false)
             } else {
-                let eid = topo.add_edge(Edge::new(v_a, v_b, EdgeCurve::Line));
+                let eid = topo.add_edge(Edge::new(
+                    vertex_ids[&idx_a],
+                    vertex_ids[&idx_b],
+                    EdgeCurve::Line,
+                ));
                 edge_map.insert(key, eid);
                 (eid, true)
             };
@@ -761,17 +891,7 @@ pub fn make_convex_hull(
 
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
         let wid = topo.add_wire(wire);
-
-        let pa = hull.vertices[a];
-        let pb = hull.vertices[b];
-        let pc = hull.vertices[c];
-        let ab = pb - pa;
-        let ac = pc - pa;
-        let normal = ab.cross(ac).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-        let d = normal
-            .x()
-            .mul_add(pa.x(), normal.y().mul_add(pa.y(), normal.z() * pa.z()));
-
+        let (normal, d, _) = planes[*tri];
         let fid = topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
         face_ids.push(fid);
     }

@@ -429,6 +429,60 @@ fn convex_hull_unit_cube() {
     assert_volume_near(&topo, solid, 1.0, 1e-10);
 }
 
+/// Coplanar hull triangles merge into one face per facet: a square
+/// pyramid has its square base, a cube six squares, and two boxes' Minkowski
+/// sum the six faces of a box.
+#[test]
+fn convex_hull_faces_are_whole_facets() {
+    let counts = |topo: &Topology, solid| {
+        let report = crate::validate::validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap()
+    };
+    let mut topo = Topology::new();
+    let pyramid = make_convex_hull(
+        &mut topo,
+        &[
+            Point3::new(-2.5, -2.5, 0.0),
+            Point3::new(2.5, -2.5, 0.0),
+            Point3::new(2.5, 2.5, 0.0),
+            Point3::new(-2.5, 2.5, 0.0),
+            Point3::new(0.0, 0.0, 20.0),
+        ],
+    )
+    .unwrap();
+    assert_eq!(counts(&topo, pyramid), (5, 8, 5));
+    assert_volume_near(&topo, pyramid, 25.0 * 20.0 / 3.0, 1e-10);
+
+    // Sides tilted 2e-7 from level: their normals all but agree, but each
+    // side's far corner stands 0.2 off its neighbour's plane.
+    let flat = make_convex_hull(
+        &mut topo,
+        &[
+            Point3::new(-5e5, -5e5, 0.0),
+            Point3::new(5e5, -5e5, 0.0),
+            Point3::new(5e5, 5e5, 0.0),
+            Point3::new(-5e5, 5e5, 0.0),
+            Point3::new(0.0, 0.0, 0.1),
+        ],
+    )
+    .unwrap();
+    assert_eq!(counts(&topo, flat), (5, 8, 5));
+    assert_volume_near(&topo, flat, 1e12 * 0.1 / 3.0, 1e-6);
+
+    let corners: Vec<Point3> = (0..8)
+        .map(|i| Point3::new(f64::from(i & 1), f64::from((i >> 1) & 1), f64::from(i >> 2)))
+        .collect();
+    let cube = make_convex_hull(&mut topo, &corners).unwrap();
+    assert_eq!(counts(&topo, cube), (6, 12, 8));
+
+    let a = make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+    let b = make_box(&mut topo, 4.0, 5.0, 6.0).unwrap();
+    let sum = make_minkowski_sum(&mut topo, a, b).unwrap();
+    assert_eq!(counts(&topo, sum), (6, 12, 8));
+    assert_volume_near(&topo, sum, 5.0 * 7.0 * 9.0, 1e-9);
+}
+
 #[test]
 fn convex_hull_larger_box() {
     let mut topo = Topology::new();
@@ -572,4 +626,36 @@ fn convex_hull_rejects_too_few_points() {
         Point3::new(0.0, 1.0, 0.0),
     ];
     assert!(make_convex_hull(&mut topo, &points).is_err());
+}
+
+/// A cap dipping 1e-5 at its corners, each of its triangles level with the
+/// next within the merge tolerance: merging neighbour by neighbour would put
+/// the cap on one plane its corners stray 3.6e-5 off.
+#[test]
+fn convex_hull_faces_hold_their_corners_on_their_planes() {
+    let mut topo = Topology::new();
+    let mut pts = vec![Point3::new(0.0, 0.0, -1000.0)];
+    for i in -10..=10 {
+        for j in -10..=10 {
+            let (x, y) = (f64::from(i) * 100.0, f64::from(j) * 100.0);
+            pts.push(Point3::new(x, y, -(x * x + y * y) / 2e11));
+        }
+    }
+    let solid = make_convex_hull(&mut topo, &pts).unwrap();
+    let report = crate::validate::validate_solid(&topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        let face = topo.face(fid).unwrap();
+        let &FaceSurface::Plane { normal, d } = face.surface() else {
+            unreachable!("hull faces are planes");
+        };
+        for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+            let p = topo
+                .vertex(topo.edge(oe.edge()).unwrap().start())
+                .unwrap()
+                .point();
+            let off = (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs();
+            assert!(off <= 1e-6, "corner {off:e} off its face's plane");
+        }
+    }
 }
