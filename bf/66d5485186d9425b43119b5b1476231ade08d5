@@ -1,0 +1,33 @@
+crates/io/tests/touching_solids_step.rs
+  s_a2dc21dbec3f2b::t_11e38f4d1eda08 41-45,49-52
+  s_a2dc21dbec3f2b::t_881b13a0413056 1-40,46-48,53-54
+crates/operations/src/validate/tests.rs
+  s_a2dc21dbec3f2b::t_cc47032ea7c5a6 572-574,576,579-592
+  s_a2dc21dbec3f2b::t_94ca3a2d272430 575,577-578,593-594
+crates/operations/src/boolean/mod.rs
+  s_a2dc21dbec3f2b::t_7359525f16a5c5 652-677
+crates/operations/tests/torus_box_tangent.rs
+  s_a2dc21dbec3f2b::t_2cca3b107a919e 92-94,99,101,103
+crates/operations/src/validate.rs
+  s_a2dc21dbec3f2b::t_375c4556efe271 232-243
+  s_a2dc21dbec3f2b::t_11e38f4d1eda08 361-395,562-563,565-567
+crates/operations/tests/touching_solids.rs
+  s_a2dc21dbec3f2b::t_7359525f16a5c5 76-79
+  s_a2dc21dbec3f2b::t_2cca3b107a919e 1-75,80-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf66d5485186d9425b43119b5b1476231ade08d5",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
