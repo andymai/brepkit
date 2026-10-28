@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793211704154,
+  "lastUpdate": 1793213391023,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58697,6 +58697,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17904922,
             "range": "± 548222",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "50a11c889655d942c559a4616f5a48c4c6fa55cc",
+          "message": "fix(operations): accept a solid whose boundary touches itself at a point (#2117)\n\nA boolean whose result touches itself at a single point falls back to a\nmesh today. Two unit boxes sharing a corner fuse to a mesh that fails\nvalidation, two balls of radius 1 touching at a point fuse to 480 planar\nfaces 4% short of their volume, and the torus of radii 3 and 1 cut by a\nbox whose face touches its tube's inner side comes out as 660 planar\nfaces that fail validation. The mesh pinches at the same point, so\nnothing is gained by it. With this change all three keep their exact\nfaces: 12 planes of volume 2, 4 sphere faces of volume 8π/3, and the cut\ntorus at the volume integrated in closed form.\n\n## Cause\n\nA boundary that touches itself at a vertex has two sheets of faces\nmeeting there. Counted once, that vertex makes V - E + F one short of\nthe balance the acceptance gate and `validate_solid` require, and\n`validate_solid` reported pieces sharing a vertex as an error.\n\n## Change\n\n- `validate_solid` also accepts the Euler-Poincaré balance with each\nsuch vertex counted once per sheet of faces meeting there\n(`extra_vertex_fans`), unless two of its edges share a stretch of\npositive length, whatever their ends, splits or curve types: a boundary\ntouching itself along an edge stays invalid. An edge of no length, like\nthe torus's seams from its one vertex back to itself, shares no stretch.\nPieces sharing a vertex are reported as a warning when they meet at a\npoint, and as an error when they also meet along an edge.\n- Its nesting check probed each piece from its first vertex. For two\nballs touching, that can be the point of contact, where rays run into\nthe other ball and read it as holding the first; it now probes from a\nvertex away from every other piece's vertices.\n- The boolean gate accepts a result balanced this way when\n`validate_solid` finds no error, for one piece or several. The check\nbefore `unify_faces` counts the same way, as unify merged a ball's\nhemispheres across the point of contact and left its mesh open.\n\n## Tests\n\n- `boxes_sharing_a_corner_fuse_exactly` and\n`balls_touching_fuse_exactly`: the fuses keep 12 planes and 4 sphere\nfaces, validate, mesh watertight, and match their volumes; a later cut\nthrough one box's far corner gives 1.999, and a half-space cut off one\nball the two balls less the cap, both exact and watertight. Without the\nsheet count in the gate both fall back.\n- `a_box_face_on_the_inner_equator_cuts_exactly` now checks the cut from\nx = 2 too, against the closed form.\n- `touching_solids_round_trip_through_step`: both fuses read back from\nSTEP as one solid with the same faces, valid, at the same volume.\n- `balls_touching_at_a_point_are_not_nested`: two touching balls in one\nshell, each with its own vertex at the point of contact, do not read as\nnested. Probing from the first vertex fails it.\n- `pinched_and_nested_pieces_are_invalid` still holds: blocks fused\nalong a shared edge stay invalid.\n- `blocks_touching_along_a_split_edge_are_invalid`: blocks touching\nalong an edge that one of them splits at its middle, its ends welded,\nstay invalid, though no two of their edges share both ends.\n`cylinders_stacked_on_one_rim_are_invalid`: two cylinders welded rim to\nrim stay invalid; reading only the edges' ends, not their middles too,\nfails it. `blocks_sharing_a_corner_beside_a_ring_are_valid`: blocks\nsharing a corner beside a ring validate. Matching edges by their ends\nand middles, as before, fails the first and third.\n- `cargo test -p brepkit-operations -p brepkit-io` passes 1922 with 14\nignored, and `cargo test -p brepkit-check --lib` passes 59. The pose\nsweep and truth audit outputs are identical to `main`'s, and `cargo\nclippy --all-targets --all-features -- -D warnings` is clean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes booleans whose result touches itself at a point so they keep exact\nfaces instead of falling back to a mesh that pinches at the same point.\n\n- `validate_solid` and the boolean gate now accept a boundary that\ntouches itself at a vertex by counting that vertex once per sheet of\nfaces meeting there; touching along an edge stays invalid.\n- Pieces sharing a vertex are reported as a warning; the nesting check\nprobes from a vertex no other piece touches.\n- `unify_faces` stays off results balanced this way, which previously\nmerged a ball's hemispheres across the point of contact and left its\nmesh open.\n- Adds tests for two boxes sharing a corner, two touching balls, a torus\ncut tangent to its tube, validation of separate copies touching at a\npoint, and STEP round-trips.\n\n<sup>Written for commit bf66d5485186d9425b43119b5b1476231ade08d5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2117?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2117?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2117&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T11:46:38-07:00",
+          "tree_id": "a357cad72c4c118324cedec0d55855383f8438cc",
+          "url": "https://github.com/andymai/brepkit/commit/50a11c889655d942c559a4616f5a48c4c6fa55cc"
+        },
+        "date": 1793213384120,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1099235,
+            "range": "± 2536",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1177739,
+            "range": "± 11141",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13252,
+            "range": "± 57",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673980,
+            "range": "± 1080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29049152,
+            "range": "± 118687",
             "unit": "ns/iter"
           }
         ]
