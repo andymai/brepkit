@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.13](https://github.com/andymai/brepkit/compare/v4.3.12...v4.3.13) (2026-10-28)
+
+
+### Bug Fixes
+
+* **check:** read a sphere face with curved rims on the sphere ([#2111](https://github.com/andymai/brepkit/issues/2111)) ([9c8d42a](https://github.com/andymai/brepkit/commit/9c8d42a9acbe743c23e1fc45f0fd0e7175fdb606))
+
 ## [4.3.12](https://github.com/andymai/brepkit/compare/v4.3.11...v4.3.12) (2026-10-28)
 
 
