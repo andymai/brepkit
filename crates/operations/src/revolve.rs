@@ -1238,11 +1238,24 @@ fn try_circle_revolution_torus(
             .map_err(crate::OperationsError::Math)?;
     let seam_eid = topo.add_edge(Edge::new(profile_vid, v1, EdgeCurve::Circle(seam_circle)));
 
+    // End caps: planar discs whose outward normals oppose (start) and follow
+    // (end) the sweep direction; each is bounded by its full profile circle,
+    // wound CCW about the cap normal. The band runs each circle the other
+    // way, whichever way the profile circle's own normal faces.
+    let sweep0 = axis
+        .cross(center - torus_center)
+        .normalize()
+        .map_err(crate::OperationsError::Math)?;
+    let start_normal = -sweep0;
+    let start_fwd = circ_normal.dot(start_normal) > 0.0;
+    let final_normal = rotate_vec(sweep0, axis, angle);
+    let end_fwd = end_normal.dot(final_normal) > 0.0;
+
     let wall_wire = Wire::new(
         vec![
-            OrientedEdge::new(profile_eid, true),
+            OrientedEdge::new(profile_eid, !start_fwd),
             OrientedEdge::new(seam_eid, true),
-            OrientedEdge::new(end_eid, false),
+            OrientedEdge::new(end_eid, !end_fwd),
             OrientedEdge::new(seam_eid, false),
         ],
         true,
@@ -1270,15 +1283,6 @@ fn try_circle_revolution_torus(
         topo.add_face(Face::new(wall_wid, vec![], FaceSurface::Torus(surface)))
     });
 
-    // End caps: planar discs whose outward normals oppose (start) and follow
-    // (end) the sweep direction; each is bounded by its full profile circle,
-    // wound CCW about the cap normal.
-    let sweep0 = axis
-        .cross(center - torus_center)
-        .normalize()
-        .map_err(crate::OperationsError::Math)?;
-    let start_normal = -sweep0;
-    let start_fwd = circ_normal.dot(start_normal) > 0.0;
     let start_wire = Wire::new(vec![OrientedEdge::new(profile_eid, start_fwd)], true)
         .map_err(crate::OperationsError::Topology)?;
     let start_wid = topo.add_wire(start_wire);
@@ -1290,8 +1294,6 @@ fn try_circle_revolution_torus(
             d: dot_normal_point(start_normal, p0),
         },
     )));
-    let final_normal = rotate_vec(sweep0, axis, angle);
-    let end_fwd = end_normal.dot(final_normal) > 0.0;
     let end_wire = Wire::new(vec![OrientedEdge::new(end_eid, end_fwd)], true)
         .map_err(crate::OperationsError::Topology)?;
     let end_wid = topo.add_wire(end_wire);
