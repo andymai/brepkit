@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793216729972,
+  "lastUpdate": 1793220813452,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58913,6 +58913,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29181631,
             "range": "± 78971",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "310e14925cf9629b269862042e5f6fb9c19f38b2",
+          "message": "feat(math): return exact rulings, touch points and small circles from planes (#2125)\n\n`exact_plane_analytic` returns wrong or empty sections for planes that\nrun along a surface's rulings or touch it. For a plane parallel to a\ncylinder's axis it samples the cylinder's cross-section circle and keeps\nthe samples that land on the plane, so a plane through the axis comes\nback as three points of that circle, `[p0, pπ, p0]`, and a plane resting\non the cylinder, or sunk 1e-6 into it, comes back empty. An oblique\nplane through a cone's apex comes back as the apex repeated. A plane\ntouching a sphere comes back empty, as does one cutting it within 1e-10\nof tangency, where the circle's radius is still 1.4e-5 on a sphere of\nradius 1. With this change a new `exact_plane_section` returns all of\nthese sections exactly, and `exact_plane_analytic` keeps the circles and\nreturns no curve for the rest.\n\nBooleans keep their sections: `phase_ff` already cuts planes along a\ncylinder's axis or through a cone's apex into rulings of its own before\ncalling `exact_plane_analytic`, and it now leaves out a sphere's circle\ncut within 1e-10 of tangency itself.\n\n## Change\n\n- `exact_plane_section` returns `PlaneSection`, a `#[non_exhaustive]`\nenum of `Circle`, `Ellipse`, `Line { line, ray }`, `Point` and `Points`.\n`ExactIntersectionCurve` is unchanged.\n- A plane along a cylinder's axis cuts its two rulings, or the one it\ntouches along.\n- A plane through a cone's apex cuts its rulings as rays from the apex,\nor meets the cone at the apex alone.\n  - A plane touching a sphere meets it at a point.\n- Touching and passing through the apex are read to 4 units in the last\nplace.\n- `exact_plane_analytic` returns no curve for a plane along a cylinder's\naxis, through a cone's apex, or touching a sphere, and returns a\nsphere's circle however small.\n- `phase_ff` reads the graze from the plane's signed distance to the\nsphere's centre, as `exact_plane_analytic` did.\n\n## Tests\n\n- `a_plane_along_a_cylinder_cuts_its_rulings`: planes through the axis\nand sunk a hair below tangency cut two rulings on both surfaces, the\nsunk pair 2 sin(1e-6) apart, the tangent plane one, and a plane past the\ncylinder none; `exact_plane_analytic` gives no curve for any of them. A\ntangency band of 1e-9 fails it.\n- `a_plane_through_a_cone_apex_cuts_its_rulings`: a plane through the\naxis cuts two rays from the apex on the real nappe, a plane tangent\nalong a ruling one, and planes meeting the cone only at its apex give\nthe apex. A plane 5e-8 off the apex still cuts its ellipse; reading the\napex to the linear tolerance fails that.\n- `a_plane_touching_a_sphere_meets_it_at_a_point`: the tangent plane\nmeets the sphere at its foot, and planes 5e-15, 1e-12 and 1e-8 inside it\ncut circles of the right radius.\n- `a_far_sphere_cut_a_hair_inside_keeps_its_circle`: a plane 1e-8 inside\ntangency of a sphere centred at (1e9, 1e9, 0) keeps its circle in\n`phase_ff`, and one 1e-11 inside is left out. Reading the depth from the\ncircle's centre drops the first.\n- `a_box_grazing_a_ball_leaves_it_whole`: a box face 1e-11 or 5e-11\ninside a ball's top leaves the ball's two faces whole after the cut.\nWithout the cut-off in `phase_ff` the ball splits into three faces.\n- `cargo test -p brepkit-math -p brepkit-algo -p brepkit-operations -p\nbrepkit-io` passes 2823 with 14 ignored, and `cargo clippy --all-targets\n--all-features -- -D warnings` is clean. The pose sweep and truth audit\noutputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes exact plane intersections with cylinders, cones, and spheres so\nthey return exact rulings, touch points, and arbitrarily small circles\ninstead of sampled point chains or empty results.\n\nA new `exact_plane_section` returns a `PlaneSection` enum of `Circle`,\n`Ellipse`, `Line { line, ray }`, `Point`, and `Points`.\n`exact_plane_analytic` returns no curve for plans along a cylinder's\naxis, through a cone's apex, or touching a sphere, but keeps a sphere's\ncircle however small.\n\n**Changes**\n- A plane along a cylinder's axis returns its rulings; a plane through a\ncone's apex returns rules as rays from the apex, or the apex alone.\n- A tangent plane meets a sphere at the point of contact; circle radius\ncomes from the plane's depth into the sphere rather than r² − h².\n- Touching and apex-passing are read within 4 units in the last place.\n- `phase_ff` leaves out a sphere's circle cut within 1e-10 of tangency\nso grazing boolean cuts keep the ball's faces whole.\n\n**Tests**\n- New tests cover rulings on cylinders and cones, sphere touch points\nand hair-thin circle cuts, a far sphere's cut circle at 1e9 scale, and a\nbox grazing a ball leaving it whole.\n- `cargo test` passes 2823 with 14 ignored; clippy is clean, and pose\nsweep and truth audit outputs match `main`.\n\n<sup>Written for commit 304445205be713f26f3a6205d3a9dcc06cd3aefb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2125?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2125?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2125&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T20:50:30Z",
+          "tree_id": "87f9bdef852a2676100b77c6bf1a9c2793d81a34",
+          "url": "https://github.com/andymai/brepkit/commit/310e14925cf9629b269862042e5f6fb9c19f38b2"
+        },
+        "date": 1793220794294,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 883702,
+            "range": "± 53779",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 950541,
+            "range": "± 1848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11282,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 539039,
+            "range": "± 4584",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23530360,
+            "range": "± 635178",
             "unit": "ns/iter"
           }
         ]
