@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793185299905,
+  "lastUpdate": 1793191328128,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58211,6 +58211,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23416029,
             "range": "± 54423",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c8d42a9acbe743c23e1fc45f0fd0e7175fdb606",
+          "message": "fix(check): read a sphere face with curved rims on the sphere (#2111)\n\nThe ray classifier misreads points against a sphere face whose rim holds\nan ellipse or NURBS edge, as a ball face cut by a cone or an off-axis\ncylinder does. Such a face is read by projecting its loop along the\nloop's normal and keeping hits on the normal's side of the plane through\nthe loop's first point, so two things go wrong today:\n\n- Where the wire starts decides. A ball of radius 1.1 at (1, 0.8, 1.2)\nfused with a cylinder of radius 2 leaves two ball faces with NURBS rims,\nand turning one face's wire to start at its second edge makes (1, 1.183,\n1.2), a point inside the cylinder, read Outside.\n- A face whose rim dips below the sphere's middle is no graph along its\nnormal. A patch round a unit sphere's pole, rimmed by eight great-circle\narcs held as NURBS with corners at heights 0.5 and -0.3 in turn, reads\n(0.8975, 0.393, 0.2) as off the patch although it lies on it.\n\nWith this change both read correctly. Splitting the ball's seam arcs at\ntheir middles, which a fix for two balls sharing an equator plane needs,\nstarts these wires elsewhere and turned the ball's centre Outside in\n`a_ball_through_a_cylinder_wall_is_exact`.\n\n## Change\n\n`SphereRims`, which reads a face on the sphere by the parity of\ngreat-circle arcs, took only lines and circles. It now reads an ellipse\nor NURBS edge as 64 chords between points along it, each standing for\nthe great-circle arc between its ends: a quarter turn of a circle strays\nunder 1e-4 of the radius from them. Its points inside the face are taken\nat chord middles, and along a descending domain the curve's tangent is\nturned round. The projection now reads such a face only where the parity\nties.\n\n## Tests\n\n- `a_patch_rimmed_by_nurbs_arcs_reads_both_sides_of_the_sphere`: the\npatch above holds the point above its rim and the pole, and not the\npoint below the rim or the far pole. On `main` it fails at the point\nabove the rim.\n- `the_ball_reads_alike_from_wherever_its_wires_start`: two ball poses\nfused with the cylinder, and a 7 by 7 by 7 grid of points over the ball\nkept 0.02 clear of both surfaces. Each ball face's wire is turned to\nstart at every edge, and every point must read as it lies against the\ntwo solids. On `main` it fails at the point above.\n- `cargo test -p brepkit-operations -p brepkit-io` passes 1909 with 15\nignored, and `cargo test -p brepkit-check --lib` passes 59.\n- The pose sweep and truth audit outputs are identical to `main`'s, and\n`cargo clippy --all-targets --all-features -- -D warnings` is clean.",
+          "timestamp": "2026-10-28T05:38:58-07:00",
+          "tree_id": "d5dbaa506658c9b0f2ac70acdd84369dfb81153e",
+          "url": "https://github.com/andymai/brepkit/commit/9c8d42a9acbe743c23e1fc45f0fd0e7175fdb606"
+        },
+        "date": 1793191318157,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1102186,
+            "range": "± 3321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1180065,
+            "range": "± 4001",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13184,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674234,
+            "range": "± 2642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29110787,
+            "range": "± 143197",
             "unit": "ns/iter"
           }
         ]
