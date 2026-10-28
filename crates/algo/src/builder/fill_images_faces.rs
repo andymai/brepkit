@@ -3376,11 +3376,18 @@ fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
     let n = sections.len();
     let mut to_remove = vec![false; n];
 
-    for i in 0..n {
+    // A section whose ends (nearly) meet, a closed rim, takes no part: as the
+    // first of a pair its chord is too short to give a line, and as the
+    // second its interval along any line is shorter than the overlap the
+    // test needs. A face cut by many holes carries one rim per hole.
+    let open: Vec<usize> = (0..n)
+        .filter(|&k| (sections[k].end - sections[k].start).length() >= tol * 0.5)
+        .collect();
+    for (a, &i) in open.iter().enumerate() {
         if to_remove[i] {
             continue;
         }
-        for j in (i + 1)..n {
+        for &j in &open[a + 1..] {
             if to_remove[j] {
                 continue;
             }
@@ -5672,6 +5679,169 @@ mod tests {
                     assert!(at.any(|g| g == w), "missing {w:?} near {q:?}");
                 }
             }
+        }
+    }
+
+    /// The collinear dedup must keep exactly what testing every pair keeps,
+    /// with closed rims, near-closed sections either side of the tolerance,
+    /// and collinear segments nested along shared lines.
+    #[test]
+    fn collinear_dedup_matches_every_pair() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        let tol = 1e-7;
+        let section = |start: Point3, end: Point3| SectionEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve_a: Curve2D::Line(
+                Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+            ),
+            pcurve_b: Curve2D::Line(
+                Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap(),
+            ),
+            start,
+            end,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        };
+        let mut state = 0x853c_49e6_748f_ea9b_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for round in 0..40 {
+            let mut sections = Vec::new();
+            for k in 0..60 {
+                let y = f64::from(k % 3);
+                let p = Point3::new(next() * 10.0, y, 0.0);
+                let kind = (k + round) % 6;
+                let q = match kind {
+                    0 => p,
+                    1 => Point3::new(p.x() + 0.4 * tol, y, 0.0),
+                    2 => Point3::new(p.x() + 0.8 * tol, y, 0.0),
+                    3 => Point3::new(p.x() + next() * 5.0, y, 0.0),
+                    4 => Point3::new(p.x() + 4.0, y + 1e-9, 0.0),
+                    _ => Point3::new(p.x(), y + next(), 0.0),
+                };
+                sections.push(section(p, q));
+            }
+            // Subsets of the first few segments, and exact copies.
+            for k in 0..10 {
+                let (a, b) = (sections[k].start, sections[k].end);
+                let mid = Point3::new(0.5 * (a.x() + b.x()), a.y(), a.z());
+                sections.push(section(a, mid));
+                sections.push(section(a, b));
+            }
+            let mut fast = sections.clone();
+            let mut slow = sections;
+            dedup_collinear_sections(&mut fast, tol);
+            all_pairs_reference(&mut slow, tol);
+            let ends = |v: &[SectionEdge]| v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>();
+            assert_eq!(ends(&fast), ends(&slow), "round {round}");
+        }
+    }
+
+    fn all_pairs_reference(sections: &mut Vec<SectionEdge>, tol: f64) {
+        if sections.len() < 2 {
+            return;
+        }
+
+        let n = sections.len();
+        let mut to_remove = vec![false; n];
+
+        for i in 0..n {
+            if to_remove[i] {
+                continue;
+            }
+            for j in (i + 1)..n {
+                if to_remove[j] {
+                    continue;
+                }
+
+                let si = &sections[i];
+                let sj = &sections[j];
+
+                // Check collinearity: direction vectors must be parallel
+                let di = sj.end - sj.start;
+                let dj = si.end - si.start;
+                let cross = di.cross(dj);
+                if cross.length() > tol * 10.0 {
+                    continue;
+                }
+
+                // Check if on the same line: distance from si.start to line(sj)
+                let to_sj = si.start - sj.start;
+                let dj_len = dj.length();
+                if dj_len < tol {
+                    continue;
+                }
+                let dj_unit = dj * (1.0 / dj_len);
+                let perp = to_sj - dj_unit * to_sj.dot(dj_unit);
+                if perp.length() > tol * 10.0 {
+                    continue;
+                }
+
+                // Collinear and on the same infinite line, but possibly DISJOINT or
+                // merely ADJACENT:
+                //  - DISJOINT: two notches on opposite walls cut the same rim along
+                //    the same x = ±cut_hw line, yet their cut segments sit at
+                //    opposite ends of the face and must both survive.
+                //  - ADJACENT: two PaveBlock fragments of one wall meeting end-to-end
+                //    at a shared junction vertex (e.g. a wall split into two faces by
+                //    a wall cutout). The junction carries sub-tolerance float noise,
+                //    so the two intervals overlap by a tiny sliver (~1e-3, well above
+                //    the 1e-7 linear tol) — but neither is a subset of the other and
+                //    dropping the shorter one deletes a genuine boundary piece (the
+                //    honeycomb-cut cap corner cell then never closes → open shell).
+                // Only treat the shorter section as a redundant subset when it is
+                // (nearly) FULLY CONTAINED in the longer one (a coplanar inner-region
+                // edge nested in the full-face FF edge): the overlap must cover
+                // essentially the whole shorter segment, not just a junction sliver.
+                // Project both segments onto the shared line and compare intervals.
+                let proj = |p: Point3, origin: Point3| (p - origin).dot(dj_unit);
+                let (ia0, ia1) = (proj(si.start, sj.start), proj(si.end, sj.start));
+                let (ib0, ib1) = (proj(sj.start, sj.start), proj(sj.end, sj.start));
+                let (ia_lo, ia_hi) = (ia0.min(ia1), ia0.max(ia1));
+                let (ib_lo, ib_hi) = (ib0.min(ib1), ib0.max(ib1));
+                let overlap = ia_hi.min(ib_hi) - ia_lo.max(ib_lo);
+                if overlap <= tol {
+                    continue;
+                }
+
+                let len_i = (si.end - si.start).length();
+                let len_j = (sj.end - sj.start).length();
+                let shorter_len = len_i.min(len_j);
+                // Containment guard: the shorter segment is a redundant subset only
+                // when the overlap spans (almost) its entire length. An adjacent pair
+                // sharing a noisy junction overlaps by far less than the shorter
+                // length, so it falls through and both survive.
+                if overlap < shorter_len - tol * 10.0 {
+                    continue;
+                }
+
+                // Overlapping collinear sections, shorter fully contained — remove it.
+                if len_i < len_j - tol {
+                    to_remove[i] = true;
+                } else if len_j < len_i - tol {
+                    to_remove[j] = true;
+                }
+                // If equal length, keep both (they might be distinct edges)
+            }
+        }
+
+        let removed = to_remove.iter().filter(|&&r| r).count();
+        if removed > 0 {
+            let mut idx = 0;
+            sections.retain(|_| {
+                let keep = !to_remove[idx];
+                idx += 1;
+                keep
+            });
         }
     }
 }
