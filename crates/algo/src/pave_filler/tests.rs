@@ -1894,8 +1894,8 @@ fn descending_pave_span_splits_along_the_edge() {
     let edge = topo.add_edge(Edge::new(start, end, EdgeCurve::Line));
     let mut arena = GfaArena::new();
     arena.init_edge_pave_block(edge, start, 0.9, end, 0.0);
-    super::helpers::add_pave_to_edge(&mut arena, edge, Pave::new(at_03, 0.3));
-    super::helpers::add_pave_to_edge(&mut arena, edge, Pave::new(at_06, 0.6));
+    super::helpers::add_pave_to_edge(&mut arena, &topo, edge, Pave::new(at_03, 0.3));
+    super::helpers::add_pave_to_edge(&mut arena, &topo, edge, Pave::new(at_06, 0.6));
     super::make_blocks::perform(&mut topo, &mut arena).unwrap();
 
     let leaves = arena.collect_leaf_pave_blocks(&arena.edge_pave_blocks[&edge]);

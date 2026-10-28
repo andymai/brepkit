@@ -57,6 +57,28 @@ pub(super) fn pave_vertex_within_tolerance(
     reach: f64,
     tol: Tolerance,
 ) -> Option<VertexId> {
+    if let Some(balls) = &arena.pave_ball_index
+        && balls.answers(p, reach)
+    {
+        let found = balls.nearest_within(topo, p, reach, tol.linear);
+        // Every tolerance raise must reach the index; the scan below is the
+        // reference it stands in for.
+        debug_assert_eq!(
+            found,
+            pave_vertex_within_tolerance_scan(topo, arena, p, reach, tol)
+        );
+        return found;
+    }
+    pave_vertex_within_tolerance_scan(topo, arena, p, reach, tol)
+}
+
+fn pave_vertex_within_tolerance_scan(
+    topo: &Topology,
+    arena: &GfaArena,
+    p: Point3,
+    reach: f64,
+    tol: Tolerance,
+) -> Option<VertexId> {
     let mut best: Option<(f64, VertexId)> = None;
     for pbs in arena.edge_pave_blocks.values() {
         for &pb_id in pbs {
@@ -144,6 +166,9 @@ pub(super) fn ef_crossing_vertex(
         && vertex.tolerance() < d
     {
         vertex.set_tolerance(d);
+        if let Some(balls) = &arena.pave_ball_index {
+            balls.note_tolerance(v, d);
+        }
     }
     Some(v)
 }
@@ -206,14 +231,16 @@ pub(super) fn find_nearby_pave_vertex_widened(
 ///
 /// Finds the pave block whose parameter range contains the pave's
 /// parameter (with a small guard band) and adds the extra pave to it.
-pub(super) fn add_pave_to_edge(arena: &mut GfaArena, edge_id: EdgeId, pave: Pave) {
+pub(super) fn add_pave_to_edge(arena: &mut GfaArena, topo: &Topology, edge_id: EdgeId, pave: Pave) {
     if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id) {
         let pb_ids_copy: Vec<_> = pb_ids.clone();
         for pb_id in pb_ids_copy {
-            if let Some(pb) = arena.pave_blocks.get_mut(pb_id)
-                && pb.spans_interior(pave.parameter)
+            if arena
+                .pave_blocks
+                .get(pb_id)
+                .is_some_and(|pb| pb.spans_interior(pave.parameter))
             {
-                pb.add_extra_pave(pave);
+                arena.add_extra_pave(topo, pb_id, pave);
             }
         }
     }
