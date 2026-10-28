@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.17](https://github.com/andymai/brepkit/compare/v4.3.16...v4.3.17) (2026-10-28)
+
+
+### Bug Fixes
+
+* **operations:** accept a solid whose boundary touches itself at a point ([#2117](https://github.com/andymai/brepkit/issues/2117)) ([50a11c8](https://github.com/andymai/brepkit/commit/50a11c889655d942c559a4616f5a48c4c6fa55cc))
+
 ## [4.3.16](https://github.com/andymai/brepkit/compare/v4.3.15...v4.3.16) (2026-10-28)
 
 
