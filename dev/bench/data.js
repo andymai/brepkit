@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793209619079,
+  "lastUpdate": 1793210211042,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58589,6 +58589,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19975483,
             "range": "± 852817",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8a0ac2590c8be46ca50364ae95186326dfa42136",
+          "message": "fix(operations): give a convex hull one face per facet (#2120)\n\n`make_convex_hull` makes a face of every hull triangle today, so its\nsolids carry their facets split into triangles. A square pyramid (a base\n5 square and an apex 20 above) comes out with 6 faces, 9 edges and 5\nvertices, its base two triangles, and a cube's faces come out as\ntriangles too, as do those of `make_minkowski_sum`, which is built on\nit. With this change each facet is one face: the pyramid has 5 faces, 8\nedges and 5 vertices, and the cube and the boxes' sum 6, 12 and 8.\n\n## Change\n\n- Two hull triangles sharing an edge merge into one facet when each\none's far corner lies on the other's plane, within 1e-9 of the hull's\nsize. A facet keeps its triangles if any of its corners lies farther\nthan that from the plane of its largest triangle, which a chain of\nneighbours each nearly level with the next can do, or if its edges do\nnot chain into one loop. Its boundary is its triangles' edges less those\ntwo of them share.\n- A hull point lying straight along an edge between two facets (a sum of\nbox corners landing midway along the Minkowski sum's edge) is dropped\nfrom both facets' loops, and only points the loops keep become vertices.\n\n## Tests\n\n- `convex_hull_faces_are_whole_facets`: the pyramid validates with 5\nfaces, 8 edges and 5 vertices at volume 500/3, the unit cube's hull with\n6, 12 and 8, and the Minkowski sum of a 1 by 2 by 3 box and a 4 by 5 by\n6 box with 6, 12 and 8 at volume 315. A pyramid with base corners at\n±500000 and its apex 0.1 up keeps its 4 sides apart; comparing the\ntriangles' normals within 1e-12 and their offsets within 1e-9 of the\nhull's size fails it.\n- `convex_hull_faces_hold_their_corners_on_their_planes`: a cap of 441\npoints 100 apart on the paraboloid z = -(x² + y²)/2e11, closed by a\npoint 1000 below, validates with every corner on its face's plane within\n1e-6. Merging neighbour by neighbour without the check on the largest\ntriangle's plane puts corners 3.6e-5 off.\n- `cargo test -p brepkit-operations --lib` passes 940 with 8 ignored,\nand `cargo clippy -p brepkit-operations --all-targets -- -D warnings` is\nclean.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nChanges `make_convex_hull` to give a convex solid one face per facet\ninstead of one triangular face per hull triangle. A square pyramid now\nhas 5 faces instead of 6, a cube 6 instead of 12, and the\n`make_minkowski_sum` of two boxes 6 faces instead of 12 triangles.\n\n- Coplanar neighbouring hull triangles merge into one polygon face, but\nonly when every corner lies on one shared plane, so curved caps keep\ntheir own planes per triangle.\n- Hull points lying straight along an edge between two facets are\ndropped from both face loops and no longer become vertices.\n\nNew tests check face, edge, and vertex counts for a pyramid, a cube, and\na two-box Minkowski sum, plus a curved-cap plane test, and the existing\nhull and Minkowski volume tests pass.\n\n<sup>Written for commit 9c04462c4b1176ad0a6084887b7d8cb476590e39.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2120?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2120?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2120&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T10:53:37-07:00",
+          "tree_id": "e04d11ce005c3ef6bdeb0e6583df4f26f0010d20",
+          "url": "https://github.com/andymai/brepkit/commit/8a0ac2590c8be46ca50364ae95186326dfa42136"
+        },
+        "date": 1793210201641,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1094585,
+            "range": "± 4460",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1171547,
+            "range": "± 1556",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12923,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 667469,
+            "range": "± 1143",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28741464,
+            "range": "± 84834",
             "unit": "ns/iter"
           }
         ]
