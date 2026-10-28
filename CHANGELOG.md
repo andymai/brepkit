@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.18](https://github.com/andymai/brepkit/compare/v4.3.17...v4.3.18) (2026-10-28)
+
+
+### Bug Fixes
+
+* **operations:** bound trimmed sphere and torus faces exactly ([#2118](https://github.com/andymai/brepkit/issues/2118)) ([d4d631d](https://github.com/andymai/brepkit/commit/d4d631dc8e9b677256442fbfb56cf5a6b67eab5f))
+
 ## [4.3.17](https://github.com/andymai/brepkit/compare/v4.3.16...v4.3.17) (2026-10-28)
 
 
