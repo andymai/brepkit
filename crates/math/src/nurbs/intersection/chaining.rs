@@ -1,8 +1,8 @@
 //! Chaining intersection points into curves.
 
 use crate::MathError;
-use crate::nurbs::fitting::{approximate_lspia, chord_length_params, interpolate};
-use crate::nurbs::projection::project_point_to_curve;
+use crate::nurbs::curve::NurbsCurve;
+use crate::nurbs::fitting::{chord_length_params, interpolate};
 use crate::vec::Point3;
 
 use super::surface_marching::near_existing_segment;
@@ -83,14 +83,22 @@ pub(super) fn chain_traced_segments(
     chains
 }
 
+/// How far a point lies from the farther surface, and the intersection
+/// point Newton reaches from it, both started beside a chain point.
+pub(super) type Settle<'a> =
+    dyn Fn(Point3, &IntersectionPoint) -> Option<(f64, IntersectionPoint)> + 'a;
+
 /// Fit a NURBS curve through each ALREADY-ORDERED chain of points.
 ///
 /// The proximity chainer above cannot serve callers that know connectivity
 /// exactly (the plane x NURBS grid scan links crossings through shared
 /// cells): its distance threshold cannot separate a sampling gap along one
 /// branch from two genuinely-close branches, and no statistic fixes that.
+/// Each fit holds `tolerance` as [`fit_within`] measures it with `settle`.
 pub(super) fn build_curves_from_chains(
     chains: &[Vec<IntersectionPoint>],
+    tolerance: f64,
+    settle: &Settle<'_>,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
     let mut curves = Vec::with_capacity(chains.len());
 
@@ -110,68 +118,7 @@ pub(super) fn build_curves_from_chains(
             continue;
         }
 
-        // Fit a NURBS curve through this chain's points.
-        let positions: Vec<Point3> = deduped.iter().map(|p| p.point).collect();
-        let degree = if positions.len() <= 3 {
-            1
-        } else {
-            3.min(positions.len() - 1)
-        };
-        let curve = if positions.len() > 50 {
-            let num_cps = (positions.len() / 3).max(degree + 1).min(positions.len());
-            let fitted = approximate_lspia(&positions, degree, num_cps, 1e-6, 100)?;
-
-            // Validate fit quality: re-evaluate residual at each sample point
-            // using the same chord-length parameterisation used during fitting.
-            // Use a relative threshold (residual / point-cloud diagonal) so the
-            // check is scale-independent.  A relative residual > 1% warrants a
-            // warning; the intersection curve may be geometrically inaccurate.
-            let fit_params = chord_length_params(&positions);
-            let mut max_residual = 0.0f64;
-            let mut bbox_min = positions[0];
-            let mut bbox_max = positions[0];
-            for (i, &t) in fit_params.iter().enumerate() {
-                let src = positions[i];
-                // Nearest-point projection gives the true geometric residual.
-                // Fall back to parametric evaluation only for degenerate curves.
-                let d = if let Ok(proj) = project_point_to_curve(&fitted, src, 1e-6) {
-                    proj.distance
-                } else {
-                    let pt = fitted.evaluate(t);
-                    (pt.x() - src.x()).hypot((pt.y() - src.y()).hypot(pt.z() - src.z()))
-                };
-                max_residual = max_residual.max(d);
-                bbox_min = Point3::new(
-                    bbox_min.x().min(src.x()),
-                    bbox_min.y().min(src.y()),
-                    bbox_min.z().min(src.z()),
-                );
-                bbox_max = Point3::new(
-                    bbox_max.x().max(src.x()),
-                    bbox_max.y().max(src.y()),
-                    bbox_max.z().max(src.z()),
-                );
-            }
-            let diagonal = (bbox_max.x() - bbox_min.x())
-                .hypot((bbox_max.y() - bbox_min.y()).hypot(bbox_max.z() - bbox_min.z()));
-            let rel_residual = if diagonal > 1e-12 {
-                max_residual / diagonal
-            } else {
-                max_residual
-            };
-            if rel_residual > 1e-2 {
-                log::warn!(
-                    "SSI: LSPIA fit relative residual {rel_residual:.2e} (abs={max_residual:.2e}) \
-                     exceeds 1% of curve extent — intersection curve may be inaccurate \
-                     (degree={degree}, num_cps={num_cps}, samples={})",
-                    positions.len()
-                );
-            }
-            fitted
-        } else {
-            interpolate(&positions, degree)?
-        };
-
+        let curve = fit_within(&mut deduped, tolerance, settle)?;
         curves.push(IntersectionCurve {
             curve,
             points: deduped,
@@ -179,6 +126,81 @@ pub(super) fn build_curves_from_chains(
     }
 
     Ok(curves)
+}
+
+/// Most points a chain grows to while its fit is refined.
+const MAX_FIT_POINTS: usize = 4096;
+
+/// Most rounds of refinement for one fit; each halves the spacing where the
+/// curve strays, which cuts a cubic's error about sixteenfold.
+const MAX_FIT_ROUNDS: usize = 8;
+
+/// Interpolate an ordered chain of intersection points, adding points until
+/// the curve holds `tolerance` halfway between each pair of neighbours.
+///
+/// `settle(p, near)` gives how far `p` lies from the farther of the two
+/// surfaces and the intersection point Newton reaches from `p`, both
+/// started from `near`, a chain point beside it. Where the curve's midpoint
+/// (in its own parameter) between two neighbours strays past `tolerance`,
+/// the point it settles to joins the chain between them, if it lands nearer
+/// each of them than they are to each other. A marched chain is accurate at
+/// its points, but a cubic through points a fixed step apart strays between
+/// them by the fourth power of that step, so a split cuts the stray about
+/// sixteenfold. The spline is global, though, and one split can leave a
+/// half straying more than its whole did, so a span is left as it is only
+/// when two splits have not halved its stray: the chain there is no smooth
+/// run of the section (a crossing, a tangency, points out of order), and
+/// more points cannot fix it.
+pub(super) fn fit_within(
+    chain: &mut Vec<IntersectionPoint>,
+    tolerance: f64,
+    settle: &Settle<'_>,
+) -> Result<NurbsCurve, MathError> {
+    // The strays of the splits that made each span, the latest first; a
+    // span left as it is holds zeros.
+    let mut split_at = vec![[f64::INFINITY; 2]; chain.len() - 1];
+    let mut round = 0;
+    loop {
+        let positions: Vec<Point3> = chain.iter().map(|p| p.point).collect();
+        let degree = if positions.len() <= 3 { 1 } else { 3 };
+        let curve = interpolate(&positions, degree)?;
+        round += 1;
+        if round > MAX_FIT_ROUNDS || chain.len() >= MAX_FIT_POINTS {
+            return Ok(curve);
+        }
+        let params = chord_length_params(&positions);
+        let mut grown = Vec::with_capacity(chain.len() * 2);
+        let mut grown_at = Vec::with_capacity(split_at.len() * 2);
+        for ((pair, t), &[last, before]) in chain.windows(2).zip(params.windows(2)).zip(&split_at) {
+            grown.push(pair[0]);
+            let open = last > 0.0;
+            let mid = curve.evaluate(0.5 * (t[0] + t[1]));
+            let strayed = if open {
+                settle(mid, &pair[0]).filter(|&(off, _)| off > tolerance)
+            } else {
+                None
+            };
+            let Some((off, q)) = strayed else {
+                grown_at.push(if open { [f64::INFINITY; 2] } else { [0.0; 2] });
+                continue;
+            };
+            let gap = (pair[1].point - pair[0].point).length();
+            let between = (q.point - pair[0].point).length() < gap
+                && (q.point - pair[1].point).length() < gap;
+            if between && off <= 0.5 * before {
+                grown.push(q);
+                grown_at.extend([[off, last], [off, last]]);
+            } else {
+                grown_at.push([0.0; 2]);
+            }
+        }
+        grown.push(chain[chain.len() - 1]);
+        if grown.len() == chain.len() {
+            return Ok(curve);
+        }
+        *chain = grown;
+        split_at = grown_at;
+    }
 }
 
 /// Chain intersection points into connected components using proximity.

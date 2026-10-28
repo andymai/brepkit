@@ -1725,3 +1725,48 @@ fn a_section_leaving_beside_a_patch_corner_ends_on_its_edge() {
     );
     assert!(on_corner_cylinder(end), "{end:?} off the cylinder");
 }
+
+/// The farthest a section's curve strays from `off`, sampled densely.
+fn farthest(curves: &[IntersectionCurve], off: impl Fn(Point3) -> f64) -> f64 {
+    let mut far = 0.0_f64;
+    for ic in curves {
+        let (t0, t1) = ic.curve.domain();
+        for i in 0..=2000 {
+            let t = t0 + (t1 - t0) * f64::from(i) / 2000.0;
+            far = far.max(off(ic.curve.evaluate(t)));
+        }
+    }
+    far
+}
+
+/// A tilted plane cuts the rational cylinder in an ellipse; between its
+/// marched points the fitted curve stays on the plane and the cylinder.
+#[test]
+fn a_plane_section_holds_its_tolerance_between_points() {
+    let cylinder = cylinder_nurbs_surface();
+    let n = Vec3::new(0.3, 0.1, 1.0);
+    let d = n.z();
+    let curves = intersect_plane_nurbs(&cylinder, n, d, 64).unwrap();
+    assert_eq!(curves.len(), 1);
+    let far = farthest(&curves, |p| {
+        let plane = (n.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs() / n.length();
+        plane.max((p.x().hypot(p.y()) - 1.0).abs())
+    });
+    assert!(far < 1e-6, "section strays {far:.2e}");
+}
+
+/// Crossing cylinders of radii 1 and 0.6 meet in two loops; between their
+/// marched points the fitted curves stay on both cylinders.
+#[test]
+fn a_marched_section_holds_its_tolerance_between_points() {
+    let cyl_z = cylinder_at(0.0, 0.0, 1.0, -2.0, 2.0);
+    let cyl_x = cylinder_along_x(0.0, 0.0, 0.6, -2.0, 2.0);
+    let curves = intersect_nurbs_nurbs(&cyl_z, &cyl_x, 20, 0.0).unwrap();
+    assert_eq!(curves.len(), 2);
+    let far = farthest(&curves, |p| {
+        (p.x().hypot(p.y()) - 1.0)
+            .abs()
+            .max((p.y().hypot(p.z()) - 0.6).abs())
+    });
+    assert!(far < 5e-6, "section strays {far:.2e}");
+}
