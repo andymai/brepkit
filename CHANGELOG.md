@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.4.0](https://github.com/andymai/brepkit/compare/v4.3.18...v4.4.0) (2026-10-28)
+
+
+### Features
+
+* **math:** return exact rulings, touch points and small circles from planes ([#2125](https://github.com/andymai/brepkit/issues/2125)) ([310e149](https://github.com/andymai/brepkit/commit/310e14925cf9629b269862042e5f6fb9c19f38b2))
+
 ## [4.3.18](https://github.com/andymai/brepkit/compare/v4.3.17...v4.3.18) (2026-10-28)
 
 
