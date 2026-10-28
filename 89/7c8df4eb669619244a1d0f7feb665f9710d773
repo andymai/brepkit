@@ -1,0 +1,24 @@
+crates/operations/src/primitives/tests.rs
+  s_a2dc21dbec3f2b::t_3fe0023ead400c 432-469
+crates/operations/src/primitives.rs
+  s_a2dc21dbec3f2b::t_f462196c6b67d0 715-716,740-754,757-809,845-846,851-855,860,863-864,873
+  s_a2dc21dbec3f2b::t_0d670c0adc633e 861-862
+  s_a2dc21dbec3f2b::t_a7c55e16d3ea32 725-731
+  s_a2dc21dbec3f2b::t_8a7d1de9b2690f 810-844
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "897c8df4eb669619244a1d0f7feb665f9710d773",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
