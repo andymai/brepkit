@@ -2416,19 +2416,20 @@ fn split_torus_by_tube_loops(
     if loops.len() < 2 {
         return None;
     }
-    // Order the loops around the ring along one latitude.
-    let v_ref = loops[0].walk[0].0;
-    let mut order: Vec<(f64, usize)> = loops
-        .iter()
-        .enumerate()
-        .map(|(i, l)| (l.u_at(v_ref).rem_euclid(TAU), i))
-        .collect();
-    order.sort_by(|a, b| a.0.total_cmp(&b.0));
-    if order.windows(2).any(|w| w[1].0 - w[0].0 < 1e-9)
-        || order[0].0 + TAU - order[order.len() - 1].0 < 1e-9
-    {
-        return None;
-    }
+    // Order the loops around the ring along one latitude, clear of any
+    // vertex two loops share.
+    let order = (0..8_u32).find_map(|j| {
+        let v_ref = loops[0].walk[0].0 + TAU * f64::from(j) / 8.0;
+        let mut order: Vec<(f64, usize)> = loops
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (l.u_at(v_ref).rem_euclid(TAU), i))
+            .collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (!(order.windows(2).any(|w| w[1].0 - w[0].0 < 1e-9)
+            || order[0].0 + TAU - order[order.len() - 1].0 < 1e-9))
+            .then_some(order)
+    })?;
     let loops: Vec<&TubeLoop> = order.iter().map(|&(_, i)| &loops[i]).collect();
     // The width of the sector past loop `i` at `v`.
     let width = |i: usize, v: f64| {
@@ -2507,6 +2508,38 @@ fn split_torus_by_tube_loops(
     let mut sectors = Vec::with_capacity(n);
     for i in 0..n {
         let (first, next) = (loops[i], loops[(i + 1) % n]);
+        // Loops that touch at a vertex (a plane tangent to the tube's inner
+        // side cuts two loops crossing at a node) close the sector between
+        // them where it narrows to that vertex: its inside is a disc already,
+        // and a seam would cut it in two.
+        let pinch = first.vertices().find_map(|(ka, a)| {
+            next.vertices()
+                .find(|&(_, b)| (b - a).length() < close_tol)
+                .map(|(kb, _)| (ka, kb, torus.project_point(a).1))
+        });
+        if let Some((ka, kb, v_node)) = pinch
+            && [v_node - 1e-3, v_node + 1e-3]
+                .iter()
+                .all(|&v| width(i, v) < PI)
+        {
+            if !held[i].is_empty() {
+                return None;
+            }
+            let mut wire = next.run_from(kb, true);
+            wire.extend(first.run_from(ka, false));
+            let v_far = v_node + PI;
+            let interior = torus.evaluate(first.u_at(v_far) + 0.5 * width(i, v_far), v_far);
+            sectors.push(SplitSubFace {
+                surface: surface.clone(),
+                outer_wire: wire,
+                inner_wires: Vec::new(),
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior: Some(interior),
+            });
+            continue;
+        }
         // The vertex pair nearest in tube angle whose straight seam stays
         // inside the sector and clear of its lobes; where a lobe lies on the
         // short way round, the seam can wind once around the tube instead.
@@ -5529,6 +5562,10 @@ pub(super) fn chain_boundary_edges(
 }
 
 /// Split a plane face with crossing section edges into 4 quadrant sub-faces.
+///
+/// The quadrants are bounded by straight edges from the crossing to the
+/// sections' ends, so curved sections (the two lobes of a torus section
+/// crossing at a node) are left to the general arrangement.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn try_split_crossing_plane_face(
     surface: &FaceSurface,
@@ -5540,6 +5577,12 @@ pub(super) fn try_split_crossing_plane_face(
     frame: &PlaneFrame,
     tol: &brepkit_math::tolerance::Tolerance,
 ) -> Option<Vec<SplitSubFace>> {
+    if !sections
+        .iter()
+        .all(|s| super::edge_curve_is_straight(&s.curve_3d))
+    {
+        return None;
+    }
     let cross_3d;
     let section_endpoints: Vec<Point3>;
 
