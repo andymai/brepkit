@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.3.9](https://github.com/andymai/brepkit/compare/v4.3.8...v4.3.9) (2026-10-28)
+
+
+### Performance
+
+* **algo:** find a section loop's enclosing loops through a box index ([#2101](https://github.com/andymai/brepkit/issues/2101)) ([6526fa6](https://github.com/andymai/brepkit/commit/6526fa671f73e98f8703ca88d6d49b70b41f528b))
+* **algo:** find the pave vertex holding a point through a spatial index ([#2104](https://github.com/andymai/brepkit/issues/2104)) ([4512542](https://github.com/andymai/brepkit/commit/4512542c432f5c218b0e500e26d869d310b37d33))
+* **algo:** index the boolean classifier's ray cast by face ([#2099](https://github.com/andymai/brepkit/issues/2099)) ([ccbf66b](https://github.com/andymai/brepkit/commit/ccbf66b274d3c30d5a7ffeadb3af0a513b0e030c))
+* **algo:** leave closed rims out of the collinear section dedup ([#2105](https://github.com/andymai/brepkit/issues/2105)) ([6cb7cdf](https://github.com/andymai/brepkit/commit/6cb7cdf29377fc88d25ae7f23b3a0967f21ed8df))
+
 ## [4.3.8](https://github.com/andymai/brepkit/compare/v4.3.7...v4.3.8) (2026-10-27)
 
 
