@@ -163,9 +163,11 @@ fn aabb_include(aabb: &mut Aabb3, p: Point3) {
 /// Expand an AABB for a face, accounting for surface curvature.
 ///
 /// Uses different strategies based on surface type:
-/// - **Sphere**: analytic full-surface expansion
-/// - **Torus**: analytic expansion only for the doubly-periodic seam topology;
-///   trimmed patches use their sampled wire bounds
+/// - **Sphere**: the sphere's farthest point along each axis, when the face
+///   holds it
+/// - **Torus**: analytic expansion for the doubly-periodic seam topology; a
+///   trimmed patch takes the torus's farthest points along each axis that it
+///   holds
 /// - **Cylinder/Cone**: wire-bounded expansion (sample edge midpoints
 ///   to avoid over-expanding for partial arcs like fillets)
 /// - **NURBS**: sparse interior grid sampling
@@ -189,18 +191,22 @@ fn expand_aabb_for_face(
     match surface {
         FaceSurface::Plane { .. } => {}
 
-        // Spheres are represented as full or near-full surfaces. A torus can
-        // also represent a trimmed fillet patch, where expanding to the full
-        // analytic torus shifts the public solid bounds by the minor radius.
-        // The placed half-extent along world axis k is the support of the
-        // source surface in direction d = row k of the linear part: r·|d| for
-        // a sphere, R·|d ⊥ axis| + r·|d| for a torus.
+        // A face's extreme along a world axis lies on its boundary, whose
+        // edges count exactly above, or at the surface's farthest point that
+        // way when the face holds it. That direction in the source frame is
+        // row k of the linear part. A sphere has one farthest point each way.
         FaceSurface::Sphere(s) => {
-            let c = placement.point(s.center());
-            let r = s.radius();
-            let h = [0, 1, 2].map(|k| r * placement.row(k).length());
-            aabb_include(aabb, Point3::new(c.x() - h[0], c.y() - h[1], c.z() - h[2]));
-            aabb_include(aabb, Point3::new(c.x() + h[0], c.y() + h[1], c.z() + h[2]));
+            for k in 0..3 {
+                let Ok(d) = placement.row(k).normalize() else {
+                    continue;
+                };
+                for d in [d, -d] {
+                    let p = s.center() + d * s.radius();
+                    if face_holds(topo, face_id, p) {
+                        aabb_include(aabb, placement.point(p));
+                    }
+                }
+            }
         }
         FaceSurface::Torus(t) => {
             if torus_face_is_full_periodic(topo, face_id) {
@@ -216,6 +222,32 @@ fn expand_aabb_for_face(
                 });
                 aabb_include(aabb, Point3::new(c.x() - h[0], c.y() - h[1], c.z() - h[2]));
                 aabb_include(aabb, Point3::new(c.x() + h[0], c.y() + h[1], c.z() + h[2]));
+            } else {
+                // A torus's farthest point along d is the tube's farthest
+                // point on the ring circle farthest along d's part across the
+                // axis; along the axis itself it is a whole circle.
+                let axis = t.z_axis();
+                for k in 0..3 {
+                    let Ok(d) = placement.row(k).normalize() else {
+                        continue;
+                    };
+                    for d in [d, -d] {
+                        let across = d - axis * d.dot(axis);
+                        let tube = t.center() + d * t.minor_radius();
+                        if let Ok(e) = across.normalize() {
+                            let p = tube + e * t.major_radius();
+                            if face_holds(topo, face_id, p) {
+                                aabb_include(aabb, placement.point(p));
+                            }
+                        } else if let Some(p) = (0..360).map(f64::from).find_map(|deg| {
+                            let (sin, cos) = deg.to_radians().sin_cos();
+                            let p = tube + (t.x_axis() * cos + t.y_axis() * sin) * t.major_radius();
+                            face_holds(topo, face_id, p).then_some(p)
+                        }) {
+                            aabb_include(aabb, placement.point(p));
+                        }
+                    }
+                }
             }
         }
 
@@ -239,6 +271,13 @@ fn expand_aabb_for_face(
             }
         }
     }
+}
+
+/// Whether a face holds a point of its surface, read as the ray-cast
+/// classifier reads a hit; a point it cannot read counts, so the box can
+/// only grow.
+fn face_holds(topo: &Topology, face_id: FaceId, p: Point3) -> bool {
+    brepkit_check::classify::face_contains(topo, face_id, p).unwrap_or(true)
 }
 
 /// Return whether a torus face is the minimal doubly-periodic whole-torus

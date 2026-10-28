@@ -16,6 +16,8 @@ use brepkit_topology::solid::SolidId;
 use crate::CheckError;
 use crate::distance::analytic;
 
+pub use boundary::face_contains;
+
 /// Result of classifying a point relative to a solid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointClassification {
