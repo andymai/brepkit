@@ -1,0 +1,32 @@
+crates/operations/src/boolean/mod.rs
+  s_a2dc21dbec3f2b::t_9f2fdafc28c818 720-721
+  s_a2dc21dbec3f2b::t_78f4f98014a68e 713-719,3742-3752
+  s_a2dc21dbec3f2b::t_44131efb12c335 710,722
+  s_a2dc21dbec3f2b::t_88c0233a99109f 3753-3757
+crates/operations/src/validate.rs
+  s_a2dc21dbec3f2b::t_78f4f98014a68e 318
+crates/operations/tests/tangent_hole_breakthrough.rs
+  s_a2dc21dbec3f2b::t_9f2fdafc28c818 86-90,95-98,101-104,133-136
+  s_a2dc21dbec3f2b::t_9ce653f8169831 1-12,14-85,91-94,99-100,105,109-114,118-132,137-155
+  s_a2dc21dbec3f2b::t_798b9d7f2da152 13,106-108,115-117
+crates/operations/src/boolean/tests.rs
+  s_a2dc21dbec3f2b::t_9f2fdafc28c818 7761-7770
+  s_a2dc21dbec3f2b::t_7505c8e9e1db2f 7737,7740-7742,7744,7746,7750,7756-7759,7771
+  s_a2dc21dbec3f2b::t_704caf073e459f 7738-7739,7743,7745,7747-7749,7751-7755,7760,7772-7773
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa5ed6875a8e47293dcc5dbeaaf36852901b6b7f",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
