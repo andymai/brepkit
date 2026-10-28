@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.11](https://github.com/andymai/brepkit/compare/v4.3.10...v4.3.11) (2026-10-28)
+
+
+### Bug Fixes
+
+* **algo:** unwrap a torus face's loops round its tube as well as its axis ([#2107](https://github.com/andymai/brepkit/issues/2107)) ([4b835a1](https://github.com/andymai/brepkit/commit/4b835a1dcc214c44cf0d58f90d952ad7347889d6))
+
 ## [4.3.10](https://github.com/andymai/brepkit/compare/v4.3.9...v4.3.10) (2026-10-28)
 
 
