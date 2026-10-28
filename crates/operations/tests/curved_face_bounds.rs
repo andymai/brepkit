@@ -9,7 +9,7 @@ use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::measure::solid_bounding_box;
+use brepkit_operations::measure::{solid_bounding_box, solid_bounding_box_transformed};
 use brepkit_operations::primitives::{make_box, make_sphere, make_torus};
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::transform::transform_solid;
@@ -24,6 +24,10 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 /// `slack` (a NURBS edge is bounded by its Bezier control points).
 fn assert_box(topo: &Topology, solid: SolidId, want: [[f64; 3]; 2], slack: f64, label: &str) {
     let bb = solid_bounding_box(topo, solid).unwrap();
+    assert_holds(&bb, want, slack, label);
+}
+
+fn assert_holds(bb: &brepkit_math::aabb::Aabb3, want: [[f64; 3]; 2], slack: f64, label: &str) {
     let min = [bb.min.x(), bb.min.y(), bb.min.z()];
     let max = [bb.max.x(), bb.max.y(), bb.max.z()];
     for k in 0..3 {
@@ -89,5 +93,28 @@ fn a_torus_piece_is_boxed_to_its_tube() {
         [[-4.0, -4.0, -1.0], [4.0, 4.0, 1.0]],
         1e-9,
         "torus",
+    );
+}
+
+/// The torus piece past x = 2.5 turned about an oblique axis, boxed in the
+/// frame that turns it back: that frame's z direction runs along the turned
+/// torus's axis but for rounding, where the tube's farthest points are a
+/// whole circle.
+#[test]
+fn a_turned_torus_piece_is_boxed_in_the_frame_turning_it_back() {
+    let mut topo = Topology::default();
+    let torus = make_torus(&mut topo, 3.0, 1.0, 32).unwrap();
+    let block = make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+    transform_solid(&mut topo, block, &Mat4::translation(2.5, -1.0, -2.0)).unwrap();
+    let piece = boolean(&mut topo, BooleanOp::Intersect, torus, block).unwrap();
+    let turn = Mat4::rotation_x(0.7) * Mat4::rotation_y(0.4);
+    transform_solid(&mut topo, piece, &turn).unwrap();
+    let back = Mat4::rotation_y(-0.4) * Mat4::rotation_x(-0.7);
+    let bb = solid_bounding_box_transformed(&topo, piece, &back).unwrap();
+    assert_holds(
+        &bb,
+        [[2.5, -1.0, -1.0], [4.0, 1.0, 1.0]],
+        1e-4,
+        "turned piece",
     );
 }

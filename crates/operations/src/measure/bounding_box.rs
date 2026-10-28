@@ -196,17 +196,13 @@ fn expand_aabb_for_face(
         // way when the face holds it. That direction in the source frame is
         // row k of the linear part. A sphere has one farthest point each way.
         FaceSurface::Sphere(s) => {
+            let mut candidates = Vec::new();
             for k in 0..3 {
-                let Ok(d) = placement.row(k).normalize() else {
-                    continue;
-                };
-                for d in [d, -d] {
-                    let p = s.center() + d * s.radius();
-                    if face_holds(topo, face_id, p) {
-                        aabb_include(aabb, placement.point(p));
-                    }
+                if let Ok(d) = placement.row(k).normalize() {
+                    candidates.extend([s.center() + d * s.radius(), s.center() - d * s.radius()]);
                 }
             }
+            include_held(topo, aabb, face_id, &candidates, placement);
         }
         FaceSurface::Torus(t) => {
             if torus_face_is_full_periodic(topo, face_id) {
@@ -223,31 +219,11 @@ fn expand_aabb_for_face(
                 aabb_include(aabb, Point3::new(c.x() - h[0], c.y() - h[1], c.z() - h[2]));
                 aabb_include(aabb, Point3::new(c.x() + h[0], c.y() + h[1], c.z() + h[2]));
             } else {
-                // A torus's farthest point along d is the tube's farthest
-                // point on the ring circle farthest along d's part across the
-                // axis; along the axis itself it is a whole circle.
-                let axis = t.z_axis();
-                for k in 0..3 {
-                    let Ok(d) = placement.row(k).normalize() else {
-                        continue;
-                    };
-                    for d in [d, -d] {
-                        let across = d - axis * d.dot(axis);
-                        let tube = t.center() + d * t.minor_radius();
-                        if let Ok(e) = across.normalize() {
-                            let p = tube + e * t.major_radius();
-                            if face_holds(topo, face_id, p) {
-                                aabb_include(aabb, placement.point(p));
-                            }
-                        } else if let Some(p) = (0..360).map(f64::from).find_map(|deg| {
-                            let (sin, cos) = deg.to_radians().sin_cos();
-                            let p = tube + (t.x_axis() * cos + t.y_axis() * sin) * t.major_radius();
-                            face_holds(topo, face_id, p).then_some(p)
-                        }) {
-                            aabb_include(aabb, placement.point(p));
-                        }
-                    }
-                }
+                let candidates: Vec<Point3> = (0..3)
+                    .filter_map(|k| placement.row(k).normalize().ok())
+                    .flat_map(|d| torus_extremes(t, d))
+                    .collect();
+                include_held(topo, aabb, face_id, &candidates, placement);
             }
         }
 
@@ -273,11 +249,129 @@ fn expand_aabb_for_face(
     }
 }
 
-/// Whether a face holds a point of its surface, read as the ray-cast
-/// classifier reads a hit; a point it cannot read counts, so the box can
-/// only grow.
-fn face_holds(topo: &Topology, face_id: FaceId, p: Point3) -> bool {
-    brepkit_check::classify::face_contains(topo, face_id, p).unwrap_or(true)
+/// A torus's farthest points along `d` and against it. Along `d` it is the
+/// tube's farthest point on the ring circle farthest along `d`'s part across
+/// the axis; along the axis itself it is a whole circle, here sampled at whole
+/// degrees. Each point is built on the torus from `d`'s parts along and
+/// across the axis, which rounding leaves a little off square when `d` runs
+/// nearly along it.
+fn torus_extremes(t: &brepkit_math::surfaces::ToroidalSurface, d: Vec3) -> Vec<Point3> {
+    let axis = t.z_axis();
+    let (big, small) = (t.major_radius(), t.minor_radius());
+    let up = d.dot(axis);
+    let flat = d - axis * up;
+    let flat = flat - axis * flat.dot(axis);
+    if flat.length() > 1e-9
+        && let Ok(e) = flat.normalize()
+    {
+        let out = d.dot(e);
+        let tube = (e * out + axis * up) * (small / out.hypot(up));
+        return [1.0, -1.0]
+            .into_iter()
+            .map(|s| t.center() + (e * big + tube) * s)
+            .collect();
+    }
+    [1.0, -1.0]
+        .into_iter()
+        .flat_map(|s| {
+            let rise = axis * (s * up.signum() * small);
+            (0..360).map(move |deg| {
+                let (sin, cos) = f64::from(deg).to_radians().sin_cos();
+                t.center() + rise + (t.x_axis() * cos + t.y_axis() * sin) * big
+            })
+        })
+        .collect()
+}
+
+/// Puts in the box each of `candidates`, points of the face's surface, that
+/// the face holds or that lies within reach of its boundary. The classifier
+/// reads a curved edge as chords, so a point the face holds between an edge
+/// and its chord can read outside; one it leaves out would cut the box
+/// short, while one barely off the face passes the face's own extent only
+/// by about its reach squared over the surface's radius. A face the
+/// classifier cannot read holds every candidate.
+fn include_held(
+    topo: &Topology,
+    aabb: &mut Aabb3,
+    face_id: FaceId,
+    candidates: &[Point3],
+    placement: Placement<'_>,
+) {
+    let held = brepkit_check::classify::face_contains_each(topo, face_id, candidates)
+        .unwrap_or_else(|_| vec![true; candidates.len()]);
+    let mut rim: Option<Rim> = None;
+    for (&p, held) in candidates.iter().zip(held) {
+        if held || rim.get_or_insert_with(|| Rim::of(topo, face_id)).reaches(p) {
+            aabb_include(aabb, placement.point(p));
+        }
+    }
+}
+
+/// Steps along each boundary edge of a face: twice the classifier's.
+const RIM_STEPS: u32 = 64;
+
+/// A face's boundary edges as fine polylines, and how far the classifier's
+/// chords of them, each two of these steps long, can stray from them: twice
+/// the farthest a step's end lies from the middle of its two neighbours.
+struct Rim {
+    segments: Vec<(Point3, Point3)>,
+    reach: f64,
+}
+
+impl Rim {
+    fn of(topo: &Topology, face_id: FaceId) -> Self {
+        let mut segments = Vec::new();
+        let mut sag = 0.0_f64;
+        if let Ok(face) = topo.face(face_id) {
+            for wire_id in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let Ok(wire) = topo.wire(wire_id) else {
+                    continue;
+                };
+                for oe in wire.edges() {
+                    let Ok(edge) = topo.edge(oe.edge()) else {
+                        continue;
+                    };
+                    let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                    else {
+                        continue;
+                    };
+                    let (a, b) = (sv.point(), ev.point());
+                    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                    let pts: Vec<Point3> = (0..=RIM_STEPS)
+                        .map(|k| {
+                            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(RIM_STEPS), t0);
+                            edge.curve().evaluate_with_endpoints(t, a, b)
+                        })
+                        .collect();
+                    for w in pts.windows(3).step_by(2) {
+                        let middle = w[0] + (w[2] - w[0]) * 0.5;
+                        sag = sag.max((w[1] - middle).length());
+                    }
+                    segments.extend(pts.windows(2).map(|w| (w[0], w[1])));
+                }
+            }
+        }
+        Self {
+            segments,
+            reach: 2.0 * sag,
+        }
+    }
+
+    fn reaches(&self, p: Point3) -> bool {
+        self.reach > 0.0
+            && self.segments.iter().any(|&(a, b)| {
+                let ab = b - a;
+                let len_sq = ab.dot(ab);
+                let s = if len_sq > 0.0 {
+                    ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (p - (a + ab * s)).length() <= self.reach
+            })
+    }
 }
 
 /// Return whether a torus face is the minimal doubly-periodic whole-torus
@@ -895,5 +989,55 @@ mod tests {
             max: Point3::new(13.0, h, h),
         };
         assert_boxes_match(got, want, 1e-9, "tilted torus");
+    }
+
+    /// Each of a torus's farthest points lies on it, also for a direction a
+    /// hair off its oblique axis, where the part across the axis is mostly
+    /// rounding.
+    #[test]
+    fn torus_extremes_lie_on_the_torus() {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let t = brepkit_math::surfaces::ToroidalSurface::with_axis(
+            Point3::new(0.5, -1.0, 2.0),
+            3.0,
+            1.0,
+            axis,
+        )
+        .unwrap();
+        let side = axis.cross(Vec3::new(1.0, 0.0, 0.0)).normalize().unwrap();
+        for tilt in [0.0, 1e-15, 1e-12, 1e-6, 0.3] {
+            let d = (axis + side * tilt).normalize().unwrap();
+            for p in torus_extremes(&t, d) {
+                let q = p - t.center();
+                let h = q.dot(t.z_axis());
+                let ring = (q - t.z_axis() * h).length();
+                let off = ((ring - 3.0).hypot(h) - 1.0).abs();
+                assert!(off < 1e-12, "tilt {tilt}: {off:e} off the torus");
+            }
+        }
+    }
+
+    /// A point of the torus a hair past a curved section edge of its face
+    /// reads outside the face, but lies within the reach of the classifier's
+    /// chords of that edge, so it enters the box.
+    #[test]
+    fn a_candidate_beside_a_curved_trim_counts() {
+        let mut topo = Topology::default();
+        let torus = crate::primitives::make_torus(&mut topo, 3.0, 1.0, 32).unwrap();
+        let block = make_box(&mut topo, 2.0, 2.0, 4.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(2.5, -1.0, -2.0)).unwrap();
+        let piece = boolean::boolean(&mut topo, BooleanOp::Intersect, torus, block).unwrap();
+        let face = brepkit_topology::explorer::solid_faces(&topo, piece)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
+            .unwrap();
+        let x = 2.5 - 1e-6;
+        let p = Point3::new(x, 0.0, (1.0 - (3.0 - x) * (3.0 - x)).sqrt());
+        assert!(!brepkit_check::classify::face_contains(&topo, face, p).unwrap());
+        let inside = Point3::new(3.5, 0.0, 0.0);
+        let mut aabb = Aabb3::try_from_points([inside]).unwrap();
+        include_held(&topo, &mut aabb, face, &[p], Placement(None));
+        assert!(aabb.min.x() <= x, "box from x = {}", aabb.min.x());
     }
 }
