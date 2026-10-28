@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793192664736,
+  "lastUpdate": 1793200726816,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -58319,6 +58319,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19791207,
             "range": "± 24748",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3b15420d4a2712959060fb2ac1987cd6846e0067",
+          "message": "fix(algo): section a torus through the node where a box face touches its tube's inner side (#2115)\n\nA box face that touches a torus's tube on its inner side sends the\nboolean to a mesh today. The torus of radii 3 and 1 with a box spanning\nx from 2 to 4.5, y from -1 to 1 and z from -2 to 2 intersects to 100\nplanar faces 1.9% short of the true volume, cuts to 660 faces that fail\nvalidation, and fuses to 663 faces 1.6% short. Its face x = 2 = R - r\ntouches the tube at (2, 0, 0), a saddle, and meets the torus in a\nfigure-eight that crosses itself there. A face at x = 2.0001, just past\nthat, falls back for all three as well. With this change the intersect\ncomes out as one torus face and 4 planes, the fuse as one torus face and\n7 planes, and both match the volume integrated in closed form; at x =\n2.0001 all three do.\n\n## Cause\n\n`plane_torus_loops` scans the tube angle offset by half a step so it\nnever lands on a node, and left a section whose branches touch open.\nEach lobe of the figure-eight came out as an open run, its gap on the\ntube's outer side, passing 0.035 from the node, and the boolean fell\nback. Its test for touching branches was one-sided, so at x = 2.0001 a\ngap in the section 0.028 wide in tube angle, between two samples inside\nit, read as touching too.\n\nTwo splitter steps then mishandled sections meeting at a node:\n\n- `try_split_crossing_plane_face` bounds the four quadrants of a plane\nface around a crossing with straight edges from the crossing to the\nsections' ends. The lobes came out as triangles, and the intersect was\n6.3094 against 6.3011.\n- `split_torus_by_tube_loops` closes the sector between two loops around\nthe tube with a seam joining them. The band between the two lobes\nnarrows to the node, so its inside is a disc already, and the seam cut\nit in two, leaving V - E + F one short.\n\n## Change\n\n- Where the branches touch, each lobe starts and ends exactly on the\nnode, both lobes taking the same point. A run of the tube angle that\nholds a node comes out as its two loops through it.\n- The peak of a gap hidden between two samples joins the scan as a\nsample outside, so the section turns either side of it, and a node needs\n|rhs| to reach 1 without passing it.\n- `try_split_crossing_plane_face` takes only straight sections, leaving\ncurved ones to the general arrangement.\n- A torus sector between two loops that share a vertex, where it narrows\nto that vertex, closes up one loop and down the other with no seam. The\nsector that widens there keeps its seam.\n\nThe cut still falls back. Its result from the boolean has the right\nvolume, 52.916546 against 52.9165459, but the ring's two cut ends touch\nat the node, and `validate_solid` reports a surface touching itself at a\nvertex as an Euler error, as it does for two boxes sharing a corner.\n\n## Tests\n\n- `a_box_face_on_the_inner_equator_cuts_exactly`: boxes from x = 2 to\n4.5, to 4 where the far face touches the outer equator too, and from x =\n2.0001 to 4.5. Intersect and fuse, and the cut from 2.0001, keep a torus\nface, validate, and match within 1e-6 the torus's volume past the face\nand within |y| <= 1, integrated in closed form. Undoing any one of the\nnode, quadrant or seam changes fails it.\n- `plane_torus_inner_tangent_figure_eight_is_two_loops_through_its_node`\nreplaces the test that pinned the open lobes: two loops, each on the\nplane and the torus, starting and ending on the node, either side of y =\n0.\n- `a_wall_just_off_the_inner_tangent_cuts_no_node`: at x = 2.0001 one\nloop with its turns at z = ±0.01414, at x = 1.9999 two loops round the\ntube, every point on the wall. Leaving the hidden gap out of the scan\ngives two loops at 2.0001.\n-\n`a_tilted_plane_tangent_inside_the_tube_cuts_two_loops_through_its_node`:\nplanes tangent at tube angles 1.7, 2.0, 2.5 and 4.0 each cut two loops\nthrough the node. At 1.7 the section is a run of the tube angle, and\nignoring the node there gives one loop.\n- `cargo test -p brepkit-operations -p brepkit-io` passes 1912 with 15\nignored; the `--lib` tests of `brepkit-math`, `brepkit-algo` and\n`brepkit-operations` pass 557, 316, and 938 with 8 ignored; and the 12\ntorus and ring test files (`torus_plane_cut`, `coaxial_torus`,\n`torus_coaxial_tools`, `boolean_determinism` and the rest) pass 57 with\n1 ignored.\n- The pose sweep and truth audit outputs are identical to `main`'s, and\n`cargo clippy --all-targets --all-features -- -D warnings` is clean.",
+          "timestamp": "2026-10-28T15:15:33Z",
+          "tree_id": "cf5e7d818a2fa3f59b3dee99cb46b571d6546fb7",
+          "url": "https://github.com/andymai/brepkit/commit/3b15420d4a2712959060fb2ac1987cd6846e0067"
+        },
+        "date": 1793200721364,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1102590,
+            "range": "± 2831",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1181548,
+            "range": "± 4383",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13320,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673328,
+            "range": "± 3842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28850868,
+            "range": "± 104078",
             "unit": "ns/iter"
           }
         ]
