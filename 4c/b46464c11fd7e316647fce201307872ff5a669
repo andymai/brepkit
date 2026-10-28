@@ -1,0 +1,30 @@
+crates/operations/tests/ball_through_a_cylinder_wall.rs
+  s_a2dc21dbec3f2b::t_853d3209c9080b 22,197-209,233-243,245-252
+  s_a2dc21dbec3f2b::t_ac50e8a21600ee 210-232,244,253
+  s_a2dc21dbec3f2b::t_8a27e3baf41fc2 254-255
+crates/check/src/classify/boundary.rs
+  s_a2dc21dbec3f2b::t_4c127e804839b4 709,712,715
+  s_a2dc21dbec3f2b::t_d6c6e433a5745b 513-517,523,570,580-583,586-588,611,689-708,714,716-719,721-725,1200-1257
+  s_a2dc21dbec3f2b::t_216c49e2fe418d 710-711,713,720,1258
+  s_a2dc21dbec3f2b::t_940d81fb678fa9 844-847,850-852,854-856,875-880
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_a2dc21dbec3f2b::t_d4665dd40c2830 534-540,574-580,1160-1166,1169-1184,1190,1236,1247-1251
+crates/operations/tests/offset_sphere_booleans.rs
+  s_a2dc21dbec3f2b::t_70f9454f44997c 25-31,77-78,81-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4cb46464c11fd7e316647fce201307872ff5a669",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
