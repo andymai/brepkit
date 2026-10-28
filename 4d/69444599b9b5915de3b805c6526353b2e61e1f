@@ -1,0 +1,25 @@
+crates/operations/tests/offset_sphere_booleans.rs
+  s_a2dc21dbec3f2b::t_0352cc1d7fcf64 1-75
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_e6f193c772c10a 5904-5922
+crates/math/src/analytic_intersection.rs
+  s_a2dc21dbec3f2b::t_f4396b86f6e822 5430-5432
+  s_a2dc21dbec3f2b::t_e6f193c772c10a 249-274
+  s_a2dc21dbec3f2b::t_dccd1ab108f59a 5418-5429,5433-5462
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4d69444599b9b5915de3b805c6526353b2e61e1f",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
