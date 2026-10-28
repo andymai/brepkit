@@ -518,6 +518,10 @@ pub fn face_contains(topo: &Topology, face_id: FaceId, p: Point3) -> Result<bool
 pub struct SphereRegion {
     outer: Vec<Point3>,
     normal: Vec3,
+    /// The outer loop's point lowest along `normal`. Along any direction a
+    /// sphere's height has no minimum but its bottom, so a face that does
+    /// not hold that point is no lower than its rim.
+    lowest: Point3,
     whole: bool,
     planar: bool,
     /// Set for a loop in no one plane whose edges are all lines and circles.
@@ -534,6 +538,15 @@ impl SphereRegion {
         // The wire runs about the sphere's outward normal on a reversed face
         // too, so its polygon normal points to the face's side of the loop.
         let normal = polygon_normal(&outer);
+        let lowest = outer
+            .iter()
+            .copied()
+            .min_by(|a, b| {
+                (*a - outer[0])
+                    .dot(normal)
+                    .total_cmp(&(*b - outer[0]).dot(normal))
+            })
+            .unwrap_or(outer[0]);
         let whole = wire_runs_out_and_back(topo, topo.face(face_id)?.outer_wire())?;
         // A loop in one plane bounds exactly the sphere's part on its side,
         // at any size; a polygon test would only add the chords' sagitta and
@@ -547,6 +560,7 @@ impl SphereRegion {
         Ok(Some(Self {
             outer,
             normal,
+            lowest,
             whole,
             planar,
             rims,
@@ -567,7 +581,7 @@ impl SphereRegion {
         // a tilted face is not a graph over an axis plane, and the part of it
         // past the axis's silhouette projects outside its own boundary.
         let in_outer = self.whole
-            || ((p - self.outer[0]).dot(self.normal) >= -HALF_SPACE_EPS
+            || ((p - self.lowest).dot(self.normal) >= -HALF_SPACE_EPS
                 && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
         Ok(in_outer && !hit_in_sphere_hole(topo, face_id, p, &self.outer, self.normal)?)
     }

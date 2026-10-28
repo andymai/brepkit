@@ -19,6 +19,7 @@ use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::wire::Wire;
 
 const WALL: f64 = 2.0;
 
@@ -190,6 +191,65 @@ fn a_ball_through_a_cylinder_wall_is_exact() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// A point reads the same whichever edge each of the ball's faces starts its
+/// wire at: the side of a face's rim a hit lies on is read from the whole
+/// rim, not from its first point.
+#[test]
+fn the_ball_reads_alike_from_wherever_its_wires_start() {
+    for (x, y, z, r) in [(1.0_f64, 0.8_f64, 1.2_f64, 1.1_f64), (1.28, 0.0, 1.2, 1.1)] {
+        let mut topo = Topology::new();
+        let a = make_cylinder(&mut topo, WALL, 6.0).unwrap();
+        transform_solid(&mut topo, a, &Mat4::translation(0.0, 0.0, -3.0)).unwrap();
+        let b = make_sphere(&mut topo, r, 32).unwrap();
+        transform_solid(&mut topo, b, &Mat4::translation(x, y, z)).unwrap();
+        let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        // A grid over the ball, each point clear of both surfaces.
+        let centre = Point3::new(x, y, z);
+        let mut points = Vec::new();
+        for i in 0..7 {
+            for j in 0..7 {
+                for k in 0..7 {
+                    let step = |n: i32| (f64::from(n) / 3.0 - 1.0) * (r + 0.05);
+                    let p = centre + Vec3::new(step(i), step(j), step(k));
+                    let (to_ball, to_wall) = ((p - centre).length() - r, p.x().hypot(p.y()) - WALL);
+                    if to_ball.abs() > 0.02 && to_wall.abs() > 0.02 {
+                        let inside = to_ball < 0.0 || to_wall < 0.0;
+                        points.push((
+                            p,
+                            if inside {
+                                PointClassification::Inside
+                            } else {
+                                PointClassification::Outside
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        for f in solid_faces(&topo, fused).unwrap() {
+            if topo.face(f).unwrap().surface().type_tag() != "sphere" {
+                continue;
+            }
+            let start = topo.face(f).unwrap().outer_wire();
+            let edges = topo.wire(start).unwrap().edges().to_vec();
+            for k in 0..edges.len() {
+                let mut turned = edges.clone();
+                turned.rotate_left(k);
+                let wire = topo.add_wire(Wire::new(turned, true).unwrap());
+                topo.face_mut(f).unwrap().set_outer_wire(wire);
+                for &(p, want) in &points {
+                    let got = classify_point(&topo, fused, p, 0.01, 1e-7).unwrap();
+                    assert_eq!(
+                        got, want,
+                        "ball at ({x}, {y}, {z}), face {f:?} from edge {k}: {p:?}"
+                    );
+                }
+            }
+            topo.face_mut(f).unwrap().set_outer_wire(start);
         }
     }
 }
