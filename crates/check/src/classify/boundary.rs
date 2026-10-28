@@ -841,14 +841,19 @@ impl SphereRims {
                     let closed = span >= std::f64::consts::TAU - 1e-12;
                     for t in [phi + w, phi - w] {
                         let rel = (t - t0).rem_euclid(std::f64::consts::TAU);
-                        if !closed
+                        // A rim's end leaves the parity unread only on the
+                        // test arc: the great circle through it meets far
+                        // vertices too, as a small circle's pole.
+                        let at_end = !closed
                             && (rel < SPHERE_GRAZE
                                 || std::f64::consts::TAU - rel < SPHERE_GRAZE
-                                || (rel - span).abs() < SPHERE_GRAZE)
+                                || (rel - span).abs() < SPHERE_GRAZE);
+                        if (at_end || rel <= span)
+                            && on_path(center + (u * t.cos() + v * t.sin()) * radius)?
                         {
-                            return None;
-                        }
-                        if rel <= span && on_path(center + (u * t.cos() + v * t.sin()) * radius)? {
+                            if at_end {
+                                return None;
+                            }
                             count += 1;
                         }
                     }
@@ -867,12 +872,12 @@ impl SphereRims {
                             a.cross(x).dot(h) / (a.length() * self.radius),
                             x.cross(b).dot(h) / (b.length() * self.radius),
                         );
-                        if (s0.abs() < SPHERE_GRAZE && a.dot(x) > 0.0)
-                            || (s1.abs() < SPHERE_GRAZE && b.dot(x) > 0.0)
-                        {
-                            return None;
-                        }
-                        if s0 > 0.0 && s1 > 0.0 && on_path(x)? {
+                        let at_end = (s0.abs() < SPHERE_GRAZE && a.dot(x) > 0.0)
+                            || (s1.abs() < SPHERE_GRAZE && b.dot(x) > 0.0);
+                        if (at_end || (s0 > 0.0 && s1 > 0.0)) && on_path(x)? {
+                            if at_end {
+                                return None;
+                            }
                             count += 1;
                         }
                     }

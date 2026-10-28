@@ -22,7 +22,13 @@ fn lens(r1: f64, r2: f64, d: f64) -> f64 {
 }
 
 fn check(offset: [f64; 3], segments: usize) {
-    let (r1, r2) = (2.0, 1.5);
+    check_radii(1.5, offset, segments);
+}
+
+/// Booleans of a ball of radius 2 at the origin and one of radius `r2` moved
+/// by `offset`.
+fn check_radii(r2: f64, offset: [f64; 3], segments: usize) {
+    let r1 = 2.0;
     let d = offset.iter().map(|c| c * c).sum::<f64>().sqrt();
     let shared = lens(r1, r2, d);
     let ball = |r: f64| 4.0 * PI * r * r * r / 3.0;
@@ -68,8 +74,19 @@ fn offset_sphere_booleans_stay_spherical() {
     }
 }
 
+/// Offsets in the plane z = 0 put both equators in one plane, so the circle
+/// the spheres share meets both seams at the same two points.
 #[test]
-#[ignore = "both spheres' faceted equators lie in one plane; the booleans fall back to a mesh"]
 fn offset_spheres_sharing_an_equator_plane() {
-    check([1.2, 0.0, 0.0], 32);
+    for segments in [16, 32] {
+        check([1.2, 0.0, 0.0], segments);
+        check([0.0, 1.2, 0.0], segments);
+        check([-1.5, 0.7, 0.0], segments);
+        // The circle meets the larger sphere's seam on a vertex of its
+        // 16-sided equator, at 45 degrees.
+        check([2.0f64.sqrt() + 0.5, 0.0, 0.0], segments);
+        // Equal radii: the two seams' arcs between the crossings are both
+        // under half a turn.
+        check_radii(2.0, [1.2, 0.0, 0.0], segments);
+    }
 }
