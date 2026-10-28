@@ -229,9 +229,18 @@ fn piece_issues(
     }
     let mut issues = Vec::new();
     if shared > 0 {
-        issues.push(ValidationIssue {
-            severity: Severity::Warning,
-            description: format!("{shared} vertex uses join separate pieces at a point"),
+        // Pieces touching at a point stay a solid; touching along an edge,
+        // held as two edges on one curve, they do not.
+        issues.push(if edges_lie_on_each_other(topo, faces)? {
+            ValidationIssue {
+                severity: Severity::Error,
+                description: format!("{shared} vertex uses join separate pieces along an edge"),
+            }
+        } else {
+            ValidationIssue {
+                severity: Severity::Warning,
+                description: format!("{shared} vertex uses join separate pieces at a point"),
+            }
         });
     }
     let mut volume: HashMap<usize, f64> = HashMap::new();
@@ -347,6 +356,41 @@ pub fn validate_solid(
     solid: SolidId,
 ) -> Result<ValidationReport, crate::OperationsError> {
     validate_solid_with_options(topo, solid, &ValidationOptions::default())
+}
+
+/// Whether two distinct edges of `faces` run between the same vertices along
+/// the same curve, where the boundary touches itself along a line.
+fn edges_lie_on_each_other(
+    topo: &Topology,
+    faces: &[brepkit_topology::face::FaceId],
+) -> Result<bool, crate::OperationsError> {
+    use std::collections::HashMap;
+    let mut by_ends: HashMap<(usize, usize), Vec<brepkit_math::vec::Point3>> = HashMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                if !seen.insert(oe.edge().index()) {
+                    continue;
+                }
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (edge.start(), edge.end());
+                let (pa, pb) = (topo.vertex(a)?.point(), topo.vertex(b)?.point());
+                let (t0, t1) = edge.curve().domain_with_endpoints(pa, pb);
+                let mid = edge
+                    .curve()
+                    .evaluate_with_endpoints(0.5 * (t0 + t1), pa, pb);
+                let key = (a.index().min(b.index()), a.index().max(b.index()));
+                let mids = by_ends.entry(key).or_default();
+                if mids.iter().any(|&m| (m - mid).length() < TOUCH_TOL) {
+                    return Ok(true);
+                }
+                mids.push(mid);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// How many times past once the vertices of `faces` are met by separate
@@ -515,8 +559,12 @@ pub fn validate_solid_with_options(
     // A boundary that touches itself at a vertex (a ring cut where its two
     // ends meet at a point, two pieces sharing a corner) fits once that
     // vertex is counted once per sheet of faces meeting there, its face's
-    // wires counted apart.
+    // wires counted apart. One that touches itself along an edge, held as two
+    // edges on one curve between the same vertices, does not.
     let fits_by_sheets = || -> Result<bool, crate::OperationsError> {
+        if edges_lie_on_each_other(topo, &faces)? {
+            return Ok(false);
+        }
         let fans = extra_vertex_fans(topo, &faces)?;
         let wires: i64 = faces
             .iter()

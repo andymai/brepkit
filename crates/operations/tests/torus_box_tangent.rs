@@ -89,21 +89,18 @@ fn a_box_face_on_the_inner_equator_cuts_exactly() {
     // The face x = 2 = R - r touches the tube's inner side at (2, 0, 0), a
     // saddle, and meets the torus in a figure-eight crossing itself there;
     // the box to x = 4 touches the outer equator too. There the cut leaves
-    // the ring's two ends touching at the node and is not checked. A face
-    // at x = 2.0001 meets the torus in one loop turning either side of a
-    // gap 0.028 wide in tube angle.
+    // the ring's two ends touching at the node. A face at x = 2.0001 meets
+    // the torus in one loop turning either side of a gap 0.028 wide in tube
+    // angle.
     let torus = 2.0 * PI * PI * 3.0;
     for (x0, x1) in [(2.0, 4.0), (2.0, 4.5), (2.0001, 4.5)] {
         let shared = past_the_inner_face(x0);
         let block = (x1 - x0) * 2.0 * 4.0;
-        let mut ops = vec![
+        for (op, want) in [
             (BooleanOp::Intersect, shared),
+            (BooleanOp::Cut, torus - shared),
             (BooleanOp::Fuse, torus + block - shared),
-        ];
-        if x0 > 2.0 {
-            ops.push((BooleanOp::Cut, torus - shared));
-        }
-        for (op, want) in ops {
+        ] {
             let (kinds, got) = run(op, x0, x1);
             assert!(
                 kinds.contains(&"torus") && kinds.len() < 20,

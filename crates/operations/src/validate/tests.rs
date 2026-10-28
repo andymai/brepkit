@@ -569,6 +569,29 @@ fn pinched_and_nested_pieces_are_invalid() {
     assert!(!report.is_valid(), "a block inside a block reads valid");
 }
 
+/// Two balls touching at a point, each with its own vertex there, gathered
+/// into one shell: neither reads as inside the other. Rays from the point
+/// where they touch run into the other ball.
+#[test]
+fn balls_touching_at_a_point_are_not_nested() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+    let b = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(2.0, 0.0, 0.0)).unwrap();
+    let both = crate::compound_ops::merge_disjoint_solids(&mut topo, &[a, b]).unwrap();
+    let report = validate_solid(&topo, both).unwrap();
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("inside another")),
+        "{:?}",
+        report.issues
+    );
+}
+
 #[test]
 fn validate_detects_redundant_face() {
     let mut topo = Topology::new();

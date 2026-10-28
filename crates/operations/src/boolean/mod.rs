@@ -649,8 +649,32 @@ fn boolean_inner(
                         (false, None)
                     }
                 };
-                let needs_unify =
-                    !(euler_balanced_pre || multi_balanced_pre) || manifold_pre == Some(false);
+                // A boundary that touches itself at a vertex balances once
+                // that vertex counts once per sheet of faces meeting there (as
+                // the gate below reads it), and `unify_faces` would merge
+                // faces across the point where the sheets meet.
+                let (pinched_pre, manifold_pre) = if euler_balanced_pre || multi_balanced_pre {
+                    (false, manifold_pre)
+                } else {
+                    let manifold = match manifold_pre {
+                        Some(m) => m,
+                        None => is_closed_manifold(topo, result)?,
+                    };
+                    let balanced = manifold && {
+                        let faces = brepkit_topology::explorer::solid_faces(topo, result)?;
+                        let fans = crate::validate::extra_vertex_fans(topo, &faces)?;
+                        let pieces = crate::boolean::assembly::face_components(topo, result).len();
+                        fans > 0
+                            && euler_balanced(
+                                euler_pre2 - inner_shell_surplus + fans,
+                                inner_wire_count_pre,
+                                i64::try_from(pieces.max(1)).unwrap_or(i64::MAX),
+                            )
+                    };
+                    (balanced, Some(manifold))
+                };
+                let needs_unify = !(euler_balanced_pre || multi_balanced_pre || pinched_pre)
+                    || manifold_pre == Some(false);
                 let mut unified = false;
                 if needs_unify {
                     for _ in 0..3 {
