@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793151936239,
+  "lastUpdate": 1793153751771,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -57995,6 +57995,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27974878,
             "range": "± 158336",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4b835a1dcc214c44cf0d58f90d952ad7347889d6",
+          "message": "fix(algo): unwrap a torus face's loops round its tube as well as its axis (#2107)\n\nA box whose face touches a torus at one point on its outer equator falls\nback to a mesh today: the torus of radii 3 and 1 with a box spanning x\n2.5 to 4 gives 67 to 683 planar faces for intersect, cut and fuse. With\nthis change all three keep their torus face and match the box reaching\njust past the touch point.\n\n## Cause\n\nThe torus piece inside the box is sampled at the touch point (4, 0, 0),\nwhich lies on the box, so the builder takes other samples from the\npiece's loops in its (u, v). `FaceLoops2d` unwrapped those loops in u\nonly. A torus is periodic round its tube too, and this piece runs across\nthe tube's seam at the outer equator, so its loop jumped a whole turn in\nv. The other samples landed on the tube's inner side, read Outside, and\nthe piece was dropped from the intersect and misplaced in the cut and\nfuse.\n\n## Change\n\n`FaceLoops2d` unwraps a torus loop's v from point to point as it does u.\nHoles and `to_uv` are placed about the middle of the outer loop's\nunwrapped v span: a mean of its samples drifts off the middle when the\nedges are split unevenly, and a patch nearly a whole turn wide would\nthen wrap its own points out of itself. The on-boundary probe reads\nfaces through the same loops.\n\n## Tests\n\n- `a_box_touching_the_outer_equator_cuts_exactly`: intersect, cut and\nfuse with the touching box keep a torus face, validate, and match the\nbox spanning x 2.5 to 4.1 to 1e-6 (the fuse less that box's extra\nvolume). With `main`'s classifier the intersect gives 67 planar faces.\n- `a_wide_torus_patch_holds_its_points_at_both_ends`: a patch from v 0.1\nto 5.9 the long way round the tube, its v = 0.1 rim in two pieces, holds\nits points at v 0.2, 3.0 and 5.8 and none at v 6.1 or past its u span.\nPlacing v about the mean of the samples fails it.\n- `cargo test -p brepkit-algo --lib` passes 316 and `cargo test -p\nbrepkit-operations --lib` passes 937 with 8 ignored. `coaxial_torus`,\n`regress_twoedge_torus_incidence`, `torus_coaxial_tools`,\n`torus_face_mesh`, `torus_plane_cut`, `curved_properties`,\n`rod_through_plate_edge`, `boolean_determinism` and\n`ray_index_matches_full_scan` pass, as do the fillet fixtures\n`kumiko_strut_fuse_inmem`, `ring_bin_fillet_fuse_inmem`,\n`crush_rib_chamfer_fuse_inmem` and `cross_one_row_fillet_inmem`. The\npose sweep and truth audit outputs are identical to `main`'s, and `cargo\nclippy -p brepkit-algo --all-targets -- -D warnings` is clean.",
+          "timestamp": "2026-10-28T02:13:12Z",
+          "tree_id": "e934be5931791610480f7b98e23c14eac57c97db",
+          "url": "https://github.com/andymai/brepkit/commit/4b835a1dcc214c44cf0d58f90d952ad7347889d6"
+        },
+        "date": 1793153744188,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 883144,
+            "range": "± 978",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 950509,
+            "range": "± 10715",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11083,
+            "range": "± 86",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 539550,
+            "range": "± 9587",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23021651,
+            "range": "± 60311",
             "unit": "ns/iter"
           }
         ]
