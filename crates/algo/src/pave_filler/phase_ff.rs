@@ -5979,9 +5979,7 @@ fn compute_raw_curves(
                                     p_end,
                                 });
                             }
-                            analytic_intersection::ExactIntersectionCurve::Line { .. }
-                            | analytic_intersection::ExactIntersectionCurve::Point(_)
-                            | analytic_intersection::ExactIntersectionCurve::Points(_) => {}
+                            analytic_intersection::ExactIntersectionCurve::Points(_) => {}
                         }
                     }
                     Ok(results)
@@ -6345,10 +6343,12 @@ fn plane_analytic_intersection(
     let mut results = Vec::new();
     for exact in exact_curves {
         match exact {
-            // A plane within 1e-10 of a sphere's top only grazes it.
-            analytic_intersection::ExactIntersectionCurve::Circle(circle)
+            // A plane within 1e-10 of touching a sphere only grazes it.
+            analytic_intersection::ExactIntersectionCurve::Circle(_)
                 if matches!(analytic, analytic_intersection::AnalyticSurface::Sphere(sphere)
-                    if sphere.radius() - (circle.center() - sphere.center()).length() < 1e-10) => {}
+                    if sphere.radius()
+                        - (normal.dot(sphere.center() - Point3::new(0.0, 0.0, 0.0)) - d).abs()
+                        < 1e-10) => {}
             analytic_intersection::ExactIntersectionCurve::Circle(circle) => {
                 let bbox = circle_bbox(&circle);
                 let domain = (0.0, std::f64::consts::TAU);
@@ -6375,34 +6375,6 @@ fn plane_analytic_intersection(
                     p_end,
                 });
             }
-            analytic_intersection::ExactIntersectionCurve::Line { line, ray } => {
-                let (base, dir) = (line.origin(), line.direction());
-                let (t0, t1) = trim_t_range_to_aabb(base, dir, bbox_a, bbox_b);
-                let t_range = (if ray { t0.max(0.0) } else { t0 }, t1);
-                if t_range.1 - t_range.0 < 1e-9 {
-                    continue;
-                }
-                let (p_start, p_end) = (base + dir * t_range.0, base + dir * t_range.1);
-                results.push(RawCurve {
-                    curve: EdgeCurve::Line,
-                    bbox: Aabb3 {
-                        min: Point3::new(
-                            p_start.x().min(p_end.x()),
-                            p_start.y().min(p_end.y()),
-                            p_start.z().min(p_end.z()),
-                        ),
-                        max: Point3::new(
-                            p_start.x().max(p_end.x()),
-                            p_start.y().max(p_end.y()),
-                            p_start.z().max(p_end.z()),
-                        ),
-                    },
-                    t_range,
-                    p_start,
-                    p_end,
-                });
-            }
-            analytic_intersection::ExactIntersectionCurve::Point(_) => {}
             analytic_intersection::ExactIntersectionCurve::Points(pts) => {
                 // The sampled chain spans the UNBOUNDED section conic (a
                 // hyperbola from a wall plane grazing a taper cone covers
@@ -6670,9 +6642,7 @@ fn exact_raw_curves(exacts: Vec<analytic_intersection::ExactIntersectionCurve>) 
                 curve: EdgeCurve::Ellipse(ellipse),
                 t_range: domain,
             }),
-            analytic_intersection::ExactIntersectionCurve::Line { .. }
-            | analytic_intersection::ExactIntersectionCurve::Point(_)
-            | analytic_intersection::ExactIntersectionCurve::Points(_) => None,
+            analytic_intersection::ExactIntersectionCurve::Points(_) => None,
         })
         .collect()
 }
@@ -10144,5 +10114,28 @@ mod tests {
             w.p_end.y()
         );
         assert!(w.p_start.y().abs() < 1e-9 || w.p_end.y().abs() < 1e-9);
+    }
+
+    /// A plane cutting a sphere 1e-8 inside tangency, a billion units from
+    /// the origin, keeps its circle; only one within 1e-10 of touching is
+    /// left out as a graze.
+    #[test]
+    fn a_far_sphere_cut_a_hair_inside_keeps_its_circle() {
+        let center = Point3::new(1e9, 1e9, 0.0);
+        let sphere = brepkit_math::surfaces::SphericalSurface::new(center, 1.0).unwrap();
+        let analytic = analytic_intersection::AnalyticSurface::Sphere(&sphere);
+        let normal = Vec3::new(0.5_f64.sqrt(), -(0.5_f64.sqrt()), 0.0);
+        let along = normal.dot(center - Point3::new(0.0, 0.0, 0.0));
+        let (a, b) = boxes(
+            ([1e9 - 2.0, 1e9 - 2.0, -2.0], [1e9 + 2.0, 1e9 + 2.0, 2.0]),
+            ([1e9 - 2.0, 1e9 - 2.0, -2.0], [1e9 + 2.0, 1e9 + 2.0, 2.0]),
+        );
+        let cut = |depth: f64| {
+            plane_analytic_intersection(normal, along - (1.0 - depth), &analytic, &a, &b)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(cut(1e-8), 1);
+        assert_eq!(cut(1e-11), 0);
     }
 }
