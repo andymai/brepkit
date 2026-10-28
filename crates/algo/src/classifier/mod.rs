@@ -90,6 +90,10 @@ pub struct FaceLoops2d {
     surface: FaceSurface,
     periodic: bool,
     u_mean: f64,
+    /// A torus is periodic in `v` (round its tube) too, so a loop across its
+    /// outer equator is unwrapped in `v` as well, about `v_mean`.
+    v_periodic: bool,
+    v_mean: f64,
     /// The outer loop, in traversal order.
     pub outer: Vec<brepkit_math::vec::Point2>,
     /// The inner loops (holes), each in traversal order.
@@ -136,8 +140,10 @@ impl FaceLoops2d {
             None
         };
         let mut aabb = [f64::MAX, f64::MAX, f64::MAX, f64::MIN, f64::MIN, f64::MIN];
+        let v_periodic = matches!(&surface, FaceSurface::Torus(_));
         let mut sample_loop = |wid: brepkit_topology::wire::WireId,
-                               u_ref: Option<f64>|
+                               u_ref: Option<f64>,
+                               v_ref: Option<f64>|
          -> Result<Vec<Point2>, AlgoError> {
             let wire = topo.wire(wid)?;
             let mut out: Vec<Point2> = Vec::new();
@@ -184,34 +190,51 @@ impl FaceLoops2d {
                     } else {
                         q
                     };
+                    let v_anchor = if v_periodic {
+                        out.last().map_or(v_ref, |prev| Some(prev.y()))
+                    } else {
+                        None
+                    };
+                    let q = if let Some(a) = v_anchor {
+                        Point2::new(q.x(), a + (q.y() - a + PI).rem_euclid(TAU) - PI)
+                    } else {
+                        q
+                    };
                     out.push(q);
                 }
             }
             Ok(out)
         };
-        let outer = sample_loop(face.outer_wire(), None)?;
+        let outer = sample_loop(face.outer_wire(), None, None)?;
         #[allow(clippy::cast_precision_loss)]
-        let u_mean = if outer.is_empty() {
-            0.0
+        let (u_mean, v_mean) = if outer.is_empty() {
+            (0.0, 0.0)
         } else {
-            outer.iter().map(|q| q.x()).sum::<f64>() / outer.len() as f64
+            let n = outer.len() as f64;
+            (
+                outer.iter().map(|q| q.x()).sum::<f64>() / n,
+                outer.iter().map(|q| q.y()).sum::<f64>() / n,
+            )
         };
         let mut holes = Vec::new();
         for &wid in face.inner_wires() {
-            holes.push(sample_loop(wid, Some(u_mean))?);
+            holes.push(sample_loop(wid, Some(u_mean), Some(v_mean))?);
         }
         Ok(Self {
             frame,
             surface,
             periodic,
             u_mean,
+            v_periodic,
+            v_mean,
             outer,
             holes,
             aabb,
         })
     }
 
-    /// `p` in this face's 2D space, `u` unwrapped next to the outer loop.
+    /// `p` in this face's 2D space, `u` (and a torus's `v`) unwrapped next to
+    /// the outer loop.
     #[must_use]
     pub fn to_uv(&self, p: Point3) -> Option<brepkit_math::vec::Point2> {
         use brepkit_math::vec::Point2;
@@ -222,12 +245,17 @@ impl FaceLoops2d {
             let (u, v) = self.surface.project_point(p)?;
             Point2::new(u, v)
         };
-        if self.periodic {
-            let u = self.u_mean + (q.x() - self.u_mean + PI).rem_euclid(TAU) - PI;
-            Some(Point2::new(u, q.y()))
+        let u = if self.periodic {
+            self.u_mean + (q.x() - self.u_mean + PI).rem_euclid(TAU) - PI
         } else {
-            Some(q)
-        }
+            q.x()
+        };
+        let v = if self.v_periodic {
+            self.v_mean + (q.y() - self.v_mean + PI).rem_euclid(TAU) - PI
+        } else {
+            q.y()
+        };
+        Some(Point2::new(u, v))
     }
 
     /// The 3D point at `q`.
