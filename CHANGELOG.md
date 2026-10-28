@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.16](https://github.com/andymai/brepkit/compare/v4.3.15...v4.3.16) (2026-10-28)
+
+
+### Bug Fixes
+
+* **operations:** give a convex hull one face per facet ([#2120](https://github.com/andymai/brepkit/issues/2120)) ([8a0ac25](https://github.com/andymai/brepkit/commit/8a0ac2590c8be46ca50364ae95186326dfa42136))
+
 ## [4.3.15](https://github.com/andymai/brepkit/compare/v4.3.14...v4.3.15) (2026-10-28)
 
 
