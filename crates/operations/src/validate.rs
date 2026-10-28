@@ -230,7 +230,7 @@ fn piece_issues(
     let mut issues = Vec::new();
     if shared > 0 {
         // Pieces touching at a point stay a solid; touching along an edge,
-        // held as two edges on one curve, they do not.
+        // two of their edges sharing a stretch, they do not.
         issues.push(if edges_lie_on_each_other(topo, faces)? {
             ValidationIssue {
                 severity: Severity::Error,
@@ -358,35 +358,169 @@ pub fn validate_solid(
     validate_solid_with_options(topo, solid, &ValidationOptions::default())
 }
 
-/// Whether two distinct edges of `faces` run between the same vertices along
-/// the same curve, where the boundary touches itself along a line.
+const TRACE_STEPS: usize = 64;
+
+/// An edge's curve between its end points, sampled at even parameters.
+struct EdgeTrace<'a> {
+    curve: &'a brepkit_topology::edge::EdgeCurve,
+    ends: (brepkit_math::vec::Point3, brepkit_math::vec::Point3),
+    span: (f64, f64),
+    closed: bool,
+    samples: Vec<brepkit_math::vec::Point3>,
+    lo: [f64; 3],
+    hi: [f64; 3],
+}
+
+impl<'a> EdgeTrace<'a> {
+    fn of(
+        topo: &'a Topology,
+        edge: &'a brepkit_topology::edge::Edge,
+    ) -> Result<Self, crate::OperationsError> {
+        let ends = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let span = edge.curve().domain_with_endpoints(ends.0, ends.1);
+        let mut trace = Self {
+            curve: edge.curve(),
+            ends,
+            span,
+            closed: edge.start() == edge.end(),
+            samples: Vec::new(),
+            lo: [f64::INFINITY; 3],
+            hi: [f64::NEG_INFINITY; 3],
+        };
+        trace.samples = (0..=TRACE_STEPS)
+            .map(|k| trace.at(trace.param(k)))
+            .collect();
+        let step = trace
+            .samples
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).length())
+            .fold(0.0_f64, f64::max);
+        let pad = 0.5 * step + TOUCH_TOL;
+        for p in &trace.samples {
+            for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+                trace.lo[k] = trace.lo[k].min(c - pad);
+                trace.hi[k] = trace.hi[k].max(c + pad);
+            }
+        }
+        Ok(trace)
+    }
+
+    fn at(&self, t: f64) -> brepkit_math::vec::Point3 {
+        self.curve
+            .evaluate_with_endpoints(t, self.ends.0, self.ends.1)
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn param(&self, k: usize) -> f64 {
+        (self.span.1 - self.span.0).mul_add(k as f64 / TRACE_STEPS as f64, self.span.0)
+    }
+
+    /// The parameter of the edge's point nearest `p`, and its distance.
+    fn nearest(&self, p: brepkit_math::vec::Point3) -> (f64, f64) {
+        let gap = |t: f64| (self.at(t) - p).length();
+        let k = (0..=TRACE_STEPS)
+            .min_by(|&i, &j| {
+                (self.samples[i] - p)
+                    .length()
+                    .total_cmp(&(self.samples[j] - p).length())
+            })
+            .unwrap_or(0);
+        let brackets = if self.closed && (k == 0 || k == TRACE_STEPS) {
+            vec![(0, 1), (TRACE_STEPS - 1, TRACE_STEPS)]
+        } else {
+            vec![(k.saturating_sub(1), (k + 1).min(TRACE_STEPS))]
+        };
+        let mut best = (self.param(k), gap(self.param(k)));
+        for (i, j) in brackets {
+            let (mut a, mut b) = (self.param(i), self.param(j));
+            for _ in 0..60 {
+                let (m1, m2) = ((b - a).mul_add(0.381_966, a), (a - b).mul_add(0.381_966, b));
+                if gap(m1) < gap(m2) {
+                    b = m2;
+                } else {
+                    a = m1;
+                }
+            }
+            let t = 0.5 * (a + b);
+            if gap(t) < best.1 {
+                best = (t, gap(t));
+            }
+        }
+        best
+    }
+
+    fn holds(&self, p: brepkit_math::vec::Point3) -> bool {
+        self.nearest(p).1 < TOUCH_TOL
+    }
+
+    /// Whether this edge and `other` share a stretch of positive length.
+    ///
+    /// A shared stretch ends where one of the edges ends, so it runs between
+    /// two of the points each edge has on the other: its ends and its middle,
+    /// the middle catching closed edges that coincide whole. Two such points
+    /// apart bound one when this edge's stretch between them lies on `other`
+    /// too. An edge of no length (a torus's seams are lines from its one
+    /// vertex back to itself) has no two such points apart and shares none.
+    fn runs_along(&self, other: &Self) -> bool {
+        let middle = |t: &Self| t.at(0.5 * (t.span.0 + t.span.1));
+        let mut shared: Vec<brepkit_math::vec::Point3> = [self.ends.0, self.ends.1, middle(self)]
+            .into_iter()
+            .filter(|&p| other.holds(p))
+            .collect();
+        shared.extend(
+            [other.ends.0, other.ends.1, middle(other)]
+                .into_iter()
+                .filter(|&p| self.holds(p)),
+        );
+        for (i, &p) in shared.iter().enumerate() {
+            for &q in &shared[i + 1..] {
+                if (p - q).length() <= TOUCH_TOL {
+                    continue;
+                }
+                let (tp, tq) = (self.nearest(p).0, self.nearest(q).0);
+                let on_other = [0.25, 0.5, 0.75]
+                    .into_iter()
+                    .all(|s: f64| other.holds(self.at((tq - tp).mul_add(s, tp))));
+                if on_other {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Whether two distinct edges of `faces` share a stretch of positive length,
+/// where the boundary touches itself along a curve, whatever the edges' ends,
+/// splits or curve types.
 fn edges_lie_on_each_other(
     topo: &Topology,
     faces: &[brepkit_topology::face::FaceId],
 ) -> Result<bool, crate::OperationsError> {
-    use std::collections::HashMap;
-    let mut by_ends: HashMap<(usize, usize), Vec<brepkit_math::vec::Point3>> = HashMap::new();
     let mut seen = std::collections::HashSet::new();
+    let mut traces = Vec::new();
     for &fid in faces {
         let face = topo.face(fid)?;
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             for oe in topo.wire(wid)?.edges() {
-                if !seen.insert(oe.edge().index()) {
-                    continue;
+                if seen.insert(oe.edge().index()) {
+                    traces.push(EdgeTrace::of(topo, topo.edge(oe.edge())?)?);
                 }
-                let edge = topo.edge(oe.edge())?;
-                let (a, b) = (edge.start(), edge.end());
-                let (pa, pb) = (topo.vertex(a)?.point(), topo.vertex(b)?.point());
-                let (t0, t1) = edge.curve().domain_with_endpoints(pa, pb);
-                let mid = edge
-                    .curve()
-                    .evaluate_with_endpoints(0.5 * (t0 + t1), pa, pb);
-                let key = (a.index().min(b.index()), a.index().max(b.index()));
-                let mids = by_ends.entry(key).or_default();
-                if mids.iter().any(|&m| (m - mid).length() < TOUCH_TOL) {
-                    return Ok(true);
-                }
-                mids.push(mid);
+            }
+        }
+    }
+    traces.sort_by(|a, b| a.lo[0].total_cmp(&b.lo[0]));
+    for (i, e) in traces.iter().enumerate() {
+        for f in &traces[i + 1..] {
+            if f.lo[0] > e.hi[0] {
+                break;
+            }
+            let boxes_meet = (1..3).all(|k| f.lo[k] <= e.hi[k] && e.lo[k] <= f.hi[k]);
+            if boxes_meet && e.runs_along(f) {
+                return Ok(true);
             }
         }
     }
@@ -559,12 +693,9 @@ pub fn validate_solid_with_options(
     // A boundary that touches itself at a vertex (a ring cut where its two
     // ends meet at a point, two pieces sharing a corner) fits once that
     // vertex is counted once per sheet of faces meeting there, its face's
-    // wires counted apart. One that touches itself along an edge, held as two
-    // edges on one curve between the same vertices, does not.
+    // wires counted apart. One that touches itself along an edge, two of its
+    // edges sharing a stretch, does not.
     let fits_by_sheets = || -> Result<bool, crate::OperationsError> {
-        if edges_lie_on_each_other(topo, &faces)? {
-            return Ok(false);
-        }
         let fans = extra_vertex_fans(topo, &faces)?;
         let wires: i64 = faces
             .iter()
@@ -572,7 +703,7 @@ pub fn validate_solid_with_options(
             .sum::<Result<usize, _>>()?
             .try_into()
             .unwrap_or(i64::MAX);
-        Ok(fans > 0 && fits(euler + fans - wires))
+        Ok(fans > 0 && fits(euler + fans - wires) && !edges_lie_on_each_other(topo, &faces)?)
     };
     if !fits(adjusted_euler) && !fits_by_sheets()? {
         issues.push(ValidationIssue {
