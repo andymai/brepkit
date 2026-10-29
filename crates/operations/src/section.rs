@@ -106,8 +106,29 @@ pub fn section(
             FaceSurface::Nurbs(nurbs) => {
                 let intersection_curves =
                     brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
+                // A curve along one of the face's own edges is that edge,
+                // which its neighbour's section gives. A seam, where the face
+                // closes on itself, has no neighbour: its curve stays.
+                let (u_lo, u_hi) = nurbs.domain_u();
+                let (v_lo, v_hi) = nurbs.domain_v();
+                let (u_seam, v_seam) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
+                let on_edge =
+                    |points: &[brepkit_math::nurbs::intersection::IntersectionPoint]| {
+                        [(0, u_lo), (0, u_hi), (1, v_lo), (1, v_hi)]
+                            .iter()
+                            .filter(|&&(k, _)| if k == 0 { !u_seam } else { !v_seam })
+                            .any(|&(k, edge)| {
+                                let slack = 1e-9 * if k == 0 { u_hi - u_lo } else { v_hi - v_lo };
+                                points.iter().all(|p| {
+                                    let at = if k == 0 { p.param1.0 } else { p.param1.1 };
+                                    (at - edge).abs() <= slack
+                                })
+                            })
+                    };
                 for curve in &intersection_curves {
-                    chain_curve_points(&curve.points, &mut segments);
+                    if !on_edge(&curve.points) {
+                        chain_curve_points(&curve.points, &mut segments);
+                    }
                 }
             }
             FaceSurface::Cylinder(cyl) => {

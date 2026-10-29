@@ -1,6 +1,7 @@
 //! Plane-NURBS surface intersection.
 
 use crate::MathError;
+use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::projection::{project_point_to_surface, project_point_to_surface_from};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
@@ -42,6 +43,7 @@ pub fn intersect_plane_nurbs(
     #[allow(clippy::cast_precision_loss)]
     let v_step = (v_max - v_min) / (n - 1) as f64;
 
+    let mut reach = 0.0_f64;
     #[allow(clippy::cast_precision_loss)]
     for (i, row) in distances.iter_mut().enumerate() {
         let u = u_min + i as f64 * u_step;
@@ -49,9 +51,13 @@ pub fn intersect_plane_nurbs(
             let v = v_min + j as f64 * v_step;
             let pt = surface.evaluate(u, v);
             let pt_vec = Vec3::new(pt.x(), pt.y(), pt.z());
+            reach = reach.max(plane_terms(plane_normal, plane_d, pt));
             *dist = plane_normal.dot(pt_vec) - plane_d;
         }
     }
+    // A node within rounding of the plane counts with its positive side.
+    let on_plane = 64.0 * f64::EPSILON * reach;
+    let below = |f: f64| f < -on_plane;
 
     // Phase 2: Find zero-crossings on the UNIQUE grid edges (marching
     // squares). Every crossing is computed once and remembers which edge it
@@ -61,6 +67,9 @@ pub fn intersect_plane_nurbs(
     // two genuinely-close branches (the kumiko strut end-patch dashes vs the
     // honeycomb thin-wall branches), and each statistic that fixes one side
     // breaks the other. Cell connectivity satisfies both by construction.
+    // A node on the plane counts with the positive side, so a section along
+    // a seam or a run of nodes still crosses the edges to its negative
+    // neighbours, at the nodes themselves.
     let mut crossings: Vec<(f64, f64)> = Vec::new();
     // Which parameter a crossing on the domain's edge lines must keep: a
     // chain ending there ends ON the patch boundary, where the boundary
@@ -78,8 +87,8 @@ pub fn intersect_plane_nurbs(
             let v0 = v_min + j as f64 * v_step;
             if i + 1 < n {
                 let (da, db) = (distances[i][j], distances[i + 1][j]);
-                if da * db < 0.0 {
-                    let t = da / (da - db);
+                if below(da) != below(db) {
+                    let t = (da / (da - db)).clamp(0.0, 1.0);
                     let u = u0.mul_add(1.0 - t, (u0 + u_step) * t);
                     horiz[i][j] = Some(crossings.len());
                     let (v, pin) = match j {
@@ -93,8 +102,8 @@ pub fn intersect_plane_nurbs(
             }
             if j + 1 < n {
                 let (da, db) = (distances[i][j], distances[i][j + 1]);
-                if da * db < 0.0 {
-                    let t = da / (da - db);
+                if below(da) != below(db) {
+                    let t = (da / (da - db)).clamp(0.0, 1.0);
                     let v = v0.mul_add(1.0 - t, (v0 + v_step) * t);
                     vert[i][j] = Some(crossings.len());
                     let (u, pin) = match i {
@@ -109,7 +118,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    let tiny = tiny_loops(
+    let (tiny, touches) = tiny_loops(
         surface,
         plane_normal,
         plane_d,
@@ -117,15 +126,14 @@ pub fn intersect_plane_nurbs(
         (u_min, u_step),
         (v_min, v_step),
     );
-    if crossings.is_empty() && tiny.is_empty() {
+    if crossings.is_empty() && tiny.is_empty() && touches.is_empty() {
         return Ok(Vec::new());
     }
 
     // Phase 3: Link crossings through each cell. A cell with two crossing
     // edges connects them; a saddle cell (all four edges crossing) pairs
-    // them by the sign of the cell-center sample. Odd counts (a crossing
-    // through a grid node) leave that cell unlinked — the chain simply ends
-    // there.
+    // them by the sign of the cell-center sample. With every node on one
+    // side or the other, a cell has no odd count.
     let mut links: Vec<Vec<usize>> = vec![Vec::new(); crossings.len()];
     let connect = |a: usize, b: usize, links: &mut Vec<Vec<usize>>| {
         if !links[a].contains(&b) {
@@ -162,7 +170,7 @@ pub fn intersect_plane_nurbs(
                         left.unwrap_or(usize::MAX),
                         right.unwrap_or(usize::MAX),
                     );
-                    if dc * d00 >= 0.0 {
+                    if below(dc) == below(d00) {
                         // Center joins the (0,0)/(1,1) corners: the curve
                         // cuts off the other two corners separately.
                         connect(b, r, &mut links);
@@ -213,6 +221,16 @@ pub fn intersect_plane_nurbs(
         }
     }
     for chain in index_chains {
+        // A node on the plane amid negative neighbours crosses every edge to
+        // them at itself, which links into a chain at that one node: the
+        // surface touching the plane there, which the tiny-loop pass finds.
+        let first = crossings[chain[0]];
+        if chain.iter().all(|&idx| {
+            let (u, v) = crossings[idx];
+            (u - first.0).abs() <= 1e-12 * u_step && (v - first.1).abs() <= 1e-12 * v_step
+        }) {
+            continue;
+        }
         let mut current: Vec<IntersectionPoint> = Vec::new();
         for idx in chain {
             let (u_guess, v_guess) = crossings[idx];
@@ -235,7 +253,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    if ordered_chains.is_empty() && tiny.is_empty() {
+    if ordered_chains.is_empty() && tiny.is_empty() && touches.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -277,6 +295,15 @@ pub fn intersect_plane_nurbs(
             points: chain,
         });
     }
+    // A point where the plane touches the surface is a curve that stays on
+    // it, with that one point.
+    for touch in touches {
+        let ends = vec![touch.point, touch.point];
+        curves.push(IntersectionCurve {
+            curve: NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], ends, vec![1.0, 1.0])?,
+            points: vec![touch],
+        });
+    }
     Ok(curves)
 }
 
@@ -293,7 +320,11 @@ const TINY_LOOP_POINTS: usize = 32;
 /// for the extremum anywhere on the patch. From there rays bracket the
 /// section and bisection settles each point to rounding, at any scale; a
 /// loop that leaves the patch or holds a node is not one of these.
-#[allow(clippy::cast_precision_loss)]
+///
+/// An extremum within rounding of the plane, where the distance curves
+/// away from it both ways, is a point where the surface touches it,
+/// returned with the loops.
+#[allow(clippy::cast_precision_loss, clippy::type_complexity)]
 fn tiny_loops(
     surface: &NurbsSurface,
     normal: Vec3,
@@ -301,7 +332,7 @@ fn tiny_loops(
     distances: &[Vec<f64>],
     (u_min, u_step): (f64, f64),
     (v_min, v_step): (f64, f64),
-) -> Vec<Vec<IntersectionPoint>> {
+) -> (Vec<Vec<IntersectionPoint>>, Vec<IntersectionPoint>) {
     let n = distances.len();
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
@@ -353,14 +384,37 @@ fn tiny_loops(
             b
         })
     };
+    // Evaluating the distance rounds it by a few ulps of the largest sum
+    // of its terms over the control points; an extremum no further past
+    // the plane than that may only touch it, as along a valley lying on the
+    // plane, where rays from it would trace rounding.
+    let noise = 4.0
+        * f64::EPSILON
+        * surface
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|&p| plane_terms(normal, d, p))
+            .fold(0.0, f64::max);
     let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
+    let mut touches: Vec<IntersectionPoint> = Vec::new();
     for i in 0..n {
         for j in 0..n {
-            let near = distances[i][j];
-            let block_holds = (i.saturating_sub(1)..=(i + 1).min(n - 1))
-                .flat_map(|a| (j.saturating_sub(1)..=(j + 1).min(n - 1)).map(move |b| (a, b)))
-                .all(|(a, b)| distances[a][b] * near > 0.0 && distances[a][b].abs() >= near.abs());
-            if !block_holds {
+            let block = || {
+                (i.saturating_sub(1)..=(i + 1).min(n - 1)).flat_map(|a| {
+                    (j.saturating_sub(1)..=(j + 1).min(n - 1)).map(move |b| distances[a][b])
+                })
+            };
+            let mut near = distances[i][j];
+            if near.abs() <= noise {
+                // A node on the plane seeds where its block lies on one side
+                // of the plane but for other nodes on it, as along a valley
+                // through a column of nodes; it takes that side.
+                near = block().fold(0.0, |m: f64, f| if f.abs() > m.abs() { f } else { m });
+                if near.abs() <= noise || block().any(|f| f * near < 0.0 && f.abs() > noise) {
+                    continue;
+                }
+            } else if !block().all(|f| f * near > 0.0 && f.abs() >= near.abs()) {
                 continue;
             }
             let seed = (u_min + i as f64 * u_step, v_min + j as f64 * v_step);
@@ -373,14 +427,34 @@ fn tiny_loops(
                 continue;
             };
             let centre = at(u, v);
+            let spread = (fuu - fvv).hypot(2.0 * fuv);
+            let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
+            if centre.abs() <= noise {
+                // A valley lying along the plane curves away from it one
+                // way only.
+                let point = surface.evaluate(u, v);
+                if settled
+                    && big * near > 0.0
+                    && small * near > 0.0
+                    && big.abs().min(small.abs()) > 1e-6 * big.abs().max(small.abs())
+                    && touches
+                        .iter()
+                        .all(|t: &IntersectionPoint| (t.point - point).length() > FIT_TOLERANCE)
+                {
+                    touches.push(IntersectionPoint {
+                        point,
+                        param1: (u, v),
+                        param2: (0.0, 0.0),
+                    });
+                }
+                continue;
+            }
             if centre * near >= 0.0 || loops.iter().any(|ring| encloses(ring, (u, v))) {
                 continue;
             }
             // Near a settled extremum the distance is `centre + ½ xᵀHx`,
             // zero on the ellipse `xᵀHx = −2·centre`: rays out along it
             // start at the section and spread evenly round a long loop.
-            let spread = (fuu - fvv).hypot(2.0 * fuv);
-            let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
             let ellipse = settled && big * centre < 0.0 && small * centre < 0.0;
             let (ax, ay) = if fuv.abs() > 0.0 {
                 let (x, y) = (big - fvv, fuv);
@@ -433,7 +507,14 @@ fn tiny_loops(
             }
         }
     }
-    loops
+    (loops, touches)
+}
+
+/// The sum of the plane's distance's terms at `p`, `Σ|nᵢ·pᵢ| + |d|`, which
+/// bounds how far evaluating it rounds: coordinates the normal does not
+/// weigh add nothing.
+fn plane_terms(normal: Vec3, d: f64, p: Point3) -> f64 {
+    (normal.x() * p.x()).abs() + (normal.y() * p.y()).abs() + (normal.z() * p.z()).abs() + d.abs()
 }
 
 /// Where the plane's distance stops changing, as Newton from a seed
