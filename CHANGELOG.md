@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.5.6](https://github.com/andymai/brepkit/compare/v4.5.5...v4.5.6) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** end a plane section's curves where the section crosses itself ([#2147](https://github.com/andymai/brepkit/issues/2147)) ([de389a9](https://github.com/andymai/brepkit/commit/de389a9db06fb0a73a87b9c2a089cf2429e1e49b))
+* **wasm:** stop rejecting exact fillets on wide parts for chord error ([#2152](https://github.com/andymai/brepkit/issues/2152)) ([c009e40](https://github.com/andymai/brepkit/commit/c009e403ca816f58794b2bc98d144ec97062290b))
+
 ## [4.5.5](https://github.com/andymai/brepkit/compare/v4.5.4...v4.5.5) (2026-10-29)
 
 
