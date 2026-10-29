@@ -1,0 +1,25 @@
+crates/math/src/curves/tests.rs
+  s_a2dc21dbec3f2b::t_ca53f523a735ab 846-884
+crates/math/src/analytic_intersection.rs
+  s_a2dc21dbec3f2b::t_eb9c9f444fe7ef 175
+  s_a2dc21dbec3f2b::t_ca53f523a735ab 6217-6258
+  s_a2dc21dbec3f2b::t_cc5a9a3f4d2c8f 119-120,123-125,130-134,144-145,147,150-151,156-158,162-169,174,176-177,181-187,195-197,206-211
+crates/math/src/curves.rs
+  s_a2dc21dbec3f2b::t_cc5a9a3f4d2c8f 913-915,918-919,933-934,1051-1052,1055-1056,1071-1072,1075
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "31a896b389acd907bd10f23c2460eb0b8223b72a",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
