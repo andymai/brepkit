@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793251436642,
+  "lastUpdate": 1793260566358,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59561,6 +59561,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28869564,
             "range": "± 237070",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3166ff936a53e4e9fde9e20ef075113fb172cfb8",
+          "message": "fix(math): meet touching coaxial tori and balls along their one circle (#2132)\n\nA ball or ring touching a coaxial ring now meets it along the exact\ncircle where they touch, and booleans of such a pair take about a\nmillisecond instead of seconds.\n\nToday `meridian_crossings` defers touching cross-sections to the\nmarcher, so `exact_sphere_torus` and `exact_torus_torus` return `None`\nwhen the surfaces touch. For a radius 2 ball sitting in the hole of a\nring with radii 3 and 1, `phase_ff` then marches the pair into 1024\ncurves, taking 63 s in a debug build, and fuse, cut and intersect each\ntake 2.2 s in release before reaching the right result.\n`intersect_analytic_analytic_bounded` has no coaxial torus arm at all,\nso its callers get marched curves for every coaxial sphere-torus and\ntorus-torus pair, crossing or touching.\n\n## Change\n\n- `meridian_crossings`: a miss is read at rounding scale, and two\ncrossings closer than the linear tolerance are the one point where the\ncircles touch, side by side or one inside the other, so\n`exact_sphere_torus` and `exact_torus_torus` return the circle it\nsweeps. The band of 1e-9 of the scale that deferred near touches is\ngone: on rings of radius 1e6 it was two thousandths wide.\n- `try_algebraic_intersection` returns the exact circles of coaxial\nsphere-torus, torus-torus and cylinder-torus pairs as rational NURBS\nloops, each with 33 sample points.\n- `phase_ff`: two sections through the axis cross twice or touch once,\nso a lone sphere-torus or torus-torus circle is where the surfaces\ntouch. It splits neither face, like a plane touching a sphere.\nCylinder-torus pairs keep their touching circle, as before.\n\n## Tests\n\n- `touching_coaxial_rings_meet_along_one_circle`: the ball in the hole\ncomes back from the bounded call as one circle within 1e-14 of both\nsurfaces, and tubes of radius 1 and 0.5 whose centres lie 1.5 apart\ntouch along a circle of radius 3.6 at height 0.8.\n- `exact_sphere_torus_misses_touches_and_defers` now expects the\ntouching circle.\n- `huge_coaxial_rings_cross_or_miss_rather_than_touch`: unit tubes on\nrings of radius 1e6 and 1e6 + 1.999 cross in two circles at heights\n±0.0316, and on rings 2.001 apart they miss.\n- `a_ball_touching_a_rings_hole_grazes_it`: `phase_ff` gives no curves\nfor the touching ball and two for a radius 3 ball. With the old\nbehaviour the touching ball gives 1024 curves after 63 s.\n- `solids_touching_a_ring_keep_their_faces_whole` fuses, cuts and\nintersects the (4, 1.5) ring with a radius 2.5 ball in its hole and with\na ring of tube radius 1 resting on it. Each fuse keeps both solids'\nfaces whole at the sum of their volumes, each cut keeps the ring whole,\nand each intersect is empty, with valid solids, closed meshes and\nmaterial probes in the tubes and the ball.\n- The booleans of the ball in the hole are unchanged: the fuse keeps 2\nsphere faces and 1 torus face with volume 92.7279 (ring plus ball), the\ncut leaves the torus whole at 59.2176, and the intersect is empty. Each\nnow takes about a millisecond.\n- `cargo test --workspace --exclude brepkit-render` passes 3677 tests,\nand the pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-10-29T07:53:26Z",
+          "tree_id": "e956a6e44d2f96419faedc31050b550fca656053",
+          "url": "https://github.com/andymai/brepkit/commit/3166ff936a53e4e9fde9e20ef075113fb172cfb8"
+        },
+        "date": 1793260558816,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 889088,
+            "range": "± 1586",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 955174,
+            "range": "± 5848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11014,
+            "range": "± 84",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 532102,
+            "range": "± 459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22983279,
+            "range": "± 37078",
             "unit": "ns/iter"
           }
         ]
