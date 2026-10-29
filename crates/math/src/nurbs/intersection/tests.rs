@@ -2133,16 +2133,19 @@ fn a_plane_section_along_a_seam_within_rounding_of_it_is_found() {
     assert_eq!(radii, [2.0, 4.0]);
 }
 
-/// The plane `z = 0` touches `z = (x² + y² − 1)²` along the unit circle,
-/// where the surface's height rounds to a few 1e-16 either side of the
-/// plane. No rounding comes back as a loop.
+/// The plane `z = 0` touches `z = (x² + y² − 1)²` along the unit circle and
+/// the trough `z = x²` along the line `x = 0`, where neither surface's
+/// height crosses the plane but rounds a few 1e-16 either side of it. Each
+/// contact comes back whole: the circle closed, the line from edge to edge.
 #[test]
-fn a_plane_touching_a_surface_along_a_circle_traces_no_rounding_loops() {
+fn a_plane_touching_a_surface_along_a_curve_traces_it() {
+    let x = [(0, 0, -2.0), (1, 0, 4.0)];
+    let y = [(0, 0, -2.0), (0, 1, 4.0)];
     let quartic = polynomial_patch(
         4,
         [
-            &[(0, 0, -2.0), (1, 0, 4.0)],
-            &[(0, 0, -2.0), (0, 1, 4.0)],
+            &x,
+            &y,
             &[
                 (0, 0, 49.0),
                 (0, 1, -224.0),
@@ -2160,20 +2163,27 @@ fn a_plane_touching_a_surface_along_a_circle_traces_no_rounding_loops() {
             ],
         ],
     );
+    let trough = polynomial_patch(2, [&x, &y, &[(0, 0, 4.0), (1, 0, -16.0), (2, 0, 16.0)]]);
+    let up = Vec3::new(0.0, 0.0, 1.0);
     for samples in [64, 63] {
-        let curves =
-            intersect_plane_nurbs(&quartic, Vec3::new(0.0, 0.0, 1.0), 0.0, samples).unwrap();
-        for ic in &curves {
-            let mut extent = 0.0_f64;
-            for a in &ic.points {
-                for b in &ic.points {
-                    extent = extent.max((a.point - b.point).length());
-                }
-            }
-            assert!(
-                extent > 0.5,
-                "{samples} samples: a curve {extent:.2e} across"
-            );
+        let circle = intersect_plane_nurbs(&quartic, up, 0.0, samples).unwrap();
+        assert_eq!(circle.len(), 1, "{samples} samples");
+        let (t0, t1) = circle[0].curve.domain();
+        assert!((circle[0].curve.evaluate(t0) - circle[0].curve.evaluate(t1)).length() < 1e-9);
+        let far = farthest(&circle, |p| {
+            (p.x().hypot(p.y()) - 1.0).abs().max(p.z().abs())
+        });
+        assert!(far < 1e-6, "{samples} samples: the circle strays {far:.2e}");
+        // From below, the nodes along the floor cross the plane to their
+        // neighbours at themselves; their chains are the traced line.
+        for normal in [up, -up] {
+            let line = intersect_plane_nurbs(&trough, normal, 0.0, samples).unwrap();
+            assert_eq!(line.len(), 1, "{samples} samples, normal {normal:?}");
+            let (t0, t1) = line[0].curve.domain();
+            let (a, b) = (line[0].curve.evaluate(t0), line[0].curve.evaluate(t1));
+            assert!((a.y().abs() - 2.0).abs() < 1e-12 && (b.y().abs() - 2.0).abs() < 1e-12);
+            let far = farthest(&line, |p| p.x().abs().max(p.z().abs()));
+            assert!(far < 1e-9, "{samples} samples: the line strays {far:.2e}");
         }
     }
 }
@@ -2316,6 +2326,223 @@ fn a_plane_section_crossing_itself_ends_its_curves_at_the_crossing() {
                 }
             }
         }
+    }
+}
+
+/// The trough `z = x²` of the test above, with its parameter across the
+/// floor running over a millionth where the one along it runs over one,
+/// still touches `z = 0` along the whole line: steps along the floor are
+/// measured against the domain, not in its parameters.
+#[test]
+fn a_plane_touching_a_squeezed_surface_along_a_line_traces_it_whole() {
+    let trough = polynomial_patch(
+        2,
+        [
+            &[(0, 0, -2.0), (1, 0, 4.0)],
+            &[(0, 0, -2.0), (0, 1, 4.0)],
+            &[(0, 0, 4.0), (1, 0, -16.0), (2, 0, 16.0)],
+        ],
+    );
+    let squeezed = NurbsSurface::new(
+        2,
+        2,
+        trough.knots_u().iter().map(|k| k * 1e-6).collect(),
+        trough.knots_v().to_vec(),
+        trough.control_points().to_vec(),
+        trough.weights().to_vec(),
+    )
+    .unwrap();
+    let line = intersect_plane_nurbs(&squeezed, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(line.len(), 1);
+    let (t0, t1) = line[0].curve.domain();
+    let (a, b) = (line[0].curve.evaluate(t0), line[0].curve.evaluate(t1));
+    assert!(
+        (a.y().abs() - 2.0).abs() < 1e-12 && (b.y().abs() - 2.0).abs() < 1e-12,
+        "the line runs from {a:?} to {b:?}"
+    );
+    let far = farthest(&line, |p| p.x().abs().max(p.z().abs()));
+    assert!(far < 1e-9, "the line strays {far:.2e}");
+}
+
+/// The plane `z = 0` touches `z = ((x − a)(x − b))²` along two lines a grid
+/// step apart at 33 samples, each traced on its own from edge to edge.
+#[test]
+fn a_plane_touching_a_surface_along_two_close_lines_traces_both() {
+    let (a, b) = (0.5, 0.531_249_99);
+    let pair = product(&[(1, 0, 1.0), (0, 0, -a)], &[(1, 0, 1.0), (0, 0, -b)]);
+    let height = product(&pair, &pair);
+    let surface = polynomial_patch(4, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &height]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 33).unwrap();
+    assert_eq!(curves.len(), 2);
+    let mut at: Vec<f64> = curves
+        .iter()
+        .map(|ic| {
+            let (t0, t1) = ic.curve.domain();
+            let (p, q) = (ic.curve.evaluate(t0), ic.curve.evaluate(t1));
+            assert!(p.y().min(q.y()).abs() < 1e-9 && (p.y().max(q.y()) - 1.0).abs() < 1e-9);
+            p.x()
+        })
+        .collect();
+    at.sort_by(f64::total_cmp);
+    assert!(
+        (at[0] - a).abs() < 1e-6 && (at[1] - b).abs() < 1e-6,
+        "lines at {at:?}"
+    );
+}
+
+/// The plane `z = 0` touches `z = (y − x²)²` along the parabola `y = x²`,
+/// which leaves the patch at its corners `(0, 0)` and `(1, 1)`, where the
+/// traced curve ends: its last step settles along the patch's edge. With
+/// `x` running backwards in `u`, the step reaching `(0, 0)` meets the edge
+/// `v = 0`, along which the height rises as `x⁴`, and settles all the same.
+#[test]
+fn a_plane_touching_a_surface_along_a_curve_traces_it_to_the_patch_edge() {
+    let forward = polynomial_patch(
+        4,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 1, 1.0)],
+            &[(0, 2, 1.0), (2, 1, -2.0), (4, 0, 1.0)],
+        ],
+    );
+    let floor = [(0, 1, 1.0), (0, 0, -1.0), (1, 0, 2.0), (2, 0, -1.0)];
+    let backward = polynomial_patch(
+        4,
+        [
+            &[(0, 0, 1.0), (1, 0, -1.0)],
+            &[(0, 1, 1.0)],
+            &product(&floor, &floor),
+        ],
+    );
+    for gutter in [forward, backward] {
+        let curves = intersect_plane_nurbs(&gutter, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+        assert_eq!(curves.len(), 1);
+        let (t0, t1) = curves[0].curve.domain();
+        let mut ends = [t0, t1].map(|t| curves[0].curve.evaluate(t));
+        ends.sort_by(|p, q| p.x().total_cmp(&q.x()));
+        assert!(
+            (ends[0] - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9
+                && (ends[1] - Point3::new(1.0, 1.0, 0.0)).length() < 1e-9,
+            "the curve runs from {:?} to {:?}",
+            ends[0],
+            ends[1]
+        );
+        let far = farthest(&curves, |p| (p.y() - p.x() * p.x()).abs().max(p.z().abs()));
+        assert!(far < 1e-7, "the curve strays {far:.2e}");
+    }
+}
+
+/// The plane `z = 0` touches `z = ((x − ½)² + (y − ½)² − r²)²` along a circle
+/// passing a millionth inside the patch's edges: a step heading off the
+/// patch near where it passes them settles back on the circle, which comes
+/// back whole and closed.
+#[test]
+fn a_plane_touching_a_surface_along_a_circle_beside_the_edge_traces_it_whole() {
+    let r: f64 = 0.499_999;
+    let ring = [
+        (2, 0, 1.0),
+        (1, 0, -1.0),
+        (0, 2, 1.0),
+        (0, 1, -1.0),
+        (0, 0, r.mul_add(-r, 0.5)),
+    ];
+    let surface = polynomial_patch(4, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &product(&ring, &ring)]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(curves.len(), 1);
+    let (t0, t1) = curves[0].curve.domain();
+    assert!((curves[0].curve.evaluate(t0) - curves[0].curve.evaluate(t1)).length() < 1e-9);
+    let far = farthest(&curves, |p| {
+        ((p.x() - 0.5).hypot(p.y() - 0.5) - r)
+            .abs()
+            .max(p.z().abs())
+    });
+    assert!(far < 1e-6, "the circle strays {far:.2e}");
+}
+
+/// The plane `z = 0` touches `z = ((x − ½)² + (y − ½)² − r²)²` along a
+/// The plane `z = 0` touches `z = ((x − ½)² + (y − ½)² − r²)²` along a
+/// circle of radius 0.003, smaller across than two of the trace's steps at
+/// 64 samples: the steps shorten round it, and the circle comes back once,
+/// closed. Off the circle the height rises as the fourth power, so the
+/// traced points lie on it and the curve between them within the fit's
+/// tolerance of both surfaces.
+#[test]
+fn a_plane_touching_a_surface_along_a_small_circle_traces_it_once() {
+    let r: f64 = 0.003;
+    let ring = [
+        (2, 0, 1.0),
+        (1, 0, -1.0),
+        (0, 2, 1.0),
+        (0, 1, -1.0),
+        (0, 0, r.mul_add(-r, 0.5)),
+    ];
+    let surface = polynomial_patch(4, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &product(&ring, &ring)]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(curves.len(), 1);
+    let (t0, t1) = curves[0].curve.domain();
+    assert!((curves[0].curve.evaluate(t0) - curves[0].curve.evaluate(t1)).length() < 1e-9);
+    assert!(
+        curves[0].points.len() < 200,
+        "{} points",
+        curves[0].points.len()
+    );
+    for p in &curves[0].points {
+        let off = ((p.point.x() - 0.5).hypot(p.point.y() - 0.5) - r).abs();
+        assert!(off < 1e-9, "a point lies {off:.2e} off the circle");
+    }
+    let far = farthest(&curves, |p| {
+        let rim = (p.x() - 0.5).mul_add(p.x() - 0.5, (p.y() - 0.5).mul_add(p.y() - 0.5, -r * r));
+        (rim * rim).max(p.z().abs())
+    });
+    assert!(far < 1e-7, "the circle strays {far:.2e}");
+}
+
+/// Dips curving far more one way than the other reach just below a plane,
+/// in loops a millionth or less as wide as they are long, each found:
+/// `z = (x − ½)² + 1e-10·(y − ½)²` under `z = 1e-15` at 64 samples, the
+/// fainter `z = (x − ½)² + 5e-13·(y − ½)²` under `z = 3e-16` at 10, and
+/// `z = (x − y²)² + 1e-5·(y − ½)²`, whose floor curves along `x = y²`,
+/// under `z = 1e-12` at 64.
+#[test]
+fn a_plane_cutting_a_faintly_curved_dip_finds_its_loop() {
+    let flat = |k: f64| {
+        polynomial_patch(
+            2,
+            [
+                &[(1, 0, 1.0)],
+                &[(0, 1, 1.0)],
+                &[
+                    (2, 0, 1.0),
+                    (1, 0, -1.0),
+                    (0, 2, k),
+                    (0, 1, -k),
+                    (0, 0, 0.25f64.mul_add(k, 0.25)),
+                ],
+            ],
+        )
+    };
+    let bent = polynomial_patch(
+        4,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 1, 1.0)],
+            &[
+                (2, 0, 1.0),
+                (1, 2, -2.0),
+                (0, 4, 1.0),
+                (0, 2, 1e-5),
+                (0, 1, -1e-5),
+                (0, 0, 0.25e-5),
+            ],
+        ],
+    );
+    for (dip, level, samples) in [
+        (flat(1e-10), 1e-15, 64),
+        (flat(5e-13), 3e-16, 10),
+        (bent, 1e-12, 64),
+    ] {
+        let curves = intersect_plane_nurbs(&dip, Vec3::new(0.0, 0.0, 1.0), level, samples).unwrap();
+        assert_eq!(curves.len(), 1, "under {level:e} at {samples} samples");
     }
 }
 

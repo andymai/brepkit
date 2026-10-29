@@ -14,10 +14,191 @@ use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
-use brepkit_math::nurbs::intersection::IntersectionPoint;
+use brepkit_math::nurbs::intersection::{
+    IntersectionCurve, IntersectionPoint, intersect_plane_nurbs,
+};
+use brepkit_math::nurbs::surface::NurbsSurface;
 
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
+
+/// How far, in spans of the domain, `mid` lies from the nearest of the
+/// section's `curves` other than the one at `index`, measured round a closed
+/// direction's seam the shorter way. A contact along the seam itself comes
+/// back as two curves, one at each of its sides: the curve at the other
+/// side is the same one, not a neighbour.
+fn gap_to_others(
+    curves: &[IntersectionCurve],
+    index: usize,
+    mid: (f64, f64),
+    ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
+    (u_closed, v_closed): (bool, bool),
+) -> f64 {
+    let (wide, tall) = (u_hi - u_lo, v_hi - v_lo);
+    let short = |x: f64, closed: bool| if closed { x - x.round() } else { x };
+    let from = |q: &IntersectionPoint| {
+        (
+            short((q.param1.0 - mid.0) / wide, u_closed),
+            short((q.param1.1 - mid.1) / tall, v_closed),
+        )
+    };
+    // Which side of a closed direction's seam all of a curve lies on.
+    let side =
+        |c: &[IntersectionPoint], (lo, hi): (f64, f64), at: fn(&IntersectionPoint) -> f64| {
+            let on = |edge: f64| c.iter().all(|q| (at(q) - edge).abs() <= 1e-12 * (hi - lo));
+            if on(lo) {
+                Some(false)
+            } else if on(hi) {
+                Some(true)
+            } else {
+                None
+            }
+        };
+    let ours = &curves[index].points;
+    let copy = |c: &[IntersectionPoint]| {
+        let across = |closed: bool, range: (f64, f64), at: fn(&IntersectionPoint) -> f64| {
+            closed
+                && matches!((side(ours, range, at), side(c, range, at)), (Some(a), Some(b)) if a != b)
+        };
+        across(u_closed, (u_lo, u_hi), |q| q.param1.0)
+            || across(v_closed, (v_lo, v_hi), |q| q.param1.1)
+    };
+    curves
+        .iter()
+        .enumerate()
+        .filter(|&(j, c)| j != index && !copy(&c.points))
+        .map(|(_, c)| {
+            let single = (c.points.len() == 1).then(|| {
+                let (x, y) = from(&c.points[0]);
+                x.hypot(y)
+            });
+            let spans = c.points.windows(2).map(|pair| {
+                // The segment's far end on the near end's side of a seam.
+                let (ax, ay) = from(&pair[0]);
+                let (bx, by) = (
+                    ax + short((pair[1].param1.0 - pair[0].param1.0) / wide, u_closed),
+                    ay + short((pair[1].param1.1 - pair[0].param1.1) / tall, v_closed),
+                );
+                let (dx, dy) = (bx - ax, by - ay);
+                let length = dx.mul_add(dx, dy * dy);
+                let t = if length > 0.0 {
+                    (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                t.mul_add(dx, ax).hypot(t.mul_add(dy, ay))
+            });
+            single
+                .into_iter()
+                .chain(spans)
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Whether the plane only touches `nurbs` along the section through
+/// `points`, without crossing it.
+///
+/// The surface's normal lies along the plane's at every point, and across
+/// the curve at its middle point the surface stays on one side of the
+/// plane. Where the surface crosses with its normal along the plane's, as
+/// `z = x³` crosses `z = 0`, the curve parts the regions either side. Each
+/// side's probe starts a billionth of the domain across and widens tenfold
+/// while the surface stays within rounding of the plane, as across
+/// `z = x⁷`, but stops short of halfway to the section's nearest other
+/// curve, so that it tells the side before another branch comes between;
+/// a curve whose sides no probe tells stays. On a closed surface the probes
+/// wrap round its seam.
+fn touches_along(
+    nurbs: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    curves: &[IntersectionCurve],
+    index: usize,
+) -> bool {
+    let points = &curves[index].points;
+    let tangent = |p: &IntersectionPoint| {
+        nurbs
+            .normal(p.param1.0, p.param1.1)
+            .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
+    };
+    if points.len() < 2 || !points.iter().all(tangent) {
+        return false;
+    }
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let (wide, tall) = (u_hi - u_lo, v_hi - v_lo);
+    let k = points.len() / 2;
+    let (a, b) = (
+        points[k - 1].param1,
+        points[(k + 1).min(points.len() - 1)].param1,
+    );
+    // Across the curve in parameters scaled to the domain.
+    let (tu, tv) = ((b.0 - a.0) / wide, (b.1 - a.1) / tall);
+    let len = tu.hypot(tv);
+    if len == 0.0 {
+        return false;
+    }
+    let mid = points[k].param1;
+    let rounding = 4.0
+        * f64::EPSILON
+        * nurbs
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|p| {
+                (normal.x() * p.x()).abs()
+                    + (normal.y() * p.y()).abs()
+                    + (normal.z() * p.z()).abs()
+                    + d.abs()
+            })
+            .fold(0.0, f64::max);
+    // Round a closed direction's seam, onto the domain's far side.
+    let wrap = |x: f64, lo: f64, hi: f64, closed: bool| {
+        if closed {
+            (x - lo).rem_euclid(hi - lo) + lo
+        } else {
+            x.clamp(lo, hi)
+        }
+    };
+    let (u_closed, v_closed) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
+    let side = |reach: f64| {
+        let u = wrap(
+            (reach * wide).mul_add(-tv / len, mid.0),
+            u_lo,
+            u_hi,
+            u_closed,
+        );
+        let v = wrap(
+            (reach * tall).mul_add(tu / len, mid.1),
+            v_lo,
+            v_hi,
+            v_closed,
+        );
+        let p = nurbs.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    // No probe reaches halfway to another curve of the section, so that
+    // none passes beyond it.
+    let gap = gap_to_others(
+        curves,
+        index,
+        mid,
+        ((u_lo, u_hi), (v_lo, v_hi)),
+        (u_closed, v_closed),
+    );
+    let nearest = |sign: f64| {
+        [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+            .into_iter()
+            .take_while(|&reach| reach < 0.5 * gap)
+            .map(|reach| side(sign * reach))
+            .find(|f| f.abs() > rounding)
+    };
+    match (nearest(1.0), nearest(-1.0)) {
+        (Some(left), Some(right)) => left * right > 0.0,
+        _ => false,
+    }
+}
 
 /// Chain intersection curve points into consecutive segment pairs.
 ///
@@ -104,31 +285,8 @@ pub fn section(
                 }
             }
             FaceSurface::Nurbs(nurbs) => {
-                let intersection_curves =
-                    brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
-                // A curve along one of the face's own edges is that edge,
-                // which its neighbour's section gives. A seam, where the face
-                // closes on itself, has no neighbour: its curve stays.
-                let (u_lo, u_hi) = nurbs.domain_u();
-                let (v_lo, v_hi) = nurbs.domain_v();
-                let (u_seam, v_seam) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
-                let on_edge =
-                    |points: &[brepkit_math::nurbs::intersection::IntersectionPoint]| {
-                        [(0, u_lo), (0, u_hi), (1, v_lo), (1, v_hi)]
-                            .iter()
-                            .filter(|&&(k, _)| if k == 0 { !u_seam } else { !v_seam })
-                            .any(|&(k, edge)| {
-                                let slack = 1e-9 * if k == 0 { u_hi - u_lo } else { v_hi - v_lo };
-                                points.iter().all(|p| {
-                                    let at = if k == 0 { p.param1.0 } else { p.param1.1 };
-                                    (at - edge).abs() <= slack
-                                })
-                            })
-                    };
-                for curve in &intersection_curves {
-                    if !on_edge(&curve.points) {
-                        chain_curve_points(&curve.points, &mut segments);
-                    }
+                for curve in &nurbs_section_curves(nurbs, normal, d)? {
+                    chain_curve_points(&curve.points, &mut segments);
                 }
             }
             FaceSurface::Cylinder(cyl) => {
@@ -216,6 +374,43 @@ pub fn section(
     Ok(Section {
         faces: result_faces,
     })
+}
+
+/// The plane's sections of a NURBS face that bound regions of the solid's
+/// section. A curve along which the face touches the plane from one side
+/// bounds none, and a curve along one of the face's own edges is that
+/// edge, which its neighbour's section gives. A seam, where the face closes
+/// on itself, has no neighbour: its curve stays.
+fn nurbs_section_curves(
+    nurbs: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Vec<IntersectionCurve>, crate::OperationsError> {
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let (u_seam, v_seam) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
+    let on_edge = |points: &[IntersectionPoint]| {
+        [(0, u_lo), (0, u_hi), (1, v_lo), (1, v_hi)]
+            .iter()
+            .filter(|&&(k, _)| if k == 0 { !u_seam } else { !v_seam })
+            .any(|&(k, edge)| {
+                let slack = 1e-9 * if k == 0 { u_hi - u_lo } else { v_hi - v_lo };
+                points.iter().all(|p| {
+                    let at = if k == 0 { p.param1.0 } else { p.param1.1 };
+                    (at - edge).abs() <= slack
+                })
+            })
+    };
+    let curves = intersect_plane_nurbs(nurbs, normal, d, 50)?;
+    let touching: Vec<bool> = (0..curves.len())
+        .map(|k| touches_along(nurbs, normal, d, &curves, k))
+        .collect();
+    Ok(curves
+        .into_iter()
+        .zip(touching)
+        .filter(|(c, touches)| !touches && !on_edge(&c.points))
+        .map(|(c, _)| c)
+        .collect())
 }
 
 /// Group section wires by containment: each outer wire collects all wires that
@@ -956,5 +1151,243 @@ mod tests {
             "sphere off-center section area should be {expected:.2}, got {total_area:.2} \
              (rel_err={rel_err:.2e})"
         );
+    }
+
+    /// The Bernstein coefficients of the polynomial whose power coefficients
+    /// are `power`, lowest first.
+    fn bernstein(power: &[f64]) -> Vec<f64> {
+        let n = power.len() - 1;
+        let choose =
+            |n: usize, k: usize| (0..k).fold(1.0, |c, m| c * (n - m) as f64 / (m + 1) as f64);
+        (0..=n)
+            .map(|i| {
+                (0..=i)
+                    .map(|k| choose(i, k) / choose(n, k) * power[k])
+                    .sum()
+            })
+            .collect()
+    }
+
+    /// A sheet `z = (x − a)³(x − b)` over `x` from 0 to 1, crossing the plane
+    /// `z = 0` along `x = a` with its normal along the plane's and along
+    /// `x = b` 0.0008 away, bounds the section along both: the side test's
+    /// probes start close enough not to reach past `x = b`.
+    #[test]
+    fn a_nurbs_face_crossing_the_plane_flat_beside_another_crossing_bounds_both() {
+        // Round a node of the 50-sample grid, so that the grid sees both.
+        let (a, b) = (24.0 / 49.0 - 0.0004, 24.0 / 49.0 + 0.0004);
+        let power = [
+            a * a * a * b,
+            -a * a * (a + 3.0 * b),
+            3.0 * a * (a + b),
+            -(3.0 * a + b),
+            1.0,
+        ];
+        let rows = bernstein(&power)
+            .into_iter()
+            .enumerate()
+            .map(|(i, z)| {
+                let x = i as f64 / 4.0;
+                vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)]
+            })
+            .collect();
+        let sheet = NurbsSurface::new(
+            4,
+            1,
+            [vec![0.0; 5], vec![1.0; 5]].concat(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 5],
+        )
+        .unwrap();
+        let curves = nurbs_section_curves(&sheet, Vec3::new(0.0, 0.0, 1.0), 0.0).unwrap();
+        assert_eq!(curves.len(), 2);
+    }
+
+    /// A sheet stretched a thousandfold along `x`, `z = (u − a)(u − b)` with
+    /// `x = 1000u`, crosses `z = 0` along two lines 8e-7 apart in `u`, where
+    /// it lies within 1e-9 of flat: no probe of the side test reaches past
+    /// the other line, and the section keeps both.
+    #[test]
+    fn a_nurbs_face_crossing_the_plane_twice_close_by_bounds_both() {
+        // Round a node of the 50-sample grid, so that the grid sees both.
+        let (a, b) = (24.0 / 49.0 - 4e-7, 24.0 / 49.0 + 4e-7);
+        let heights = [
+            a * b,
+            0.5f64.mul_add(-(a + b), a * b),
+            1.0 - (a + b) + a * b,
+        ];
+        let rows = heights
+            .iter()
+            .enumerate()
+            .map(|(i, &z)| {
+                let x = 500.0 * i as f64;
+                vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)]
+            })
+            .collect();
+        let sheet = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let curves = nurbs_section_curves(&sheet, Vec3::new(0.0, 0.0, 1.0), 0.0).unwrap();
+        assert_eq!(curves.len(), 2);
+    }
+
+    /// Across a closed direction's seam, the side test's gap to another
+    /// curve of the section is measured the shorter way round, passing over
+    /// a curve's own copy across the seam but not a close neighbour.
+    #[test]
+    fn the_gap_to_another_curve_runs_round_a_closed_seam() {
+        use brepkit_math::nurbs::intersection::{IntersectionCurve as IC, IntersectionPoint as IP};
+        // Two lines of the section on either side of a seam at `u = 0`, at
+        // `u = 0.9996` and `u = 0.0004`.
+        let line = |u: f64| {
+            let points: Vec<_> = [0.2, 0.5, 0.8]
+                .map(|v| IP {
+                    point: Point3::new(u, v, 0.0),
+                    param1: (u, v),
+                    param2: (0.0, 0.0),
+                })
+                .to_vec();
+            IC {
+                curve: brepkit_math::nurbs::curve::NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![points[0].point, points[2].point],
+                    vec![1.0, 1.0],
+                )
+                .unwrap(),
+                points,
+            }
+        };
+        let curves = [line(0.9996), line(0.0004)];
+        let round = gap_to_others(
+            &curves,
+            0,
+            (0.9996, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (true, false),
+        );
+        let open = gap_to_others(
+            &curves,
+            0,
+            (0.9996, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (false, false),
+        );
+        assert!((round - 0.0008).abs() < 1e-12, "{round}");
+        assert!((open - 0.9992).abs() < 1e-12, "{open}");
+        // A line along the seam comes back at `u = 1` as well as `u = 0`,
+        // and that copy is no neighbour; lines 8e-10 apart are, astride the
+        // seam or on an open surface.
+        let copy = [line(0.0), line(1.0)];
+        let gap = gap_to_others(
+            &copy,
+            0,
+            (0.0, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (true, false),
+        );
+        assert!(gap.is_infinite(), "{gap}");
+        let astride = [line(4e-10), line(1.0 - 4e-10)];
+        let gap = gap_to_others(
+            &astride,
+            0,
+            (4e-10, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (true, false),
+        );
+        assert!((gap - 8e-10).abs() < 1e-15, "{gap}");
+        let close = [line(0.5), line(0.5 + 8e-10)];
+        let gap = gap_to_others(
+            &close,
+            0,
+            (0.5, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (false, false),
+        );
+        assert!((gap - 8e-10).abs() < 1e-15, "{gap}");
+    }
+
+    /// A closed rational NURBS cylinder of radius 1 about `z`, whose seam
+    /// runs along `(1, 0, z)`, touches the plane `x = 1` along its seam: the
+    /// side test's probes wrap round the seam, and the contact bounds no
+    /// region of the section.
+    #[test]
+    fn a_closed_nurbs_face_touching_the_plane_along_its_seam_bounds_nothing() {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let ring = [
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, w),
+            (0.0, 1.0, 1.0),
+            (-1.0, 1.0, w),
+            (-1.0, 0.0, 1.0),
+            (-1.0, -1.0, w),
+            (0.0, -1.0, 1.0),
+            (1.0, -1.0, w),
+            (1.0, 0.0, 1.0),
+        ];
+        let cylinder = NurbsSurface::new(
+            2,
+            1,
+            vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ],
+            vec![0.0, 0.0, 1.0, 1.0],
+            ring.iter()
+                .map(|&(x, y, _)| vec![Point3::new(x, y, 0.0), Point3::new(x, y, 1.0)])
+                .collect(),
+            ring.iter().map(|&(_, _, w)| vec![w, w]).collect(),
+        )
+        .unwrap();
+        assert!(cylinder.is_periodic_u());
+        let curves = nurbs_section_curves(&cylinder, Vec3::new(1.0, 0.0, 0.0), 1.0).unwrap();
+        assert!(curves.is_empty(), "{} curves", curves.len());
+    }
+
+    /// A NURBS face crossing the plane where its normal lies along the
+    /// plane's, as `z = x³` and `z = x⁷` cross `z = 0` along `x = 0`, bounds
+    /// the section there; a trough whose floor only touches the plane does
+    /// not.
+    #[test]
+    fn a_nurbs_face_crossing_the_plane_where_it_lies_flat_bounds_the_section() {
+        let sheet = |rows: Vec<Vec<Point3>>| {
+            let degree = rows.len() - 1;
+            let knots = [vec![0.0; degree + 1], vec![1.0; degree + 1]].concat();
+            NurbsSurface::new(
+                degree,
+                1,
+                knots,
+                vec![0.0, 0.0, 1.0, 1.0],
+                rows,
+                vec![vec![1.0; 2]; degree + 1],
+            )
+            .unwrap()
+        };
+        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        for power in [3_u32, 7] {
+            // `(2u − 1)ⁿ` has Bernstein coefficients `(−1)ⁿ⁻ᵏ`.
+            let odd = sheet(
+                (0..=power)
+                    .map(|k| {
+                        let x = 2.0f64.mul_add(f64::from(k) / f64::from(power), -1.0);
+                        row(x, if (power - k) % 2 == 0 { 1.0 } else { -1.0 })
+                    })
+                    .collect(),
+            );
+            assert_eq!(
+                nurbs_section_curves(&odd, up, 0.0).unwrap().len(),
+                1,
+                "x^{power}"
+            );
+        }
+        let trough = sheet(vec![row(-1.0, 1.0), row(0.0, -1.0), row(1.0, 1.0)]);
+        assert!(nurbs_section_curves(&trough, up, 0.0).unwrap().is_empty());
     }
 }

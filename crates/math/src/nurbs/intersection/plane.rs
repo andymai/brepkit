@@ -126,7 +126,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    let (tiny, touches) = tiny_loops(
+    let (tiny, touches, valleys) = tiny_loops(
         surface,
         plane_normal,
         plane_d,
@@ -134,7 +134,7 @@ pub fn intersect_plane_nurbs(
         (u_min, u_step),
         (v_min, v_step),
     );
-    if crossings.is_empty() && tiny.is_empty() && touches.is_empty() {
+    if crossings.is_empty() && tiny.is_empty() && touches.is_empty() && valleys.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -363,8 +363,19 @@ pub fn intersect_plane_nurbs(
             ordered_chains.push(current);
         }
     }
+    // Where the surface touches the plane along a valley through a run of
+    // nodes, each node crosses the plane to its neighbours at itself, and
+    // the chains through those crossings repeat the valley traced along it.
+    let spans = spans(surface);
+    #[allow(clippy::cast_precision_loss)]
+    let reach = VALLEY_REACH / (n - 1) as f64;
+    ordered_chains.retain(|chain| {
+        !valleys
+            .iter()
+            .any(|valley| chain.iter().all(|p| beside(valley, p.param1, spans, reach)))
+    });
 
-    if ordered_chains.is_empty() && tiny.is_empty() && touches.is_empty() {
+    if ordered_chains.is_empty() && tiny.is_empty() && touches.is_empty() && valleys.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -406,6 +417,16 @@ pub fn intersect_plane_nurbs(
             points: chain,
         });
     }
+    // A valley the fit cannot take leaves no curve: the surface only
+    // touches the plane there.
+    for mut chain in valleys {
+        if let Ok(curve) = fit_within(&mut chain, FIT_TOLERANCE, &section) {
+            curves.push(IntersectionCurve {
+                curve,
+                points: chain,
+            });
+        }
+    }
     // A point where the plane touches the surface is a curve that stays on
     // it, with that one point.
     for touch in touches {
@@ -434,8 +455,14 @@ const TINY_LOOP_POINTS: usize = 32;
 ///
 /// An extremum within rounding of the plane, where the distance curves
 /// away from it both ways, is a point where the surface touches it,
-/// returned with the loops.
-#[allow(clippy::cast_precision_loss, clippy::type_complexity)]
+/// returned with the loops. Where it curves away one way only, the floor
+/// of a valley lies on the plane, and the surface touches the plane along
+/// it: [`trace_valley`] follows it.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::type_complexity,
+    clippy::too_many_lines
+)]
 fn tiny_loops(
     surface: &NurbsSurface,
     normal: Vec3,
@@ -443,7 +470,11 @@ fn tiny_loops(
     distances: &[Vec<f64>],
     (u_min, u_step): (f64, f64),
     (v_min, v_step): (f64, f64),
-) -> (Vec<Vec<IntersectionPoint>>, Vec<IntersectionPoint>) {
+) -> (
+    Vec<Vec<IntersectionPoint>>,
+    Vec<IntersectionPoint>,
+    Vec<Vec<IntersectionPoint>>,
+) {
     let n = distances.len();
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
@@ -501,6 +532,10 @@ fn tiny_loops(
     let noise = rounding(surface, normal, d);
     let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
     let mut touches: Vec<IntersectionPoint> = Vec::new();
+    let mut valleys: Vec<Vec<IntersectionPoint>> = Vec::new();
+    #[allow(clippy::cast_precision_loss)]
+    let step = 0.5 / (n - 1) as f64;
+    let (wide, tall) = spans(surface);
     for i in 0..n {
         for j in 0..n {
             let block = || {
@@ -529,17 +564,69 @@ fn tiny_loops(
             else {
                 continue;
             };
-            let centre = at(u, v);
+            let (mut u, mut v, mut centre) = (u, v, at(u, v));
+            let (mut fuu, mut fuv, mut fvv) = (fuu, fuv, fvv);
+            // `extremum` leaves out its step along a direction the distance
+            // barely curves, as along `y` on `x² + 1e-10·y²`, so it can stop
+            // short of a floor dipping below the plane. Before the extremum
+            // is let go, Newton along every direction curving away from the
+            // plane's far side finishes the descent, each step halved until
+            // it brings the distance nearer the plane, so that a curved
+            // floor's other direction stays settled.
+            if settled && centre.abs() > noise && centre * near > 0.0 {
+                let height = |q: (f64, f64)| at(q.0, q.1) * near.signum();
+                let mut best = height((u, v));
+                for _ in 0..MAX_NEWTON_ITER {
+                    let b = bend(surface, normal, (u, v));
+                    let (mut du, mut dv) = (0.0, 0.0);
+                    for (lambda, e) in [b.major, b.minor] {
+                        if lambda * near > 0.0 {
+                            let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
+                            (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
+                        }
+                    }
+                    let mut t = 1.0;
+                    let moved = loop {
+                        let q = (
+                            (t * du).mul_add(-wide, u).clamp(u_lo, u_hi),
+                            (t * dv).mul_add(-tall, v).clamp(v_lo, v_hi),
+                        );
+                        let h = height(q);
+                        if h < best {
+                            best = h;
+                            break Some(q);
+                        }
+                        t *= 0.5;
+                        if t < 1e-6 {
+                            break None;
+                        }
+                    };
+                    let Some(q) = moved else {
+                        break;
+                    };
+                    (u, v) = q;
+                    if t * du.abs().max(dv.abs()) <= 1e-12 {
+                        break;
+                    }
+                }
+                centre = at(u, v);
+                (fuu, fuv, fvv) = bend(surface, normal, (u, v)).hessian;
+            }
             let spread = (fuu - fvv).hypot(2.0 * fuv);
             let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
             if centre.abs() <= noise {
-                // A valley lying along the plane curves away from it one
-                // way only.
                 let point = surface.evaluate(u, v);
-                if settled
-                    && big * near > 0.0
-                    && small * near > 0.0
-                    && big.abs().min(small.abs()) > 1e-6 * big.abs().max(small.abs())
+                let known = |valley: &Vec<IntersectionPoint>| {
+                    beside(valley, (u, v), (wide, tall), VALLEY_REACH * 2.0 * step)
+                };
+                if !settled || valleys.iter().any(known) {
+                    continue;
+                }
+                let b = bend(surface, normal, (u, v));
+                let ((major, _), (minor, _)) = (b.major, b.minor);
+                if major * near > 0.0
+                    && minor * near > 0.0
+                    && minor.abs() > 1e-6 * major.abs()
                     && touches
                         .iter()
                         .all(|t: &IntersectionPoint| (t.point - point).length() > FIT_TOLERANCE)
@@ -549,6 +636,13 @@ fn tiny_loops(
                         param1: (u, v),
                         param2: (0.0, 0.0),
                     });
+                    continue;
+                }
+                if major * near > 0.0 && minor.abs() <= 1e-6 * major.abs() {
+                    let valley = trace_valley(surface, normal, d, (u, v), noise, step);
+                    if valley.len() >= 2 {
+                        valleys.push(valley);
+                    }
                 }
                 continue;
             }
@@ -610,7 +704,227 @@ fn tiny_loops(
             }
         }
     }
-    (loops, touches)
+    (loops, touches, valleys)
+}
+
+/// How near a traced valley, in grid steps, a point counts as on it: the
+/// valley sags far less than this between its points, half a step apart,
+/// and valleys further apart than this stay apart.
+const VALLEY_REACH: f64 = 0.125;
+
+/// Whether `(u, v)` lies within `reach` spans of the domain of the line
+/// through `curve`'s parameters.
+fn beside(
+    curve: &[IntersectionPoint],
+    (u, v): (f64, f64),
+    (wide, tall): (f64, f64),
+    reach: f64,
+) -> bool {
+    let from = |q: &IntersectionPoint| ((q.param1.0 - u) / wide, (q.param1.1 - v) / tall);
+    if let [only] = curve {
+        let (x, y) = from(only);
+        return x.hypot(y) <= reach;
+    }
+    curve.windows(2).any(|pair| {
+        let ((ax, ay), (bx, by)) = (from(&pair[0]), from(&pair[1]));
+        let (dx, dy) = (bx - ax, by - ay);
+        let length = dx.mul_add(dx, dy * dy);
+        let t = if length > 0.0 {
+            (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        t.mul_add(dx, ax).hypot(t.mul_add(dy, ay)) <= reach
+    })
+}
+
+/// Newton steps settling a point of a valley takes at most.
+const MAX_SETTLE_STEPS: usize = 128;
+
+/// The most a valley's direction may turn over one step of
+/// [`trace_valley`], in radians, before the next step is halved.
+const MAX_VALLEY_TURN: f64 = 0.25;
+
+/// Steps [`trace_valley`] takes each way at most.
+const MAX_VALLEY_STEPS: usize = 4096;
+
+/// The curve along which the surface touches the plane, through `start` on
+/// the floor of a valley of the plane's distance lying on the plane. It
+/// steps up to `step` spans of the domain along the valley's flat direction,
+/// less where it turns sharply, and settles back across the valley each
+/// step, both ways until the floor leaves the plane or the patch, or the
+/// curve comes round to `start`. A step that reaches the patch's edge
+/// settles along the edge, so that the curve ends on it. A walk that runs
+/// out of steps first gives no curve.
+#[allow(clippy::similar_names, clippy::too_many_lines)]
+fn trace_valley(
+    surface: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    start: (f64, f64),
+    noise: f64,
+    step: f64,
+) -> Vec<IntersectionPoint> {
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let (wide, tall) = spans(surface);
+    let at = |(u, v): (f64, f64)| {
+        let p = surface.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    // Newton across the valley, along its curved direction or, held to an
+    // edge, along the edge, until its step shrinks to rounding. Where the
+    // valley meets the edge at a slant its floor along the edge rises as a
+    // higher power, and Newton closes only a fraction of the way each step.
+    let settle = |(mut u, mut v): (f64, f64), pin: Option<Pin>| {
+        let mut settled = false;
+        let mut last = f64::INFINITY;
+        for _ in 0..MAX_SETTLE_STEPS {
+            let b = bend(surface, normal, (u, v));
+            let ((lambda, e), grad) = match pin {
+                None => (b.major, b.grad),
+                Some(Pin::U) => ((tall * tall * b.hessian.2, (0.0, 1.0)), b.grad),
+                Some(Pin::V) => ((wide * wide * b.hessian.0, (1.0, 0.0)), b.grad),
+            };
+            if lambda == 0.0 {
+                return None;
+            }
+            let s = grad.0.mul_add(e.0, grad.1 * e.1) / lambda;
+            u = (s * e.0).mul_add(-wide, u).clamp(u_lo, u_hi);
+            v = (s * e.1).mul_add(-tall, v).clamp(v_lo, v_hi);
+            if stalled(s.abs(), last, step) {
+                settled = true;
+                break;
+            }
+            last = s.abs();
+        }
+        (settled && at((u, v)).abs() <= noise).then_some((u, v))
+    };
+    let flat = |q: (f64, f64)| bend(surface, normal, q).minor.1;
+    let apart = |p: (f64, f64), q: (f64, f64)| ((p.0 - q.0) / wide).hypot((p.1 - q.1) / tall);
+    // `Some(true)` when the walk comes back round to `start`, `Some(false)`
+    // when it ends, and `None` when it runs out of steps first.
+    let walk = |sign: f64, pts: &mut Vec<(f64, f64)>| -> Option<bool> {
+        let (mut p, e) = (start, flat(start));
+        let mut dir = (sign * e.0, sign * e.1);
+        // The step, shortened where the valley turns sharply, as round a
+        // loop smaller than a step, and lengthened again where it runs
+        // straight.
+        let mut h = step;
+        // Whether the walk has left `start` behind, so that coming back
+        // near it closes the curve.
+        let mut away = false;
+        for _ in 0..MAX_VALLEY_STEPS {
+            // As far as the patch allows, up to one step.
+            let reach = |x: f64, dx: f64, lo: f64, hi: f64| {
+                if dx > 0.0 {
+                    (hi - x) / dx
+                } else if dx < 0.0 {
+                    (lo - x) / dx
+                } else {
+                    f64::INFINITY
+                }
+            };
+            let (across, along) = (
+                reach(p.0, dir.0 * wide, u_lo, u_hi),
+                reach(p.1, dir.1 * tall, v_lo, v_hi),
+            );
+            let t = h.min(across).min(along);
+            if t <= 1e-9 * step {
+                return Some(false);
+            }
+            let mut ahead = (
+                (t * dir.0).mul_add(wide, p.0),
+                (t * dir.1).mul_add(tall, p.1),
+            );
+            let pin = if t < h && across <= along {
+                ahead.0 = if dir.0 > 0.0 { u_hi } else { u_lo };
+                Some(Pin::U)
+            } else if t < h {
+                ahead.1 = if dir.1 > 0.0 { v_hi } else { v_lo };
+                Some(Pin::V)
+            } else {
+                None
+            };
+            // A step heading off the patch can leave a curve that turns back
+            // short of the edge: held to the edge, the valley's floor lies
+            // off the plane there, and the whole step, kept on the patch,
+            // settles freely.
+            let settled = match settle(ahead, pin) {
+                Some(next) => Some((next, pin.is_some())),
+                None if pin.is_some() => {
+                    let whole = (
+                        (h * dir.0).mul_add(wide, p.0).clamp(u_lo, u_hi),
+                        (h * dir.1).mul_add(tall, p.1).clamp(v_lo, v_hi),
+                    );
+                    settle(whole, None)
+                        .filter(|&next| apart(next, p) > 1e-3 * h)
+                        .map(|next| (next, false))
+                }
+                None => None,
+            };
+            let Some((next, on_edge)) = settled else {
+                return Some(false);
+            };
+            if away && apart(next, start) < h {
+                return Some(true);
+            }
+            away |= apart(next, start) > 2.0 * h;
+            pts.push(next);
+            if on_edge {
+                return Some(false);
+            }
+            let e = flat(next);
+            let e = if e.0.mul_add(dir.0, e.1 * dir.1) >= 0.0 {
+                e
+            } else {
+                (-e.0, -e.1)
+            };
+            let turn = e.0.mul_add(dir.0, e.1 * dir.1).clamp(-1.0, 1.0).acos();
+            if turn > MAX_VALLEY_TURN {
+                h = (0.5 * h).max(1e-4 * step);
+            } else if turn < 0.25 * MAX_VALLEY_TURN {
+                h = (2.0 * h).min(step);
+            }
+            dir = e;
+            p = next;
+        }
+        None
+    };
+    let mut forward = Vec::new();
+    let Some(closed) = walk(1.0, &mut forward) else {
+        return Vec::new();
+    };
+    let mut params = Vec::with_capacity(forward.len() * 2 + 2);
+    if closed {
+        params.push(start);
+        params.extend(forward);
+        params.push(start);
+    } else {
+        let mut back = Vec::new();
+        if walk(-1.0, &mut back).is_none() {
+            return Vec::new();
+        }
+        params.extend(back.into_iter().rev());
+        params.push(start);
+        params.extend(forward);
+    }
+    // Settling can bring a step back onto the point before it, which the
+    // fit cannot take twice.
+    let mut points: Vec<IntersectionPoint> = Vec::with_capacity(params.len());
+    for (u, v) in params {
+        if points
+            .last()
+            .is_none_or(|q| apart(q.param1, (u, v)) > 1e-9 * step)
+        {
+            points.push(IntersectionPoint {
+                point: surface.evaluate(u, v),
+                param1: (u, v),
+                param2: (0.0, 0.0),
+            });
+        }
+    }
+    points
 }
 
 /// How far evaluating the plane's distance on `surface` can round it: a few
@@ -750,6 +1064,14 @@ fn self_crossings(
     found
 }
 
+/// Whether Newton, its step now `size` after `last`, both in spans of the
+/// domain, has settled at a point `scale` spans across: its step has shrunk
+/// to rounding, or below a billionth of `scale` it has stopped shrinking,
+/// where rounding in a faintly curving distance's gradient holds it.
+fn stalled(size: f64, last: f64, scale: f64) -> bool {
+    size <= 1e-12 * scale || (size <= 1e-9 * scale && size >= 0.5 * last)
+}
+
 /// Where the plane's distance stops changing, as Newton from a seed
 /// finds it on the patch.
 struct Extremum {
@@ -760,31 +1082,103 @@ struct Extremum {
     hessian: (f64, f64, f64),
 }
 
+/// The plane's distance's second derivatives at `(u, v)`, and its gradient
+/// and its curvature's eigenvalues, the larger in size first, with their
+/// unit eigenvectors, per span of the domain: how the parameters scale
+/// leaves those alone.
+struct Bend {
+    grad: (f64, f64),
+    hessian: (f64, f64, f64),
+    major: (f64, (f64, f64)),
+    minor: (f64, (f64, f64)),
+}
+
+fn bend(surface: &NurbsSurface, normal: Vec3, (u, v): (f64, f64)) -> Bend {
+    let ders = surface.derivatives(u, v, 2);
+    let hessian = (
+        normal.dot(ders[2][0]),
+        normal.dot(ders[1][1]),
+        normal.dot(ders[0][2]),
+    );
+    let (wide, tall) = spans(surface);
+    let (fu, fv) = (wide * normal.dot(ders[1][0]), tall * normal.dot(ders[0][1]));
+    let (fuu, fuv, fvv) = (
+        wide * wide * hessian.0,
+        wide * tall * hessian.1,
+        tall * tall * hessian.2,
+    );
+    let spread = (fuu - fvv).hypot(2.0 * fuv);
+    let mean = 0.5 * (fuu + fvv);
+    let (high, low) = (mean + 0.5 * spread, mean - 0.5 * spread);
+    // An eigenvector of the 2 by 2 Hessian, from whichever of its rows
+    // leaves the longer one.
+    let along = |lambda: f64| {
+        let (a, b) = ((lambda - fvv, fuv), (fuv, lambda - fuu));
+        let (x, y) = if a.0.hypot(a.1) >= b.0.hypot(b.1) {
+            a
+        } else {
+            b
+        };
+        let len = x.hypot(y);
+        if len > 0.0 {
+            (x / len, y / len)
+        } else {
+            (1.0, 0.0)
+        }
+    };
+    let (major, minor) = if high.abs() >= low.abs() {
+        (high, low)
+    } else {
+        (low, high)
+    };
+    let major_dir = along(major);
+    Bend {
+        grad: (fu, fv),
+        hessian,
+        major: (major, major_dir),
+        minor: (minor, (-major_dir.1, major_dir.0)),
+    }
+}
+
+/// How far the patch's domain runs in `u` and in `v`.
+fn spans(surface: &NurbsSurface) -> (f64, f64) {
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    (u_hi - u_lo, v_hi - v_lo)
+}
+
+/// Where the plane's distance stops changing, by Newton from `seed` on the
+/// patch. Along a direction where it curves less than a thousandth as much
+/// as across it the step is left out, so along a valley Newton settles
+/// across it: near a curved valley's floor that direction's curving is
+/// faint and swings with the distance from the floor, and stepping along
+/// it with rounding's gradient sends Newton wandering along the valley.
 fn extremum(surface: &NurbsSurface, normal: Vec3, (mut u, mut v): (f64, f64)) -> Option<Extremum> {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
     let mut found = None;
+    let mut last = f64::INFINITY;
     for _ in 0..MAX_NEWTON_ITER {
-        let ders = surface.derivatives(u, v, 2);
-        let (fu, fv) = (normal.dot(ders[1][0]), normal.dot(ders[0][1]));
-        let (fuu, fuv, fvv) = (
-            normal.dot(ders[2][0]),
-            normal.dot(ders[1][1]),
-            normal.dot(ders[0][2]),
-        );
-        let det = fuu.mul_add(fvv, -(fuv * fuv));
-        if det.abs() <= f64::EPSILON * (fuu.abs() + fvv.abs()).powi(2) {
+        let b = bend(surface, normal, (u, v));
+        if b.major.0 == 0.0 {
             break;
         }
-        let du = fvv.mul_add(fu, -(fuv * fv)) / det;
-        let dv = fuu.mul_add(fv, -(fuv * fu)) / det;
-        u = (u - du).clamp(u_lo, u_hi);
-        v = (v - dv).clamp(v_lo, v_hi);
-        let settled = du.abs() <= 1e-12 * (u_hi - u_lo) && dv.abs() <= 1e-12 * (v_hi - v_lo);
+        let (mut du, mut dv) = (0.0, 0.0);
+        for (lambda, e) in [b.major, b.minor] {
+            if lambda.abs() > 1e-3 * b.major.0.abs() {
+                let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
+                (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
+            }
+        }
+        u = du.mul_add(-(u_hi - u_lo), u).clamp(u_lo, u_hi);
+        v = dv.mul_add(-(v_hi - v_lo), v).clamp(v_lo, v_hi);
+        let size = du.abs().max(dv.abs());
+        let settled = stalled(size, last, 1.0);
+        last = size;
         found = Some(Extremum {
             at: (u, v),
             settled,
-            hessian: (fuu, fuv, fvv),
+            hessian: b.hessian,
         });
         if settled {
             break;
