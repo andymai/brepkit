@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793263934686,
+  "lastUpdate": 1793269590052,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59777,6 +59777,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23073853,
             "range": "± 72419",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "141c51d019eb3df1ae9438e5f309816b659398c2",
+          "message": "fix(math): meet equal cylinders whose axes cross in exact cornered loops (#2141)\n\nTwo cylinders of one radius whose axes cross now meet in exact curves,\ninstead of interpolated loops that cut the corners where the curves\ncross.\n\nToday `algebraic_cylinder_cylinder` solves each ruling of the first\ncylinder against the second and interpolates the roots. For equal radii\nthe roots pair into two loops, each running along one ellipse and\nturning onto the other where the two ellipses cross, and the\ninterpolation rounds those corners off: for cylinders of radius 1 along\nz and x, the loops stray up to 1.6e-4 from the cylinders. `phase_ff`\ngets its cylinder sections from the same function, through\n`intersect_analytic_analytic_in_region`.\n\n## Change\n\n- `crossing_equal_cylinders`: the curve is two ellipses in the planes\nthrough the crossing that bisect the axes, where a point's offsets along\nthe two axes are equal or opposite. Both have their minor axis, of the\nradius, along the axes' common normal, and cross at its two ends.\n- They come back as the same two loops the rulings give: the halves of\nboth ellipses on one side of the crossing along the first axis, then on\nthe other. Each loop is one rational quadratic NURBS, exact, with a\ncorner knot where its halves meet, and one loop starts at each end of\nthe common normal. The face splitter already routes these closed loops,\nwhile four open half ellipses between the crossings leave both walls\nunsplit.\n- The case applies only when the radii match and the axes cross to\nrounding, read at the crossing's own scale. Axes that miss by `δ` part\nthe curves at the crossings by about `√(δ·r)`, so a miss even of 1e-9\nkeeps the ruling solve, as do origins so far along their axes that the\nmiss carries more rounding than that.\n- It also needs the axes far enough from parallel: an ellipse's\nsemi-major axis is `2r / |d1 ∓ d2|`, and rounding the axes moves its far\nvertices by about `2rε / |d1 ∓ d2|²`, which must stay under a thousandth\nof the tolerance.\n\n## Tests\n\n- `equal_cylinders_with_crossing_axes_meet_in_two_cornered_loops`:\nradius 1.5, axes 60° apart, crossing at (1, 2, 3). Each loop stays\nwithin 1e-13 of both cylinders and on its side of the crossing, starts\nand ends at its end of the common normal, and passes the other end\nhalfway round. The four ellipse vertices along the major axes are\ndistinct.\n- `nearly_crossing_equal_cylinders_are_not_ellipses`: axes 1e-9 apart,\nradii 1e-9 apart, or a 1e-6 miss between origins 1e8 apart along an\naxis, are not taken for this case.\n- `nearly_parallel_equal_cylinders_are_not_ellipses`: radius-10\ncylinders whose axes are 1e-8 or 1.5e-5 apart in angle are not taken\neither.\n- The existing `steinmetz_lens_fuse_closed_form_volume` (a radius-3\nfuse) now takes the new path and passes. The pose sweep and truth audit\nnever reach it, which I counted with a temporary print.\n- `cargo test --workspace --exclude brepkit-render` passes 3697 tests,\nand the first test fails without the new case.\n- An intersect of two such cylinders of radius 1 and length 4 does not\nfinish within 25 minutes on `main`, nor within 10 on this branch: both\nspend the time in `boolean_inner` tessellating a face. That is separate\nfrom this change.",
+          "timestamp": "2026-10-29T03:23:27-07:00",
+          "tree_id": "f311b10dee332e4e9fd26f1eda5d2edbdd317d37",
+          "url": "https://github.com/andymai/brepkit/commit/141c51d019eb3df1ae9438e5f309816b659398c2"
+        },
+        "date": 1793269580597,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 902522,
+            "range": "± 1633",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 975220,
+            "range": "± 4278",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10317,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 569606,
+            "range": "± 1815",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23496156,
+            "range": "± 115415",
             "unit": "ns/iter"
           }
         ]
