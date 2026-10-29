@@ -910,11 +910,13 @@ impl Parabola3D {
         })
     }
 
-    /// Creates a parabola with an explicit in-plane `u_axis`, perpendicular
-    /// to `axis_dir`, along which `t` runs from the vertex.
+    /// Creates a parabola opening along `axis_dir`, with `t` running from
+    /// the vertex along `u_axis`. Both are normalized, and `u_axis` is made
+    /// perpendicular to `axis_dir`.
     ///
     /// # Errors
-    /// Returns an error if `focal_length` is not positive.
+    /// Returns an error if `focal_length` is not positive, or if either
+    /// direction is zero or they are parallel.
     pub fn with_axes(
         vertex: Point3,
         axis_dir: Vec3,
@@ -928,6 +930,8 @@ impl Parabola3D {
                 max: f64::MAX,
             });
         }
+        let axis_dir = axis_dir.normalize()?;
+        let u_axis = (u_axis - axis_dir * u_axis.dot(axis_dir)).normalize()?;
         Ok(Self {
             vertex,
             axis_dir,
@@ -1044,13 +1048,14 @@ impl Hyperbola3D {
 
     /// Creates a hyperbola with explicit in-plane axes: `u_axis` along the
     /// real semi-axis toward the branch `t` traces, `v_axis` along the
-    /// imaginary one.
+    /// imaginary one. Both are normalized, `v_axis` is made perpendicular
+    /// to `u_axis`, and the normal is `u_axis × v_axis`.
     ///
     /// # Errors
-    /// Returns an error if either semi-axis is non-positive.
+    /// Returns an error if either semi-axis is non-positive, or if either
+    /// direction is zero or they are parallel.
     pub fn with_axes(
         center: Point3,
-        normal: Vec3,
         semi_major: f64,
         semi_minor: f64,
         u_axis: Vec3,
@@ -1063,9 +1068,11 @@ impl Hyperbola3D {
                 max: f64::MAX,
             });
         }
+        let u_axis = u_axis.normalize()?;
+        let v_axis = (v_axis - u_axis * v_axis.dot(u_axis)).normalize()?;
         Ok(Self {
             center,
-            normal,
+            normal: u_axis.cross(v_axis),
             semi_major,
             semi_minor,
             u_axis,

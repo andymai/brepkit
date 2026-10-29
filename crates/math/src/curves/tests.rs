@@ -843,3 +843,42 @@ fn tilted_conic_boxes_match_their_samples() {
         assert!((whole.min - full.min).length() < 1e-12 && (whole.max - full.max).length() < 1e-12);
     }
 }
+
+/// Directions given at any length, or a little off square, are normalized
+/// and squared: the focus `focus()` reports is where the evaluated
+/// parabola's focus is, and the hyperbola's vertex sits a real semi-axis
+/// along its normalized `u_axis`.
+#[test]
+fn conics_with_axes_normalize_their_frames() {
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let parabola = Parabola3D::with_axes(
+        origin,
+        Vec3::new(0.0, 0.0, 2.0),
+        Vec3::new(1.0, 0.0, 0.1),
+        1.0,
+    )
+    .unwrap();
+    assert!((parabola.focus() - Point3::new(0.0, 0.0, 1.0)).length() < 1e-15);
+    assert!((parabola.evaluate(2.0) - Point3::new(2.0, 0.0, 1.0)).length() < 1e-15);
+    let hyperbola = Hyperbola3D::with_axes(
+        origin,
+        2.0,
+        1.0,
+        Vec3::new(3.0, 0.0, 0.0),
+        Vec3::new(1.0, 1.0, 0.0),
+    )
+    .unwrap();
+    assert!((hyperbola.evaluate(0.0) - Point3::new(2.0, 0.0, 0.0)).length() < 1e-15);
+    assert!((hyperbola.normal() - Vec3::new(0.0, 0.0, 1.0)).length() < 1e-15);
+    let (near, _) = hyperbola.foci();
+    assert!((near - Point3::new(5.0_f64.sqrt(), 0.0, 0.0)).length() < 1e-15);
+    assert!(
+        Parabola3D::with_axes(
+            origin,
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, 3.0),
+            1.0
+        )
+        .is_err()
+    );
+}
