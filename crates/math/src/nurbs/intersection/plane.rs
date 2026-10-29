@@ -1,10 +1,11 @@
 //! Plane-NURBS surface intersection.
 
 use crate::MathError;
+use crate::nurbs::projection::{project_point_to_surface, project_point_to_surface_from};
 use crate::nurbs::surface::NurbsSurface;
-use crate::vec::Vec3;
+use crate::vec::{Point3, Vec3};
 
-use super::chaining::build_curves_from_chains;
+use super::chaining::{Section, build_curves_from_chains};
 use super::{IntersectionCurve, IntersectionPoint, MAX_NEWTON_ITER};
 
 /// Intersect a plane with a NURBS surface.
@@ -182,6 +183,11 @@ pub fn intersect_plane_nurbs(
             chain.push(next);
             current = next;
         }
+        // A loop ends beside its start; closing it keeps the cell between
+        // them, and the curve, unbroken.
+        if chain.len() > 2 && links[current].contains(&start) {
+            chain.push(start);
+        }
         chain
     };
     let degree_one: Vec<usize> = (0..crossings.len())
@@ -226,8 +232,32 @@ pub fn intersect_plane_nurbs(
     }
 
     // Phase 5: Fit a curve through each ordered chain.
-    build_curves_from_chains(&ordered_chains)
+    let len = plane_normal.length();
+    let foot = |p: Point3, near: &IntersectionPoint| {
+        project_point_to_surface_from(surface, p, near.param1, FIT_TOLERANCE)
+            .or_else(|_| project_point_to_surface(surface, p, FIT_TOLERANCE))
+            .ok()
+    };
+    let off = |p: Point3, near: &IntersectionPoint| {
+        let off_plane = (plane_normal.dot(Vec3::new(p.x(), p.y(), p.z())) - plane_d).abs() / len;
+        Some(foot(p, near)?.distance.max(off_plane))
+    };
+    let settle = |p: Point3, near: &IntersectionPoint| {
+        let foot = foot(p, near)?;
+        refine_plane_surface_point(surface, plane_normal, plane_d, (foot.u, foot.v), None)
+    };
+    build_curves_from_chains(
+        &ordered_chains,
+        FIT_TOLERANCE,
+        &Section {
+            off: &off,
+            settle: &settle,
+        },
+    )
 }
+
+/// How far a fitted section may stray from the plane or the surface.
+const FIT_TOLERANCE: f64 = 1e-7;
 
 /// The parameter a boundary crossing holds fixed during refinement.
 #[derive(Clone, Copy)]

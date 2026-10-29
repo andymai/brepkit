@@ -400,6 +400,32 @@ pub fn project_point_to_surface(
     }
 }
 
+/// Project `point` onto `surface` by Newton from `(u, v)`, for a point
+/// known to lie near the surface there.
+///
+/// # Errors
+///
+/// Returns an error if Newton does not converge.
+pub(crate) fn project_point_to_surface_from(
+    surface: &NurbsSurface,
+    point: Point3,
+    (u, v): (f64, f64),
+    tolerance: f64,
+) -> Result<SurfaceProjection, MathError> {
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
+    let wraps = surface.is_periodic_u() || surface.is_periodic_v();
+    let (u, v, pt) = surface_newton_refine(
+        surface, point, u, v, u_min, u_max, v_min, v_max, tolerance, wraps,
+    )?;
+    Ok(SurfaceProjection {
+        u,
+        v,
+        point: pt,
+        distance: (pt - point).length(),
+    })
+}
+
 fn project_from_coarse_grid(
     surface: &NurbsSurface,
     point: Point3,
