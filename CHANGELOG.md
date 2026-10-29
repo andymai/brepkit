@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.1](https://github.com/andymai/brepkit/compare/v4.5.0...v4.5.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** meet touching coaxial tori and balls along their one circle ([#2132](https://github.com/andymai/brepkit/issues/2132)) ([3166ff9](https://github.com/andymai/brepkit/commit/3166ff936a53e4e9fde9e20ef075113fb172cfb8))
+
 ## [4.5.0](https://github.com/andymai/brepkit/compare/v4.4.3...v4.5.0) (2026-10-29)
 
 
