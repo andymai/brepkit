@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.8](https://github.com/andymai/brepkit/compare/v4.5.7...v4.5.8) (2026-10-29)
+
+
+### Bug Fixes
+
+* **blend:** fillet rims and corners that end on a cap's hole ([#2151](https://github.com/andymai/brepkit/issues/2151)) ([dc2cb3b](https://github.com/andymai/brepkit/commit/dc2cb3b8d0c0465677cffdca7154d3f2c3575f28))
+
 ## [4.5.7](https://github.com/andymai/brepkit/compare/v4.5.6...v4.5.7) (2026-10-29)
 
 
