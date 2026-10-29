@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.5.8](https://github.com/andymai/brepkit/compare/v4.5.7...v4.5.8) (2026-10-29)
+
+
+### Bug Fixes
+
+* **blend:** fillet rims and corners that end on a cap's hole ([#2151](https://github.com/andymai/brepkit/issues/2151)) ([dc2cb3b](https://github.com/andymai/brepkit/commit/dc2cb3b8d0c0465677cffdca7154d3f2c3575f28))
+
+## [4.5.7](https://github.com/andymai/brepkit/compare/v4.5.6...v4.5.7) (2026-10-29)
+
+
+### Bug Fixes
+
+* **blend:** round a set-back trihedral corner on the ball's own sphere ([#2153](https://github.com/andymai/brepkit/issues/2153)) ([14dd3fd](https://github.com/andymai/brepkit/commit/14dd3fdf7c5cbf596a3a937bf5d3425303c8eb25))
+
+## [4.5.6](https://github.com/andymai/brepkit/compare/v4.5.5...v4.5.6) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** end a plane section's curves where the section crosses itself ([#2147](https://github.com/andymai/brepkit/issues/2147)) ([de389a9](https://github.com/andymai/brepkit/commit/de389a9db06fb0a73a87b9c2a089cf2429e1e49b))
+* **wasm:** stop rejecting exact fillets on wide parts for chord error ([#2152](https://github.com/andymai/brepkit/issues/2152)) ([c009e40](https://github.com/andymai/brepkit/commit/c009e403ca816f58794b2bc98d144ec97062290b))
+
 ## [4.5.5](https://github.com/andymai/brepkit/compare/v4.5.4...v4.5.5) (2026-10-29)
 
 
