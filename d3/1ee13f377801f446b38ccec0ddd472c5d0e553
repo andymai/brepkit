@@ -1,0 +1,30 @@
+crates/math/src/nurbs/intersection/tests.rs
+  s_a2dc21dbec3f2b::t_e91f1ca4271a87 2136-2139,2141-2143,2147-2148,2166-2167,2169-2183
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_2ca16cd9085677 6797-6804
+  s_a2dc21dbec3f2b::t_e91f1ca4271a87 10246-10263
+crates/operations/src/section.rs
+  s_a2dc21dbec3f2b::t_2ca16cd9085677 109-115,117-119
+crates/math/src/nurbs/intersection/plane.rs
+  s_a2dc21dbec3f2b::t_1ce491b9cad955 699-723,729,735,741-752,758-759,762-768,775
+  s_a2dc21dbec3f2b::t_175e6c45187f22 594-595
+  s_a2dc21dbec3f2b::t_60d38ff454e709 450-464
+  s_a2dc21dbec3f2b::t_b48f1578640433 121,129,292,334-340,369-376,384-388,446-447,481-486,497-504,566-593,596-670
+  s_a2dc21dbec3f2b::t_489c512db0c936 724-728,730-734,736-740
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d31ee13f377801f446b38ccec0ddd472c5d0e553",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
