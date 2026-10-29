@@ -15,12 +15,74 @@ use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use brepkit_math::nurbs::intersection::{
-    IntersectionCurve, IntersectionPoint, intersect_plane_nurbs, touches_along,
+    IntersectionCurve, IntersectionPoint, intersect_plane_nurbs,
 };
 use brepkit_math::nurbs::surface::NurbsSurface;
 
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
+
+/// Whether the plane only touches `nurbs` along the section through
+/// `points`, without crossing it.
+///
+/// The surface's normal lies along the plane's at every point, and across
+/// the curve at its middle point the surface stays on one side of the
+/// plane. Where the surface crosses with its normal along the plane's, as
+/// `z = x³` crosses `z = 0`, the curve parts the regions either side. A
+/// probe a thousandth of the domain across can stay within rounding of the
+/// plane, as across `z = x⁷`, and settles nothing: wider ones follow, and a
+/// curve none of them settles stays.
+fn touches_along(nurbs: &NurbsSurface, normal: Vec3, d: f64, points: &[IntersectionPoint]) -> bool {
+    let tangent = |p: &IntersectionPoint| {
+        nurbs
+            .normal(p.param1.0, p.param1.1)
+            .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
+    };
+    if points.len() < 2 || !points.iter().all(tangent) {
+        return false;
+    }
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let (wide, tall) = (u_hi - u_lo, v_hi - v_lo);
+    let k = points.len() / 2;
+    let (a, b) = (
+        points[k - 1].param1,
+        points[(k + 1).min(points.len() - 1)].param1,
+    );
+    // Across the curve in parameters scaled to the domain.
+    let (tu, tv) = ((b.0 - a.0) / wide, (b.1 - a.1) / tall);
+    let len = tu.hypot(tv);
+    if len == 0.0 {
+        return false;
+    }
+    let mid = points[k].param1;
+    let rounding = 4.0
+        * f64::EPSILON
+        * nurbs
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|p| {
+                (normal.x() * p.x()).abs()
+                    + (normal.y() * p.y()).abs()
+                    + (normal.z() * p.z()).abs()
+                    + d.abs()
+            })
+            .fold(0.0, f64::max);
+    let side = |reach: f64| {
+        let u = (reach * wide).mul_add(-tv / len, mid.0).clamp(u_lo, u_hi);
+        let v = (reach * tall).mul_add(tu / len, mid.1).clamp(v_lo, v_hi);
+        let p = nurbs.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    for reach in [1e-3, 1e-2, 1e-1] {
+        let (left, right) = (side(reach), side(-reach));
+        if left.abs() > rounding && right.abs() > rounding {
+            return left * right > 0.0;
+        }
+    }
+    false
+}
 
 /// Chain intersection curve points into consecutive segment pairs.
 ///

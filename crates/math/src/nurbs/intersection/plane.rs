@@ -346,6 +346,17 @@ pub fn intersect_plane_nurbs(
             ordered_chains.push(current);
         }
     }
+    // Where the surface touches the plane along a valley through a run of
+    // nodes, each node crosses the plane to its neighbours at itself, and
+    // the chains through those crossings repeat the valley traced along it.
+    let spans = spans(surface);
+    #[allow(clippy::cast_precision_loss)]
+    let reach = VALLEY_REACH / (n - 1) as f64;
+    ordered_chains.retain(|chain| {
+        !valleys
+            .iter()
+            .any(|valley| chain.iter().all(|p| beside(valley, p.param1, spans, reach)))
+    });
 
     if ordered_chains.is_empty() && tiny.is_empty() && touches.is_empty() && valleys.is_empty() {
         return Ok(Vec::new());
@@ -409,60 +420,6 @@ pub fn intersect_plane_nurbs(
         });
     }
     Ok(curves)
-}
-
-/// Whether the plane only touches `surface` along the section through
-/// `points`, without crossing it.
-///
-/// The surface's normal lies along the plane's at every point, and across
-/// the curve at its middle point the surface stays on one side of the plane
-/// or on it. Where the surface crosses with its normal along the plane's,
-/// as `z = x³` crosses `z = 0`, the curve still parts the regions either
-/// side.
-#[must_use]
-pub fn touches_along(
-    surface: &NurbsSurface,
-    normal: Vec3,
-    d: f64,
-    points: &[IntersectionPoint],
-) -> bool {
-    let tangent = |p: &IntersectionPoint| {
-        surface
-            .normal(p.param1.0, p.param1.1)
-            .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
-    };
-    if points.len() < 2 || !points.iter().all(tangent) {
-        return false;
-    }
-    let (u_lo, u_hi) = surface.domain_u();
-    let (v_lo, v_hi) = surface.domain_v();
-    let (wide, tall) = (u_hi - u_lo, v_hi - v_lo);
-    let k = points.len() / 2;
-    let (a, b) = (
-        points[k - 1].param1,
-        points[(k + 1).min(points.len() - 1)].param1,
-    );
-    // Across the curve in parameters scaled to the domain, a thousandth of
-    // it each way.
-    let (tu, tv) = ((b.0 - a.0) / wide, (b.1 - a.1) / tall);
-    let len = tu.hypot(tv);
-    if len == 0.0 {
-        return true;
-    }
-    let mid = points[k].param1;
-    let noise = rounding(surface, normal, d);
-    let side = |sign: f64| {
-        let u = (sign * 1e-3 * wide)
-            .mul_add(-tv / len, mid.0)
-            .clamp(u_lo, u_hi);
-        let v = (sign * 1e-3 * tall)
-            .mul_add(tu / len, mid.1)
-            .clamp(v_lo, v_hi);
-        let p = surface.evaluate(u, v);
-        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
-    };
-    let (left, right) = (side(1.0), side(-1.0));
-    left * right >= 0.0 || left.abs() <= noise || right.abs() <= noise
 }
 
 /// How far a fitted section may stray from the plane or the surface.
@@ -595,10 +552,10 @@ fn tiny_loops(
             let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
             if centre.abs() <= noise {
                 let point = surface.evaluate(u, v);
-                let known = |q: &IntersectionPoint| {
-                    ((q.param1.0 - u) / wide).hypot((q.param1.1 - v) / tall) <= 2.0 * step
+                let known = |valley: &Vec<IntersectionPoint>| {
+                    beside(valley, (u, v), (wide, tall), VALLEY_REACH * 2.0 * step)
                 };
-                if !settled || valleys.iter().flatten().any(known) {
+                if !settled || valleys.iter().any(known) {
                     continue;
                 }
                 let b = bend(surface, normal, (u, v));
@@ -684,6 +641,37 @@ fn tiny_loops(
         }
     }
     (loops, touches, valleys)
+}
+
+/// How near a traced valley, in grid steps, a point counts as on it: the
+/// valley sags far less than this between its points, half a step apart,
+/// and valleys further apart than this stay apart.
+const VALLEY_REACH: f64 = 0.125;
+
+/// Whether `(u, v)` lies within `reach` spans of the domain of the line
+/// through `curve`'s parameters.
+fn beside(
+    curve: &[IntersectionPoint],
+    (u, v): (f64, f64),
+    (wide, tall): (f64, f64),
+    reach: f64,
+) -> bool {
+    let from = |q: &IntersectionPoint| ((q.param1.0 - u) / wide, (q.param1.1 - v) / tall);
+    if let [only] = curve {
+        let (x, y) = from(only);
+        return x.hypot(y) <= reach;
+    }
+    curve.windows(2).any(|pair| {
+        let ((ax, ay), (bx, by)) = (from(&pair[0]), from(&pair[1]));
+        let (dx, dy) = (bx - ax, by - ay);
+        let length = dx.mul_add(dx, dy * dy);
+        let t = if length > 0.0 {
+            (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        t.mul_add(dx, ax).hypot(t.mul_add(dy, ay)) <= reach
+    })
 }
 
 /// Steps [`trace_valley`] takes each way at most.
