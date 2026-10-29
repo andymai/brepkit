@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.5.4](https://github.com/andymai/brepkit/compare/v4.5.3...v4.5.4) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** meet a ball touching a ring torus off its axis at the touching point ([#2143](https://github.com/andymai/brepkit/issues/2143)) ([eab41c8](https://github.com/andymai/brepkit/commit/eab41c88cf35aa521be2494179bde3a2e7e0f1d3))
+* **math:** read a plane section's nodes and extrema within rounding of the plane ([#2144](https://github.com/andymai/brepkit/issues/2144)) ([f527076](https://github.com/andymai/brepkit/commit/f5270761894f0da33283f05a8f9618eb69c901d1))
+
 ## [4.5.3](https://github.com/andymai/brepkit/compare/v4.5.2...v4.5.3) (2026-10-29)
 
 
