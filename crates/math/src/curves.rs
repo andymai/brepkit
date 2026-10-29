@@ -910,6 +910,32 @@ impl Parabola3D {
         })
     }
 
+    /// Creates a parabola with an explicit in-plane `u_axis`, perpendicular
+    /// to `axis_dir`, along which `t` runs from the vertex.
+    ///
+    /// # Errors
+    /// Returns an error if `focal_length` is not positive.
+    pub fn with_axes(
+        vertex: Point3,
+        axis_dir: Vec3,
+        u_axis: Vec3,
+        focal_length: f64,
+    ) -> Result<Self, MathError> {
+        if focal_length <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: focal_length,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        Ok(Self {
+            vertex,
+            axis_dir,
+            focal_length,
+            u_axis,
+        })
+    }
+
     /// Evaluates the parabola at parameter `t`.
     ///
     /// At `t = 0` this returns the vertex.
@@ -1013,6 +1039,37 @@ impl Hyperbola3D {
             semi_minor,
             u_axis: f.x,
             v_axis: f.y,
+        })
+    }
+
+    /// Creates a hyperbola with explicit in-plane axes: `u_axis` along the
+    /// real semi-axis toward the branch `t` traces, `v_axis` along the
+    /// imaginary one.
+    ///
+    /// # Errors
+    /// Returns an error if either semi-axis is non-positive.
+    pub fn with_axes(
+        center: Point3,
+        normal: Vec3,
+        semi_major: f64,
+        semi_minor: f64,
+        u_axis: Vec3,
+        v_axis: Vec3,
+    ) -> Result<Self, MathError> {
+        if semi_major <= 0.0 || semi_minor <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: semi_major.min(semi_minor),
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        Ok(Self {
+            center,
+            normal,
+            semi_major,
+            semi_minor,
+            u_axis,
+            v_axis,
         })
     }
 
