@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.4.3](https://github.com/andymai/brepkit/compare/v4.4.2...v4.4.3) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** close plane sections of NURBS surfaces that loop ([#2133](https://github.com/andymai/brepkit/issues/2133)) ([1d83534](https://github.com/andymai/brepkit/commit/1d8353403d434ac8e6e63b15d03350d4e5036500))
+* **math:** intersect parallel cylinders along exact rulings ([#2130](https://github.com/andymai/brepkit/issues/2130)) ([4c4a183](https://github.com/andymai/brepkit/commit/4c4a1835a266d1de9c20cef3a7acd0c86e3ff910))
+
 ## [4.4.2](https://github.com/andymai/brepkit/compare/v4.4.1...v4.4.2) (2026-10-29)
 
 
