@@ -2553,7 +2553,11 @@ fn off_axis_touch(sphere: &SphericalSurface, torus: &ToroidalSurface) -> Option<
     let (to_near, to_far) = (sphere.center() - near, sphere.center() - far);
     let (d_near, d_far) = (to_near.length(), to_far.length());
     let slack = 64.0 * f64::EPSILON * (big + small + radius + offset.length());
-    if (d_near - small - radius).abs() <= slack || (small - d_near - radius).abs() <= slack {
+    // A ball centred on the core circle meets the tube along a whole
+    // meridian, not at a point.
+    if d_near > slack
+        && ((d_near - small - radius).abs() <= slack || (small - d_near - radius).abs() <= slack)
+    {
         return Some(near + to_near * (small / d_near));
     }
     ((d_far + small - radius).abs() <= slack).then(|| far - to_far * (small / d_far))
@@ -6671,7 +6675,8 @@ mod tests {
     /// A ball off a ring's axis touches it at one point from outside the
     /// tube, from inside it, or holding the whole ring, and that point is
     /// all they share. A ball reaching 1e-6 further cuts the tube in a small
-    /// loop, which is the marcher's.
+    /// loop, and one centred on the core circle meets it along a meridian;
+    /// both are the marcher's.
     #[test]
     fn a_ball_off_a_rings_axis_touches_it_at_one_point() {
         let o = Point3::new(1.0, 2.0, 3.0);
@@ -6711,5 +6716,7 @@ mod tests {
         assert!((touches[0] - (o + out * 4.0)).length() < 1e-12);
         let past = SphericalSurface::new(o + out * 5.0, 1.0 + 1e-6).unwrap();
         assert!(exact_sphere_torus(&past, &ring).unwrap().is_none());
+        let on_core = SphericalSurface::new(o + out * 3.0, 1.0).unwrap();
+        assert!(exact_sphere_torus(&on_core, &ring).unwrap().is_none());
     }
 }
