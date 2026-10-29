@@ -6813,15 +6813,10 @@ fn plane_nurbs_intersection(
     let mut results = Vec::new();
     for ic in isect_curves {
         // A point where the plane touches the surface splits neither face,
-        // nor a curve along which the surface lies on the plane, and a
-        // curve along one of the face's own edges is that edge.
-        let tangent = |p: &nurbs_isect::IntersectionPoint| {
-            nurbs
-                .normal(p.param1.0, p.param1.1)
-                .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
-        };
+        // nor a curve along which the surface touches the plane from one
+        // side, and a curve along one of the face's own edges is that edge.
         if ic.points.len() < 2
-            || ic.points.iter().all(tangent)
+            || nurbs_isect::touches_along(nurbs, normal, d, &ic.points)
             || runs_along_an_edge(nurbs, &ic.points)
         {
             continue;
@@ -10303,6 +10298,29 @@ mod tests {
         .unwrap();
         let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &trough).unwrap();
         assert!(raw.is_empty());
+    }
+
+    /// A plane crossing a NURBS sheet where the sheet's normal lies along
+    /// its own, as `z = x³` crosses `z = 0` along `x = 0`, still splits it.
+    #[test]
+    fn a_plane_crossing_a_nurbs_sheet_where_it_lies_flat_splits_it() {
+        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
+        let cubic = brepkit_math::nurbs::surface::NurbsSurface::new(
+            3,
+            1,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                row(-1.0, -1.0),
+                row(-1.0 / 3.0, 1.0),
+                row(1.0 / 3.0, -1.0),
+                row(1.0, 1.0),
+            ],
+            vec![vec![1.0; 2]; 4],
+        )
+        .unwrap();
+        let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &cubic).unwrap();
+        assert_eq!(raw.len(), 1);
     }
 
     /// A plane holding one edge of a NURBS sheet that lies on its negative
