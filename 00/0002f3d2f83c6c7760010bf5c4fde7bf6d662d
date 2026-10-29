@@ -1,0 +1,19 @@
+crates/blend/src/analytic.rs
+  s_b643c88cf32b29::t_bc07757786d31e 5148-5160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "000002f3d2f83c6c7760010bf5c4fde7bf6d662d",
+  "prompts": {},
+  "sessions": {
+    "s_b643c88cf32b29": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4bb05cff-da30-45b2-a3b6-85e1ddcdee98",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
