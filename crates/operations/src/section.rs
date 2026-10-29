@@ -14,7 +14,10 @@ use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
-use brepkit_math::nurbs::intersection::IntersectionPoint;
+use brepkit_math::nurbs::intersection::{
+    IntersectionCurve, IntersectionPoint, intersect_plane_nurbs, touches_along,
+};
+use brepkit_math::nurbs::surface::NurbsSurface;
 
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
@@ -104,38 +107,8 @@ pub fn section(
                 }
             }
             FaceSurface::Nurbs(nurbs) => {
-                let intersection_curves =
-                    brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
-                // A curve along which the face lies on the plane bounds no
-                // region of the section, and a curve along one of the face's
-                // own edges is that edge, which its neighbour's section gives.
-                // A seam, where the face closes on itself, has no neighbour:
-                // its curve stays.
-                let tangent = |p: &brepkit_math::nurbs::intersection::IntersectionPoint| {
-                    nurbs
-                        .normal(p.param1.0, p.param1.1)
-                        .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
-                };
-                let (u_lo, u_hi) = nurbs.domain_u();
-                let (v_lo, v_hi) = nurbs.domain_v();
-                let (u_seam, v_seam) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
-                let on_edge =
-                    |points: &[brepkit_math::nurbs::intersection::IntersectionPoint]| {
-                        [(0, u_lo), (0, u_hi), (1, v_lo), (1, v_hi)]
-                            .iter()
-                            .filter(|&&(k, _)| if k == 0 { !u_seam } else { !v_seam })
-                            .any(|&(k, edge)| {
-                                let slack = 1e-9 * if k == 0 { u_hi - u_lo } else { v_hi - v_lo };
-                                points.iter().all(|p| {
-                                    let at = if k == 0 { p.param1.0 } else { p.param1.1 };
-                                    (at - edge).abs() <= slack
-                                })
-                            })
-                    };
-                for curve in &intersection_curves {
-                    if !curve.points.iter().all(tangent) && !on_edge(&curve.points) {
-                        chain_curve_points(&curve.points, &mut segments);
-                    }
+                for curve in &nurbs_section_curves(nurbs, normal, d)? {
+                    chain_curve_points(&curve.points, &mut segments);
                 }
             }
             FaceSurface::Cylinder(cyl) => {
@@ -223,6 +196,36 @@ pub fn section(
     Ok(Section {
         faces: result_faces,
     })
+}
+
+/// The plane's sections of a NURBS face that bound regions of the solid's
+/// section. A curve along which the face touches the plane from one side
+/// bounds none, and a curve along one of the face's own edges is that
+/// edge, which its neighbour's section gives. A seam, where the face closes
+/// on itself, has no neighbour: its curve stays.
+fn nurbs_section_curves(
+    nurbs: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Vec<IntersectionCurve>, crate::OperationsError> {
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let (u_seam, v_seam) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
+    let on_edge = |points: &[IntersectionPoint]| {
+        [(0, u_lo), (0, u_hi), (1, v_lo), (1, v_hi)]
+            .iter()
+            .filter(|&&(k, _)| if k == 0 { !u_seam } else { !v_seam })
+            .any(|&(k, edge)| {
+                let slack = 1e-9 * if k == 0 { u_hi - u_lo } else { v_hi - v_lo };
+                points.iter().all(|p| {
+                    let at = if k == 0 { p.param1.0 } else { p.param1.1 };
+                    (at - edge).abs() <= slack
+                })
+            })
+    };
+    let mut curves = intersect_plane_nurbs(nurbs, normal, d, 50)?;
+    curves.retain(|c| !touches_along(nurbs, normal, d, &c.points) && !on_edge(&c.points));
+    Ok(curves)
 }
 
 /// Group section wires by containment: each outer wire collects all wires that
@@ -963,5 +966,36 @@ mod tests {
             "sphere off-center section area should be {expected:.2}, got {total_area:.2} \
              (rel_err={rel_err:.2e})"
         );
+    }
+
+    /// A NURBS face crossing the plane where its normal lies along the
+    /// plane's, as `z = x³` crosses `z = 0` along `x = 0`, bounds the
+    /// section there; a trough whose floor only touches the plane does not.
+    #[test]
+    fn a_nurbs_face_crossing_the_plane_where_it_lies_flat_bounds_the_section() {
+        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
+        let sheet = |rows: Vec<Vec<Point3>>| {
+            let degree = rows.len() - 1;
+            let knots = [vec![0.0; degree + 1], vec![1.0; degree + 1]].concat();
+            NurbsSurface::new(
+                degree,
+                1,
+                knots,
+                vec![0.0, 0.0, 1.0, 1.0],
+                rows,
+                vec![vec![1.0; 2]; degree + 1],
+            )
+            .unwrap()
+        };
+        let cubic = sheet(vec![
+            row(-1.0, -1.0),
+            row(-1.0 / 3.0, 1.0),
+            row(1.0 / 3.0, -1.0),
+            row(1.0, 1.0),
+        ]);
+        let trough = sheet(vec![row(-1.0, 1.0), row(0.0, -1.0), row(1.0, 1.0)]);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        assert_eq!(nurbs_section_curves(&cubic, up, 0.0).unwrap().len(), 1);
+        assert!(nurbs_section_curves(&trough, up, 0.0).unwrap().is_empty());
     }
 }

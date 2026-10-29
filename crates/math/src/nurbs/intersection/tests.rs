@@ -2297,6 +2297,70 @@ fn a_plane_section_crossing_itself_ends_its_curves_at_the_crossing() {
     }
 }
 
+/// The trough `z = x²` of the test above, with its parameter across the
+/// floor running over a millionth where the one along it runs over one,
+/// still touches `z = 0` along the whole line: steps along the floor are
+/// measured against the domain, not in its parameters.
+#[test]
+fn a_plane_touching_a_squeezed_surface_along_a_line_traces_it_whole() {
+    let trough = polynomial_patch(
+        2,
+        [
+            &[(0, 0, -2.0), (1, 0, 4.0)],
+            &[(0, 0, -2.0), (0, 1, 4.0)],
+            &[(0, 0, 4.0), (1, 0, -16.0), (2, 0, 16.0)],
+        ],
+    );
+    let squeezed = NurbsSurface::new(
+        2,
+        2,
+        trough.knots_u().iter().map(|k| k * 1e-6).collect(),
+        trough.knots_v().to_vec(),
+        trough.control_points().to_vec(),
+        trough.weights().to_vec(),
+    )
+    .unwrap();
+    let line = intersect_plane_nurbs(&squeezed, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(line.len(), 1);
+    let (t0, t1) = line[0].curve.domain();
+    let (a, b) = (line[0].curve.evaluate(t0), line[0].curve.evaluate(t1));
+    assert!(
+        (a.y().abs() - 2.0).abs() < 1e-12 && (b.y().abs() - 2.0).abs() < 1e-12,
+        "the line runs from {a:?} to {b:?}"
+    );
+    let far = farthest(&line, |p| p.x().abs().max(p.z().abs()));
+    assert!(far < 1e-9, "the line strays {far:.2e}");
+}
+
+/// The plane `z = 0` touches `z = (y − x²)²` along the parabola `y = x²`,
+/// which leaves the patch at its corners `(0, 0)` and `(1, 1)`, where the
+/// traced curve ends: its last step settles along the patch's edge.
+#[test]
+fn a_plane_touching_a_surface_along_a_curve_traces_it_to_the_patch_edge() {
+    let gutter = polynomial_patch(
+        4,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 1, 1.0)],
+            &[(0, 2, 1.0), (2, 1, -2.0), (4, 0, 1.0)],
+        ],
+    );
+    let curves = intersect_plane_nurbs(&gutter, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(curves.len(), 1);
+    let (t0, t1) = curves[0].curve.domain();
+    let mut ends = [t0, t1].map(|t| curves[0].curve.evaluate(t));
+    ends.sort_by(|p, q| p.x().total_cmp(&q.x()));
+    assert!(
+        (ends[0] - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9
+            && (ends[1] - Point3::new(1.0, 1.0, 0.0)).length() < 1e-9,
+        "the curve runs from {:?} to {:?}",
+        ends[0],
+        ends[1]
+    );
+    let far = farthest(&curves, |p| (p.y() - p.x() * p.x()).abs().max(p.z().abs()));
+    assert!(far < 1e-7, "the curve strays {far:.2e}");
+}
+
 /// A sheet 1e12 along `x` from the origin, rising from −0.001 to 0.001
 /// across it, crosses `z = 0` along its middle, where the section's points
 /// lie: coordinates the plane's normal does not weigh leave the plane's
