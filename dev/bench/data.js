@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793271222518,
+  "lastUpdate": 1793271418520,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59885,6 +59885,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28295475,
             "range": "± 218963",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eab41c88cf35aa521be2494179bde3a2e7e0f1d3",
+          "message": "fix(math): meet a ball touching a ring torus off its axis at the touching point (#2143)\n\nA ball off a ring torus's axis that touches it at one point now meets it\nat that point, found in closed form, instead of being marched.\n\nToday `exact_sphere_torus` solves only a sphere centred on the torus's\naxis, and returns `None` for any other, so `try_algebraic_intersection`\nand `phase_ff` both hand the pair to the marcher. For a ball of radius 1\ntouching the outer equator of a torus with radii 3 and 1,\n`intersect_analytic_analytic` returns 332 curves, the farthest 0.031\nfrom the touching point, after 16 s in a debug build.\n\n## Change\n\n- `off_axis_touch`: such a touch sits over the point of the torus's core\ncircle nearest the ball's centre, or the one farthest from it, at\n`d_near` or `d_far`. The ball then touches the tube from outside (radius\n`d_near − r`), sits inside the tube against its wall (`r − d_near`), or\nholds the whole ring and touches its far side (`d_far + r`). Each is the\ncentre's least or greatest distance to the torus, so the point is all\nthe two share.\n- `exact_sphere_torus` returns that point as\n`ExactIntersectionCurve::Points` when the ball's radius matches one of\nthe three to rounding. Otherwise it still returns `None`, as for a\nspindle torus, and so it does for a ball centred on the core circle,\nwhich meets the tube along a whole meridian.\n- `phase_ff` already reads a single exact sphere-torus result as a\ngraze, which splits neither face, so a touch adds no section.\n- `exact_circle_curves` turns a lone point into a curve that stays on\nit, as the sphere-sphere touch already does, so\n`intersect_analytic_analytic` returns the point.\n\n## Tests\n\n- `a_ball_off_a_rings_axis_touches_it_at_one_point`: the three touches,\non a torus centred at (1, 2, 3). Each point lies on both surfaces to\n1e-12, and the outside touch is at the outer equator. A ball 1e-6 larger\nthan the outside touch, and a ball of the tube's radius centred on the\ncore circle, are left to the marcher.\n- `a_ball_touching_a_ring_off_its_axis_grazes_it`: in `phase_ff`, the\noutside touch gives no section, now as a graze read from the exact\npoint.\n- The first test fails without the change. `cargo test --workspace\n--exclude brepkit-render` passes 3697 tests, and the pose sweep and\ntruth audit never reach the new case, which I counted with a temporary\nprint.",
+          "timestamp": "2026-10-29T03:51:19-07:00",
+          "tree_id": "9ed3cd74689c43d2b14ac4ed43654c0db6dff265",
+          "url": "https://github.com/andymai/brepkit/commit/eab41c88cf35aa521be2494179bde3a2e7e0f1d3"
+        },
+        "date": 1793271409667,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1071773,
+            "range": "± 3047",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1157273,
+            "range": "± 3900",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12499,
+            "range": "± 199",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690421,
+            "range": "± 6738",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27865748,
+            "range": "± 210623",
             "unit": "ns/iter"
           }
         ]
