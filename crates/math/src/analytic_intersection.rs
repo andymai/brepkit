@@ -2106,6 +2106,7 @@ fn try_algebraic_intersection(
                     }
                     return Ok(Some(vec![])); // Coaxial, different radii
                 }
+                return parallel_cylinders(c1, c2, v_range_a, v_range_b);
             }
             // Non-coaxial: algebraic quadratic in v.
             algebraic_cylinder_cylinder(c1, c2)
@@ -2864,6 +2865,89 @@ fn off_axis_sphere_cylinder(
 /// and `b` and whether `a` came first.
 const fn in_order(a: (f64, f64), b: (f64, f64), a_first: bool) -> ((f64, f64), (f64, f64)) {
     if a_first { (a, b) } else { (b, a) }
+}
+
+/// Two cylinders whose axes are parallel but apart meet along rulings:
+/// every plane across the axes cuts them in two circles `d` apart, which
+/// cross in two points, touch in one, or miss, alike in every plane. Each
+/// crossing sweeps a ruling, cut to the stretch of axis both faces' `v`
+/// ranges share. `None` (the marcher's case) when neither range is known,
+/// since a ruling has no ends of its own.
+fn parallel_cylinders(
+    c1: &CylindricalSurface,
+    c2: &CylindricalSurface,
+    v_range_1: Option<(f64, f64)>,
+    v_range_2: Option<(f64, f64)>,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let axis = c1.axis();
+    let delta = c2.origin() - c1.origin();
+    let along = delta.dot(axis);
+    let across = delta - axis * along;
+    let d = across.length();
+    let (r1, r2) = (c1.radius(), c2.radius());
+    let slack = 1e-9 * (r1 + r2 + d);
+    // The second face's range, measured along the first one's axis.
+    let flip = c2.axis().dot(axis);
+    let ranges = [
+        v_range_1,
+        v_range_2.map(|(a, b)| (along + a * flip, along + b * flip)),
+    ];
+    let (lo, hi) = ranges
+        .into_iter()
+        .flatten()
+        .fold((f64::NEG_INFINITY, f64::INFINITY), |(lo, hi), (a, b)| {
+            (lo.max(a.min(b)), hi.min(a.max(b)))
+        });
+    if !lo.is_finite() || !hi.is_finite() {
+        return Ok(None);
+    }
+    if d > r1 + r2 + slack || d < (r1 - r2).abs() - slack || hi - lo <= slack {
+        return Ok(Some(Vec::new()));
+    }
+    let toward = across * (1.0 / d);
+    let side = axis.cross(toward);
+    let feet = if (d - (r1 + r2)).abs() <= slack {
+        vec![toward * r1]
+    } else if (d - (r1 - r2).abs()).abs() <= slack {
+        // The inner one touches the outer's wall on the side away from the
+        // outer's axis.
+        vec![toward * if r1 > r2 { r1 } else { -r1 }]
+    } else {
+        let x = r2.mul_add(-r2, d.mul_add(d, r1 * r1)) / (2.0 * d);
+        let y = r1.mul_add(r1, -(x * x)).max(0.0).sqrt();
+        vec![toward * x + side * y, toward * x - side * y]
+    };
+    feet.into_iter()
+        .map(|foot| {
+            let base = c1.origin() + foot;
+            ruling_segment(base + axis * lo, base + axis * hi, |p| {
+                (c1.project_point(p), c2.project_point(p))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// A straight intersection curve from `from` to `to`, carrying its ends and
+/// middle as points.
+fn ruling_segment(
+    from: Point3,
+    to: Point3,
+    params: impl Fn(Point3) -> ((f64, f64), (f64, f64)),
+) -> Result<IntersectionCurve, MathError> {
+    let curve = NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![from, to], vec![1.0, 1.0])?;
+    let points = [from, from + (to - from) * 0.5, to]
+        .into_iter()
+        .map(|point| {
+            let (param1, param2) = params(point);
+            IntersectionPoint {
+                point,
+                param1,
+                param2,
+            }
+        })
+        .collect();
+    Ok(IntersectionCurve { curve, points })
 }
 
 /// Algebraic cylinder-cylinder intersection for non-coaxial cylinders.
@@ -6062,5 +6146,88 @@ mod tests {
             );
             assert!(p.dot(frame.z).abs() < 1e-14);
         }
+    }
+
+    /// The rulings two parallel cylinders meet along, from the bounded call
+    /// with each face's `v` range: each ruling's ends, sorted by height.
+    fn parallel_rulings(
+        (c1, r1, v1): (Point3, f64, (f64, f64)),
+        (c2, r2, axis2, v2): (Point3, f64, Vec3, (f64, f64)),
+    ) -> Vec<(Point3, Point3)> {
+        let a = CylindricalSurface::new(c1, Vec3::new(0.0, 0.0, 1.0), r1).unwrap();
+        let b = CylindricalSurface::new(c2, axis2, r2).unwrap();
+        let curves = intersect_analytic_analytic_bounded(
+            AnalyticSurface::Cylinder(&a),
+            AnalyticSurface::Cylinder(&b),
+            32,
+            Some(v1),
+            Some(v2),
+        )
+        .unwrap();
+        curves
+            .iter()
+            .map(|ic| {
+                let (t0, t1) = ic.curve.domain();
+                let (p, q) = (ic.curve.evaluate(t0), ic.curve.evaluate(t1));
+                for i in 0..=100 {
+                    let x = ic.curve.evaluate(t0 + (t1 - t0) * f64::from(i) / 100.0);
+                    let on_a = ((x - c1) - Vec3::new(0.0, 0.0, (x - c1).z())).length() - r1;
+                    let w = x - c2;
+                    let on_b = (w - axis2 * w.dot(axis2)).length() - r2;
+                    assert!(
+                        on_a.abs() < 1e-12 && on_b.abs() < 1e-12,
+                        "{x:?} off a cylinder"
+                    );
+                }
+                if p.z() <= q.z() { (p, q) } else { (q, p) }
+            })
+            .collect()
+    }
+
+    /// Rods of radius 1 with axes 1.2 apart overlap along two rulings, at
+    /// x 0.6 and y ±0.8, over the height both faces share; the second rod's
+    /// axis runs down, so its range counts down from its origin.
+    #[test]
+    fn overlapping_parallel_rods_meet_along_two_rulings() {
+        let mut rulings = parallel_rulings(
+            (Point3::new(0.0, 0.0, 0.0), 1.0, (0.0, 4.0)),
+            (
+                Point3::new(1.2, 0.0, 3.0),
+                1.0,
+                Vec3::new(0.0, 0.0, -1.0),
+                (0.0, 2.0),
+            ),
+        );
+        rulings.sort_by(|a, b| a.0.y().total_cmp(&b.0.y()));
+        assert_eq!(rulings.len(), 2);
+        for ((lo, hi), y) in rulings.into_iter().zip([-0.8, 0.8]) {
+            assert!((lo - Point3::new(0.6, y, 1.0)).length() < 1e-12, "{lo:?}");
+            assert!((hi - Point3::new(0.6, y, 3.0)).length() < 1e-12, "{hi:?}");
+        }
+    }
+
+    /// Rods touching side by side, or one inside another against its wall,
+    /// meet along the one ruling where they touch; rods apart do not meet.
+    #[test]
+    fn touching_parallel_rods_meet_along_one_ruling() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let beside = parallel_rulings(
+            (Point3::new(0.0, 0.0, 0.0), 1.0, (-2.0, 2.0)),
+            (Point3::new(2.0, 0.0, -2.0), 1.0, up, (0.0, 4.0)),
+        );
+        assert_eq!(beside.len(), 1);
+        assert!((beside[0].0 - Point3::new(1.0, 0.0, -2.0)).length() < 1e-12);
+        assert!((beside[0].1 - Point3::new(1.0, 0.0, 2.0)).length() < 1e-12);
+        let inside = parallel_rulings(
+            (Point3::new(0.0, 0.0, 0.0), 2.0, (0.0, 1.0)),
+            (Point3::new(-1.0, 0.0, 0.0), 1.0, up, (0.0, 1.0)),
+        );
+        assert_eq!(inside.len(), 1);
+        assert!((inside[0].0 - Point3::new(-2.0, 0.0, 0.0)).length() < 1e-12);
+        let apart = parallel_rulings(
+            (Point3::new(0.0, 0.0, 0.0), 1.0, (0.0, 1.0)),
+            (Point3::new(2.5, 0.0, 0.0), 1.0, up, (0.0, 1.0)),
+        );
+        assert!(apart.is_empty());
     }
 }
