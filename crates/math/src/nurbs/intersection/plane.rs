@@ -568,23 +568,44 @@ fn tiny_loops(
             let (mut fuu, mut fuv, mut fvv) = (fuu, fuv, fvv);
             // `extremum` leaves out its step along a direction the distance
             // barely curves, as along `y` on `x² + 1e-10·y²`, so it can stop
-            // short of a floor dipping below the plane. Where that direction
-            // curves the same way as the other, steps along it alone finish
-            // the descent before the extremum is let go.
+            // short of a floor dipping below the plane. Before the extremum
+            // is let go, Newton along every direction curving away from the
+            // plane's far side finishes the descent, each step halved until
+            // it brings the distance nearer the plane, so that a curved
+            // floor's other direction stays settled.
             if settled && centre.abs() > noise && centre * near > 0.0 {
+                let height = |q: (f64, f64)| at(q.0, q.1) * near.signum();
+                let mut best = height((u, v));
                 for _ in 0..MAX_NEWTON_ITER {
                     let b = bend(surface, normal, (u, v));
-                    let (lambda, e) = b.minor;
-                    if lambda * b.major.0 <= 0.0 || lambda.abs() <= 1e-12 * b.major.0.abs() {
-                        break;
+                    let (mut du, mut dv) = (0.0, 0.0);
+                    for (lambda, e) in [b.major, b.minor] {
+                        if lambda * near > 0.0 {
+                            let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
+                            (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
+                        }
                     }
-                    let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
-                    if s.abs() > 1.0 {
+                    let mut t = 1.0;
+                    let moved = loop {
+                        let q = (
+                            (t * du).mul_add(-wide, u).clamp(u_lo, u_hi),
+                            (t * dv).mul_add(-tall, v).clamp(v_lo, v_hi),
+                        );
+                        let h = height(q);
+                        if h < best {
+                            best = h;
+                            break Some(q);
+                        }
+                        t *= 0.5;
+                        if t < 1e-6 {
+                            break None;
+                        }
+                    };
+                    let Some(q) = moved else {
                         break;
-                    }
-                    u = (s * e.0).mul_add(-wide, u).clamp(u_lo, u_hi);
-                    v = (s * e.1).mul_add(-tall, v).clamp(v_lo, v_hi);
-                    if s.abs() <= 1e-12 {
+                    };
+                    (u, v) = q;
+                    if t * du.abs().max(dv.abs()) <= 1e-12 {
                         break;
                     }
                 }

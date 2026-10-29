@@ -2498,27 +2498,53 @@ fn a_plane_touching_a_surface_along_a_small_circle_traces_it_once() {
     assert!(far < 1e-7, "the circle strays {far:.2e}");
 }
 
-/// `z = (x − ½)² + 1e-10·(y − ½)²` dips 1e-15 below `z = 1e-15`, in a loop
-/// a millionth as wide as it is long: Newton for its floor keeps the faint
-/// curving along `y`, and the loop comes back.
+/// Dips curving far more one way than the other reach just below a plane,
+/// in loops a millionth or less as wide as they are long, each found:
+/// `z = (x − ½)² + 1e-10·(y − ½)²` under `z = 1e-15` at 64 samples, the
+/// fainter `z = (x − ½)² + 5e-13·(y − ½)²` under `z = 3e-16` at 10, and
+/// `z = (x − y²)² + 1e-5·(y − ½)²`, whose floor curves along `x = y²`,
+/// under `z = 1e-12` at 64.
 #[test]
 fn a_plane_cutting_a_faintly_curved_dip_finds_its_loop() {
-    let dip = polynomial_patch(
-        2,
+    let flat = |k: f64| {
+        polynomial_patch(
+            2,
+            [
+                &[(1, 0, 1.0)],
+                &[(0, 1, 1.0)],
+                &[
+                    (2, 0, 1.0),
+                    (1, 0, -1.0),
+                    (0, 2, k),
+                    (0, 1, -k),
+                    (0, 0, 0.25f64.mul_add(k, 0.25)),
+                ],
+            ],
+        )
+    };
+    let bent = polynomial_patch(
+        4,
         [
             &[(1, 0, 1.0)],
             &[(0, 1, 1.0)],
             &[
                 (2, 0, 1.0),
-                (1, 0, -1.0),
-                (0, 2, 1e-10),
-                (0, 1, -1e-10),
-                (0, 0, 0.25 + 0.25e-10),
+                (1, 2, -2.0),
+                (0, 4, 1.0),
+                (0, 2, 1e-5),
+                (0, 1, -1e-5),
+                (0, 0, 0.25e-5),
             ],
         ],
     );
-    let curves = intersect_plane_nurbs(&dip, Vec3::new(0.0, 0.0, 1.0), 1e-15, 64).unwrap();
-    assert_eq!(curves.len(), 1);
+    for (dip, level, samples) in [
+        (flat(1e-10), 1e-15, 64),
+        (flat(5e-13), 3e-16, 10),
+        (bent, 1e-12, 64),
+    ] {
+        let curves = intersect_plane_nurbs(&dip, Vec3::new(0.0, 0.0, 1.0), level, samples).unwrap();
+        assert_eq!(curves.len(), 1, "under {level:e} at {samples} samples");
+    }
 }
 
 /// The product of two polynomials in `u` and `v`, as `(i, j, c)` terms
