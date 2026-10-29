@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793293230899,
+  "lastUpdate": 1793293911980,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60209,6 +60209,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28650147,
             "range": "± 122464",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "de389a9db06fb0a73a87b9c2a089cf2429e1e49b",
+          "message": "fix(math): end a plane section's curves where the section crosses itself (#2147)\n\nA plane section of a NURBS surface that crosses itself now comes back as\ncurves that end at the crossing, instead of curves that turn a corner\nthrough it.\n\nToday `intersect_plane_nurbs` links the plane's crossings with the edges\nof each grid cell in pairs, by the sign at the cell's centre where all\nfour edges cross. Where the section crosses itself, each pair runs along\none branch into the crossing and out along another: for the plane `z =\n0` and the saddle `z = xy`, the call returns two curves, each made of\nhalf of one axis and half of the other, bent at the origin.\n\n## Change\n\n- `self_crossings` finds where the section crosses itself: points within\nrounding of the plane where the plane's distance stops changing, curving\nup one way and down the other. A grid node seeds the search when its\nblock of nine has nodes on both sides of the plane and differences\nacross the block put such a point within a step and a half of it; Newton\n(`extremum`) settles the point. Where the point falls on the grid does\nnot matter: inside a cell, on an edge or on a node.\n- Near the crossing the branches run too close together for the grid to\ntell apart, so they do not link inside a block of cells round the node\nnearest the crossing. Each branch leaves the block where one of its rim\nedges crosses the plane, and links from there to the crossing. Whatever\nelse of the section lies inside the block, linked to none of the\nbranches, links as before. The block of 16 cells serves where four\nbranches cross its rim; failing that, the block of four where four or\ntwo do. No two blocks share a cell, and a larger block that would gives\nway to a smaller one.\n- Each crossing of a grid edge now comes from false position kept inside\nthe edge's bracket (`edge_root`), not from the line between the ends'\ndistances. Another branch passing near one end bends the distance along\nthe edge, and from that line's reading, refinement could settle on the\nother branch. Over 400 sections of a quartic and a cylinder at 64\nsamples, this took 570 ms where the line's reading took 660 to 720.\n- The walk stops a chain at a crossing and starts chains from it, so any\nnumber of chains share it as an end.\n\n## Tests\n\n- `a_plane_section_crossing_itself_ends_its_curves_at_the_crossing`: `z\n= 0` against saddles whose two lines cross at a cell's centre, on a\nnode, on an edge and at an arbitrary point, with the lines along the\ngrid, at 45 and 135 degrees, at 20 and 75 degrees, and 30 degrees apart,\nat 33 and at 64 samples. Each gives four curves, each with one end\nwithin 1e-9 of the crossing and staying within 1e-7 of its line. The\ntest fails without the crossing search, and with crossings read off the\nline between the ends.\n-\n`a_plane_section_crossing_itself_twice_close_by_ends_its_curves_at_both`:\n`z = (x − a)(x − b)(y − c)` at 33 samples, whose two crossings are three\ngrid steps apart, gives seven curves with four ends at each crossing. It\nfails when the second crossing's overlapping block is skipped rather\nthan shrunk.\n- `a_plane_section_keeps_a_loop_beside_where_it_crosses_itself`: a small\ncircle inside the block round a crossing comes back closed, its points\nwithin 1e-9 of it, beside the crossing's four curves. It fails when the\nwhole block is left unlinked.\n- With this change the pose sweep and truth audit outputs are identical\nto `main`'s. With it and the changes stacked on it, `cargo test\n--workspace --exclude brepkit-render` passes 3722 tests.",
+          "timestamp": "2026-10-29T10:08:17-07:00",
+          "tree_id": "5c60347e8e795cd997279365173366d3ad38c441",
+          "url": "https://github.com/andymai/brepkit/commit/de389a9db06fb0a73a87b9c2a089cf2429e1e49b"
+        },
+        "date": 1793293902847,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1145371,
+            "range": "± 5219",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1230165,
+            "range": "± 3116",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14408,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690711,
+            "range": "± 5212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30142667,
+            "range": "± 130321",
             "unit": "ns/iter"
           }
         ]
