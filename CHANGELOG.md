@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.5.3](https://github.com/andymai/brepkit/compare/v4.5.2...v4.5.3) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** meet equal cylinders whose axes cross in exact cornered loops ([#2141](https://github.com/andymai/brepkit/issues/2141)) ([141c51d](https://github.com/andymai/brepkit/commit/141c51d019eb3df1ae9438e5f309816b659398c2))
+
+## [4.5.2](https://github.com/andymai/brepkit/compare/v4.5.1...v4.5.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** find plane sections of NURBS surfaces smaller than a grid cell ([#2138](https://github.com/andymai/brepkit/issues/2138)) ([4e5f263](https://github.com/andymai/brepkit/commit/4e5f2631233625ae013d0d1583a0f2b3487b5529))
+
 ## [4.5.1](https://github.com/andymai/brepkit/compare/v4.5.0...v4.5.1) (2026-10-29)
 
 
