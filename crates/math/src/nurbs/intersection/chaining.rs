@@ -107,18 +107,12 @@ pub(super) fn build_curves_from_chains(
     let mut curves = Vec::with_capacity(chains.len());
 
     for chain in chains {
-        // Points closer than 1e-6, or than a thousandth of a chain smaller
-        // than a millimetre, are one point met twice.
-        let span = chain
-            .iter()
-            .map(|p| (p.point - chain[0].point).length())
-            .fold(0.0_f64, f64::max);
-        let same = (1e-3 * span).min(1e-6);
+        // Deduplicate closely spaced points within the chain.
         let mut deduped: Vec<IntersectionPoint> = Vec::new();
         for pt in chain {
             let is_dup = deduped
                 .last()
-                .is_some_and(|last: &IntersectionPoint| (last.point - pt.point).length() < same);
+                .is_some_and(|last: &IntersectionPoint| (last.point - pt.point).length() < 1e-6);
             if !is_dup {
                 deduped.push(*pt);
             }

@@ -5,7 +5,7 @@ use crate::nurbs::projection::{project_point_to_surface, project_point_to_surfac
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
-use super::chaining::{Section, build_curves_from_chains};
+use super::chaining::{Section, build_curves_from_chains, fit_within};
 use super::{IntersectionCurve, IntersectionPoint, MAX_NEWTON_ITER};
 
 /// Intersect a plane with a NURBS surface.
@@ -235,8 +235,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    ordered_chains.extend(tiny);
-    if ordered_chains.is_empty() {
+    if ordered_chains.is_empty() && tiny.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -255,14 +254,22 @@ pub fn intersect_plane_nurbs(
         let foot = foot(p, near)?;
         refine_plane_surface_point(surface, plane_normal, plane_d, (foot.u, foot.v), None)
     };
-    build_curves_from_chains(
-        &ordered_chains,
-        FIT_TOLERANCE,
-        &Section {
-            off: &off,
-            settle: &settle,
-        },
-    )
+    let section = Section {
+        off: &off,
+        settle: &settle,
+    };
+    let mut curves = build_curves_from_chains(&ordered_chains, FIT_TOLERANCE, &section)?;
+    // A tiny loop's points lie evenly round it, so none is one met twice,
+    // however close: the chains' merge of points within 1e-6 would fold a
+    // loop smaller than that into a point.
+    for mut chain in tiny {
+        let curve = fit_within(&mut chain, FIT_TOLERANCE, &section)?;
+        curves.push(IntersectionCurve {
+            curve,
+            points: chain,
+        });
+    }
+    Ok(curves)
 }
 
 /// How far a fitted section may stray from the plane or the surface.
