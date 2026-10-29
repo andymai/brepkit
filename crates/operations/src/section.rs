@@ -1031,11 +1031,11 @@ mod tests {
     }
 
     /// A NURBS face crossing the plane where its normal lies along the
-    /// plane's, as `z = x³` crosses `z = 0` along `x = 0`, bounds the
-    /// section there; a trough whose floor only touches the plane does not.
+    /// plane's, as `z = x³` and `z = x⁷` cross `z = 0` along `x = 0`, bounds
+    /// the section there; a trough whose floor only touches the plane does
+    /// not.
     #[test]
     fn a_nurbs_face_crossing_the_plane_where_it_lies_flat_bounds_the_section() {
-        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
         let sheet = |rows: Vec<Vec<Point3>>| {
             let degree = rows.len() - 1;
             let knots = [vec![0.0; degree + 1], vec![1.0; degree + 1]].concat();
@@ -1049,15 +1049,25 @@ mod tests {
             )
             .unwrap()
         };
-        let cubic = sheet(vec![
-            row(-1.0, -1.0),
-            row(-1.0 / 3.0, 1.0),
-            row(1.0 / 3.0, -1.0),
-            row(1.0, 1.0),
-        ]);
-        let trough = sheet(vec![row(-1.0, 1.0), row(0.0, -1.0), row(1.0, 1.0)]);
+        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
         let up = Vec3::new(0.0, 0.0, 1.0);
-        assert_eq!(nurbs_section_curves(&cubic, up, 0.0).unwrap().len(), 1);
+        for power in [3_u32, 7] {
+            // `(2u − 1)ⁿ` has Bernstein coefficients `(−1)ⁿ⁻ᵏ`.
+            let odd = sheet(
+                (0..=power)
+                    .map(|k| {
+                        let x = 2.0f64.mul_add(f64::from(k) / f64::from(power), -1.0);
+                        row(x, if (power - k) % 2 == 0 { 1.0 } else { -1.0 })
+                    })
+                    .collect(),
+            );
+            assert_eq!(
+                nurbs_section_curves(&odd, up, 0.0).unwrap().len(),
+                1,
+                "x^{power}"
+            );
+        }
+        let trough = sheet(vec![row(-1.0, 1.0), row(0.0, -1.0), row(1.0, 1.0)]);
         assert!(nurbs_section_curves(&trough, up, 0.0).unwrap().is_empty());
     }
 }

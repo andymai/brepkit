@@ -2174,13 +2174,17 @@ fn a_plane_touching_a_surface_along_a_curve_traces_it() {
             (p.x().hypot(p.y()) - 1.0).abs().max(p.z().abs())
         });
         assert!(far < 1e-6, "{samples} samples: the circle strays {far:.2e}");
-        let line = intersect_plane_nurbs(&trough, up, 0.0, samples).unwrap();
-        assert_eq!(line.len(), 1, "{samples} samples");
-        let (t0, t1) = line[0].curve.domain();
-        let (a, b) = (line[0].curve.evaluate(t0), line[0].curve.evaluate(t1));
-        assert!((a.y().abs() - 2.0).abs() < 1e-12 && (b.y().abs() - 2.0).abs() < 1e-12);
-        let far = farthest(&line, |p| p.x().abs().max(p.z().abs()));
-        assert!(far < 1e-9, "{samples} samples: the line strays {far:.2e}");
+        // From below, the nodes along the floor cross the plane to their
+        // neighbours at themselves; their chains are the traced line.
+        for normal in [up, -up] {
+            let line = intersect_plane_nurbs(&trough, normal, 0.0, samples).unwrap();
+            assert_eq!(line.len(), 1, "{samples} samples, normal {normal:?}");
+            let (t0, t1) = line[0].curve.domain();
+            let (a, b) = (line[0].curve.evaluate(t0), line[0].curve.evaluate(t1));
+            assert!((a.y().abs() - 2.0).abs() < 1e-12 && (b.y().abs() - 2.0).abs() < 1e-12);
+            let far = farthest(&line, |p| p.x().abs().max(p.z().abs()));
+            assert!(far < 1e-9, "{samples} samples: the line strays {far:.2e}");
+        }
     }
 }
 
@@ -2358,6 +2362,32 @@ fn a_plane_touching_a_squeezed_surface_along_a_line_traces_it_whole() {
     );
     let far = farthest(&line, |p| p.x().abs().max(p.z().abs()));
     assert!(far < 1e-9, "the line strays {far:.2e}");
+}
+
+/// The plane `z = 0` touches `z = ((x − a)(x − b))²` along two lines a grid
+/// step apart at 33 samples, each traced on its own from edge to edge.
+#[test]
+fn a_plane_touching_a_surface_along_two_close_lines_traces_both() {
+    let (a, b) = (0.5, 0.531_249_99);
+    let pair = product(&[(1, 0, 1.0), (0, 0, -a)], &[(1, 0, 1.0), (0, 0, -b)]);
+    let height = product(&pair, &pair);
+    let surface = polynomial_patch(4, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &height]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 33).unwrap();
+    assert_eq!(curves.len(), 2);
+    let mut at: Vec<f64> = curves
+        .iter()
+        .map(|ic| {
+            let (t0, t1) = ic.curve.domain();
+            let (p, q) = (ic.curve.evaluate(t0), ic.curve.evaluate(t1));
+            assert!(p.y().min(q.y()).abs() < 1e-9 && (p.y().max(q.y()) - 1.0).abs() < 1e-9);
+            p.x()
+        })
+        .collect();
+    at.sort_by(f64::total_cmp);
+    assert!(
+        (at[0] - a).abs() < 1e-6 && (at[1] - b).abs() < 1e-6,
+        "lines at {at:?}"
+    );
 }
 
 /// The plane `z = 0` touches `z = (y − x²)²` along the parabola `y = x²`,

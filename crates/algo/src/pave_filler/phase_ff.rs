@@ -10368,26 +10368,33 @@ mod tests {
     }
 
     /// A plane crossing a NURBS sheet where the sheet's normal lies along
-    /// its own, as `z = x³` crosses `z = 0` along `x = 0`, still splits it.
+    /// its own, as `z = x³` and `z = x⁷` cross `z = 0` along `x = 0`, still
+    /// splits it; across `x⁷` the sheet stays within rounding of the plane
+    /// a thousandth of the way.
     #[test]
     fn a_plane_crossing_a_nurbs_sheet_where_it_lies_flat_splits_it() {
-        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
-        let cubic = brepkit_math::nurbs::surface::NurbsSurface::new(
-            3,
-            1,
-            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![
-                row(-1.0, -1.0),
-                row(-1.0 / 3.0, 1.0),
-                row(1.0 / 3.0, -1.0),
-                row(1.0, 1.0),
-            ],
-            vec![vec![1.0; 2]; 4],
-        )
-        .unwrap();
-        let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &cubic).unwrap();
-        assert_eq!(raw.len(), 1);
+        for power in [3_u32, 7] {
+            // `(2u − 1)ⁿ` has Bernstein coefficients `(−1)ⁿ⁻ᵏ`.
+            let rows = (0..=power)
+                .map(|k| {
+                    let x = 2.0f64.mul_add(f64::from(k) / f64::from(power), -1.0);
+                    let z = if (power - k) % 2 == 0 { 1.0 } else { -1.0 };
+                    vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)]
+                })
+                .collect::<Vec<_>>();
+            let order = rows.len();
+            let sheet = brepkit_math::nurbs::surface::NurbsSurface::new(
+                order - 1,
+                1,
+                [vec![0.0; order], vec![1.0; order]].concat(),
+                vec![0.0, 0.0, 1.0, 1.0],
+                rows,
+                vec![vec![1.0; 2]; order],
+            )
+            .unwrap();
+            let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &sheet).unwrap();
+            assert_eq!(raw.len(), 1, "x^{power}");
+        }
     }
 
     /// A plane holding one edge of a NURBS sheet that lies on its negative
