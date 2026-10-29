@@ -794,6 +794,10 @@ pub fn plane_cylinder_fillet(
     } else {
         n_p_inward
     };
+    // The wall contact must land on the wall, short of its far boundary.
+    if radius >= wall_reach(topo, face_cyl, p_axis_on_plane, z_axis_dir)? - tol_lin {
+        return Ok(None);
+    }
     let torus_center = p_axis_on_plane + z_axis_dir * radius;
     let major_radius = if inward { r_c - radius } else { r_c + radius };
     let minor_radius = radius;
@@ -1346,6 +1350,10 @@ pub fn plane_cone_fillet(
     let contact_cone_radius = r_p + wall_rho * reach;
     let contact_cone_height = wall_h * reach;
     if major_radius - minor_radius < tol_lin || contact_cone_radius <= tol_lin {
+        return Ok(None);
+    }
+    // The wall contact must land on the wall, short of its far boundary.
+    if contact_cone_height >= wall_reach(topo, face_cone, p_axis_on_plane, toward_wall)? - tol_lin {
         return Ok(None);
     }
     let torus_center = p_axis_on_plane + toward_wall * radius;
@@ -5116,6 +5124,32 @@ pub fn cylinder_cylinder_chamfer(
 /// `brepkit-geometry`. The geometry crate has the same algorithm in
 /// `convert::curve_to_nurbs::circle_to_nurbs`; consolidating both into the
 /// math layer is a follow-up.
+/// How far the wall face's boundary reaches from the plate along `toward`,
+/// read from its vertices and samples along its edges.
+fn wall_reach(
+    topo: &Topology,
+    wall: FaceId,
+    on_plate: Point3,
+    toward: Vec3,
+) -> Result<f64, BlendError> {
+    let face = topo.face(wall)?;
+    let mut reach = 0.0_f64;
+    for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oriented in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oriented.edge())?;
+            let a = topo.vertex(edge.start())?.point();
+            let b = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            for k in 0..=8 {
+                let t = t0 + (t1 - t0) * f64::from(k) / 8.0;
+                let p = edge.curve().evaluate_with_endpoints(t, a, b);
+                reach = reach.max((p - on_plate).dot(toward));
+            }
+        }
+    }
+    Ok(reach)
+}
+
 fn circle_arc_to_nurbs(
     circle: &brepkit_math::curves::Circle3D,
     t_start: f64,

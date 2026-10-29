@@ -333,3 +333,39 @@ fn a_tapered_holes_mouth_rounds_off() {
     let removed = ring_volume(5.0, (1.0, 0.0), unit(-3.0, 8.0), 1.0);
     assert_rim_fillet_changes_by(&mut topo, body, (5.0, 8.0), 1.0, -removed);
 }
+
+/// Fillets `rim` and checks it is refused, or the result is valid and
+/// watertight: never a band whose wall contact overruns the wall.
+fn assert_refused_or_sound(topo: &mut Topology, solid: SolidId, rim: (f64, f64), r: f64) {
+    let edge = rim_at(topo, solid, rim.0, rim.1);
+    let Ok(result) = fillet_v2(topo, solid, &[edge], r) else {
+        return;
+    };
+    if !result.failed.is_empty() || result.solid == solid {
+        return;
+    }
+    let report = validate_solid(topo, result.solid).unwrap();
+    assert!(report.is_valid(), "r = {r}: {:?}", report.issues);
+    let mesh = tessellate_solid(topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "r = {r}: mesh not watertight");
+}
+
+/// A wall shorter than the fillet reaches: the contact would land past the
+/// wall's far rim.
+#[test]
+fn a_rim_fillet_reaching_past_a_short_wall_is_refused() {
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 2.99, 0.2).unwrap();
+    assert_refused_or_sound(&mut topo, frustum, (2.99, 0.2), 0.3);
+
+    let mut topo = Topology::new();
+    let disc = make_cylinder(&mut topo, RADIUS, 0.2).unwrap();
+    assert_refused_or_sound(&mut topo, disc, (RADIUS, 0.2), 0.3);
+
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 30.0, 30.0, 4.0).unwrap();
+    let post = make_cone(&mut topo, 5.0, 4.99, 0.2).unwrap();
+    transform_solid(&mut topo, post, &Mat4::translation(15.0, 15.0, 4.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Fuse, plate, post).unwrap();
+    assert_refused_or_sound(&mut topo, body, (5.0, 4.0), 0.3);
+}
