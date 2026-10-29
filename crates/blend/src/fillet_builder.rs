@@ -316,25 +316,14 @@ impl<'a> FilletBuilder<'a> {
             std::collections::HashMap::new();
         let mut regular_results: Vec<&StripeResult> = Vec::new();
 
-        let closed_rims = stripe_results
+        let recognized = stripe_results
             .iter()
-            .enumerate()
-            .map(|(stripe_index, sr)| {
-                // The closed-rim rebuild owns its cap: a cap another stripe
-                // also runs along (a hole's rim filleted in the same call)
-                // takes the normal path.
-                let cap_shared = |cap: FaceId| {
-                    stripe_results.iter().enumerate().any(|(other, o)| {
-                        other != stripe_index && (o.stripe.face1 == cap || o.stripe.face2 == cap)
-                    })
-                };
-                Ok(closed_rim_info(topo, &sr.stripe)?.filter(|rim| !cap_shared(rim.plane_face)))
-            })
+            .map(|sr| closed_rim_info(topo, &sr.stripe))
             .collect::<Result<Vec<_>, BlendError>>()?;
         // Each rim's wall contact is checked against the wall alone, so two
         // rims of one wall must also leave wall between their contacts, or
-        // their bands overlap.
-        let rims: Vec<&ClosedRimInfo> = closed_rims.iter().flatten().collect();
+        // their bands overlap, whichever path below builds them.
+        let rims: Vec<&ClosedRimInfo> = recognized.iter().flatten().collect();
         let crossing = rims.iter().enumerate().any(|(i, a)| {
             rims[i + 1..]
                 .iter()
@@ -358,6 +347,22 @@ impl<'a> FilletBuilder<'a> {
             });
         }
 
+        // The closed-rim rebuild owns its cap: a cap another stripe also runs
+        // along (a hole's rim filleted in the same call) takes the normal path.
+        let closed_rims: Vec<Option<ClosedRimInfo>> = recognized
+            .into_iter()
+            .enumerate()
+            .map(|(stripe_index, rim)| {
+                rim.filter(|rim| {
+                    !stripe_results.iter().enumerate().any(|(other, o)| {
+                        other != stripe_index
+                            && (o.stripe.face1 == rim.plane_face
+                                || o.stripe.face2 == rim.plane_face)
+                    })
+                })
+            })
+            .collect();
+        let mut closed_rim_supports: HashSet<FaceId> = HashSet::new();
         for (stripe_index, (sr, closed_rim)) in stripe_results.iter().zip(closed_rims).enumerate() {
             if let Some(rim) = closed_rim {
                 let contour_id =
@@ -376,7 +381,14 @@ impl<'a> FilletBuilder<'a> {
                     &mut boundary_registry,
                     &mut face_replacements,
                 ) {
-                    Ok(band) => blend_face_ids.push(band),
+                    Ok(band) => {
+                        blend_face_ids.push(band);
+                        closed_rim_supports.extend(
+                            [rim.plane_face, rim.wall_face]
+                                .iter()
+                                .filter_map(|support| face_replacements.get(support)),
+                        );
+                    }
                     Err(e) => {
                         // Closed-rim geometry is authoritative; do not hide
                         // an assembly failure behind a sequential fallback.
@@ -1511,10 +1523,17 @@ impl<'a> FilletBuilder<'a> {
         // convention like the untouched face it replaced. Without it a prism
         // whose every face was rebuilt has no seed, and the pairing walk
         // inverts the two mirrored corner bands it reaches through a
-        // clockwise-wound neighbour.
+        // clockwise-wound neighbour. A closed rim's rebuilt cap and wall keep
+        // their sources' surfaces and reversal flags, and take their new
+        // circles' senses from the rim's against the axis, so they anchor it
+        // too: a frustum with both rims filleted has no other face to.
         let seeds: Vec<FaceId> = result_faces
             .iter()
-            .filter(|f| original_set.contains(f) || notched_caps.contains(f))
+            .filter(|f| {
+                original_set.contains(f)
+                    || notched_caps.contains(f)
+                    || closed_rim_supports.contains(f)
+            })
             .copied()
             .collect();
         let seed_set: std::collections::HashSet<FaceId> = seeds.iter().copied().collect();
