@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793246987130,
+  "lastUpdate": 1793248424627,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59453,6 +59453,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23152842,
             "range": "± 79536",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "40c50811fc58b268399a00696484ae8bcb4cf432",
+          "message": "feat(math): return a cone's parabola and hyperbola sections exactly (#2135)\n\n`exact_plane_section` now returns a plane's parabola or hyperbola\nsection of a cone as an exact curve, instead of a chain of sampled\npoints.\n\nToday it returns circles, ellipses and rulings exactly, but a parabola\nor hyperbola falls through to `exact_plane_analytic`, which returns the\npoints where 512 of the cone's generators meet the plane, so anything\ndrawn or fitted between them is a chord. `Parabola3D::new` and\n`Hyperbola3D::new` choose their in-plane axes themselves, so neither\ncould be oriented to a given section.\n\n## Change\n\n- `PlaneSection` gains `Parabola` and `Hyperbola`. It is\n`#[non_exhaustive]`, so this is additive.\n- `plane_cone_open_section` works in the frame `exact_plane_cone` uses\nand reads the section's type from its eccentricity: `e² − 1` within\n1e-12 of zero gives a parabola, and past 1e-6 a hyperbola, returned as\nits branch on the cone's one nappe with `u_axis` pointing from the\ncentre to that branch. Between the two the sampled points stay: a\nhyperbola's centre lies the plane's offset over the conic coefficient\naway, so close to zero its vertex loses digits.\n- Each curve is checked at three points against the cone's one nappe\nbefore it is returned. One that does not hold, from a cone so flat or so\nnarrow that the formulas lose their digits, falls back to the sampled\npoints.\n- A parabola wholly on the far side of the apex, where the cone has no\nsurface, gives no section.\n- `Parabola3D::with_axes` and `Hyperbola3D::with_axes` take explicit\nin-plane axes. They normalize both, square the second against the first,\nand the hyperbola takes its normal from the two.\n\n## Tests\n\n- `a_plane_cuts_a_cones_open_conics`: a plane parallel to the axis of a\ncone rising 60° from its radial plane cuts a hyperbola branch on the\nplane and the cone to 1e-12, all above the apex. A plane parallel to a\ngenerator of a 45° cone cuts a parabola on both to 1e-12, and the same\nplane on the other side of the apex cuts nothing.\n- `extreme_cones_give_sections_on_the_cone`: a cone rising 1e-7 from its\nradial plane, cut by a plane tilted 7e-7 off it, gives a hyperbola on\nthe cone, and a cone opening 5e-7 off its axis, cut parallel to the\naxis, gives sections on the cone without error.\n- `conics_with_axes_normalize_their_frames`: directions of any length,\nslightly off square, give a parabola whose `focus()` is its evaluated\nfocus and a hyperbola whose vertex and foci sit along its unit `u_axis`.\n- `cargo test -p brepkit-math` passes 591 tests. `PlaneSection` has no\nusers outside `brepkit-math`.",
+          "timestamp": "2026-10-29T04:30:50Z",
+          "tree_id": "45d1f7edcb7ededb33e7cf3d7a2b1f8166e4999e",
+          "url": "https://github.com/andymai/brepkit/commit/40c50811fc58b268399a00696484ae8bcb4cf432"
+        },
+        "date": 1793248417042,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 883523,
+            "range": "± 4686",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 950075,
+            "range": "± 1343",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11136,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 530850,
+            "range": "± 520",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23247291,
+            "range": "± 505625",
             "unit": "ns/iter"
           }
         ]
