@@ -1892,6 +1892,34 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     let wall_center = project_onto_axis(wall_pt, axis_origin, axis);
     let wall_radius = radial_distance(wall_pt, axis_origin, axis);
 
+    // The wall contact must land on the wall, short of its far boundary: a
+    // fillet wider than a plate is thick would carry it past the plate.
+    let rise = wall_center - plate_center;
+    if let Ok(toward) = rise.normalize() {
+        let wall = topo.face(wall_face)?;
+        let mut reach = 0.0_f64;
+        for wire in std::iter::once(wall.outer_wire()).chain(wall.inner_wires().iter().copied()) {
+            for oriented in topo.wire(wire)?.edges() {
+                let edge = topo.edge(oriented.edge())?;
+                let a = topo.vertex(edge.start())?.point();
+                let b = topo.vertex(edge.end())?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                for k in 0..=8 {
+                    let t = t0 + (t1 - t0) * f64::from(k) / 8.0;
+                    let p = edge.curve().evaluate_with_endpoints(t, a, b);
+                    reach = reach.max((p - plate_center).dot(toward));
+                }
+            }
+        }
+        if rise.length() >= reach - 1e-7 {
+            return Err(BlendError::PlanningFailure {
+                reason: format!(
+                    "the fillet's wall contact would land past the wall bounding rim {rim_edge:?}"
+                ),
+            });
+        }
+    }
+
     if rim_is_hole {
         // Every kept wire must stay outside the plate contact, or the band
         // would run over it.
@@ -2057,21 +2085,27 @@ fn assemble_closed_rim(
         .is_some_and(OrientedEdge::is_forward);
     let plane_side = usize::from(stripe.face2 == rim.plane_face);
     let wall_side = usize::from(stripe.face2 == rim.wall_face);
+    // Both contact circles turn about the wall's axis; at a hole rim the cap
+    // and the wall keep their traversal direction whichever way the rim
+    // circle's own normal runs.
+    let rim_turns_with_axis = match topo.edge(rim.rim_edge)?.curve() {
+        EdgeCurve::Circle(c) => c.normal().dot(rim.plate_circle.normal()) > 0.0,
+        _ => true,
+    };
     let cap_sense = if rim.rim_is_hole {
-        // The plate circle turns about the wall's axis; keep the hole's
-        // traversal direction whichever way the rim circle's own normal runs.
-        let rim_turns_with_axis = match topo.edge(rim.rim_edge)?.curve() {
-            EdgeCurve::Circle(c) => c.normal().dot(rim.plate_circle.normal()) > 0.0,
-            _ => true,
-        };
         cap_forward == rim_turns_with_axis
     } else if matches!(&wall_surf, FaceSurface::Cylinder(_)) {
         cap_forward
     } else {
         !cap_forward
     };
-    let plate_sense = (cap_forward == plane_reversed) != band_reversed;
-    let wall_sense = (wall_forward == wall_reversed) != band_reversed;
+    let wall_support_sense = if rim.rim_is_hole {
+        wall_forward == rim_turns_with_axis
+    } else {
+        wall_forward
+    };
+    let plate_sense = (cap_sense == plane_reversed) != band_reversed;
+    let wall_sense = (wall_support_sense == wall_reversed) != band_reversed;
     let plate_handle = registry.register(
         BoundaryKey::contact(contour_id, 0, plane_side as u8),
         PlannedVertex::new(plate_v),
@@ -2092,7 +2126,7 @@ fn assemble_closed_rim(
         EdgeCurve::Circle(rim.wall_circle.clone()),
         (0.0, std::f64::consts::TAU),
         [
-            BoundaryOwner::planned("closed-rim support wall", wall_forward),
+            BoundaryOwner::planned("closed-rim support wall", wall_support_sense),
             BoundaryOwner::planned("closed-rim torus band", wall_sense),
         ],
     )?;

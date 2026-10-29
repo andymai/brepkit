@@ -429,101 +429,28 @@ fn fillet_cylinder_base_circle_produces_torus() {
     );
 }
 
-/// Plane-cone fillet on a frustum primitive's bottom rim. Verifies the
-/// analytic dispatcher produces an exact toroidal blend whose major radius
-/// is `r_p + r·cot(α/2)` (collapsing to `r_p + r` at α = π/2, which matches
-/// the plane-cylinder limit), and that both contacts are tangent to the
-/// expected surfaces.
+/// A frustum's bottom rim: `plane_cone_fillet` rolls this rim's ball below
+/// the base, so its wall contact lands on the cone's extension past the
+/// frustum's base, and the closed-rim rebuild refuses it rather than build a
+/// band off the wall.
 #[test]
-fn fillet_cone_bottom_rim_produces_torus() {
+fn fillet_cone_bottom_rim_with_its_contact_off_the_frustum_is_refused() {
     let mut topo = Topology::new();
-    // Regular frustum: bottom_radius=3 > top_radius=1 with height 4 ⇒ make_cone
-    // builds a virtual apex above the frustum and axis pointing -z. The
-    // bottom rim corner is the convex spine for the fillet.
     let solid = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
-    let fillet_r = 0.3;
-
-    // Find the bottom rim (Circle edge at z=0, radius=3).
     let bottom_rim = solid_edges(&topo, solid)
         .unwrap()
         .into_iter()
         .find(|&eid| {
-            if let EdgeCurve::Circle(c) = topo.edge(eid).unwrap().curve() {
-                (c.radius() - 3.0).abs() < 1e-6
-            } else {
-                false
-            }
+            matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::Circle(c) if (c.radius() - 3.0).abs() < 1e-6)
         })
         .expect("frustum bottom rim should exist with radius 3");
 
-    let result = fillet_v2(&mut topo, solid, &[bottom_rim], fillet_r).unwrap();
+    let error = fillet_v2(&mut topo, solid, &[bottom_rim], 0.3)
+        .err()
+        .expect("a wall contact off the frustum must be refused");
     assert!(
-        !result.succeeded.is_empty(),
-        "cone bottom-rim fillet must produce at least one stripe; failed = {:?}",
-        result.failed
-    );
-
-    let new_faces = solid_faces(&topo, result.solid).unwrap();
-    let torus = new_faces
-        .iter()
-        .find_map(|&fid| {
-            if let FaceSurface::Torus(t) = topo.face(fid).unwrap().surface() {
-                Some(t.clone())
-            } else {
-                None
-            }
-        })
-        .expect("plane-cone fillet should produce a Torus face");
-
-    // Half-angle: make_cone(3, 1, 4) builds the virtual apex 2 units above
-    // the top, so the apex is at z=6, the frustum tip-to-base axial extent
-    // is 6, and α = atan2(6, 3).
-    let alpha = 6.0_f64.atan2(3.0);
-    let r_p = 3.0;
-    let expected_major = r_p + fillet_r * (alpha * 0.5).tan().recip(); // r_p + r·cot(α/2)
-
-    assert!(
-        (torus.minor_radius() - fillet_r).abs() < 1e-9,
-        "torus minor should equal fillet radius {fillet_r}, got {}",
-        torus.minor_radius()
-    );
-    assert!(
-        (torus.major_radius() - expected_major).abs() < 1e-6,
-        "torus major should be r_p + r·cot(α/2) = {expected_major:.6}, got {}",
-        torus.major_radius()
-    );
-
-    // Strict geometric check — the torus must touch the plate (z=0) and the
-    // analytical cone surface at the predicted contact points.
-    // Frame derivation for the cone primitive: ConicalSurface::new with
-    // axis=(0,0,-1), Frame3::from_normal picks x_axis = axis × seed where
-    // seed = (1,0,0) since axis.x() = 0; that gives x = (-z) × (1,0,0) =
-    // (0, -1, 0). So the radial=cos(0)·x + sin(0)·y direction at u=0 is
-    // (0, -1, 0).
-    let want_plate = brepkit_math::vec::Point3::new(0.0, -expected_major, 0.0);
-    // Cone contact is at axial = -r·(1 + cos(α)) (below the plate, where
-    // the analytical cone surface — extended past the frustum's base —
-    // intersects the rolling-ball trajectory).
-    let cone_contact_axial = -fillet_r * (1.0 + alpha.cos());
-    let cone_contact_radial = expected_major - fillet_r * alpha.sin();
-    let want_cone = brepkit_math::vec::Point3::new(0.0, -cone_contact_radial, cone_contact_axial);
-    // Evaluate at the exact predicted v parameters rather than sampling — the
-    // contact happens at v values that aren't necessarily on a 1440-sample
-    // grid, and discretization noise would otherwise mask geometry errors.
-    // For axis_dir = -n_p_inward = -z (the choice the impl makes), plate
-    // contact is at v = 3π/2 (cos=0, sin=-1) and cone contact is at the v
-    // satisfying cos(v) = -sin(α), sin(v) = cos(α) — i.e. v = atan2(cos(α), -sin(α)).
-    let v_plate = 3.0 * std::f64::consts::FRAC_PI_2;
-    let p_plate = ParametricSurface::evaluate(&torus, 0.0, v_plate);
-    let v_cone = alpha.cos().atan2(-alpha.sin());
-    let p_cone = ParametricSurface::evaluate(&torus, 0.0, v_cone);
-    assert!(
-        (p_plate - want_plate).length() < 1e-9,
-        "torus at v=3π/2 should touch plate at {want_plate:?}; got {p_plate:?}"
-    );
-    assert!(
-        (p_cone - want_cone).length() < 1e-9,
-        "torus at v=atan2(cos α, -sin α) should touch cone at {want_cone:?}; got {p_cone:?}"
+        format!("{error:?}").contains("wall contact would land past"),
+        "{error:?}"
     );
 }
 

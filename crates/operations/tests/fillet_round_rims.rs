@@ -172,3 +172,44 @@ fn a_bores_mouth_in_an_elliptical_plate_rounds_off() {
     let removed = 2.0 * PI * (RADIUS + centroid_from_corner(1.0)) * area;
     assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 8.0), 1.0, -removed);
 }
+
+/// A bore's mouth fillet wider than its plate is thick would put the wall
+/// contact past the plate's far face: it is refused, never a solid that
+/// crosses itself.
+#[test]
+fn a_bores_mouth_fillet_wider_than_its_plate_is_refused() {
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 30.0, 30.0, 2.0).unwrap();
+    let bore = make_cylinder(&mut topo, RADIUS, 6.0).unwrap();
+    transform_solid(&mut topo, bore, &Mat4::translation(15.0, 15.0, -2.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Cut, plate, bore).unwrap();
+    let edge = rim_at(&topo, body, RADIUS, 2.0);
+    let Ok(result) = fillet_v2(&mut topo, body, &[edge], 3.0) else {
+        return;
+    };
+    assert!(
+        !result.failed.is_empty() || result.solid == body,
+        "a fillet wider than the plate must not build"
+    );
+}
+
+/// A bore cut by a cylinder standing either way up leaves its rim circle
+/// turning either way about the bore's axis; the mouth rounds off the same.
+#[test]
+fn a_bores_mouth_rounds_off_whichever_way_its_rim_turns() {
+    for flip in [false, true] {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 30.0, 30.0, 8.0).unwrap();
+        let bore = make_cylinder(&mut topo, RADIUS, 12.0).unwrap();
+        let placed = if flip {
+            Mat4::translation(15.0, 15.0, 10.0) * Mat4::rotation_x(std::f64::consts::PI)
+        } else {
+            Mat4::translation(15.0, 15.0, -2.0)
+        };
+        transform_solid(&mut topo, bore, &placed).unwrap();
+        let body = boolean(&mut topo, BooleanOp::Cut, plate, bore).unwrap();
+        let area = 1.0 - PI / 4.0;
+        let removed = 2.0 * PI * (RADIUS + centroid_from_corner(1.0)) * area;
+        assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 8.0), 1.0, -removed);
+    }
+}
