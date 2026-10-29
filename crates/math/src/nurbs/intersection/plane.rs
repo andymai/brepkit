@@ -69,7 +69,15 @@ pub fn intersect_plane_nurbs(
     // breaks the other. Cell connectivity satisfies both by construction.
     // A node on the plane counts with the positive side, so a section along
     // a seam or a run of nodes still crosses the edges to its negative
-    // neighbours, at the nodes themselves.
+    // neighbours, at the nodes themselves. Each crossing is found on its
+    // edge, between ends on either side, not read off the line between
+    // the ends' distances: another branch passing near one end bends the
+    // distance along the edge, and from such a reading refinement can
+    // settle on that branch instead.
+    let at = |u: f64, v: f64| {
+        let p = surface.evaluate(u, v);
+        plane_normal.dot(Vec3::new(p.x(), p.y(), p.z())) - plane_d
+    };
     let mut crossings: Vec<(f64, f64)> = Vec::new();
     // Which parameter a crossing on the domain's edge lines must keep: a
     // chain ending there ends ON the patch boundary, where the boundary
@@ -88,14 +96,14 @@ pub fn intersect_plane_nurbs(
             if i + 1 < n {
                 let (da, db) = (distances[i][j], distances[i + 1][j]);
                 if below(da) != below(db) {
-                    let t = (da / (da - db)).clamp(0.0, 1.0);
-                    let u = u0.mul_add(1.0 - t, (u0 + u_step) * t);
-                    horiz[i][j] = Some(crossings.len());
                     let (v, pin) = match j {
                         0 => (v_min, Some(Pin::V)),
                         _ if j + 1 == n => (v_max, Some(Pin::V)),
                         _ => (v0, None),
                     };
+                    let t = edge_root(|t| at(t.mul_add(u_step, u0), v), on_plane, da, db);
+                    let u = t.mul_add(u_step, u0);
+                    horiz[i][j] = Some(crossings.len());
                     crossings.push((u, v));
                     pinned.push(pin);
                 }
@@ -103,14 +111,14 @@ pub fn intersect_plane_nurbs(
             if j + 1 < n {
                 let (da, db) = (distances[i][j], distances[i][j + 1]);
                 if below(da) != below(db) {
-                    let t = (da / (da - db)).clamp(0.0, 1.0);
-                    let v = v0.mul_add(1.0 - t, (v0 + v_step) * t);
-                    vert[i][j] = Some(crossings.len());
                     let (u, pin) = match i {
                         0 => (u_min, Some(Pin::U)),
                         _ if i + 1 == n => (u_max, Some(Pin::U)),
                         _ => (u0, None),
                     };
+                    let t = edge_root(|t| at(u, t.mul_add(v_step, v0)), on_plane, da, db);
+                    let v = t.mul_add(v_step, v0);
+                    vert[i][j] = Some(crossings.len());
                     crossings.push((u, v));
                     pinned.push(pin);
                 }
@@ -134,6 +142,115 @@ pub fn intersect_plane_nurbs(
     // edges connects them; a saddle cell (all four edges crossing) pairs
     // them by the sign of the cell-center sample. With every node on one
     // side or the other, a cell has no odd count.
+    #[allow(clippy::cast_precision_loss)]
+    let cell_pairs = |i: usize, j: usize| -> [Option<(usize, usize)>; 2] {
+        match (horiz[i][j], horiz[i][j + 1], vert[i][j], vert[i + 1][j]) {
+            (Some(b), Some(t), Some(l), Some(r)) => {
+                // Saddle: the center sample decides which corners the
+                // curve separates.
+                let uc = u_min + (i as f64 + 0.5) * u_step;
+                let vc = v_min + (j as f64 + 0.5) * v_step;
+                let pc = surface.evaluate(uc, vc);
+                let dc = plane_normal.dot(Vec3::new(pc.x(), pc.y(), pc.z())) - plane_d;
+                if below(dc) == below(distances[i][j]) {
+                    // Center joins the (0,0)/(1,1) corners: the curve
+                    // cuts off the other two corners separately.
+                    [Some((b, r)), Some((t, l))]
+                } else {
+                    [Some((b, l)), Some((t, r))]
+                }
+            }
+            (bottom, top, left, right) => {
+                let mut present = [bottom, top, left, right].into_iter().flatten();
+                match (present.next(), present.next(), present.next()) {
+                    (Some(a), Some(b), None) => [Some((a, b)), None],
+                    _ => [None, None],
+                }
+            }
+        }
+    };
+
+    // Where the section crosses itself, its branches leave a block of cells
+    // round the node nearest the crossing through the block's rim, each
+    // where an edge there crosses the plane. They end at the crossing
+    // instead, and do not link inside the block: near the crossing the
+    // branches run too close together for the grid to tell apart. Whatever
+    // else of the section lies inside the block, linked to none of the
+    // branches, links as before. The block of sixteen cells serves where
+    // four branches cross its rim, where they have drawn apart; failing
+    // that, the block of four where four do, or two, as where two leave
+    // through one edge; no two blocks share a cell.
+    let mut nodes: Vec<((f64, f64), Vec<usize>)> = Vec::new();
+    let mut claimed = vec![vec![false; n - 1]; n - 1];
+    let mut retired = vec![false; crossings.len()];
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    for at in self_crossings(
+        surface,
+        plane_normal,
+        plane_d,
+        &distances,
+        on_plane,
+        (u_min, u_step),
+        (v_min, v_step),
+    ) {
+        let nearest =
+            |x: f64, lo: f64, step: f64| (((x - lo) / step).round().max(0.0) as usize).min(n - 1);
+        let (ci, cj) = (nearest(at.0, u_min, u_step), nearest(at.1, v_min, v_step));
+        let block = |r: usize| {
+            let (a0, a1) = (ci.saturating_sub(r), (ci + r - 1).min(n - 2));
+            let (b0, b1) = (cj.saturating_sub(r), (cj + r - 1).min(n - 2));
+            let mut exits: Vec<usize> = Vec::new();
+            for a in a0..=a1 {
+                exits.extend(horiz[a][b0]);
+                exits.extend(horiz[a][b1 + 1]);
+            }
+            for b in b0..=b1 {
+                exits.extend(vert[a0][b]);
+                exits.extend(vert[a1 + 1][b]);
+            }
+            ((a0, a1), (b0, b1), exits)
+        };
+        let free = |(a0, a1): (usize, usize), (b0, b1): (usize, usize)| {
+            (a0..=a1).all(|a| (b0..=b1).all(|b| !claimed[a][b]))
+        };
+        let Some(((a0, a1), (b0, b1), exits)) = [2, 1]
+            .into_iter()
+            .map(block)
+            .find(|b| b.2.len() == 4 && free(b.0, b.1))
+            .or_else(|| Some(block(1)).filter(|b| b.2.len() == 2 && free(b.0, b.1)))
+        else {
+            continue;
+        };
+        for row in &mut claimed[a0..=a1] {
+            row[b0..=b1].fill(true);
+        }
+        // The branches: the rim's crossings, and those the block's cells
+        // link them to.
+        let pairs: Vec<(usize, usize)> = (a0..=a1)
+            .flat_map(|a| (b0..=b1).flat_map(move |b| cell_pairs(a, b)))
+            .flatten()
+            .collect();
+        let mut branch = exits.clone();
+        for &x in &branch {
+            retired[x] = true;
+        }
+        while let Some(x) = branch.pop() {
+            for &(p, q) in &pairs {
+                let other = if p == x {
+                    q
+                } else if q == x {
+                    p
+                } else {
+                    continue;
+                };
+                if !retired[other] {
+                    retired[other] = true;
+                    branch.push(other);
+                }
+            }
+        }
+        nodes.push((at, exits));
+    }
     let mut links: Vec<Vec<usize>> = vec![Vec::new(); crossings.len()];
     let connect = |a: usize, b: usize, links: &mut Vec<Vec<usize>>| {
         if !links[a].contains(&b) {
@@ -141,83 +258,77 @@ pub fn intersect_plane_nurbs(
             links[b].push(a);
         }
     };
-    #[allow(clippy::cast_precision_loss)]
     for i in 0..n - 1 {
         for j in 0..n - 1 {
-            let bottom = horiz[i][j];
-            let top = horiz[i][j + 1];
-            let left = vert[i][j];
-            let right = vert[i + 1][j];
-            let mut present = [0_usize; 4];
-            let mut n_present = 0_usize;
-            for e in [bottom, top, left, right].into_iter().flatten() {
-                present[n_present] = e;
-                n_present += 1;
-            }
-            match n_present {
-                2 => connect(present[0], present[1], &mut links),
-                4 => {
-                    // Saddle: the center sample decides which corners the
-                    // curve separates.
-                    let uc = u_min + (i as f64 + 0.5) * u_step;
-                    let vc = v_min + (j as f64 + 0.5) * v_step;
-                    let pc = surface.evaluate(uc, vc);
-                    let dc = plane_normal.dot(Vec3::new(pc.x(), pc.y(), pc.z())) - plane_d;
-                    let d00 = distances[i][j];
-                    let (b, t, l, r) = (
-                        bottom.unwrap_or(usize::MAX),
-                        top.unwrap_or(usize::MAX),
-                        left.unwrap_or(usize::MAX),
-                        right.unwrap_or(usize::MAX),
-                    );
-                    if below(dc) == below(d00) {
-                        // Center joins the (0,0)/(1,1) corners: the curve
-                        // cuts off the other two corners separately.
-                        connect(b, r, &mut links);
-                        connect(t, l, &mut links);
-                    } else {
-                        connect(b, l, &mut links);
-                        connect(t, r, &mut links);
-                    }
+            for (a, b) in cell_pairs(i, j).into_iter().flatten() {
+                if !(claimed[i][j] && (retired[a] || retired[b])) {
+                    connect(a, b, &mut links);
                 }
-                _ => {}
             }
         }
     }
 
+    let mut junction = vec![false; crossings.len()];
+    for (at, ends) in nodes {
+        let node = crossings.len();
+        crossings.push(at);
+        pinned.push(None);
+        links.push(Vec::new());
+        junction.push(true);
+        for end in ends {
+            connect(end, node, &mut links);
+        }
+    }
+
     // Phase 4: Walk the links into ordered chains (open chains from
-    // degree-1 endpoints first, then closed loops), Newton-refining each
-    // crossing; a refinement failure splits its chain.
+    // degree-1 endpoints first, then from the points where the section
+    // crosses itself, then closed loops), Newton-refining each crossing; a
+    // refinement failure splits its chain. A chain stops at such a point,
+    // which any number of chains may share.
     let mut visited = vec![false; crossings.len()];
     let mut ordered_chains: Vec<Vec<IntersectionPoint>> = Vec::new();
-    let walk = |start: usize, visited: &mut Vec<bool>| -> Vec<usize> {
-        let mut chain = vec![start];
+    let walk = |from: Option<usize>, start: usize, visited: &mut Vec<bool>| -> Vec<usize> {
+        let mut chain: Vec<usize> = from.into_iter().chain([start]).collect();
         visited[start] = true;
-        let mut current = start;
-        while let Some(&next) = links[current].iter().find(|&&x| !visited[x]) {
-            visited[next] = true;
+        let (mut prev, mut current) = (from, start);
+        while let Some(next) = links[current]
+            .iter()
+            .copied()
+            .find(|&x| Some(x) != prev && (junction[x] || !visited[x]))
+        {
             chain.push(next);
-            current = next;
+            if junction[next] {
+                return chain;
+            }
+            visited[next] = true;
+            (prev, current) = (Some(current), next);
         }
         // A loop ends beside its start; closing it keeps the cell between
         // them, and the curve, unbroken.
-        if chain.len() > 2 && links[current].contains(&start) {
+        if from.is_none() && chain.len() > 2 && links[current].contains(&start) {
             chain.push(start);
         }
         chain
     };
     let degree_one: Vec<usize> = (0..crossings.len())
-        .filter(|&x| links[x].len() == 1)
+        .filter(|&x| !junction[x] && links[x].len() == 1)
         .collect();
     let mut index_chains: Vec<Vec<usize>> = Vec::new();
     for start in degree_one {
         if !visited[start] {
-            index_chains.push(walk(start, &mut visited));
+            index_chains.push(walk(None, start, &mut visited));
+        }
+    }
+    for node in (0..crossings.len()).filter(|&x| junction[x]) {
+        for &start in &links[node] {
+            if !visited[start] {
+                index_chains.push(walk(Some(node), start, &mut visited));
+            }
         }
     }
     for start in 0..crossings.len() {
-        if !visited[start] {
-            index_chains.push(walk(start, &mut visited));
+        if !junction[start] && !visited[start] {
+            index_chains.push(walk(None, start, &mut visited));
         }
     }
     for chain in index_chains {
@@ -384,18 +495,10 @@ fn tiny_loops(
             b
         })
     };
-    // Evaluating the distance rounds it by a few ulps of the largest sum
-    // of its terms over the control points; an extremum no further past
-    // the plane than that may only touch it, as along a valley lying on the
-    // plane, where rays from it would trace rounding.
-    let noise = 4.0
-        * f64::EPSILON
-        * surface
-            .control_points()
-            .iter()
-            .flatten()
-            .map(|&p| plane_terms(normal, d, p))
-            .fold(0.0, f64::max);
+    // An extremum no further past the plane than rounding may only touch
+    // it, as along a valley lying on the plane, where rays from it would
+    // trace rounding.
+    let noise = rounding(surface, normal, d);
     let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
     let mut touches: Vec<IntersectionPoint> = Vec::new();
     for i in 0..n {
@@ -510,11 +613,141 @@ fn tiny_loops(
     (loops, touches)
 }
 
+/// How far evaluating the plane's distance on `surface` can round it: a few
+/// ulps of the largest sum of its terms over the control points.
+fn rounding(surface: &NurbsSurface, normal: Vec3, d: f64) -> f64 {
+    4.0 * f64::EPSILON
+        * surface
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|&p| plane_terms(normal, d, p))
+            .fold(0.0, f64::max)
+}
+
 /// The sum of the plane's distance's terms at `p`, `Σ|nᵢ·pᵢ| + |d|`, which
 /// bounds how far evaluating it rounds: coordinates the normal does not
 /// weigh add nothing.
 fn plane_terms(normal: Vec3, d: f64, p: Point3) -> f64 {
     (normal.x() * p.x()).abs() + (normal.y() * p.y()).abs() + (normal.z() * p.z()).abs() + d.abs()
+}
+
+/// Where along a grid edge, at `t` from 0 to 1, the plane's distance
+/// `at(t)` passes from one side of the plane to the other, as the ends'
+/// distances `da` and `db` lie, a node within `on_plane` of it counting
+/// with the positive side: by false position kept inside the bracket,
+/// halving the weight of an end that stays put (Illinois).
+fn edge_root(at: impl Fn(f64) -> f64, on_plane: f64, da: f64, db: f64) -> f64 {
+    let side = |f: f64| f + on_plane;
+    let (mut a, mut b) = ((0.0, side(da)), (1.0, side(db)));
+    let mut kept = 0_i8;
+    for _ in 0..MAX_EDGE_STEPS {
+        let mut t = a.0 - a.1 * (b.0 - a.0) / (b.1 - a.1);
+        if !(t > a.0 && t < b.0) {
+            t = 0.5 * (a.0 + b.0);
+        }
+        let g = side(at(t));
+        if g == 0.0 {
+            return t;
+        }
+        if (g < 0.0) == (a.1 < 0.0) {
+            a = (t, g);
+            if kept == 1 {
+                b.1 *= 0.5;
+            }
+            kept = 1;
+        } else {
+            b = (t, g);
+            if kept == -1 {
+                a.1 *= 0.5;
+            }
+            kept = -1;
+        }
+        if b.0 - a.0 <= 1e-12 {
+            break;
+        }
+    }
+    a.0 - a.1 * (b.0 - a.0) / (b.1 - a.1)
+}
+
+/// Evaluations [`edge_root`] takes at most.
+const MAX_EDGE_STEPS: usize = 48;
+
+/// Where the section crosses itself: points within rounding of the plane
+/// where its distance stops changing and curves away from it upward one
+/// way and downward the other. A node whose block of nine has nodes on both
+/// sides of the plane, and whose differences put such a point within a
+/// step and a half of it, seeds Newton for the point.
+#[allow(clippy::cast_precision_loss)]
+fn self_crossings(
+    surface: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    distances: &[Vec<f64>],
+    on_plane: f64,
+    (u_min, u_step): (f64, f64),
+    (v_min, v_step): (f64, f64),
+) -> Vec<(f64, f64)> {
+    let n = distances.len();
+    let noise = rounding(surface, normal, d);
+    // Curving both ways, not only along a valley, by the ratio of the
+    // eigenvalues' product to their squares' sum.
+    let saddle = |(fuu, fuv, fvv): (f64, f64, f64)| {
+        -fuu.mul_add(fvv, -(fuv * fuv)) > 1e-6 * fuu.mul_add(fuu, fvv.mul_add(fvv, 2.0 * fuv * fuv))
+    };
+    let mut found: Vec<(f64, f64)> = Vec::new();
+    for i in 1..n - 1 {
+        for j in 1..n - 1 {
+            let f = |a: usize, b: usize| distances[a][b];
+            let block = || (i - 1..=i + 1).flat_map(|a| (j - 1..=j + 1).map(move |b| f(a, b)));
+            if block().all(|x| x < -on_plane) || !block().any(|x| x < -on_plane) {
+                continue;
+            }
+            // Differences in steps, and the stationary point they model.
+            let fu = 0.5 * (f(i + 1, j) - f(i - 1, j));
+            let fv = 0.5 * (f(i, j + 1) - f(i, j - 1));
+            let fuu = f(i, j).mul_add(-2.0, f(i + 1, j) + f(i - 1, j));
+            let fvv = f(i, j).mul_add(-2.0, f(i, j + 1) + f(i, j - 1));
+            let fuv =
+                0.25 * (f(i + 1, j + 1) - f(i + 1, j - 1) - f(i - 1, j + 1) + f(i - 1, j - 1));
+            if !saddle((fuu, fuv, fvv)) {
+                continue;
+            }
+            let det = fuu.mul_add(fvv, -(fuv * fuv));
+            let du = fuv.mul_add(fv, -(fvv * fu)) / det;
+            let dv = fuv.mul_add(fu, -(fuu * fv)) / det;
+            if du.abs() > 1.5 || dv.abs() > 1.5 {
+                continue;
+            }
+            let seed = (
+                du.mul_add(u_step, u_min + i as f64 * u_step),
+                dv.mul_add(v_step, v_min + j as f64 * v_step),
+            );
+            let Some(Extremum {
+                at: (u, v),
+                settled,
+                hessian: (huu, huv, hvv),
+            }) = extremum(surface, normal, seed)
+            else {
+                continue;
+            };
+            let p = surface.evaluate(u, v);
+            if settled
+                && (normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d).abs() <= noise
+                && saddle((
+                    huu * u_step * u_step,
+                    huv * u_step * v_step,
+                    hvv * v_step * v_step,
+                ))
+                && found
+                    .iter()
+                    .all(|q| (q.0 - u).abs() > 1e-6 * u_step || (q.1 - v).abs() > 1e-6 * v_step)
+            {
+                found.push((u, v));
+            }
+        }
+    }
+    found
 }
 
 /// Where the plane's distance stops changing, as Newton from a seed
