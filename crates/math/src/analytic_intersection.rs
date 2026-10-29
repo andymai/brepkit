@@ -2228,7 +2228,12 @@ fn try_algebraic_intersection(
         (AnalyticSurface::Cylinder(c), AnalyticSurface::Sphere(s)) => {
             algebraic_sphere_cylinder(s, c, false)
         }
-        (AnalyticSurface::Cone(c1), AnalyticSurface::Cone(c2)) => algebraic_cone_cone(c1, c2),
+        (AnalyticSurface::Cone(c1), AnalyticSurface::Cone(c2)) => {
+            if let Some(rulings) = shared_apex_cones(c1, c2, v_range_a, v_range_b)? {
+                return Ok(Some(rulings));
+            }
+            algebraic_cone_cone(c1, c2)
+        }
         (AnalyticSurface::Cone(cone), AnalyticSurface::Sphere(sphere)) => {
             Ok(ruling_cone_sphere(cone, sphere, true))
         }
@@ -2805,6 +2810,103 @@ fn conic_loop(centre: Point3, u: Vec3, v: Vec3, a: f64, b: f64) -> Result<NurbsC
         0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
     ];
     NurbsCurve::new(2, knots, points, weights)
+}
+
+/// Two cones sharing an apex meet only along rulings through it. A
+/// ruling's direction `d` makes each cone's angle with its axis, `d·aᵢ =
+/// ±sin(half_angleᵢ)` (the half-angle runs from the radial plane), a line
+/// that crosses the unit sphere twice, touches it where the cones are
+/// tangent along one ruling, or misses it. Along `apex + t·d` the first
+/// cone's `v` is `t` and the second's `±t`, so each ruling runs where both
+/// faces' `v` ranges hold it, as a straight segment cut at the apex. Two
+/// rulings closer than the linear tolerance across the faces are one.
+///
+/// `None` unless both ranges are given, the axes are not parallel (the
+/// coaxial path's case), and the apexes coincide to rounding.
+fn shared_apex_cones(
+    c1: &ConicalSurface,
+    c2: &ConicalSurface,
+    v1: Option<(f64, f64)>,
+    v2: Option<(f64, f64)>,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let (Some(v1), Some(v2)) = (v1, v2) else {
+        return Ok(None);
+    };
+    let (a1, a2, apex) = (c1.axis(), c2.axis(), c1.apex());
+    let across = a1.cross(a2);
+    let sin = across.length();
+    if sin < 1e-9 {
+        return Ok(None);
+    }
+    let reach = v1.0.abs().max(v1.1.abs()).max(v2.0.abs()).max(v2.1.abs());
+    let scale = reach.max((apex - Point3::new(0.0, 0.0, 0.0)).length());
+    if (c2.apex() - apex).length() > 64.0 * f64::EPSILON * scale {
+        return Ok(None);
+    }
+    let normal = across * (1.0 / sin);
+    let tol = Tolerance::new().linear;
+    // A ruling's part across the first axis is `(t2 − s1·cos) / sin`, whose
+    // rounding grows as the axes close up; past a tenth of the tolerance
+    // over the faces, the pair is left to the marcher.
+    if f64::EPSILON * reach > 0.1 * tol * sin {
+        return Ok(None);
+    }
+    // The second axis's part across the first, a unit vector.
+    let toward = normal.cross(a1);
+    let cos = a1.dot(a2);
+    let (s1, s2) = (c1.half_angle().sin(), c2.half_angle().sin());
+    // `evaluate` turns its radial direction round for negative `v`.
+    let params = |cone: &ConicalSurface, p: Point3| {
+        let (u, v) = cone.project_point(p);
+        if v < 0.0 {
+            ((u + std::f64::consts::PI).rem_euclid(TAU), v)
+        } else {
+            (u, v)
+        }
+    };
+    let mut curves = Vec::new();
+    for nappe in [1.0, -1.0] {
+        let t2 = nappe * s2;
+        let side = cos.mul_add(-s1, t2) / sin;
+        let foot = a1 * s1 + toward * side;
+        let lift_sq = s1.mul_add(-s1, side.mul_add(-side, 1.0));
+        let rounding = 4.0 * f64::EPSILON;
+        let lifts = if lift_sq.abs() <= rounding {
+            // Within rounding of touching: the rulings that rounding could
+            // hide part by up to `√(2·rounding)` radians, taken as one while
+            // that stays within ten tolerances over the faces, and beyond
+            // it not settled here.
+            if (2.0 * rounding).sqrt() * reach > 10.0 * tol {
+                return Ok(None);
+            }
+            vec![0.0]
+        } else if lift_sq < 0.0 {
+            Vec::new()
+        } else if 2.0 * lift_sq.sqrt() * reach <= tol {
+            vec![0.0]
+        } else {
+            vec![lift_sq.sqrt(), -lift_sq.sqrt()]
+        };
+        let along2 = if nappe > 0.0 { v2 } else { (-v2.1, -v2.0) };
+        let (lo, hi) = (v1.0.max(along2.0), v1.1.min(along2.1));
+        if hi - lo <= tol {
+            continue;
+        }
+        for lift in lifts {
+            let d = (foot + normal * lift).normalize()?;
+            let pieces = if lo < 0.0 && hi > 0.0 {
+                vec![(lo, 0.0), (0.0, hi)]
+            } else {
+                vec![(lo, hi)]
+            };
+            for (from, to) in pieces {
+                curves.push(ruling_segment(apex + d * from, apex + d * to, |p| {
+                    (params(c1, p), params(c2, p))
+                })?);
+            }
+        }
+    }
+    Ok(Some(curves))
 }
 
 /// Two cylinders of one radius whose axes cross meet in two ellipses, one
@@ -6839,6 +6941,121 @@ mod tests {
         close.sort_by(|a, b| a.0.y().total_cmp(&b.0.y()));
         let apart = close[1].0.y() - close[0].0.y();
         assert!((apart - 0.010_954).abs() < 1e-5, "{apart}");
+    }
+
+    /// How far `p` lies off `cone` (either nappe), and its `v` there.
+    fn off_cone(cone: &ConicalSurface, p: Point3) -> (f64, f64) {
+        let q = p - cone.apex();
+        let (along, s) = (q.dot(cone.axis()), cone.half_angle().sin());
+        ((along.abs() - s * q.length()).abs(), along / s)
+    }
+
+    /// Cones sharing an apex, their axes 40° apart and each opening 20°
+    /// from its axis, touch along the one ruling between the axes, which
+    /// runs where both faces hold it.
+    #[test]
+    fn cones_sharing_an_apex_touch_along_one_ruling() {
+        let apex = Point3::new(1.0, 2.0, 3.0);
+        let a = 20.0_f64.to_radians();
+        let half = std::f64::consts::FRAC_PI_2 - a;
+        let c1 = ConicalSurface::new(apex, Vec3::new(a.cos(), 0.0, a.sin()), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(a.cos(), 0.0, -a.sin()), half).unwrap();
+        let curves = intersect_analytic_analytic_bounded(
+            AnalyticSurface::Cone(&c1),
+            AnalyticSurface::Cone(&c2),
+            64,
+            Some((0.2, 3.0)),
+            Some((0.5, 4.0)),
+        )
+        .unwrap();
+        assert_eq!(curves.len(), 1);
+        let curve = &curves[0].curve;
+        let (t0, t1) = curve.domain();
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        assert!((curve.evaluate(t0) - (apex + x * 0.5)).length() < 1e-12);
+        assert!((curve.evaluate(t1) - (apex + x * 3.0)).length() < 1e-12);
+    }
+
+    /// Cones sharing an apex, their axes 20° apart and each opening 30°,
+    /// cross along two rulings; faces reaching past the apex hold each on
+    /// both sides of it, in two segments that end there.
+    #[test]
+    fn cones_sharing_an_apex_cross_along_two_rulings() {
+        let apex = Point3::new(-1.0, 0.5, 2.0);
+        let b = 20.0_f64.to_radians();
+        let half = 60.0_f64.to_radians();
+        let c1 = ConicalSurface::new(apex, Vec3::new(0.0, 0.0, 1.0), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(b.sin(), 0.0, b.cos()), half).unwrap();
+        for (range, pieces) in [((0.5, 2.0), 2), ((-2.0, 2.0), 4)] {
+            let curves = intersect_analytic_analytic_bounded(
+                AnalyticSurface::Cone(&c1),
+                AnalyticSurface::Cone(&c2),
+                64,
+                Some(range),
+                Some(range),
+            )
+            .unwrap();
+            assert_eq!(curves.len(), pieces, "{range:?}");
+            for ic in &curves {
+                let (t0, t1) = ic.curve.domain();
+                for k in 0..=20 {
+                    let p = ic.curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 20.0);
+                    for cone in [&c1, &c2] {
+                        let (off, v) = off_cone(cone, p);
+                        assert!(off < 1e-12, "{range:?}: off a cone by {off:.2e}");
+                        assert!(v > range.0 - 1e-12 && v < range.1 + 1e-12);
+                    }
+                }
+                if pieces == 4 {
+                    let ends = [ic.curve.evaluate(t0), ic.curve.evaluate(t1)];
+                    assert!(ends.iter().any(|&e| (e - apex).length() < 1e-12));
+                }
+                for point in &ic.points {
+                    let (on1, on2) = (point.param1, point.param2);
+                    assert!((c1.evaluate(on1.0, on1.1) - point.point).length() < 1e-9);
+                    assert!((c2.evaluate(on2.0, on2.1) - point.point).length() < 1e-9);
+                }
+            }
+        }
+    }
+
+    /// Axes 1e-8 apart in angle leave a ruling's part across them to
+    /// rounding, and cones touching within rounding along a ruling leave
+    /// how far apart their rulings may be 1e6 out to it: neither is solved
+    /// here.
+    #[test]
+    fn cones_sharing_an_apex_defer_what_rounding_cannot_settle() {
+        let apex = Point3::new(0.0, 0.0, 0.0);
+        let half = 60.0_f64.to_radians();
+        let c1 = ConicalSurface::new(apex, Vec3::new(0.0, 0.0, 1.0), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(1e-8_f64.sin(), 0.0, 1e-8_f64.cos()), half)
+            .unwrap();
+        let near = Some((0.5, 2.0));
+        assert!(shared_apex_cones(&c1, &c2, near, near).unwrap().is_none());
+        let a = 20.0_f64.to_radians();
+        let half = std::f64::consts::FRAC_PI_2 - a;
+        let c1 = ConicalSurface::new(apex, Vec3::new(a.cos(), 0.0, a.sin()), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(a.cos(), 0.0, -a.sin()), half).unwrap();
+        let far = Some((0.5, 1e6));
+        assert!(shared_apex_cones(&c1, &c2, far, far).unwrap().is_none());
+    }
+
+    /// Perpendicular cones opening 1e-15 short of touching cross along two
+    /// rulings, which part by about 0.09 a million out: two segments.
+    #[test]
+    fn cones_sharing_an_apex_just_short_of_touching_cross_in_two_rulings() {
+        let apex = Point3::new(0.0, 0.0, 0.0);
+        let half = std::f64::consts::FRAC_PI_4 - 1e-15;
+        let c1 = ConicalSurface::new(apex, Vec3::new(0.0, 0.0, 1.0), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(1.0, 0.0, 0.0), half).unwrap();
+        let range = Some((0.5, 1e6));
+        let curves = shared_apex_cones(&c1, &c2, range, range).unwrap().unwrap();
+        assert_eq!(curves.len(), 2);
+        let ends: Vec<Point3> = curves
+            .iter()
+            .map(|ic| ic.curve.evaluate(ic.curve.domain().1))
+            .collect();
+        assert!((ends[0] - ends[1]).length() > 0.05);
     }
 
     /// A ball off a ring's axis touches it at one point from outside the
