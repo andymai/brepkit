@@ -6802,6 +6802,73 @@ fn runs_along_an_edge(
         || along(|p| p.param1.1, v_hi, dv)
 }
 
+/// Whether the plane only touches `nurbs` along the section through
+/// `points`, without crossing it.
+///
+/// The surface's normal lies along the plane's at every point, and across
+/// the curve at its middle point the surface stays on one side of the
+/// plane. Where the surface crosses with its normal along the plane's, as
+/// `z = x³` crosses `z = 0`, the curve parts the regions either side. A
+/// probe a thousandth of the domain across can stay within rounding of the
+/// plane, as across `z = x⁷`, and settles nothing: wider ones follow, and a
+/// curve none of them settles stays.
+fn touches_along(
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    points: &[nurbs_isect::IntersectionPoint],
+) -> bool {
+    let tangent = |p: &nurbs_isect::IntersectionPoint| {
+        nurbs
+            .normal(p.param1.0, p.param1.1)
+            .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
+    };
+    if points.len() < 2 || !points.iter().all(tangent) {
+        return false;
+    }
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let (wide, tall) = (u_hi - u_lo, v_hi - v_lo);
+    let k = points.len() / 2;
+    let (a, b) = (
+        points[k - 1].param1,
+        points[(k + 1).min(points.len() - 1)].param1,
+    );
+    // Across the curve in parameters scaled to the domain.
+    let (tu, tv) = ((b.0 - a.0) / wide, (b.1 - a.1) / tall);
+    let len = tu.hypot(tv);
+    if len == 0.0 {
+        return false;
+    }
+    let mid = points[k].param1;
+    let rounding = 4.0
+        * f64::EPSILON
+        * nurbs
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|p| {
+                (normal.x() * p.x()).abs()
+                    + (normal.y() * p.y()).abs()
+                    + (normal.z() * p.z()).abs()
+                    + d.abs()
+            })
+            .fold(0.0, f64::max);
+    let side = |reach: f64| {
+        let u = (reach * wide).mul_add(-tv / len, mid.0).clamp(u_lo, u_hi);
+        let v = (reach * tall).mul_add(tu / len, mid.1).clamp(v_lo, v_hi);
+        let p = nurbs.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    for reach in [1e-3, 1e-2, 1e-1] {
+        let (left, right) = (side(reach), side(-reach));
+        if left.abs() > rounding && right.abs() > rounding {
+            return left * right > 0.0;
+        }
+    }
+    false
+}
+
 /// Plane-NURBS intersection.
 fn plane_nurbs_intersection(
     normal: Vec3,
@@ -6816,7 +6883,7 @@ fn plane_nurbs_intersection(
         // nor a curve along which the surface touches the plane from one
         // side, and a curve along one of the face's own edges is that edge.
         if ic.points.len() < 2
-            || nurbs_isect::touches_along(nurbs, normal, d, &ic.points)
+            || touches_along(nurbs, normal, d, &ic.points)
             || runs_along_an_edge(nurbs, &ic.points)
         {
             continue;
@@ -10301,26 +10368,33 @@ mod tests {
     }
 
     /// A plane crossing a NURBS sheet where the sheet's normal lies along
-    /// its own, as `z = x³` crosses `z = 0` along `x = 0`, still splits it.
+    /// its own, as `z = x³` and `z = x⁷` cross `z = 0` along `x = 0`, still
+    /// splits it; across `x⁷` the sheet stays within rounding of the plane
+    /// a thousandth of the way.
     #[test]
     fn a_plane_crossing_a_nurbs_sheet_where_it_lies_flat_splits_it() {
-        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
-        let cubic = brepkit_math::nurbs::surface::NurbsSurface::new(
-            3,
-            1,
-            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![
-                row(-1.0, -1.0),
-                row(-1.0 / 3.0, 1.0),
-                row(1.0 / 3.0, -1.0),
-                row(1.0, 1.0),
-            ],
-            vec![vec![1.0; 2]; 4],
-        )
-        .unwrap();
-        let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &cubic).unwrap();
-        assert_eq!(raw.len(), 1);
+        for power in [3_u32, 7] {
+            // `(2u − 1)ⁿ` has Bernstein coefficients `(−1)ⁿ⁻ᵏ`.
+            let rows = (0..=power)
+                .map(|k| {
+                    let x = 2.0f64.mul_add(f64::from(k) / f64::from(power), -1.0);
+                    let z = if (power - k) % 2 == 0 { 1.0 } else { -1.0 };
+                    vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)]
+                })
+                .collect::<Vec<_>>();
+            let order = rows.len();
+            let sheet = brepkit_math::nurbs::surface::NurbsSurface::new(
+                order - 1,
+                1,
+                [vec![0.0; order], vec![1.0; order]].concat(),
+                vec![0.0, 0.0, 1.0, 1.0],
+                rows,
+                vec![vec![1.0; 2]; order],
+            )
+            .unwrap();
+            let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &sheet).unwrap();
+            assert_eq!(raw.len(), 1, "x^{power}");
+        }
     }
 
     /// A plane holding one edge of a NURBS sheet that lies on its negative

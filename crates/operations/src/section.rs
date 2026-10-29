@@ -15,12 +15,74 @@ use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use brepkit_math::nurbs::intersection::{
-    IntersectionCurve, IntersectionPoint, intersect_plane_nurbs, touches_along,
+    IntersectionCurve, IntersectionPoint, intersect_plane_nurbs,
 };
 use brepkit_math::nurbs::surface::NurbsSurface;
 
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
+
+/// Whether the plane only touches `nurbs` along the section through
+/// `points`, without crossing it.
+///
+/// The surface's normal lies along the plane's at every point, and across
+/// the curve at its middle point the surface stays on one side of the
+/// plane. Where the surface crosses with its normal along the plane's, as
+/// `z = x³` crosses `z = 0`, the curve parts the regions either side. A
+/// probe a thousandth of the domain across can stay within rounding of the
+/// plane, as across `z = x⁷`, and settles nothing: wider ones follow, and a
+/// curve none of them settles stays.
+fn touches_along(nurbs: &NurbsSurface, normal: Vec3, d: f64, points: &[IntersectionPoint]) -> bool {
+    let tangent = |p: &IntersectionPoint| {
+        nurbs
+            .normal(p.param1.0, p.param1.1)
+            .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
+    };
+    if points.len() < 2 || !points.iter().all(tangent) {
+        return false;
+    }
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let (wide, tall) = (u_hi - u_lo, v_hi - v_lo);
+    let k = points.len() / 2;
+    let (a, b) = (
+        points[k - 1].param1,
+        points[(k + 1).min(points.len() - 1)].param1,
+    );
+    // Across the curve in parameters scaled to the domain.
+    let (tu, tv) = ((b.0 - a.0) / wide, (b.1 - a.1) / tall);
+    let len = tu.hypot(tv);
+    if len == 0.0 {
+        return false;
+    }
+    let mid = points[k].param1;
+    let rounding = 4.0
+        * f64::EPSILON
+        * nurbs
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|p| {
+                (normal.x() * p.x()).abs()
+                    + (normal.y() * p.y()).abs()
+                    + (normal.z() * p.z()).abs()
+                    + d.abs()
+            })
+            .fold(0.0, f64::max);
+    let side = |reach: f64| {
+        let u = (reach * wide).mul_add(-tv / len, mid.0).clamp(u_lo, u_hi);
+        let v = (reach * tall).mul_add(tu / len, mid.1).clamp(v_lo, v_hi);
+        let p = nurbs.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    for reach in [1e-3, 1e-2, 1e-1] {
+        let (left, right) = (side(reach), side(-reach));
+        if left.abs() > rounding && right.abs() > rounding {
+            return left * right > 0.0;
+        }
+    }
+    false
+}
 
 /// Chain intersection curve points into consecutive segment pairs.
 ///
@@ -969,11 +1031,11 @@ mod tests {
     }
 
     /// A NURBS face crossing the plane where its normal lies along the
-    /// plane's, as `z = x³` crosses `z = 0` along `x = 0`, bounds the
-    /// section there; a trough whose floor only touches the plane does not.
+    /// plane's, as `z = x³` and `z = x⁷` cross `z = 0` along `x = 0`, bounds
+    /// the section there; a trough whose floor only touches the plane does
+    /// not.
     #[test]
     fn a_nurbs_face_crossing_the_plane_where_it_lies_flat_bounds_the_section() {
-        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
         let sheet = |rows: Vec<Vec<Point3>>| {
             let degree = rows.len() - 1;
             let knots = [vec![0.0; degree + 1], vec![1.0; degree + 1]].concat();
@@ -987,15 +1049,25 @@ mod tests {
             )
             .unwrap()
         };
-        let cubic = sheet(vec![
-            row(-1.0, -1.0),
-            row(-1.0 / 3.0, 1.0),
-            row(1.0 / 3.0, -1.0),
-            row(1.0, 1.0),
-        ]);
-        let trough = sheet(vec![row(-1.0, 1.0), row(0.0, -1.0), row(1.0, 1.0)]);
+        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
         let up = Vec3::new(0.0, 0.0, 1.0);
-        assert_eq!(nurbs_section_curves(&cubic, up, 0.0).unwrap().len(), 1);
+        for power in [3_u32, 7] {
+            // `(2u − 1)ⁿ` has Bernstein coefficients `(−1)ⁿ⁻ᵏ`.
+            let odd = sheet(
+                (0..=power)
+                    .map(|k| {
+                        let x = 2.0f64.mul_add(f64::from(k) / f64::from(power), -1.0);
+                        row(x, if (power - k) % 2 == 0 { 1.0 } else { -1.0 })
+                    })
+                    .collect(),
+            );
+            assert_eq!(
+                nurbs_section_curves(&odd, up, 0.0).unwrap().len(),
+                1,
+                "x^{power}"
+            );
+        }
+        let trough = sheet(vec![row(-1.0, 1.0), row(0.0, -1.0), row(1.0, 1.0)]);
         assert!(nurbs_section_curves(&trough, up, 0.0).unwrap().is_empty());
     }
 }
