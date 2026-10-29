@@ -1,0 +1,40 @@
+crates/math/src/nurbs/intersection/plane.rs
+  s_a2dc21dbec3f2b::t_1cb8eeb5844a34 317-318,350-354
+  s_a2dc21dbec3f2b::t_fba704b8a5d2be 496,503
+  s_a2dc21dbec3f2b::t_50f598e314b9f4 519-525,543-544,548-550,552-557
+  s_a2dc21dbec3f2b::t_e2b7e89039b6b1 286,289-295,306-308,313-316,319-349,355,357-358,360-361,366-372,376,379-381,384,399-405,407-415,417-431,439-492
+  s_a2dc21dbec3f2b::t_ca05123324195d 262-269,274
+  s_b643c88cf32b29::t_8cf64c9aabb989 493
+crates/math/src/nurbs/intersection/tests.rs
+  s_a2dc21dbec3f2b::t_71021b5222844a 1916
+  s_a2dc21dbec3f2b::t_366af2b0073d04 1865-1866,1868
+  s_a2dc21dbec3f2b::t_8ad2a044697f63 1974,1980
+  s_a2dc21dbec3f2b::t_86c8e386905477 1873-1915,1917-1962,1965-1966,1970,1981-2007,2011-2012,2014
+  s_a2dc21dbec3f2b::t_58c1acf9c4467b 1963-1964,1967-1969,1971-1973,1975,2008-2010,2013
+  s_a2dc21dbec3f2b::t_1cb8eeb5844a34 1976-1979,2047-2050
+  s_a2dc21dbec3f2b::t_fba704b8a5d2be 2015-2046,2051
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a3fe5ad6cea36c83fc484867d05843712318021",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    },
+    "s_b643c88cf32b29": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4bb05cff-da30-45b2-a3b6-85e1ddcdee98",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
