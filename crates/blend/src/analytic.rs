@@ -841,11 +841,9 @@ pub fn plane_cylinder_fillet(
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
         let u_end_raw = ParametricSurface::project_point(cyl, p_spine_end).0;
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * std::f64::consts::PI
-        }
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        let u_mid = ParametricSurface::project_point(cyl, p_spine_mid).0;
+        arc_span_end(u_start, u_mid, u_end_raw)
     };
 
     // 9) 3D contact curves.
@@ -1398,12 +1396,8 @@ pub fn plane_cone_fillet(
         u_start + 2.0 * PI
     } else {
         let p_spine_end = spine.evaluate(topo, spine_len)?;
-        let u_end_raw = u_at(p_spine_end);
-        if u_end_raw > u_start {
-            u_end_raw
-        } else {
-            u_end_raw + 2.0 * PI
-        }
+        let p_spine_mid = spine.evaluate(topo, 0.5 * spine_len)?;
+        arc_span_end(u_start, u_at(p_spine_mid), u_at(p_spine_end))
     };
 
     // 10) 3D contact curves: the plate contact around the axis on the
@@ -5150,6 +5144,20 @@ fn wall_reach(
 /// `brepkit-geometry`. The geometry crate has the same algorithm in
 /// `convert::curve_to_nurbs::circle_to_nurbs`; consolidating both into the
 /// math layer is a follow-up.
+/// The end angle of an arc that starts at `u_start` and passes `u_mid` on its
+/// way to `u_end`, unwrapped so the span from `u_start` runs the arc's way
+/// round: counter-clockwise past `u_start` or clockwise below it.
+fn arc_span_end(u_start: f64, u_mid: f64, u_end: f64) -> f64 {
+    use std::f64::consts::TAU;
+    let ccw = |u: f64| u_start + (u - u_start).rem_euclid(TAU);
+    let end_ccw = ccw(u_end);
+    if ccw(u_mid) <= end_ccw {
+        end_ccw
+    } else {
+        end_ccw - TAU
+    }
+}
+
 fn circle_arc_to_nurbs(
     circle: &brepkit_math::curves::Circle3D,
     t_start: f64,
