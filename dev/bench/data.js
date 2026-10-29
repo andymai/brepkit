@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793248424627,
+  "lastUpdate": 1793251436642,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59507,6 +59507,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23247291,
             "range": "± 505625",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c1f9112059565a7bfc201843b4759af83000caca",
+          "message": "chore(main): release 4.5.0 (#2137)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.5.0](https://github.com/andymai/brepkit/compare/v4.4.3...v4.5.0)\n(2026-10-29)\n\n\n### Features\n\n* **math:** return a cone's parabola and hyperbola sections exactly\n([#2135](https://github.com/andymai/brepkit/issues/2135))\n([40c5081](https://github.com/andymai/brepkit/commit/40c50811fc58b268399a00696484ae8bcb4cf432))\n\n\n### Bug Fixes\n\n* **algo:** intersect a sphere face with a NURBS face on the exact\nsphere ([#2136](https://github.com/andymai/brepkit/issues/2136))\n([52d3c4e](https://github.com/andymai/brepkit/commit/52d3c4e9135782f9cd2194c60fa818e65034a661))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-29T05:20:48Z",
+          "tree_id": "ecb5e21332917cde14b96aac34b59be797561247",
+          "url": "https://github.com/andymai/brepkit/commit/c1f9112059565a7bfc201843b4759af83000caca"
+        },
+        "date": 1793251427841,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1103722,
+            "range": "± 4870",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1182873,
+            "range": "± 6250",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13210,
+            "range": "± 33",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673956,
+            "range": "± 1499",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28869564,
+            "range": "± 237070",
             "unit": "ns/iter"
           }
         ]
