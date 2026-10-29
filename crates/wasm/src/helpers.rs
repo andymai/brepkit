@@ -241,13 +241,27 @@ pub fn try_fillet(
                     // past its neighbouring blend reads 1010.11 exact and
                     // 985.42 meshed); a sound one agrees to the mesh's chord
                     // error, far inside 1%.
+                    // Chord error alone can pass 1% at the coarse deflection
+                    // (a plain r = 10 cylinder meshes 1.24% short at 0.1), so
+                    // a disagreement is re-read ten times finer, where a sound
+                    // solid converges and an inconsistent one does not.
+                    let agrees =
+                        |exact: f64, meshed: f64| (exact - meshed).abs() <= 0.01 * exact.abs();
                     meshed > 1e-12
                         && brepkit_operations::measure::solid_volume(
                             topo,
                             s,
                             orientation_deflection,
                         )
-                        .is_ok_and(|exact| (exact - meshed).abs() <= 0.01 * exact.abs())
+                        .is_ok_and(|exact| {
+                            agrees(exact, meshed)
+                                || brepkit_operations::measure::oriented_solid_volume(
+                                    topo,
+                                    s,
+                                    orientation_deflection * 0.1,
+                                )
+                                .is_ok_and(|fine| agrees(exact, fine))
+                        })
                 })
             && watertight()
     };
@@ -712,6 +726,33 @@ mod fillet_tests {
                 .is_valid(),
             "rounded rim solid must be watertight"
         );
+    }
+
+    // A wide rim's chord error alone reads past 1% at the gate's coarse
+    // deflection (a plain r = 10 cylinder meshes 1.24% short at 0.1); the
+    // exact round must not be rejected for it.
+    #[test]
+    fn try_fillet_accepts_a_wide_cylinders_rim_round() {
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+        let top: Vec<EdgeId> = solid_edge_ids(&topo, cyl)
+            .into_iter()
+            .filter(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+                    && (topo.vertex(edge.start()).unwrap().point().z() - 20.0).abs() < 1e-9
+            })
+            .collect();
+        assert_eq!(top.len(), 1);
+
+        let result = try_fillet(&mut topo, cyl, &top, 2.0).expect("rim fillet");
+        let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.001).unwrap();
+        let section = (1.0 - PI / 4.0) * 4.0;
+        let centroid = 2.0 * 3.0f64.mul_add(-PI, 10.0) / (3.0 * (4.0 - PI));
+        let truth = PI * 100.0 * 20.0 - 2.0 * PI * (10.0 - centroid) * section;
+        assert!((vol - truth).abs() < 1e-6 * truth, "{vol} vs {truth}");
     }
 
     #[test]
