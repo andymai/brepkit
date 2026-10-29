@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793295672210,
+  "lastUpdate": 1793295963556,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60317,6 +60317,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28735623,
             "range": "± 108498",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "14dd3fdf7c5cbf596a3a937bf5d3425303c8eb25",
+          "message": "fix(blend): round a set-back trihedral corner on the ball's own sphere (#2153)\n\nWhere three equal-radius fillets meet at a corner, the corner patch is\nnow the exact sphere of the rolling ball, so filleting every edge of a\nbox measures exactly.\n\nToday a set-back trihedral corner, where the three stripes end on\nsections through the ball's centre, takes the rational patch that\n`build_spherical_corner_surface` builds, and that patch strays up to\n0.414 off the ball for r 3. A 40 x 30 x 20 box with every edge filleted\nr 3 measures 23321.15 against Steiner's 23340.85, and 4716.90 against\n4726.27 in area, its eight corners 103.73 where eighths of the ball give\n113.10.\n\n## Change\n\n- Each section of a set-back corner passes through the ball's centre, so\nit is a great circle of the ball. `build_junction_fan` takes the first\nstripe's section centre as the ball's, checks that every boundary edge\nof the corner lies on that sphere, and builds the corner on it\n(`ball_sphere`), with its axis at right angles to the patch's middle\ndirection so neither pole falls on a box corner's patch. A corner that\nfails the check keeps the rational patch.\n- `fillet_builder_trihedral_junction_reuses_registry_cross_edges`\nrequired a NURBS corner patch; it now requires a sphere of the fillet's\nradius.\n- The roadmap records it as closed.\n\n## Tests\n\n- `fillet_box_corners.rs`: the box above, every edge filleted r 3, is\nvalid, watertight, within 1e-6 of Steiner's volume and area, and has\neight sphere faces of `πr²/2` each. It fails without the change.\n- `cargo test --workspace --exclude brepkit-render` passes 3712 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nSet-back trihedral corners formed by three equal-radius fillets now use\nthe rolling ball’s exact sphere when all boundary edges lie on it,\ninstead of an approximate rational patch that strayed up to 0.414 off\nthe ball for r 3. This restores exact volume and area measurements for\nfully filleted boxes, which previously read short against Steiner's\nformulas.\n\n- Corners that fail the boundary check retain the rational patch.\n- The sphere’s axis keeps its poles outside the corner patch.\n- A regression test checks watertightness, validity, Steiner volume and\narea, and the area of all eight spherical corners.\n\n<sup>Written for commit 2b98112cc2f034f7d1020d828c5da10f7dff75c0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2153?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2153?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2153&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-29T17:42:47Z",
+          "tree_id": "f03bb83710f25b736cbe3ed5f3a20899d6c5a2ce",
+          "url": "https://github.com/andymai/brepkit/commit/14dd3fdf7c5cbf596a3a937bf5d3425303c8eb25"
+        },
+        "date": 1793295953121,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1146982,
+            "range": "± 18932",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1233597,
+            "range": "± 11817",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14162,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 688698,
+            "range": "± 2169",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 30200779,
+            "range": "± 2065985",
             "unit": "ns/iter"
           }
         ]
