@@ -2460,6 +2460,44 @@ fn a_plane_touching_a_surface_along_a_circle_beside_the_edge_traces_it_whole() {
     assert!(far < 1e-6, "the circle strays {far:.2e}");
 }
 
+/// The plane `z = 0` touches `z = ((x − ½)² + (y − ½)² − r²)²` along a
+/// The plane `z = 0` touches `z = ((x − ½)² + (y − ½)² − r²)²` along a
+/// circle of radius 0.003, smaller across than two of the trace's steps at
+/// 64 samples: the steps shorten round it, and the circle comes back once,
+/// closed. Off the circle the height rises as the fourth power, so the
+/// traced points lie on it and the curve between them within the fit's
+/// tolerance of both surfaces.
+#[test]
+fn a_plane_touching_a_surface_along_a_small_circle_traces_it_once() {
+    let r: f64 = 0.003;
+    let ring = [
+        (2, 0, 1.0),
+        (1, 0, -1.0),
+        (0, 2, 1.0),
+        (0, 1, -1.0),
+        (0, 0, r.mul_add(-r, 0.5)),
+    ];
+    let surface = polynomial_patch(4, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &product(&ring, &ring)]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(curves.len(), 1);
+    let (t0, t1) = curves[0].curve.domain();
+    assert!((curves[0].curve.evaluate(t0) - curves[0].curve.evaluate(t1)).length() < 1e-9);
+    assert!(
+        curves[0].points.len() < 200,
+        "{} points",
+        curves[0].points.len()
+    );
+    for p in &curves[0].points {
+        let off = ((p.point.x() - 0.5).hypot(p.point.y() - 0.5) - r).abs();
+        assert!(off < 1e-9, "a point lies {off:.2e} off the circle");
+    }
+    let far = farthest(&curves, |p| {
+        let rim = (p.x() - 0.5).mul_add(p.x() - 0.5, (p.y() - 0.5).mul_add(p.y() - 0.5, -r * r));
+        (rim * rim).max(p.z().abs())
+    });
+    assert!(far < 1e-7, "the circle strays {far:.2e}");
+}
+
 /// `z = (x − ½)² + 1e-10·(y − ½)²` dips 1e-15 below `z = 1e-15`, in a loop
 /// a millionth as wide as it is long: Newton for its floor keeps the faint
 /// curving along `y`, and the loop comes back.
