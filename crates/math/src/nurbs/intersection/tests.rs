@@ -2319,6 +2319,104 @@ fn a_plane_section_crossing_itself_ends_its_curves_at_the_crossing() {
     }
 }
 
+/// The product of two polynomials in `u` and `v`, as `(i, j, c)` terms
+/// `c·uⁱvʲ`.
+fn product(a: &[(u32, u32, f64)], b: &[(u32, u32, f64)]) -> Vec<(u32, u32, f64)> {
+    let mut terms: Vec<(u32, u32, f64)> = Vec::new();
+    for &(i, j, c) in a {
+        for &(k, l, d) in b {
+            match terms.iter_mut().find(|t| t.0 == i + k && t.1 == j + l) {
+                Some(t) => t.2 = c.mul_add(d, t.2),
+                None => terms.push((i + k, j + l, c * d)),
+            }
+        }
+    }
+    terms
+}
+
+/// The ends of `curves` within 1e-9 of `(x, y)` on `z = 0`.
+fn ends_at(curves: &[IntersectionCurve], (x, y): (f64, f64)) -> usize {
+    curves
+        .iter()
+        .flat_map(|ic| {
+            let (t0, t1) = ic.curve.domain();
+            [t0, t1].map(|t| ic.curve.evaluate(t))
+        })
+        .filter(|p| (p.x() - x).hypot(p.y() - y) < 1e-9)
+        .count()
+}
+
+/// Two crossings of `z = 0` with the section of
+/// `z = (x − a)(x − b)(y − c)`, three grid steps apart at 33 samples, are
+/// each where four curves end, though the larger blocks of cells round
+/// them would overlap.
+#[test]
+fn a_plane_section_crossing_itself_twice_close_by_ends_its_curves_at_both() {
+    let (a, b, c) = (0.414_062_5, 0.507_812_5, 0.507_812_5);
+    let height = product(
+        &product(&[(1, 0, 1.0), (0, 0, -a)], &[(1, 0, 1.0), (0, 0, -b)]),
+        &[(0, 1, 1.0), (0, 0, -c)],
+    );
+    let surface = polynomial_patch(2, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &height]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 33).unwrap();
+    assert_eq!(curves.len(), 7);
+    assert_eq!(ends_at(&curves, (a, c)), 4);
+    assert_eq!(ends_at(&curves, (b, c)), 4);
+    let far = farthest(&curves, |p| {
+        (p.x() - a)
+            .abs()
+            .min((p.x() - b).abs())
+            .min((p.y() - c).abs())
+            .max(p.z().abs())
+    });
+    assert!(far < 1e-7, "a curve strays {far:.2e} off the lines");
+}
+
+/// `z = (x − a)(y − a)((x − c)² + (y − c)² − r²)` meets `z = 0` in two lines
+/// crossing at `(a, a)` and a small circle round `(c, c)`, inside the block
+/// of cells round the crossing but apart from its lines: at 33 samples the
+/// circle comes back closed with the crossing's four curves, all on both
+/// surfaces. Round the circle the surface lies within 3e-8 of the plane,
+/// so its curve need only keep to that.
+#[test]
+fn a_plane_section_keeps_a_loop_beside_where_it_crosses_itself() {
+    let (a, c, r) = (125.0 / 256.0, 17.0 / 32.0, 1.0 / 128.0);
+    let lines = product(&[(1, 0, 1.0), (0, 0, -a)], &[(0, 1, 1.0), (0, 0, -a)]);
+    let circle = [
+        (2, 0, 1.0),
+        (1, 0, -2.0 * c),
+        (0, 2, 1.0),
+        (0, 1, -2.0 * c),
+        (0, 0, 2.0f64.mul_add(c * c, -r * r)),
+    ];
+    let height = product(&lines, &circle);
+    let surface = polynomial_patch(3, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &height]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 33).unwrap();
+    assert_eq!(curves.len(), 5);
+    assert_eq!(ends_at(&curves, (a, a)), 4);
+    let ring: Vec<&IntersectionCurve> = curves
+        .iter()
+        .filter(|ic| {
+            ic.points
+                .iter()
+                .all(|p| (p.point.x() - c).hypot(p.point.y() - c) < 2.0 * r)
+        })
+        .collect();
+    assert_eq!(ring.len(), 1);
+    let (t0, t1) = ring[0].curve.domain();
+    assert!((ring[0].curve.evaluate(t0) - ring[0].curve.evaluate(t1)).length() < 1e-9);
+    for p in &ring[0].points {
+        let off = ((p.point.x() - c).hypot(p.point.y() - c) - r).abs();
+        assert!(off < 1e-9, "a point of the circle lies {off:.2e} off it");
+    }
+    let far = farthest(&curves, |p| {
+        let (x, y) = (p.x(), p.y());
+        let rim = (x - c).mul_add(x - c, (y - c).mul_add(y - c, -r * r));
+        ((x - a) * (y - a) * rim).abs().max(p.z().abs())
+    });
+    assert!(far < 1e-7, "a curve strays {far:.2e}");
+}
+
 /// A sheet 1e12 along `x` from the origin, rising from −0.001 to 0.001
 /// across it, crosses `z = 0` along its middle, where the section's points
 /// lie: coordinates the plane's normal does not weigh leave the plane's
