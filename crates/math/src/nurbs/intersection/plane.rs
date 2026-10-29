@@ -331,12 +331,15 @@ pub fn intersect_plane_nurbs(
             points: chain,
         });
     }
+    // A valley the fit cannot take leaves no curve: the surface only
+    // touches the plane there.
     for mut chain in valleys {
-        let curve = fit_within(&mut chain, FIT_TOLERANCE, &section)?;
-        curves.push(IntersectionCurve {
-            curve,
-            points: chain,
-        });
+        if let Ok(curve) = fit_within(&mut chain, FIT_TOLERANCE, &section) {
+            curves.push(IntersectionCurve {
+                curve,
+                points: chain,
+            });
+        }
     }
     // A point where the plane touches the surface is a curve that stays on
     // it, with that one point.
@@ -660,14 +663,23 @@ fn trace_valley(
         params.push(start);
         params.extend(forward);
     }
-    params
-        .into_iter()
-        .map(|(u, v)| IntersectionPoint {
-            point: surface.evaluate(u, v),
-            param1: (u, v),
-            param2: (0.0, 0.0),
-        })
-        .collect()
+    // Settling can bring a step back onto the point before it, which the
+    // fit cannot take twice.
+    let mut points: Vec<IntersectionPoint> = Vec::with_capacity(params.len());
+    for (u, v) in params {
+        let point = surface.evaluate(u, v);
+        if points
+            .last()
+            .is_none_or(|q| (q.point - point).length() > 1e-9 * step)
+        {
+            points.push(IntersectionPoint {
+                point,
+                param1: (u, v),
+                param2: (0.0, 0.0),
+            });
+        }
+    }
+    points
 }
 
 /// How far evaluating the plane's distance on `surface` can round it: a few
