@@ -18,6 +18,7 @@ crates/math/src/nurbs/intersection/tests.rs
   s_a2dc21dbec3f2b::t_0cc11cc2526385 1815-1825
   s_a2dc21dbec3f2b::t_d611a8e5c7169c 1773
   s_a2dc21dbec3f2b::t_1a174d977233c9 1826
+  s_a2dc21dbec3f2b::t_63c37a224f762d 1814
 crates/math/src/nurbs/projection.rs
   s_a2dc21dbec3f2b::t_733bec090b0ee4 403-428
 ---
