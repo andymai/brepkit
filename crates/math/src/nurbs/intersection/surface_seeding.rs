@@ -20,6 +20,72 @@ use super::surface_marching::{
 };
 use super::{IntersectionCurve, IntersectionPoint, MAX_NEWTON_ITER, MAX_QUEUE_SIZE, MAX_SEGMENTS};
 
+/// The plane a patch lies in, when every control point lies on it to
+/// rounding: as `(unit normal, offset)`, from the cross of its corners'
+/// diagonals.
+fn plane_of(surface: &NurbsSurface) -> Option<(Vec3, f64)> {
+    let cps = surface.control_points();
+    let (first, last) = (cps.first()?, cps.last()?);
+    let corners = [
+        *first.first()?,
+        *first.last()?,
+        *last.first()?,
+        *last.last()?,
+    ];
+    let across = (corners[3] - corners[0]).cross(corners[1] - corners[2]);
+    let normal = across.normalize().ok()?;
+    let at = |p: Point3| normal.dot(Vec3::new(p.x(), p.y(), p.z()));
+    let offset = at(corners[0]);
+    let scale = cps
+        .iter()
+        .flatten()
+        .map(|p| Vec3::new(p.x(), p.y(), p.z()).length())
+        .fold(0.0, f64::max);
+    cps.iter()
+        .flatten()
+        .all(|&p| (at(p) - offset).abs() <= 64.0 * f64::EPSILON * scale)
+        .then_some((normal, offset))
+}
+
+/// When `flat` lies in a plane, the plane's section of `other`, as
+/// [`intersect_plane_nurbs`](super::intersect_plane_nurbs) finds it, with
+/// each point's parameters on both patches (`flat`'s first when
+/// `flat_first`). `None` unless every point of it lies on `flat` itself:
+/// a section reaching past the patch is left to the marcher.
+fn planar_patch_sections(
+    flat: &NurbsSurface,
+    other: &NurbsSurface,
+    samples: usize,
+    flat_first: bool,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let Some((normal, offset)) = plane_of(flat) else {
+        return Ok(None);
+    };
+    let mut curves = super::intersect_plane_nurbs(other, normal, offset, samples)?;
+    let (u_lo, u_hi) = flat.domain_u();
+    let (v_lo, v_hi) = flat.domain_v();
+    let slack = 1e-9 * (u_hi - u_lo).max(v_hi - v_lo);
+    for curve in &mut curves {
+        for point in &mut curve.points {
+            let Ok(foot) = project_point_to_surface(flat, point.point, 1e-10) else {
+                return Ok(None);
+            };
+            let inside = (u_lo - slack..=u_hi + slack).contains(&foot.u)
+                && (v_lo - slack..=v_hi + slack).contains(&foot.v);
+            if !inside || foot.distance > 1e-7 {
+                return Ok(None);
+            }
+            let on_other = point.param1;
+            (point.param1, point.param2) = if flat_first {
+                ((foot.u, foot.v), on_other)
+            } else {
+                (on_other, (foot.u, foot.v))
+            };
+        }
+    }
+    Ok(Some(curves))
+}
+
 /// Intersect two NURBS surfaces.
 ///
 /// Uses a subdivision + marching approach:
@@ -46,6 +112,12 @@ pub fn intersect_nurbs_nurbs(
     samples: usize,
     march_step: f64,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
+    if let Some(curves) = planar_patch_sections(surface1, surface2, samples, true)? {
+        return Ok(curves);
+    }
+    if let Some(curves) = planar_patch_sections(surface2, surface1, samples, false)? {
+        return Ok(curves);
+    }
     let n = samples.max(5);
     let tolerance = 1e-6;
 

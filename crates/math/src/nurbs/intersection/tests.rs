@@ -2286,3 +2286,64 @@ fn a_plane_section_crossing_itself_ends_its_curves_at_the_crossing() {
         assert!(far < 1e-7, "a curve strays {far:.2e} off the axes");
     }
 }
+
+/// A flat NURBS sheet at `z = 0` reaching from −3 to 3 each way.
+fn wide_sheet(z: f64) -> NurbsSurface {
+    let at = |x: f64, y: f64| Point3::new(x, y, z);
+    NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![at(-3.0, -3.0), at(-3.0, 3.0)],
+            vec![at(3.0, -3.0), at(3.0, 3.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap()
+}
+
+/// A rational cylinder of radius 1 along `x`, resting on a flat NURBS sheet,
+/// touches it along a line; the sheet lies in a plane, so its section is
+/// the plane's, and comes back whole either way round, each point carrying
+/// its parameters on both patches.
+#[test]
+fn a_flat_patch_meets_a_cylinder_resting_on_it_along_the_line() {
+    let rod = cylinder_along_x(0.0, 1.0, 1.0, -2.0, 2.0);
+    let sheet = wide_sheet(0.0);
+    for (first, second, sheet_first) in [(&sheet, &rod, true), (&rod, &sheet, false)] {
+        let curves = intersect_nurbs_nurbs(first, second, 32, 0.0).unwrap();
+        assert_eq!(curves.len(), 1);
+        let (t0, t1) = curves[0].curve.domain();
+        let (a, b) = (curves[0].curve.evaluate(t0), curves[0].curve.evaluate(t1));
+        assert!((a.x().abs() - 2.0).abs() < 1e-9 && (b.x().abs() - 2.0).abs() < 1e-9);
+        let far = farthest(&curves, |p| p.y().abs().max(p.z().abs()));
+        assert!(far < 1e-9, "the line strays {far:.2e}");
+        for point in &curves[0].points {
+            let (on_sheet, on_rod) = if sheet_first {
+                (point.param1, point.param2)
+            } else {
+                (point.param2, point.param1)
+            };
+            assert!((sheet.evaluate(on_sheet.0, on_sheet.1) - point.point).length() < 1e-9);
+            assert!((rod.evaluate(on_rod.0, on_rod.1) - point.point).length() < 1e-9);
+        }
+    }
+}
+
+/// The plane of a small flat patch cuts a cylinder in lines that run past
+/// the patch, which is left to the marcher: the section stays on the patch.
+#[test]
+fn a_flat_patch_whose_plane_cuts_past_it_keeps_its_section_on_it() {
+    let rod = cylinder_along_x(0.0, 0.5, 1.0, -2.0, 2.0);
+    let patch = flat_surface();
+    let curves = intersect_nurbs_nurbs(&patch, &rod, 32, 0.0).unwrap();
+    assert!(!curves.is_empty());
+    for ic in &curves {
+        for point in &ic.points {
+            let p = point.point;
+            assert!((-1e-6..=1.0 + 1e-6).contains(&p.x()) && (-1e-6..=1.0 + 1e-6).contains(&p.y()));
+        }
+    }
+}
