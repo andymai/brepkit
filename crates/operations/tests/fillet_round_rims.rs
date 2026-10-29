@@ -193,6 +193,48 @@ fn a_bores_mouth_fillet_wider_than_its_plate_is_refused() {
     );
 }
 
+/// A radius 5 post standing 8 tall on a 16 x 16 x 4 plate, its top cut by
+/// the plane rising `slope` along x through the point 3 above its foot.
+fn post_with_a_sloped_top(topo: &mut Topology, slope: f64) -> SolidId {
+    let plate = make_box(topo, 16.0, 16.0, 4.0).unwrap();
+    let post = make_cylinder(topo, RADIUS, 8.0).unwrap();
+    transform_solid(topo, post, &Mat4::translation(8.0, 8.0, 4.0)).unwrap();
+    let body = boolean(topo, BooleanOp::Fuse, plate, post).unwrap();
+    let above = make_box(topo, 30.0, 30.0, 20.0).unwrap();
+    let tilt = Mat4::translation(8.0, 8.0, 7.0)
+        * Mat4::rotation_y(-slope.atan())
+        * Mat4::translation(-15.0, -15.0, 0.0);
+    transform_solid(topo, above, &tilt).unwrap();
+    boolean(topo, BooleanOp::Cut, body, above).unwrap()
+}
+
+/// The highest point of a post's sloped top clears its foot fillet's wall
+/// contact, but the lowest does not: the contact circle would cross the top.
+#[test]
+fn a_posts_foot_fillet_reaching_past_its_sloped_top_is_refused() {
+    let mut topo = Topology::new();
+    let body = post_with_a_sloped_top(&mut topo, 0.3);
+    let edge = rim_at(&topo, body, RADIUS, 4.0);
+    let Ok(result) = fillet_v2(&mut topo, body, &[edge], 2.0) else {
+        return;
+    };
+    assert!(
+        !result.failed.is_empty() || result.solid == body,
+        "a contact circle crossing the top must not build"
+    );
+}
+
+/// A sloped top whose lowest point clears the contact keeps the ring exact.
+#[test]
+fn a_posts_foot_under_a_sloped_top_fills_its_ring() {
+    let mut topo = Topology::new();
+    let body = post_with_a_sloped_top(&mut topo, 0.3);
+    let r = 1.0;
+    let area = (1.0 - PI / 4.0) * r * r;
+    let filled = 2.0 * PI * (RADIUS + centroid_from_corner(r)) * area;
+    assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 4.0), r, filled);
+}
+
 /// A bore cut by a cylinder standing either way up leaves its rim circle
 /// turning either way about the bore's axis; the mouth rounds off the same.
 #[test]

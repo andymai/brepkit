@@ -1783,6 +1783,66 @@ struct ClosedRimInfo {
     rim_is_hole: bool,
 }
 
+/// The lowest height along `toward`, from `base`, of the wall boundary that
+/// `assemble_closed_rim` keeps: every edge but the rim, and the far end of
+/// each seam leaving the rim's vertex. A conic counts its whole curve's
+/// lowest point and a NURBS edge its control hull's, so the value never sits
+/// above the boundary's own; a NURBS edge whose weights are not all positive
+/// has no hull bound and counts as reaching the base.
+fn kept_wall_boundary_height(
+    topo: &Topology,
+    wall_face: FaceId,
+    rim_edge: EdgeId,
+    base: Point3,
+    toward: Vec3,
+) -> Result<f64, BlendError> {
+    let height = |p: Point3| (p - base).dot(toward);
+    let rim_vertex = topo.edge(rim_edge)?.start();
+    let face = topo.face(wall_face)?;
+    let mut lowest = f64::INFINITY;
+    for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oriented in topo.wire(wire)?.edges() {
+            if oriented.edge() == rim_edge {
+                continue;
+            }
+            let edge = topo.edge(oriented.edge())?;
+            let ends = [edge.start(), edge.end()];
+            if ends.contains(&rim_vertex) {
+                for v in ends.into_iter().filter(|&v| v != rim_vertex) {
+                    lowest = lowest.min(height(topo.vertex(v)?.point()));
+                }
+                continue;
+            }
+            let edge_lowest = match edge.curve() {
+                EdgeCurve::Line => {
+                    height(topo.vertex(ends[0])?.point()).min(height(topo.vertex(ends[1])?.point()))
+                }
+                EdgeCurve::Circle(c) => {
+                    let across = (1.0 - c.normal().dot(toward).powi(2)).max(0.0).sqrt();
+                    height(c.center()) - c.radius() * across
+                }
+                EdgeCurve::Ellipse(el) => {
+                    let u = el.semi_major() * el.u_axis().dot(toward);
+                    let v = el.semi_minor() * el.v_axis().dot(toward);
+                    height(el.center()) - u.hypot(v)
+                }
+                EdgeCurve::NurbsCurve(n) => {
+                    if n.weights().iter().all(|&w| w.is_finite() && w > 0.0) {
+                        n.control_points()
+                            .iter()
+                            .map(|&p| height(p))
+                            .fold(f64::INFINITY, f64::min)
+                    } else {
+                        0.0
+                    }
+                }
+            };
+            lowest = lowest.min(edge_lowest);
+        }
+    }
+    Ok(lowest)
+}
+
 /// Project a point onto the infinite axis line through `origin` with unit
 /// direction `axis`, returning the foot of the perpendicular.
 fn project_onto_axis(p: Point3, origin: Point3, axis: Vec3) -> Point3 {
@@ -1892,32 +1952,19 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     let wall_center = project_onto_axis(wall_pt, axis_origin, axis);
     let wall_radius = radial_distance(wall_pt, axis_origin, axis);
 
-    // The wall contact must land on the wall, short of its far boundary: a
-    // fillet wider than a plate is thick would carry it past the plate.
+    // The wall contact circle must land on the wall, short of every point of
+    // the boundary the rebuild keeps: a fillet wider than a plate is thick, or
+    // a post whose sloped top dips below the contact, would carry it past.
     let rise = wall_center - plate_center;
-    if let Ok(toward) = rise.normalize() {
-        let wall = topo.face(wall_face)?;
-        let mut reach = 0.0_f64;
-        for wire in std::iter::once(wall.outer_wire()).chain(wall.inner_wires().iter().copied()) {
-            for oriented in topo.wire(wire)?.edges() {
-                let edge = topo.edge(oriented.edge())?;
-                let a = topo.vertex(edge.start())?.point();
-                let b = topo.vertex(edge.end())?.point();
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                for k in 0..=8 {
-                    let t = t0 + (t1 - t0) * f64::from(k) / 8.0;
-                    let p = edge.curve().evaluate_with_endpoints(t, a, b);
-                    reach = reach.max((p - plate_center).dot(toward));
-                }
-            }
-        }
-        if rise.length() >= reach - 1e-7 {
-            return Err(BlendError::PlanningFailure {
-                reason: format!(
-                    "the fillet's wall contact would land past the wall bounding rim {rim_edge:?}"
-                ),
-            });
-        }
+    if let Ok(toward) = rise.normalize()
+        && rise.length()
+            >= kept_wall_boundary_height(topo, wall_face, rim_edge, plate_center, toward)? - 1e-7
+    {
+        return Err(BlendError::PlanningFailure {
+            reason: format!(
+                "the fillet's wall contact would land past the wall bounding rim {rim_edge:?}"
+            ),
+        });
     }
 
     if rim_is_hole {
