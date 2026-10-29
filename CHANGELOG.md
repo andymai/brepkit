@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.4.2](https://github.com/andymai/brepkit/compare/v4.4.1...v4.4.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** fit NURBS intersection curves to tolerance between their points ([#2127](https://github.com/andymai/brepkit/issues/2127)) ([68d09e6](https://github.com/andymai/brepkit/commit/68d09e68a546fa4ce3a4d18c557a48edffb4a361))
+
 ## [4.4.1](https://github.com/andymai/brepkit/compare/v4.4.0...v4.4.1) (2026-10-29)
 
 
