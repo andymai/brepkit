@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793271418520,
+  "lastUpdate": 1793273407610,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59939,6 +59939,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27865748,
             "range": "± 210623",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f5270761894f0da33283f05a8f9618eb69c901d1",
+          "message": "fix(math): read a plane section's nodes and extrema within rounding of the plane (#2144)\n\nA plane cutting a NURBS surface along its seam, or touching it at a\npoint, now gets that section back, and a plane lying along a valley of\nthe surface no longer gets loops traced out of rounding.\n\nToday `intersect_plane_nurbs` samples the plane's distance on a grid and\nfollows where it changes sign along grid edges, testing `da * db < 0`. A\nnode exactly on the plane never crosses, so a section along a closed\nsurface's seam, which lies on both edge columns of the grid, is lost:\nthe plane `y = 0` gets the rational cylinder's line at `x = −1` back,\nbut not the one along its seam at `x = 1`. When the seam's control\npoints carry rounding (`sin 2π` is −2.4e-16), one edge row reads just\nbelow the plane and the other on it, and the circle between them is lost\nthe same way. Separately, `tiny_loops` reads an extremum a rounding\nerror past the plane as a loop: `z = (x² + y² − 1)²` under `z = 0` gives\n10 \"loops\" at 64 samples, each a cluster of points on the unit circle\nbetween 9e-8 and 7e-6 across.\n\n## Change\n\n- A node within 64 ulps of the largest sum of the plane's distance's\nterms over the grid (`Σ|nᵢ·pᵢ| + |d|`) counts with the positive side, so\na section along a seam crosses the edges to its negative neighbours at\nthe nodes themselves. Every cell then has 0, 2 or 4 crossings.\n- In `tiny_loops`, an extremum closer to the plane than 4 ulps of the\nlargest sum of those terms over the control points is no loop. Where the\ndistance curves away from the plane both ways there (both eigenvalues of\nits second derivatives on the outside, the smaller in size at least 1e-6\nof the larger), the surface touches the plane at that point, which comes\nback as a curve that stays on it, holding that one point. A valley lying\nalong the plane curves away one way only and gives nothing.\n- A node on the plane seeds that search too, when the rest of its block\nlies on one side, so a touch at a grid node is found. The crossings such\na node makes with negative neighbours all sit at the node, and give no\nsection.\n- `phase_ff` skips such a point, which splits neither face. The section\noperation chains each curve's points into segments, and one point makes\nnone.\n- Where the plane holds one of a face's own edges, the nodes along it\nnow cross to their negative neighbours, and a section comes back along\nthat edge. `phase_ff` skips a curve whose every point lies on one edge\nof the face's parameter domain, seams included: the edge already bounds\nthe face, and on `main` no such curve reached it. The section operation\nskips it too, but keeps one along a periodic seam, where the face closes\non itself and no neighbour supplies the section.\n\n## Tests\n\n- `a_plane_section_along_the_seam_and_a_column_of_nodes_is_found`: the\nplane `y = 0` cuts the rational cylinder in its two lines at 64 samples,\nand at 33, where the second line also runs along a column of nodes.\n- `a_plane_section_along_a_seam_within_rounding_of_it_is_found`: a\nrational torus whose seam row of control points sits at `sin 2π`, cut by\n`z = 0`, gives both equators.\n- `a_plane_touching_a_surface_along_a_circle_traces_no_rounding_loops`:\nthe quartic above gives no curve shorter than half the circle, at 64 and\n63 samples.\n- `a_plane_touching_a_surface_at_points_returns_them`: `z = 0` touches\n`z = x² + y²` at its vertex and `z = (x² − 1)² + (y² − 1)²` at `(±1,\n±1)`, each returned as one point, with 64 samples and with 33, which\nputs the touches on nodes, and with the plane facing either way.\n- `a_plane_section_far_from_the_origin_along_the_plane_is_found`: a\nsheet 1e12 along `x` from the origin, crossing `z = 0` along its middle,\ngives its line.\n- `a_plane_touching_a_nurbs_bowl_at_a_point_grazes_it`: in `phase_ff`,\nthe vertex touch gives no section.\n- `a_plane_holding_a_nurbs_faces_edge_adds_no_section`: in `phase_ff`, a\nplane holding one edge of a NURBS sheet that lies on its negative side\ngives no section.\n- The first four fail on `main`, the fifth with the bound taken from\ndistances to the origin, and the last two without their skips.\n- The pose sweep and truth audit outputs are identical to `main`'s, and\nthe scoop clip fixture's five booleans stay exact.",
+          "timestamp": "2026-10-29T04:27:39-07:00",
+          "tree_id": "83a87efa54f053bdfdc44e48a7c15f33524c375a",
+          "url": "https://github.com/andymai/brepkit/commit/f5270761894f0da33283f05a8f9618eb69c901d1"
+        },
+        "date": 1793273398761,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 614023,
+            "range": "± 16908",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 660595,
+            "range": "± 15683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7610,
+            "range": "± 178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 377681,
+            "range": "± 12924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16809457,
+            "range": "± 225070",
             "unit": "ns/iter"
           }
         ]
