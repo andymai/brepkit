@@ -5573,3 +5573,106 @@ fn plane_cone_chamfer_concave_emits_chamfer_cone() {
         "cone-side contact must lie on chamfer cone: project→eval gave {on_surf_cone:?}, want {want_cone:?}"
     );
 }
+
+/// An open quarter of a frustum's bottom rim, traversed either way round:
+/// one of the two runs clockwise in the cone's angle, and both must sweep
+/// the quarter they span, not the three quarters outside it, which shares
+/// their endpoints.
+#[test]
+fn plane_cone_fillet_open_arc_sweeps_its_own_quarter_either_way_round() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ConicalSurface;
+
+    let alpha = 6.0_f64.atan2(3.0);
+    let r_p = 3.0;
+    let r_fillet = 0.3;
+    for clockwise in [false, true] {
+        let mut topo = Topology::new();
+        let o = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let a = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(0.0, r_p, 0.0), 1e-7));
+        let (from, to, normal) = if clockwise {
+            (b, a, Vec3::new(0.0, 0.0, -1.0))
+        } else {
+            (a, b, Vec3::new(0.0, 0.0, 1.0))
+        };
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, 0.0), normal, r_p).unwrap();
+        let rim = topo.add_edge(Edge::new(from, to, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, rim).unwrap();
+
+        // The bottom cap's quarter: a pie slice inside the rim, outward -z.
+        let oa = topo.add_edge(Edge::new(o, a, EdgeCurve::Line));
+        let bo = topo.add_edge(Edge::new(b, o, EdgeCurve::Line));
+        let cap_wire = Wire::new(
+            vec![
+                OrientedEdge::new(oa, true),
+                OrientedEdge::new(rim, !clockwise),
+                OrientedEdge::new(bo, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let cap_wire = topo.add_wire(cap_wire);
+        let face_plate = topo.add_face(Face::new_reversed(
+            cap_wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        // The wall's quarter, up to its rim of radius 1 at z = 4.
+        let a_top = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 4.0), 1e-7));
+        let b_top = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 4.0), 1e-7));
+        let top = Circle3D::new(Point3::new(0.0, 0.0, 4.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let top_rim = topo.add_edge(Edge::new(a_top, b_top, EdgeCurve::Circle(top)));
+        let up_a = topo.add_edge(Edge::new(a, a_top, EdgeCurve::Line));
+        let up_b = topo.add_edge(Edge::new(b, b_top, EdgeCurve::Line));
+        let wall_wire = Wire::new(
+            vec![
+                OrientedEdge::new(rim, clockwise),
+                OrientedEdge::new(up_a, true),
+                OrientedEdge::new(top_rim, true),
+                OrientedEdge::new(up_b, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wall_wire = topo.add_wire(wall_wire);
+        let cone =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 6.0), Vec3::new(0.0, 0.0, -1.0), alpha)
+                .unwrap();
+        let face_cone = topo.add_face(Face::new(
+            wall_wire,
+            vec![],
+            FaceSurface::Cone(cone.clone()),
+        ));
+
+        let result = plane_cone_fillet(
+            Vec3::new(0.0, 0.0, 1.0),
+            0.0,
+            &cone,
+            &spine,
+            &topo,
+            r_fillet,
+            face_plate,
+            face_cone,
+        )
+        .unwrap()
+        .expect("a frustum's rim quarter should fillet analytically");
+
+        let major = r_p - r_fillet * (alpha * 0.5).tan().recip();
+        let (t0, t1) = result.stripe.contact1.domain();
+        let middle = result.stripe.contact1.evaluate(0.5 * (t0 + t1));
+        let angle = middle.y().atan2(middle.x()).to_degrees();
+        assert!(
+            (angle - 45.0).abs() < 1e-6,
+            "clockwise {clockwise}: plate contact's middle at {angle} degrees"
+        );
+        assert!(
+            (middle.x().hypot(middle.y()) - major).abs() < 1e-9 && middle.z().abs() < 1e-9,
+            "clockwise {clockwise}: plate contact's middle {middle:?}"
+        );
+    }
+}
