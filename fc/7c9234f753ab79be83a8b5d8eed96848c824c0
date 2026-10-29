@@ -1,0 +1,23 @@
+crates/math/src/nurbs/intersection/tests.rs
+  s_a2dc21dbec3f2b::t_0cc11cc2526385 1774-1784
+  s_a2dc21dbec3f2b::t_d611a8e5c7169c 1773
+  s_a2dc21dbec3f2b::t_1a174d977233c9 1785
+crates/math/src/nurbs/intersection/plane.rs
+  s_a2dc21dbec3f2b::t_050caa7992cae7 186-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fc7c9234f753ab79be83a8b5d8eed96848c824c0",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
