@@ -109,6 +109,8 @@ pub fn section(
                 // A curve along which the face lies on the plane bounds no
                 // region of the section, and a curve along one of the face's
                 // own edges is that edge, which its neighbour's section gives.
+                // A seam, where the face closes on itself, has no neighbour:
+                // its curve stays.
                 let tangent = |p: &brepkit_math::nurbs::intersection::IntersectionPoint| {
                     nurbs
                         .normal(p.param1.0, p.param1.1)
@@ -116,10 +118,12 @@ pub fn section(
                 };
                 let (u_lo, u_hi) = nurbs.domain_u();
                 let (v_lo, v_hi) = nurbs.domain_v();
+                let (u_seam, v_seam) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
                 let on_edge =
                     |points: &[brepkit_math::nurbs::intersection::IntersectionPoint]| {
                         [(0, u_lo), (0, u_hi), (1, v_lo), (1, v_hi)]
                             .iter()
+                            .filter(|&&(k, _)| if k == 0 { !u_seam } else { !v_seam })
                             .any(|&(k, edge)| {
                                 let slack = 1e-9 * if k == 0 { u_hi - u_lo } else { v_hi - v_lo };
                                 points.iter().all(|p| {

@@ -2186,7 +2186,9 @@ fn a_plane_touching_a_surface_along_a_curve_traces_it() {
 
 /// The plane `z = 0` touches the paraboloid `z = x² + y²` at its vertex and
 /// `z = (x² − 1)² + (y² − 1)²` at `(±1, ±1)`, curving away both ways at
-/// each: every touch comes back as a curve that stays on its point.
+/// each: every touch comes back as a curve that stays on its point, with 64
+/// samples and with 33, which puts the touches on grid nodes, and whichever
+/// way the plane faces.
 #[test]
 fn a_plane_touching_a_surface_at_points_returns_them() {
     let x = [(0, 0, -2.0), (1, 0, 4.0)];
@@ -2230,8 +2232,12 @@ fn a_plane_touching_a_surface_at_points_returns_them() {
             vec![(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)],
         ),
     ];
-    for (surface, expected) in touches {
-        let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    let (up, down) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, -1.0));
+    for ((surface, expected), normal, samples) in touches
+        .iter()
+        .flat_map(|t| [(t, up, 64), (t, up, 33), (t, down, 64), (t, down, 33)])
+    {
+        let curves = intersect_plane_nurbs(surface, normal, 0.0, samples).unwrap();
         let mut found: Vec<(f64, f64)> = curves
             .iter()
             .map(|ic| {
@@ -2245,8 +2251,12 @@ fn a_plane_touching_a_surface_at_points_returns_them() {
             })
             .collect();
         found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
-        assert_eq!(found.len(), expected.len());
-        for (f, e) in found.iter().zip(&expected) {
+        assert_eq!(
+            found.len(),
+            expected.len(),
+            "{samples} samples, normal {normal:?}"
+        );
+        for (f, e) in found.iter().zip(expected) {
             assert!((f.0 - e.0).hypot(f.1 - e.1) < 1e-9, "{f:?} for {e:?}");
         }
     }
@@ -2284,6 +2294,36 @@ fn a_plane_section_crossing_itself_ends_its_curves_at_the_crossing() {
             p.x().abs().min(p.y().abs()).max(p.z().abs())
         });
         assert!(far < 1e-7, "a curve strays {far:.2e} off the axes");
+    }
+}
+
+/// A sheet 1e12 along `x` from the origin, rising from −0.001 to 0.001
+/// across it, crosses `z = 0` along its middle, where the section's points
+/// lie: coordinates the plane's normal does not weigh leave the plane's
+/// distance unrounded.
+#[test]
+fn a_plane_section_far_from_the_origin_along_the_plane_is_found() {
+    let at = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+    let sheet = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![at(1e12, 0.0, -0.001), at(1e12, 1.0, -0.001)],
+            vec![at(1e12 + 1.0, 0.0, 0.001), at(1e12 + 1.0, 1.0, 0.001)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    let curves = intersect_plane_nurbs(&sheet, Vec3::new(0.0, 0.0, 1.0), 0.0, 32).unwrap();
+    assert_eq!(curves.len(), 1);
+    for point in &curves[0].points {
+        let p = point.point;
+        assert!(
+            p.z().abs() < 1e-12 && (p.x() - (1e12 + 0.5)).abs() < 1e-3,
+            "{p:?}"
+        );
     }
 }
 
