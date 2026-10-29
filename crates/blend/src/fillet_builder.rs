@@ -497,19 +497,22 @@ impl<'a> FilletBuilder<'a> {
                 ) {
                     continue;
                 }
-                let notchable = junction
+                let contour = junction
                     .incident_contours
                     .first()
-                    .and_then(|&contour| fillet_plan.contours.get(contour))
-                    .is_some_and(|contour| {
-                        let stripe = regular_results
-                            .iter()
-                            .map(|result| &result.stripe)
-                            .find(|stripe| stripe.spine_edges() == contour.spine.edges());
-                        stripe.is_some_and(|stripe| {
-                            terminal_cap_is_notchable(topo, junction, contour, stripe)
-                        })
-                    });
+                    .and_then(|&contour| fillet_plan.contours.get(contour));
+                let stripe = contour.and_then(|contour| {
+                    regular_results
+                        .iter()
+                        .map(|result| &result.stripe)
+                        .find(|stripe| stripe.spine_edges() == contour.spine.edges())
+                });
+                let notchable = match (contour, stripe) {
+                    (Some(contour), Some(stripe)) => {
+                        terminal_cap_is_notchable(topo, junction, contour, stripe)?
+                    }
+                    _ => false,
+                };
                 log::debug!(
                     "terminal {:?}: notchable={notchable} contours={:?} fan={:?}",
                     junction.vertex,
@@ -1913,8 +1916,11 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
                     EdgeCurve::Circle(c) => {
                         ((c.center() - plate_center).length() - c.radius()).abs()
                     }
+                    // Every point of an ellipse lies between its semi-axes
+                    // from its centre.
                     EdgeCurve::Ellipse(el) => {
-                        (el.center() - plate_center).length() - el.semi_major()
+                        let d = (el.center() - plate_center).length();
+                        (d - el.semi_major()).max(el.semi_minor() - d)
                     }
                     EdgeCurve::NurbsCurve(_) => return Ok(None),
                 };
@@ -2210,7 +2216,7 @@ fn terminal_cap_is_notchable(
     junction: &crate::fillet_plan::VertexJunction,
     contour: &crate::fillet_plan::FilletContour,
     stripe: &Stripe,
-) -> bool {
+) -> Result<bool, BlendError> {
     let caps: Vec<FaceId> = junction
         .face_fan
         .iter()
@@ -2218,16 +2224,16 @@ fn terminal_cap_is_notchable(
         .filter(|&face| face != contour.side1 && face != contour.side2)
         .collect();
     let [cap] = caps.as_slice() else {
-        return false;
+        return Ok(false);
     };
     let Ok(face) = topo.face(*cap) else {
-        return false;
+        return Ok(false);
     };
     if !face.surface().is_planar() {
-        return false;
+        return Ok(false);
     }
     let Ok(vertex) = topo.vertex(junction.vertex) else {
-        return false;
+        return Ok(false);
     };
     let vertex = vertex.point();
     // The corner sits on the cap's outer wire (a convex fillet) or on one of
@@ -2240,21 +2246,21 @@ fn terminal_cap_is_notchable(
         .flat_map(|wire| wire.edges().iter())
     {
         let Ok(edge) = topo.edge(oriented.edge()) else {
-            return false;
+            return Ok(false);
         };
         if edge.start() != junction.vertex && edge.end() != junction.vertex {
             continue;
         }
         if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-            return false;
+            return Ok(false);
         }
         let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
-            return false;
+            return Ok(false);
         };
         corner_edges.push((a.point(), b.point()));
     }
     if corner_edges.len() != 2 {
-        return false;
+        return Ok(false);
     }
     // Both contacts must end on those corner edges, or the split lands on
     // the cap's edge while the notch can never match its corner path.
@@ -2269,17 +2275,96 @@ fn terminal_cap_is_notchable(
             (a + ab * t - point).length() <= 1e-5
         })
     };
-    [&stripe.contact1, &stripe.contact2]
+    let near_ends: Vec<Point3> = [&stripe.contact1, &stripe.contact2]
         .into_iter()
-        .all(|contact| {
+        .map(|contact| {
             let (t0, t1) = contact.domain();
             let (start, end) = (contact.evaluate(t0), contact.evaluate(t1));
-            let near = if (start - vertex).length() <= (end - vertex).length() {
+            if (start - vertex).length() <= (end - vertex).length() {
                 start
             } else {
                 end
-            };
-            on_segment(near)
+            }
+        })
+        .collect();
+    if !near_ends.iter().all(|&point| on_segment(point)) {
+        return Ok(false);
+    }
+    // The arc that replaces the corner path lies in the triangle between its
+    // ends and the corner, so no other boundary of the cap may reach into
+    // that triangle (a fillet wider than a cup's wall would cross its mouth).
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return Ok(false);
+    };
+    let Ok(frame) = brepkit_math::frame::Frame3::from_normal(vertex, *normal) else {
+        return Ok(false);
+    };
+    let flat = |p: Point3| {
+        let d = p - vertex;
+        (d.dot(frame.x), d.dot(frame.y))
+    };
+    let triangle = [flat(near_ends[0]), (0.0, 0.0), flat(near_ends[1])];
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    for oriented in wires
+        .filter_map(|wire| topo.wire(wire).ok())
+        .flat_map(|wire| wire.edges().iter())
+    {
+        let Ok(edge) = topo.edge(oriented.edge()) else {
+            return Ok(false);
+        };
+        if edge.start() == junction.vertex || edge.end() == junction.vertex {
+            continue;
+        }
+        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return Ok(false);
+        };
+        let (a, b) = (a.point(), b.point());
+        let samples = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            1
+        } else {
+            64
+        };
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let path: Vec<(f64, f64)> = (0..=samples)
+            .map(|k| {
+                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(samples);
+                flat(edge.curve().evaluate_with_endpoints(t, a, b))
+            })
+            .collect();
+        if path_enters_triangle(&path, triangle) {
+            return Err(BlendError::PlanningFailure {
+                reason: format!(
+                    "the fillet's end at {:?} would cross another boundary of its cap",
+                    junction.vertex
+                ),
+            });
+        }
+    }
+    Ok(true)
+}
+
+/// Whether a polyline in the plane passes inside a triangle: a point strictly
+/// inside it, or a segment crossing one of its sides.
+fn path_enters_triangle(path: &[(f64, f64)], triangle: [(f64, f64); 3]) -> bool {
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+    let scale = triangle
+        .iter()
+        .map(|&(x, y)| x.abs().max(y.abs()))
+        .fold(0.0_f64, f64::max);
+    let eps = 1e-9 * scale * scale;
+    let area = cross(triangle[0], triangle[1], triangle[2]);
+    let inside = |p: (f64, f64)| {
+        (0..3).all(|i| cross(triangle[i], triangle[(i + 1) % 3], p) * area.signum() > eps)
+    };
+    let opposite = |x: f64, y: f64| (x > eps && y < -eps) || (x < -eps && y > eps);
+    let crosses = |p: (f64, f64), q: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        opposite(cross(a, b, p), cross(a, b, q)) && opposite(cross(p, q, a), cross(p, q, b))
+    };
+    path.iter().any(|&p| inside(p))
+        || path.windows(2).any(|pair| {
+            (0..3).any(|i| crosses(pair[0], pair[1], triangle[i], triangle[(i + 1) % 3]))
         })
 }
 

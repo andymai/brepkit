@@ -129,3 +129,27 @@ fn a_blind_pockets_corner_fills_up_to_its_mouth() {
         assert_fillet_changes_by(&mut topo, body, &edges, r, corner_section(r) * 8.0);
     }
 }
+
+/// A fillet wider than the cup's wall would carry its corner across the
+/// cavity's mouth: the rim keeps no notch that crosses its hole, so the
+/// fillet is refused or the result is a valid, watertight solid.
+#[test]
+fn a_shelled_boxs_corner_fillet_wider_than_its_wall_never_crosses_the_mouth() {
+    let mut topo = Topology::new();
+    let cup = shelled_box(&mut topo);
+    let edges = verticals_at(
+        &topo,
+        cup,
+        &[(0.0, 0.0), (60.0, 0.0), (60.0, 40.0), (0.0, 40.0)],
+    );
+    let Ok(result) = fillet_v2(&mut topo, cup, &edges, 12.0) else {
+        return;
+    };
+    if !result.failed.is_empty() || result.solid == cup {
+        return;
+    }
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let mesh = tessellate_solid(&topo, result.solid, 0.1).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+}

@@ -156,3 +156,19 @@ fn a_round_pockets_floor_fills_its_ring() {
         assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 4.0), r, filled);
     }
 }
+
+/// A bore through an elliptical plate: the plate's outer edge is an ellipse
+/// that encloses the plate contact, so the mouth still takes the closed-rim
+/// path and rounds off by the ring.
+#[test]
+fn a_bores_mouth_in_an_elliptical_plate_rounds_off() {
+    let mut topo = Topology::new();
+    let plate = make_cylinder(&mut topo, 10.0, 8.0).unwrap();
+    transform_solid(&mut topo, plate, &Mat4::scale(2.0, 1.5, 1.0)).unwrap();
+    let bore = make_cylinder(&mut topo, RADIUS, 12.0).unwrap();
+    transform_solid(&mut topo, bore, &Mat4::translation(0.0, 0.0, -2.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Cut, plate, bore).unwrap();
+    let area = (1.0 - PI / 4.0) * 1.0;
+    let removed = 2.0 * PI * (RADIUS + centroid_from_corner(1.0)) * area;
+    assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 8.0), 1.0, -removed);
+}
