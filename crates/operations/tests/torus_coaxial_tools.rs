@@ -210,3 +210,66 @@ fn rod_in_a_rings_hole() {
     let volume = solid_volume(&topo, rest, 0.01).unwrap();
     assert!((volume - ring).abs() < 1e-9 * ring, "cut: volume {volume}");
 }
+
+/// A ball of radius 2.5 sits in the ring's hole, touching the tube's inner
+/// equator, and a ring of tube radius 1 rests on the ring, touching the top
+/// of its tube: each touch splits neither solid, so the fuse keeps both
+/// whole, the cut keeps the ring whole, and they have nothing in common.
+#[test]
+fn solids_touching_a_ring_keep_their_faces_whole() {
+    use brepkit_check::classify::PointClassification::{Inside, Outside};
+    let (big, small) = RING;
+    let ring = 2.0 * PI * PI * big * small * small;
+    let ball = big - small;
+    let rest = small + 1.0;
+    let touching = [
+        (
+            "ball",
+            4.0 / 3.0 * PI * ball.powi(3),
+            ("sphere", 2),
+            (0.0, 0.0),
+        ),
+        ("ring", 2.0 * PI * PI * big, ("torus", 1), (big, rest)),
+    ];
+    for (name, volume, (tag, count), inner) in touching {
+        let build = |topo: &mut Topology| {
+            let a = make_torus(topo, big, small, 32).unwrap();
+            let b = if name == "ball" {
+                make_sphere(topo, ball, 32).unwrap()
+            } else {
+                let b = make_torus(topo, big, 1.0, 32).unwrap();
+                transform_solid(topo, b, &Mat4::translation(0.0, 0.0, rest)).unwrap();
+                b
+            };
+            (a, b)
+        };
+        let fused: Vec<(&str, usize)> = if tag == "torus" {
+            vec![("torus", 2)]
+        } else {
+            vec![("torus", 1), (tag, count)]
+        };
+        for (op, faces, truth, in_other) in [
+            (BooleanOp::Fuse, fused, ring + volume, Inside),
+            (BooleanOp::Cut, vec![("torus", 1)], ring, Outside),
+        ] {
+            let label = format!("{name} {op:?}");
+            let mut topo = Topology::new();
+            let (a, b) = build(&mut topo);
+            let piece = boolean(&mut topo, op, a, b).unwrap();
+            check(&topo, piece, &faces, truth, &label);
+            assert_eq!(at(&topo, piece, big, 0.0), Inside, "{label}: in the tube");
+            assert_eq!(
+                at(&topo, piece, inner.0, inner.1),
+                in_other,
+                "{label}: in the {name}"
+            );
+        }
+        let mut topo = Topology::new();
+        let (a, b) = build(&mut topo);
+        let common = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        assert!(
+            solid_faces(&topo, common).unwrap().is_empty(),
+            "{name}: the touch has no volume in common"
+        );
+    }
+}

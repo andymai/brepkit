@@ -2199,10 +2199,10 @@ fn parallel_axis_torus_cylinder(
 
 /// Where two circles in a half-plane through an axis cross, as `(rho, z)`
 /// pairs (distance from the axis, height along it): each sweeps a circle
-/// about the axis. Circles touching, side by side or one inside the other,
-/// meet at the one point on the line through their centres. `None` (defer
-/// to the marcher) when the circles coincide or a crossing lands on or past
-/// the axis; `Some` of none when they miss.
+/// about the axis. Two crossings closer than the linear tolerance are the
+/// one point where the circles touch, side by side or one inside the
+/// other. `None` (defer to the marcher) when the circles coincide or a
+/// crossing lands on or past the axis; `Some` of none when they miss.
 fn meridian_crossings(
     first: (f64, f64, f64),
     second: (f64, f64, f64),
@@ -2215,22 +2215,20 @@ fn meridian_crossings(
     if dist < slack {
         return None;
     }
-    let (ux, uz) = (dx / dist, dz / dist);
-    let beside = (dist - (r1 + r2)).abs() < slack;
-    if beside || (dist - (r1 - r2).abs()).abs() < slack {
-        // The inner circle touches the outer on its side away from the
-        // outer's centre.
-        let reach = if beside || r1 > r2 { r1 } else { -r1 };
-        let rho = reach.mul_add(ux, x1);
-        return (rho > slack).then(|| vec![(rho, reach.mul_add(uz, z1))]);
-    }
-    if dist > r1 + r2 || dist < (r1 - r2).abs() {
+    let rounding = 8.0 * f64::EPSILON * (x1.abs() + x2.abs() + z1.abs() + z2.abs() + r1 + r2);
+    if dist > r1 + r2 + rounding || dist < (r1 - r2).abs() - rounding {
         return Some(Vec::new());
     }
     let along = r2.mul_add(-r2, r1.mul_add(r1, dist * dist)) / (2.0 * dist);
     let across = r1.mul_add(r1, -(along * along)).max(0.0).sqrt();
-    let mut crossings = Vec::with_capacity(2);
-    for side in [1.0, -1.0] {
+    let (ux, uz) = (dx / dist, dz / dist);
+    let sides: &[f64] = if 2.0 * across <= Tolerance::new().linear {
+        &[0.0]
+    } else {
+        &[1.0, -1.0]
+    };
+    let mut crossings = Vec::with_capacity(sides.len());
+    for side in sides {
         let rho = x1 + along * ux - side * across * uz;
         if rho <= slack {
             return None;
@@ -6172,5 +6170,36 @@ mod tests {
             circles[0].radius()
         );
         assert!((circles[0].center().z() - 0.8).abs() < 1e-12);
+    }
+
+    /// Unit tubes on rings of radius 1e6 and 1e6 + 1.999 overlap by 0.001
+    /// and cross in two circles 0.063 apart; on rings 2.001 apart they miss.
+    /// Neither is read as a touch, at a scale where a millionth of it is
+    /// two thousandths.
+    #[test]
+    fn huge_coaxial_rings_cross_or_miss_rather_than_touch() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let ring = |big: f64| {
+            ToroidalSurface::with_axis_and_ref_dir(Point3::new(0.0, 0.0, 0.0), big, 1.0, z, x)
+                .unwrap()
+        };
+        let crossing = exact_torus_torus(&ring(1e6), &ring(1_000_001.999))
+            .unwrap()
+            .unwrap();
+        let circles = circles_of(&crossing);
+        assert_eq!(circles.len(), 2);
+        for circle in circles {
+            let height = (1.0 - 0.9995_f64 * 0.9995).sqrt();
+            assert!(
+                (circle.center().z().abs() - height).abs() < 1e-9,
+                "{}",
+                circle.center().z()
+            );
+        }
+        let apart = exact_torus_torus(&ring(1e6), &ring(1_000_002.001))
+            .unwrap()
+            .unwrap();
+        assert!(apart.is_empty());
     }
 }
