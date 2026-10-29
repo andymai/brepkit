@@ -2350,34 +2350,48 @@ fn meridian_crossings(
 }
 
 /// Exact circles as intersection curves, each sampled at 33 points that
-/// carry both surfaces' parameters.
+/// carry both surfaces' parameters, and a lone touching point as a curve
+/// that stays on it.
 fn exact_circle_curves(
     exacts: Vec<ExactIntersectionCurve>,
     params: impl Fn(Point3) -> ((f64, f64), (f64, f64)),
 ) -> Result<Vec<IntersectionCurve>, MathError> {
-    exacts
-        .into_iter()
-        .filter_map(|exact| match exact {
-            ExactIntersectionCurve::Circle(circle) => Some(circle),
-            ExactIntersectionCurve::Ellipse(_) | ExactIntersectionCurve::Points(_) => None,
-        })
-        .map(|circle| {
-            let points = (0..=32)
-                .map(|i| {
-                    let point = circle.evaluate(TAU * f64::from(i) / 32.0);
-                    let (param1, param2) = params(point);
-                    IntersectionPoint {
+    let mut curves = Vec::with_capacity(exacts.len());
+    for exact in exacts {
+        match exact {
+            ExactIntersectionCurve::Circle(circle) => {
+                let points = (0..=32)
+                    .map(|i| {
+                        let point = circle.evaluate(TAU * f64::from(i) / 32.0);
+                        let (param1, param2) = params(point);
+                        IntersectionPoint {
+                            point,
+                            param1,
+                            param2,
+                        }
+                    })
+                    .collect();
+                let r = circle.radius();
+                let curve = conic_loop(circle.center(), circle.u_axis(), circle.v_axis(), r, r)?;
+                curves.push(IntersectionCurve { curve, points });
+            }
+            // A lone point is where the surfaces touch.
+            ExactIntersectionCurve::Points(points) if points.len() == 1 => {
+                let point = points[0];
+                let (param1, param2) = params(point);
+                curves.push(IntersectionCurve {
+                    curve: interpolate(&[point, point], 1)?,
+                    points: vec![IntersectionPoint {
                         point,
                         param1,
                         param2,
-                    }
-                })
-                .collect();
-            let r = circle.radius();
-            let curve = conic_loop(circle.center(), circle.u_axis(), circle.v_axis(), r, r)?;
-            Ok(IntersectionCurve { curve, points })
-        })
-        .collect()
+                    }],
+                });
+            }
+            ExactIntersectionCurve::Ellipse(_) | ExactIntersectionCurve::Points(_) => {}
+        }
+    }
+    Ok(curves)
 }
 
 /// Circles about an axis through `base`, at the given `(rho, z)` crossings.
@@ -2486,9 +2500,11 @@ pub fn exact_cylinder_torus(
 /// The sphere's great circle and the tube's cross-section in a half-plane
 /// through the axis cross in up to two points, and each sweeps a circle
 /// about the axis; where they touch (a ball sitting in the ring's hole or
-/// on its rim) they meet along one circle.
+/// on its rim) they meet along one circle. A sphere off the axis that
+/// touches a ring torus at one point gives that point.
 ///
-/// `None` (defer to the marcher) unless the sphere's centre lies on the axis.
+/// `None` (defer to the marcher) for a spindle torus, and for a sphere off
+/// the axis that does not touch the torus at one point.
 ///
 /// # Errors
 ///
@@ -2501,8 +2517,13 @@ pub fn exact_sphere_torus(
     let scale = torus.major_radius() + sphere.radius();
     let offset = sphere.center() - torus.center();
     // A spindle torus's tube also crosses the far side of the axis.
-    if torus.minor_radius() >= torus.major_radius() || offset.cross(axis).length() > 1e-9 * scale {
+    if torus.minor_radius() >= torus.major_radius() {
         return Ok(None);
+    }
+    if offset.cross(axis).length() > 1e-9 * scale {
+        return Ok(
+            off_axis_touch(sphere, torus).map(|p| vec![ExactIntersectionCurve::Points(vec![p])])
+        );
     }
     let Some(crossings) = meridian_crossings(
         (0.0, offset.dot(axis), sphere.radius()),
@@ -2512,6 +2533,30 @@ pub fn exact_sphere_torus(
         return Ok(None);
     };
     circles_about_axis(torus.center(), axis, &crossings).map(Some)
+}
+
+/// Where a sphere off a ring torus's axis touches it at one point: from
+/// outside the tube, from inside it, or holding the whole ring. The touch
+/// sits over the core circle's point nearest the sphere's centre, at
+/// `d_near`, or farthest from it, at `d_far`, and the sphere's radius is
+/// then `d_near − r`, `r − d_near` or `d_far + r`. Each is the centre's
+/// least or greatest distance to the torus, so the point is all the two
+/// share. `None` unless the radius matches one to rounding.
+fn off_axis_touch(sphere: &SphericalSurface, torus: &ToroidalSurface) -> Option<Point3> {
+    let axis = torus.z_axis();
+    let (big, small, radius) = (torus.major_radius(), torus.minor_radius(), sphere.radius());
+    let offset = sphere.center() - torus.center();
+    let radial = offset - axis * offset.dot(axis);
+    let out = radial * (1.0 / radial.length());
+    let near = torus.center() + out * big;
+    let far = torus.center() - out * big;
+    let (to_near, to_far) = (sphere.center() - near, sphere.center() - far);
+    let (d_near, d_far) = (to_near.length(), to_far.length());
+    let slack = 64.0 * f64::EPSILON * (big + small + radius + offset.length());
+    if (d_near - small - radius).abs() <= slack || (small - d_near - radius).abs() <= slack {
+        return Some(near + to_near * (small / d_near));
+    }
+    ((d_far + small - radius).abs() <= slack).then(|| far - to_far * (small / d_far))
 }
 
 /// Exact coaxial cone-cone intersection: returns the shared circle.
@@ -6621,5 +6666,50 @@ mod tests {
         close.sort_by(|a, b| a.0.y().total_cmp(&b.0.y()));
         let apart = close[1].0.y() - close[0].0.y();
         assert!((apart - 0.010_954).abs() < 1e-5, "{apart}");
+    }
+
+    /// A ball off a ring's axis touches it at one point from outside the
+    /// tube, from inside it, or holding the whole ring, and that point is
+    /// all they share. A ball reaching 1e-6 further cuts the tube in a small
+    /// loop, which is the marcher's.
+    #[test]
+    fn a_ball_off_a_rings_axis_touches_it_at_one_point() {
+        let o = Point3::new(1.0, 2.0, 3.0);
+        let ring = ToroidalSurface::new(o, 3.0, 1.0).unwrap();
+        let (s, c) = 30.0_f64.to_radians().sin_cos();
+        let (out, up) = (Vec3::new(c, s, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        let on_ring = |p: Point3| {
+            let q = p - o;
+            ((q.x().hypot(q.y()) - 3.0).hypot(q.z()) - 1.0).abs()
+        };
+        let balls = [
+            (o + out * 5.0, 1.0),
+            (o + out * 3.2 + up * 0.1, 1.0 - 0.05_f64.sqrt()),
+            (o + out + up * 0.5, 1.0 + 16.25_f64.sqrt()),
+        ];
+        let mut touches = Vec::new();
+        for (centre, radius) in balls {
+            let ball = SphericalSurface::new(centre, radius).unwrap();
+            let exacts = exact_sphere_torus(&ball, &ring).unwrap().unwrap();
+            let p = match exacts.as_slice() {
+                [ExactIntersectionCurve::Points(points)] => points[0],
+                _ => unreachable!("one touching point"),
+            };
+            assert!(on_ring(p) < 1e-12 && ((p - centre).length() - radius).abs() < 1e-12);
+            let curves = intersect_analytic_analytic(
+                AnalyticSurface::Sphere(&ball),
+                AnalyticSurface::Torus(&ring),
+                16,
+            )
+            .unwrap();
+            assert_eq!(curves.len(), 1);
+            let (t0, t1) = curves[0].curve.domain();
+            assert!((curves[0].curve.evaluate(t0) - p).length() < 1e-15);
+            assert!((curves[0].curve.evaluate(t1) - p).length() < 1e-15);
+            touches.push(p);
+        }
+        assert!((touches[0] - (o + out * 4.0)).length() < 1e-12);
+        let past = SphericalSurface::new(o + out * 5.0, 1.0 + 1e-6).unwrap();
+        assert!(exact_sphere_torus(&past, &ring).unwrap().is_none());
     }
 }
