@@ -3818,9 +3818,12 @@ mod tests {
                 .faces()
                 .iter()
                 .any(|&face| {
-                    matches!(topo.face(face).unwrap().surface(), FaceSurface::Nurbs(_))
+                    matches!(
+                        topo.face(face).unwrap().surface(),
+                        FaceSurface::Sphere(sphere) if (sphere.radius() - 0.1).abs() < 1e-12
+                    )
                 }),
-            "three-stripe junction must publish a spherical NURBS patch"
+            "three-stripe junction must publish a patch of the ball's sphere"
         );
         assert_shell_edges_are_closed(&topo, result.solid);
     }

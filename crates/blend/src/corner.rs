@@ -3668,6 +3668,43 @@ fn apply_equal_two_edge_miter_corner(
     Ok(())
 }
 
+/// The sphere of radius `radius` about `center` when every one of the corner's
+/// boundary edges lies on it, its poles kept off the patch the edges bound.
+fn ball_sphere(
+    topo: &Topology,
+    center: Point3,
+    radius: f64,
+    boundary_edges: &[EdgeId],
+) -> Result<Option<brepkit_math::surfaces::SphericalSurface>, BlendError> {
+    let tol = 1e-6 * radius;
+    let mut middle = Vec3::new(0.0, 0.0, 0.0);
+    let mut first = None;
+    for &edge_id in boundary_edges {
+        let edge = topo.edge(edge_id)?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        for k in 0..=4 {
+            let t = t0 + (t1 - t0) * f64::from(k) / 4.0;
+            let direction = edge.curve().evaluate_with_endpoints(t, start, end) - center;
+            if (direction.length() - radius).abs() > tol {
+                return Ok(None);
+            }
+            middle += direction;
+            first.get_or_insert(direction);
+        }
+    }
+    let (Ok(middle), Some(first)) = (middle.normalize(), first) else {
+        return Ok(None);
+    };
+    let Ok(axis) = middle.cross(first).normalize() else {
+        return Ok(None);
+    };
+    Ok(Some(brepkit_math::surfaces::SphericalSurface::with_axis(
+        center, radius, axis,
+    )?))
+}
+
 fn build_junction_fan(
     topo: &mut Topology,
     stripes: &[Stripe],
@@ -3738,7 +3775,25 @@ fn build_junction_fan(
         )
     } else if stripe_indices.len() == 3 {
         let data = multi_edge_corner_data(junction_vertex, stripe_indices, stripes, topo)?;
-        if data.contact_points.len() == 3 {
+        // A set-back corner's sections all pass through the ball's centre,
+        // so they are great circles of the ball and the corner is a patch
+        // of its sphere, facing away from the centre as the patch below is
+        // oriented.
+        let ball = if is_setback_corner && data.contact_points.len() == 3 {
+            let boundary_edges: Vec<EdgeId> = cycles[0]
+                .iter()
+                .map(|&(index, _)| boundaries[index].edge)
+                .collect();
+            match contact_section_at_vertex(junction_vertex, &stripes[stripe_indices[0]], topo) {
+                Some(section) => ball_sphere(topo, section.center, data.radius, &boundary_edges)?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        if let Some(sphere) = ball {
+            (FaceSurface::Sphere(sphere), false)
+        } else if data.contact_points.len() == 3 {
             let surface = build_spherical_corner_surface(&data)?;
             let reversed = if is_setback_corner {
                 let center = sphere_center(&data)?;
