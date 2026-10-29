@@ -74,9 +74,10 @@ pub(super) fn planar_patch_sections(
         return Ok(None);
     }
     // The plane's grid can miss a branch narrower than its step while it
-    // finds others. A span of `other` whose control points lie on both
-    // sides of the plane may meet it there; where no point of the section
-    // lies in such a span, the search looks instead.
+    // finds others. A span of `other` whose control points reach the plane,
+    // to rounding, may meet it there, crossing or only touching it; where
+    // no point of the section lies in such a span, the search looks
+    // instead.
     let rounding = 64.0
         * f64::EPSILON
         * other
@@ -101,7 +102,7 @@ pub(super) fn planar_patch_sections(
             let (u, v) = q.param1;
             (u0 - su..=u1 + su).contains(&u) && (v0 - sv..=v1 + sv).contains(&v)
         });
-        if low < -rounding && high > rounding && !met {
+        if low <= rounding && high >= -rounding && !met {
             return Ok(None);
         }
     }

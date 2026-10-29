@@ -2823,6 +2823,36 @@ fn a_flat_patch_whose_section_the_grid_misses_is_still_searched() {
     }
 }
 
+/// The notched sheet beside a broad crossing, its notch now only reaching
+/// down to `z = 0`, touches a flat sheet along `x = ½`, which the plane's
+/// 32-sample grid misses: the notch's spans reach the plane, hold none of
+/// the section, and the path declines the section of the broad line alone.
+#[test]
+fn a_flat_patch_whose_section_misses_a_touching_notch_is_declined() {
+    let row = |x: f64, z: f64| vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)];
+    let notch = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 0.2, 0.49, 0.5, 0.51, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            row(0.0, -1.0),
+            row(0.2, 1.0),
+            row(0.49, 1.0),
+            row(0.5, 0.0),
+            row(0.51, 1.0),
+            row(1.0, 1.0),
+        ],
+        vec![vec![1.0; 2]; 6],
+    )
+    .unwrap();
+    assert!(
+        planar_patch_sections(&wide_sheet(0.0), &notch, 32, true)
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// The flat rectangle `0 ≤ x ≤ 1, −1 ≤ y ≤ 0` at `z = 0` meets the wall
 /// `y = 1e-5 − 0.01·(x − ½)²` in two pieces, the wall's section bowing past
 /// the rectangle's edge `y = 0` where `x` is within 0.032 of ½. At 10
