@@ -1775,6 +1775,9 @@ struct ClosedRimInfo {
     /// Contact circle on the wall (radius `r_c` for a cylinder), one fillet
     /// radius along the axis from the plate.
     wall_circle: Circle3D,
+    /// The rim is one of the cap's holes (a post standing on a plate), not
+    /// its whole outer wire (a disc cap).
+    rim_is_hole: bool,
 }
 
 /// Project a point onto the infinite axis line through `origin` with unit
@@ -1835,18 +1838,27 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
         _ => return Ok(None),
     };
 
-    // The annular rebuild replaces the cap's whole outer wire with the
-    // plate-contact circle, so it only applies when the cap's outer wire is
-    // this rim alone. Its holes are kept, which is checked below once the
-    // contact radius is known.
-    let cap_holes = {
+    // The annular rebuild replaces the wire that is this rim alone with the
+    // plate-contact circle: the cap's outer wire (a disc cap) or one of its
+    // holes (a post on a plate). The cap's other wires are kept, which is
+    // checked below once the contact radius is known.
+    let is_rim_wire = |wire: brepkit_topology::wire::WireId| {
+        topo.wire(wire)
+            .is_ok_and(|w| w.edges().len() == 1 && w.edges()[0].edge() == rim_edge)
+    };
+    let (rim_is_hole, kept_wires) = {
         let cap = topo.face(plane_face)?;
-        let cap_wire = topo.wire(cap.outer_wire())?;
-        let edges = cap_wire.edges();
-        if edges.len() != 1 || edges[0].edge() != rim_edge {
+        if is_rim_wire(cap.outer_wire()) {
+            (false, cap.inner_wires().to_vec())
+        } else if cap.inner_wires().iter().any(|&w| is_rim_wire(w)) {
+            let kept: Vec<_> = std::iter::once(cap.outer_wire())
+                .chain(cap.inner_wires().iter().copied())
+                .filter(|&w| !is_rim_wire(w))
+                .collect();
+            (true, kept)
+        } else {
             return Ok(None);
         }
-        cap.inner_wires().to_vec()
     };
 
     // The plane-side contact curve is the one whose face is the plane.
@@ -1877,9 +1889,46 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
     let wall_center = project_onto_axis(wall_pt, axis_origin, axis);
     let wall_radius = radial_distance(wall_pt, axis_origin, axis);
 
+    if rim_is_hole {
+        // Every kept wire must stay outside the plate contact, or the band
+        // would run over it.
+        let clearance = |a: Point3, b: Point3| {
+            let ab = b - a;
+            let len2 = ab.length_squared();
+            let t = if len2 <= 1e-24 {
+                0.0
+            } else {
+                ((plate_center - a).dot(ab) / len2).clamp(0.0, 1.0)
+            };
+            (a + ab * t - plate_center).length()
+        };
+        for &wire in &kept_wires {
+            for oe in topo.wire(wire)?.edges() {
+                let e = topo.edge(oe.edge())?;
+                let near = match e.curve() {
+                    EdgeCurve::Line => clearance(
+                        topo.vertex(e.start())?.point(),
+                        topo.vertex(e.end())?.point(),
+                    ),
+                    EdgeCurve::Circle(c) => {
+                        ((c.center() - plate_center).length() - c.radius()).abs()
+                    }
+                    EdgeCurve::Ellipse(el) => {
+                        (el.center() - plate_center).length() - el.semi_major()
+                    }
+                    EdgeCurve::NurbsCurve(_) => return Ok(None),
+                };
+                if near <= plate_radius + 1e-7 {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
     // A hole reaching the plate contact would meet the blend; the normal trim
     // path handles that.
-    for &hole in &cap_holes {
+    let cap_holes: &[brepkit_topology::wire::WireId] = if rim_is_hole { &[] } else { &kept_wires };
+    for &hole in cap_holes {
         for oe in topo.wire(hole)?.edges() {
             let e = topo.edge(oe.edge())?;
             let reach = match e.curve() {
@@ -1914,6 +1963,7 @@ fn closed_rim_info(topo: &Topology, stripe: &Stripe) -> Result<Option<ClosedRimI
         rim_edge,
         plate_circle,
         wall_circle,
+        rim_is_hole,
     }))
 }
 
@@ -1957,10 +2007,24 @@ fn assemble_closed_rim(
             .copied()
             .unwrap_or(rim.plane_face),
     )?;
-    let cap_orig_wire_id = cap_orig_wire.outer_wire();
+    let cap_outer = cap_orig_wire.outer_wire();
     let cap_holes = cap_orig_wire.inner_wires().to_vec();
+    let rim_wire = if rim.rim_is_hole {
+        cap_holes
+            .iter()
+            .copied()
+            .find(|&w| {
+                topo.wire(w)
+                    .is_ok_and(|w| w.edges().iter().any(|oe| oe.edge() == rim.rim_edge))
+            })
+            .ok_or(BlendError::TrimmingFailure {
+                face: rim.plane_face,
+            })?
+    } else {
+        cap_outer
+    };
     let cap_forward = topo
-        .wire(cap_orig_wire_id)?
+        .wire(rim_wire)?
         .edges()
         .iter()
         .find(|oe| oe.edge() == rim.rim_edge)
@@ -1980,14 +2044,22 @@ fn assemble_closed_rim(
             });
         }
     };
-    let band_reversed = torus_band_needs_reversal(&torus, rim);
+    let band_reversed = torus_band_needs_reversal(&torus, rim, (&wall_surf, wall_reversed));
     let wall_forward = wall_oriented
         .iter()
         .find(|oe| oe.edge() == rim.rim_edge)
         .is_some_and(OrientedEdge::is_forward);
     let plane_side = usize::from(stripe.face2 == rim.plane_face);
     let wall_side = usize::from(stripe.face2 == rim.wall_face);
-    let cap_sense = if matches!(&wall_surf, FaceSurface::Cylinder(_)) {
+    let cap_sense = if rim.rim_is_hole {
+        // The plate circle turns about the wall's axis; keep the hole's
+        // traversal direction whichever way the rim circle's own normal runs.
+        let rim_turns_with_axis = match topo.edge(rim.rim_edge)?.curve() {
+            EdgeCurve::Circle(c) => c.normal().dot(rim.plate_circle.normal()) > 0.0,
+            _ => true,
+        };
+        cap_forward == rim_turns_with_axis
+    } else if matches!(&wall_surf, FaceSurface::Cylinder(_)) {
         cap_forward
     } else {
         !cap_forward
@@ -2022,7 +2094,16 @@ fn assemble_closed_rim(
     let cap_boundary = registry.oriented_edge(topo, plate_handle, 0)?;
     let cap_wire = Wire::new(vec![cap_boundary], true)?;
     let cap_wire_id = topo.add_wire(cap_wire);
-    let mut cap_face = Face::new(cap_wire_id, cap_holes, plane_surf);
+    let (cap_outer, cap_holes) = if rim.rim_is_hole {
+        let holes = cap_holes
+            .iter()
+            .map(|&w| if w == rim_wire { cap_wire_id } else { w })
+            .collect();
+        (cap_outer, holes)
+    } else {
+        (cap_wire_id, cap_holes)
+    };
+    let mut cap_face = Face::new(cap_outer, cap_holes, plane_surf);
     cap_face.set_reversed(plane_reversed);
     let cap_face_id = topo.add_face(cap_face);
     registry.set_owner_face(plate_handle, 0, cap_face_id)?;
@@ -2142,18 +2223,22 @@ fn terminal_cap_is_notchable(
     let Ok(face) = topo.face(*cap) else {
         return false;
     };
-    if !face.surface().is_planar() || !face.inner_wires().is_empty() {
+    if !face.surface().is_planar() {
         return false;
     }
-    let Ok(wire) = topo.wire(face.outer_wire()) else {
-        return false;
-    };
     let Ok(vertex) = topo.vertex(junction.vertex) else {
         return false;
     };
     let vertex = vertex.point();
+    // The corner sits on the cap's outer wire (a convex fillet) or on one of
+    // its holes (a concave one ending on a cup's rim); the notch replaces it
+    // on whichever wire holds it.
     let mut corner_edges: Vec<(Point3, Point3)> = Vec::new();
-    for oriented in wire.edges() {
+    let wires = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    for oriented in wires
+        .filter_map(|wire| topo.wire(wire).ok())
+        .flat_map(|wire| wire.edges().iter())
+    {
         let Ok(edge) = topo.edge(oriented.edge()) else {
             return false;
         };
@@ -2436,16 +2521,29 @@ fn check_stripe_residuals(topo: &Topology, stripe: &Stripe) -> Result<(), BlendE
 /// Decide whether a rim-fillet torus band must carry `reversed` so its outward
 /// normal points away from the solid.
 ///
-/// The band's mid-arc geometric normal points radially out from the tube; we
-/// need it to also point to the *empty* side along the axis. The empty side is
-/// opposite the wall material: for a non-reversed cylinder/cone wall the
-/// material is on the axis-interior side, and the band sits one fillet radius
-/// from the plate toward the material — so the band's outward axial direction is
-/// the one pointing from the wall-contact circle back toward the plate.
+/// The band is tangent to the wall along the wall-contact circle, so there its
+/// outward normal is the wall's: the band is reversed when the torus's own
+/// normal (out of the tube) opposes it. That holds for a convex rim, whose
+/// tube lies in the material (a rod's top, a bore's mouth), and a concave one,
+/// whose tube lies in the air (a post's foot, a round pocket's floor). Without
+/// a wall normal, the band is taken as convex: its axial direction at mid-arc
+/// points from the wall contact back toward the plate.
 fn torus_band_needs_reversal(
     torus: &brepkit_math::surfaces::ToroidalSurface,
     rim: &ClosedRimInfo,
+    wall: (&FaceSurface, bool),
 ) -> bool {
+    let (wall_surface, wall_reversed) = wall;
+    let contact = rim.wall_circle.evaluate(0.0);
+    if let Some((u, v)) = wall_surface.project_point(contact) {
+        let wall_out = wall_surface.normal(u, v);
+        let wall_out = if wall_reversed { -wall_out } else { wall_out };
+        let (tu, tv) = torus.project_point(contact);
+        let along = torus.normal(tu, tv).dot(wall_out);
+        if along.abs() > 0.5 {
+            return along < 0.0;
+        }
+    }
     // The torus geometric normal at the mid-arc point (halfway between the two
     // contacts) should point away from the segment plate→wall along the axis.
     // The "away from material" axial direction is plate_center → (plate_center −

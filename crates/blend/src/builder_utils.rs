@@ -454,8 +454,49 @@ pub fn notch_face_corner_with_arc(
     face_id: FaceId,
     arc: (brepkit_topology::edge::EdgeId, VertexId, VertexId),
 ) -> Result<Option<FaceId>, BlendError> {
+    let (outer, holes) = {
+        let face = topo.face(face_id)?;
+        (face.outer_wire(), face.inner_wires().to_vec())
+    };
+    // A concave fillet ends on a cap's hole (a shelled cup's rim), a convex
+    // one on its outer wire; the corner path lies on exactly one of them.
+    let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(outer)
+        .chain(holes.iter().copied())
+        .collect();
+    for (slot, wire_id) in wires.into_iter().enumerate() {
+        let Some(new_oes) = notched_wire_edges(topo, wire_id, arc)? else {
+            continue;
+        };
+        let new_wire = topo.add_wire(Wire::new(new_oes, true)?);
+        let (surface, reversed) = {
+            let f = topo.face(face_id)?;
+            (f.surface().clone(), f.is_reversed())
+        };
+        let (outer_wire, inners) = if slot == 0 {
+            (new_wire, holes)
+        } else {
+            let mut inners = holes;
+            inners[slot - 1] = new_wire;
+            (outer, inners)
+        };
+        let new_face = if reversed {
+            Face::new_reversed(outer_wire, inners, surface)
+        } else {
+            Face::new(outer_wire, inners, surface)
+        };
+        return Ok(Some(topo.add_face(new_face)));
+    }
+    Ok(None)
+}
+
+/// The wire's edges with its two-edge corner path `va -> corner -> vb`
+/// replaced by the arc, or `None` when the wire has no such path.
+fn notched_wire_edges(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    arc: (brepkit_topology::edge::EdgeId, VertexId, VertexId),
+) -> Result<Option<Vec<OrientedEdge>>, BlendError> {
     let (arc_eid, va, vb) = arc;
-    let wire_id = topo.face(face_id)?.outer_wire();
     let oes = topo.wire(wire_id)?.edges().to_vec();
     let n = oes.len();
     if n < 3 {
@@ -474,7 +515,7 @@ pub fn notch_face_corner_with_arc(
             has_b |= s == vb || e == vb;
         }
         if has_a || has_b {
-            log::warn!("NOTCH-TRACE face={face_id:?} has_va={has_a} has_vb={has_b} wire_len={n}");
+            log::warn!("NOTCH-TRACE wire={wire_id:?} has_va={has_a} has_vb={has_b} wire_len={n}");
         }
     }
     for i in 0..n {
@@ -524,22 +565,7 @@ pub fn notch_face_corner_with_arc(
                 new_oes.push(*oe);
             }
         }
-        let new_wire = topo.add_wire(Wire::new(new_oes, true)?);
-        let (surface, reversed, inners) = {
-            let f = topo.face(face_id)?;
-            (
-                f.surface().clone(),
-                f.is_reversed(),
-                f.inner_wires().to_vec(),
-            )
-        };
-        let new_face = if reversed {
-            Face::new_reversed(new_wire, inners, surface)
-        } else {
-            Face::new(new_wire, inners, surface)
-        };
-        let nf = topo.add_face(new_face);
-        return Ok(Some(nf));
+        return Ok(Some(new_oes));
     }
     Ok(None)
 }
