@@ -2256,38 +2256,66 @@ fn a_plane_touching_a_surface_at_points_returns_them() {
     }
 }
 
-/// The plane `z = 0` meets the saddle `z = xy` in the two axes, which cross
-/// at the origin, inside a cell of the grid. The section comes back as four
-/// curves, each from the crossing out to the patch's edge along an axis.
+/// The plane `z = 0` meets a saddle in two lines that cross, wherever the
+/// crossing falls on the grid: inside a cell, on a node, on an edge, off
+/// centre, and with the lines along the grid, across it or close together.
+/// The section comes back as four curves, each from the crossing out to
+/// the patch's edge along a line.
 #[test]
 fn a_plane_section_crossing_itself_ends_its_curves_at_the_crossing() {
-    let saddle = polynomial_patch(
-        1,
-        [
-            &[(0, 0, -1.0), (1, 0, 2.0)],
-            &[(0, 0, -1.0), (0, 1, 2.0)],
-            &[(0, 0, 1.0), (1, 0, -2.0), (0, 1, -2.0), (1, 1, 4.0)],
-        ],
-    );
-    let curves = intersect_plane_nurbs(&saddle, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
-    assert_eq!(curves.len(), 4);
-    for ic in &curves {
-        let (t0, t1) = ic.curve.domain();
-        let (a, b) = (ic.curve.evaluate(t0), ic.curve.evaluate(t1));
-        let (centre, rim) = if a.x().hypot(a.y()) < b.x().hypot(b.y()) {
-            (a, b)
-        } else {
-            (b, a)
-        };
-        assert!(
-            centre.x().hypot(centre.y()) < 1e-12,
-            "a curve ends {centre:?}"
-        );
-        assert!((rim.x().abs().max(rim.y().abs()) - 1.0).abs() < 1e-12);
-        let far = farthest(std::slice::from_ref(ic), |p| {
-            p.x().abs().min(p.y().abs()).max(p.z().abs())
-        });
-        assert!(far < 1e-7, "a curve strays {far:.2e} off the axes");
+    // A cell's centre with 64 samples, a node and an edge's middle with 33,
+    // and nowhere in particular.
+    let places = [
+        (31.5 / 63.0, 31.5 / 63.0),
+        (0.5, 0.5),
+        (0.5, 0.537),
+        (0.413, 0.587),
+    ];
+    let slopes = [(0.0, 90.0), (45.0, 135.0), (20.0, 75.0), (10.0, 40.0)];
+    for (a, b) in places {
+        for (first, second) in slopes {
+            // The lines' unit normals, so that each line's value at a point
+            // is the point's distance from it.
+            let [(s1, c1), (s2, c2)] = [first, second].map(|t: f64| t.to_radians().sin_cos());
+            let (puu, puv, pvv) = (s1 * s2, -s1.mul_add(c2, s2 * c1), c1 * c2);
+            let z = [
+                (2, 0, puu),
+                (1, 0, puv.mul_add(-b, -2.0 * a * puu)),
+                (1, 1, puv),
+                (0, 1, puv.mul_add(-a, -2.0 * b * pvv)),
+                (0, 2, pvv),
+                (
+                    0,
+                    0,
+                    (puu * a).mul_add(a, (puv * a).mul_add(b, pvv * b * b)),
+                ),
+            ];
+            let saddle = polynomial_patch(2, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &z]);
+            for samples in [33, 64] {
+                let curves =
+                    intersect_plane_nurbs(&saddle, Vec3::new(0.0, 0.0, 1.0), 0.0, samples).unwrap();
+                let case = format!("({a}, {b}) at {first} and {second}, {samples} samples");
+                assert_eq!(curves.len(), 4, "{case}");
+                for ic in &curves {
+                    let (t0, t1) = ic.curve.domain();
+                    let ends = [t0, t1].map(|t| {
+                        let p = ic.curve.evaluate(t);
+                        (p.x() - a).hypot(p.y() - b)
+                    });
+                    assert_eq!(
+                        ends.iter().filter(|&&e| e < 1e-9).count(),
+                        1,
+                        "{case}: a curve ends {ends:?} from the crossing"
+                    );
+                    let far = farthest(std::slice::from_ref(ic), |p| {
+                        let (x, y) = (p.x() - a, p.y() - b);
+                        let off = [(s1, c1), (s2, c2)].map(|(s, c)| c.mul_add(y, -s * x).abs());
+                        off[0].min(off[1]).max(p.z().abs())
+                    });
+                    assert!(far < 1e-7, "{case}: a curve strays {far:.2e} off the lines");
+                }
+            }
+        }
     }
 }
 
