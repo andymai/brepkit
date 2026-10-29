@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793316371748,
+  "lastUpdate": 1793317801455,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60695,6 +60695,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18431723,
             "range": "± 147615",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fa9f4b7839e3242dc165bcf8433331e11ddd9542",
+          "message": "fix(math): intersect a flat NURBS patch with another as its plane's section (#2149)\n\nTwo NURBS patches, one of them flat, now meet in the flat patch's plane\nsection of the other, instead of in a marched curve.\n\nToday `intersect_nurbs_nurbs` marches every pair of patches, a flat one\nincluded, so a section the plane path finds exactly comes back\napproximate, or not at all where the patches only touch: a rational\ncylinder of radius 1 resting on a flat NURBS sheet comes back up to\n1.2e-3 off the line they touch along.\n\n## Change\n\n- `plane_of`: a patch whose control points all lie, to rounding, in the\nplane through its corners' diagonals lies in that plane. Rounding is\nweighed by the plane's own terms, as the plane section weighs it, so a\ncurved patch far along its plane is not taken for flat.\n- `planar_patch_sections`: when either patch is flat, the plane's\nsection of the other comes from `intersect_plane_nurbs`, with its seams,\ntouching points, self-crossings and touching curves, and each point gets\nits parameters on both patches, in the order they were passed.\n- The plane reaches past the flat patch, so the path applies only when\nevery point of the section projects onto the patch within its domain and\nwithin 1e-7, and so do points along the fitted curve, four for each\npoint of the section, within 1e-6. A section bowing past the patch's\nedge between points, or crossing a gap in it, shows on the curve.\n- `phase_ff`'s NURBS-NURBS sections skip a one-point section: a flat\npatch touching another at a point now comes back as one, and it splits\nneither face.\n- The plane's grid can miss a branch narrower than its step. The path\ndeclines an empty section, and one that leaves out a span of the other\npatch whose control points reach the plane, to rounding, since such a\nspan may cross or touch it. Declined pairs are marched as before.\n\n## Tests\n\n- `a_flat_patch_meets_a_cylinder_resting_on_it_along_the_line`: the\ncylinder on a flat sheet, passed either way round, gives one line from\nend to end within 1e-9 of where they touch, and every point's parameters\ngive it back on both patches to 1e-9. Without the change the line strays\n1.2e-3.\n- `a_flat_patch_whose_plane_cuts_past_it_keeps_its_section_on_it`: a\nsmall flat patch whose plane cuts a cylinder in lines running past it is\nmarched, and the section stays on the patch.\n- `a_curved_patch_far_along_its_plane_is_not_taken_for_flat`: a patch\narching 0.004 above `z = 0` at `x = 1e12` is not flat, and a covering\nsheet at `z = 0.002` meets it in two lines. With rounding weighed by the\ncoordinates' size the arch counts as flat.\n- `a_flat_patch_whose_section_the_grid_misses_is_still_searched`: a\nsheet dipping through `z = 0` in a notch narrower than the grid's step,\nagainst a flat sheet, still meets it. Taking the empty plane section as\nthe answer gives nothing.\n-\n`a_flat_patch_whose_section_misses_a_notch_beside_a_found_line_is_still_searched`:\nthe same notch beside a broad crossing at `x = 0.1`, which the grid\nfinds, still meets the flat sheet in the notch as well. Without the span\ncheck only the broad line comes back.\n- `a_flat_patch_whose_section_misses_a_touching_notch_is_declined`: the\nsame notch reaching only down to `z = 0` touches the flat sheet along `x\n= ½`, which the 32-sample grid misses, and the path declines the section\nof the broad line alone. It fails when only spans with control points\nstrictly on both sides count.\n- `a_flat_nurbs_sheet_touching_a_nurbs_bowl_at_a_point_grazes_it`: in\n`phase_ff`, a flat NURBS sheet at `z = 0` against the NURBS bowl `z = x²\n+ y²` gives no section; without the skip it gives the one-point contact.\n- `a_flat_patch_whose_section_leaves_it_between_points_is_declined`: a\nflat patch whose edge bows 0.001 into the plane's line at its middle\nholds the line at every point of the section at 10 samples but not\nbetween them, and the path declines it. Without the check along the\nfitted curve it takes the line.\n- `a_flat_patch_whose_fitted_section_bows_off_it_is_declined`: the\nrectangle `0 ≤ x ≤ 1, −1 ≤ y ≤ 0` against the wall `y = 1e-5 − 0.01·(x −\n½)²`, whose section bows 1e-5 past the edge `y = 0`, is declined at 10\nsamples, where every point of the section and every chord between them\nlie on the rectangle. Checking chords instead of the curve, the path\ntakes it.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3756 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-29T16:47:25-07:00",
+          "tree_id": "46375b57291fc99fcb44c4b72e91b5cba2b383f1",
+          "url": "https://github.com/andymai/brepkit/commit/fa9f4b7839e3242dc165bcf8433331e11ddd9542"
+        },
+        "date": 1793317792720,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 633945,
+            "range": "± 90153",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 686512,
+            "range": "± 6090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8228,
+            "range": "± 418",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 389195,
+            "range": "± 17882",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17484160,
+            "range": "± 317488",
             "unit": "ns/iter"
           }
         ]
