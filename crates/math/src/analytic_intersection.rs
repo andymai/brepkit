@@ -8,7 +8,7 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::MathError;
 use crate::aabb::Aabb3;
-use crate::curves::{Circle3D, Ellipse3D, Line3D};
+use crate::curves::{Circle3D, Ellipse3D, Hyperbola3D, Line3D, Parabola3D};
 use crate::frame::Frame3;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::fitting::interpolate;
@@ -49,6 +49,11 @@ pub enum PlaneSection {
     Point(Point3),
     /// A sampled chain of points along the section.
     Points(Vec<Point3>),
+    /// A cone's parabola.
+    Parabola(Parabola3D),
+    /// The branch of a cone's hyperbola on the cone's one nappe, which the
+    /// hyperbola's `u_axis` points to from its centre.
+    Hyperbola(Hyperbola3D),
 }
 
 impl From<ExactIntersectionCurve> for PlaneSection {
@@ -66,7 +71,9 @@ impl From<ExactIntersectionCurve> for PlaneSection {
 /// It includes the sections [`exact_plane_analytic`] has no curve for: the
 /// rulings a plane along a cylinder's axis or through a cone's apex cuts,
 /// and the point where a plane touches a sphere or meets a cone at its apex
-/// alone.
+/// alone. A cone's parabola and hyperbola come back as curves, which
+/// [`exact_plane_analytic`] samples into points, except in a band about the
+/// parabola where neither form keeps its digits.
 ///
 /// The plane is `dot(normal, p) = d`, with `normal` of unit length.
 ///
@@ -85,6 +92,11 @@ pub fn exact_plane_section(
         AnalyticSurface::Cone(cone) if plane_holds_apex(cone, normal, d) => {
             return plane_cone_apex_rulings(cone, normal);
         }
+        AnalyticSurface::Cone(cone) => {
+            if let Some(open) = plane_cone_open_section(cone, normal, d)? {
+                return Ok(open);
+            }
+        }
         AnalyticSurface::Sphere(sphere) => {
             let h = dot_np(normal, sphere.center()) - d;
             let r = sphere.radius();
@@ -96,12 +108,108 @@ pub fn exact_plane_section(
                 ))]);
             }
         }
-        AnalyticSurface::Cylinder(_) | AnalyticSurface::Cone(_) | AnalyticSurface::Torus(_) => {}
+        AnalyticSurface::Cylinder(_) | AnalyticSurface::Torus(_) => {}
     }
     Ok(exact_plane_analytic(surface, normal, d)?
         .into_iter()
         .map(PlaneSection::from)
         .collect())
+}
+
+/// How far a cone section's `e² − 1` (its eccentricity squared, less one)
+/// may sit from zero for the section to be read as a parabola.
+const PARABOLIC: f64 = 1e-12;
+
+/// Where a cone's hyperbola starts, in `e² − 1`: its centre lies the
+/// plane's offset over the conic coefficient away, and nearer zero its
+/// vertex loses digits.
+const HYPERBOLIC: f64 = 1e-6;
+
+/// A plane's parabola or hyperbola section of a cone, on the cone's one
+/// nappe, worked in the frame of [`exact_plane_cone`]. `None` for a circle
+/// or an ellipse, in the band between [`PARABOLIC`] and [`HYPERBOLIC`], and
+/// for a curve whose points do not hold to the cone (a cone so narrow or so
+/// flat that the formulas lose their digits), all of which go to the
+/// sampled section.
+#[allow(clippy::many_single_char_names)]
+fn plane_cone_open_section(
+    cone: &ConicalSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Option<Vec<PlaneSection>>, MathError> {
+    let axis = cone.axis();
+    let c = normal.dot(axis);
+    let p2 = c.mul_add(-c, 1.0).max(0.0);
+    let p = p2.sqrt();
+    let rise = cone.half_angle().sin();
+    let k = rise * rise;
+    let a_coeff = p2 - k;
+    let eccentric = a_coeff / k;
+    let m = axis - normal * c;
+    let m_len = m.length();
+    if m_len < 1e-12 || eccentric < -PARABOLIC || (eccentric > PARABOLIC && eccentric <= HYPERBOLIC)
+    {
+        return Ok(None);
+    }
+    let e1 = m * (1.0 / m_len);
+    let e2 = normal.cross(e1);
+    let apex = cone.apex();
+    let e = d - dot_np(normal, apex);
+    let origin = apex + normal * e;
+    // A point `s` along `e1` from `origin` lies `e·c + s·p` up the axis from
+    // the apex, which the real nappe keeps non-negative.
+    let real = |s: f64| e.mul_add(c, s * p) >= 0.0;
+    // On the one nappe a point's height up the axis is `rise` times its
+    // distance from the apex.
+    let holds = |q: Point3| {
+        let w = q - apex;
+        let reach = w.length();
+        reach.is_finite() && (w.dot(axis) - rise * reach).abs() <= 1e-9 * (1.0 + reach)
+    };
+    if eccentric <= PARABOLIC {
+        // k t² = 2ecp s + e²(c² − k): the vertex at t = 0, opening along e1
+        // with the sign of ecp, `1 / 4f = k / 2|ecp|`.
+        let ecp = e * c * p;
+        let vertex_s = -e * (c * c - k) / (2.0 * c * p);
+        let focal = ecp.abs() / (2.0 * k);
+        if !(vertex_s.is_finite() && focal > 0.0 && focal.is_finite()) {
+            return Ok(None);
+        }
+        if !real(vertex_s) {
+            return Ok(Some(Vec::new()));
+        }
+        let parabola = Parabola3D::with_axes(origin + e1 * vertex_s, e1 * ecp.signum(), e2, focal)?;
+        if ![0.0, focal, -focal]
+            .iter()
+            .all(|&t| holds(parabola.evaluate(t)))
+        {
+            return Ok(None);
+        }
+        return Ok(Some(vec![PlaneSection::Parabola(parabola)]));
+    }
+    // A(s − s_c)² − k t² = e²k(1 − k)/A: the branches' vertices lie a real
+    // semi-axis either side of the centre, one on each nappe.
+    let centre_s = -e * c * p / a_coeff;
+    let rhs = e * e * k * (1.0 - k) / a_coeff;
+    let (real_axis, imaginary_axis) = ((rhs / a_coeff).sqrt(), (rhs / k).sqrt());
+    if !(real_axis > 0.0 && imaginary_axis > 0.0 && centre_s.is_finite()) {
+        return Ok(None);
+    }
+    let toward = if real(centre_s + real_axis) { e1 } else { -e1 };
+    let hyperbola = Hyperbola3D::with_axes(
+        origin + e1 * centre_s,
+        real_axis,
+        imaginary_axis,
+        toward,
+        e2,
+    )?;
+    if ![0.0, 1.0, -1.0]
+        .iter()
+        .all(|&t| holds(hyperbola.evaluate(t)))
+    {
+        return Ok(None);
+    }
+    Ok(Some(vec![PlaneSection::Hyperbola(hyperbola)]))
 }
 
 /// Rounding band, relative, within which a plane counts as touching a
@@ -6294,6 +6402,91 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(apart.is_empty());
+    }
+
+    /// A plane parallel to a cone's axis cuts the branch of a hyperbola on
+    /// the cone's one nappe; planes parallel to a generator cut a parabola
+    /// on one side of the apex and miss the cone on the other.
+    #[test]
+    fn a_plane_cuts_a_cones_open_conics() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let on_cone = |p: Point3, slope: f64| (p.z() - slope * p.x().hypot(p.y())).abs();
+        let steep =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), up, 60_f64.to_radians()).unwrap();
+        let slope = 60_f64.to_radians().tan();
+        let along =
+            exact_plane_section(AnalyticSurface::Cone(&steep), Vec3::new(1.0, 0.0, 0.0), 1.0)
+                .unwrap();
+        let [PlaneSection::Hyperbola(h)] = along.as_slice() else {
+            unreachable!("{along:?}")
+        };
+        for i in -20..=20 {
+            let p = h.evaluate(f64::from(i) / 5.0);
+            assert!((p.x() - 1.0).abs() < 1e-12 && p.z() > 0.0, "{p:?}");
+            assert!(on_cone(p, slope) < 1e-12 * p.z().max(1.0), "{p:?}");
+        }
+        let even =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), up, 45_f64.to_radians()).unwrap();
+        let tilt = Vec3::new(-1.0, 0.0, 1.0) * std::f64::consts::FRAC_1_SQRT_2;
+        let above = exact_plane_section(AnalyticSurface::Cone(&even), tilt, 1.0).unwrap();
+        let [PlaneSection::Parabola(parabola)] = above.as_slice() else {
+            unreachable!("{above:?}")
+        };
+        for i in -20..=20 {
+            let p = parabola.evaluate(f64::from(i) / 2.0);
+            assert!(
+                (tilt.dot(p - Point3::new(0.0, 0.0, 0.0)) - 1.0).abs() < 1e-12,
+                "{p:?}"
+            );
+            assert!(
+                p.z() > 0.0 && on_cone(p, 1.0) < 1e-12 * p.z().max(1.0),
+                "{p:?}"
+            );
+        }
+        let below = exact_plane_section(AnalyticSurface::Cone(&even), tilt, -1.0).unwrap();
+        assert!(below.is_empty(), "{below:?}");
+    }
+
+    /// A cone so flat it rises 1e-7 from its radial plane, cut by a plane
+    /// tilted 7e-7 off it, and a cone so narrow it opens 5e-7 off its axis,
+    /// cut by a plane parallel to the axis, give sections that lie on the
+    /// cone: a hyperbola for the flat one, read from its eccentricity, and
+    /// sampled points where the formulas lose their digits.
+    #[test]
+    fn extreme_cones_give_sections_on_the_cone() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let apex = Point3::new(0.0, 0.0, 0.0);
+        let holds = |cone: &ConicalSurface, q: Point3| {
+            let w = q - apex;
+            (w.dot(up) - cone.half_angle().sin() * w.length()).abs() <= 1e-6 * (1.0 + w.length())
+        };
+        let flat = ConicalSurface::new(apex, up, 1e-7).unwrap();
+        let tilt = Vec3::new(5e-13_f64.sqrt(), 0.0, (1.0 - 5e-13_f64).sqrt());
+        let needle = ConicalSurface::new(apex, up, FRAC_PI_2 - 5e-7).unwrap();
+        for (cone, normal, d) in [(&flat, tilt, 1.0), (&needle, Vec3::new(1.0, 0.0, 0.0), 1.0)] {
+            let sections = exact_plane_section(AnalyticSurface::Cone(cone), normal, d).unwrap();
+            assert!(!sections.is_empty());
+            for section in &sections {
+                let points: Vec<Point3> = match section {
+                    PlaneSection::Hyperbola(h) => {
+                        (-4..=4).map(|i| h.evaluate(f64::from(i) / 4.0)).collect()
+                    }
+                    PlaneSection::Parabola(q) => {
+                        (-4..=4).map(|i| q.evaluate(f64::from(i))).collect()
+                    }
+                    PlaneSection::Points(points) => points.clone(),
+                    other => unreachable!("{other:?}"),
+                };
+                for q in points {
+                    assert!(holds(cone, q), "{q:?} off the cone");
+                }
+            }
+        }
+        let flat_section = exact_plane_section(AnalyticSurface::Cone(&flat), tilt, 1.0).unwrap();
+        assert!(matches!(
+            flat_section.as_slice(),
+            [PlaneSection::Hyperbola(_)]
+        ));
     }
 
     /// The rulings two parallel cylinders meet along, from the bounded call

@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.5.0](https://github.com/andymai/brepkit/compare/v4.4.3...v4.5.0) (2026-10-29)
+
+
+### Features
+
+* **math:** return a cone's parabola and hyperbola sections exactly ([#2135](https://github.com/andymai/brepkit/issues/2135)) ([40c5081](https://github.com/andymai/brepkit/commit/40c50811fc58b268399a00696484ae8bcb4cf432))
+
+
+### Bug Fixes
+
+* **algo:** intersect a sphere face with a NURBS face on the exact sphere ([#2136](https://github.com/andymai/brepkit/issues/2136)) ([52d3c4e](https://github.com/andymai/brepkit/commit/52d3c4e9135782f9cd2194c60fa818e65034a661))
+
 ## [4.4.3](https://github.com/andymai/brepkit/compare/v4.4.2...v4.4.3) (2026-10-29)
 
 
