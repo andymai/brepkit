@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.7](https://github.com/andymai/brepkit/compare/v4.5.6...v4.5.7) (2026-10-29)
+
+
+### Bug Fixes
+
+* **blend:** round a set-back trihedral corner on the ball's own sphere ([#2153](https://github.com/andymai/brepkit/issues/2153)) ([14dd3fd](https://github.com/andymai/brepkit/commit/14dd3fdf7c5cbf596a3a937bf5d3425303c8eb25))
+
 ## [4.5.6](https://github.com/andymai/brepkit/compare/v4.5.5...v4.5.6) (2026-10-29)
 
 
