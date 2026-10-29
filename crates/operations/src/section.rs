@@ -107,14 +107,29 @@ pub fn section(
                 let intersection_curves =
                     brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
                 // A curve along which the face lies on the plane bounds no
-                // region of the section.
+                // region of the section, and a curve along one of the face's
+                // own edges is that edge, which its neighbour's section gives.
                 let tangent = |p: &brepkit_math::nurbs::intersection::IntersectionPoint| {
                     nurbs
                         .normal(p.param1.0, p.param1.1)
                         .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
                 };
+                let (u_lo, u_hi) = nurbs.domain_u();
+                let (v_lo, v_hi) = nurbs.domain_v();
+                let on_edge =
+                    |points: &[brepkit_math::nurbs::intersection::IntersectionPoint]| {
+                        [(0, u_lo), (0, u_hi), (1, v_lo), (1, v_hi)]
+                            .iter()
+                            .any(|&(k, edge)| {
+                                let slack = 1e-9 * if k == 0 { u_hi - u_lo } else { v_hi - v_lo };
+                                points.iter().all(|p| {
+                                    let at = if k == 0 { p.param1.0 } else { p.param1.1 };
+                                    (at - edge).abs() <= slack
+                                })
+                            })
+                    };
                 for curve in &intersection_curves {
-                    if !curve.points.iter().all(tangent) {
+                    if !curve.points.iter().all(tangent) && !on_edge(&curve.points) {
                         chain_curve_points(&curve.points, &mut segments);
                     }
                 }
