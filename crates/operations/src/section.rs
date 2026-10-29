@@ -24,62 +24,75 @@ use crate::dot_normal_point;
 
 /// How far, in spans of the domain, `mid` lies from the nearest of the
 /// section's `curves` other than the one at `index`, measured round a closed
-/// direction's seam the shorter way. A curve that meets `mid` only round
-/// the seam, lying far off without going round, is the same one met again
-/// across it, as a contact along the seam comes back at both its sides.
+/// direction's seam the shorter way. A contact along the seam itself comes
+/// back as two curves, one at each of its sides: the curve at the other
+/// side is the same one, not a neighbour.
 fn gap_to_others(
     curves: &[IntersectionCurve],
     index: usize,
     mid: (f64, f64),
-    (wide, tall): (f64, f64),
+    ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
     (u_closed, v_closed): (bool, bool),
 ) -> f64 {
-    // How near `c` comes to `mid`, going round the directions closed here.
-    let reach = |c: &[IntersectionPoint], (u_round, v_round): (bool, bool)| {
-        let short = |x: f64, round: bool| if round { x - x.round() } else { x };
-        let from = |q: &IntersectionPoint| {
-            (
-                short((q.param1.0 - mid.0) / wide, u_round),
-                short((q.param1.1 - mid.1) / tall, v_round),
-            )
-        };
-        let single = (c.len() == 1).then(|| {
-            let (x, y) = from(&c[0]);
-            x.hypot(y)
-        });
-        let spans = c.windows(2).map(|pair| {
-            // The segment's far end on the near end's side of a seam.
-            let (ax, ay) = from(&pair[0]);
-            let (bx, by) = (
-                ax + short((pair[1].param1.0 - pair[0].param1.0) / wide, u_round),
-                ay + short((pair[1].param1.1 - pair[0].param1.1) / tall, v_round),
-            );
-            let (dx, dy) = (bx - ax, by - ay);
-            let length = dx.mul_add(dx, dy * dy);
-            let t = if length > 0.0 {
-                (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+    let (wide, tall) = (u_hi - u_lo, v_hi - v_lo);
+    let short = |x: f64, closed: bool| if closed { x - x.round() } else { x };
+    let from = |q: &IntersectionPoint| {
+        (
+            short((q.param1.0 - mid.0) / wide, u_closed),
+            short((q.param1.1 - mid.1) / tall, v_closed),
+        )
+    };
+    // Which side of a closed direction's seam all of a curve lies on.
+    let side =
+        |c: &[IntersectionPoint], (lo, hi): (f64, f64), at: fn(&IntersectionPoint) -> f64| {
+            let on = |edge: f64| c.iter().all(|q| (at(q) - edge).abs() <= 1e-12 * (hi - lo));
+            if on(lo) {
+                Some(false)
+            } else if on(hi) {
+                Some(true)
             } else {
-                0.0
-            };
-            t.mul_add(dx, ax).hypot(t.mul_add(dy, ay))
-        });
-        single
-            .into_iter()
-            .chain(spans)
-            .fold(f64::INFINITY, f64::min)
+                None
+            }
+        };
+    let ours = &curves[index].points;
+    let copy = |c: &[IntersectionPoint]| {
+        let across = |closed: bool, range: (f64, f64), at: fn(&IntersectionPoint) -> f64| {
+            closed
+                && matches!((side(ours, range, at), side(c, range, at)), (Some(a), Some(b)) if a != b)
+        };
+        across(u_closed, (u_lo, u_hi), |q| q.param1.0)
+            || across(v_closed, (v_lo, v_hi), |q| q.param1.1)
     };
     curves
         .iter()
         .enumerate()
-        .filter(|&(j, _)| j != index)
+        .filter(|&(j, c)| j != index && !copy(&c.points))
         .map(|(_, c)| {
-            (
-                reach(&c.points, (u_closed, v_closed)),
-                reach(&c.points, (false, false)),
-            )
+            let single = (c.points.len() == 1).then(|| {
+                let (x, y) = from(&c.points[0]);
+                x.hypot(y)
+            });
+            let spans = c.points.windows(2).map(|pair| {
+                // The segment's far end on the near end's side of a seam.
+                let (ax, ay) = from(&pair[0]);
+                let (bx, by) = (
+                    ax + short((pair[1].param1.0 - pair[0].param1.0) / wide, u_closed),
+                    ay + short((pair[1].param1.1 - pair[0].param1.1) / tall, v_closed),
+                );
+                let (dx, dy) = (bx - ax, by - ay);
+                let length = dx.mul_add(dx, dy * dy);
+                let t = if length > 0.0 {
+                    (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                t.mul_add(dx, ax).hypot(t.mul_add(dy, ay))
+            });
+            single
+                .into_iter()
+                .chain(spans)
+                .fold(f64::INFINITY, f64::min)
         })
-        .filter(|&(round, open)| round > 1e-9 || open < 0.5)
-        .map(|(round, _)| round)
         .fold(f64::INFINITY, f64::min)
 }
 
@@ -167,7 +180,13 @@ fn touches_along(
     };
     // No probe reaches halfway to another curve of the section, so that
     // none passes beyond it.
-    let gap = gap_to_others(curves, index, mid, (wide, tall), (u_closed, v_closed));
+    let gap = gap_to_others(
+        curves,
+        index,
+        mid,
+        ((u_lo, u_hi), (v_lo, v_hi)),
+        (u_closed, v_closed),
+    );
     let nearest = |sign: f64| {
         [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
             .into_iter()
@@ -1247,17 +1266,51 @@ mod tests {
             }
         };
         let curves = [line(0.9996), line(0.0004)];
-        let round = gap_to_others(&curves, 0, (0.9996, 0.5), (1.0, 1.0), (true, false));
-        let open = gap_to_others(&curves, 0, (0.9996, 0.5), (1.0, 1.0), (false, false));
+        let round = gap_to_others(
+            &curves,
+            0,
+            (0.9996, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (true, false),
+        );
+        let open = gap_to_others(
+            &curves,
+            0,
+            (0.9996, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (false, false),
+        );
         assert!((round - 0.0008).abs() < 1e-12, "{round}");
         assert!((open - 0.9992).abs() < 1e-12, "{open}");
         // A line along the seam comes back at `u = 1` as well as `u = 0`,
-        // and that copy is no neighbour; a line 8e-10 off is.
+        // and that copy is no neighbour; lines 8e-10 apart are, astride the
+        // seam or on an open surface.
         let copy = [line(0.0), line(1.0)];
-        let gap = gap_to_others(&copy, 0, (0.0, 0.5), (1.0, 1.0), (true, false));
+        let gap = gap_to_others(
+            &copy,
+            0,
+            (0.0, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (true, false),
+        );
         assert!(gap.is_infinite(), "{gap}");
+        let astride = [line(4e-10), line(1.0 - 4e-10)];
+        let gap = gap_to_others(
+            &astride,
+            0,
+            (4e-10, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (true, false),
+        );
+        assert!((gap - 8e-10).abs() < 1e-15, "{gap}");
         let close = [line(0.5), line(0.5 + 8e-10)];
-        let gap = gap_to_others(&close, 0, (0.5, 0.5), (1.0, 1.0), (false, false));
+        let gap = gap_to_others(
+            &close,
+            0,
+            (0.5, 0.5),
+            ((0.0, 1.0), (0.0, 1.0)),
+            (false, false),
+        );
         assert!((gap - 8e-10).abs() < 1e-15, "{gap}");
     }
 
