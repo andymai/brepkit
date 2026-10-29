@@ -5870,6 +5870,7 @@ fn compute_raw_curves(
             // dense chain around such a loop made its fit a dense solve over
             // thousands of points.
             match analytic_intersection::exact_torus_torus(t1, t2)? {
+                Some(exacts) if exacts.len() == 1 => Ok(Vec::new()),
                 Some(exacts) => Ok(exact_raw_curves(exacts)),
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
@@ -5923,8 +5924,12 @@ fn compute_raw_curves(
         (FaceSurface::Sphere(sphere), FaceSurface::Torus(torus))
         | (FaceSurface::Torus(torus), FaceSurface::Sphere(sphere)) => {
             // A sphere centred on a torus's axis meets it in circles about
-            // that axis; marching one took minutes to fit.
+            // that axis; marching one took minutes to fit. Their sections
+            // through the axis cross twice or touch once, so a lone circle
+            // is where the surfaces touch: a graze, which splits neither
+            // face (two coaxial tori alike).
             match analytic_intersection::exact_sphere_torus(sphere, torus)? {
+                Some(exacts) if exacts.len() == 1 => Ok(Vec::new()),
                 Some(exacts) => Ok(exact_raw_curves(exacts)),
                 None => {
                     if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
@@ -10137,5 +10142,31 @@ mod tests {
         };
         assert_eq!(cut(1e-8), 1);
         assert_eq!(cut(1e-11), 0);
+    }
+
+    /// A ball sitting in a ring's hole touches its inner equator: a graze,
+    /// with no curve to split either face by. A wider ball cuts the tube in
+    /// two circles.
+    #[test]
+    fn a_ball_touching_a_rings_hole_grazes_it() {
+        let ring = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0)
+                .unwrap(),
+        );
+        let (a, b) = boxes(
+            ([-4.0, -4.0, -1.0], [4.0, 4.0, 1.0]),
+            ([-4.0, -4.0, -4.0], [4.0, 4.0, 4.0]),
+        );
+        let sections = |radius: f64| {
+            let ball = FaceSurface::Sphere(
+                brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
+                    .unwrap(),
+            );
+            compute_raw_curves(&ring, &ball, &a, &b, None, None)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(sections(2.0), 0);
+        assert_eq!(sections(3.0), 2);
     }
 }

@@ -2125,13 +2125,32 @@ fn try_algebraic_intersection(
             Ok(ruling_cone_sphere(cone, sphere, false))
         }
         (AnalyticSurface::Torus(t), AnalyticSurface::Cylinder(c)) => {
+            if let Some(exacts) = exact_cylinder_torus(c, t)? {
+                return exact_circle_curves(exacts, |p| (t.project_point(p), c.project_point(p)))
+                    .map(Some);
+            }
             Ok(parallel_axis_torus_cylinder(t, c, true)
                 .or_else(|| ruling_torus_cylinder(t, c, true)))
         }
         (AnalyticSurface::Cylinder(c), AnalyticSurface::Torus(t)) => {
+            if let Some(exacts) = exact_cylinder_torus(c, t)? {
+                return exact_circle_curves(exacts, |p| (c.project_point(p), t.project_point(p)))
+                    .map(Some);
+            }
             Ok(parallel_axis_torus_cylinder(t, c, false)
                 .or_else(|| ruling_torus_cylinder(t, c, false)))
         }
+        (AnalyticSurface::Sphere(s), AnalyticSurface::Torus(t)) => exact_sphere_torus(s, t)?
+            .map(|exacts| exact_circle_curves(exacts, |p| (s.project_point(p), t.project_point(p))))
+            .transpose(),
+        (AnalyticSurface::Torus(t), AnalyticSurface::Sphere(s)) => exact_sphere_torus(s, t)?
+            .map(|exacts| exact_circle_curves(exacts, |p| (t.project_point(p), s.project_point(p))))
+            .transpose(),
+        (AnalyticSurface::Torus(t1), AnalyticSurface::Torus(t2)) => exact_torus_torus(t1, t2)?
+            .map(|exacts| {
+                exact_circle_curves(exacts, |p| (t1.project_point(p), t2.project_point(p)))
+            })
+            .transpose(),
         _ => Ok(None),
     }
 }
@@ -2180,9 +2199,10 @@ fn parallel_axis_torus_cylinder(
 
 /// Where two circles in a half-plane through an axis cross, as `(rho, z)`
 /// pairs (distance from the axis, height along it): each sweeps a circle
-/// about the axis. `None` (defer to the marcher) when the circles coincide
-/// or touch, or a crossing lands on or past the axis; `Some` of none when
-/// they miss.
+/// about the axis. Circles touching, side by side or one inside the other,
+/// meet at the one point on the line through their centres. `None` (defer
+/// to the marcher) when the circles coincide or a crossing lands on or past
+/// the axis; `Some` of none when they miss.
 fn meridian_crossings(
     first: (f64, f64, f64),
     second: (f64, f64, f64),
@@ -2192,15 +2212,23 @@ fn meridian_crossings(
     let (dx, dz) = (x2 - x1, z2 - z1);
     let dist = dx.hypot(dz);
     let slack = 1e-9 * scale;
-    if dist < slack || (dist - (r1 + r2)).abs() < slack || (dist - (r1 - r2).abs()).abs() < slack {
+    if dist < slack {
         return None;
+    }
+    let (ux, uz) = (dx / dist, dz / dist);
+    let beside = (dist - (r1 + r2)).abs() < slack;
+    if beside || (dist - (r1 - r2).abs()).abs() < slack {
+        // The inner circle touches the outer on its side away from the
+        // outer's centre.
+        let reach = if beside || r1 > r2 { r1 } else { -r1 };
+        let rho = reach.mul_add(ux, x1);
+        return (rho > slack).then(|| vec![(rho, reach.mul_add(uz, z1))]);
     }
     if dist > r1 + r2 || dist < (r1 - r2).abs() {
         return Some(Vec::new());
     }
     let along = r2.mul_add(-r2, r1.mul_add(r1, dist * dist)) / (2.0 * dist);
     let across = r1.mul_add(r1, -(along * along)).max(0.0).sqrt();
-    let (ux, uz) = (dx / dist, dz / dist);
     let mut crossings = Vec::with_capacity(2);
     for side in [1.0, -1.0] {
         let rho = x1 + along * ux - side * across * uz;
@@ -2210,6 +2238,37 @@ fn meridian_crossings(
         crossings.push((rho, z1 + along * uz + side * across * ux));
     }
     Some(crossings)
+}
+
+/// Exact circles as intersection curves, each sampled at 33 points that
+/// carry both surfaces' parameters.
+fn exact_circle_curves(
+    exacts: Vec<ExactIntersectionCurve>,
+    params: impl Fn(Point3) -> ((f64, f64), (f64, f64)),
+) -> Result<Vec<IntersectionCurve>, MathError> {
+    exacts
+        .into_iter()
+        .filter_map(|exact| match exact {
+            ExactIntersectionCurve::Circle(circle) => Some(circle),
+            ExactIntersectionCurve::Ellipse(_) | ExactIntersectionCurve::Points(_) => None,
+        })
+        .map(|circle| {
+            let points = (0..=32)
+                .map(|i| {
+                    let point = circle.evaluate(TAU * f64::from(i) / 32.0);
+                    let (param1, param2) = params(point);
+                    IntersectionPoint {
+                        point,
+                        param1,
+                        param2,
+                    }
+                })
+                .collect();
+            let r = circle.radius();
+            let curve = conic_loop(circle.center(), circle.u_axis(), circle.v_axis(), r, r)?;
+            Ok(IntersectionCurve { curve, points })
+        })
+        .collect()
 }
 
 /// Circles about an axis through `base`, at the given `(rho, z)` crossings.
@@ -2230,8 +2289,9 @@ fn circles_about_axis(
 /// in a half-plane through the axis cross in up to two points, and each sweeps
 /// a circle about the axis.
 ///
-/// `None` (defer to the marcher) unless the axes lie on one line, or when the
-/// cross-sections coincide or touch.
+/// Cross-sections that touch meet at one point, sweeping one circle. `None`
+/// (defer to the marcher) unless the axes lie on one line, or when the
+/// cross-sections coincide.
 ///
 /// # Errors
 ///
@@ -2316,10 +2376,10 @@ pub fn exact_cylinder_torus(
 ///
 /// The sphere's great circle and the tube's cross-section in a half-plane
 /// through the axis cross in up to two points, and each sweeps a circle
-/// about the axis.
+/// about the axis; where they touch (a ball sitting in the ring's hole or
+/// on its rim) they meet along one circle.
 ///
-/// `None` (defer to the marcher) unless the sphere's centre lies on the axis,
-/// or when the two circles touch.
+/// `None` (defer to the marcher) unless the sphere's centre lies on the axis.
 ///
 /// # Errors
 ///
@@ -5426,12 +5486,17 @@ mod tests {
                 .is_empty(),
             "a small ball in the hole misses"
         );
-        assert!(
-            exact_sphere_torus(&ball(0.0, 2.5), &torus)
-                .unwrap()
-                .is_none(),
-            "a ball touching the inner equator defers"
+        let touching = exact_sphere_torus(&ball(0.0, 2.5), &torus)
+            .unwrap()
+            .unwrap();
+        let circles = circles_of(&touching);
+        assert_eq!(
+            circles.len(),
+            1,
+            "a ball in the hole touches the inner equator"
         );
+        assert!((circles[0].radius() - 2.5).abs() < 1e-12);
+        assert!(circles[0].center().z().abs() < 1e-12);
         assert!(
             exact_sphere_torus(&ball(1.0, 3.0), &torus)
                 .unwrap()
@@ -6062,5 +6127,50 @@ mod tests {
             );
             assert!(p.dot(frame.z).abs() < 1e-14);
         }
+    }
+
+    /// A ball sitting in a ring's hole, and a ring resting on a wider one,
+    /// meet them along the one circle where they touch, and the bounded
+    /// call returns it exactly.
+    #[test]
+    fn touching_coaxial_rings_meet_along_one_circle() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let ring =
+            ToroidalSurface::with_axis_and_ref_dir(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0, z, x)
+                .unwrap();
+        let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0).unwrap();
+        let curves = intersect_analytic_analytic_bounded(
+            AnalyticSurface::Sphere(&ball),
+            AnalyticSurface::Torus(&ring),
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(curves.len(), 1);
+        let far = farthest(&curves, |p| {
+            let q = p - Point3::new(0.0, 0.0, 0.0);
+            let rho = q.x().hypot(q.y());
+            let on_ring = ((rho - 3.0).hypot(q.z()) - 1.0).abs();
+            on_ring.max((q.length() - 2.0).abs())
+        });
+        assert!(far < 1e-14, "circle strays {far:.2e}");
+
+        // Tubes of radius 1 and 0.5 on rings of radius 3 and 3.9, the second
+        // raised 1.2: their centres lie 1.5 apart, so they touch a third of
+        // the way along, at height 0.8 on a circle of radius 3.6.
+        let wider =
+            ToroidalSurface::with_axis_and_ref_dir(Point3::new(0.0, 0.0, 1.2), 3.9, 0.5, z, x)
+                .unwrap();
+        let touching = exact_torus_torus(&ring, &wider).unwrap().unwrap();
+        let circles = circles_of(&touching);
+        assert_eq!(circles.len(), 1);
+        assert!(
+            (circles[0].radius() - 3.6).abs() < 1e-12,
+            "{}",
+            circles[0].radius()
+        );
+        assert!((circles[0].center().z() - 0.8).abs() < 1e-12);
     }
 }
