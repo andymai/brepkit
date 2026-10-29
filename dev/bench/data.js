@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793262265772,
+  "lastUpdate": 1793262629165,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59669,6 +59669,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28972629,
             "range": "± 344842",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4e5f2631233625ae013d0d1583a0f2b3487b5529",
+          "message": "fix(math): find plane sections of NURBS surfaces smaller than a grid cell (#2138)\n\nA plane cutting a NURBS surface in a loop that holds no node of the\nsampling grid now gets that loop back, instead of nothing.\n\nToday `intersect_plane_nurbs` samples the plane's signed distance on a\ngrid (32 by 32 when `phase_ff` calls it) and follows where the distance\nchanges sign along grid edges. A loop that holds no grid node never\nchanges the distance's sign between two nodes, so it is never seen: a\nplane 1e-8 above the vertex of the paraboloid z = x² + y² cuts a loop of\nradius 1e-4, and the call returns nothing.\n\n## Change\n\n- `tiny_loops`: a grid node holding the least distance of its block, all\nof one sign, seeds Newton for the distance's extremum. Blocks at the\npatch's edges are clipped to it, and Newton may move anywhere on the\npatch. Where the distance at the extremum has the other sign, 32 rays\nout from it bracket the section and bisection settles each point to\nrounding. The rays follow the ellipse that the distance's second\nderivatives give once Newton has settled, so points spread evenly round\na long loop. A loop that leaves the patch, or holds a grid node (which\nthe grid already finds), is dropped.\n- The tiny loops go to `fit_within` directly. The grid chains' merge of\npoints within 1e-6 would fold a loop smaller than that into a single\npoint. Their stray is how far settling moves a point onto the section:\nthe plane all but touches the surface there, so a point can lie within\n1e-12 of both and still sit well off the loop.\n- `refine_plane_surface_point` stops once the step left to take is under\n1e-12, not just once the plane's distance is: on `z = x⁴ + y⁴` under the\nplane `z = 1e-14`, a point twice as far out as the section is within\n1e-12 of the plane. Its test for a vanishing gradient is now relative to\nthe surface's derivatives.\n\n## Tests\n\n- `a_plane_section_loop_inside_one_grid_cell_is_found`: planes at\nheights 1e-8 and 1e-14 cut loops of radius 1e-4 and 1e-7 from the\nparaboloid, each returned closed and within a thousandth of its radius\nof the circle, plus 1e-16 over the radius for the rounding of the\nparaboloid's height. On `main` the call returns nothing for either.\n- `a_tiny_loop_beside_the_patch_edge_is_found`: a loop whose least grid\ndistance lies on the patch's edge.\n- `a_long_tiny_loop_across_the_grid_is_found`: a loop about 100 times\nlonger than wide, along a valley at a slant to the grid. The curve stays\nwithin 1e-7 of the loop.\n- `a_tiny_loop_on_a_flat_bottom_is_its_true_size`: the `z = x⁴ + y⁴`\nloop comes back within 1% of its size. On the previous head of this\nbranch it strayed out to 2.68 times its size.\n- `refining_onto_a_nearly_tangent_plane_reaches_the_section`: refining\nfrom the point twice as far out lands on the section.\n- The edge and long-loop tests find no single loop on the previous head.\nThe long-loop and refining tests fail with the old stopping rule alone.",
+          "timestamp": "2026-10-29T01:27:27-07:00",
+          "tree_id": "949ff6b8b332fcc5ad6daef4eb9781abfecb22e7",
+          "url": "https://github.com/andymai/brepkit/commit/4e5f2631233625ae013d0d1583a0f2b3487b5529"
+        },
+        "date": 1793262622040,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 644774,
+            "range": "± 8346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 706335,
+            "range": "± 4557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8345,
+            "range": "± 240",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 408839,
+            "range": "± 5511",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18915607,
+            "range": "± 302380",
             "unit": "ns/iter"
           }
         ]
