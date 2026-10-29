@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793275106044,
+  "lastUpdate": 1793276001830,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60047,6 +60047,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28902015,
             "range": "± 166904",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "45a56c62fa86ed4f37df8b910b2cb23f33e5f5ae",
+          "message": "fix(math): meet cones sharing an apex along their shared rulings (#2142)\n\nTwo cones sharing an apex now meet in the straight rulings they share,\ninstead of whatever the general marcher traces near them.\n\nToday `try_algebraic_intersection` hands two cones to\n`algebraic_cone_cone`, which solves coaxial and offset parallel axes in\nclosed form and leaves every other pair to the marcher. Cones sharing an\napex meet only along rulings through it, which the marcher does not\nfollow: for two cones whose axes are 40° apart, each opening 20° from\nits axis, so that they touch along one ruling,\n`intersect_analytic_analytic_bounded` returns 7 curves, the farthest\n0.43 from that ruling.\n\n## Change\n\n- `shared_apex_cones`: a shared ruling's direction `d` makes each cone's\nangle with its axis, `d·aᵢ = ±sin(half_angleᵢ)` (the half-angle runs\nfrom the radial plane). That is a line, which crosses the unit sphere in\ntwo directions, touches it in one where the cones are tangent, or misses\nit.\n- Along `apex + t·d` the first cone's `v` is `t` and the second's is `t`\nor `−t`, by nappe, so each ruling runs where both faces' `v` ranges hold\nit. It comes back as a straight segment, cut in two where it passes the\napex.\n- The direction's part across the first axis comes from an orthonormal\nframe, so it does not cancel as the axes close up. Axes so near parallel\nthat its rounding would pass a tenth of the tolerance over the faces are\nleft to the marcher.\n- Two rulings closer than the linear tolerance across the faces' reach\nare one. A pair whose discriminant is within rounding of zero is taken\nas touching while the rulings that rounding could hide stay within ten\ntolerances over the faces, and is left to the marcher beyond that.\n- A point on a nappe where `v` is negative gets the azimuth that\n`evaluate` turns round there, so its parameters give the point back.\n- The case applies only when both faces' `v` ranges are given, the axes\nare not parallel (the coaxial path's case), and the apexes coincide to\nrounding.\n\n## Tests\n\n- `cones_sharing_an_apex_touch_along_one_ruling`: the pair above, with\n`v` ranges 0.2 to 3 and 0.5 to 4, gives one segment along the ruling\nfrom `v` 0.5 to 3, its ends within 1e-12.\n- `cones_sharing_an_apex_cross_along_two_rulings`: axes 20° apart, each\nopening 30°. With both ranges 0.5 to 2 there are two segments; with both\nranges −2 to 2 there are four, each ending at the apex. Every point lies\nwithin 1e-12 of both cones and inside both ranges, and its parameters on\neach cone give it back to 1e-9.\n- `cones_sharing_an_apex_defer_what_rounding_cannot_settle`: axes 1e-8\napart in angle, and the touching pair with faces reaching 1e6, are left\nto the marcher.\n- `cones_sharing_an_apex_just_short_of_touching_cross_in_two_rulings`:\nperpendicular cones opening 1e-15 short of touching, with faces reaching\n1e6, give two segments whose far ends are more than 0.05 apart.\n- The first two tests fail without the new case. `cargo test --workspace\n--exclude brepkit-render` passes 3697 tests, and the pose sweep and\ntruth audit never reach the new case, which I counted with a temporary\nprint.",
+          "timestamp": "2026-10-29T12:10:16Z",
+          "tree_id": "7abd5ec208d02c8b72c91e58b6f69491487a9627",
+          "url": "https://github.com/andymai/brepkit/commit/45a56c62fa86ed4f37df8b910b2cb23f33e5f5ae"
+        },
+        "date": 1793275994978,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1091767,
+            "range": "± 2221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1170002,
+            "range": "± 2292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12911,
+            "range": "± 63",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 668176,
+            "range": "± 1675",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29142403,
+            "range": "± 271117",
             "unit": "ns/iter"
           }
         ]
