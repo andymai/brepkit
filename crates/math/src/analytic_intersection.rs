@@ -2795,23 +2795,49 @@ fn shared_apex_cones(
         return Ok(None);
     }
     let normal = across * (1.0 / sin);
+    let tol = Tolerance::new().linear;
+    // A ruling's part across the first axis is `(t2 − s1·cos) / sin`, whose
+    // rounding grows as the axes close up; past a tenth of the tolerance
+    // over the faces, the pair is left to the marcher.
+    if f64::EPSILON * reach > 0.1 * tol * sin {
+        return Ok(None);
+    }
+    // The second axis's part across the first, a unit vector.
+    let toward = normal.cross(a1);
     let cos = a1.dot(a2);
     let (s1, s2) = (c1.half_angle().sin(), c2.half_angle().sin());
-    let tol = Tolerance::new().linear;
+    // `evaluate` turns its radial direction round for negative `v`.
+    let params = |cone: &ConicalSurface, p: Point3| {
+        let (u, v) = cone.project_point(p);
+        if v < 0.0 {
+            ((u + std::f64::consts::PI).rem_euclid(TAU), v)
+        } else {
+            (u, v)
+        }
+    };
     let mut curves = Vec::new();
     for nappe in [1.0, -1.0] {
         let t2 = nappe * s2;
-        let foot = a1 * ((s1 - cos * t2) / (sin * sin)) + a2 * ((t2 - cos * s1) / (sin * sin));
-        let lift_sq = 1.0 - foot.dot(foot);
-        // Rounding alone parts a touching pair by about `√ε` radians.
-        let lifts =
-            if lift_sq.abs() <= 16.0 * f64::EPSILON || 2.0 * lift_sq.abs().sqrt() * reach <= tol {
-                vec![0.0]
-            } else if lift_sq < 0.0 {
-                Vec::new()
-            } else {
-                vec![lift_sq.sqrt(), -lift_sq.sqrt()]
-            };
+        let side = cos.mul_add(-s1, t2) / sin;
+        let foot = a1 * s1 + toward * side;
+        let lift_sq = s1.mul_add(-s1, side.mul_add(-side, 1.0));
+        let rounding = 4.0 * f64::EPSILON;
+        let lifts = if lift_sq.abs() <= rounding {
+            // Within rounding of touching: the rulings that rounding could
+            // hide part by up to `√(2·rounding)` radians, taken as one while
+            // that stays within ten tolerances over the faces, and beyond
+            // it not settled here.
+            if (2.0 * rounding).sqrt() * reach > 10.0 * tol {
+                return Ok(None);
+            }
+            vec![0.0]
+        } else if lift_sq < 0.0 {
+            Vec::new()
+        } else if 2.0 * lift_sq.sqrt() * reach <= tol {
+            vec![0.0]
+        } else {
+            vec![lift_sq.sqrt(), -lift_sq.sqrt()]
+        };
         let along2 = if nappe > 0.0 { v2 } else { (-v2.1, -v2.0) };
         let (lo, hi) = (v1.0.max(along2.0), v1.1.min(along2.1));
         if hi - lo <= tol {
@@ -2826,7 +2852,7 @@ fn shared_apex_cones(
             };
             for (from, to) in pieces {
                 curves.push(ruling_segment(apex + d * from, apex + d * to, |p| {
-                    (c1.project_point(p), c2.project_point(p))
+                    (params(c1, p), params(c2, p))
                 })?);
             }
         }
@@ -6766,7 +6792,51 @@ mod tests {
                     let ends = [ic.curve.evaluate(t0), ic.curve.evaluate(t1)];
                     assert!(ends.iter().any(|&e| (e - apex).length() < 1e-12));
                 }
+                for point in &ic.points {
+                    let (on1, on2) = (point.param1, point.param2);
+                    assert!((c1.evaluate(on1.0, on1.1) - point.point).length() < 1e-9);
+                    assert!((c2.evaluate(on2.0, on2.1) - point.point).length() < 1e-9);
+                }
             }
         }
+    }
+
+    /// Axes 1e-8 apart in angle leave a ruling's part across them to
+    /// rounding, and cones touching within rounding along a ruling leave
+    /// how far apart their rulings may be 1e6 out to it: neither is solved
+    /// here.
+    #[test]
+    fn cones_sharing_an_apex_defer_what_rounding_cannot_settle() {
+        let apex = Point3::new(0.0, 0.0, 0.0);
+        let half = 60.0_f64.to_radians();
+        let c1 = ConicalSurface::new(apex, Vec3::new(0.0, 0.0, 1.0), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(1e-8_f64.sin(), 0.0, 1e-8_f64.cos()), half)
+            .unwrap();
+        let near = Some((0.5, 2.0));
+        assert!(shared_apex_cones(&c1, &c2, near, near).unwrap().is_none());
+        let a = 20.0_f64.to_radians();
+        let half = std::f64::consts::FRAC_PI_2 - a;
+        let c1 = ConicalSurface::new(apex, Vec3::new(a.cos(), 0.0, a.sin()), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(a.cos(), 0.0, -a.sin()), half).unwrap();
+        let far = Some((0.5, 1e6));
+        assert!(shared_apex_cones(&c1, &c2, far, far).unwrap().is_none());
+    }
+
+    /// Perpendicular cones opening 1e-15 short of touching cross along two
+    /// rulings, which part by about 0.09 a million out: two segments.
+    #[test]
+    fn cones_sharing_an_apex_just_short_of_touching_cross_in_two_rulings() {
+        let apex = Point3::new(0.0, 0.0, 0.0);
+        let half = std::f64::consts::FRAC_PI_4 - 1e-15;
+        let c1 = ConicalSurface::new(apex, Vec3::new(0.0, 0.0, 1.0), half).unwrap();
+        let c2 = ConicalSurface::new(apex, Vec3::new(1.0, 0.0, 0.0), half).unwrap();
+        let range = Some((0.5, 1e6));
+        let curves = shared_apex_cones(&c1, &c2, range, range).unwrap().unwrap();
+        assert_eq!(curves.len(), 2);
+        let ends: Vec<Point3> = curves
+            .iter()
+            .map(|ic| ic.curve.evaluate(ic.curve.domain().1))
+            .collect();
+        assert!((ends[0] - ends[1]).length() > 0.05);
     }
 }
