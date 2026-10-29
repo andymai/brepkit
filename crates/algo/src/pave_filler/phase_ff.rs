@@ -6784,6 +6784,24 @@ fn analytic_analytic_intersection(
     Ok(results)
 }
 
+/// Whether every point lies on one edge of `nurbs`'s parameter domain, as
+/// a section does where the plane holds that edge of the face.
+fn runs_along_an_edge(
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    points: &[nurbs_isect::IntersectionPoint],
+) -> bool {
+    let (u_lo, u_hi) = nurbs.domain_u();
+    let (v_lo, v_hi) = nurbs.domain_v();
+    let (du, dv) = (1e-9 * (u_hi - u_lo), 1e-9 * (v_hi - v_lo));
+    let along = |at: fn(&nurbs_isect::IntersectionPoint) -> f64, edge: f64, slack: f64| {
+        points.iter().all(|p| (at(p) - edge).abs() <= slack)
+    };
+    along(|p| p.param1.0, u_lo, du)
+        || along(|p| p.param1.0, u_hi, du)
+        || along(|p| p.param1.1, v_lo, dv)
+        || along(|p| p.param1.1, v_hi, dv)
+}
+
 /// Plane-NURBS intersection.
 fn plane_nurbs_intersection(
     normal: Vec3,
@@ -6794,8 +6812,9 @@ fn plane_nurbs_intersection(
 
     let mut results = Vec::new();
     for ic in isect_curves {
-        // A point where the plane touches the surface splits neither face.
-        if ic.points.len() < 2 {
+        // A point where the plane touches the surface splits neither face,
+        // and a curve along one of the face's own edges is that edge.
+        if ic.points.len() < 2 || runs_along_an_edge(nurbs, &ic.points) {
             continue;
         }
         let domain = ic.curve.domain();
@@ -10235,6 +10254,28 @@ mod tests {
         )
         .unwrap();
         let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &bowl).unwrap();
+        assert!(raw.is_empty());
+    }
+
+    /// A plane holding one edge of a NURBS sheet that lies on its negative
+    /// side meets the sheet only along that edge, which already bounds the
+    /// face: no section.
+    #[test]
+    fn a_plane_holding_a_nurbs_faces_edge_adds_no_section() {
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let sheet = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![at(-1.0, 0.0), at(-1.0, 1.0)],
+                vec![at(0.0, 0.0), at(0.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let raw = plane_nurbs_intersection(Vec3::new(1.0, 0.0, 0.0), 0.0, &sheet).unwrap();
         assert!(raw.is_empty());
     }
 }
