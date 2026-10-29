@@ -183,6 +183,11 @@ pub fn intersect_plane_nurbs(
             chain.push(next);
             current = next;
         }
+        // A loop ends beside its start; closing it keeps the cell between
+        // them, and the curve, unbroken.
+        if chain.len() > 2 && links[current].contains(&start) {
+            chain.push(start);
+        }
         chain
     };
     let degree_one: Vec<usize> = (0..crossings.len())

@@ -1811,3 +1811,16 @@ fn a_plane_section_through_an_inflection_holds_its_tolerance() {
     });
     assert!(far < 1e-6, "section strays {far:.2e}");
 }
+
+/// A level plane cuts the dome in a loop inside its patch, which comes back
+/// closed: its curve ends where it starts.
+#[test]
+fn a_plane_section_loop_comes_back_closed() {
+    let dome = dome_surface();
+    let curves = intersect_plane_nurbs(&dome, Vec3::new(0.0, 0.0, 1.0), 0.0, 32).unwrap();
+    assert_eq!(curves.len(), 1);
+    let curve = &curves[0].curve;
+    let (t0, t1) = curve.domain();
+    let gap = (curve.evaluate(t1) - curve.evaluate(t0)).length();
+    assert!(gap < 1e-9, "loop left open by {gap:.2e}");
+}
