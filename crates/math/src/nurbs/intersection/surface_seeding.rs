@@ -8,7 +8,9 @@ use crate::aabb::Aabb3;
 use crate::bvh::Bvh;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{BezierPatch, surface_to_bezier_patches};
-use crate::nurbs::projection::{project_point_to_surface, project_point_to_surface_from};
+use crate::nurbs::projection::{
+    SurfaceProjection, project_point_to_surface, project_point_to_surface_from,
+};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
@@ -22,8 +24,9 @@ use super::{IntersectionCurve, IntersectionPoint, MAX_NEWTON_ITER, MAX_QUEUE_SIZ
 
 /// The plane a patch lies in, when every control point lies on it to
 /// rounding: as `(unit normal, offset)`, from the cross of its corners'
-/// diagonals.
-fn plane_of(surface: &NurbsSurface) -> Option<(Vec3, f64)> {
+/// diagonals. Rounding is weighed by the plane's own terms, so that a patch
+/// far along the plane keeps its curvature.
+pub(super) fn plane_of(surface: &NurbsSurface) -> Option<(Vec3, f64)> {
     let cps = surface.control_points();
     let (first, last) = (cps.first()?, cps.last()?);
     let corners = [
@@ -34,25 +37,30 @@ fn plane_of(surface: &NurbsSurface) -> Option<(Vec3, f64)> {
     ];
     let across = (corners[3] - corners[0]).cross(corners[1] - corners[2]);
     let normal = across.normalize().ok()?;
-    let at = |p: Point3| normal.dot(Vec3::new(p.x(), p.y(), p.z()));
-    let offset = at(corners[0]);
+    let offset = normal.dot(Vec3::new(corners[0].x(), corners[0].y(), corners[0].z()));
     let scale = cps
         .iter()
         .flatten()
-        .map(|p| Vec3::new(p.x(), p.y(), p.z()).length())
+        .map(|&p| super::plane::plane_terms(normal, offset, p))
         .fold(0.0, f64::max);
     cps.iter()
         .flatten()
-        .all(|&p| (at(p) - offset).abs() <= 64.0 * f64::EPSILON * scale)
+        .all(|&p| normal.dot(p - corners[0]).abs() <= 64.0 * f64::EPSILON * scale)
         .then_some((normal, offset))
 }
+
+/// Parts each chord of a flat patch's section is cut into, where they join
+/// checked to lie on the patch.
+const CHORD_CHECKS: usize = 4;
 
 /// When `flat` lies in a plane, the plane's section of `other`, as
 /// [`intersect_plane_nurbs`](super::intersect_plane_nurbs) finds it, with
 /// each point's parameters on both patches (`flat`'s first when
-/// `flat_first`). `None` unless every point of it lies on `flat` itself:
-/// a section reaching past the patch is left to the marcher.
-fn planar_patch_sections(
+/// `flat_first`). `None` unless the section lies on `flat` itself, at its
+/// points and between them: a section reaching past the patch is left to
+/// the marcher, and so is an empty one, which the plane's grid can miss
+/// where the search below finds it.
+pub(super) fn planar_patch_sections(
     flat: &NurbsSurface,
     other: &NurbsSurface,
     samples: usize,
@@ -62,19 +70,43 @@ fn planar_patch_sections(
         return Ok(None);
     };
     let mut curves = super::intersect_plane_nurbs(other, normal, offset, samples)?;
+    if curves.is_empty() {
+        return Ok(None);
+    }
     let (u_lo, u_hi) = flat.domain_u();
     let (v_lo, v_hi) = flat.domain_v();
     let slack = 1e-9 * (u_hi - u_lo).max(v_hi - v_lo);
+    let on_flat = |foot: &SurfaceProjection| {
+        (u_lo - slack..=u_hi + slack).contains(&foot.u)
+            && (v_lo - slack..=v_hi + slack).contains(&foot.v)
+            && foot.distance <= 1e-7
+    };
     for curve in &mut curves {
+        let mut last: Option<(Point3, (f64, f64))> = None;
         for point in &mut curve.points {
             let Ok(foot) = project_point_to_surface(flat, point.point, 1e-10) else {
                 return Ok(None);
             };
-            let inside = (u_lo - slack..=u_hi + slack).contains(&foot.u)
-                && (v_lo - slack..=v_hi + slack).contains(&foot.v);
-            if !inside || foot.distance > 1e-7 {
+            if !on_flat(&foot) {
                 return Ok(None);
             }
+            // The chord between points lies in the plane, so it lies on the
+            // patch wherever the section does, up to the curve's sag: a
+            // gap in the patch between points shows on it.
+            if let Some((from, near)) = last {
+                for k in 1..CHORD_CHECKS {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = k as f64 / CHORD_CHECKS as f64;
+                    let q = from + (point.point - from) * t;
+                    let Ok(step) = project_point_to_surface_from(flat, q, near, 1e-10) else {
+                        return Ok(None);
+                    };
+                    if !on_flat(&step) {
+                        return Ok(None);
+                    }
+                }
+            }
+            last = Some((point.point, (foot.u, foot.v)));
             let on_other = point.param1;
             (point.param1, point.param2) = if flat_first {
                 ((foot.u, foot.v), on_other)

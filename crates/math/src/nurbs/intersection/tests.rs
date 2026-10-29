@@ -6,7 +6,8 @@ use crate::vec::{Point3, Vec3};
 use super::surface_marching::march_intersection;
 use super::surface_marching::{near_existing_segment, second_order_tangent};
 use super::surface_seeding::{
-    REFINE_CALLS, find_ssi_seeds_grid, find_ssi_seeds_subdivision, refine_ssi_point,
+    REFINE_CALLS, find_ssi_seeds_grid, find_ssi_seeds_subdivision, planar_patch_sections, plane_of,
+    refine_ssi_point,
 };
 use super::*;
 
@@ -2386,4 +2387,113 @@ fn a_flat_patch_whose_plane_cuts_past_it_keeps_its_section_on_it() {
             assert!((-1e-6..=1.0 + 1e-6).contains(&p.x()) && (-1e-6..=1.0 + 1e-6).contains(&p.y()));
         }
     }
+}
+
+/// A patch arching 0.004 above `z = 0` a million million along `x` from the
+/// origin is not flat, though its height is a few ulps of its distance from
+/// the origin: a sheet at `z = 0.002` covering it meets it in two lines,
+/// which the marcher finds as near as `x`, rounded to 1.2e-4 out there,
+/// allows.
+#[test]
+fn a_curved_patch_far_along_its_plane_is_not_taken_for_flat() {
+    let x0 = 1e12;
+    let row = |x: f64, z: f64| vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)];
+    let arch = NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![row(x0, 0.0), row(x0 + 0.5, 0.008), row(x0 + 1.0, 0.0)],
+        vec![vec![1.0; 2]; 3],
+    )
+    .unwrap();
+    let at = |x: f64, y: f64| Point3::new(x, y, 0.002);
+    let cover = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![at(x0 - 1.0, -1.0), at(x0 - 1.0, 2.0)],
+            vec![at(x0 + 2.0, -1.0), at(x0 + 2.0, 2.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    assert!(plane_of(&arch).is_none());
+    assert!(plane_of(&cover).is_some());
+    // The arch's height is 0.016·u·(1 − u), at 0.002 where u is ½ ∓ √⅛.
+    let across = [0.5 - 0.125_f64.sqrt(), 0.5 + 0.125_f64.sqrt()];
+    for (first, second) in [(&arch, &cover), (&cover, &arch)] {
+        let curves = intersect_nurbs_nurbs(first, second, 32, 0.0).unwrap();
+        assert_eq!(curves.len(), 2);
+        for ic in &curves {
+            for p in &ic.points {
+                assert!((p.point.z() - 0.002).abs() < 1e-5, "a point at {p:?}");
+                let x = p.point.x() - x0;
+                assert!(
+                    across.iter().any(|a| (x - a).abs() < 1e-3),
+                    "a point at {p:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A sheet dipping through `z = 0` in a notch narrower than the grid's
+/// step, whose plane section the grid misses, is still searched: the flat
+/// sheet's section is not taken as the answer when it comes back empty,
+/// and the marcher finds the notch to its own tolerance.
+#[test]
+fn a_flat_patch_whose_section_the_grid_misses_is_still_searched() {
+    let row = |x: f64, z: f64| vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)];
+    let notch = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 0.49, 0.5, 0.51, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            row(0.0, 1.0),
+            row(0.49, 1.0),
+            row(0.5, -1.0),
+            row(0.51, 1.0),
+            row(1.0, 1.0),
+        ],
+        vec![vec![1.0; 2]; 5],
+    )
+    .unwrap();
+    let sheet = wide_sheet(0.0);
+    for (first, second) in [(&notch, &sheet), (&sheet, &notch)] {
+        let curves = intersect_nurbs_nurbs(first, second, 32, 0.0).unwrap();
+        assert!(!curves.is_empty());
+        let far = farthest(&curves, |p| {
+            (p.x() - 0.495)
+                .abs()
+                .min((p.x() - 0.505).abs())
+                .max(p.z().abs())
+        });
+        assert!(far < 1e-6, "a curve strays {far:.2e}");
+    }
+}
+
+/// The plane `z = 0` of a flat patch whose lower edge bows up 0.001 into it
+/// at `x = ½` cuts the sheet `y = 0` in a line the patch holds at every
+/// tenth along it but not across its middle: the line between the points
+/// leaves the patch, so the plane's section is not the patches' meeting.
+#[test]
+fn a_flat_patch_whose_section_leaves_it_between_points_is_declined() {
+    let bowed = polynomial_patch(
+        2,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 1, 1.0), (0, 0, -0.249), (1, 0, 1.0), (2, 0, -1.0)],
+            &[],
+        ],
+    );
+    let wall = polynomial_patch(1, [&[(1, 0, 1.0)], &[], &[(0, 0, -1.0), (0, 1, 2.0)]]);
+    assert!(
+        planar_patch_sections(&bowed, &wall, 10, true)
+            .unwrap()
+            .is_none()
+    );
 }

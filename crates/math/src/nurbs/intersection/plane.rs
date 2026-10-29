@@ -708,7 +708,7 @@ fn rounding(surface: &NurbsSurface, normal: Vec3, d: f64) -> f64 {
 /// The sum of the plane's distance's terms at `p`, `Σ|nᵢ·pᵢ| + |d|`, which
 /// bounds how far evaluating it rounds: coordinates the normal does not
 /// weigh add nothing.
-fn plane_terms(normal: Vec3, d: f64, p: Point3) -> f64 {
+pub(super) fn plane_terms(normal: Vec3, d: f64, p: Point3) -> f64 {
     (normal.x() * p.x()).abs() + (normal.y() * p.y()).abs() + (normal.z() * p.z()).abs() + d.abs()
 }
 
