@@ -51,12 +51,12 @@ pub fn intersect_plane_nurbs(
             let v = v_min + j as f64 * v_step;
             let pt = surface.evaluate(u, v);
             let pt_vec = Vec3::new(pt.x(), pt.y(), pt.z());
-            reach = reach.max(pt_vec.length());
+            reach = reach.max(plane_terms(plane_normal, plane_d, pt));
             *dist = plane_normal.dot(pt_vec) - plane_d;
         }
     }
     // A node within rounding of the plane counts with its positive side.
-    let on_plane = 64.0 * f64::EPSILON * plane_normal.length().mul_add(reach, plane_d.abs());
+    let on_plane = 64.0 * f64::EPSILON * reach;
     let below = |f: f64| f < -on_plane;
 
     // Phase 2: Find zero-crossings on the UNIQUE grid edges (marching
@@ -221,6 +221,16 @@ pub fn intersect_plane_nurbs(
         }
     }
     for chain in index_chains {
+        // A node on the plane amid negative neighbours crosses every edge to
+        // them at itself, which links into a chain at that one node: the
+        // surface touching the plane there, which the tiny-loop pass finds.
+        let first = crossings[chain[0]];
+        if chain.iter().all(|&idx| {
+            let (u, v) = crossings[idx];
+            (u - first.0).abs() <= 1e-12 * u_step && (v - first.1).abs() <= 1e-12 * v_step
+        }) {
+            continue;
+        }
         let mut current: Vec<IntersectionPoint> = Vec::new();
         for idx in chain {
             let (u_guess, v_guess) = crossings[idx];
@@ -374,8 +384,8 @@ fn tiny_loops(
             b
         })
     };
-    // Evaluating the distance rounds it by a few ulps of the largest
-    // `|n|·|P| + |d|` over the control points; an extremum no further past
+    // Evaluating the distance rounds it by a few ulps of the largest sum
+    // of its terms over the control points; an extremum no further past
     // the plane than that may only touch it, as along a valley lying on the
     // plane, where rays from it would trace rounding.
     let noise = 4.0
@@ -384,21 +394,27 @@ fn tiny_loops(
             .control_points()
             .iter()
             .flatten()
-            .map(|p| {
-                normal
-                    .length()
-                    .mul_add(Vec3::new(p.x(), p.y(), p.z()).length(), d.abs())
-            })
+            .map(|&p| plane_terms(normal, d, p))
             .fold(0.0, f64::max);
     let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
     let mut touches: Vec<IntersectionPoint> = Vec::new();
     for i in 0..n {
         for j in 0..n {
-            let near = distances[i][j];
-            let block_holds = (i.saturating_sub(1)..=(i + 1).min(n - 1))
-                .flat_map(|a| (j.saturating_sub(1)..=(j + 1).min(n - 1)).map(move |b| (a, b)))
-                .all(|(a, b)| distances[a][b] * near > 0.0 && distances[a][b].abs() >= near.abs());
-            if !block_holds {
+            let block = || {
+                (i.saturating_sub(1)..=(i + 1).min(n - 1)).flat_map(|a| {
+                    (j.saturating_sub(1)..=(j + 1).min(n - 1)).map(move |b| distances[a][b])
+                })
+            };
+            let mut near = distances[i][j];
+            if near.abs() <= noise {
+                // A node on the plane seeds where its block lies on one side
+                // of the plane but for other nodes on it, as along a valley
+                // through a column of nodes; it takes that side.
+                near = block().fold(0.0, |m: f64, f| if f.abs() > m.abs() { f } else { m });
+                if near.abs() <= noise || block().any(|f| f * near < 0.0 && f.abs() > noise) {
+                    continue;
+                }
+            } else if !block().all(|f| f * near > 0.0 && f.abs() >= near.abs()) {
                 continue;
             }
             let seed = (u_min + i as f64 * u_step, v_min + j as f64 * v_step);
@@ -419,7 +435,8 @@ fn tiny_loops(
                 let point = surface.evaluate(u, v);
                 if settled
                     && big * near > 0.0
-                    && small * near > 1e-6 * big * near
+                    && small * near > 0.0
+                    && big.abs().min(small.abs()) > 1e-6 * big.abs().max(small.abs())
                     && touches
                         .iter()
                         .all(|t: &IntersectionPoint| (t.point - point).length() > FIT_TOLERANCE)
@@ -491,6 +508,13 @@ fn tiny_loops(
         }
     }
     (loops, touches)
+}
+
+/// The sum of the plane's distance's terms at `p`, `Σ|nᵢ·pᵢ| + |d|`, which
+/// bounds how far evaluating it rounds: coordinates the normal does not
+/// weigh add nothing.
+fn plane_terms(normal: Vec3, d: f64, p: Point3) -> f64 {
+    (normal.x() * p.x()).abs() + (normal.y() * p.y()).abs() + (normal.z() * p.z()).abs() + d.abs()
 }
 
 /// Where the plane's distance stops changing, as Newton from a seed
