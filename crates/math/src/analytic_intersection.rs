@@ -2106,7 +2106,9 @@ fn try_algebraic_intersection(
                     }
                     return Ok(Some(vec![])); // Coaxial, different radii
                 }
-                return parallel_cylinders(c1, c2, v_range_a, v_range_b);
+                if let Some(rulings) = parallel_cylinders(c1, c2, v_range_a, v_range_b)? {
+                    return Ok(Some(rulings));
+                }
             }
             // Non-coaxial: algebraic quadratic in v.
             algebraic_cylinder_cylinder(c1, c2)
@@ -2871,8 +2873,11 @@ const fn in_order(a: (f64, f64), b: (f64, f64), a_first: bool) -> ((f64, f64), (
 /// every plane across the axes cuts them in two circles `d` apart, which
 /// cross in two points, touch in one, or miss, alike in every plane. Each
 /// crossing sweeps a ruling, cut to the stretch of axis both faces' `v`
-/// ranges share. `None` (the marcher's case) when neither range is known,
-/// since a ruling has no ends of its own.
+/// ranges share. Two crossings closer than the linear tolerance are the one
+/// where the circles touch, side by side or one inside the other. `None`
+/// (the next solver's case) when neither range is known, since a ruling has
+/// no ends of its own, or when a ruling's end strays off the second
+/// cylinder, its axis leaning off the first's by more than the span allows.
 fn parallel_cylinders(
     c1: &CylindricalSurface,
     c2: &CylindricalSurface,
@@ -2885,7 +2890,6 @@ fn parallel_cylinders(
     let across = delta - axis * along;
     let d = across.length();
     let (r1, r2) = (c1.radius(), c2.radius());
-    let slack = 1e-9 * (r1 + r2 + d);
     // The second face's range, measured along the first one's axis.
     let flip = c2.axis().dot(axis);
     let ranges = [
@@ -2901,31 +2905,36 @@ fn parallel_cylinders(
     if !lo.is_finite() || !hi.is_finite() {
         return Ok(None);
     }
-    if d > r1 + r2 + slack || d < (r1 - r2).abs() - slack || hi - lo <= slack {
+    let rounding = 8.0 * f64::EPSILON * (r1 + r2 + d);
+    if d > r1 + r2 + rounding || d < (r1 - r2).abs() - rounding || hi <= lo {
         return Ok(Some(Vec::new()));
     }
     let toward = across * (1.0 / d);
     let side = axis.cross(toward);
-    let feet = if (d - (r1 + r2)).abs() <= slack {
-        vec![toward * r1]
-    } else if (d - (r1 - r2).abs()).abs() <= slack {
-        // The inner one touches the outer's wall on the side away from the
-        // outer's axis.
-        vec![toward * if r1 > r2 { r1 } else { -r1 }]
+    let x = r2.mul_add(-r2, d.mul_add(d, r1 * r1)) / (2.0 * d);
+    let y = r1.mul_add(r1, -(x * x)).max(0.0).sqrt();
+    let linear = Tolerance::new().linear;
+    let feet = if 2.0 * y <= linear {
+        vec![toward * x]
     } else {
-        let x = r2.mul_add(-r2, d.mul_add(d, r1 * r1)) / (2.0 * d);
-        let y = r1.mul_add(r1, -(x * x)).max(0.0).sqrt();
         vec![toward * x + side * y, toward * x - side * y]
     };
-    feet.into_iter()
-        .map(|foot| {
-            let base = c1.origin() + foot;
-            ruling_segment(base + axis * lo, base + axis * hi, |p| {
-                (c1.project_point(p), c2.project_point(p))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+    let on_second = |p: Point3| {
+        let w = p - c2.origin();
+        ((w - c2.axis() * w.dot(c2.axis())).length() - r2).abs() <= linear
+    };
+    let mut rulings = Vec::with_capacity(feet.len());
+    for foot in feet {
+        let base = c1.origin() + foot;
+        let (from, to) = (base + axis * lo, base + axis * hi);
+        if !on_second(from) || !on_second(to) {
+            return Ok(None);
+        }
+        rulings.push(ruling_segment(from, to, |p| {
+            (c1.project_point(p), c2.project_point(p))
+        })?);
+    }
+    Ok(Some(rulings))
 }
 
 /// A straight intersection curve from `from` to `to`, carrying its ends and
@@ -6154,6 +6163,16 @@ mod tests {
         (c1, r1, v1): (Point3, f64, (f64, f64)),
         (c2, r2, axis2, v2): (Point3, f64, Vec3, (f64, f64)),
     ) -> Vec<(Point3, Point3)> {
+        rulings_within((c1, r1, v1), (c2, r2, axis2, v2), 1e-12)
+    }
+
+    /// [`parallel_rulings`] with each curve held to `tolerance` of both
+    /// cylinders.
+    fn rulings_within(
+        (c1, r1, v1): (Point3, f64, (f64, f64)),
+        (c2, r2, axis2, v2): (Point3, f64, Vec3, (f64, f64)),
+        tolerance: f64,
+    ) -> Vec<(Point3, Point3)> {
         let a = CylindricalSurface::new(c1, Vec3::new(0.0, 0.0, 1.0), r1).unwrap();
         let b = CylindricalSurface::new(c2, axis2, r2).unwrap();
         let curves = intersect_analytic_analytic_bounded(
@@ -6175,8 +6194,8 @@ mod tests {
                     let w = x - c2;
                     let on_b = (w - axis2 * w.dot(axis2)).length() - r2;
                     assert!(
-                        on_a.abs() < 1e-12 && on_b.abs() < 1e-12,
-                        "{x:?} off a cylinder"
+                        on_a.abs() < tolerance && on_b.abs() < tolerance,
+                        "{x:?} off a cylinder by {on_a:.1e}, {on_b:.1e}"
                     );
                 }
                 if p.z() <= q.z() { (p, q) } else { (q, p) }
@@ -6229,5 +6248,46 @@ mod tests {
             (Point3::new(2.5, 0.0, 0.0), 1.0, up, (0.0, 1.0)),
         );
         assert!(apart.is_empty());
+    }
+
+    /// Rods whose axes lean 1e-5 apart drift 1e-3 over a span of 100, so
+    /// the rulings defer to the next solver there; over a span of 0.001
+    /// they drift 1e-8 and keep their two rulings.
+    #[test]
+    fn rods_leaning_apart_keep_rulings_only_over_a_short_span() {
+        let up = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+            .unwrap();
+        let lean = Vec3::new(1e-5_f64.sin(), 0.0, 1e-5_f64.cos());
+        let leaning = CylindricalSurface::new(Point3::new(1.2, 0.0, 0.0), lean, 1.0).unwrap();
+        let span = |h: f64| parallel_cylinders(&up, &leaning, Some((0.0, h)), Some((0.0, h)));
+        assert!(span(100.0).unwrap().is_none());
+        assert_eq!(span(0.001).unwrap().map(|r| r.len()), Some(2));
+    }
+
+    /// Huge rods a short stretch long still meet along both rulings, and
+    /// rods of radius 100 whose axes lie 3e-7 short of touching meet along
+    /// two rulings 0.011 apart, not the one where they would touch.
+    #[test]
+    fn parallel_rods_keep_short_and_close_rulings() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let huge = rulings_within(
+            (Point3::new(0.0, 0.0, 0.0), 1e6, (0.0, 0.001)),
+            (Point3::new(1.2e6, 0.0, 0.0), 1e6, up, (0.0, 0.001)),
+            1e-9,
+        );
+        assert_eq!(huge.len(), 2);
+        assert!(
+            huge.iter()
+                .all(|(lo, hi)| ((*hi - *lo).length() - 0.001).abs() < 1e-12)
+        );
+        let mut close = rulings_within(
+            (Point3::new(0.0, 0.0, 0.0), 100.0, (0.0, 1.0)),
+            (Point3::new(199.999_999_7, 0.0, 0.0), 100.0, up, (0.0, 1.0)),
+            1e-9,
+        );
+        assert_eq!(close.len(), 2);
+        close.sort_by(|a, b| a.0.y().total_cmp(&b.0.y()));
+        let apart = close[1].0.y() - close[0].0.y();
+        assert!((apart - 0.010_954).abs() < 1e-5, "{apart}");
     }
 }
