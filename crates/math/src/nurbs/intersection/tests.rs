@@ -2245,3 +2245,38 @@ fn a_plane_touching_a_surface_at_points_returns_them() {
         }
     }
 }
+
+/// The plane `z = 0` meets the saddle `z = xy` in the two axes, which cross
+/// at the origin, inside a cell of the grid. The section comes back as four
+/// curves, each from the crossing out to the patch's edge along an axis.
+#[test]
+fn a_plane_section_crossing_itself_ends_its_curves_at_the_crossing() {
+    let saddle = polynomial_patch(
+        1,
+        [
+            &[(0, 0, -1.0), (1, 0, 2.0)],
+            &[(0, 0, -1.0), (0, 1, 2.0)],
+            &[(0, 0, 1.0), (1, 0, -2.0), (0, 1, -2.0), (1, 1, 4.0)],
+        ],
+    );
+    let curves = intersect_plane_nurbs(&saddle, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(curves.len(), 4);
+    for ic in &curves {
+        let (t0, t1) = ic.curve.domain();
+        let (a, b) = (ic.curve.evaluate(t0), ic.curve.evaluate(t1));
+        let (centre, rim) = if a.x().hypot(a.y()) < b.x().hypot(b.y()) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        assert!(
+            centre.x().hypot(centre.y()) < 1e-12,
+            "a curve ends {centre:?}"
+        );
+        assert!((rim.x().abs().max(rim.y().abs()) - 1.0).abs() < 1e-12);
+        let far = farthest(std::slice::from_ref(ic), |p| {
+            p.x().abs().min(p.y().abs()).max(p.z().abs())
+        });
+        assert!(far < 1e-7, "a curve strays {far:.2e} off the axes");
+    }
+}

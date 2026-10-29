@@ -132,8 +132,13 @@ pub fn intersect_plane_nurbs(
 
     // Phase 3: Link crossings through each cell. A cell with two crossing
     // edges connects them; a saddle cell (all four edges crossing) pairs
-    // them by the sign of the cell-center sample. With every node on one
-    // side or the other, a cell has no odd count.
+    // them by the sign of the cell-center sample, unless the section
+    // crosses itself there: a point of the cell where the plane's distance
+    // stops changing on the plane, and curves away from it on both sides or
+    // not at all, joins all four. With every node on one side or the
+    // other, a cell has no odd count.
+    let noise = rounding(surface, plane_normal, plane_d);
+    let mut nodes: Vec<((f64, f64), [usize; 4])> = Vec::new();
     let mut links: Vec<Vec<usize>> = vec![Vec::new(); crossings.len()];
     let connect = |a: usize, b: usize, links: &mut Vec<Vec<usize>>| {
         if !links[a].contains(&b) {
@@ -161,6 +166,19 @@ pub fn intersect_plane_nurbs(
                     // curve separates.
                     let uc = u_min + (i as f64 + 0.5) * u_step;
                     let vc = v_min + (j as f64 + 0.5) * v_step;
+                    if let Some(node) = extremum(surface, plane_normal, (uc, vc)).filter(|e| {
+                        let (fuu, fuv, fvv) = e.hessian;
+                        let ((u, v), at) = (e.at, surface.evaluate(e.at.0, e.at.1));
+                        let off = plane_normal.dot(Vec3::new(at.x(), at.y(), at.z())) - plane_d;
+                        e.settled
+                            && (u - uc).abs() <= u_step
+                            && (v - vc).abs() <= v_step
+                            && off.abs() <= noise
+                            && fuu.mul_add(fvv, -(fuv * fuv)) <= 0.0
+                    }) {
+                        nodes.push((node.at, present));
+                        continue;
+                    }
                     let pc = surface.evaluate(uc, vc);
                     let dc = plane_normal.dot(Vec3::new(pc.x(), pc.y(), pc.z())) - plane_d;
                     let d00 = distances[i][j];
@@ -185,39 +203,67 @@ pub fn intersect_plane_nurbs(
         }
     }
 
+    let mut junction = vec![false; crossings.len()];
+    for (at, ends) in nodes {
+        let node = crossings.len();
+        crossings.push(at);
+        pinned.push(None);
+        links.push(Vec::new());
+        junction.push(true);
+        for end in ends {
+            connect(end, node, &mut links);
+        }
+    }
+
     // Phase 4: Walk the links into ordered chains (open chains from
-    // degree-1 endpoints first, then closed loops), Newton-refining each
-    // crossing; a refinement failure splits its chain.
+    // degree-1 endpoints first, then from the points where the section
+    // crosses itself, then closed loops), Newton-refining each crossing; a
+    // refinement failure splits its chain. A chain stops at such a point,
+    // which any number of chains may share.
     let mut visited = vec![false; crossings.len()];
     let mut ordered_chains: Vec<Vec<IntersectionPoint>> = Vec::new();
-    let walk = |start: usize, visited: &mut Vec<bool>| -> Vec<usize> {
-        let mut chain = vec![start];
+    let walk = |from: Option<usize>, start: usize, visited: &mut Vec<bool>| -> Vec<usize> {
+        let mut chain: Vec<usize> = from.into_iter().chain([start]).collect();
         visited[start] = true;
-        let mut current = start;
-        while let Some(&next) = links[current].iter().find(|&&x| !visited[x]) {
-            visited[next] = true;
+        let (mut prev, mut current) = (from, start);
+        while let Some(next) = links[current]
+            .iter()
+            .copied()
+            .find(|&x| Some(x) != prev && (junction[x] || !visited[x]))
+        {
             chain.push(next);
-            current = next;
+            if junction[next] {
+                return chain;
+            }
+            visited[next] = true;
+            (prev, current) = (Some(current), next);
         }
         // A loop ends beside its start; closing it keeps the cell between
         // them, and the curve, unbroken.
-        if chain.len() > 2 && links[current].contains(&start) {
+        if from.is_none() && chain.len() > 2 && links[current].contains(&start) {
             chain.push(start);
         }
         chain
     };
     let degree_one: Vec<usize> = (0..crossings.len())
-        .filter(|&x| links[x].len() == 1)
+        .filter(|&x| !junction[x] && links[x].len() == 1)
         .collect();
     let mut index_chains: Vec<Vec<usize>> = Vec::new();
     for start in degree_one {
         if !visited[start] {
-            index_chains.push(walk(start, &mut visited));
+            index_chains.push(walk(None, start, &mut visited));
+        }
+    }
+    for node in (0..crossings.len()).filter(|&x| junction[x]) {
+        for &start in &links[node] {
+            if !visited[start] {
+                index_chains.push(walk(Some(node), start, &mut visited));
+            }
         }
     }
     for start in 0..crossings.len() {
-        if !visited[start] {
-            index_chains.push(walk(start, &mut visited));
+        if !junction[start] && !visited[start] {
+            index_chains.push(walk(None, start, &mut visited));
         }
     }
     for chain in index_chains {
@@ -374,22 +420,10 @@ fn tiny_loops(
             b
         })
     };
-    // Evaluating the distance rounds it by a few ulps of the largest
-    // `|n|·|P| + |d|` over the control points; an extremum no further past
-    // the plane than that may only touch it, as along a valley lying on the
-    // plane, where rays from it would trace rounding.
-    let noise = 4.0
-        * f64::EPSILON
-        * surface
-            .control_points()
-            .iter()
-            .flatten()
-            .map(|p| {
-                normal
-                    .length()
-                    .mul_add(Vec3::new(p.x(), p.y(), p.z()).length(), d.abs())
-            })
-            .fold(0.0, f64::max);
+    // An extremum no further past the plane than rounding may only touch
+    // it, as along a valley lying on the plane, where rays from it would
+    // trace rounding.
+    let noise = rounding(surface, normal, d);
     let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
     let mut touches: Vec<IntersectionPoint> = Vec::new();
     for i in 0..n {
@@ -491,6 +525,22 @@ fn tiny_loops(
         }
     }
     (loops, touches)
+}
+
+/// How far evaluating the plane's distance on `surface` can round it: a few
+/// ulps of the largest `|n|·|P| + |d|` over the control points.
+fn rounding(surface: &NurbsSurface, normal: Vec3, d: f64) -> f64 {
+    4.0 * f64::EPSILON
+        * surface
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|p| {
+                normal
+                    .length()
+                    .mul_add(Vec3::new(p.x(), p.y(), p.z()).length(), d.abs())
+            })
+            .fold(0.0, f64::max)
 }
 
 /// Where the plane's distance stops changing, as Newton from a seed
