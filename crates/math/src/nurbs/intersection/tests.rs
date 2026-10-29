@@ -1824,3 +1824,228 @@ fn a_plane_section_loop_comes_back_closed() {
     let gap = (curve.evaluate(t1) - curve.evaluate(t0)).length();
     assert!(gap < 1e-9, "loop left open by {gap:.2e}");
 }
+
+/// Planes at heights 1e-8 and 1e-14 cut the paraboloid `z = x² + y²` in
+/// loops of radius 1e-4 and 1e-7 round its vertex, far inside one cell of
+/// the sampling grid, which no grid edge crosses. Each comes back closed,
+/// on the plane and the paraboloid.
+#[test]
+fn a_plane_section_loop_inside_one_grid_cell_is_found() {
+    let row = |x: f64, z: [f64; 3]| {
+        vec![
+            Point3::new(x, -1.0, z[0]),
+            Point3::new(x, 0.0, z[1]),
+            Point3::new(x, 1.0, z[2]),
+        ]
+    };
+    let bowl = NurbsSurface::new(
+        2,
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            row(-1.0, [2.0, 0.0, 2.0]),
+            row(0.0, [0.0, -2.0, 0.0]),
+            row(1.0, [2.0, 0.0, 2.0]),
+        ],
+        vec![vec![1.0; 3]; 3],
+    )
+    .unwrap();
+    for radius in [1e-4, 1e-7] {
+        let height = radius * radius;
+        let curves = intersect_plane_nurbs(&bowl, Vec3::new(0.0, 0.0, 1.0), height, 64).unwrap();
+        assert_eq!(curves.len(), 1, "radius {radius}");
+        let curve = &curves[0].curve;
+        let (t0, t1) = curve.domain();
+        assert!((curve.evaluate(t1) - curve.evaluate(t0)).length() < 1e-3 * radius);
+        let far = farthest(&curves, |p| {
+            let rim = (p.x().hypot(p.y()) - radius).abs();
+            rim.max((p.z() - height).abs())
+        });
+        // Evaluating the bowl rounds its height by about 2e-16, which
+        // moves where a loop of radius r crosses the plane by 1e-16 / r.
+        assert!(
+            far < 1e-3 * radius + 1e-16 / radius,
+            "radius {radius}: loop strays {far:.2e}"
+        );
+    }
+}
+
+/// The Bézier patch of degree `p` on the unit square whose coordinates are
+/// the polynomials with terms `(a, b, c)`, each `c·uᵃvᵇ`.
+fn polynomial_patch(p: u32, coords: [&[(u32, u32, f64)]; 3]) -> NurbsSurface {
+    let choose = |n: u32, k: u32| {
+        if k > n {
+            return 0.0;
+        }
+        (0..k).fold(1.0, |acc, m| acc * f64::from(n - m) / f64::from(m + 1))
+    };
+    let coefficient = |terms: &[(u32, u32, f64)], i: u32, j: u32| {
+        terms
+            .iter()
+            .map(|&(a, b, c)| c * choose(i, a) / choose(p, a) * choose(j, b) / choose(p, b))
+            .sum::<f64>()
+    };
+    let order = usize::try_from(p).unwrap() + 1;
+    let knots = [vec![0.0; order], vec![1.0; order]].concat();
+    let control = (0..=p)
+        .map(|i| {
+            (0..=p)
+                .map(|j| {
+                    let [x, y, z] = coords.map(|terms| coefficient(terms, i, j));
+                    Point3::new(x, y, z)
+                })
+                .collect()
+        })
+        .collect();
+    NurbsSurface::new(
+        order - 1,
+        order - 1,
+        knots.clone(),
+        knots,
+        control,
+        vec![vec![1.0; order]; order],
+    )
+    .unwrap()
+}
+
+/// A loop inside a cell along the patch's edge, whose least grid distance
+/// lies on that edge, is found.
+#[test]
+fn a_tiny_loop_beside_the_patch_edge_is_found() {
+    let a = 0.25_f64 / 63.0;
+    let bowl = polynomial_patch(
+        2,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 1, 1.0)],
+            &[
+                (0, 0, a.mul_add(a, 0.25)),
+                (1, 0, -2.0 * a),
+                (2, 0, 1.0),
+                (0, 1, -1.0),
+                (0, 2, 1.0),
+            ],
+        ],
+    );
+    let curves = intersect_plane_nurbs(&bowl, Vec3::new(0.0, 0.0, 1.0), 1e-8, 64).unwrap();
+    assert_eq!(curves.len(), 1);
+    let far = farthest(&curves, |p| {
+        let rim = ((p.x() - a).hypot(p.y() - 0.5) - 1e-4).abs();
+        rim.max((p.z() - 1e-8).abs())
+    });
+    assert!(far < 1e-7, "loop strays {far:.2e}");
+}
+
+/// A long loop along a valley running across the grid's lines is found
+/// from a node far along the valley from its lowest point.
+#[test]
+fn a_long_tiny_loop_across_the_grid_is_found() {
+    // (v − 0.5 − 0.4(u − 0.5))² + 1e-4·(u − 0.5)²
+    let valley = polynomial_patch(
+        2,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 1, 1.0)],
+            &[
+                (0, 0, 0.09 + 0.25e-4),
+                (1, 0, 0.24 - 1e-4),
+                (2, 0, 0.16 + 1e-4),
+                (0, 1, -0.6),
+                (0, 2, 1.0),
+                (1, 1, -0.8),
+            ],
+        ],
+    );
+    let height = (1e-3_f64 / 63.0).powi(2);
+    let curves = intersect_plane_nurbs(&valley, Vec3::new(0.0, 0.0, 1.0), height, 64).unwrap();
+    assert_eq!(curves.len(), 1);
+    // The loop is `q = 1` for `q = (w² + 1e-4·s²) / height`; a point's
+    // distance from it is about `|q − 1| / |∇q|`.
+    let far = farthest(&curves, |p| {
+        let (s, w) = (p.x() - 0.5, p.y() - 0.5 - 0.4 * (p.x() - 0.5));
+        let q = (w * w + 1e-4 * s * s) / height;
+        let grad = Vec3::new(2e-4 * s - 0.8 * w, 2.0 * w, 0.0) * (1.0 / height);
+        ((q - 1.0).abs() / grad.length()).max((p.z() - height).abs())
+    });
+    assert!(far < 1e-7, "loop strays {far:.2e}");
+    for point in &curves[0].points {
+        let p = point.point;
+        let (s, w) = (p.x() - 0.5, p.y() - 0.5 - 0.4 * (p.x() - 0.5));
+        let rim = ((w * w + 1e-4 * s * s) / height).sqrt() - 1.0;
+        assert!(
+            rim.abs() < 1e-6,
+            "a point strays {rim:.2e} of the loop's size"
+        );
+    }
+}
+
+/// A plane just above the flat bottom of `z = x⁴ + y⁴` cuts a loop where
+/// the surface runs so nearly along the plane that points twice the loop's
+/// size lie within 1e-12 of it; the loop found is the true one.
+#[test]
+fn a_tiny_loop_on_a_flat_bottom_is_its_true_size() {
+    let quartic = polynomial_patch(
+        4,
+        [
+            &[(0, 0, -1.0), (1, 0, 2.0)],
+            &[(0, 0, -1.0), (0, 1, 2.0)],
+            &[
+                (0, 0, 2.0),
+                (1, 0, -8.0),
+                (2, 0, 24.0),
+                (3, 0, -32.0),
+                (4, 0, 16.0),
+                (0, 1, -8.0),
+                (0, 2, 24.0),
+                (0, 3, -32.0),
+                (0, 4, 16.0),
+            ],
+        ],
+    );
+    let curves = intersect_plane_nurbs(&quartic, Vec3::new(0.0, 0.0, 1.0), 1e-14, 10).unwrap();
+    assert_eq!(curves.len(), 1);
+    // Evaluating the patch rounds its height by about 1e-16, a hundredth
+    // of the plane's, which leaves the loop's size good to about 0.25%.
+    let far = farthest(&curves, |p| {
+        (((p.x().powi(4) + p.y().powi(4)) / 1e-14).powf(0.25) - 1.0).abs()
+    });
+    assert!(far < 1e-2, "loop strays {far:.2e} of its size");
+}
+
+/// Within 1e-12 of a plane just above the flat bottom of `z = x⁴ + y⁴`
+/// lie points over twice as far out as the section; refining one of them
+/// still finds the section.
+#[test]
+fn refining_onto_a_nearly_tangent_plane_reaches_the_section() {
+    let quartic = polynomial_patch(
+        4,
+        [
+            &[(0, 0, -1.0), (1, 0, 2.0)],
+            &[(0, 0, -1.0), (0, 1, 2.0)],
+            &[
+                (0, 0, 2.0),
+                (1, 0, -8.0),
+                (2, 0, 24.0),
+                (3, 0, -32.0),
+                (4, 0, 16.0),
+                (0, 1, -8.0),
+                (0, 2, 24.0),
+                (0, 3, -32.0),
+                (0, 4, 16.0),
+            ],
+        ],
+    );
+    let guess = 0.5 * (1.0 + 5.6e-4);
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    let wide = quartic.evaluate(guess, guess);
+    assert!((wide.z() - 1e-14).abs() < 1e-12);
+    let point =
+        plane::refine_plane_surface_point(&quartic, up, 1e-14, (guess, guess), None).unwrap();
+    let (x, y) = (point.point.x(), point.point.y());
+    let size = ((x.powi(4) + y.powi(4)) / 1e-14).powf(0.25);
+    assert!(
+        (size - 1.0).abs() < 1e-2,
+        "refined to {size:.3} of the section's size"
+    );
+}
