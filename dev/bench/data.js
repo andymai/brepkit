@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793277617630,
+  "lastUpdate": 1793293230899,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60155,6 +60155,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18060995,
             "range": "± 822152",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c009e403ca816f58794b2bc98d144ec97062290b",
+          "message": "fix(wasm): stop rejecting exact fillets on wide parts for chord error (#2152)\n\nThe wasm `fillet` now accepts an exact round on a wide part, instead of\nreporting that no fillet engine produced a valid result.\n\nToday `try_fillet` accepts `fillet_v2`'s result only if its exact and\nmeshed volumes agree within 1%, meshed at `(radius * 0.1).clamp(0.01,\n0.1)`. On a wide part chord error alone exceeds that: a plain\n`make_cylinder(10, 20)` meshes 6205.33 against 6283.19 at 0.1, 1.24%\nshort, so its top rim filleted r 2, which `fillet_v2` builds exactly\n(6231.66, watertight), is rejected.\n\n## Change\n\n- When the two volumes disagree, the meshed volume is read again at a\ntenth of the deflection before the result is rejected. A sound solid\nconverges there (the rim fillet reads 6221.71 at 0.01, 0.16% short),\nwhile one whose exact and meshed volumes truly differ, which the check\nexists for, stays apart.\n- The roadmap records it as closed.\n\n## Tests\n\n- `try_fillet_accepts_a_wide_cylinders_rim_round`: that rim fillet comes\nback from `try_fillet` measuring the cylinder less the ring it rounds\noff, within 1e-6. It fails without the change.\n- `try_fillet_second_pass_does_not_break_solid`, which needs some of its\nsecond fillets rejected, still passes.\n- `cargo test --workspace --exclude brepkit-render` passes 3711 tests.\n`compound_cut_edge_tangent_tools_stays_analytic` failed in that run and\npasses alone, here and on `main`: it reads the process-wide mesh\nfallback counter, which other tests in the run also move.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nStops the WASM `fillet` from rejecting exact rounds on wide parts.\n`try_fillet` compared exact and meshed volumes within 1% at a deflection\nset by the fillet radius, but chord error alone exceeds 1% on wide parts\n— a radius-10 cylinder meshes 1.24% short at the coarse deflection. Now,\nwhen the volumes disagree, the solid is re-measured at a tenth of the\ndeflection before the result is rejected: a sound solid converges there,\nwhile an inconsistent one does not.\n\nAdds `try_fillet_accepts_a_wide_cylinders_rim_round` to cover a wide\ncylinder's rim round; it fails without the change, and the existing\nimpact test `try_fillet_second_pass_does_not_break_solid` still passes.\n\n<sup>Written for commit ea6f6db61eeec22a132ef20f49cae2b7d93a60ae.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2152?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2152?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2152&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-29T09:57:20-07:00",
+          "tree_id": "1837de5d0d4942e36c0d352d47fd4c8b68c0bbbd",
+          "url": "https://github.com/andymai/brepkit/commit/c009e403ca816f58794b2bc98d144ec97062290b"
+        },
+        "date": 1793293224829,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1096394,
+            "range": "± 1731",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1166430,
+            "range": "± 1496",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13512,
+            "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675678,
+            "range": "± 2252",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28650147,
+            "range": "± 122464",
             "unit": "ns/iter"
           }
         ]
