@@ -6809,17 +6809,20 @@ fn runs_along_an_edge(
 /// the curve at its middle point the surface stays on one side of the
 /// plane. Where the surface crosses with its normal along the plane's, as
 /// `z = x³` crosses `z = 0`, the curve parts the regions either side. Each
-/// side's probe starts a millionth of the domain across and widens tenfold
+/// side's probe starts a billionth of the domain across and widens tenfold
 /// while the surface stays within rounding of the plane, as across
-/// `z = x⁷`, so the nearest probe that tells the side does, before another
-/// branch beside the curve can come between; a curve whose sides no probe
-/// tells stays. On a closed surface the probes wrap round its seam.
+/// `z = x⁷`, but stops short of halfway to the section's nearest other
+/// curve, so that it tells the side before another branch comes between;
+/// a curve whose sides no probe tells stays. On a closed surface the probes
+/// wrap round its seam.
 fn touches_along(
     nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
     normal: Vec3,
     d: f64,
-    points: &[nurbs_isect::IntersectionPoint],
+    curves: &[nurbs_isect::IntersectionCurve],
+    index: usize,
 ) -> bool {
+    let points = &curves[index].points;
     let tangent = |p: &nurbs_isect::IntersectionPoint| {
         nurbs
             .normal(p.param1.0, p.param1.1)
@@ -6881,9 +6884,36 @@ fn touches_along(
         let p = nurbs.evaluate(u, v);
         normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
     };
+    // No probe reaches halfway to another curve of the section, so that
+    // none passes beyond it.
+    let from = |q: &nurbs_isect::IntersectionPoint| {
+        ((q.param1.0 - mid.0) / wide, (q.param1.1 - mid.1) / tall)
+    };
+    let gap = curves
+        .iter()
+        .enumerate()
+        .filter(|&(j, _)| j != index)
+        .flat_map(|(_, c)| {
+            let ends: Vec<(f64, f64)> = c.points.iter().map(from).collect();
+            let single = (ends.len() == 1).then(|| ends[0].0.hypot(ends[0].1));
+            let spans = ends.windows(2).map(|pair| {
+                let ((ax, ay), (bx, by)) = (pair[0], pair[1]);
+                let (dx, dy) = (bx - ax, by - ay);
+                let length = dx.mul_add(dx, dy * dy);
+                let t = if length > 0.0 {
+                    (-ax.mul_add(dx, ay * dy) / length).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                t.mul_add(dx, ax).hypot(t.mul_add(dy, ay))
+            });
+            single.into_iter().chain(spans).collect::<Vec<f64>>()
+        })
+        .fold(f64::INFINITY, f64::min);
     let nearest = |sign: f64| {
-        [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+        [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
             .into_iter()
+            .take_while(|&reach| reach < 0.5 * gap)
             .map(|reach| side(sign * reach))
             .find(|f| f.abs() > rounding)
     };
@@ -6902,14 +6932,14 @@ fn plane_nurbs_intersection(
     let isect_curves = nurbs_isect::intersect_plane_nurbs(nurbs, normal, d, NURBS_SAMPLES)?;
 
     let mut results = Vec::new();
-    for ic in isect_curves {
+    let touching: Vec<bool> = (0..isect_curves.len())
+        .map(|k| touches_along(nurbs, normal, d, &isect_curves, k))
+        .collect();
+    for (ic, touches) in isect_curves.into_iter().zip(touching) {
         // A point where the plane touches the surface splits neither face,
         // nor a curve along which the surface touches the plane from one
         // side, and a curve along one of the face's own edges is that edge.
-        if ic.points.len() < 2
-            || touches_along(nurbs, normal, d, &ic.points)
-            || runs_along_an_edge(nurbs, &ic.points)
-        {
+        if ic.points.len() < 2 || touches || runs_along_an_edge(nurbs, &ic.points) {
             continue;
         }
         let domain = ic.curve.domain();
@@ -10425,6 +10455,37 @@ mod tests {
             vec![0.0, 0.0, 1.0, 1.0],
             rows,
             vec![vec![1.0; 2]; 5],
+        )
+        .unwrap();
+        let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &sheet).unwrap();
+        assert_eq!(raw.len(), 2);
+    }
+
+    /// A sheet stretched a thousandfold along `x`, `z = (u − a)(u − b)` with
+    /// `x = 1000u`, crosses `z = 0` along two lines 8e-7 apart in `u`, where
+    /// it lies within 1e-9 of flat: no probe of the side test reaches past
+    /// the other line, and the sheet splits along both.
+    #[test]
+    fn a_plane_crossing_a_nearly_flat_nurbs_sheet_twice_close_by_splits_it_twice() {
+        // Round a node of the 32-sample grid, so that the grid sees both.
+        let (a, b) = (15.0 / 31.0 - 4e-7, 15.0 / 31.0 + 4e-7);
+        let heights = [
+            a * b,
+            0.5f64.mul_add(-(a + b), a * b),
+            1.0 - (a + b) + a * b,
+        ];
+        let rows = heights
+            .iter()
+            .zip([0.0, 500.0, 1000.0])
+            .map(|(&z, x)| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)])
+            .collect();
+        let sheet = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 3],
         )
         .unwrap();
         let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &sheet).unwrap();

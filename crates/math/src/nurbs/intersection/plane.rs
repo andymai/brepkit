@@ -564,7 +564,33 @@ fn tiny_loops(
             else {
                 continue;
             };
-            let centre = at(u, v);
+            let (mut u, mut v, mut centre) = (u, v, at(u, v));
+            let (mut fuu, mut fuv, mut fvv) = (fuu, fuv, fvv);
+            // `extremum` leaves out its step along a direction the distance
+            // barely curves, as along `y` on `x² + 1e-10·y²`, so it can stop
+            // short of a floor dipping below the plane. Where that direction
+            // curves the same way as the other, steps along it alone finish
+            // the descent before the extremum is let go.
+            if settled && centre.abs() > noise && centre * near > 0.0 {
+                for _ in 0..MAX_NEWTON_ITER {
+                    let b = bend(surface, normal, (u, v));
+                    let (lambda, e) = b.minor;
+                    if lambda * b.major.0 <= 0.0 || lambda.abs() <= 1e-12 * b.major.0.abs() {
+                        break;
+                    }
+                    let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
+                    if s.abs() > 1.0 {
+                        break;
+                    }
+                    u = (s * e.0).mul_add(-wide, u).clamp(u_lo, u_hi);
+                    v = (s * e.1).mul_add(-tall, v).clamp(v_lo, v_hi);
+                    if s.abs() <= 1e-12 {
+                        break;
+                    }
+                }
+                centre = at(u, v);
+                (fuu, fuv, fvv) = bend(surface, normal, (u, v)).hessian;
+            }
             let spread = (fuu - fvv).hypot(2.0 * fuv);
             let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
             if centre.abs() <= noise {
@@ -694,16 +720,21 @@ fn beside(
 /// Newton steps settling a point of a valley takes at most.
 const MAX_SETTLE_STEPS: usize = 128;
 
+/// The most a valley's direction may turn over one step of
+/// [`trace_valley`], in radians, before the next step is halved.
+const MAX_VALLEY_TURN: f64 = 0.25;
+
 /// Steps [`trace_valley`] takes each way at most.
 const MAX_VALLEY_STEPS: usize = 4096;
 
 /// The curve along which the surface touches the plane, through `start` on
 /// the floor of a valley of the plane's distance lying on the plane. It
-/// steps `step` spans of the domain along the valley's flat direction and
-/// settles back across the valley each step, both ways until the floor
-/// leaves the plane or the patch, or the curve comes round to `start`. A
-/// step that reaches the patch's edge settles along the edge, so that the
-/// curve ends on it.
+/// steps up to `step` spans of the domain along the valley's flat direction,
+/// less where it turns sharply, and settles back across the valley each
+/// step, both ways until the floor leaves the plane or the patch, or the
+/// curve comes round to `start`. A step that reaches the patch's edge
+/// settles along the edge, so that the curve ends on it. A walk that runs
+/// out of steps first gives no curve.
 #[allow(clippy::similar_names, clippy::too_many_lines)]
 fn trace_valley(
     surface: &NurbsSurface,
@@ -726,6 +757,7 @@ fn trace_valley(
     // higher power, and Newton closes only a fraction of the way each step.
     let settle = |(mut u, mut v): (f64, f64), pin: Option<Pin>| {
         let mut settled = false;
+        let mut last = f64::INFINITY;
         for _ in 0..MAX_SETTLE_STEPS {
             let b = bend(surface, normal, (u, v));
             let ((lambda, e), grad) = match pin {
@@ -739,18 +771,25 @@ fn trace_valley(
             let s = grad.0.mul_add(e.0, grad.1 * e.1) / lambda;
             u = (s * e.0).mul_add(-wide, u).clamp(u_lo, u_hi);
             v = (s * e.1).mul_add(-tall, v).clamp(v_lo, v_hi);
-            if s.abs() <= 1e-12 * step {
+            if stalled(s.abs(), last, step) {
                 settled = true;
                 break;
             }
+            last = s.abs();
         }
         (settled && at((u, v)).abs() <= noise).then_some((u, v))
     };
     let flat = |q: (f64, f64)| bend(surface, normal, q).minor.1;
     let apart = |p: (f64, f64), q: (f64, f64)| ((p.0 - q.0) / wide).hypot((p.1 - q.1) / tall);
-    let walk = |sign: f64, pts: &mut Vec<(f64, f64)>| {
+    // `Some(true)` when the walk comes back round to `start`, `Some(false)`
+    // when it ends, and `None` when it runs out of steps first.
+    let walk = |sign: f64, pts: &mut Vec<(f64, f64)>| -> Option<bool> {
         let (mut p, e) = (start, flat(start));
         let mut dir = (sign * e.0, sign * e.1);
+        // The step, shortened where the valley turns sharply, as round a
+        // loop smaller than a step, and lengthened again where it runs
+        // straight.
+        let mut h = step;
         // Whether the walk has left `start` behind, so that coming back
         // near it closes the curve.
         let mut away = false;
@@ -769,18 +808,18 @@ fn trace_valley(
                 reach(p.0, dir.0 * wide, u_lo, u_hi),
                 reach(p.1, dir.1 * tall, v_lo, v_hi),
             );
-            let t = step.min(across).min(along);
+            let t = h.min(across).min(along);
             if t <= 1e-9 * step {
-                return false;
+                return Some(false);
             }
             let mut ahead = (
                 (t * dir.0).mul_add(wide, p.0),
                 (t * dir.1).mul_add(tall, p.1),
             );
-            let pin = if t < step && across <= along {
+            let pin = if t < h && across <= along {
                 ahead.0 = if dir.0 > 0.0 { u_hi } else { u_lo };
                 Some(Pin::U)
-            } else if t < step {
+            } else if t < h {
                 ahead.1 = if dir.1 > 0.0 { v_hi } else { v_lo };
                 Some(Pin::V)
             } else {
@@ -794,38 +833,47 @@ fn trace_valley(
                 Some(next) => Some((next, pin.is_some())),
                 None if pin.is_some() => {
                     let whole = (
-                        (step * dir.0).mul_add(wide, p.0).clamp(u_lo, u_hi),
-                        (step * dir.1).mul_add(tall, p.1).clamp(v_lo, v_hi),
+                        (h * dir.0).mul_add(wide, p.0).clamp(u_lo, u_hi),
+                        (h * dir.1).mul_add(tall, p.1).clamp(v_lo, v_hi),
                     );
                     settle(whole, None)
-                        .filter(|&next| apart(next, p) > 1e-3 * step)
+                        .filter(|&next| apart(next, p) > 1e-3 * h)
                         .map(|next| (next, false))
                 }
                 None => None,
             };
             let Some((next, on_edge)) = settled else {
-                return false;
+                return Some(false);
             };
-            if away && apart(next, start) < step {
-                return true;
+            if away && apart(next, start) < h {
+                return Some(true);
             }
-            away |= apart(next, start) > 2.0 * step;
+            away |= apart(next, start) > 2.0 * h;
             pts.push(next);
             if on_edge {
-                return false;
+                return Some(false);
             }
             let e = flat(next);
-            dir = if e.0.mul_add(dir.0, e.1 * dir.1) >= 0.0 {
+            let e = if e.0.mul_add(dir.0, e.1 * dir.1) >= 0.0 {
                 e
             } else {
                 (-e.0, -e.1)
             };
+            let turn = e.0.mul_add(dir.0, e.1 * dir.1).clamp(-1.0, 1.0).acos();
+            if turn > MAX_VALLEY_TURN {
+                h = (0.5 * h).max(1e-4 * step);
+            } else if turn < 0.25 * MAX_VALLEY_TURN {
+                h = (2.0 * h).min(step);
+            }
+            dir = e;
             p = next;
         }
-        false
+        None
     };
     let mut forward = Vec::new();
-    let closed = walk(1.0, &mut forward);
+    let Some(closed) = walk(1.0, &mut forward) else {
+        return Vec::new();
+    };
     let mut params = Vec::with_capacity(forward.len() * 2 + 2);
     if closed {
         params.push(start);
@@ -833,7 +881,9 @@ fn trace_valley(
         params.push(start);
     } else {
         let mut back = Vec::new();
-        walk(-1.0, &mut back);
+        if walk(-1.0, &mut back).is_none() {
+            return Vec::new();
+        }
         params.extend(back.into_iter().rev());
         params.push(start);
         params.extend(forward);
@@ -993,6 +1043,14 @@ fn self_crossings(
     found
 }
 
+/// Whether Newton, its step now `size` after `last`, both in spans of the
+/// domain, has settled at a point `scale` spans across: its step has shrunk
+/// to rounding, or below a billionth of `scale` it has stopped shrinking,
+/// where rounding in a faintly curving distance's gradient holds it.
+fn stalled(size: f64, last: f64, scale: f64) -> bool {
+    size <= 1e-12 * scale || (size <= 1e-9 * scale && size >= 0.5 * last)
+}
+
 /// Where the plane's distance stops changing, as Newton from a seed
 /// finds it on the patch.
 struct Extremum {
@@ -1069,12 +1127,16 @@ fn spans(surface: &NurbsSurface) -> (f64, f64) {
 }
 
 /// Where the plane's distance stops changing, by Newton from `seed` on the
-/// patch. Along a direction where it does not curve the step is left out,
-/// so along a valley Newton settles across it.
+/// patch. Along a direction where it curves less than a thousandth as much
+/// as across it the step is left out, so along a valley Newton settles
+/// across it: near a curved valley's floor that direction's curving is
+/// faint and swings with the distance from the floor, and stepping along
+/// it with rounding's gradient sends Newton wandering along the valley.
 fn extremum(surface: &NurbsSurface, normal: Vec3, (mut u, mut v): (f64, f64)) -> Option<Extremum> {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
     let mut found = None;
+    let mut last = f64::INFINITY;
     for _ in 0..MAX_NEWTON_ITER {
         let b = bend(surface, normal, (u, v));
         if b.major.0 == 0.0 {
@@ -1082,14 +1144,16 @@ fn extremum(surface: &NurbsSurface, normal: Vec3, (mut u, mut v): (f64, f64)) ->
         }
         let (mut du, mut dv) = (0.0, 0.0);
         for (lambda, e) in [b.major, b.minor] {
-            if lambda.abs() > 1e-12 * b.major.0.abs() {
+            if lambda.abs() > 1e-3 * b.major.0.abs() {
                 let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
                 (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
             }
         }
         u = du.mul_add(-(u_hi - u_lo), u).clamp(u_lo, u_hi);
         v = dv.mul_add(-(v_hi - v_lo), v).clamp(v_lo, v_hi);
-        let settled = du.abs() <= 1e-12 && dv.abs() <= 1e-12;
+        let size = du.abs().max(dv.abs());
+        let settled = stalled(size, last, 1.0);
+        last = size;
         found = Some(Extremum {
             at: (u, v),
             settled,
