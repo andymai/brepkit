@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793297816930,
+  "lastUpdate": 1793309972320,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60425,6 +60425,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17160542,
             "range": "± 303764",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc2cb3b8d0c0465677cffdca7154d3f2c3575f28",
+          "message": "fix(blend): fillet rims and corners that end on a cap's hole (#2151)\n\nA fillet along the closed rim where a post stands on a plate, or where a\nbore leaves the plate it passes through, now builds its exact torus\nband, and a straight fillet that ends on a cap with holes now notches\nthe cap's corner.\n\nToday `closed_rim_info` takes a closed rim only when it is its planar\ncap's whole outer wire (a rod's top), so a rim that is one of the cap's\nholes goes to the batch trimmer, which leaves the wall untrimmed: a\nradius 10 post 12 tall fused onto a 60 x 60 x 8 plate, its foot filleted\nr 3 with `fillet_v2`, comes back closed but measuring 30027.68 against\n32699.40, and its mesh at deflection 0.1 has 289 open edges. Separately,\n`terminal_cap_is_notchable` refuses any cap with holes and\n`notch_face_corner_with_arc` reads only the outer wire, so a fillet\nending on such a cap keeps the cap's square corner under a runout patch.\nOn a 60 x 40 x 30 box shelled 3 with its top open, the four outer\nvertical edges filleted r 6 measure right but mesh with 16 open edges,\nand one inner vertical edge filleted r 3 fails the incidence audit, as\ndoes a vertical corner of a blind pocket.\n\n## Change\n\n- `closed_rim_info` also takes a rim that is one of its cap's holes,\nwhen the cap's outer wire and other holes all stay outside the plate\ncontact circle (an ellipse's points lying between its semi-axes from its\ncentre, and a NURBS edge there declining). `assemble_closed_rim` puts\nthe contact circle in that hole's place and keeps the outer wire; the\nwall is shortened as before. At a hole rim the cap and the wall take\ntheir new circles' senses from the rim circle's normal against the axis,\nso a rim turning against it keeps both shared edges consistent.\n- At any closed rim, planning fails when the wall contact would land at\nor past the lowest point of the wall boundary the rebuild keeps (every\nwall edge but the rim, and the far end of each seam), as for a fillet\nwider than its plate is thick or a post whose sloped top dips below the\ncontact. A line counts its endpoints, a circle or ellipse its whole\ncurve's lowest point, and a NURBS edge its control hull's when every\nweight is positive; any other NURBS edge counts as reaching the plate.\n- `torus_band_needs_reversal` reads the band's side from its tangency\nwith the wall: at the wall contact the band's outward normal is the\nwall's, so the band is reversed when the torus's normal there opposes\nit. The axial rule it replaces held for convex rims only, and stays as\nthe fallback when the contact does not project onto the wall.\n- `terminal_cap_is_notchable` takes caps with holes and finds the\ncorner's edges on whichever wire holds the vertex, and\n`notch_face_corner_with_arc` replaces the corner on that wire, outer or\nhole.\n- The new arc lies in the triangle between its ends and the corner, so a\nfillet end whose triangle another boundary of the cap reaches into fails\nplanning instead of building crossing boundaries: a fillet wider than a\ncup's wall reaches across its mouth. A line is tested exactly, a NURBS\nedge by the hull of its control points when every weight is positive\n(any other NURBS edge counts as reaching it), and a circle or ellipse by\na polyline held to the triangle widened by its chords' sag.\n- The roadmap records both as closed, and opens a row for a round\npocket's floor (below).\n\n## Tests\n\n- `fillet_round_rims.rs`: `a_posts_foot_on_a_plate_fills_its_ring` (a\nradius 5 post on a 30 x 30 x 4 plate, r 1 and 3) and\n`a_bores_mouth_in_a_plate_rounds_off` (a radius 5 bore through a 30 x 30\nx 8 plate, r 1 and 2) check each result is valid, watertight at 0.01,\nand changed in volume by the ring the fillet fills or removes, `(1 -\nπ/4) r² · 2π (5 + c r)` with `c` the section centroid's offset, within\n1e-6 of the part's volume. The rod and tube tests now share that helper\nand its tolerance, which was 1e-4.\n- `a_bores_mouth_rounds_off_whichever_way_its_rim_turns` cuts the bore\nwith a cylinder standing either way up;\n`a_bores_mouth_fillet_wider_than_its_plate_is_refused` fillets a radius\n5 bore through a 2 thick plate at r 3. Both failed before the change\nthat added them.\n`a_posts_foot_fillet_reaching_past_its_sloped_top_is_refused`: a radius\n5 post on a 16 x 16 x 4 plate whose top rises 0.3 along x and dips to\n1.5 above its foot, filleted r 2, was accepted while the check read the\nboundary's highest point.\n`a_posts_foot_under_a_sloped_top_fills_its_ring` fillets the same foot\nat r 1 by the ring.\n- `fillet_holed_caps.rs`: the shelled box's four outer corners at r 6,\nits four inner corners and one alone at r 3, and the blind pocket's\ncorner at r 1 and 5, each against the prism the fillet removes or fills.\n-\n`a_shelled_boxs_corner_fillet_wider_than_its_wall_never_crosses_the_mouth`:\nthe cup's outer corners at r 12 are refused, or come back valid and\nwatertight. `a_bores_mouth_in_an_elliptical_plate_rounds_off`: a radius\n5 bore through a plate whose outer edge is an ellipse of semi-axes 20\nand 15 rounds off at r 1 by the ring.\n- Unit tests in `fillet_builder.rs` cover the triangle test: a degree-1\nexcursion inside a knot span 0.002 wide, which 64 samples step over and\nthe control hull catches; a quadratic with a negative weight whose hull\nis clear while the curve is not; a hull that only touches the chord; and\na polyline that reaches the triangle only once widened by its sag.\n- `fillet_cone_bottom_rim_produces_torus` asserted a frustum's\nbottom-rim fillet whose ball rolls below the base, its wall contact on\nthe cone's extension. The reach check refuses that fillet, and\n`fillet_cone_bottom_rim_with_its_contact_off_the_frustum_is_refused`\nchecks the refusal; #2155 places that ball on the frustum and checks its\nband.\n- The first five integration tests fail on `main`, and the last two with\ntheir part of the change taken out.\n- `a_round_pockets_floor_fills_its_ring` is ignored: the plane x\ncylinder stripe puts a round pocket floor's contacts on the convex side\n(radius 6 and z 3 for a radius 5 pocket whose floor is at z 4), with or\nwithout this change. #2155 fixes it.\n- Before this branch's rebase onto #2152, `cargo test --workspace\n--exclude brepkit-render` passed 3718 tests. On this head, `cargo test\n--release -p brepkit-blend -p brepkit-operations -p brepkit-wasm -p\nbrepkit-io` passes 2329 tests.",
+          "timestamp": "2026-10-29T14:36:44-07:00",
+          "tree_id": "2f73df91c9a28cde180708b450202b63da7c8243",
+          "url": "https://github.com/andymai/brepkit/commit/dc2cb3b8d0c0465677cffdca7154d3f2c3575f28"
+        },
+        "date": 1793309962996,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 882734,
+            "range": "± 1901",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 949228,
+            "range": "± 5587",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11197,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 532080,
+            "range": "± 14941",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23110725,
+            "range": "± 577917",
             "unit": "ns/iter"
           }
         ]
