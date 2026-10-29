@@ -2365,7 +2365,12 @@ fn cap_edge_reaches_triangle(
             let sag = major.powi(3) / (minor * minor) * step * step / 8.0;
             path_within_of_triangle(&polyline(), triangle, sag * 1.01)
         }
+        // The hull bounds a rational curve only while every weight is
+        // positive; any other curve cannot be certified clear.
         EdgeCurve::NurbsCurve(curve) => {
+            if !curve.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
+                return true;
+            }
             let hull: Vec<(f64, f64)> = curve.control_points().iter().map(|&p| flat(p)).collect();
             hull_overlaps_triangle(&hull, triangle)
         }
@@ -3777,6 +3782,43 @@ mod tests {
             "the samples step over the spike"
         );
         assert!(hull_overlaps_triangle(&points, NOTCH));
+    }
+
+    #[test]
+    fn a_curve_with_a_negative_weight_is_never_certified_clear() {
+        // Its control hull lies outside the triangle, yet the curve passes
+        // through (1, 1).
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(4.0, 4.0, 0.0),
+                Point3::new(7.0, 8.0, 0.0),
+                Point3::new(4.0, 5.0, 0.0),
+            ],
+            vec![1.0, -0.5, 1.0],
+        )
+        .unwrap();
+        let middle = curve.evaluate(0.5);
+        assert!((middle.x() - 1.0).abs() < 1e-9 && (middle.y() - 1.0).abs() < 1e-9);
+        assert!(!hull_overlaps_triangle(
+            &[(4.0, 4.0), (7.0, 8.0), (4.0, 5.0)],
+            NOTCH
+        ));
+
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(4.0, 4.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(4.0, 5.0, 0.0), 1e-7));
+        let edge_id = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(curve)));
+        let edge = topo.edge(edge_id).unwrap();
+        let flat = |p: Point3| (p.x(), p.y());
+        assert!(cap_edge_reaches_triangle(
+            edge,
+            Point3::new(4.0, 4.0, 0.0),
+            Point3::new(4.0, 5.0, 0.0),
+            &flat,
+            NOTCH,
+        ));
     }
 
     #[test]
