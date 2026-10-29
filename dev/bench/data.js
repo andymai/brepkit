@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793243987997,
+  "lastUpdate": 1793245450016,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59345,6 +59345,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18041285,
             "range": "± 256928",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fc24fc07525c8ee37e415e11a154eb3d75d45d3e",
+          "message": "chore(main): release 4.4.3 (#2134)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.4.3](https://github.com/andymai/brepkit/compare/v4.4.2...v4.4.3)\n(2026-10-29)\n\n\n### Bug Fixes\n\n* **math:** close plane sections of NURBS surfaces that loop\n([#2133](https://github.com/andymai/brepkit/issues/2133))\n([1d83534](https://github.com/andymai/brepkit/commit/1d8353403d434ac8e6e63b15d03350d4e5036500))\n* **math:** intersect parallel cylinders along exact rulings\n([#2130](https://github.com/andymai/brepkit/issues/2130))\n([4c4a183](https://github.com/andymai/brepkit/commit/4c4a1835a266d1de9c20cef3a7acd0c86e3ff910))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-29T03:41:05Z",
+          "tree_id": "0958ada46985d63bea893cc712f08d3c3752adec",
+          "url": "https://github.com/andymai/brepkit/commit/fc24fc07525c8ee37e415e11a154eb3d75d45d3e"
+        },
+        "date": 1793245441691,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1098876,
+            "range": "± 29095",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1173352,
+            "range": "± 90411",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13221,
+            "range": "± 149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674090,
+            "range": "± 6353",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28759300,
+            "range": "± 213956",
             "unit": "ns/iter"
           }
         ]
