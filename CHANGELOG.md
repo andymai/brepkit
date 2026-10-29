@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.5](https://github.com/andymai/brepkit/compare/v4.5.4...v4.5.5) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** meet cones sharing an apex along their shared rulings ([#2142](https://github.com/andymai/brepkit/issues/2142)) ([45a56c6](https://github.com/andymai/brepkit/commit/45a56c62fa86ed4f37df8b910b2cb23f33e5f5ae))
+
 ## [4.5.4](https://github.com/andymai/brepkit/compare/v4.5.3...v4.5.4) (2026-10-29)
 
 
