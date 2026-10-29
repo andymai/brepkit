@@ -6830,10 +6830,9 @@ fn nurbs_nurbs_intersection(
     Ok(results)
 }
 
-/// Quadric × NURBS intersection: convert the analytic surface to its NURBS
-/// representation over the face's v-range (exact rational for the cylinder;
-/// cone, sphere and torus use their sampled conversions) and march it
-/// against the partner. This arm used to return no curves ("deferred to
+/// Quadric × NURBS intersection: convert the analytic surface to its exact
+/// rational NURBS (over the face's v-range for a cylinder or cone) and march
+/// it against the partner. This arm used to return no curves ("deferred to
 /// later phases" — no such phase existed), so any boolean pairing a quadric
 /// with a NURBS face silently never split either side: the NURBS solid's
 /// kept pieces and the quadric's kept pieces shared no seam and the result
@@ -6869,7 +6868,7 @@ fn analytic_nurbs_intersection(
             let (v0, v1) = v_range.unwrap_or_else(|| axial_range(c.apex(), c.axis()));
             c.to_rational_nurbs(v0, v1)
         }
-        FaceSurface::Sphere(s) => s.to_nurbs(),
+        FaceSurface::Sphere(s) => s.to_rational_nurbs(),
         FaceSurface::Torus(t) => t.to_rational_nurbs(),
         _ => return Ok(Vec::new()),
     };
@@ -10137,5 +10136,43 @@ mod tests {
         };
         assert_eq!(cut(1e-8), 1);
         assert_eq!(cut(1e-11), 0);
+    }
+
+    /// A flat NURBS sheet at height 0.5 cuts a ball of radius 2 in a circle
+    /// of radius √3.75, which the section follows on the ball itself, not
+    /// on a faceted stand-in for it.
+    #[test]
+    fn a_ball_meets_a_nurbs_sheet_on_the_ball() {
+        let corner = |x: f64, y: f64| Point3::new(x, y, 0.5);
+        let sheet = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![corner(-2.5, -2.5), corner(-2.5, 2.5)],
+                vec![corner(2.5, -2.5), corner(2.5, 2.5)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let ball = FaceSurface::Sphere(
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0).unwrap(),
+        );
+        let raw = analytic_nurbs_intersection(&ball, None, &sheet).unwrap();
+        assert!(!raw.is_empty());
+        let mut far = 0.0_f64;
+        for curve in &raw {
+            let EdgeCurve::NurbsCurve(c) = &curve.curve else {
+                unreachable!("a marched section is a NURBS curve")
+            };
+            let (t0, t1) = c.domain();
+            for i in 0..=400 {
+                let p = c.evaluate(t0 + (t1 - t0) * f64::from(i) / 400.0);
+                let on_ball = ((p - Point3::new(0.0, 0.0, 0.0)).length() - 2.0).abs();
+                far = far.max(on_ball).max((p.z() - 0.5).abs());
+            }
+        }
+        assert!(far < 1e-5, "section strays {far:.2e} off the ball");
     }
 }
