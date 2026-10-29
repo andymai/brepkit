@@ -1,0 +1,26 @@
+crates/operations/src/section.rs
+  s_a2dc21dbec3f2b::t_ae043353983f92 112-113
+  s_a2dc21dbec3f2b::t_bc2874746c38f7 121,126
+crates/math/src/nurbs/intersection/tests.rs
+  s_a2dc21dbec3f2b::t_bc2874746c38f7 2189-2191,2235-2240,2254-2259,2299-2326
+  s_a2dc21dbec3f2b::t_78d7d8d04152e5 2327-2328
+crates/math/src/nurbs/intersection/plane.rs
+  s_a2dc21dbec3f2b::t_bc2874746c38f7 54,59,270-279,500-501,697,704,708-712
+  s_a2dc21dbec3f2b::t_c0171939c1e5ae 713-714
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e3afbaad7ee121c1e52299a6613a27236dfa1a54",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
