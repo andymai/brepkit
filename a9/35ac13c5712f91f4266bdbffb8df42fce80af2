@@ -1,0 +1,14 @@
+crates/blend/src/analytic/tests.rs
+  h_b755e1950659f4 5553-5655
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a935ac13c5712f91f4266bdbffb8df42fce80af2",
+  "prompts": {},
+  "humans": {
+    "h_b755e1950659f4": {
+      "author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
