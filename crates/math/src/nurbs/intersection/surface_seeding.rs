@@ -12,7 +12,7 @@ use crate::nurbs::projection::{project_point_to_surface, project_point_to_surfac
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
-use super::chaining::{build_curves_from_chains, chain_traced_segments};
+use super::chaining::{Section, build_curves_from_chains, chain_traced_segments};
 use super::curve_surface::intersect_curve_surface;
 use super::surface_marching::{
     constrain_param, constrain_state, march_with_branches, near_existing_segment,
@@ -159,20 +159,31 @@ pub fn intersect_nurbs_nurbs(
     if chains.is_empty() {
         return Ok(Vec::new());
     }
-    // Newton aims a tenth inside the tolerance and its fallback accepts ten
-    // times its aim, so no point the fit adds strays past the tolerance.
     let foot = |s: &NurbsSurface, p: Point3, uv: (f64, f64)| {
         project_point_to_surface_from(s, p, uv, tolerance)
             .or_else(|_| project_point_to_surface(s, p, tolerance))
             .ok()
     };
+    let off = |p: Point3, near: &IntersectionPoint| {
+        let a = foot(surface1, p, near.param1)?;
+        let b = foot(surface2, p, near.param2)?;
+        Some(a.distance.max(b.distance))
+    };
+    // Newton aims a tenth inside the tolerance and its fallback accepts ten
+    // times its aim, so no point the fit adds strays past the tolerance.
     let settle = |p: Point3, near: &IntersectionPoint| {
         let a = foot(surface1, p, near.param1)?;
         let b = foot(surface2, p, near.param2)?;
-        let q = refine_ssi_point(surface1, surface2, a.u, a.v, b.u, b.v, tolerance * 0.1)?;
-        Some((a.distance.max(b.distance), q))
+        refine_ssi_point(surface1, surface2, a.u, a.v, b.u, b.v, tolerance * 0.1)
     };
-    build_curves_from_chains(&chains, tolerance, &settle)
+    build_curves_from_chains(
+        &chains,
+        tolerance,
+        &Section {
+            off: &off,
+            settle: &settle,
+        },
+    )
 }
 
 /// Curves between boundary seeds no traced segment reached. A march keeps

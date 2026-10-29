@@ -83,10 +83,14 @@ pub(super) fn chain_traced_segments(
     chains
 }
 
-/// How far a point lies from the farther surface, and the intersection
-/// point Newton reaches from it, both started beside a chain point.
-pub(super) type Settle<'a> =
-    dyn Fn(Point3, &IntersectionPoint) -> Option<(f64, IntersectionPoint)> + 'a;
+/// A section's two surfaces as a fit sees them, each closure started from
+/// a chain point beside the point it is given.
+pub(super) struct Section<'a> {
+    /// How far a point lies from the farther surface.
+    pub off: &'a dyn Fn(Point3, &IntersectionPoint) -> Option<f64>,
+    /// The intersection point Newton reaches from a point.
+    pub settle: &'a dyn Fn(Point3, &IntersectionPoint) -> Option<IntersectionPoint>,
+}
 
 /// Fit a NURBS curve through each ALREADY-ORDERED chain of points.
 ///
@@ -94,11 +98,11 @@ pub(super) type Settle<'a> =
 /// exactly (the plane x NURBS grid scan links crossings through shared
 /// cells): its distance threshold cannot separate a sampling gap along one
 /// branch from two genuinely-close branches, and no statistic fixes that.
-/// Each fit holds `tolerance` as [`fit_within`] measures it with `settle`.
+/// Each fit holds `tolerance` against `section` (see [`fit_within`]).
 pub(super) fn build_curves_from_chains(
     chains: &[Vec<IntersectionPoint>],
     tolerance: f64,
-    settle: &Settle<'_>,
+    section: &Section<'_>,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
     let mut curves = Vec::with_capacity(chains.len());
 
@@ -118,7 +122,7 @@ pub(super) fn build_curves_from_chains(
             continue;
         }
 
-        let curve = fit_within(&mut deduped, tolerance, settle)?;
+        let curve = fit_within(&mut deduped, tolerance, section)?;
         curves.push(IntersectionCurve {
             curve,
             points: deduped,
@@ -136,25 +140,25 @@ const MAX_FIT_POINTS: usize = 4096;
 const MAX_FIT_ROUNDS: usize = 8;
 
 /// Interpolate an ordered chain of intersection points, adding points until
-/// the curve holds `tolerance` halfway between each pair of neighbours.
+/// the curve holds `tolerance` between each pair of neighbours.
 ///
-/// `settle(p, near)` gives how far `p` lies from the farther of the two
-/// surfaces and the intersection point Newton reaches from `p`, both
-/// started from `near`, a chain point beside it. Where the curve's midpoint
-/// (in its own parameter) between two neighbours strays past `tolerance`,
-/// the point it settles to joins the chain between them, if it lands nearer
-/// each of them than they are to each other. A marched chain is accurate at
-/// its points, but a cubic through points a fixed step apart strays between
-/// them by the fourth power of that step, so a split cuts the stray about
-/// sixteenfold. The spline is global, though, and one split can leave a
-/// half straying more than its whole did, so a span is left as it is only
-/// when two splits have not halved its stray: the chain there is no smooth
-/// run of the section (a crossing, a tangency, points out of order), and
-/// more points cannot fix it.
+/// The curve is measured at the quarter, half and three-quarter marks (in
+/// its own parameter) between two neighbours: a span bending through an
+/// inflection can pass its middle on the section and stray either side of
+/// it. Where any mark strays past `tolerance`, the point the middle settles
+/// to joins the chain between them, if it lands nearer each of them than
+/// they are to each other. A marched chain is accurate at its points, but a
+/// cubic through points a fixed step apart strays between them by the
+/// fourth power of that step, so a split cuts the stray about sixteenfold.
+/// The spline is global, though, and one split can leave a half straying
+/// more than its whole did, so a span is left as it is only when two splits
+/// have not halved its stray: the chain there is no smooth run of the
+/// section (a crossing, a tangency, points out of order), and more points
+/// cannot fix it. No round adds more points than `MAX_FIT_POINTS` leaves.
 pub(super) fn fit_within(
     chain: &mut Vec<IntersectionPoint>,
     tolerance: f64,
-    settle: &Settle<'_>,
+    section: &Section<'_>,
 ) -> Result<NurbsCurve, MathError> {
     // The strays of the splits that made each span, the latest first; a
     // span left as it is holds zeros.
@@ -168,28 +172,43 @@ pub(super) fn fit_within(
         if round > MAX_FIT_ROUNDS || chain.len() >= MAX_FIT_POINTS {
             return Ok(curve);
         }
+        let mut budget = MAX_FIT_POINTS - chain.len();
         let params = chord_length_params(&positions);
         let mut grown = Vec::with_capacity(chain.len() * 2);
         let mut grown_at = Vec::with_capacity(split_at.len() * 2);
         for ((pair, t), &[last, before]) in chain.windows(2).zip(params.windows(2)).zip(&split_at) {
             grown.push(pair[0]);
-            let open = last > 0.0;
-            let mid = curve.evaluate(0.5 * (t[0] + t[1]));
-            let strayed = if open {
-                settle(mid, &pair[0]).filter(|&(off, _)| off > tolerance)
+            let at = |f: f64| curve.evaluate(t[0] + f * (t[1] - t[0]));
+            let stray = if last > 0.0 {
+                [(0.25, &pair[0]), (0.5, &pair[0]), (0.75, &pair[1])]
+                    .into_iter()
+                    .filter_map(|(f, near)| (section.off)(at(f), near))
+                    .fold(None, |far: Option<f64>, off| {
+                        Some(far.map_or(off, |far| far.max(off)))
+                    })
             } else {
                 None
             };
-            let Some((off, q)) = strayed else {
-                grown_at.push(if open { [f64::INFINITY; 2] } else { [0.0; 2] });
+            let Some(stray) = stray.filter(|&stray| stray > tolerance) else {
+                grown_at.push(if last > 0.0 {
+                    [f64::INFINITY; 2]
+                } else {
+                    [0.0; 2]
+                });
                 continue;
             };
             let gap = (pair[1].point - pair[0].point).length();
-            let between = (q.point - pair[0].point).length() < gap
-                && (q.point - pair[1].point).length() < gap;
-            if between && off <= 0.5 * before {
+            let split = (budget > 0 && stray <= 0.5 * before)
+                .then(|| (section.settle)(at(0.5), &pair[0]))
+                .flatten()
+                .filter(|q| {
+                    (q.point - pair[0].point).length() < gap
+                        && (q.point - pair[1].point).length() < gap
+                });
+            if let Some(q) = split {
                 grown.push(q);
-                grown_at.extend([[off, last], [off, last]]);
+                grown_at.extend([[stray, last], [stray, last]]);
+                budget -= 1;
             } else {
                 grown_at.push([0.0; 2]);
             }

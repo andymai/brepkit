@@ -1770,3 +1770,44 @@ fn a_marched_section_holds_its_tolerance_between_points() {
     });
     assert!(far < 5e-6, "section strays {far:.2e}");
 }
+
+/// The plane `v − u = 0.9` crosses the cubic sheet `z = (x − 0.05)³` from
+/// one corner edge to the other, through the sheet's inflection: the line
+/// between the two grid crossings meets the section at its middle and
+/// strays 4.7e-5 at its quarter marks, which the fit must catch.
+#[test]
+fn a_plane_section_through_an_inflection_holds_its_tolerance() {
+    let a = 0.05_f64;
+    let z = [
+        -a.powi(3),
+        a * a - a.powi(3),
+        2.0 * a * a - a.powi(3) - a,
+        (1.0 - a).powi(3),
+    ];
+    let cps = (0..4)
+        .map(|i| {
+            let x = f64::from(i) / 3.0;
+            vec![
+                Point3::new(x, 0.0, z[i as usize]),
+                Point3::new(x, 1.0, z[i as usize]),
+            ]
+        })
+        .collect();
+    let sheet = NurbsSurface::new(
+        3,
+        1,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        cps,
+        vec![vec![1.0; 2]; 4],
+    )
+    .unwrap();
+    let n = Vec3::new(-1.0, 1.0, 0.0);
+    let curves = intersect_plane_nurbs(&sheet, n, 0.9, 10).unwrap();
+    assert_eq!(curves.len(), 1);
+    let far = farthest(&curves, |p| {
+        let plane = (n.dot(Vec3::new(p.x(), p.y(), p.z())) - 0.9).abs() / n.length();
+        plane.max((p.z() - (p.x() - a).powi(3)).abs())
+    });
+    assert!(far < 1e-6, "section strays {far:.2e}");
+}
