@@ -2775,26 +2775,42 @@ fn crossing_equal_cylinders(
     c2: &CylindricalSurface,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
     let (d1, d2, r) = (c1.axis(), c2.axis(), c1.radius());
+    if (c2.radius() - r).abs() > 8.0 * f64::EPSILON * r {
+        return Ok(None);
+    }
+    // An ellipse's semi-major axis is `2r / |d1 ∓ d2|`. Rounding the axes
+    // turns its major axis by about `ε / |d1 ∓ d2|`, which moves its far
+    // vertices by `2rε / |d1 ∓ d2|²`; axes nearer parallel than keeps that
+    // well inside the tolerance are left to the rulings.
+    let bisectors = [d1 - d2, d1 + d2];
+    let tol = Tolerance::new().linear;
+    if bisectors
+        .iter()
+        .any(|b| 2.0 * r * f64::EPSILON > 1e-3 * tol * b.dot(*b))
+    {
+        return Ok(None);
+    }
     let across = d1.cross(d2);
     let sin = across.length();
-    if sin < 1e-9 || (c2.radius() - r).abs() > 8.0 * f64::EPSILON * r {
-        return Ok(None);
-    }
     let normal = across * (1.0 / sin);
     let w = c1.origin() - c2.origin();
-    if w.dot(normal).abs() > 64.0 * f64::EPSILON * r.max(w.length()) {
-        return Ok(None);
-    }
     let cos = d1.dot(d2);
     let along = cos.mul_add(d2.dot(w), -d1.dot(w)) / (sin * sin);
     let centre = c1.origin() + d1 * along;
+    // The miss is read at the crossing's own scale: origins far along
+    // their axes leave it more rounding than that, and are left to the
+    // rulings too.
+    let scale = r.max((centre - Point3::new(0.0, 0.0, 0.0)).length());
+    if w.dot(normal).abs() > 64.0 * f64::EPSILON * scale {
+        return Ok(None);
+    }
     // Each ellipse's major axis, turned to lean along the first axis, and
     // its semi-major axis.
-    let majors = [d1 - d2, d1 + d2].map(|bisector| {
-        let plane = bisector * (1.0 / bisector.length());
-        let major = plane.cross(normal);
+    let majors = bisectors.map(|bisector| {
+        let length = bisector.length();
+        let major = (bisector * (1.0 / length)).cross(normal);
         let major = if major.dot(d1) < 0.0 { -major } else { major };
-        (major, r / plane.dot(d1).abs())
+        (major, 2.0 * r / length)
     });
     let corner = std::f64::consts::FRAC_1_SQRT_2;
     let half = [(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0)];
@@ -5632,29 +5648,38 @@ mod tests {
 
     /// Axes that miss each other by 1e-9, or radii that differ by as much,
     /// part the curves where the ellipses would cross; neither is taken for
-    /// a pair of ellipses.
+    /// a pair of ellipses, nor a miss of 1e-6 read between origins 1e8
+    /// apart along an axis.
     #[test]
     fn nearly_crossing_equal_cylinders_are_not_ellipses() {
         let z = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
             .unwrap();
-        let x = |y: f64, r: f64| {
-            CylindricalSurface::new(Point3::new(-2.0, y, 0.0), Vec3::new(1.0, 0.0, 0.0), r).unwrap()
+        let x = |(x0, y): (f64, f64), r: f64| {
+            CylindricalSurface::new(Point3::new(x0, y, 0.0), Vec3::new(1.0, 0.0, 0.0), r).unwrap()
         };
-        assert!(
-            crossing_equal_cylinders(&z, &x(0.0, 1.0))
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            crossing_equal_cylinders(&z, &x(1e-9, 1.0))
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            crossing_equal_cylinders(&z, &x(0.0, 1.0 + 1e-9))
-                .unwrap()
-                .is_none()
-        );
+        let taken = |c: &CylindricalSurface| crossing_equal_cylinders(&z, c).unwrap().is_some();
+        assert!(taken(&x((-2.0, 0.0), 1.0)));
+        assert!(!taken(&x((-2.0, 1e-9), 1.0)));
+        assert!(!taken(&x((-2.0, 0.0), 1.0 + 1e-9)));
+        assert!(!taken(&x((-1e8, 1e-6), 1.0)));
+    }
+
+    /// Axes 1e-8 and 1.5e-5 apart in angle cross in ellipses whose far
+    /// vertices rounding alone would move past the tolerance; they are
+    /// left to the rulings.
+    #[test]
+    fn nearly_parallel_equal_cylinders_are_not_ellipses() {
+        let z = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 10.0)
+            .unwrap();
+        for slope in [1e-8, 1.5e-5] {
+            let tilted = CylindricalSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(slope, 0.0, 1.0),
+                10.0,
+            )
+            .unwrap();
+            assert!(crossing_equal_cylinders(&z, &tilted).unwrap().is_none());
+        }
     }
 
     #[test]
