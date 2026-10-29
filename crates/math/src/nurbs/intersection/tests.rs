@@ -2696,6 +2696,50 @@ fn a_flat_patch_whose_section_the_grid_misses_is_still_searched() {
     }
 }
 
+/// The notched sheet of the test above, crossing `z = 0` broadly at
+/// `x = 0.1` as well: the plane's grid finds that line, and the notch's
+/// span, whose control points lie on both sides of the plane, holds none of
+/// the section, so the search looks there too.
+#[test]
+fn a_flat_patch_whose_section_misses_a_notch_beside_a_found_line_is_still_searched() {
+    let row = |x: f64, z: f64| vec![Point3::new(x, 0.0, z), Point3::new(x, 1.0, z)];
+    let notch = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 0.2, 0.49, 0.5, 0.51, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            row(0.0, -1.0),
+            row(0.2, 1.0),
+            row(0.49, 1.0),
+            row(0.5, -1.0),
+            row(0.51, 1.0),
+            row(1.0, 1.0),
+        ],
+        vec![vec![1.0; 2]; 6],
+    )
+    .unwrap();
+    let sheet = wide_sheet(0.0);
+    for (first, second) in [(&notch, &sheet), (&sheet, &notch)] {
+        let curves = intersect_nurbs_nurbs(first, second, 32, 0.0).unwrap();
+        let near = |x: f64| {
+            curves
+                .iter()
+                .any(|ic| ic.points.iter().all(|p| (p.point.x() - x).abs() < 1e-6))
+        };
+        assert!(near(0.1), "the broad crossing is missing");
+        assert!(near(0.495) || near(0.505), "the notch is missing");
+        let far = farthest(&curves, |p| {
+            [0.1, 0.495, 0.505]
+                .iter()
+                .map(|x| (p.x() - x).abs())
+                .fold(f64::INFINITY, f64::min)
+                .max(p.z().abs())
+        });
+        assert!(far < 1e-6, "a curve strays {far:.2e}");
+    }
+}
+
 /// The plane `z = 0` of a flat patch whose lower edge bows up 0.001 into it
 /// at `x = ½` cuts the sheet `y = 0` in a line the patch holds at every
 /// tenth along it but not across its middle: the line between the points

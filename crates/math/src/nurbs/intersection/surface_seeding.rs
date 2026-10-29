@@ -58,8 +58,8 @@ const CHORD_CHECKS: usize = 4;
 /// each point's parameters on both patches (`flat`'s first when
 /// `flat_first`). `None` unless the section lies on `flat` itself, at its
 /// points and between them: a section reaching past the patch is left to
-/// the marcher, and so is an empty one, which the plane's grid can miss
-/// where the search below finds it.
+/// the marcher, and so is one the plane's grid may have missed a branch
+/// of, where the search below can find it.
 pub(super) fn planar_patch_sections(
     flat: &NurbsSurface,
     other: &NurbsSurface,
@@ -72,6 +72,38 @@ pub(super) fn planar_patch_sections(
     let mut curves = super::intersect_plane_nurbs(other, normal, offset, samples)?;
     if curves.is_empty() {
         return Ok(None);
+    }
+    // The plane's grid can miss a branch narrower than its step while it
+    // finds others. A span of `other` whose control points lie on both
+    // sides of the plane may meet it there; where no point of the section
+    // lies in such a span, the search looks instead.
+    let rounding = 64.0
+        * f64::EPSILON
+        * other
+            .control_points()
+            .iter()
+            .flatten()
+            .map(|&p| super::plane::plane_terms(normal, offset, p))
+            .fold(0.0, f64::max);
+    let Ok(patches) = surface_to_bezier_patches(other) else {
+        return Ok(None);
+    };
+    for patch in patches {
+        let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+        for p in patch.surface.control_points().iter().flatten() {
+            let side = normal.dot(Vec3::new(p.x(), p.y(), p.z())) - offset;
+            (low, high) = (low.min(side), high.max(side));
+        }
+        let (u0, u1) = patch.u_range;
+        let (v0, v1) = patch.v_range;
+        let (su, sv) = (1e-9 * (u1 - u0), 1e-9 * (v1 - v0));
+        let met = curves.iter().flat_map(|c| &c.points).any(|q| {
+            let (u, v) = q.param1;
+            (u0 - su..=u1 + su).contains(&u) && (v0 - sv..=v1 + sv).contains(&v)
+        });
+        if low < -rounding && high > rounding && !met {
+            return Ok(None);
+        }
     }
     let (u_lo, u_hi) = flat.domain_u();
     let (v_lo, v_hi) = flat.domain_v();
