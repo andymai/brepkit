@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793314705485,
+  "lastUpdate": 1793316371748,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60641,6 +60641,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29785640,
             "range": "± 62385",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "69c2f9918394624a41b4a869986040411cf2ded6",
+          "message": "fix(blend): sweep an open arc's fillet the way the arc runs (#2156)\n\nA fillet along an arc that runs clockwise about its wall's axis now\nsweeps that arc, so tangent loops of lines and arcs fillet exactly.\n\nToday `plane_cylinder_fillet` and `plane_cone_fillet` unwrap an open\narc's end angle to lie above its start, which assumes the arc runs\ncounter-clockwise in the wall's angle. A pocket's rounded corner on its\nfloor and a block's rounded corner on its top can run the other way, and\ntheir bands then sweep three quarters of a turn. On an 80 x 60 x 20\nblock less a 50 x 30 x 8 pocket whose corners are filleted r 5, one\ncorner arc of the floor filleted r 2 measures 83203.48 exact against\n84153.89 meshed, with 14 open mesh edges, and the whole floor loop reads\n84057.95 where it should rise to 84299.25.\n\n## Change\n\n- Both take the span from the start angle to whichever end angle holds\nthe spine's middle (`arc_span_end`), counter-clockwise or clockwise.\n`circle_arc_to_nurbs` and the pcurves already take a descending span.\n- The roadmap records it as closed.\n\n## Tests\n\n- `fillet_tangent_loops.rs`: the pocket's floor loop at r 2 after its\ncorners are filleted r 5, each of its four corner arcs alone, and the\nloop round the top of a 50 x 40 x 30 block whose vertical edges are\nfilleted R 8, at R 4. Each result is valid, watertight, and changed in\nvolume by the prisms along the straight runs plus the quarter turns\nabout the corner arcs, within 1e-6 of the part's volume. All three tests\nfail without the change.\n- `plane_cone_fillet_open_arc_sweeps_its_own_quarter_either_way_round`:\nan open quarter of a frustum's bottom rim, traversed both ways, puts its\nplate contact's middle at the arc's middle; without the change the run\nthat is clockwise in the cone's angle puts it at -135 degrees.\n- On this head, `cargo test --release -p brepkit-blend -p\nbrepkit-operations -p brepkit-wasm -p brepkit-io` passes 2347 tests.\n`compound_cut_edge_tangent_tools_stays_analytic` failed in an earlier\nfull run and passes alone, here and on `main`: it reads the process-wide\nmesh fallback counter, which other tests in a run also move.",
+          "timestamp": "2026-10-29T16:23:38-07:00",
+          "tree_id": "7c80f1f2fea2ce0b5026f14d2784d8b51a667152",
+          "url": "https://github.com/andymai/brepkit/commit/69c2f9918394624a41b4a869986040411cf2ded6"
+        },
+        "date": 1793316362814,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 682276,
+            "range": "± 21424",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 718223,
+            "range": "± 6682",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8223,
+            "range": "± 64",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 405577,
+            "range": "± 3903",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18431723,
+            "range": "± 147615",
             "unit": "ns/iter"
           }
         ]
