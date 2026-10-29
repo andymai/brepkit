@@ -5,7 +5,7 @@ use crate::nurbs::projection::{project_point_to_surface, project_point_to_surfac
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
-use super::chaining::{Section, build_curves_from_chains};
+use super::chaining::{Section, build_curves_from_chains, fit_within};
 use super::{IntersectionCurve, IntersectionPoint, MAX_NEWTON_ITER};
 
 /// Intersect a plane with a NURBS surface.
@@ -109,7 +109,15 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    if crossings.is_empty() {
+    let tiny = tiny_loops(
+        surface,
+        plane_normal,
+        plane_d,
+        &distances,
+        (u_min, u_step),
+        (v_min, v_step),
+    );
+    if crossings.is_empty() && tiny.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -227,7 +235,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    if ordered_chains.is_empty() {
+    if ordered_chains.is_empty() && tiny.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -246,29 +254,253 @@ pub fn intersect_plane_nurbs(
         let foot = foot(p, near)?;
         refine_plane_surface_point(surface, plane_normal, plane_d, (foot.u, foot.v), None)
     };
-    build_curves_from_chains(
-        &ordered_chains,
-        FIT_TOLERANCE,
-        &Section {
-            off: &off,
-            settle: &settle,
-        },
-    )
+    let section = Section {
+        off: &off,
+        settle: &settle,
+    };
+    let mut curves = build_curves_from_chains(&ordered_chains, FIT_TOLERANCE, &section)?;
+    // A tiny loop runs where the plane all but touches the surface, so a
+    // point can lie close to both well off the loop: its stray is how far
+    // settling moves it onto the section.
+    let to_loop = |p: Point3, near: &IntersectionPoint| Some((p - settle(p, near)?.point).length());
+    let tiny_section = Section {
+        off: &to_loop,
+        settle: &settle,
+    };
+    // A tiny loop's points lie evenly round it, so none is one met twice,
+    // however close: the chains' merge of points within 1e-6 would fold a
+    // loop smaller than that into a point.
+    for mut chain in tiny {
+        let curve = fit_within(&mut chain, FIT_TOLERANCE, &tiny_section)?;
+        curves.push(IntersectionCurve {
+            curve,
+            points: chain,
+        });
+    }
+    Ok(curves)
 }
 
 /// How far a fitted section may stray from the plane or the surface.
 const FIT_TOLERANCE: f64 = 1e-7;
 
+/// Points round each loop [`tiny_loops`] finds.
+const TINY_LOOP_POINTS: usize = 32;
+
+/// Closed sections that enclose no grid node, so that no grid edge sees
+/// the plane's distance change sign. Each winds round an extremum of the
+/// distance whose value has the other sign from the nodes round it. A node
+/// holding the least distance of its block, all of one sign, seeds Newton
+/// for the extremum anywhere on the patch. From there rays bracket the
+/// section and bisection settles each point to rounding, at any scale; a
+/// loop that leaves the patch or holds a node is not one of these.
+#[allow(clippy::cast_precision_loss)]
+fn tiny_loops(
+    surface: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    distances: &[Vec<f64>],
+    (u_min, u_step): (f64, f64),
+    (v_min, v_step): (f64, f64),
+) -> Vec<Vec<IntersectionPoint>> {
+    let n = distances.len();
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let grain = f64::EPSILON * u_lo.abs().max(u_hi.abs()).max(v_lo.abs()).max(v_hi.abs());
+    let at = |u: f64, v: f64| {
+        let p = surface.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    // Along `from + t·dir`, where the distance first loses the sign it
+    // has at `from`; `None` when the ray leaves the patch before that.
+    let crossing = |from: (f64, f64), inner: f64, dir: (f64, f64), start: f64| {
+        let along = |t: f64| (dir.0.mul_add(t, from.0), dir.1.mul_add(t, from.1));
+        let on_patch =
+            |(u, v): (f64, f64)| (u_lo..=u_hi).contains(&u) && (v_lo..=v_hi).contains(&v);
+        let (mut lo, mut hi) = (0.0, start);
+        for _ in 0..64 {
+            let p = along(hi);
+            if !on_patch(p) {
+                return None;
+            }
+            if at(p.0, p.1) * inner <= 0.0 {
+                break;
+            }
+            (lo, hi) = (hi, 2.0 * hi);
+        }
+        let reach = dir.0.abs().max(dir.1.abs());
+        for _ in 0..128 {
+            if (hi - lo) * reach <= grain {
+                break;
+            }
+            let mid = 0.5 * (lo + hi);
+            let p = along(mid);
+            let f = at(p.0, p.1);
+            if f * inner > 0.0 {
+                lo = mid;
+            } else if f * inner < 0.0 {
+                hi = mid;
+            } else {
+                return Some(p);
+            }
+        }
+        let (a, b) = (along(lo), along(hi));
+        if at(b.0, b.1) * inner > 0.0 {
+            return None;
+        }
+        Some(if at(a.0, a.1).abs() < at(b.0, b.1).abs() {
+            a
+        } else {
+            b
+        })
+    };
+    let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            let near = distances[i][j];
+            let block_holds = (i.saturating_sub(1)..=(i + 1).min(n - 1))
+                .flat_map(|a| (j.saturating_sub(1)..=(j + 1).min(n - 1)).map(move |b| (a, b)))
+                .all(|(a, b)| distances[a][b] * near > 0.0 && distances[a][b].abs() >= near.abs());
+            if !block_holds {
+                continue;
+            }
+            let seed = (u_min + i as f64 * u_step, v_min + j as f64 * v_step);
+            let Some(Extremum {
+                at: (u, v),
+                settled,
+                hessian: (fuu, fuv, fvv),
+            }) = extremum(surface, normal, seed)
+            else {
+                continue;
+            };
+            let centre = at(u, v);
+            if centre * near >= 0.0 || loops.iter().any(|ring| encloses(ring, (u, v))) {
+                continue;
+            }
+            // Near a settled extremum the distance is `centre + ½ xᵀHx`,
+            // zero on the ellipse `xᵀHx = −2·centre`: rays out along it
+            // start at the section and spread evenly round a long loop.
+            let spread = (fuu - fvv).hypot(2.0 * fuv);
+            let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
+            let ellipse = settled && big * centre < 0.0 && small * centre < 0.0;
+            let (ax, ay) = if fuv.abs() > 0.0 {
+                let (x, y) = (big - fvv, fuv);
+                let len = x.hypot(y);
+                (x / len, y / len)
+            } else if fuu >= fvv {
+                (1.0, 0.0)
+            } else {
+                (0.0, 1.0)
+            };
+            let (r1, r2) = ((-2.0 * centre / big).sqrt(), (-2.0 * centre / small).sqrt());
+            let mut chain = Vec::with_capacity(TINY_LOOP_POINTS + 1);
+            for k in 0..TINY_LOOP_POINTS {
+                let angle = std::f64::consts::TAU * k as f64 / TINY_LOOP_POINTS as f64;
+                let (s, c) = angle.sin_cos();
+                let (dir, start) = if ellipse {
+                    let (x, y) = (r1 * c, r2 * s);
+                    ((x * ax - y * ay, x * ay + y * ax), 1.0)
+                } else {
+                    ((u_step * c, v_step * s), 0.25)
+                };
+                let Some((pu, pv)) = crossing((u, v), centre, dir, start) else {
+                    break;
+                };
+                chain.push(IntersectionPoint {
+                    point: surface.evaluate(pu, pv),
+                    param1: (pu, pv),
+                    param2: (0.0, 0.0),
+                });
+            }
+            if chain.len() < TINY_LOOP_POINTS {
+                continue;
+            }
+            chain.push(chain[0]);
+            let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+            for p in &chain {
+                lo = (lo.0.min(p.param1.0), lo.1.min(p.param1.1));
+                hi = (hi.0.max(p.param1.0), hi.1.max(p.param1.1));
+            }
+            let holds_node = (0..n).any(|a| {
+                let nu = u_min + a as f64 * u_step;
+                (lo.0..=hi.0).contains(&nu)
+                    && (0..n).any(|b| {
+                        let nv = v_min + b as f64 * v_step;
+                        (lo.1..=hi.1).contains(&nv) && encloses(&chain, (nu, nv))
+                    })
+            });
+            if !holds_node {
+                loops.push(chain);
+            }
+        }
+    }
+    loops
+}
+
+/// Where the plane's distance stops changing, as Newton from a seed
+/// finds it on the patch.
+struct Extremum {
+    at: (f64, f64),
+    /// Whether Newton's last step had shrunk to rounding.
+    settled: bool,
+    /// The distance's second derivatives `(fuu, fuv, fvv)` there.
+    hessian: (f64, f64, f64),
+}
+
+fn extremum(surface: &NurbsSurface, normal: Vec3, (mut u, mut v): (f64, f64)) -> Option<Extremum> {
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let mut found = None;
+    for _ in 0..MAX_NEWTON_ITER {
+        let ders = surface.derivatives(u, v, 2);
+        let (fu, fv) = (normal.dot(ders[1][0]), normal.dot(ders[0][1]));
+        let (fuu, fuv, fvv) = (
+            normal.dot(ders[2][0]),
+            normal.dot(ders[1][1]),
+            normal.dot(ders[0][2]),
+        );
+        let det = fuu.mul_add(fvv, -(fuv * fuv));
+        if det.abs() <= f64::EPSILON * (fuu.abs() + fvv.abs()).powi(2) {
+            break;
+        }
+        let du = fvv.mul_add(fu, -(fuv * fv)) / det;
+        let dv = fuu.mul_add(fv, -(fuv * fu)) / det;
+        u = (u - du).clamp(u_lo, u_hi);
+        v = (v - dv).clamp(v_lo, v_hi);
+        let settled = du.abs() <= 1e-12 * (u_hi - u_lo) && dv.abs() <= 1e-12 * (v_hi - v_lo);
+        found = Some(Extremum {
+            at: (u, v),
+            settled,
+            hessian: (fuu, fuv, fvv),
+        });
+        if settled {
+            break;
+        }
+    }
+    found
+}
+
+/// Whether the loop of parameters `ring` winds round `(u, v)`.
+fn encloses(ring: &[IntersectionPoint], (u, v): (f64, f64)) -> bool {
+    let mut inside = false;
+    for pair in ring.windows(2) {
+        let ((ua, va), (ub, vb)) = (pair[0].param1, pair[1].param1);
+        if (va > v) != (vb > v) && u < (v - va) / (vb - va) * (ub - ua) + ua {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
 /// The parameter a boundary crossing holds fixed during refinement.
 #[derive(Clone, Copy)]
-enum Pin {
+pub(super) enum Pin {
     U,
     V,
 }
 
 /// Refine a plane-surface intersection point using Newton iteration; a
 /// pinned parameter stays on its domain edge.
-fn refine_plane_surface_point(
+pub(super) fn refine_plane_surface_point(
     surface: &NurbsSurface,
     plane_normal: Vec3,
     plane_d: f64,
@@ -284,13 +516,13 @@ fn refine_plane_surface_point(
         let pt = surface.evaluate(u, v);
         let pt_vec = Vec3::new(pt.x(), pt.y(), pt.z());
         let f = plane_normal.dot(pt_vec) - plane_d;
-
-        if f.abs() < 1e-12 {
-            return Some(IntersectionPoint {
-                point: pt,
-                param1: (u, v),
-                param2: (0.0, 0.0),
-            });
+        let on_section = || IntersectionPoint {
+            point: pt,
+            param1: (u, v),
+            param2: (0.0, 0.0),
+        };
+        if f == 0.0 {
+            return Some(on_section());
         }
 
         // Compute gradient of f w.r.t. (u, v).
@@ -308,12 +540,21 @@ fn refine_plane_surface_point(
         };
 
         let grad_len_sq = grad_u.mul_add(grad_u, grad_v * grad_v);
-        if grad_len_sq < 1e-20 {
+        let rounding = f64::EPSILON * plane_normal.length() * (du.length() + dv.length());
+        if grad_len_sq <= rounding * rounding {
             break; // Singular.
         }
 
-        // Steepest descent step.
+        // Where the surface runs nearly along the plane, a point far from
+        // the section still lies within 1e-12 of the plane: the step left
+        // to take says how far off it is.
         let step_size = f / grad_len_sq;
+        let left = (du * grad_u + dv * grad_v).length() * step_size.abs();
+        if f.abs() < 1e-12 && left < 1e-12 {
+            return Some(on_section());
+        }
+
+        // Steepest descent step.
         u -= grad_u * step_size;
         v -= grad_v * step_size;
 
