@@ -5131,19 +5131,6 @@ fn wall_reach(
     Ok(reach)
 }
 
-/// Build a rational quadratic NURBS for an arc on a `Circle3D` from
-/// `t_start` to `t_end` (radians).
-///
-/// Decomposes the arc span into quarter-pi pieces; each piece becomes one
-/// rational quadratic Bezier with weight `cos(half_angle)` on the off-curve
-/// middle control point. The result is geometrically exact for circles
-/// (unlike the chord-only approximation used by `nurbs_line` for short
-/// arcs).
-///
-/// Inlined here to keep `crates/blend` from picking up a dependency on
-/// `brepkit-geometry`. The geometry crate has the same algorithm in
-/// `convert::curve_to_nurbs::circle_to_nurbs`; consolidating both into the
-/// math layer is a follow-up.
 /// The end angle of an arc that starts at `u_start` and passes `u_mid` on its
 /// way to `u_end`, unwrapped so the span from `u_start` runs the arc's way
 /// round: counter-clockwise past `u_start` or clockwise below it.
@@ -5158,6 +5145,19 @@ fn arc_span_end(u_start: f64, u_mid: f64, u_end: f64) -> f64 {
     }
 }
 
+/// Build a rational quadratic NURBS for an arc on a `Circle3D` from
+/// `t_start` to `t_end` (radians).
+///
+/// Decomposes the arc span into quarter-pi pieces; each piece becomes one
+/// rational quadratic Bezier with weight `cos(half_angle)` on the off-curve
+/// middle control point. The result is geometrically exact for circles
+/// (unlike the chord-only approximation used by `nurbs_line` for short
+/// arcs).
+///
+/// Inlined here to keep `crates/blend` from picking up a dependency on
+/// `brepkit-geometry`. The geometry crate has the same algorithm in
+/// `convert::curve_to_nurbs::circle_to_nurbs`; consolidating both into the
+/// math layer is a follow-up.
 fn circle_arc_to_nurbs(
     circle: &brepkit_math::curves::Circle3D,
     t_start: f64,
