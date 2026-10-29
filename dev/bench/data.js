@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793309972320,
+  "lastUpdate": 1793311674184,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60479,6 +60479,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23110725,
             "range": "± 577917",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fd0345f65f6c90cf5de730eec2464d23c4142c28",
+          "message": "chore(main): release 4.5.8 (#2158)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.5.8](https://github.com/andymai/brepkit/compare/v4.5.7...v4.5.8)\n(2026-10-29)\n\n\n### Bug Fixes\n\n* **blend:** fillet rims and corners that end on a cap's hole\n([#2151](https://github.com/andymai/brepkit/issues/2151))\n([dc2cb3b](https://github.com/andymai/brepkit/commit/dc2cb3b8d0c0465677cffdca7154d3f2c3575f28))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.5.8, which fixes a bug where fillet rims and corners\nthat end on a cap's hole were not blended correctly. Updates the\nworkspace and crate versions from 4.5.7 to 4.5.8 and adds the changelog\nentry.\n\n<sup>Written for commit 0e87d777b73f80bc993ec95e955866065d57945e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2158?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2158?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2158&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-29T22:04:45Z",
+          "tree_id": "c8744e42ef01f8b8f0e4bed78191626e47a5b7f2",
+          "url": "https://github.com/andymai/brepkit/commit/fd0345f65f6c90cf5de730eec2464d23c4142c28"
+        },
+        "date": 1793311666711,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1098765,
+            "range": "± 4076",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1172580,
+            "range": "± 1091",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13204,
+            "range": "± 288",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 669634,
+            "range": "± 2151",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28955339,
+            "range": "± 248827",
             "unit": "ns/iter"
           }
         ]
