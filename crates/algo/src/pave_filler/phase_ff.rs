@@ -6808,10 +6808,12 @@ fn runs_along_an_edge(
 /// The surface's normal lies along the plane's at every point, and across
 /// the curve at its middle point the surface stays on one side of the
 /// plane. Where the surface crosses with its normal along the plane's, as
-/// `z = x³` crosses `z = 0`, the curve parts the regions either side. A
-/// probe a thousandth of the domain across can stay within rounding of the
-/// plane, as across `z = x⁷`, and settles nothing: wider ones follow, and a
-/// curve none of them settles stays.
+/// `z = x³` crosses `z = 0`, the curve parts the regions either side. Each
+/// side's probe starts a millionth of the domain across and widens tenfold
+/// while the surface stays within rounding of the plane, as across
+/// `z = x⁷`, so the nearest probe that tells the side does, before another
+/// branch beside the curve can come between; a curve whose sides no probe
+/// tells stays. On a closed surface the probes wrap round its seam.
 fn touches_along(
     nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
     normal: Vec3,
@@ -6854,19 +6856,41 @@ fn touches_along(
                     + d.abs()
             })
             .fold(0.0, f64::max);
+    // Round a closed direction's seam, onto the domain's far side.
+    let wrap = |x: f64, lo: f64, hi: f64, closed: bool| {
+        if closed {
+            (x - lo).rem_euclid(hi - lo) + lo
+        } else {
+            x.clamp(lo, hi)
+        }
+    };
+    let (u_closed, v_closed) = (nurbs.is_periodic_u(), nurbs.is_periodic_v());
     let side = |reach: f64| {
-        let u = (reach * wide).mul_add(-tv / len, mid.0).clamp(u_lo, u_hi);
-        let v = (reach * tall).mul_add(tu / len, mid.1).clamp(v_lo, v_hi);
+        let u = wrap(
+            (reach * wide).mul_add(-tv / len, mid.0),
+            u_lo,
+            u_hi,
+            u_closed,
+        );
+        let v = wrap(
+            (reach * tall).mul_add(tu / len, mid.1),
+            v_lo,
+            v_hi,
+            v_closed,
+        );
         let p = nurbs.evaluate(u, v);
         normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
     };
-    for reach in [1e-3, 1e-2, 1e-1] {
-        let (left, right) = (side(reach), side(-reach));
-        if left.abs() > rounding && right.abs() > rounding {
-            return left * right > 0.0;
-        }
+    let nearest = |sign: f64| {
+        [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]
+            .into_iter()
+            .map(|reach| side(sign * reach))
+            .find(|f| f.abs() > rounding)
+    };
+    match (nearest(1.0), nearest(-1.0)) {
+        (Some(left), Some(right)) => left * right > 0.0,
+        _ => false,
     }
-    false
 }
 
 /// Plane-NURBS intersection.
@@ -10365,6 +10389,46 @@ mod tests {
         .unwrap();
         let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &trough).unwrap();
         assert!(raw.is_empty());
+    }
+
+    /// A sheet `z = (x − a)³(x − b)` crossing `z = 0` along `x = a` with its
+    /// normal along the plane's and along `x = b` 0.0008 away splits along
+    /// both: the side test's probes start close enough not to reach past
+    /// `x = b`.
+    #[test]
+    fn a_plane_crossing_a_nurbs_sheet_flat_beside_another_crossing_splits_it_twice() {
+        // Round a node of the 32-sample grid, so that the grid sees both.
+        let (a, b) = (15.0 / 31.0 - 0.0004, 15.0 / 31.0 + 0.0004);
+        let power = [
+            a * a * a * b,
+            -a * a * (a + 3.0 * b),
+            3.0 * a * (a + b),
+            -(3.0 * a + b),
+            1.0,
+        ];
+        // The quartic's Bernstein coefficients.
+        let choose =
+            |n: u32, k: u32| (0..k).fold(1.0, |c, m| c * f64::from(n - m) / f64::from(m + 1));
+        let rows = (0..=4_u32)
+            .map(|i| {
+                let z: f64 = (0..=i)
+                    .map(|k| choose(i, k) / choose(4, k) * power[k as usize])
+                    .sum();
+                let x = f64::from(i) / 4.0;
+                vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)]
+            })
+            .collect();
+        let sheet = brepkit_math::nurbs::surface::NurbsSurface::new(
+            4,
+            1,
+            [vec![0.0; 5], vec![1.0; 5]].concat(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 5],
+        )
+        .unwrap();
+        let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &sheet).unwrap();
+        assert_eq!(raw.len(), 2);
     }
 
     /// A plane crossing a NURBS sheet where the sheet's normal lies along

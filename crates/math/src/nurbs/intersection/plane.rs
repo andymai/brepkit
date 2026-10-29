@@ -691,6 +691,9 @@ fn beside(
     })
 }
 
+/// Newton steps settling a point of a valley takes at most.
+const MAX_SETTLE_STEPS: usize = 128;
+
 /// Steps [`trace_valley`] takes each way at most.
 const MAX_VALLEY_STEPS: usize = 4096;
 
@@ -718,9 +721,12 @@ fn trace_valley(
         normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
     };
     // Newton across the valley, along its curved direction or, held to an
-    // edge, along the edge.
+    // edge, along the edge, until its step shrinks to rounding. Where the
+    // valley meets the edge at a slant its floor along the edge rises as a
+    // higher power, and Newton closes only a fraction of the way each step.
     let settle = |(mut u, mut v): (f64, f64), pin: Option<Pin>| {
-        for _ in 0..MAX_NEWTON_ITER {
+        let mut settled = false;
+        for _ in 0..MAX_SETTLE_STEPS {
             let b = bend(surface, normal, (u, v));
             let ((lambda, e), grad) = match pin {
                 None => (b.major, b.grad),
@@ -734,16 +740,20 @@ fn trace_valley(
             u = (s * e.0).mul_add(-wide, u).clamp(u_lo, u_hi);
             v = (s * e.1).mul_add(-tall, v).clamp(v_lo, v_hi);
             if s.abs() <= 1e-12 * step {
+                settled = true;
                 break;
             }
         }
-        (at((u, v)).abs() <= noise).then_some((u, v))
+        (settled && at((u, v)).abs() <= noise).then_some((u, v))
     };
     let flat = |q: (f64, f64)| bend(surface, normal, q).minor.1;
     let apart = |p: (f64, f64), q: (f64, f64)| ((p.0 - q.0) / wide).hypot((p.1 - q.1) / tall);
     let walk = |sign: f64, pts: &mut Vec<(f64, f64)>| {
         let (mut p, e) = (start, flat(start));
         let mut dir = (sign * e.0, sign * e.1);
+        // Whether the walk has left `start` behind, so that coming back
+        // near it closes the curve.
+        let mut away = false;
         for _ in 0..MAX_VALLEY_STEPS {
             // As far as the patch allows, up to one step.
             let reach = |x: f64, dx: f64, lo: f64, hi: f64| {
@@ -760,7 +770,7 @@ fn trace_valley(
                 reach(p.1, dir.1 * tall, v_lo, v_hi),
             );
             let t = step.min(across).min(along);
-            if t <= 0.0 {
+            if t <= 1e-9 * step {
                 return false;
             }
             let mut ahead = (
@@ -776,14 +786,32 @@ fn trace_valley(
             } else {
                 None
             };
-            let Some(next) = settle(ahead, pin) else {
+            // A step heading off the patch can leave a curve that turns back
+            // short of the edge: held to the edge, the valley's floor lies
+            // off the plane there, and the whole step, kept on the patch,
+            // settles freely.
+            let settled = match settle(ahead, pin) {
+                Some(next) => Some((next, pin.is_some())),
+                None if pin.is_some() => {
+                    let whole = (
+                        (step * dir.0).mul_add(wide, p.0).clamp(u_lo, u_hi),
+                        (step * dir.1).mul_add(tall, p.1).clamp(v_lo, v_hi),
+                    );
+                    settle(whole, None)
+                        .filter(|&next| apart(next, p) > 1e-3 * step)
+                        .map(|next| (next, false))
+                }
+                None => None,
+            };
+            let Some((next, on_edge)) = settled else {
                 return false;
             };
-            if pts.len() > 2 && apart(next, start) < step {
+            if away && apart(next, start) < step {
                 return true;
             }
+            away |= apart(next, start) > 2.0 * step;
             pts.push(next);
-            if pin.is_some() {
+            if on_edge {
                 return false;
             }
             let e = flat(next);
@@ -1054,7 +1082,7 @@ fn extremum(surface: &NurbsSurface, normal: Vec3, (mut u, mut v): (f64, f64)) ->
         }
         let (mut du, mut dv) = (0.0, 0.0);
         for (lambda, e) in [b.major, b.minor] {
-            if lambda.abs() > 1e-9 * b.major.0.abs() {
+            if lambda.abs() > 1e-12 * b.major.0.abs() {
                 let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
                 (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
             }

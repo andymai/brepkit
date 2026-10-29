@@ -2392,10 +2392,12 @@ fn a_plane_touching_a_surface_along_two_close_lines_traces_both() {
 
 /// The plane `z = 0` touches `z = (y − x²)²` along the parabola `y = x²`,
 /// which leaves the patch at its corners `(0, 0)` and `(1, 1)`, where the
-/// traced curve ends: its last step settles along the patch's edge.
+/// traced curve ends: its last step settles along the patch's edge. With
+/// `x` running backwards in `u`, the step reaching `(0, 0)` meets the edge
+/// `v = 0`, along which the height rises as `x⁴`, and settles all the same.
 #[test]
 fn a_plane_touching_a_surface_along_a_curve_traces_it_to_the_patch_edge() {
-    let gutter = polynomial_patch(
+    let forward = polynomial_patch(
         4,
         [
             &[(1, 0, 1.0)],
@@ -2403,20 +2405,81 @@ fn a_plane_touching_a_surface_along_a_curve_traces_it_to_the_patch_edge() {
             &[(0, 2, 1.0), (2, 1, -2.0), (4, 0, 1.0)],
         ],
     );
-    let curves = intersect_plane_nurbs(&gutter, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    let floor = [(0, 1, 1.0), (0, 0, -1.0), (1, 0, 2.0), (2, 0, -1.0)];
+    let backward = polynomial_patch(
+        4,
+        [
+            &[(0, 0, 1.0), (1, 0, -1.0)],
+            &[(0, 1, 1.0)],
+            &product(&floor, &floor),
+        ],
+    );
+    for gutter in [forward, backward] {
+        let curves = intersect_plane_nurbs(&gutter, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+        assert_eq!(curves.len(), 1);
+        let (t0, t1) = curves[0].curve.domain();
+        let mut ends = [t0, t1].map(|t| curves[0].curve.evaluate(t));
+        ends.sort_by(|p, q| p.x().total_cmp(&q.x()));
+        assert!(
+            (ends[0] - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9
+                && (ends[1] - Point3::new(1.0, 1.0, 0.0)).length() < 1e-9,
+            "the curve runs from {:?} to {:?}",
+            ends[0],
+            ends[1]
+        );
+        let far = farthest(&curves, |p| (p.y() - p.x() * p.x()).abs().max(p.z().abs()));
+        assert!(far < 1e-7, "the curve strays {far:.2e}");
+    }
+}
+
+/// The plane `z = 0` touches `z = ((x − ½)² + (y − ½)² − r²)²` along a circle
+/// passing a millionth inside the patch's edges: a step heading off the
+/// patch near where it passes them settles back on the circle, which comes
+/// back whole and closed.
+#[test]
+fn a_plane_touching_a_surface_along_a_circle_beside_the_edge_traces_it_whole() {
+    let r: f64 = 0.499_999;
+    let ring = [
+        (2, 0, 1.0),
+        (1, 0, -1.0),
+        (0, 2, 1.0),
+        (0, 1, -1.0),
+        (0, 0, r.mul_add(-r, 0.5)),
+    ];
+    let surface = polynomial_patch(4, [&[(1, 0, 1.0)], &[(0, 1, 1.0)], &product(&ring, &ring)]);
+    let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
     assert_eq!(curves.len(), 1);
     let (t0, t1) = curves[0].curve.domain();
-    let mut ends = [t0, t1].map(|t| curves[0].curve.evaluate(t));
-    ends.sort_by(|p, q| p.x().total_cmp(&q.x()));
-    assert!(
-        (ends[0] - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9
-            && (ends[1] - Point3::new(1.0, 1.0, 0.0)).length() < 1e-9,
-        "the curve runs from {:?} to {:?}",
-        ends[0],
-        ends[1]
+    assert!((curves[0].curve.evaluate(t0) - curves[0].curve.evaluate(t1)).length() < 1e-9);
+    let far = farthest(&curves, |p| {
+        ((p.x() - 0.5).hypot(p.y() - 0.5) - r)
+            .abs()
+            .max(p.z().abs())
+    });
+    assert!(far < 1e-6, "the circle strays {far:.2e}");
+}
+
+/// `z = (x − ½)² + 1e-10·(y − ½)²` dips 1e-15 below `z = 1e-15`, in a loop
+/// a millionth as wide as it is long: Newton for its floor keeps the faint
+/// curving along `y`, and the loop comes back.
+#[test]
+fn a_plane_cutting_a_faintly_curved_dip_finds_its_loop() {
+    let dip = polynomial_patch(
+        2,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 1, 1.0)],
+            &[
+                (2, 0, 1.0),
+                (1, 0, -1.0),
+                (0, 2, 1e-10),
+                (0, 1, -1e-10),
+                (0, 0, 0.25 + 0.25e-10),
+            ],
+        ],
     );
-    let far = farthest(&curves, |p| (p.y() - p.x() * p.x()).abs().max(p.z().abs()));
-    assert!(far < 1e-7, "the curve strays {far:.2e}");
+    let curves = intersect_plane_nurbs(&dip, Vec3::new(0.0, 0.0, 1.0), 1e-15, 64).unwrap();
+    assert_eq!(curves.len(), 1);
 }
 
 /// The product of two polynomials in `u` and `v`, as `(i, j, c)` terms
