@@ -253,11 +253,16 @@ fn plane_cylinder_fillet_hole_contacts_support_outside_spine() {
     let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
     let spine = Spine::from_single_edge(&topo, eid).unwrap();
 
-    // Plate face — non-reversed, normal = +z (top of plate).
-    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+    // Plate face — non-reversed, normal = +z (top of plate), reaching out
+    // to radius 5 round the hole.
+    let v_out = topo.add_vertex(Vertex::new(Point3::new(5.0, 0.0, 0.0), 1e-7));
+    let rim_out = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 5.0).unwrap();
+    let e_out = topo.add_edge(Edge::new(v_out, v_out, EdgeCurve::Circle(rim_out)));
+    let w_out = topo.add_wire(Wire::new(vec![OrientedEdge::new(e_out, true)], true).unwrap());
+    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
     let face_plate = topo.add_face(Face::new(
-        w1,
-        vec![],
+        w_out,
+        vec![w1],
         FaceSurface::Plane {
             normal: Vec3::new(0.0, 0.0, 1.0),
             d: 0.0,

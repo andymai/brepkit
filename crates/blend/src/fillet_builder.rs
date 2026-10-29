@@ -1498,12 +1498,20 @@ impl<'a> FilletBuilder<'a> {
         brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
         boundary_registry.refresh_owner_orientations(topo)?;
-        // The post-assembly shell may come out globally inverted (every
-        // face's effective normal pointing inward) while still passing the
+        // Without a seed the propagation anchors on an arbitrary face, so the
+        // post-assembly shell may come out globally inverted (every face's
+        // effective normal pointing inward) while still passing the
         // incidence and closure gates. Detect that via the signed volume of
         // the result shell and flip the whole shell when negative, then
-        // re-run the orientation passes so consistency is restored.
-        let signed_volume = crate::signed_volume::signed_shell_volume(topo, &result_faces)?;
+        // re-run the orientation passes so consistency is restored. Seeds
+        // carry the input's orientation, which the propagation never flips,
+        // and the estimate reads curved faces over their whole parameter
+        // domain, so it is not asked to overrule them.
+        let signed_volume = if seeds.is_empty() {
+            crate::signed_volume::signed_shell_volume(topo, &result_faces)?
+        } else {
+            1.0
+        };
         if signed_volume < 0.0 {
             log::debug!("orientation flip: signed shell volume {signed_volume} < 0");
             for &face_id in &result_faces {
@@ -2132,25 +2140,15 @@ fn assemble_closed_rim(
         .is_some_and(OrientedEdge::is_forward);
     let plane_side = usize::from(stripe.face2 == rim.plane_face);
     let wall_side = usize::from(stripe.face2 == rim.wall_face);
-    // Both contact circles turn about the wall's axis; at a hole rim the cap
-    // and the wall keep their traversal direction whichever way the rim
-    // circle's own normal runs.
+    // Both contact circles turn about the wall's axis; the cap and the wall
+    // keep their traversal direction whichever way the rim circle's own
+    // normal runs, and the band runs each circle against its neighbour.
     let rim_turns_with_axis = match topo.edge(rim.rim_edge)?.curve() {
         EdgeCurve::Circle(c) => c.normal().dot(rim.plate_circle.normal()) > 0.0,
         _ => true,
     };
-    let cap_sense = if rim.rim_is_hole {
-        cap_forward == rim_turns_with_axis
-    } else if matches!(&wall_surf, FaceSurface::Cylinder(_)) {
-        cap_forward
-    } else {
-        !cap_forward
-    };
-    let wall_support_sense = if rim.rim_is_hole {
-        wall_forward == rim_turns_with_axis
-    } else {
-        wall_forward
-    };
+    let cap_sense = cap_forward == rim_turns_with_axis;
+    let wall_support_sense = wall_forward == rim_turns_with_axis;
     let plate_sense = (cap_sense == plane_reversed) != band_reversed;
     let wall_sense = (wall_support_sense == wall_reversed) != band_reversed;
     let plate_handle = registry.register(
@@ -2160,8 +2158,6 @@ fn assemble_closed_rim(
         EdgeCurve::Circle(rim.plate_circle.clone()),
         (0.0, std::f64::consts::TAU),
         [
-            // Result-face orientation propagation determines the final cap
-            // use; cylinders retain the source sense while cones reverse it.
             BoundaryOwner::planned("closed-rim support cap", cap_sense),
             BoundaryOwner::planned("closed-rim torus band", plate_sense),
         ],

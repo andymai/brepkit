@@ -429,29 +429,86 @@ fn fillet_cylinder_base_circle_produces_torus() {
     );
 }
 
-/// A frustum's bottom rim: `plane_cone_fillet` rolls this rim's ball below
-/// the base, so its wall contact lands on the cone's extension past the
-/// frustum's base, and the closed-rim rebuild refuses it rather than build a
-/// band off the wall.
+/// Plane-cone fillet on a frustum primitive's bottom rim. The rim is convex,
+/// so the ball rolls inside the material between the base and the wall: an
+/// exact torus of major radius `r_p - r·cot(α/2)` whose centre sits one
+/// radius above the base, tangent to the base and to the frustum's own wall.
 #[test]
-fn fillet_cone_bottom_rim_with_its_contact_off_the_frustum_is_refused() {
+fn fillet_cone_bottom_rim_produces_torus() {
     let mut topo = Topology::new();
+    // make_cone(3, 1, 4) puts the virtual apex at z = 6, so the wall leans
+    // in at α = atan2(6, 3) from the base.
     let solid = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
+    let fillet_r = 0.3;
+
     let bottom_rim = solid_edges(&topo, solid)
         .unwrap()
         .into_iter()
         .find(|&eid| {
-            matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::Circle(c) if (c.radius() - 3.0).abs() < 1e-6)
+            if let EdgeCurve::Circle(c) = topo.edge(eid).unwrap().curve() {
+                (c.radius() - 3.0).abs() < 1e-6
+            } else {
+                false
+            }
         })
         .expect("frustum bottom rim should exist with radius 3");
 
-    let error = fillet_v2(&mut topo, solid, &[bottom_rim], 0.3)
-        .err()
-        .expect("a wall contact off the frustum must be refused");
+    let result = fillet_v2(&mut topo, solid, &[bottom_rim], fillet_r).unwrap();
     assert!(
-        format!("{error:?}").contains("wall contact would land past"),
-        "{error:?}"
+        result.failed.is_empty(),
+        "cone bottom-rim fillet must succeed; failed = {:?}",
+        result.failed
     );
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+
+    let new_faces = solid_faces(&topo, result.solid).unwrap();
+    let torus = new_faces
+        .iter()
+        .find_map(|&fid| {
+            if let FaceSurface::Torus(t) = topo.face(fid).unwrap().surface() {
+                Some(t.clone())
+            } else {
+                None
+            }
+        })
+        .expect("plane-cone fillet should produce a Torus face");
+
+    let alpha = 6.0_f64.atan2(3.0);
+    let reach = fillet_r * (alpha * 0.5).tan().recip();
+    let expected_major = 3.0 - reach;
+    assert!(
+        (torus.minor_radius() - fillet_r).abs() < 1e-9,
+        "torus minor should equal fillet radius {fillet_r}, got {}",
+        torus.minor_radius()
+    );
+    assert!(
+        (torus.major_radius() - expected_major).abs() < 1e-9,
+        "torus major should be r_p - r·cot(α/2) = {expected_major:.6}, got {}",
+        torus.major_radius()
+    );
+    assert!(
+        (torus.center().z() - fillet_r).abs() < 1e-9,
+        "torus centre should sit one radius above the base, got {:?}",
+        torus.center()
+    );
+
+    // The tube touches the base at the major radius and the wall one reach
+    // from the rim along its generator, both on the frustum's own faces.
+    let tube_distance = |p: brepkit_math::vec::Point3| {
+        let rho = p.x().hypot(p.y());
+        (rho - torus.major_radius()).hypot(p.z() - torus.center().z())
+    };
+    let on_base = brepkit_math::vec::Point3::new(expected_major, 0.0, 0.0);
+    let on_wall =
+        brepkit_math::vec::Point3::new(3.0 - reach * alpha.cos(), 0.0, reach * alpha.sin());
+    for p in [on_base, on_wall] {
+        assert!(
+            (tube_distance(p) - fillet_r).abs() < 1e-9,
+            "{p:?} should lie on the tube, at {} from its core",
+            tube_distance(p)
+        );
+    }
 }
 
 /// The blend chamfer cannot trim a cap or a wall along a closed rim, so a

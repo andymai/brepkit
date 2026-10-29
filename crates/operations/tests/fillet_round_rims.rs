@@ -8,7 +8,8 @@
 //! The rim can also be a hole of its cap: a post standing on a plate, whose
 //! concave foot fills a ring of the same section, and a bore's mouth, whose
 //! convex rim removes one. A round pocket's floor is a disc cap with a
-//! concave rim.
+//! concave rim. A cone's rims meet their caps at other angles: a frustum's
+//! two rims, a tapered post's foot on a plate, and a tapered hole's mouth.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -17,7 +18,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::{make_box, make_cylinder};
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
@@ -143,7 +144,6 @@ fn a_bores_mouth_in_a_plate_rounds_off() {
 /// A blind round pocket: its floor is a disc cap whose rim is concave, and
 /// the fillet fills the ring round the floor's edge.
 #[test]
-#[ignore = "the plane x cylinder stripe rolls the ball below the floor and outside the pocket wall"]
 fn a_round_pockets_floor_fills_its_ring() {
     for r in [1.0, 2.0] {
         let mut topo = Topology::new();
@@ -254,4 +254,82 @@ fn a_bores_mouth_rounds_off_whichever_way_its_rim_turns() {
         let removed = 2.0 * PI * (RADIUS + centroid_from_corner(1.0)) * area;
         assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 8.0), 1.0, -removed);
     }
+}
+
+/// The ring a fillet of radius `r` fills or removes at a rim of radius `rim`,
+/// from the plate's and the wall's unit rays leaving the corner in the
+/// (radial, axial) half-plane: the kite between the corner, both contacts and
+/// the ball's centre, less the ball's sector, turned about the axis (Pappus).
+fn ring_volume(rim: f64, plate: (f64, f64), wall: (f64, f64), r: f64) -> f64 {
+    let theta = plate.0.mul_add(wall.0, plate.1 * wall.1).acos();
+    let reach = r / (theta / 2.0).tan();
+    let to_centre = r / (theta / 2.0).sin();
+    let (bx, by) = (plate.0 + wall.0, plate.1 + wall.1);
+    let len = bx.hypot(by);
+    let corner = (rim, 0.0);
+    let centre = (rim + bx / len * to_centre, by / len * to_centre);
+    let on_plate = (rim + plate.0 * reach, plate.1 * reach);
+    let on_wall = (rim + wall.0 * reach, wall.1 * reach);
+    let moment = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
+        let area = (b.0 - a.0)
+            .mul_add(c.1 - a.1, -(c.0 - a.0) * (b.1 - a.1))
+            .abs()
+            / 2.0;
+        area * (a.0 + b.0 + c.0) / 3.0
+    };
+    let kite = moment(corner, on_plate, centre) + moment(corner, centre, on_wall);
+    let phi = PI - theta;
+    let sector_rho =
+        centre.0 + (corner.0 - centre.0) / to_centre * 4.0 * r * (phi / 2.0).sin() / (3.0 * phi);
+    2.0 * PI * (kite - 0.5 * r * r * phi * sector_rho)
+}
+
+fn unit(x: f64, y: f64) -> (f64, f64) {
+    let len = x.hypot(y);
+    (x / len, y / len)
+}
+
+/// A frustum's rims are convex: the bottom one leans in at the base, the top
+/// one opens past a right angle at the top.
+#[test]
+fn a_frustums_rims_round_off() {
+    for r in [0.3, 0.6] {
+        let mut topo = Topology::new();
+        let frustum = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
+        let removed = ring_volume(3.0, (-1.0, 0.0), unit(-3.0, 6.0), r);
+        assert_rim_fillet_changes_by(&mut topo, frustum, (3.0, 0.0), r, -removed);
+    }
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
+    let removed = ring_volume(1.0, (-1.0, 0.0), unit(2.0, 4.0), 0.3);
+    assert_rim_fillet_changes_by(&mut topo, frustum, (1.0, 4.0), 0.3, -removed);
+}
+
+/// A tapered post on a plate, narrowing or widening as it rises: its foot is
+/// a hole of the plate's top, and the fillet fills the ring round it.
+#[test]
+fn a_tapered_posts_foot_on_a_plate_fills_its_ring() {
+    for (bottom, top, r) in [(5.0, 3.0, 1.0), (5.0, 3.0, 2.0), (3.0, 5.0, 1.0)] {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 30.0, 30.0, 4.0).unwrap();
+        let post = make_cone(&mut topo, bottom, top, 6.0).unwrap();
+        transform_solid(&mut topo, post, &Mat4::translation(15.0, 15.0, 4.0)).unwrap();
+        let body = boolean(&mut topo, BooleanOp::Fuse, plate, post).unwrap();
+        let wall = unit(top - bottom, 6.0);
+        let filled = ring_volume(bottom, (1.0, 0.0), wall, r);
+        assert_rim_fillet_changes_by(&mut topo, body, (bottom, 4.0), r, filled);
+    }
+}
+
+/// A tapered hole through a plate, wider at the top: its mouth is a hole of
+/// the plate's top, and the fillet rounds off the ring round it.
+#[test]
+fn a_tapered_holes_mouth_rounds_off() {
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 30.0, 30.0, 8.0).unwrap();
+    let hole = make_cone(&mut topo, 2.0, 5.0, 8.0).unwrap();
+    transform_solid(&mut topo, hole, &Mat4::translation(15.0, 15.0, 0.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap();
+    let removed = ring_volume(5.0, (1.0, 0.0), unit(-3.0, 8.0), 1.0);
+    assert_rim_fillet_changes_by(&mut topo, body, (5.0, 8.0), 1.0, -removed);
 }
