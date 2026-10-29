@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793222542320,
+  "lastUpdate": 1793234885099,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59021,6 +59021,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28638008,
             "range": "± 57079",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b46fe4b7a4fe42d7e3e3b128e767351832f168df",
+          "message": "fix(math): return exact circles and ellipses from closed-form analytic sections (#2128)\n\nThe circles and ellipses `intersect_analytic_analytic_bounded` solves\nfor cone-cone, coaxial sphere-cylinder and sphere-sphere pairs now come\nback as exact curves instead of cubic fits.\n\nToday each of these arms finds its section exactly, a circle or an\nellipse, then samples it at 33 points and interpolates a cubic through\nthem. The cubic strays off the circle between samples: 4.2e-5 for a unit\nball sitting in a bore of its own radius, and 3.1e-5 for two unit balls\na unit apart. `phase_ff` asks `exact_sphere_sphere`, `exact_cone_cone`\nand `exact_sphere_cylinder` first, so booleans already get the exact\ncircle. The fitted curve reaches the offset engine's face-face step\n(`inter3d.rs`) and other callers of `intersect_analytic_analytic`.\n\n## Change\n\n- `conic_loop` builds the full ellipse as an exact rational quadratic\nNURBS: 9 control points around the bounding rectangle, corners weighted\ncos 45°, as `CylindricalSurface::to_nurbs` builds its rings. A circle is\nthe case of equal semi-axes.\n- The three arms return that curve. Their 33 sample points stay on as\nthe curve's `points`, and the curve's domain is still [0, 1].\n\n## Tests\n\n- `a_ball_in_its_bore_meets_it_on_an_exact_circle` and\n`overlapping_balls_meet_on_an_exact_circle` sample each curve 2001 times\nagainst both surfaces. On `main` they stray 4.2e-5 and 3.1e-5; with this\nchange both stay under 1e-14.\n- `a_conic_loop_is_its_ellipse` checks a loop with semi-axes 3 and 1.5\nin a tilted frame against its ellipse to 1e-14, and that it starts at\nthe end of the major axis.\n- `cargo test` passes 2585 tests across `brepkit-math`, `brepkit-algo`,\n`brepkit-offset`, `brepkit-blend` and `brepkit-operations`, and the pose\nsweep and truth audit outputs are identical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReturn exact rational NURBS circles and ellipses from the conic section\narms of the analytic intersection solver instead of cubic interpolants.\n\nThe cone-cone, coaxial sphere-cylinder, and sphere-sphere arms of\n`intersect_analytic_analytic_bounded` found the exact section, then\nsampled it at 33 points and interpolated a cubic, which strayed 4.2e-5\nand 3.1e-5 off two unit-circle cases. They now build the conic directly\nas a rational quadratic NURBS (four quarter arcs with corner weights cos\n45°; equal semi-axes give a circle). The 33 sample points stay as the\ncurve's `points`, and the domain remains [0, 1].\n\nTests\n- New tests sample returned curves 2001 times against both surfaces and\nstay under 1e-14.\n- `cargo test` passes across five crates; pose sweep and truth audit\noutputs match `main`.\n\n<sup>Written for commit 45904e08b4d83b4aba4bd0bf3f739312644a5c91.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2128?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2128?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2128&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-29T00:44:59Z",
+          "tree_id": "7cda04fd788188957de684130ac5825c2610bbbc",
+          "url": "https://github.com/andymai/brepkit/commit/b46fe4b7a4fe42d7e3e3b128e767351832f168df"
+        },
+        "date": 1793234877177,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1101091,
+            "range": "± 14217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1177930,
+            "range": "± 8230",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13452,
+            "range": "± 61",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 671227,
+            "range": "± 2428",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28617918,
+            "range": "± 92704",
             "unit": "ns/iter"
           }
         ]
