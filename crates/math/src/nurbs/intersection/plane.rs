@@ -109,7 +109,15 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    if crossings.is_empty() {
+    let tiny = tiny_loops(
+        surface,
+        plane_normal,
+        plane_d,
+        &distances,
+        (u_min, u_step),
+        (v_min, v_step),
+    );
+    if crossings.is_empty() && tiny.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -227,6 +235,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
+    ordered_chains.extend(tiny);
     if ordered_chains.is_empty() {
         return Ok(Vec::new());
     }
@@ -258,6 +267,117 @@ pub fn intersect_plane_nurbs(
 
 /// How far a fitted section may stray from the plane or the surface.
 const FIT_TOLERANCE: f64 = 1e-7;
+
+/// Points round each loop [`tiny_loops`] seeds from.
+const TINY_LOOP_POINTS: usize = 32;
+
+/// Closed sections inside one grid cell, which cross no grid edge. Each
+/// winds round an extremum of the plane's distance where the distance
+/// changes sign between nodes. A node holding the least distance of its
+/// 3 by 3 block, all of one sign, seeds Newton for the extremum; where the
+/// distance there has the other sign, points round the ellipse that its
+/// second derivatives give settle onto the section, closing the loop.
+#[allow(clippy::cast_precision_loss)]
+fn tiny_loops(
+    surface: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    distances: &[Vec<f64>],
+    (u_min, u_step): (f64, f64),
+    (v_min, v_step): (f64, f64),
+) -> Vec<Vec<IntersectionPoint>> {
+    let n = distances.len();
+    let at = |u: f64, v: f64| {
+        let p = surface.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
+    let mut centres: Vec<(f64, f64)> = Vec::new();
+    for i in 1..n.saturating_sub(1) {
+        for j in 1..n.saturating_sub(1) {
+            let near = distances[i][j];
+            let block_holds = (i - 1..=i + 1)
+                .flat_map(|a| (j - 1..=j + 1).map(move |b| (a, b)))
+                .all(|(a, b)| distances[a][b] * near > 0.0 && distances[a][b].abs() >= near.abs());
+            if !block_holds {
+                continue;
+            }
+            let (u0, v0) = (u_min + i as f64 * u_step, v_min + j as f64 * v_step);
+            let (mut u, mut v) = (u0, v0);
+            let mut hessian = None;
+            for _ in 0..MAX_NEWTON_ITER {
+                let ders = surface.derivatives(u, v, 2);
+                let (fu, fv) = (normal.dot(ders[1][0]), normal.dot(ders[0][1]));
+                let (fuu, fuv, fvv) = (
+                    normal.dot(ders[2][0]),
+                    normal.dot(ders[1][1]),
+                    normal.dot(ders[0][2]),
+                );
+                let det = fuu.mul_add(fvv, -(fuv * fuv));
+                if det.abs() <= f64::EPSILON * (fuu.abs() + fvv.abs()).powi(2) {
+                    hessian = None;
+                    break;
+                }
+                let du = fvv.mul_add(fu, -(fuv * fv)) / det;
+                let dv = fuu.mul_add(fv, -(fuv * fu)) / det;
+                u = (u - du).clamp(u0 - u_step, u0 + u_step);
+                v = (v - dv).clamp(v0 - v_step, v0 + v_step);
+                hessian = Some((fuu, fuv, fvv));
+                if du.abs() <= 1e-15 * u_step && dv.abs() <= 1e-15 * v_step {
+                    break;
+                }
+            }
+            let Some((fuu, fuv, fvv)) = hessian else {
+                continue;
+            };
+            let centre = at(u, v);
+            if centre * near >= 0.0
+                || centres
+                    .iter()
+                    .any(|&(a, b)| (a - u).abs() <= 1e-9 * u_step && (b - v).abs() <= 1e-9 * v_step)
+            {
+                continue;
+            }
+            // Near the extremum the distance is `centre + ½ xᵀHx`, zero on
+            // the ellipse `xᵀHx = −2·centre` about its principal axes.
+            let spread = (fuu - fvv).hypot(2.0 * fuv);
+            let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
+            if big * centre >= 0.0 || small * centre >= 0.0 {
+                continue;
+            }
+            let (ax, ay) = if fuv.abs() > 0.0 {
+                let (x, y) = (big - fvv, fuv);
+                let len = x.hypot(y);
+                (x / len, y / len)
+            } else if fuu >= fvv {
+                (1.0, 0.0)
+            } else {
+                (0.0, 1.0)
+            };
+            let (r1, r2) = ((-2.0 * centre / big).sqrt(), (-2.0 * centre / small).sqrt());
+            let mut chain = Vec::with_capacity(TINY_LOOP_POINTS + 1);
+            for k in 0..TINY_LOOP_POINTS {
+                let angle = std::f64::consts::TAU * k as f64 / TINY_LOOP_POINTS as f64;
+                let (s, c) = angle.sin_cos();
+                let (x, y) = (r1 * c, r2 * s);
+                let guess = (u + x * ax - y * ay, v + x * ay + y * ax);
+                if (guess.0 - u0).abs() > u_step || (guess.1 - v0).abs() > v_step {
+                    break;
+                }
+                match refine_plane_surface_point(surface, normal, d, guess, None) {
+                    Some(point) => chain.push(point),
+                    None => break,
+                }
+            }
+            if chain.len() == TINY_LOOP_POINTS {
+                chain.push(chain[0]);
+                loops.push(chain);
+                centres.push((u, v));
+            }
+        }
+    }
+    loops
+}
 
 /// The parameter a boundary crossing holds fixed during refinement.
 #[derive(Clone, Copy)]

@@ -1824,3 +1824,47 @@ fn a_plane_section_loop_comes_back_closed() {
     let gap = (curve.evaluate(t1) - curve.evaluate(t0)).length();
     assert!(gap < 1e-9, "loop left open by {gap:.2e}");
 }
+
+/// Planes at heights 1e-8 and 1e-14 cut the paraboloid `z = x² + y²` in
+/// loops of radius 1e-4 and 1e-7 round its vertex, far inside one cell of
+/// the sampling grid, which no grid edge crosses. Each comes back closed,
+/// on the plane and the paraboloid.
+#[test]
+fn a_plane_section_loop_inside_one_grid_cell_is_found() {
+    let row = |x: f64, z: [f64; 3]| {
+        vec![
+            Point3::new(x, -1.0, z[0]),
+            Point3::new(x, 0.0, z[1]),
+            Point3::new(x, 1.0, z[2]),
+        ]
+    };
+    let bowl = NurbsSurface::new(
+        2,
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            row(-1.0, [2.0, 0.0, 2.0]),
+            row(0.0, [0.0, -2.0, 0.0]),
+            row(1.0, [2.0, 0.0, 2.0]),
+        ],
+        vec![vec![1.0; 3]; 3],
+    )
+    .unwrap();
+    for radius in [1e-4, 1e-7] {
+        let height = radius * radius;
+        let curves = intersect_plane_nurbs(&bowl, Vec3::new(0.0, 0.0, 1.0), height, 64).unwrap();
+        assert_eq!(curves.len(), 1, "radius {radius}");
+        let curve = &curves[0].curve;
+        let (t0, t1) = curve.domain();
+        assert!((curve.evaluate(t1) - curve.evaluate(t0)).length() < 1e-3 * radius);
+        let far = farthest(&curves, |p| {
+            let rim = (p.x().hypot(p.y()) - radius).abs();
+            rim.max((p.z() - height).abs())
+        });
+        assert!(
+            far < 1e-3 * radius,
+            "radius {radius}: loop strays {far:.2e}"
+        );
+    }
+}
