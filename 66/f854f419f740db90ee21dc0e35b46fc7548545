@@ -1,0 +1,21 @@
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_a2dc21dbec3f2b::t_cbd79227c39e4f 77-80,105
+crates/math/src/nurbs/intersection/tests.rs
+  s_a2dc21dbec3f2b::t_cbd79227c39e4f 2826-2855
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "66f854f419f740db90ee21dc0e35b46fc7548545",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
