@@ -1,0 +1,24 @@
+crates/math/src/nurbs/intersection/tests.rs
+  s_a2dc21dbec3f2b::t_bd6e387a1a792d 2177-2187,2367-2390
+  s_a2dc21dbec3f2b::t_695a33cb7dc969 2391-2392
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_bd6e387a1a792d 10371-10373,10376-10397
+crates/operations/src/section.rs
+  s_a2dc21dbec3f2b::t_bd6e387a1a792d 1034-1036,1052,1054-1070
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "14e17e6c29bc5bf5acb61441b2eec566da1d7138",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
