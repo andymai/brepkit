@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.4.1](https://github.com/andymai/brepkit/compare/v4.4.0...v4.4.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **math:** return exact circles and ellipses from closed-form analytic sections ([#2128](https://github.com/andymai/brepkit/issues/2128)) ([b46fe4b](https://github.com/andymai/brepkit/commit/b46fe4b7a4fe42d7e3e3b128e767351832f168df))
+
 ## [4.4.0](https://github.com/andymai/brepkit/compare/v4.3.18...v4.4.0) (2026-10-28)
 
 
