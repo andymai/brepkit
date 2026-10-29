@@ -2319,19 +2319,7 @@ fn terminal_cap_is_notchable(
             return Ok(false);
         };
         let (a, b) = (a.point(), b.point());
-        let samples = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-            1
-        } else {
-            64
-        };
-        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-        let path: Vec<(f64, f64)> = (0..=samples)
-            .map(|k| {
-                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(samples);
-                flat(edge.curve().evaluate_with_endpoints(t, a, b))
-            })
-            .collect();
-        if path_enters_triangle(&path, triangle) {
+        if cap_edge_reaches_triangle(edge, a, b, &flat, triangle) {
             return Err(BlendError::PlanningFailure {
                 reason: format!(
                     "the fillet's end at {:?} would cross another boundary of its cap",
@@ -2341,6 +2329,139 @@ fn terminal_cap_is_notchable(
         }
     }
     Ok(true)
+}
+
+/// Whether a cap edge may pass inside the notch triangle, certified: a line
+/// exactly, a circle or ellipse by a polyline held to the triangle widened by
+/// its chords' sag, and a NURBS curve by the hull of its control points, which
+/// holds the whole curve however narrow a knot span is.
+fn cap_edge_reaches_triangle(
+    edge: &brepkit_topology::edge::Edge,
+    a: Point3,
+    b: Point3,
+    flat: &impl Fn(Point3) -> (f64, f64),
+    triangle: [(f64, f64); 3],
+) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+    const SAMPLES: u32 = 64;
+    let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+    let polyline = || -> Vec<(f64, f64)> {
+        (0..=SAMPLES)
+            .map(|k| {
+                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+                flat(edge.curve().evaluate_with_endpoints(t, a, b))
+            })
+            .collect()
+    };
+    let step = (t1 - t0).abs() / f64::from(SAMPLES);
+    match edge.curve() {
+        EdgeCurve::Line => path_enters_triangle(&[flat(a), flat(b)], triangle),
+        EdgeCurve::Circle(circle) => {
+            let sag = circle.radius() * step * step / 8.0;
+            path_within_of_triangle(&polyline(), triangle, sag * 1.01)
+        }
+        EdgeCurve::Ellipse(ellipse) => {
+            let (major, minor) = (ellipse.semi_major(), ellipse.semi_minor());
+            let sag = major.powi(3) / (minor * minor) * step * step / 8.0;
+            path_within_of_triangle(&polyline(), triangle, sag * 1.01)
+        }
+        EdgeCurve::NurbsCurve(curve) => {
+            let hull: Vec<(f64, f64)> = curve.control_points().iter().map(|&p| flat(p)).collect();
+            hull_overlaps_triangle(&hull, triangle)
+        }
+    }
+}
+
+/// Whether a polyline comes within `margin` of a triangle, its inside
+/// included.
+fn path_within_of_triangle(path: &[(f64, f64)], triangle: [(f64, f64); 3], margin: f64) -> bool {
+    let to_segment = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len2 = dx.mul_add(dx, dy * dy);
+        let t = if len2 <= 0.0 {
+            0.0
+        } else {
+            ((p.0 - a.0).mul_add(dx, (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+        };
+        (p.0 - t.mul_add(dx, a.0)).hypot(p.1 - t.mul_add(dy, a.1))
+    };
+    let sides = [
+        (triangle[0], triangle[1]),
+        (triangle[1], triangle[2]),
+        (triangle[2], triangle[0]),
+    ];
+    path_enters_triangle(path, triangle)
+        || path.windows(2).any(|pair| {
+            sides.iter().any(|&(a, b)| {
+                to_segment(pair[0], a, b) <= margin
+                    || to_segment(pair[1], a, b) <= margin
+                    || to_segment(a, pair[0], pair[1]) <= margin
+                    || to_segment(b, pair[0], pair[1]) <= margin
+            })
+        })
+}
+
+/// Whether the convex hull of `points` overlaps the triangle by more than a
+/// rounding of their sizes (touching alone does not count).
+fn hull_overlaps_triangle(points: &[(f64, f64)], triangle: [(f64, f64); 3]) -> bool {
+    let mut sorted = points.to_vec();
+    sorted.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.total_cmp(&q.1)));
+    sorted.dedup();
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+        (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+    };
+    let mut hull: Vec<(f64, f64)> = Vec::new();
+    for pass in 0..2 {
+        let start = hull.len();
+        let ordered: Box<dyn Iterator<Item = &(f64, f64)>> = if pass == 0 {
+            Box::new(sorted.iter())
+        } else {
+            Box::new(sorted.iter().rev())
+        };
+        for &p in ordered {
+            while hull.len() >= start + 2
+                && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+            {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    if hull.is_empty() {
+        return false;
+    }
+    let scale = points
+        .iter()
+        .chain(triangle.iter())
+        .map(|&(x, y)| x.abs().max(y.abs()))
+        .fold(0.0_f64, f64::max);
+    let eps = 1e-9 * scale.max(1.0);
+    let polygons: [&[(f64, f64)]; 2] = [&hull, &triangle];
+    for polygon in polygons {
+        let n = polygon.len();
+        for i in 0..n {
+            let (a, b) = (polygon[i], polygon[(i + 1) % n]);
+            let axis = (b.1 - a.1, a.0 - b.0);
+            let len = axis.0.hypot(axis.1);
+            if len <= eps {
+                continue;
+            }
+            let project = |p: &(f64, f64)| (p.0 * axis.0 + p.1 * axis.1) / len;
+            let (h0, h1) = hull
+                .iter()
+                .map(project)
+                .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            let (t0, t1) = triangle
+                .iter()
+                .map(project)
+                .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+            if h1 <= t0 + eps || t1 <= h0 + eps {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Whether a polyline in the plane passes inside a triangle: a point strictly
@@ -3619,6 +3740,63 @@ mod tests {
     use brepkit_topology::test_utils::make_unit_cube_manifold;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The notch triangle at a corner filleted r 6: the arc's ends on the two
+    /// corner edges and the corner itself.
+    const NOTCH: [(f64, f64); 3] = [(6.0, 0.0), (0.0, 0.0), (0.0, 6.0)];
+
+    #[test]
+    fn a_spike_inside_a_narrow_knot_span_reaches_the_notch_triangle() {
+        // A degree-1 boundary whose excursion to (1, 1) lies in knot spans
+        // 0.001 wide, between two of 64 evenly spaced samples.
+        let points = [
+            (12.0, 2.0),
+            (4.0, 4.0),
+            (1.0, 1.0),
+            (4.0, 4.01),
+            (2.0, 12.0),
+        ];
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.5, 0.501, 0.502, 1.0, 1.0],
+            points
+                .iter()
+                .map(|&(x, y)| Point3::new(x, y, 0.0))
+                .collect(),
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let samples: Vec<(f64, f64)> = (0..=64)
+            .map(|k| {
+                let p = curve.evaluate(f64::from(k) / 64.0);
+                (p.x(), p.y())
+            })
+            .collect();
+        assert!(
+            !path_enters_triangle(&samples, NOTCH),
+            "the samples step over the spike"
+        );
+        assert!(hull_overlaps_triangle(&points, NOTCH));
+    }
+
+    #[test]
+    fn a_hull_touching_the_notch_chord_does_not_reach_it() {
+        let touching = [(3.0, 3.0), (10.0, 3.0), (10.0, 10.0), (3.0, 10.0)];
+        assert!(!hull_overlaps_triangle(&touching, NOTCH));
+        let clear = [(20.0, 20.0), (30.0, 20.0), (25.0, 30.0)];
+        assert!(!hull_overlaps_triangle(&clear, NOTCH));
+        let crossing = [(2.0, 2.0), (10.0, 2.0), (10.0, 10.0), (2.0, 10.0)];
+        assert!(hull_overlaps_triangle(&crossing, NOTCH));
+    }
+
+    #[test]
+    fn a_circle_within_its_chords_sag_of_the_notch_reaches_it() {
+        // A polyline that stays just outside the triangle reaches it once
+        // widened by the sag of the arc it stands for.
+        let outside = [(4.0, 2.0005), (2.0005, 4.0)];
+        assert!(!path_within_of_triangle(&outside, NOTCH, 1e-4));
+        assert!(path_within_of_triangle(&outside, NOTCH, 1e-3));
+    }
 
     /// A NURBS edge running along the first half of a 10 long line, forward
     /// and reversed: a point over the unused half reads its distance to the
