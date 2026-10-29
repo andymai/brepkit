@@ -106,8 +106,17 @@ pub fn section(
             FaceSurface::Nurbs(nurbs) => {
                 let intersection_curves =
                     brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
+                // A curve along which the face lies on the plane bounds no
+                // region of the section.
+                let tangent = |p: &brepkit_math::nurbs::intersection::IntersectionPoint| {
+                    nurbs
+                        .normal(p.param1.0, p.param1.1)
+                        .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
+                };
                 for curve in &intersection_curves {
-                    chain_curve_points(&curve.points, &mut segments);
+                    if !curve.points.iter().all(tangent) {
+                        chain_curve_points(&curve.points, &mut segments);
+                    }
                 }
             }
             FaceSurface::Cylinder(cyl) => {

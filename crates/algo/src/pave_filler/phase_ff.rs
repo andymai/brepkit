@@ -6794,8 +6794,14 @@ fn plane_nurbs_intersection(
 
     let mut results = Vec::new();
     for ic in isect_curves {
-        // A point where the plane touches the surface splits neither face.
-        if ic.points.len() < 2 {
+        // A point where the plane touches the surface splits neither face,
+        // nor a curve along which the surface lies on the plane.
+        let tangent = |p: &nurbs_isect::IntersectionPoint| {
+            nurbs
+                .normal(p.param1.0, p.param1.1)
+                .is_ok_and(|n| n.cross(normal).length() <= 1e-9 * normal.length())
+        };
+        if ic.points.len() < 2 || ic.points.iter().all(tangent) {
             continue;
         }
         let domain = ic.curve.domain();
@@ -10235,6 +10241,24 @@ mod tests {
         )
         .unwrap();
         let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &bowl).unwrap();
+        assert!(raw.is_empty());
+    }
+
+    /// A plane touching a NURBS trough along its floor grazes it as well:
+    /// the section the surface lies on splits neither face.
+    #[test]
+    fn a_plane_touching_a_nurbs_trough_along_a_line_grazes_it() {
+        let row = |x: f64, z: f64| vec![Point3::new(x, -1.0, z), Point3::new(x, 1.0, z)];
+        let trough = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(-1.0, 1.0), row(0.0, -1.0), row(1.0, 1.0)],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &trough).unwrap();
         assert!(raw.is_empty());
     }
 }

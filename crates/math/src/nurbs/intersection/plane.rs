@@ -118,7 +118,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    let (tiny, touches) = tiny_loops(
+    let (tiny, touches, valleys) = tiny_loops(
         surface,
         plane_normal,
         plane_d,
@@ -126,7 +126,7 @@ pub fn intersect_plane_nurbs(
         (u_min, u_step),
         (v_min, v_step),
     );
-    if crossings.is_empty() && tiny.is_empty() && touches.is_empty() {
+    if crossings.is_empty() && tiny.is_empty() && touches.is_empty() && valleys.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -289,7 +289,7 @@ pub fn intersect_plane_nurbs(
         }
     }
 
-    if ordered_chains.is_empty() && tiny.is_empty() && touches.is_empty() {
+    if ordered_chains.is_empty() && tiny.is_empty() && touches.is_empty() && valleys.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -331,6 +331,13 @@ pub fn intersect_plane_nurbs(
             points: chain,
         });
     }
+    for mut chain in valleys {
+        let curve = fit_within(&mut chain, FIT_TOLERANCE, &section)?;
+        curves.push(IntersectionCurve {
+            curve,
+            points: chain,
+        });
+    }
     // A point where the plane touches the surface is a curve that stays on
     // it, with that one point.
     for touch in touches {
@@ -359,8 +366,14 @@ const TINY_LOOP_POINTS: usize = 32;
 ///
 /// An extremum within rounding of the plane, where the distance curves
 /// away from it both ways, is a point where the surface touches it,
-/// returned with the loops.
-#[allow(clippy::cast_precision_loss, clippy::type_complexity)]
+/// returned with the loops. Where it curves away one way only, the floor
+/// of a valley lies on the plane, and the surface touches the plane along
+/// it: [`trace_valley`] follows it.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::type_complexity,
+    clippy::too_many_lines
+)]
 fn tiny_loops(
     surface: &NurbsSurface,
     normal: Vec3,
@@ -368,7 +381,11 @@ fn tiny_loops(
     distances: &[Vec<f64>],
     (u_min, u_step): (f64, f64),
     (v_min, v_step): (f64, f64),
-) -> (Vec<Vec<IntersectionPoint>>, Vec<IntersectionPoint>) {
+) -> (
+    Vec<Vec<IntersectionPoint>>,
+    Vec<IntersectionPoint>,
+    Vec<Vec<IntersectionPoint>>,
+) {
     let n = distances.len();
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
@@ -426,13 +443,25 @@ fn tiny_loops(
     let noise = rounding(surface, normal, d);
     let mut loops: Vec<Vec<IntersectionPoint>> = Vec::new();
     let mut touches: Vec<IntersectionPoint> = Vec::new();
+    let mut valleys: Vec<Vec<IntersectionPoint>> = Vec::new();
+    let step = 0.5 * u_step.min(v_step);
     for i in 0..n {
         for j in 0..n {
-            let near = distances[i][j];
-            let block_holds = (i.saturating_sub(1)..=(i + 1).min(n - 1))
-                .flat_map(|a| (j.saturating_sub(1)..=(j + 1).min(n - 1)).map(move |b| (a, b)))
-                .all(|(a, b)| distances[a][b] * near > 0.0 && distances[a][b].abs() >= near.abs());
-            if !block_holds {
+            let block = || {
+                (i.saturating_sub(1)..=(i + 1).min(n - 1)).flat_map(|a| {
+                    (j.saturating_sub(1)..=(j + 1).min(n - 1)).map(move |b| distances[a][b])
+                })
+            };
+            let mut near = distances[i][j];
+            if near.abs() <= noise {
+                // A node on the plane seeds where its block lies on one side
+                // of the plane but for other nodes on it, as along a valley
+                // through a column of nodes; it takes that side.
+                near = block().fold(0.0, |m: f64, f| if f.abs() > m.abs() { f } else { m });
+                if near.abs() <= noise || block().any(|f| f * near < 0.0 && f.abs() > noise) {
+                    continue;
+                }
+            } else if !block().all(|f| f * near > 0.0 && f.abs() >= near.abs()) {
                 continue;
             }
             let seed = (u_min + i as f64 * u_step, v_min + j as f64 * v_step);
@@ -448,11 +477,13 @@ fn tiny_loops(
             let spread = (fuu - fvv).hypot(2.0 * fuv);
             let (big, small) = (0.5 * (fuu + fvv + spread), 0.5 * (fuu + fvv - spread));
             if centre.abs() <= noise {
-                // A valley lying along the plane curves away from it one
-                // way only.
                 let point = surface.evaluate(u, v);
-                if settled
-                    && big * near > 0.0
+                let known =
+                    |q: &IntersectionPoint| (q.param1.0 - u).hypot(q.param1.1 - v) <= 2.0 * step;
+                if !settled || valleys.iter().flatten().any(known) {
+                    continue;
+                }
+                if big * near > 0.0
                     && small * near > 1e-6 * big * near
                     && touches
                         .iter()
@@ -463,6 +494,14 @@ fn tiny_loops(
                         param1: (u, v),
                         param2: (0.0, 0.0),
                     });
+                    continue;
+                }
+                let b = bend(surface, normal, (u, v));
+                if b.major.0 * near > 0.0 && b.minor.0.abs() <= 1e-6 * b.major.0.abs() {
+                    let valley = trace_valley(surface, normal, d, (u, v), noise, step);
+                    if valley.len() >= 2 {
+                        valleys.push(valley);
+                    }
                 }
                 continue;
             }
@@ -524,7 +563,111 @@ fn tiny_loops(
             }
         }
     }
-    (loops, touches)
+    (loops, touches, valleys)
+}
+
+/// Steps [`trace_valley`] takes each way at most.
+const MAX_VALLEY_STEPS: usize = 4096;
+
+/// The curve along which the surface touches the plane, through `start` on
+/// the floor of a valley of the plane's distance lying on the plane. It
+/// steps along the valley's flat direction and settles back across the
+/// valley each step, both ways until the floor leaves the plane or the
+/// patch, or the curve comes round to `start`.
+#[allow(clippy::similar_names)]
+fn trace_valley(
+    surface: &NurbsSurface,
+    normal: Vec3,
+    d: f64,
+    start: (f64, f64),
+    noise: f64,
+    step: f64,
+) -> Vec<IntersectionPoint> {
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let at = |(u, v): (f64, f64)| {
+        let p = surface.evaluate(u, v);
+        normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d
+    };
+    let settle = |(mut u, mut v): (f64, f64)| {
+        for _ in 0..MAX_NEWTON_ITER {
+            let b = bend(surface, normal, (u, v));
+            let ((lambda, e), grad) = (b.major, b.grad);
+            if lambda == 0.0 {
+                return None;
+            }
+            let s = grad.0.mul_add(e.0, grad.1 * e.1) / lambda;
+            u = s.mul_add(-e.0, u).clamp(u_lo, u_hi);
+            v = s.mul_add(-e.1, v).clamp(v_lo, v_hi);
+            if s.abs() <= 1e-12 * step {
+                break;
+            }
+        }
+        (at((u, v)).abs() <= noise).then_some((u, v))
+    };
+    let flat = |q: (f64, f64)| bend(surface, normal, q).minor.1;
+    let walk = |sign: f64, pts: &mut Vec<(f64, f64)>| {
+        let (mut p, e) = (start, flat(start));
+        let mut dir = (sign * e.0, sign * e.1);
+        for _ in 0..MAX_VALLEY_STEPS {
+            // As far as the patch allows, up to one step.
+            let reach = |x: f64, dx: f64, lo: f64, hi: f64| {
+                if dx > 0.0 {
+                    (hi - x) / dx
+                } else if dx < 0.0 {
+                    (lo - x) / dx
+                } else {
+                    f64::INFINITY
+                }
+            };
+            let t = step
+                .min(reach(p.0, dir.0, u_lo, u_hi))
+                .min(reach(p.1, dir.1, v_lo, v_hi));
+            if t <= 0.0 {
+                return false;
+            }
+            let Some(next) = settle((t.mul_add(dir.0, p.0), t.mul_add(dir.1, p.1))) else {
+                return false;
+            };
+            if pts.len() > 2 && (next.0 - start.0).hypot(next.1 - start.1) < step {
+                return true;
+            }
+            pts.push(next);
+            if t < step {
+                return false;
+            }
+            let e = flat(next);
+            dir = if e.0.mul_add(dir.0, e.1 * dir.1) >= 0.0 {
+                e
+            } else {
+                (-e.0, -e.1)
+            };
+            p = next;
+        }
+        false
+    };
+    let mut forward = Vec::new();
+    let closed = walk(1.0, &mut forward);
+    let mut params = Vec::with_capacity(forward.len() * 2 + 2);
+    if closed {
+        params.push(start);
+        params.extend(forward);
+        params.push(start);
+    } else {
+        let mut back = Vec::new();
+        walk(-1.0, &mut back);
+        params.extend(back.into_iter().rev());
+        params.push(start);
+        params.extend(forward);
+    }
+    params
+        .into_iter()
+        .map(|(u, v)| IntersectionPoint {
+            point: surface.evaluate(u, v),
+            param1: (u, v),
+            param2: (0.0, 0.0),
+        })
+        .collect()
 }
 
 /// How far evaluating the plane's distance on `surface` can round it: a few
@@ -553,31 +696,83 @@ struct Extremum {
     hessian: (f64, f64, f64),
 }
 
+/// The plane's distance's gradient and second derivatives at `(u, v)`,
+/// its curvature's eigenvalues, the larger in size first, with their unit
+/// eigenvectors.
+struct Bend {
+    grad: (f64, f64),
+    hessian: (f64, f64, f64),
+    major: (f64, (f64, f64)),
+    minor: (f64, (f64, f64)),
+}
+
+fn bend(surface: &NurbsSurface, normal: Vec3, (u, v): (f64, f64)) -> Bend {
+    let ders = surface.derivatives(u, v, 2);
+    let (fu, fv) = (normal.dot(ders[1][0]), normal.dot(ders[0][1]));
+    let (fuu, fuv, fvv) = (
+        normal.dot(ders[2][0]),
+        normal.dot(ders[1][1]),
+        normal.dot(ders[0][2]),
+    );
+    let spread = (fuu - fvv).hypot(2.0 * fuv);
+    let mean = 0.5 * (fuu + fvv);
+    let (high, low) = (mean + 0.5 * spread, mean - 0.5 * spread);
+    // An eigenvector of the 2 by 2 Hessian, from whichever of its rows
+    // leaves the longer one.
+    let along = |lambda: f64| {
+        let (a, b) = ((lambda - fvv, fuv), (fuv, lambda - fuu));
+        let (x, y) = if a.0.hypot(a.1) >= b.0.hypot(b.1) {
+            a
+        } else {
+            b
+        };
+        let len = x.hypot(y);
+        if len > 0.0 {
+            (x / len, y / len)
+        } else {
+            (1.0, 0.0)
+        }
+    };
+    let (major, minor) = if high.abs() >= low.abs() {
+        (high, low)
+    } else {
+        (low, high)
+    };
+    let major_dir = along(major);
+    Bend {
+        grad: (fu, fv),
+        hessian: (fuu, fuv, fvv),
+        major: (major, major_dir),
+        minor: (minor, (-major_dir.1, major_dir.0)),
+    }
+}
+
+/// Where the plane's distance stops changing, by Newton from `seed` on the
+/// patch. Along a direction where it does not curve the step is left out,
+/// so along a valley Newton settles across it.
 fn extremum(surface: &NurbsSurface, normal: Vec3, (mut u, mut v): (f64, f64)) -> Option<Extremum> {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
     let mut found = None;
     for _ in 0..MAX_NEWTON_ITER {
-        let ders = surface.derivatives(u, v, 2);
-        let (fu, fv) = (normal.dot(ders[1][0]), normal.dot(ders[0][1]));
-        let (fuu, fuv, fvv) = (
-            normal.dot(ders[2][0]),
-            normal.dot(ders[1][1]),
-            normal.dot(ders[0][2]),
-        );
-        let det = fuu.mul_add(fvv, -(fuv * fuv));
-        if det.abs() <= f64::EPSILON * (fuu.abs() + fvv.abs()).powi(2) {
+        let b = bend(surface, normal, (u, v));
+        if b.major.0 == 0.0 {
             break;
         }
-        let du = fvv.mul_add(fu, -(fuv * fv)) / det;
-        let dv = fuu.mul_add(fv, -(fuv * fu)) / det;
+        let (mut du, mut dv) = (0.0, 0.0);
+        for (lambda, e) in [b.major, b.minor] {
+            if lambda.abs() > 1e-9 * b.major.0.abs() {
+                let s = b.grad.0.mul_add(e.0, b.grad.1 * e.1) / lambda;
+                (du, dv) = (s.mul_add(e.0, du), s.mul_add(e.1, dv));
+            }
+        }
         u = (u - du).clamp(u_lo, u_hi);
         v = (v - dv).clamp(v_lo, v_hi);
         let settled = du.abs() <= 1e-12 * (u_hi - u_lo) && dv.abs() <= 1e-12 * (v_hi - v_lo);
         found = Some(Extremum {
             at: (u, v),
             settled,
-            hessian: (fuu, fuv, fvv),
+            hessian: b.hessian,
         });
         if settled {
             break;

@@ -2133,16 +2133,19 @@ fn a_plane_section_along_a_seam_within_rounding_of_it_is_found() {
     assert_eq!(radii, [2.0, 4.0]);
 }
 
-/// The plane `z = 0` touches `z = (x² + y² − 1)²` along the unit circle,
-/// where the surface's height rounds to a few 1e-16 either side of the
-/// plane. No rounding comes back as a loop.
+/// The plane `z = 0` touches `z = (x² + y² − 1)²` along the unit circle and
+/// the trough `z = x²` along the line `x = 0`, where neither surface's
+/// height crosses the plane but rounds a few 1e-16 either side of it. Each
+/// contact comes back whole: the circle closed, the line from edge to edge.
 #[test]
-fn a_plane_touching_a_surface_along_a_circle_traces_no_rounding_loops() {
+fn a_plane_touching_a_surface_along_a_curve_traces_it() {
+    let x = [(0, 0, -2.0), (1, 0, 4.0)];
+    let y = [(0, 0, -2.0), (0, 1, 4.0)];
     let quartic = polynomial_patch(
         4,
         [
-            &[(0, 0, -2.0), (1, 0, 4.0)],
-            &[(0, 0, -2.0), (0, 1, 4.0)],
+            &x,
+            &y,
             &[
                 (0, 0, 49.0),
                 (0, 1, -224.0),
@@ -2160,21 +2163,24 @@ fn a_plane_touching_a_surface_along_a_circle_traces_no_rounding_loops() {
             ],
         ],
     );
+    let trough = polynomial_patch(2, [&x, &y, &[(0, 0, 4.0), (1, 0, -16.0), (2, 0, 16.0)]]);
+    let up = Vec3::new(0.0, 0.0, 1.0);
     for samples in [64, 63] {
-        let curves =
-            intersect_plane_nurbs(&quartic, Vec3::new(0.0, 0.0, 1.0), 0.0, samples).unwrap();
-        for ic in &curves {
-            let mut extent = 0.0_f64;
-            for a in &ic.points {
-                for b in &ic.points {
-                    extent = extent.max((a.point - b.point).length());
-                }
-            }
-            assert!(
-                extent > 0.5,
-                "{samples} samples: a curve {extent:.2e} across"
-            );
-        }
+        let circle = intersect_plane_nurbs(&quartic, up, 0.0, samples).unwrap();
+        assert_eq!(circle.len(), 1, "{samples} samples");
+        let (t0, t1) = circle[0].curve.domain();
+        assert!((circle[0].curve.evaluate(t0) - circle[0].curve.evaluate(t1)).length() < 1e-9);
+        let far = farthest(&circle, |p| {
+            (p.x().hypot(p.y()) - 1.0).abs().max(p.z().abs())
+        });
+        assert!(far < 1e-6, "{samples} samples: the circle strays {far:.2e}");
+        let line = intersect_plane_nurbs(&trough, up, 0.0, samples).unwrap();
+        assert_eq!(line.len(), 1, "{samples} samples");
+        let (t0, t1) = line[0].curve.domain();
+        let (a, b) = (line[0].curve.evaluate(t0), line[0].curve.evaluate(t1));
+        assert!((a.y().abs() - 2.0).abs() < 1e-12 && (b.y().abs() - 2.0).abs() < 1e-12);
+        let far = farthest(&line, |p| p.x().abs().max(p.z().abs()));
+        assert!(far < 1e-9, "{samples} samples: the line strays {far:.2e}");
     }
 }
 
