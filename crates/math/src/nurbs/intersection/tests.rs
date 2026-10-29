@@ -2049,3 +2049,199 @@ fn refining_onto_a_nearly_tangent_plane_reaches_the_section() {
         "refined to {size:.3} of the section's size"
     );
 }
+
+/// The plane `y = 0` cuts the rational cylinder in two lines: `x = 1` on its
+/// seam, where both edge columns of the grid lie on the plane, and `x = −1`,
+/// along a column of nodes when the grid has one at a half turn. Both come
+/// back whole, on the plane and the cylinder.
+#[test]
+fn a_plane_section_along_the_seam_and_a_column_of_nodes_is_found() {
+    let cylinder = cylinder_nurbs_surface();
+    for samples in [64, 33] {
+        let curves =
+            intersect_plane_nurbs(&cylinder, Vec3::new(0.0, 1.0, 0.0), 0.0, samples).unwrap();
+        assert_eq!(curves.len(), 2, "{samples} samples");
+        let mut sides: Vec<f64> = Vec::new();
+        for ic in &curves {
+            let (t0, t1) = ic.curve.domain();
+            let (a, b) = (ic.curve.evaluate(t0), ic.curve.evaluate(t1));
+            assert!(
+                (a.z() - b.z()).abs() > 2.0 - 1e-9,
+                "{samples} samples: a line cut short"
+            );
+            let x = a.x();
+            let far = farthest(std::slice::from_ref(ic), |p| {
+                p.y().abs().max((p.x() - x).abs())
+            });
+            assert!(far < 1e-9, "{samples} samples: line strays {far:.2e}");
+            sides.push(x);
+        }
+        sides.sort_by(f64::total_cmp);
+        assert!((sides[0] + 1.0).abs() < 1e-9 && (sides[1] - 1.0).abs() < 1e-9);
+    }
+}
+
+/// The plane `z = 0` cuts a rational torus with radii 3 and 1 in its inner
+/// and outer equators. The outer lies on the tube's seam, whose last row of
+/// control points sits at `sin 2π`, 2.4e-16 below the plane, so that the
+/// grid's two edge rows read 0 and −2.4e-16; both circles come back whole.
+#[test]
+fn a_plane_section_along_a_seam_within_rounding_of_it_is_found() {
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let ring = [
+        (1.0, 0.0, 1.0),
+        (1.0, 1.0, w),
+        (0.0, 1.0, 1.0),
+        (-1.0, 1.0, w),
+        (-1.0, std::f64::consts::PI.sin(), 1.0),
+        (-1.0, -1.0, w),
+        (0.0, -1.0, 1.0),
+        (1.0, -1.0, w),
+        (1.0, std::f64::consts::TAU.sin(), 1.0),
+    ];
+    let cps = ring
+        .iter()
+        .map(|&(sx, sy, _)| {
+            ring.iter()
+                .map(|&(a, b, _)| Point3::new((3.0 + a) * sx, (3.0 + a) * sy, b))
+                .collect()
+        })
+        .collect();
+    let weights = ring
+        .iter()
+        .map(|&(_, _, wu)| ring.iter().map(|&(_, _, wv)| wu * wv).collect())
+        .collect();
+    let knots = vec![
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    let torus = NurbsSurface::new(2, 2, knots.clone(), knots, cps, weights).unwrap();
+    let curves = intersect_plane_nurbs(&torus, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+    assert_eq!(curves.len(), 2);
+    let mut radii: Vec<f64> = Vec::new();
+    for ic in &curves {
+        let (t0, t1) = ic.curve.domain();
+        let start = ic.curve.evaluate(t0);
+        assert!((ic.curve.evaluate(t1) - start).length() < 1e-9);
+        let radius = start.x().hypot(start.y()).round();
+        let far = farthest(std::slice::from_ref(ic), |p| {
+            p.z().abs().max((p.x().hypot(p.y()) - radius).abs())
+        });
+        assert!(far < 1e-7, "circle of radius {radius} strays {far:.2e}");
+        radii.push(radius);
+    }
+    radii.sort_by(f64::total_cmp);
+    assert_eq!(radii, [2.0, 4.0]);
+}
+
+/// The plane `z = 0` touches `z = (x² + y² − 1)²` along the unit circle,
+/// where the surface's height rounds to a few 1e-16 either side of the
+/// plane. No rounding comes back as a loop.
+#[test]
+fn a_plane_touching_a_surface_along_a_circle_traces_no_rounding_loops() {
+    let quartic = polynomial_patch(
+        4,
+        [
+            &[(0, 0, -2.0), (1, 0, 4.0)],
+            &[(0, 0, -2.0), (0, 1, 4.0)],
+            &[
+                (0, 0, 49.0),
+                (0, 1, -224.0),
+                (0, 2, 480.0),
+                (0, 3, -512.0),
+                (0, 4, 256.0),
+                (1, 0, -224.0),
+                (1, 1, 512.0),
+                (1, 2, -512.0),
+                (2, 0, 480.0),
+                (2, 1, -512.0),
+                (2, 2, 512.0),
+                (3, 0, -512.0),
+                (4, 0, 256.0),
+            ],
+        ],
+    );
+    for samples in [64, 63] {
+        let curves =
+            intersect_plane_nurbs(&quartic, Vec3::new(0.0, 0.0, 1.0), 0.0, samples).unwrap();
+        for ic in &curves {
+            let mut extent = 0.0_f64;
+            for a in &ic.points {
+                for b in &ic.points {
+                    extent = extent.max((a.point - b.point).length());
+                }
+            }
+            assert!(
+                extent > 0.5,
+                "{samples} samples: a curve {extent:.2e} across"
+            );
+        }
+    }
+}
+
+/// The plane `z = 0` touches the paraboloid `z = x² + y²` at its vertex and
+/// `z = (x² − 1)² + (y² − 1)²` at `(±1, ±1)`, curving away both ways at
+/// each: every touch comes back as a curve that stays on its point.
+#[test]
+fn a_plane_touching_a_surface_at_points_returns_them() {
+    let x = [(0, 0, -2.0), (1, 0, 4.0)];
+    let y = [(0, 0, -2.0), (0, 1, 4.0)];
+    let bowl = polynomial_patch(
+        2,
+        [
+            &x,
+            &y,
+            &[
+                (0, 0, 8.0),
+                (0, 1, -16.0),
+                (0, 2, 16.0),
+                (1, 0, -16.0),
+                (2, 0, 16.0),
+            ],
+        ],
+    );
+    let dimples = polynomial_patch(
+        4,
+        [
+            &x,
+            &y,
+            &[
+                (0, 0, 18.0),
+                (0, 1, -96.0),
+                (0, 2, 352.0),
+                (0, 3, -512.0),
+                (0, 4, 256.0),
+                (1, 0, -96.0),
+                (2, 0, 352.0),
+                (3, 0, -512.0),
+                (4, 0, 256.0),
+            ],
+        ],
+    );
+    let touches = [
+        (bowl, vec![(0.0, 0.0)]),
+        (
+            dimples,
+            vec![(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)],
+        ),
+    ];
+    for (surface, expected) in touches {
+        let curves = intersect_plane_nurbs(&surface, Vec3::new(0.0, 0.0, 1.0), 0.0, 64).unwrap();
+        let mut found: Vec<(f64, f64)> = curves
+            .iter()
+            .map(|ic| {
+                assert_eq!(ic.points.len(), 1);
+                let (t0, t1) = ic.curve.domain();
+                let p = ic.points[0].point;
+                assert!((ic.curve.evaluate(t0) - p).length() < 1e-15);
+                assert!((ic.curve.evaluate(t1) - p).length() < 1e-15);
+                assert!(p.z().abs() < 1e-14);
+                (p.x(), p.y())
+            })
+            .collect();
+        found.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        assert_eq!(found.len(), expected.len());
+        for (f, e) in found.iter().zip(&expected) {
+            assert!((f.0 - e.0).hypot(f.1 - e.1) < 1e-9, "{f:?} for {e:?}");
+        }
+    }
+}

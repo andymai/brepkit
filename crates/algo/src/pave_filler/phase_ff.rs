@@ -6794,6 +6794,10 @@ fn plane_nurbs_intersection(
 
     let mut results = Vec::new();
     for ic in isect_curves {
+        // A point where the plane touches the surface splits neither face.
+        if ic.points.len() < 2 {
+            continue;
+        }
         let domain = ic.curve.domain();
         let bbox = nurbs_curve_bbox(&ic.curve);
         let p_start = ParametricCurve::evaluate(&ic.curve, domain.0);
@@ -10205,5 +10209,32 @@ mod tests {
             }
         }
         assert!(far < 1e-5, "section strays {far:.2e} off the ball");
+    }
+    /// A plane touching a NURBS bowl at its vertex grazes it: the touching
+    /// point splits neither face.
+    #[test]
+    fn a_plane_touching_a_nurbs_bowl_at_a_point_grazes_it() {
+        let row = |x: f64, z: [f64; 3]| {
+            vec![
+                Point3::new(x, -1.0, z[0]),
+                Point3::new(x, 0.0, z[1]),
+                Point3::new(x, 1.0, z[2]),
+            ]
+        };
+        let bowl = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                row(-1.0, [2.0, 0.0, 2.0]),
+                row(0.0, [0.0, -2.0, 0.0]),
+                row(1.0, [2.0, 0.0, 2.0]),
+            ],
+            vec![vec![1.0; 3]; 3],
+        )
+        .unwrap();
+        let raw = plane_nurbs_intersection(Vec3::new(0.0, 0.0, 1.0), 0.0, &bowl).unwrap();
+        assert!(raw.is_empty());
     }
 }
