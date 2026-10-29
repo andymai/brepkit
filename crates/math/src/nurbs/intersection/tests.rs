@@ -2823,6 +2823,42 @@ fn a_flat_patch_whose_section_the_grid_misses_is_still_searched() {
     }
 }
 
+/// The flat rectangle `0 ≤ x ≤ 1, −1 ≤ y ≤ 0` at `z = 0` meets the wall
+/// `y = 1e-5 − 0.01·(x − ½)²` in two pieces, the wall's section bowing past
+/// the rectangle's edge `y = 0` where `x` is within 0.032 of ½. At 10
+/// samples every point of the plane's section, and every chord between
+/// them, lies on the rectangle, but the fitted curve does not, so the path
+/// declines it.
+#[test]
+fn a_flat_patch_whose_fitted_section_bows_off_it_is_declined() {
+    let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+    let rectangle = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![at(0.0, -1.0), at(0.0, 0.0)],
+            vec![at(1.0, -1.0), at(1.0, 0.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    let wall = polynomial_patch(
+        2,
+        [
+            &[(1, 0, 1.0)],
+            &[(0, 0, 1e-5 - 0.0025), (1, 0, 0.01), (2, 0, -0.01)],
+            &[(0, 0, -1.0), (0, 1, 2.0)],
+        ],
+    );
+    assert!(
+        planar_patch_sections(&rectangle, &wall, 10, true)
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// The notched sheet of the test above, crossing `z = 0` broadly at
 /// `x = 0.1` as well: the plane's grid finds that line, and the notch's
 /// span, whose control points lie on both sides of the plane, holds none of

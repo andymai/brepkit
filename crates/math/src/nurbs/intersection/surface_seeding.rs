@@ -49,17 +49,17 @@ pub(super) fn plane_of(surface: &NurbsSurface) -> Option<(Vec3, f64)> {
         .then_some((normal, offset))
 }
 
-/// Parts each chord of a flat patch's section is cut into, where they join
-/// checked to lie on the patch.
-const CHORD_CHECKS: usize = 4;
+/// Points along a flat patch's fitted section checked to lie on the patch,
+/// for each point of the section.
+const CURVE_CHECKS: usize = 4;
 
 /// When `flat` lies in a plane, the plane's section of `other`, as
 /// [`intersect_plane_nurbs`](super::intersect_plane_nurbs) finds it, with
 /// each point's parameters on both patches (`flat`'s first when
 /// `flat_first`). `None` unless the section lies on `flat` itself, at its
-/// points and between them: a section reaching past the patch is left to
-/// the marcher, and so is one the plane's grid may have missed a branch
-/// of, where the search below can find it.
+/// points and along its fitted curve between them: a section reaching past
+/// the patch is left to the marcher, and so is one the plane's grid may
+/// have missed a branch of, where the search below can find it.
 pub(super) fn planar_patch_sections(
     flat: &NurbsSurface,
     other: &NurbsSurface,
@@ -114,7 +114,7 @@ pub(super) fn planar_patch_sections(
             && foot.distance <= 1e-7
     };
     for curve in &mut curves {
-        let mut last: Option<(Point3, (f64, f64))> = None;
+        let mut feet = Vec::with_capacity(curve.points.len());
         for point in &mut curve.points {
             let Ok(foot) = project_point_to_surface(flat, point.point, 1e-10) else {
                 return Ok(None);
@@ -122,29 +122,39 @@ pub(super) fn planar_patch_sections(
             if !on_flat(&foot) {
                 return Ok(None);
             }
-            // The chord between points lies in the plane, so it lies on the
-            // patch wherever the section does, up to the curve's sag: a
-            // gap in the patch between points shows on it.
-            if let Some((from, near)) = last {
-                for k in 1..CHORD_CHECKS {
-                    #[allow(clippy::cast_precision_loss)]
-                    let t = k as f64 / CHORD_CHECKS as f64;
-                    let q = from + (point.point - from) * t;
-                    let Ok(step) = project_point_to_surface_from(flat, q, near, 1e-10) else {
-                        return Ok(None);
-                    };
-                    if !on_flat(&step) {
-                        return Ok(None);
-                    }
-                }
-            }
-            last = Some((point.point, (foot.u, foot.v)));
+            feet.push((point.point, (foot.u, foot.v)));
             let on_other = point.param1;
             (point.param1, point.param2) = if flat_first {
                 ((foot.u, foot.v), on_other)
             } else {
                 (on_other, (foot.u, foot.v))
             };
+        }
+        // The fitted curve between the points must lie on the patch too: a
+        // section passing just outside the patch's edge between points, or
+        // across a gap in it, leaves its points on the patch.
+        let (t0, t1) = curve.curve.domain();
+        let checks = CURVE_CHECKS * feet.len();
+        for k in 0..=checks {
+            #[allow(clippy::cast_precision_loss)]
+            let q = curve
+                .curve
+                .evaluate((t1 - t0).mul_add(k as f64 / checks as f64, t0));
+            let Some(&(_, near)) = feet
+                .iter()
+                .min_by(|a, b| (a.0 - q).length().total_cmp(&(b.0 - q).length()))
+            else {
+                return Ok(None);
+            };
+            let Ok(foot) = project_point_to_surface_from(flat, q, near, 1e-10) else {
+                return Ok(None);
+            };
+            let inside = (u_lo - slack..=u_hi + slack).contains(&foot.u)
+                && (v_lo - slack..=v_hi + slack).contains(&foot.v);
+            // The fit keeps within its tolerance of the plane, not on it.
+            if !inside || foot.distance > 1e-6 {
+                return Ok(None);
+            }
         }
     }
     Ok(Some(curves))
