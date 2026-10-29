@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793314085367,
+  "lastUpdate": 1793314705485,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60587,6 +60587,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16909786,
             "range": "± 232488",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c1e35a6ae6bc8905f38852941e8562f841f5f2d8",
+          "message": "fix(blend): roll rim fillets in the wedge their faces form (#2155)\n\nA closed rim's fillet now builds on the right side of the edge at a\nfrustum's rims, a tapered post's foot, a tapered hole's mouth and a\nround pocket's floor.\n\nToday `plane_cone_fillet` places the ball by fixed sign rules keyed to\nthe cone face's `reversed` flag and the side the apex lies on, and none\nof those layouts matches them. On `make_cone(3, 1, 4)` the bottom rim\nfilleted r 0.3 grows the solid from 54.454 to 72.491 with a negative\nmeshed volume, because the ball rolls below the base against the cone's\nextension, and the top rim builds no stripe; a frustum fused onto a\nplate and a revolved flange whose neck tapers build no stripe at their\nfoot either. `plane_cylinder_fillet` reads every reversed wall as a bore\nthrough the plate, so a radius 5 round pocket whose floor is at z 4 gets\nits contacts at radius 6 and z 3, where they belong at radius 4 and z 5,\nand its result meshes open.\n\n## Change\n\n- `plane_cone_fillet` places the ball in the wedge between the plate's\nray from the rim and the wall's, along the cone's generator: one radius\noff the plate on the wall's side, over the plate contact at `r_p ± r /\ntan(θ/2)`, with `θ` the wedge's angle. The plate's side comes from the\nface itself (`plane_inside_rim`, the axis-general form of\n`plane_inside_cylinder`), and the wall's side from that and the cone\nface's `reversed` flag: the wall lies on the plate's material side when\nexactly one of them holds.\n- `plane_cylinder_fillet` reads the plate's side for a reversed wall\ntoo, so a round pocket's floor contracts toward the axis. A bore whose\nplate side cannot be read keeps the old placement.\n- Both decline when the wall contact would land at or past the farthest\nreach of the wall face's boundary (`wall_reach`), as on a frustum or a\npost shorter than the fillet.\n- The builder refuses a call that fillets two rims of one wall whose\nwall contacts meet or cross, as on a frustum, a disc or a bore 0.5 tall\nwith both rims at r 0.3, where each contact alone fits the wall. It\nchecks every closed rim of the call, including rims whose cap another\nselected rim shares, which take the normal path.\n- A closed rim's rebuilt cap and wall seed the orientation, as a notched\ncap does: they keep their sources' surfaces and reversal flags. A\nfrustum with both rims filleted has no other input face left, and the\nvolume estimate it fell back to read the result as inverted once the\npart was moved 100 down.\n- `assemble_closed_rim` gives every closed rim's cap and wall their new\ncircles' senses by comparing the rim circle's normal with the axis, as\n#2151 does for a hole rim; a disc cap's senses were assumed per surface\ntype.\n- The builder flips the result shell by `signed_shell_volume` only when\nno input face seeds the orientation. With seeds the propagation already\nkeeps the input's orientation, and the estimate, which integrates curved\nfaces over their whole parameter domain, read a tapered neck's correct\nresult as inverted and flipped every face.\n- #2151's reach check refuses a frustum's bottom-rim fillet under the\nold placement, with the ball below the base touching the cone's\nextension, and\n`fillet_cone_bottom_rim_with_its_contact_off_the_frustum_is_refused`\nchecks that refusal. `fillet_cone_bottom_rim_produces_torus` replaces it\nand checks a major radius of `r_p - r·cot(α/2)`, the torus centre one\nradius above the base, and both contacts on the frustum's own faces.\n`plane_cylinder_fillet_hole_contacts_support_outside_spine` built its\nplate as a disc, which is a pocket's floor, so its plate now surrounds\nthe hole, as does the hole half of\n`plane_cylinder_fillet_takes_spindle_tori_up_to_the_cylinder_radius`.\nThe synthetic helper tests give their wall faces the far rim a real wall\nhas.\n- The roadmap closes the round pocket floor row and opens one for a\nbolted flange whose volume reads 4.90 high after its neck fillet, though\nthe faces match the result without the holes.\n\n## Tests\n\n- `fillet_round_rims.rs`: `a_frustums_rims_round_off` (the bottom rim at\nr 0.3 and 0.6, the top rim at 0.3),\n`a_tapered_posts_foot_on_a_plate_fills_its_ring` (a frustum on a plate\nnarrowing at r 1 and 2, and widening at r 1),\n`a_tapered_holes_mouth_rounds_off`, and\n`a_round_pockets_floor_fills_its_ring`, no longer ignored. Each result\nis valid, watertight, and changed in volume by the ring between the\ncorner, the two contacts and the ball, turned about the axis, within\n1e-6 of the part's volume.\n`a_rim_fillet_reaching_past_a_short_wall_is_refused`: a frustum's top\nrim, a post's foot and a disc's rim, each 0.2 tall at r 0.3, are refused\nor come back valid and watertight; it fails without the reach check.\n`both_rims_of_a_wall_too_short_for_their_two_fillets_are_refused`: that\nfrustum, disc and bore, each accepted without the two-rim check.\n`both_rims_of_a_wall_round_off_in_one_call`: the same frustum and disc\nat height 1 round off both rims, valid, watertight, and changed in\nvolume by the two rings to within 1e-6 of the part's volume.\n`both_rims_of_a_frustum_point_outward_wherever_it_sits`: `make_cone(3.0,\n1.0, 4.0)` with both rims at r 0.3, as built and moved 100 down, points\noutward and changes by the two rings; the moved one pointed inward\nbefore.\n`rims_sharing_their_caps_on_walls_too_short_for_two_fillets_are_refused`:\na tube of radii 5 and 1, 0.5 tall, with all four rims at r 0.3, accepted\nbefore.\n- Before this branch's rebase onto #2152, `cargo test --workspace\n--exclude brepkit-render` passed 3722 tests. Rebased onto #2151, `cargo\ntest --release -p brepkit-blend -p brepkit-operations -p brepkit-wasm -p\nbrepkit-io` passes 2338 tests.",
+          "timestamp": "2026-10-29T15:55:07-07:00",
+          "tree_id": "94ac652a20a0b2da0d3a07bd4c962d8b18493ee0",
+          "url": "https://github.com/andymai/brepkit/commit/c1e35a6ae6bc8905f38852941e8562f841f5f2d8"
+        },
+        "date": 1793314694871,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1145212,
+            "range": "± 2021",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1229721,
+            "range": "± 3794",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14305,
+            "range": "± 99",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689681,
+            "range": "± 1614",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29785640,
+            "range": "± 62385",
             "unit": "ns/iter"
           }
         ]
