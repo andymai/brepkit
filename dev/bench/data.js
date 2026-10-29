@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793311674184,
+  "lastUpdate": 1793314085367,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60533,6 +60533,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28955339,
             "range": "± 248827",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4bfc29bf721d591492603a0308c2059884017d26",
+          "message": "fix(math): trace where a plane touches a NURBS surface along a curve (#2148)\n\nA plane that touches a NURBS surface along a curve now gets that curve\nback.\n\nToday `intersect_plane_nurbs` finds nothing where the surface touches\nthe plane along a curve without crossing it: the plane's distance never\nchanges sign on the grid, and Newton for the distance's extremum stops\nwhere its second derivatives are singular, as on a valley's floor. `z =\n(x² + y² − 1)²` under `z = 0` returns no curve.\n\n## Change\n\n- `bend` gives the plane's distance's gradient and its curvature's\neigenvalues and eigenvectors per span of the domain, so how the\nparameters scale does not change which way the distance counts as flat.\n- `extremum` leaves out the Newton step along a direction curving less\nthan a thousandth as much as the other, so along a valley it settles\nacross the floor instead of stopping: near a curved valley's floor that\ndirection's curving is faint and swings with the distance from the\nfloor, and stepping along it with rounding's gradient sends Newton\nwandering. Where both directions curve, the step is Newton's as before.\nA step that has shrunk below a billionth of the domain and stopped\nshrinking counts as settled, as rounding in a faint distance's gradient\ncan hold it there. Before an extremum is let go for lying on the same\nside of the plane as the grid round it, Newton along every direction\ncurving away from the plane finishes the descent, each step halved until\nit brings the distance nearer the plane, so that the other direction of\na curved floor stays settled.\n- When the extremum it settles at lies within rounding of the plane and\nthe distance curves away from the plane one way only (the smaller\neigenvalue under 1e-6 of the larger), the valley's floor lies on the\nplane. `trace_valley` follows it: up to half a grid step at a time along\nthe flat direction, measured in spans of the domain, settling back\nacross the valley each step, both ways until the floor leaves the plane\nor the patch, or the curve comes back to its start after leaving it. The\nstep halves where the valley turns more than a quarter radian and grows\nback on the straight, so a loop smaller than a step closes, and a walk\nthat runs out of steps gives no curve. Each point settles until Newton's\nstep shrinks to rounding. A step that reaches the patch's edge settles\nalong the edge, so the curve ends on it; where the floor along the edge\nlies off the plane, the curve turns back short of the edge, and the\nwhole step, kept on the patch, settles freely instead.\n- A seed counts as on a valley already traced when it lies within an\neighth of a grid step of the traced line, so a second valley a grid step\naway is traced too. A grid chain that lies along a traced valley gives\nway to it: under a plane facing the other way, the nodes along a floor\ncross the plane to their neighbours at themselves, and their chains\nrepeat the valley.\n- Settling can bring a step back onto the point before it; such repeats\nare dropped, and a valley the fit still cannot take gives no curve\nrather than failing the whole section. Inside the gridfinity honeycomb\nfixture's cuts, a plane lies tangent to NURBS faces this way.\n- A grid node on the plane can now seed this, when the rest of its block\nlies on one side of the plane, as along a valley through a column of\nnodes. It takes that side.\n- `phase_ff` and the section operation skip a curve along which the\nsurface only touches the plane (`touches_along`): its normal lies along\nthe plane's, to 1e-9, at every point, and across the curve at its middle\npoint the surface stays on one side of the plane. Where the surface\ncrosses with its normal along the plane's, as `z = x³` crosses `z = 0`\nalong `x = 0`, the curve stays. Each side's probe starts a billionth of\nthe domain across and widens tenfold while the surface stays within\nrounding of the plane, as across `z = x⁷`, but stops short of halfway to\nthe section's nearest other curve, measured the shorter way round a\nclosed seam and passing over the curve's own copy, which a contact along\nthe seam itself leaves at the seam's other side, so that it tells the\nside before another branch comes between; a curve whose sides no probe\ntells stays. On a closed surface the probes wrap round its seam. Each\ncaller keeps its own copy, since both are checked against the published\nmath crate. The section operation's filtering of a NURBS face's curves\nmoves to `nurbs_section_curves`.\n\n## Tests\n\n- `a_plane_touching_a_surface_along_a_curve_traces_it`: `z = 0` against\n`z = (x² + y² − 1)²` gives the unit circle, closed, within 1e-6 of it,\nand against the trough `z = x²` the line `x = 0` from edge to edge,\nwithin 1e-9, at 64 samples and at 63, where the line runs through a\ncolumn of nodes, with the plane facing either way. Without the change\nthe quartic returns no curve; without chains giving way to the valley,\nthe trough under a downward normal at 63 samples gives three curves.\n- `a_plane_touching_a_surface_along_two_close_lines_traces_both`: `z =\n((x − a)(x − b))²` at 33 samples, its two lines a grid step apart, gives\nboth. It fails when seeds within a grid step of a traced valley count as\non it.\n- `a_plane_touching_a_squeezed_surface_along_a_line_traces_it_whole`:\nthe trough with its parameter across the floor running over 1e-6 gives\nthe line whole, from edge to edge within 1e-9. Measuring steps in\nparameters instead, it came back as 46 pieces.\n-\n`a_plane_touching_a_surface_along_a_curve_traces_it_to_the_patch_edge`:\n`z = 0` against `z = (y − x²)²` gives the parabola from `(0, 0)` to `(1,\n1)`, its ends within 1e-9 of those corners, and so does the same surface\nwith `x` running backwards in `u`, whose last step meets an edge along\nwhich the height rises as `x⁴`. Without settling along the edge, one end\nstops about 1e-6 short of `(1, 1)`; accepting a settle that has not\nconverged fails the backward surface.\n-\n`a_plane_touching_a_surface_along_a_circle_beside_the_edge_traces_it_whole`:\na touching circle passing a millionth inside the patch's edges comes\nback as one closed curve within 1e-6 of it. It fails when a step whose\nedge-held settle fails ends the curve.\n- `a_plane_cutting_a_faintly_curved_dip_finds_its_loop`: `z = (x − ½)² +\n1e-10·(y − ½)²` under `z = 1e-15` at 64 samples, `z = (x − ½)² +\n5e-13·(y − ½)²` under `z = 3e-16` at 10, and `z = (x − y²)² + 1e-5·(y −\n½)²`, whose floor curves along `x = y²`, under `z = 1e-12` at 64, each\ngive their loop. It fails when the descent steps along the faint\ndirection alone: on the curved floor, and at 5e-13 when that direction's\ncurving must exceed 1e-12 of the other's.\n- `a_plane_touching_a_surface_along_a_small_circle_traces_it_once`: a\ntouching circle of radius 0.003, smaller across than two steps at 64\nsamples, comes back once, closed, its points within 1e-9 of it. It fails\nwith a fixed step, with a curvature cutoff of 1e-9, and when a stalled\ntiny step does not count as settled.\n- `a_plane_touching_a_nurbs_trough_along_a_line_grazes_it`: in\n`phase_ff`, the trough's floor gives no section.\n- `a_plane_crossing_a_nurbs_sheet_where_it_lies_flat_splits_it` in\n`phase_ff` and\n`a_nurbs_face_crossing_the_plane_where_it_lies_flat_bounds_the_section`\nin the section operation: sheets `z = x³` and `z = x⁷` give their\ncurves, and in the section operation the trough gives none. Both fail\nwhen the side test is skipped.\n-\n`a_plane_crossing_a_nurbs_sheet_flat_beside_another_crossing_splits_it_twice`\nin `phase_ff` and\n`a_nurbs_face_crossing_the_plane_flat_beside_another_crossing_bounds_both`\nin the section operation: `z = (x − a)³(x − b)` with `b − a = 0.0008`\ngives both curves. Both fail when the probes start a thousandth of the\ndomain across and may reach past the other curve.\n-\n`a_plane_crossing_a_nearly_flat_nurbs_sheet_twice_close_by_splits_it_twice`\nin `phase_ff` and\n`a_nurbs_face_crossing_the_plane_twice_close_by_bounds_both` in the\nsection operation: a sheet stretched a thousandfold along `x`, `z = (u −\na)(u − b)`, lies within 1e-9 of flat where it crosses `z = 0` along two\nlines 8e-7 apart in `u`, and keeps both. Both fail when the probes start\na millionth of the domain across and may reach past the other line.\n- `the_gap_to_another_curve_runs_round_a_closed_seam` in both callers:\nlines at `u = 0.9996` and `u = 0.0004` lie 0.0008 apart across a closed\nseam and 0.9992 apart without one; a line's copy at `u = 1` of one at `u\n= 0` is passed over, and lines 8e-10 apart, astride the seam or on an\nopen surface, are not.\n-\n`a_closed_nurbs_face_touching_the_plane_along_its_seam_bounds_nothing`:\na closed rational cylinder touching `x = 1` along its seam adds nothing\nto the section. It fails when the probes clamp at the seam instead of\nwrapping, and when the contact's copy at the seam's other side counts as\nanother curve.\n- With this change and the one stacked on it, `cargo test --workspace\n--exclude brepkit-render` passes 3738 tests, and the pose sweep and\ntruth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-10-29T15:45:38-07:00",
+          "tree_id": "b64b20a456a930c5120ce53ed663cc6ebd17da14",
+          "url": "https://github.com/andymai/brepkit/commit/4bfc29bf721d591492603a0308c2059884017d26"
+        },
+        "date": 1793314076103,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 616220,
+            "range": "± 10265",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 662563,
+            "range": "± 5803",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8185,
+            "range": "± 124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 378357,
+            "range": "± 33565",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16909786,
+            "range": "± 232488",
             "unit": "ns/iter"
           }
         ]
