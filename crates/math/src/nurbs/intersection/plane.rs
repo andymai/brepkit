@@ -51,12 +51,12 @@ pub fn intersect_plane_nurbs(
             let v = v_min + j as f64 * v_step;
             let pt = surface.evaluate(u, v);
             let pt_vec = Vec3::new(pt.x(), pt.y(), pt.z());
-            reach = reach.max(pt_vec.length());
+            reach = reach.max(plane_terms(plane_normal, plane_d, pt));
             *dist = plane_normal.dot(pt_vec) - plane_d;
         }
     }
     // A node within rounding of the plane counts with its positive side.
-    let on_plane = 64.0 * f64::EPSILON * plane_normal.length().mul_add(reach, plane_d.abs());
+    let on_plane = 64.0 * f64::EPSILON * reach;
     let below = |f: f64| f < -on_plane;
 
     // Phase 2: Find zero-crossings on the UNIQUE grid edges (marching
@@ -267,6 +267,16 @@ pub fn intersect_plane_nurbs(
         }
     }
     for chain in index_chains {
+        // A node on the plane amid negative neighbours crosses every edge to
+        // them at itself, which links into a chain at that one node: the
+        // surface touching the plane there, which the tiny-loop pass finds.
+        let first = crossings[chain[0]];
+        if chain.iter().all(|&idx| {
+            let (u, v) = crossings[idx];
+            (u - first.0).abs() <= 1e-12 * u_step && (v - first.1).abs() <= 1e-12 * v_step
+        }) {
+            continue;
+        }
         let mut current: Vec<IntersectionPoint> = Vec::new();
         for idx in chain {
             let (u_guess, v_guess) = crossings[idx];
@@ -487,7 +497,8 @@ fn tiny_loops(
                     continue;
                 }
                 if big * near > 0.0
-                    && small * near > 1e-6 * big * near
+                    && small * near > 0.0
+                    && big.abs().min(small.abs()) > 1e-6 * big.abs().max(small.abs())
                     && touches
                         .iter()
                         .all(|t: &IntersectionPoint| (t.point - point).length() > FIT_TOLERANCE)
@@ -683,19 +694,22 @@ fn trace_valley(
 }
 
 /// How far evaluating the plane's distance on `surface` can round it: a few
-/// ulps of the largest `|n|·|P| + |d|` over the control points.
+/// ulps of the largest sum of its terms over the control points.
 fn rounding(surface: &NurbsSurface, normal: Vec3, d: f64) -> f64 {
     4.0 * f64::EPSILON
         * surface
             .control_points()
             .iter()
             .flatten()
-            .map(|p| {
-                normal
-                    .length()
-                    .mul_add(Vec3::new(p.x(), p.y(), p.z()).length(), d.abs())
-            })
+            .map(|&p| plane_terms(normal, d, p))
             .fold(0.0, f64::max)
+}
+
+/// The sum of the plane's distance's terms at `p`, `Σ|nᵢ·pᵢ| + |d|`, which
+/// bounds how far evaluating it rounds: coordinates the normal does not
+/// weigh add nothing.
+fn plane_terms(normal: Vec3, d: f64, p: Point3) -> f64 {
+    (normal.x() * p.x()).abs() + (normal.y() * p.y()).abs() + (normal.z() * p.z()).abs() + d.abs()
 }
 
 /// Where the plane's distance stops changing, as Newton from a seed
