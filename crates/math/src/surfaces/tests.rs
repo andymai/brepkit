@@ -650,6 +650,34 @@ fn rational_torus_lies_on_the_torus() {
     }
 }
 
+#[test]
+fn rational_sphere_lies_on_the_sphere() {
+    let centre = Point3::new(1.0, -2.0, 0.5);
+    let sphere = SphericalSurface::with_axis_and_ref_dir(
+        centre,
+        2.0,
+        Vec3::new(0.3, -0.4, 1.0),
+        Vec3::new(1.0, 0.0, -0.3),
+    )
+    .unwrap();
+    let nurbs = sphere.to_rational_nurbs().unwrap();
+    let ((u0, u1), (v0, v1)) = (nurbs.domain_u(), nurbs.domain_v());
+    for i in 0..=40 {
+        for j in 0..=40 {
+            let p = nurbs.evaluate(
+                (u1 - u0).mul_add(f64::from(i) / 40.0, u0),
+                (v1 - v0).mul_add(f64::from(j) / 40.0, v0),
+            );
+            let off = (p - centre).length() - 2.0;
+            assert!(off.abs() < 1e-12, "({i}, {j}) lies {off} off the sphere");
+        }
+    }
+    let poles = [nurbs.evaluate(u0, v0), nurbs.evaluate(u0, v1)];
+    let axis = sphere.z_axis();
+    assert!((poles[0] - (centre - axis * 2.0)).length() < 1e-12);
+    assert!((poles[1] - (centre + axis * 2.0)).length() < 1e-12);
+}
+
 /// A turned surface is the same surface read from another angle: each
 /// point a quarter turn on at the same `u` here sits at `u` plus the turn.
 #[test]

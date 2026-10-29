@@ -699,6 +699,69 @@ impl SphericalSurface {
             (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
         )
     }
+
+    /// The sphere exactly, as a rational biquadratic NURBS: the 5-point
+    /// rational half circle from pole to pole swept round the 9-point
+    /// rational circle about the axis. Its parameters are not the sphere's
+    /// angles. The sampled [`Self::to_nurbs`] (eight bilinear spans from pole
+    /// to pole) sags off it by up to 2.4% of the radius.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `NurbsSurface` construction fails.
+    pub fn to_rational_nurbs(&self) -> Result<NurbsSurface, MathError> {
+        use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, TAU};
+        let round: [(f64, f64); 9] = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let meridian: [(f64, f64); 5] =
+            [(0.0, -1.0), (1.0, -1.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let weight = |i: usize| if i % 2 == 1 { FRAC_1_SQRT_2 } else { 1.0 };
+        let r = self.radius;
+        let mut cps = Vec::with_capacity(9);
+        let mut weights = Vec::with_capacity(9);
+        for (i, &(ux, uy)) in round.iter().enumerate() {
+            let mut row = Vec::with_capacity(5);
+            let mut w_row = Vec::with_capacity(5);
+            for (j, &(rho, z)) in meridian.iter().enumerate() {
+                row.push(
+                    self.center
+                        + self.x_axis * (ux * rho * r)
+                        + self.y_axis * (uy * rho * r)
+                        + self.z_axis * (z * r),
+                );
+                w_row.push(weight(i) * weight(j));
+            }
+            cps.push(row);
+            weights.push(w_row);
+        }
+        let knots_u = vec![
+            0.0,
+            0.0,
+            0.0,
+            TAU * 0.25,
+            TAU * 0.25,
+            TAU * 0.5,
+            TAU * 0.5,
+            TAU * 0.75,
+            TAU * 0.75,
+            TAU,
+            TAU,
+            TAU,
+        ];
+        let knots_v = vec![
+            -FRAC_PI_2, -FRAC_PI_2, -FRAC_PI_2, 0.0, 0.0, FRAC_PI_2, FRAC_PI_2, FRAC_PI_2,
+        ];
+        NurbsSurface::new(2, 2, knots_u, knots_v, cps, weights)
+    }
 }
 
 /// A toroidal surface.
