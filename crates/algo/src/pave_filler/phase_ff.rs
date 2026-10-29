@@ -10192,6 +10192,27 @@ mod tests {
         assert_eq!(sections(3.0), 2);
     }
 
+    /// A ball off a ring's axis touching its outer equator grazes it too.
+    #[test]
+    fn a_ball_touching_a_ring_off_its_axis_grazes_it() {
+        let ring = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0)
+                .unwrap(),
+        );
+        let ball = FaceSurface::Sphere(
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(5.0, 0.0, 0.0), 1.0).unwrap(),
+        );
+        let (a, b) = boxes(
+            ([-4.0, -4.0, -1.0], [4.0, 4.0, 1.0]),
+            ([4.0, -1.0, -1.0], [6.0, 1.0, 1.0]),
+        );
+        assert!(
+            compute_raw_curves(&ring, &ball, &a, &b, None, None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// A flat NURBS sheet at height 0.5 cuts a ball of radius 2 in a circle
     /// of radius √3.75, which the section follows on the ball itself, not
     /// on a faceted stand-in for it.
