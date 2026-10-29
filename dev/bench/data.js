@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793245450016,
+  "lastUpdate": 1793246987130,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59399,6 +59399,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28759300,
             "range": "± 213956",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "52d3c4e9135782f9cd2194c60fa818e65034a661",
+          "message": "fix(algo): intersect a sphere face with a NURBS face on the exact sphere (#2136)\n\nBooleans now intersect a sphere face with a NURBS face on the sphere\nitself, not on a faceted stand-in for it.\n\nToday `analytic_nurbs_intersection` converts the quadric to a NURBS\nsurface and marches it against the partner. Cylinders, cones and tori\nconvert exactly, but a sphere goes through `SphericalSurface::to_nurbs`,\na bilinear grid of 33 by 9 samples that sags up to 2.4% of the radius\noff the sphere. A flat NURBS sheet at height 0.5 through a radius 2 ball\ncomes back with a section 4.4e-2 off the ball, and the split faces and\nthe result's edges are built on it.\n\n## Change\n\n- `SphericalSurface::to_rational_nurbs` builds the sphere exactly: the\n5-point rational half circle from pole to pole swept round the 9-point\nrational circle about the axis, degree 2 both ways, as\n`ToroidalSurface::to_rational_nurbs` builds its tube. `heal`'s\n`sphere_to_nurbs` builds the same form, but `algo` cannot depend on\n`heal`.\n- `analytic_nurbs_intersection` marches against it.\n\n## Tests\n\n- `rational_sphere_lies_on_the_sphere` samples the form of a sphere on a\ntilted axis at 41 by 41 parameters, all within 1e-12 of the sphere, with\nits poles on the axis.\n- `a_ball_meets_a_nurbs_sheet_on_the_ball` holds the sheet's section\nwithin 1e-5 of the ball. With the sampled form it strays 4.36e-2, and in\na debug build takes 1.07 s against 0.03 s.\n- `cargo test --workspace --exclude brepkit-render` passes 3678 tests,\nand the pose sweep and truth audit outputs are identical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nBooleans now intersect a sphere face with a NURBS face on the exact\nsphere instead of the sampled bilinear stand-in that sagged up to 2.4%\nof the radius off it.\n\n- Adds `SphericalSurface::to_rational_nurbs`, an exact rational\nbiquadratic form built the way `ToroidalSurface::to_rational_nurbs`\nbuilds its tube, and makes `analytic_nurbs_intersection` march against\nit.\n- A sheet cutting a radius-2 ball now stays within 1e-5 of the ball; the\nsampled form strayed 4.4e-2 and took 1.07 s in debug builds against 0.03\ns.\n\n<sup>Written for commit 76cf4743c0fa73bd2bb5623a5865292522472293.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2136?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2136?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2136&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-29T04:06:55Z",
+          "tree_id": "c5be07ab9a366b7a97d8813dd7da8df4268dd3b9",
+          "url": "https://github.com/andymai/brepkit/commit/52d3c4e9135782f9cd2194c60fa818e65034a661"
+        },
+        "date": 1793246978371,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 884130,
+            "range": "± 3374",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 951056,
+            "range": "± 1153",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11332,
+            "range": "± 71",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 534243,
+            "range": "± 560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23152842,
+            "range": "± 79536",
             "unit": "ns/iter"
           }
         ]
