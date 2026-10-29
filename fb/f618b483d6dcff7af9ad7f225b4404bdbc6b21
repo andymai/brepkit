@@ -1,0 +1,32 @@
+crates/math/src/nurbs/intersection/surface_seeding.rs
+  s_a2dc21dbec3f2b::t_96ea7a68dcb94a 29
+  s_a2dc21dbec3f2b::t_abc2beabac498a 11-13,52-53,79
+  s_a2dc21dbec3f2b::t_cca68617e296b0 63
+  s_a2dc21dbec3f2b::t_96b620d696355e 54-55
+  s_a2dc21dbec3f2b::t_a6e93808dded37 27-28,40,44,48,59-62,73-75,80-83,85,90,93-109
+crates/math/src/nurbs/intersection/plane.rs
+  s_a2dc21dbec3f2b::t_a6e93808dded37 711
+crates/math/src/nurbs/intersection/tests.rs
+  s_a2dc21dbec3f2b::t_cca68617e296b0 2392-2393,2398-2401,2403-2422,2425-2431,2433,2438-2444,2447-2469,2474,2476-2486,2493
+  s_a2dc21dbec3f2b::t_466b9ed237dda6 10,2434-2437,2470-2473,2494-2498
+  s_a2dc21dbec3f2b::t_3bea509072bcfc 2394-2396,2432,2445-2446,2475
+  s_a2dc21dbec3f2b::t_96ea7a68dcb94a 9,2423-2424
+  s_a2dc21dbec3f2b::t_abc2beabac498a 2402,2487-2492
+  s_a2dc21dbec3f2b::t_c1a1c5d6388a40 2391,2397,2499
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fbf618b483d6dcff7af9ad7f225b4404bdbc6b21",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
