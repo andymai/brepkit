@@ -2561,11 +2561,39 @@ pub fn exact_cone_cylinder(
     Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
 }
 
+/// The exact rational quadratic NURBS of the full ellipse `centre +
+/// a·cos(t)·u + b·sin(t)·v` (a circle when `a == b`), starting at
+/// `centre + a·u`: four quarter arcs, each with its corner weighted by
+/// cos 45°.
+fn conic_loop(centre: Point3, u: Vec3, v: Vec3, a: f64, b: f64) -> Result<NurbsCurve, MathError> {
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let corners: [(f64, f64); 9] = [
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 0.0),
+    ];
+    let points = corners
+        .iter()
+        .map(|&(x, y)| centre + u * (a * x) + v * (b * y))
+        .collect();
+    let weights = vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+    let knots = vec![
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    NurbsCurve::new(2, knots, points, weights)
+}
+
 /// Algebraic cone-cone intersection (NURBS form for the general bounded
-/// path). Delegates to [`exact_cone_cone`] and samples each exact conic
-/// (coaxial circle or offset-parallel radical-plane ellipse) into an
-/// interpolated NURBS `IntersectionCurve`, mirroring the
-/// sphere-cylinder algebraic path. phase FF prefers the exact circle form
+/// path). Delegates to [`exact_cone_cone`] and returns each exact conic
+/// (coaxial circle or offset-parallel radical-plane ellipse) as an exact
+/// rational NURBS `IntersectionCurve` with sample points along it, mirroring
+/// the sphere-cylinder algebraic path. phase FF prefers the exact circle form
 /// directly (so the section edge links to the coincident boundary), but a
 /// caller of `intersect_analytic_analytic_bounded` still gets one clean
 /// curve instead of the marcher's fragments.
@@ -2579,7 +2607,6 @@ fn algebraic_cone_cone(
     let mut curves = Vec::new();
     for exact in exacts {
         let n_samples = 33;
-        let mut positions = Vec::with_capacity(n_samples);
         let mut points = Vec::with_capacity(n_samples);
         #[allow(clippy::cast_precision_loss)]
         for i in 0..n_samples {
@@ -2593,18 +2620,25 @@ fn algebraic_cone_cone(
                 }
                 ExactIntersectionCurve::Points(_) => break,
             };
-            positions.push(pt);
             points.push(IntersectionPoint {
                 point: pt,
                 param1: (0.0, 0.0),
                 param2: (0.0, 0.0),
             });
         }
-        if positions.is_empty() {
-            continue;
-        }
-        let degree = 3.min(positions.len() - 1);
-        let curve = interpolate(&positions, degree)?;
+        let curve = match &exact {
+            ExactIntersectionCurve::Circle(c) => {
+                conic_loop(c.center(), c.u_axis(), c.v_axis(), c.radius(), c.radius())?
+            }
+            ExactIntersectionCurve::Ellipse(e) => conic_loop(
+                e.center(),
+                e.u_axis(),
+                e.v_axis(),
+                e.semi_major(),
+                e.semi_minor(),
+            )?,
+            ExactIntersectionCurve::Points(_) => continue,
+        };
         curves.push(IntersectionCurve { curve, points });
     }
     Ok(Some(curves))
@@ -2739,8 +2773,8 @@ pub fn exact_cone_sphere(
 }
 
 /// Algebraic sphere-cylinder intersection (NURBS form for the general bounded
-/// path). A coaxial pair delegates to [`exact_sphere_cylinder`] and samples
-/// each exact circle into an interpolated NURBS `IntersectionCurve`. phase FF
+/// path). A coaxial pair delegates to [`exact_sphere_cylinder`] and returns
+/// each exact circle as an exact rational NURBS `IntersectionCurve`. phase FF
 /// prefers the exact circle form directly (so the section edge links to the
 /// coincident boundary and the closed-circle splitter can carve the spherical
 /// band), but a caller of `intersect_analytic_analytic_bounded` still gets
@@ -2762,12 +2796,10 @@ fn algebraic_sphere_cylinder(
         };
         let n_samples = 33;
         let mut points = Vec::with_capacity(n_samples);
-        let mut positions = Vec::with_capacity(n_samples);
         #[allow(clippy::cast_precision_loss)]
         for i in 0..n_samples {
             let theta = TAU * i as f64 / (n_samples - 1) as f64;
             let pt = crate::traits::ParametricCurve::evaluate(&circle, theta);
-            positions.push(pt);
             let (param1, param2) = in_order(
                 sphere.project_point(pt),
                 cyl.project_point(pt),
@@ -2779,8 +2811,8 @@ fn algebraic_sphere_cylinder(
                 param2,
             });
         }
-        let degree = 3.min(positions.len() - 1);
-        let curve = interpolate(&positions, degree)?;
+        let r = circle.radius();
+        let curve = conic_loop(circle.center(), circle.u_axis(), circle.v_axis(), r, r)?;
         curves.push(IntersectionCurve { curve, points });
     }
 
@@ -3675,10 +3707,9 @@ fn algebraic_sphere_sphere(
     let u_dir = basis.x;
     let v_dir = basis.y;
 
-    // Sample the circle for the IntersectionCurve representation.
+    // Sample points along the circle for the IntersectionCurve.
     let n_samples = 33; // Odd for symmetry
     let mut points = Vec::with_capacity(n_samples);
-    let mut positions = Vec::with_capacity(n_samples);
     #[allow(clippy::cast_precision_loss)]
     for i in 0..n_samples {
         let theta = TAU * i as f64 / (n_samples - 1) as f64;
@@ -3688,7 +3719,6 @@ fn algebraic_sphere_sphere(
             center.y() + (u_dir.y() * cos_t + v_dir.y() * sin_t) * r_circle,
             center.z() + (u_dir.z() * cos_t + v_dir.z() * sin_t) * r_circle,
         );
-        positions.push(pt);
         points.push(IntersectionPoint {
             point: pt,
             param1: (0.0, 0.0),
@@ -3696,8 +3726,7 @@ fn algebraic_sphere_sphere(
         });
     }
 
-    let degree = 3.min(positions.len() - 1);
-    let curve = interpolate(&positions, degree)?;
+    let curve = conic_loop(center, u_dir, v_dir, r_circle, r_circle)?;
 
     Ok(vec![IntersectionCurve { curve, points }])
 }
@@ -5950,6 +5979,88 @@ mod tests {
                 circle.radius()
             );
             assert!((circle.center().z() - height).abs() < 1e-15);
+        }
+    }
+
+    /// The farthest any of `curves` strays from `off`, sampled densely.
+    fn farthest(curves: &[IntersectionCurve], off: impl Fn(Point3) -> f64) -> f64 {
+        let mut far = 0.0_f64;
+        for ic in curves {
+            let (t0, t1) = ic.curve.domain();
+            for i in 0..=2000 {
+                let t = t0 + (t1 - t0) * f64::from(i) / 2000.0;
+                far = far.max(off(ic.curve.evaluate(t)));
+            }
+        }
+        far
+    }
+
+    /// A ball sitting in a bore of its own radius touches it along its
+    /// equator, which comes back as the exact circle.
+    #[test]
+    fn a_ball_in_its_bore_meets_it_on_an_exact_circle() {
+        let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap();
+        let bore =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, -2.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let curves = intersect_analytic_analytic_bounded(
+            AnalyticSurface::Sphere(&ball),
+            AnalyticSurface::Cylinder(&bore),
+            64,
+            None,
+            Some((0.0, 4.0)),
+        )
+        .unwrap();
+        assert_eq!(curves.len(), 1);
+        let far = farthest(&curves, |p| {
+            let on_ball = ((p - Point3::new(0.0, 0.0, 0.0)).length() - 1.0).abs();
+            on_ball
+                .max((p.x().hypot(p.y()) - 1.0).abs())
+                .max(p.z().abs())
+        });
+        assert!(far < 1e-14, "circle strays {far:.2e}");
+    }
+
+    /// Two unit balls a unit apart meet in a circle of radius √3/2, which
+    /// comes back exact.
+    #[test]
+    fn overlapping_balls_meet_on_an_exact_circle() {
+        let a = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap();
+        let b = SphericalSurface::new(Point3::new(1.0, 0.0, 0.0), 1.0).unwrap();
+        let curves = intersect_analytic_analytic_bounded(
+            AnalyticSurface::Sphere(&a),
+            AnalyticSurface::Sphere(&b),
+            64,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(curves.len(), 1);
+        let far = farthest(&curves, |p| {
+            let on_a = ((p - Point3::new(0.0, 0.0, 0.0)).length() - 1.0).abs();
+            on_a.max(((p - Point3::new(1.0, 0.0, 0.0)).length() - 1.0).abs())
+        });
+        assert!(far < 1e-14, "circle strays {far:.2e}");
+    }
+
+    /// A loop with semi-axes 3 and 1.5 in a tilted frame lies on its ellipse
+    /// all the way round and starts at the end of its major axis.
+    #[test]
+    fn a_conic_loop_is_its_ellipse() {
+        let centre = Point3::new(1.0, -2.0, 0.5);
+        let frame = Frame3::from_normal(centre, Vec3::new(0.3, -0.4, 1.0)).unwrap();
+        let curve = conic_loop(centre, frame.x, frame.y, 3.0, 1.5).unwrap();
+        let (t0, t1) = curve.domain();
+        assert!((curve.evaluate(t0) - (centre + frame.x * 3.0)).length() < 1e-15);
+        for i in 0..=2000 {
+            let p = curve.evaluate(t0 + (t1 - t0) * f64::from(i) / 2000.0) - centre;
+            let (x, y) = (p.dot(frame.x) / 3.0, p.dot(frame.y) / 1.5);
+            assert!(
+                (x.hypot(y) - 1.0).abs() < 1e-14,
+                "off its ellipse by {}",
+                x.hypot(y) - 1.0
+            );
+            assert!(p.dot(frame.z).abs() < 1e-14);
         }
     }
 }
