@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793242498974,
+  "lastUpdate": 1793243987997,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59291,6 +59291,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28703854,
             "range": "± 69968",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4c4a1835a266d1de9c20cef3a7acd0c86e3ff910",
+          "message": "fix(math): intersect parallel cylinders along exact rulings (#2130)\n\nTwo cylinders whose axes are parallel but apart now meet along exact\nrulings instead of a marched trace.\n\nToday the cylinder-cylinder arm of `try_algebraic_intersection` solves\ncoaxial pairs and crossing axes, but for parallel axes\n`algebraic_cylinder_cylinder` returns `None` and the general marcher\ntraces the section. `phase_ff` reaches that arm through\n`intersect_analytic_analytic_in_region`, so booleans of parallel\ncylinder faces take the marcher too. Its curves stray off the cylinders,\nand two unit rods touching side by side came back as 13 curves, 12 of\nthem running partly off the line where the rods touch.\n\n## Change\n\n- `parallel_cylinders`: every plane across the axes cuts the two\ncylinders in circles `d` apart, which cross in two points, touch in one\n(side by side, or one inside the other against its wall), or miss, alike\nin every plane. A miss is read at rounding scale, and two crossings\ncloser than the linear tolerance are taken as the one where the circles\ntouch. Each crossing sweeps a ruling, cut to the stretch of axis both\nfaces' `v` ranges share.\n- It defers to the next solver, as today, when neither range is known,\nsince a ruling has no ends of its own, and when a ruling's end lies more\nthan the linear tolerance off the second cylinder: axes within the\nparallel test can still lean 1.4e-5 apart, which over a long span moves\nthe second axis.\n- `ruling_segment` builds each ruling as a straight NURBS carrying its\nends and middle as points.\n\n## Tests\n\n- `overlapping_parallel_rods_meet_along_two_rulings`: rods of radius 1\nwith axes 1.2 apart, the second running down, meet along rulings at x\n0.6 and y ±0.8 over the height both faces share.\n- `touching_parallel_rods_meet_along_one_ruling`: rods side by side, and\na rod inside another against its wall, meet along one ruling each; rods\napart do not meet.\n- Both sample each curve against both cylinders to 1e-12. With the new\narm unhooked, the marched curves fail that check.\n- `parallel_rods_keep_short_and_close_rulings`: rods of radius 1e6\noverlapping along a stretch 0.001 long meet along two rulings that long,\nand rods of radius 100 whose axes lie 3e-7 short of touching meet along\ntwo rulings 0.011 apart.\n- `rods_leaning_apart_keep_rulings_only_over_a_short_span`: axes leaning\n1e-5 apart keep their two rulings over a span of 0.001 and defer over a\nspan of 100.\n- `cargo test --workspace --exclude brepkit-render` passes 3677 tests,\nand the pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-10-29T03:17:13Z",
+          "tree_id": "6ff9b6d0a1aa95cb7d3f10ba2abd9dd50655a1aa",
+          "url": "https://github.com/andymai/brepkit/commit/4c4a1835a266d1de9c20cef3a7acd0c86e3ff910"
+        },
+        "date": 1793243979446,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 653810,
+            "range": "± 2976",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 703732,
+            "range": "± 6583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8486,
+            "range": "± 864",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 398002,
+            "range": "± 5627",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18041285,
+            "range": "± 256928",
             "unit": "ns/iter"
           }
         ]
