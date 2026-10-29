@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793236532875,
+  "lastUpdate": 1793238287805,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59129,6 +59129,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23236462,
             "range": "± 121696",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68d09e68a546fa4ce3a4d18c557a48edffb4a361",
+          "message": "fix(math): fit NURBS intersection curves to tolerance between their points (#2127)\n\nNURBS surface intersections now hold their tolerance along the whole\nfitted curve, not only at the points they march through.\n\nToday `build_curves_from_chains` fits a chain of more than 50 points by\nleast squares with a third as many control points, and interpolates\nshorter chains. Only `intersect_nurbs_nurbs` checks the curve between\nits points, at 5 places against a 1e-5 bar, and where that fails it\ninterpolates the same points again. The marched points sit within 1e-6\nof both surfaces, but on plane and NURBS sections of cylinders, spheres,\ntori and paraboloids the fitted curve strays 1.6e-5 to 4.4e-5 between\nthem. `phase_ff` and `section` build their edges on these curves, so the\nedges carry that error.\n\n## Change\n\n- `fit_within` interpolates the chain, then measures the curve at the\nquarter, half and three-quarter marks between each pair of neighbouring\npoints. Where any mark strays past the tolerance, the intersection point\nNewton settles to from the middle joins the chain, and the chain is\nfitted again. It stops after 8 rounds or 4096 points, and no round adds\nmore points than that cap leaves. A span stops splitting once two splits\nhave not halved its stray: the chain there is not a smooth run of the\nsection, and more points will not fix it.\n- Plane sections fit to 1e-7, since their crossings already refine to\n1e-12. NURBS-NURBS sections fit to 1e-6, the tolerance their march uses.\n- `project_point_to_surface_from` starts the projection from a\nneighbouring point's parameters and falls back to the global search.\n- `intersect_nurbs_nurbs` drops that 5-point check.\n\n## Tests\n\n- `a_plane_section_holds_its_tolerance_between_points` and\n`a_marched_section_holds_its_tolerance_between_points` sample each\nfitted curve 2001 times against the exact surfaces. On `main` the curves\nstray 3.8e-5 (a tilted plane through a rational cylinder) and 7.1e-5\n(cylinders of radius 1 and 0.6 crossing). With this change they stay\nunder 1e-6 and 5e-6.\n- `a_plane_section_through_an_inflection_holds_its_tolerance` cuts a\ncubic sheet through its inflection, where the line between two grid\ncrossings meets the section at its middle. Measured at the middle alone,\nthe curve strays 4.8e-5; with the quarter marks it stays under 1e-6.\n- `a_scoop_clipped_by_a_tapered_envelope_keeps_its_closed_form` checks\nmesh volumes at deflection 0.001 against twice what that mesh reads off.\nThe reads move from intersect 0.45, cut 0.15 and fuse 0.17 to 0.13, 0.31\nand 0.33, so the allowances follow. At deflection 3e-5 the two solids\nagree: the cut reads 169.4187 here and 169.4202 on `main` (true\n169.424), and the intersect comes closer, 5078.977 against `main`'s\n5079.004 (true 5078.933).\n- `cargo test --workspace` passes 3700 tests. The render tests contend\nfor the GPU under parallel load here, so they ran on one thread.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n- Over 70 NURBS intersection cases, total time goes from 7.1 s to 7.7 s.\nMost of the increase is in two cases whose chains were already wrong, 84\nto 257 ms and 232 to 548 ms.",
+          "timestamp": "2026-10-29T01:41:31Z",
+          "tree_id": "d812c8b14b8797febe1be48a1068853095d1e996",
+          "url": "https://github.com/andymai/brepkit/commit/68d09e68a546fa4ce3a4d18c557a48edffb4a361"
+        },
+        "date": 1793238279308,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1066864,
+            "range": "± 4027",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1149978,
+            "range": "± 8707",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12241,
+            "range": "± 63",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673643,
+            "range": "± 2002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27672738,
+            "range": "± 199829",
             "unit": "ns/iter"
           }
         ]
