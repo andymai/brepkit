@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793239775741,
+  "lastUpdate": 1793242498974,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -59237,6 +59237,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23423724,
             "range": "± 84348",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d8353403d434ac8e6e63b15d03350d4e5036500",
+          "message": "fix(math): close plane sections of NURBS surfaces that loop (#2133)\n\nA plane cutting a NURBS surface in a closed loop now gets that loop back\nclosed, instead of an open curve one grid cell short.\n\n`intersect_plane_nurbs` links the plane's crossings of its sample grid\nthrough shared cells and walks each chain of links. A loop's walk\nfollows the links around to the crossing beside its start and stops\nthere, so the fitted curve ends a cell short of where it began: 3.2e-2\non a dome cut level at 32 samples. `phase_ff` takes the curve's two ends\nas they come, so a boolean gets the loop with that gap.\n\n## Change\n\n- When a walk's last crossing links back to its start, the walk returns\nto the start, and the chain closes on the same refined point it began\nwith.\n\n## Tests\n\n- `a_plane_section_loop_comes_back_closed`: the level dome section comes\nback as one curve whose ends meet within 1e-9. Without the change they\nare 3.2e-2 apart.\n- `cargo test --workspace --exclude brepkit-render` passes 3677 tests,\nand the pose sweep and truth audit outputs are identical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes plane sections of NURBS surfaces that loop so the section comes\nback closed instead of ending one grid cell short. The grid walk returns\nto its start when its last crossing links back to it.\n\n**Tests**\n- `a_plane_section_loop_comes_back_closed` asserts the dome section's\nends meet within 1e-9; without the fix they are 3.2e-2 apart.\n- `cargo test --workspace --exclude brepkit-render` passes 3677 tests,\nwith pose sweep and truth audit outputs identical to `main`.\n\n<sup>Written for commit fd2b833cfcf13a7af92d21e8ecf35513c5ddcd43.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2133?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2133?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2133&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-28T19:51:58-07:00",
+          "tree_id": "b169fd7abf9040a1f1418cd94aee5a8f5261954e",
+          "url": "https://github.com/andymai/brepkit/commit/1d8353403d434ac8e6e63b15d03350d4e5036500"
+        },
+        "date": 1793242490957,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1100352,
+            "range": "± 1406",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1181817,
+            "range": "± 32919",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13196,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675384,
+            "range": "± 4390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28703854,
+            "range": "± 69968",
             "unit": "ns/iter"
           }
         ]
