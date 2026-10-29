@@ -7,6 +7,7 @@ crates/math/src/analytic_intersection.rs
   s_a2dc21dbec3f2b::t_2db71b6e60857b 5582-5589,5591-5592,6224,6359-6386,6390,6392-6396,6398-6400
   s_a2dc21dbec3f2b::t_caccf616121aa6 2205-2208,2218,2221-2229,2295-2297,2382-2383,2385,6402
   s_a2dc21dbec3f2b::t_887dd98a720e30 2275-2276
+  s_a2dc21dbec3f2b::t_12a28eaa614ea8 6358
 ---
 {
   "schema_version": "authorship/3.0.0",
