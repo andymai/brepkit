@@ -2700,6 +2700,79 @@ fn conic_loop(centre: Point3, u: Vec3, v: Vec3, a: f64, b: f64) -> Result<NurbsC
     NurbsCurve::new(2, knots, points, weights)
 }
 
+/// Two cylinders of one radius whose axes cross meet in two ellipses, one
+/// in each plane through the crossing that bisects the axes: a point lies
+/// as far from both axes where its offsets along them are equal or
+/// opposite. Both ellipses have their minor axis, of the radius, along the
+/// axes' common normal, and meet at its two ends. They come back as two
+/// closed loops, as the first cylinder's rulings pair them: the halves of
+/// both ellipses on one side of the crossing along its axis, then on the
+/// other, each exact, rational, and cornered where its halves meet. One
+/// loop starts at each end of the common normal.
+///
+/// `None` unless the radii match and the axes cross to rounding: axes that
+/// miss by `δ` part the curves at the crossings by about `√(δ·r)`.
+fn crossing_equal_cylinders(
+    c1: &CylindricalSurface,
+    c2: &CylindricalSurface,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let (d1, d2, r) = (c1.axis(), c2.axis(), c1.radius());
+    let across = d1.cross(d2);
+    let sin = across.length();
+    if sin < 1e-9 || (c2.radius() - r).abs() > 8.0 * f64::EPSILON * r {
+        return Ok(None);
+    }
+    let normal = across * (1.0 / sin);
+    let w = c1.origin() - c2.origin();
+    if w.dot(normal).abs() > 64.0 * f64::EPSILON * r.max(w.length()) {
+        return Ok(None);
+    }
+    let cos = d1.dot(d2);
+    let along = cos.mul_add(d2.dot(w), -d1.dot(w)) / (sin * sin);
+    let centre = c1.origin() + d1 * along;
+    // Each ellipse's major axis, turned to lean along the first axis, and
+    // its semi-major axis.
+    let majors = [d1 - d2, d1 + d2].map(|bisector| {
+        let plane = bisector * (1.0 / bisector.length());
+        let major = plane.cross(normal);
+        let major = if major.dot(d1) < 0.0 { -major } else { major };
+        (major, r / plane.dot(d1).abs())
+    });
+    let corner = std::f64::consts::FRAC_1_SQRT_2;
+    let half = [(1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0)];
+    let mut curves = Vec::with_capacity(2);
+    for side in [1.0, -1.0] {
+        let [(m1, a1), (m2, a2)] = majors;
+        let out = half
+            .iter()
+            .map(|&(x, y)| centre + normal * (side * r * x) + m1 * (side * a1 * y));
+        let back = half[1..]
+            .iter()
+            .map(|&(x, y)| centre - normal * (side * r * x) + m2 * (side * a2 * y));
+        let curve = NurbsCurve::new(
+            2,
+            vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ],
+            out.chain(back).collect(),
+            vec![1.0, corner, 1.0, corner, 1.0, corner, 1.0, corner, 1.0],
+        )?;
+        #[allow(clippy::cast_precision_loss)]
+        let points = (0..=32)
+            .map(|i| {
+                let point = curve.evaluate(i as f64 / 32.0);
+                IntersectionPoint {
+                    point,
+                    param1: c1.project_point(point),
+                    param2: c2.project_point(point),
+                }
+            })
+            .collect();
+        curves.push(IntersectionCurve { curve, points });
+    }
+    Ok(Some(curves))
+}
+
 /// Algebraic cone-cone intersection (NURBS form for the general bounded
 /// path). Delegates to [`exact_cone_cone`] and returns each exact conic
 /// (coaxial circle or offset-parallel radical-plane ellipse) as an exact
@@ -3085,6 +3158,9 @@ fn algebraic_cylinder_cylinder(
     c1: &CylindricalSurface,
     c2: &CylindricalSurface,
 ) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    if let Some(halves) = crossing_equal_cylinders(c1, c2)? {
+        return Ok(Some(halves));
+    }
     let alpha = c1.axis().dot(c2.axis());
     let a_coeff = 1.0 - alpha * alpha;
 
@@ -5453,6 +5529,74 @@ mod tests {
             .unwrap()
             .expect("the thin cylinder's sweep finds the loop");
         assert_eq!(curves.len(), 1);
+    }
+
+    /// Cylinders of radius 1.5 whose axes cross at 60° meet in two ellipses
+    /// crossing at the ends of the axes' common normal: two exact loops,
+    /// one from each end, each the halves of both ellipses on one side of
+    /// the crossing along the first axis, on both cylinders to rounding.
+    #[test]
+    fn equal_cylinders_with_crossing_axes_meet_in_two_cornered_loops() {
+        let crossing = Point3::new(1.0, 2.0, 3.0);
+        let (s, c) = 60.0_f64.to_radians().sin_cos();
+        let (d1, d2) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(s, 0.0, c));
+        let c1 = CylindricalSurface::new(crossing - d1 * 2.0, d1, 1.5).unwrap();
+        let c2 = CylindricalSurface::new(crossing + d2 * 0.7, d2, 1.5).unwrap();
+        let curves = algebraic_cylinder_cylinder(&c1, &c2).unwrap().unwrap();
+        assert_eq!(curves.len(), 2);
+        let off = |p: Point3, cyl: &CylindricalSurface| {
+            let q = p - cyl.origin();
+            ((q - cyl.axis() * q.dot(cyl.axis())).length() - 1.5).abs()
+        };
+        let ends = [
+            crossing + Vec3::new(0.0, 1.5, 0.0),
+            crossing - Vec3::new(0.0, 1.5, 0.0),
+        ];
+        let mut vertices: Vec<Point3> = Vec::new();
+        for (ic, (end, side)) in curves.iter().zip([(ends[0], 1.0), (ends[1], -1.0)]) {
+            let (t0, t1) = ic.curve.domain();
+            for k in 0..=400 {
+                let p = ic.curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 400.0);
+                assert!(off(p, &c1).max(off(p, &c2)) < 1e-13);
+                assert!(side * (p - crossing).dot(d1) > -1e-13);
+            }
+            assert!((ic.curve.evaluate(t0) - end).length() < 1e-14);
+            assert!((ic.curve.evaluate(t1) - end).length() < 1e-14);
+            let other = ends[usize::from(side > 0.0)];
+            assert!((ic.curve.evaluate(0.5) - other).length() < 1e-14);
+            for t in [0.25, 0.75] {
+                let vertex = ic.curve.evaluate(t);
+                assert!(vertices.iter().all(|&v| (v - vertex).length() > 1.0));
+                vertices.push(vertex);
+            }
+        }
+    }
+
+    /// Axes that miss each other by 1e-9, or radii that differ by as much,
+    /// part the curves where the ellipses would cross; neither is taken for
+    /// a pair of ellipses.
+    #[test]
+    fn nearly_crossing_equal_cylinders_are_not_ellipses() {
+        let z = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+            .unwrap();
+        let x = |y: f64, r: f64| {
+            CylindricalSurface::new(Point3::new(-2.0, y, 0.0), Vec3::new(1.0, 0.0, 0.0), r).unwrap()
+        };
+        assert!(
+            crossing_equal_cylinders(&z, &x(0.0, 1.0))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            crossing_equal_cylinders(&z, &x(1e-9, 1.0))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            crossing_equal_cylinders(&z, &x(0.0, 1.0 + 1e-9))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
