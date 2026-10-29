@@ -7027,6 +7027,10 @@ fn nurbs_nurbs_intersection(
 
     let mut results = Vec::new();
     for ic in isect_curves {
+        // A point where the patches touch splits neither face.
+        if ic.points.len() < 2 {
+            continue;
+        }
         let domain = ic.curve.domain();
         let bbox = nurbs_curve_bbox(&ic.curve);
         let p_start = ParametricCurve::evaluate(&ic.curve, domain.0);
@@ -10626,6 +10630,48 @@ mod tests {
             (false, false),
         );
         assert!((gap - 8e-10).abs() < 1e-15, "{gap}");
+    }
+
+    /// A flat NURBS sheet at `z = 0` touches the NURBS bowl `z = x² + y²`
+    /// only at its lowest point, which splits neither face.
+    #[test]
+    fn a_flat_nurbs_sheet_touching_a_nurbs_bowl_at_a_point_grazes_it() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        // `(2u − 1)²` has Bernstein coefficients 1, −1, 1.
+        let fall = [1.0, -1.0, 1.0];
+        let bowl = NurbsSurface::new(
+            2,
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            (0..3)
+                .map(|i| {
+                    (0..3)
+                        .map(|j| {
+                            let at = |k: usize| f64::from(u8::try_from(k).unwrap()) - 1.0;
+                            Point3::new(at(i), at(j), fall[i] + fall[j])
+                        })
+                        .collect()
+                })
+                .collect(),
+            vec![vec![1.0; 3]; 3],
+        )
+        .unwrap();
+        let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let sheet = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![at(-2.0, -2.0), at(-2.0, 2.0)],
+                vec![at(2.0, -2.0), at(2.0, 2.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let raw = nurbs_nurbs_intersection(&sheet, &bowl).unwrap();
+        assert!(raw.is_empty(), "{} curves", raw.len());
     }
 
     /// A plane crossing a NURBS sheet where the sheet's normal lies along
