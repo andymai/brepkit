@@ -369,3 +369,66 @@ fn a_rim_fillet_reaching_past_a_short_wall_is_refused() {
     let body = boolean(&mut topo, BooleanOp::Fuse, plate, post).unwrap();
     assert_refused_or_sound(&mut topo, body, (5.0, 4.0), 0.3);
 }
+
+/// Fillets both `rims` of one wall in a single call.
+fn fillet_both_rims(
+    topo: &mut Topology,
+    solid: SolidId,
+    rims: [(f64, f64); 2],
+    r: f64,
+) -> Option<SolidId> {
+    let edges = rims.map(|(rim, z)| rim_at(topo, solid, rim, z));
+    let result = fillet_v2(topo, solid, &edges, r).ok()?;
+    (result.failed.is_empty() && result.solid != solid).then_some(result.solid)
+}
+
+/// Each rim's contact fits the wall alone, but the two land past each other
+/// and their bands would overlap.
+#[test]
+fn both_rims_of_a_wall_too_short_for_their_two_fillets_are_refused() {
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 2.99, 0.5).unwrap();
+    assert!(fillet_both_rims(&mut topo, frustum, [(3.0, 0.0), (2.99, 0.5)], 0.3).is_none());
+
+    let mut topo = Topology::new();
+    let disc = make_cylinder(&mut topo, RADIUS, 0.5).unwrap();
+    assert!(fillet_both_rims(&mut topo, disc, [(RADIUS, 0.0), (RADIUS, 0.5)], 0.3).is_none());
+
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 30.0, 30.0, 0.5).unwrap();
+    let bore = make_cylinder(&mut topo, RADIUS, 0.5).unwrap();
+    transform_solid(&mut topo, bore, &Mat4::translation(15.0, 15.0, 0.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Cut, plate, bore).unwrap();
+    assert!(fillet_both_rims(&mut topo, body, [(RADIUS, 0.0), (RADIUS, 0.5)], 0.3).is_none());
+}
+
+/// A wall tall enough for both fillets keeps a strip between their contacts.
+#[test]
+fn both_rims_of_a_wall_round_off_in_one_call() {
+    let r = 0.3;
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 2.99, 1.0).unwrap();
+    let before = solid_volume(&topo, frustum, 0.001).unwrap();
+    let removed = ring_volume(3.0, (-1.0, 0.0), unit(-0.01, 1.0), r)
+        + ring_volume(2.99, (-1.0, 0.0), unit(0.01, 1.0), r);
+    let rounded = fillet_both_rims(&mut topo, frustum, [(3.0, 0.0), (2.99, 1.0)], r).unwrap();
+    assert_sound_and_changed_by(&topo, rounded, before, -removed);
+
+    let mut topo = Topology::new();
+    let disc = make_cylinder(&mut topo, RADIUS, 1.0).unwrap();
+    let before = solid_volume(&topo, disc, 0.001).unwrap();
+    let rounded = fillet_both_rims(&mut topo, disc, [(RADIUS, 0.0), (RADIUS, 1.0)], r).unwrap();
+    assert_sound_and_changed_by(&topo, rounded, before, -2.0 * rounded_off(RADIUS, r));
+}
+
+fn assert_sound_and_changed_by(topo: &Topology, solid: SolidId, before: f64, change: f64) {
+    let report = validate_solid(topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let mesh = tessellate_solid(topo, solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    let changed = solid_volume(topo, solid, 0.001).unwrap() - before;
+    assert!(
+        (changed - change).abs() < 1e-6 * before,
+        "changed by {changed}, truth {change}"
+    );
+}

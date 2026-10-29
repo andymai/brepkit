@@ -316,18 +316,50 @@ impl<'a> FilletBuilder<'a> {
             std::collections::HashMap::new();
         let mut regular_results: Vec<&StripeResult> = Vec::new();
 
-        for (stripe_index, sr) in stripe_results.iter().enumerate() {
-            // The closed-rim rebuild owns its cap: a cap another stripe also
-            // runs along (a hole's rim filleted in the same call) takes the
-            // normal path.
-            let cap_shared = |cap: FaceId| {
-                stripe_results.iter().enumerate().any(|(other, o)| {
-                    other != stripe_index && (o.stripe.face1 == cap || o.stripe.face2 == cap)
-                })
-            };
-            if let Some(rim) =
-                closed_rim_info(topo, &sr.stripe)?.filter(|rim| !cap_shared(rim.plane_face))
-            {
+        let closed_rims = stripe_results
+            .iter()
+            .enumerate()
+            .map(|(stripe_index, sr)| {
+                // The closed-rim rebuild owns its cap: a cap another stripe
+                // also runs along (a hole's rim filleted in the same call)
+                // takes the normal path.
+                let cap_shared = |cap: FaceId| {
+                    stripe_results.iter().enumerate().any(|(other, o)| {
+                        other != stripe_index && (o.stripe.face1 == cap || o.stripe.face2 == cap)
+                    })
+                };
+                Ok(closed_rim_info(topo, &sr.stripe)?.filter(|rim| !cap_shared(rim.plane_face)))
+            })
+            .collect::<Result<Vec<_>, BlendError>>()?;
+        // Each rim's wall contact is checked against the wall alone, so two
+        // rims of one wall must also leave wall between their contacts, or
+        // their bands overlap.
+        let rims: Vec<&ClosedRimInfo> = closed_rims.iter().flatten().collect();
+        let crossing = rims.iter().enumerate().any(|(i, a)| {
+            rims[i + 1..]
+                .iter()
+                .any(|b| a.wall_face == b.wall_face && !contacts_leave_wall_between(a, b))
+        });
+        if crossing {
+            for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges) {
+                failed.push((
+                    edge_id,
+                    BlendError::PlanningFailure {
+                        reason: "two rim fillets' wall contacts meet on their shared wall"
+                            .to_owned(),
+                    },
+                ));
+            }
+            return Ok(BlendResult {
+                solid: self.solid,
+                succeeded: Vec::new(),
+                failed,
+                is_partial: true,
+            });
+        }
+
+        for (stripe_index, (sr, closed_rim)) in stripe_results.iter().zip(closed_rims).enumerate() {
+            if let Some(rim) = closed_rim {
                 let contour_id =
                     plan.as_ref()
                         .and_then(|fillet_plan| {
@@ -1849,6 +1881,16 @@ fn kept_wall_boundary_height(
         }
     }
     Ok(lowest)
+}
+
+/// Two rims of one wall: each wall contact moves from its rim toward the
+/// other's, and the pair must keep that order with some wall left between.
+fn contacts_leave_wall_between(a: &ClosedRimInfo, b: &ClosedRimInfo) -> bool {
+    let span = b.plate_circle.center() - a.plate_circle.center();
+    let Ok(along) = span.normalize() else {
+        return false;
+    };
+    (b.wall_circle.center() - a.wall_circle.center()).dot(along) > 1e-7
 }
 
 /// Project a point onto the infinite axis line through `origin` with unit
