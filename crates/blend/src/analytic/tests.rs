@@ -6,6 +6,17 @@ use brepkit_topology::face::Face;
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
+/// A closed circle about +z: a wall's far rim, which bounds how far along the
+/// wall a fillet's contact may land.
+fn far_rim(topo: &mut Topology, center: Point3, radius: f64) -> brepkit_topology::wire::WireId {
+    let start = Point3::new(center.x() + radius, center.y(), center.z());
+    let v = topo.add_vertex(Vertex::new(start, 1e-7));
+    let circle =
+        brepkit_math::curves::Circle3D::new(center, Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+    let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+    topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap())
+}
+
 /// Create a spine along a single edge from `a` to `b`, plus two dummy faces.
 fn make_spine(topo: &mut Topology, a: Point3, b: Point3) -> (Spine, FaceId, FaceId) {
     let v0 = topo.add_vertex(Vertex::new(a, 1e-7));
@@ -253,11 +264,16 @@ fn plane_cylinder_fillet_hole_contacts_support_outside_spine() {
     let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
     let spine = Spine::from_single_edge(&topo, eid).unwrap();
 
-    // Plate face — non-reversed, normal = +z (top of plate).
-    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+    // Plate face — non-reversed, normal = +z (top of plate), reaching out
+    // to radius 5 round the hole.
+    let v_out = topo.add_vertex(Vertex::new(Point3::new(5.0, 0.0, 0.0), 1e-7));
+    let rim_out = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 5.0).unwrap();
+    let e_out = topo.add_edge(Edge::new(v_out, v_out, EdgeCurve::Circle(rim_out)));
+    let w_out = topo.add_wire(Wire::new(vec![OrientedEdge::new(e_out, true)], true).unwrap());
+    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
     let face_plate = topo.add_face(Face::new(
-        w1,
-        vec![],
+        w_out,
+        vec![w1],
         FaceSurface::Plane {
             normal: Vec3::new(0.0, 0.0, 1.0),
             d: 0.0,
@@ -270,9 +286,10 @@ fn plane_cylinder_fillet_hole_contacts_support_outside_spine() {
     let cyl_surface =
         CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
     let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+    let far = far_rim(&mut topo, Point3::new(0.0, 0.0, -5.0), r_c);
     let face_cyl = topo.add_face(Face::new_reversed(
         w2,
-        vec![],
+        vec![far],
         FaceSurface::Cylinder(cyl_surface.clone()),
     ));
 
@@ -366,9 +383,10 @@ fn plane_cylinder_fillet_rim_emits_torus_with_smaller_major() {
     let cyl_surface =
         CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
     let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+    let far = far_rim(&mut topo, Point3::new(0.0, 0.0, 5.0), r_c);
     let face_cyl = topo.add_face(Face::new(
         w2,
-        vec![],
+        vec![far],
         FaceSurface::Cylinder(cyl_surface.clone()),
     ));
 
@@ -431,27 +449,35 @@ fn plane_cylinder_fillet_takes_spindle_tori_up_to_the_cylinder_radius() {
             Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
         let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
         let spine = Spine::from_single_edge(topo, eid).unwrap();
-        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
-        let face_plate = topo.add_face(Face::new(
-            w1,
-            vec![],
-            FaceSurface::Plane {
-                normal: Vec3::new(0.0, 0.0, -1.0),
-                d: 0.0,
-            },
-        ));
+        // A hole's plate surrounds the rim, out to radius 5; a rim's cap is
+        // the disc inside it.
+        let plate = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        };
+        let face_plate = if reversed {
+            let outer = far_rim(topo, Point3::new(0.0, 0.0, 0.0), 5.0);
+            let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+            topo.add_face(Face::new(outer, vec![w1], plate))
+        } else {
+            let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+            topo.add_face(Face::new(w1, vec![], plate))
+        };
         let cyl =
             CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c)
                 .unwrap();
         let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        // The hole's wall runs down into the plate, the rim's wall up from it.
+        let far_z = if reversed { -5.0 } else { 5.0 };
+        let far = far_rim(topo, Point3::new(0.0, 0.0, far_z), r_c);
         let face_cyl = if reversed {
             topo.add_face(Face::new_reversed(
                 w2,
-                vec![],
+                vec![far],
                 FaceSurface::Cylinder(cyl.clone()),
             ))
         } else {
-            topo.add_face(Face::new(w2, vec![], FaceSurface::Cylinder(cyl.clone())))
+            topo.add_face(Face::new(w2, vec![far], FaceSurface::Cylinder(cyl.clone())))
         };
         (spine, cyl, face_plate, face_cyl)
     };
@@ -588,9 +614,10 @@ fn plane_cone_fillet_concave_emits_torus_with_smaller_major() {
     let cone_surface =
         ConicalSurface::new(Point3::new(0.0, 0.0, 6.0), Vec3::new(0.0, 0.0, -1.0), alpha).unwrap();
     let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+    let far = far_rim(&mut topo, Point3::new(0.0, 0.0, 5.0), 0.5);
     let face_cone = topo.add_face(Face::new_reversed(
         w2,
-        vec![],
+        vec![far],
         FaceSurface::Cone(cone_surface.clone()),
     ));
 
@@ -678,9 +705,10 @@ fn plane_cone_fillet_concave_rejects_spindle_radius() {
     let cone_surface =
         ConicalSurface::new(Point3::new(0.0, 0.0, 6.0), Vec3::new(0.0, 0.0, -1.0), alpha).unwrap();
     let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+    let far = far_rim(&mut topo, Point3::new(0.0, 0.0, 5.0), 0.5);
     let face_cone = topo.add_face(Face::new_reversed(
         w2,
-        vec![],
+        vec![far],
         FaceSurface::Cone(cone_surface.clone()),
     ));
     let n_p_inward = Vec3::new(0.0, 0.0, -1.0);

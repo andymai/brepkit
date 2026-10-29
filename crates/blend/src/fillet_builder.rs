@@ -316,18 +316,55 @@ impl<'a> FilletBuilder<'a> {
             std::collections::HashMap::new();
         let mut regular_results: Vec<&StripeResult> = Vec::new();
 
-        for (stripe_index, sr) in stripe_results.iter().enumerate() {
-            // The closed-rim rebuild owns its cap: a cap another stripe also
-            // runs along (a hole's rim filleted in the same call) takes the
-            // normal path.
-            let cap_shared = |cap: FaceId| {
-                stripe_results.iter().enumerate().any(|(other, o)| {
-                    other != stripe_index && (o.stripe.face1 == cap || o.stripe.face2 == cap)
+        let recognized = stripe_results
+            .iter()
+            .map(|sr| closed_rim_info(topo, &sr.stripe))
+            .collect::<Result<Vec<_>, BlendError>>()?;
+        // Each rim's wall contact is checked against the wall alone, so two
+        // rims of one wall must also leave wall between their contacts, or
+        // their bands overlap, whichever path below builds them.
+        let rims: Vec<&ClosedRimInfo> = recognized.iter().flatten().collect();
+        let crossing = rims.iter().enumerate().any(|(i, a)| {
+            rims[i + 1..]
+                .iter()
+                .any(|b| a.wall_face == b.wall_face && !contacts_leave_wall_between(a, b))
+        });
+        if crossing {
+            for edge_id in succeeded_candidates(plan.as_ref(), &stripe_results, &all_edges) {
+                failed.push((
+                    edge_id,
+                    BlendError::PlanningFailure {
+                        reason: "two rim fillets' wall contacts meet on their shared wall"
+                            .to_owned(),
+                    },
+                ));
+            }
+            return Ok(BlendResult {
+                solid: self.solid,
+                succeeded: Vec::new(),
+                failed,
+                is_partial: true,
+            });
+        }
+
+        // The closed-rim rebuild owns its cap: a cap another stripe also runs
+        // along (a hole's rim filleted in the same call) takes the normal path.
+        let closed_rims: Vec<Option<ClosedRimInfo>> = recognized
+            .into_iter()
+            .enumerate()
+            .map(|(stripe_index, rim)| {
+                rim.filter(|rim| {
+                    !stripe_results.iter().enumerate().any(|(other, o)| {
+                        other != stripe_index
+                            && (o.stripe.face1 == rim.plane_face
+                                || o.stripe.face2 == rim.plane_face)
+                    })
                 })
-            };
-            if let Some(rim) =
-                closed_rim_info(topo, &sr.stripe)?.filter(|rim| !cap_shared(rim.plane_face))
-            {
+            })
+            .collect();
+        let mut closed_rim_supports: HashSet<FaceId> = HashSet::new();
+        for (stripe_index, (sr, closed_rim)) in stripe_results.iter().zip(closed_rims).enumerate() {
+            if let Some(rim) = closed_rim {
                 let contour_id =
                     plan.as_ref()
                         .and_then(|fillet_plan| {
@@ -344,7 +381,14 @@ impl<'a> FilletBuilder<'a> {
                     &mut boundary_registry,
                     &mut face_replacements,
                 ) {
-                    Ok(band) => blend_face_ids.push(band),
+                    Ok(band) => {
+                        blend_face_ids.push(band);
+                        closed_rim_supports.extend(
+                            [rim.plane_face, rim.wall_face]
+                                .iter()
+                                .filter_map(|support| face_replacements.get(support)),
+                        );
+                    }
                     Err(e) => {
                         // Closed-rim geometry is authoritative; do not hide
                         // an assembly failure behind a sequential fallback.
@@ -1479,10 +1523,17 @@ impl<'a> FilletBuilder<'a> {
         // convention like the untouched face it replaced. Without it a prism
         // whose every face was rebuilt has no seed, and the pairing walk
         // inverts the two mirrored corner bands it reaches through a
-        // clockwise-wound neighbour.
+        // clockwise-wound neighbour. A closed rim's rebuilt cap and wall keep
+        // their sources' surfaces and reversal flags, and take their new
+        // circles' senses from the rim's against the axis, so they anchor it
+        // too: a frustum with both rims filleted has no other face to.
         let seeds: Vec<FaceId> = result_faces
             .iter()
-            .filter(|f| original_set.contains(f) || notched_caps.contains(f))
+            .filter(|f| {
+                original_set.contains(f)
+                    || notched_caps.contains(f)
+                    || closed_rim_supports.contains(f)
+            })
             .copied()
             .collect();
         let seed_set: std::collections::HashSet<FaceId> = seeds.iter().copied().collect();
@@ -1498,12 +1549,20 @@ impl<'a> FilletBuilder<'a> {
         brepkit_topology::orientation::normalize_face_normals(topo, &new_faces, &seeds)?;
         brepkit_topology::orientation::propagate_orientation(topo, &result_faces, &seeds)?;
         boundary_registry.refresh_owner_orientations(topo)?;
-        // The post-assembly shell may come out globally inverted (every
-        // face's effective normal pointing inward) while still passing the
+        // Without a seed the propagation anchors on an arbitrary face, so the
+        // post-assembly shell may come out globally inverted (every face's
+        // effective normal pointing inward) while still passing the
         // incidence and closure gates. Detect that via the signed volume of
         // the result shell and flip the whole shell when negative, then
-        // re-run the orientation passes so consistency is restored.
-        let signed_volume = crate::signed_volume::signed_shell_volume(topo, &result_faces)?;
+        // re-run the orientation passes so consistency is restored. Seeds
+        // carry the input's orientation, which the propagation never flips,
+        // and the estimate reads curved faces over their whole parameter
+        // domain, so it is not asked to overrule them.
+        let signed_volume = if seeds.is_empty() {
+            crate::signed_volume::signed_shell_volume(topo, &result_faces)?
+        } else {
+            1.0
+        };
         if signed_volume < 0.0 {
             log::debug!("orientation flip: signed shell volume {signed_volume} < 0");
             for &face_id in &result_faces {
@@ -1843,6 +1902,16 @@ fn kept_wall_boundary_height(
     Ok(lowest)
 }
 
+/// Two rims of one wall: each wall contact moves from its rim toward the
+/// other's, and the pair must keep that order with some wall left between.
+fn contacts_leave_wall_between(a: &ClosedRimInfo, b: &ClosedRimInfo) -> bool {
+    let span = b.plate_circle.center() - a.plate_circle.center();
+    let Ok(along) = span.normalize() else {
+        return false;
+    };
+    (b.wall_circle.center() - a.wall_circle.center()).dot(along) > 1e-7
+}
+
 /// Project a point onto the infinite axis line through `origin` with unit
 /// direction `axis`, returning the foot of the perpendicular.
 fn project_onto_axis(p: Point3, origin: Point3, axis: Vec3) -> Point3 {
@@ -2132,25 +2201,15 @@ fn assemble_closed_rim(
         .is_some_and(OrientedEdge::is_forward);
     let plane_side = usize::from(stripe.face2 == rim.plane_face);
     let wall_side = usize::from(stripe.face2 == rim.wall_face);
-    // Both contact circles turn about the wall's axis; at a hole rim the cap
-    // and the wall keep their traversal direction whichever way the rim
-    // circle's own normal runs.
+    // Both contact circles turn about the wall's axis; the cap and the wall
+    // keep their traversal direction whichever way the rim circle's own
+    // normal runs, and the band runs each circle against its neighbour.
     let rim_turns_with_axis = match topo.edge(rim.rim_edge)?.curve() {
         EdgeCurve::Circle(c) => c.normal().dot(rim.plate_circle.normal()) > 0.0,
         _ => true,
     };
-    let cap_sense = if rim.rim_is_hole {
-        cap_forward == rim_turns_with_axis
-    } else if matches!(&wall_surf, FaceSurface::Cylinder(_)) {
-        cap_forward
-    } else {
-        !cap_forward
-    };
-    let wall_support_sense = if rim.rim_is_hole {
-        wall_forward == rim_turns_with_axis
-    } else {
-        wall_forward
-    };
+    let cap_sense = cap_forward == rim_turns_with_axis;
+    let wall_support_sense = wall_forward == rim_turns_with_axis;
     let plate_sense = (cap_sense == plane_reversed) != band_reversed;
     let wall_sense = (wall_support_sense == wall_reversed) != band_reversed;
     let plate_handle = registry.register(
@@ -2160,8 +2219,6 @@ fn assemble_closed_rim(
         EdgeCurve::Circle(rim.plate_circle.clone()),
         (0.0, std::f64::consts::TAU),
         [
-            // Result-face orientation propagation determines the final cap
-            // use; cylinders retain the source sense while cones reverse it.
             BoundaryOwner::planned("closed-rim support cap", cap_sense),
             BoundaryOwner::planned("closed-rim torus band", plate_sense),
         ],

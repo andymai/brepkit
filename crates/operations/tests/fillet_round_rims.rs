@@ -8,7 +8,8 @@
 //! The rim can also be a hole of its cap: a post standing on a plate, whose
 //! concave foot fills a ring of the same section, and a bore's mouth, whose
 //! convex rim removes one. A round pocket's floor is a disc cap with a
-//! concave rim.
+//! concave rim. A cone's rims meet their caps at other angles: a frustum's
+//! two rims, a tapered post's foot on a plate, and a tapered hole's mouth.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::PI;
@@ -16,8 +17,8 @@ use std::f64::consts::PI;
 use brepkit_math::mat::Mat4;
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
-use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::{make_box, make_cylinder};
+use brepkit_operations::measure::{oriented_solid_volume, solid_volume};
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
@@ -143,7 +144,6 @@ fn a_bores_mouth_in_a_plate_rounds_off() {
 /// A blind round pocket: its floor is a disc cap whose rim is concave, and
 /// the fillet fills the ring round the floor's edge.
 #[test]
-#[ignore = "the plane x cylinder stripe rolls the ball below the floor and outside the pocket wall"]
 fn a_round_pockets_floor_fills_its_ring() {
     for r in [1.0, 2.0] {
         let mut topo = Topology::new();
@@ -254,4 +254,221 @@ fn a_bores_mouth_rounds_off_whichever_way_its_rim_turns() {
         let removed = 2.0 * PI * (RADIUS + centroid_from_corner(1.0)) * area;
         assert_rim_fillet_changes_by(&mut topo, body, (RADIUS, 8.0), 1.0, -removed);
     }
+}
+
+/// The ring a fillet of radius `r` fills or removes at a rim of radius `rim`,
+/// from the plate's and the wall's unit rays leaving the corner in the
+/// (radial, axial) half-plane: the kite between the corner, both contacts and
+/// the ball's centre, less the ball's sector, turned about the axis (Pappus).
+fn ring_volume(rim: f64, plate: (f64, f64), wall: (f64, f64), r: f64) -> f64 {
+    let theta = plate.0.mul_add(wall.0, plate.1 * wall.1).acos();
+    let reach = r / (theta / 2.0).tan();
+    let to_centre = r / (theta / 2.0).sin();
+    let (bx, by) = (plate.0 + wall.0, plate.1 + wall.1);
+    let len = bx.hypot(by);
+    let corner = (rim, 0.0);
+    let centre = (rim + bx / len * to_centre, by / len * to_centre);
+    let on_plate = (rim + plate.0 * reach, plate.1 * reach);
+    let on_wall = (rim + wall.0 * reach, wall.1 * reach);
+    let moment = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| {
+        let area = (b.0 - a.0)
+            .mul_add(c.1 - a.1, -(c.0 - a.0) * (b.1 - a.1))
+            .abs()
+            / 2.0;
+        area * (a.0 + b.0 + c.0) / 3.0
+    };
+    let kite = moment(corner, on_plate, centre) + moment(corner, centre, on_wall);
+    let phi = PI - theta;
+    let sector_rho =
+        centre.0 + (corner.0 - centre.0) / to_centre * 4.0 * r * (phi / 2.0).sin() / (3.0 * phi);
+    2.0 * PI * (kite - 0.5 * r * r * phi * sector_rho)
+}
+
+fn unit(x: f64, y: f64) -> (f64, f64) {
+    let len = x.hypot(y);
+    (x / len, y / len)
+}
+
+/// A frustum's rims are convex: the bottom one leans in at the base, the top
+/// one opens past a right angle at the top.
+#[test]
+fn a_frustums_rims_round_off() {
+    for r in [0.3, 0.6] {
+        let mut topo = Topology::new();
+        let frustum = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
+        let removed = ring_volume(3.0, (-1.0, 0.0), unit(-3.0, 6.0), r);
+        assert_rim_fillet_changes_by(&mut topo, frustum, (3.0, 0.0), r, -removed);
+    }
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
+    let removed = ring_volume(1.0, (-1.0, 0.0), unit(2.0, 4.0), 0.3);
+    assert_rim_fillet_changes_by(&mut topo, frustum, (1.0, 4.0), 0.3, -removed);
+}
+
+/// A tapered post on a plate, narrowing or widening as it rises: its foot is
+/// a hole of the plate's top, and the fillet fills the ring round it.
+#[test]
+fn a_tapered_posts_foot_on_a_plate_fills_its_ring() {
+    for (bottom, top, r) in [(5.0, 3.0, 1.0), (5.0, 3.0, 2.0), (3.0, 5.0, 1.0)] {
+        let mut topo = Topology::new();
+        let plate = make_box(&mut topo, 30.0, 30.0, 4.0).unwrap();
+        let post = make_cone(&mut topo, bottom, top, 6.0).unwrap();
+        transform_solid(&mut topo, post, &Mat4::translation(15.0, 15.0, 4.0)).unwrap();
+        let body = boolean(&mut topo, BooleanOp::Fuse, plate, post).unwrap();
+        let wall = unit(top - bottom, 6.0);
+        let filled = ring_volume(bottom, (1.0, 0.0), wall, r);
+        assert_rim_fillet_changes_by(&mut topo, body, (bottom, 4.0), r, filled);
+    }
+}
+
+/// A tapered hole through a plate, wider at the top: its mouth is a hole of
+/// the plate's top, and the fillet rounds off the ring round it.
+#[test]
+fn a_tapered_holes_mouth_rounds_off() {
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 30.0, 30.0, 8.0).unwrap();
+    let hole = make_cone(&mut topo, 2.0, 5.0, 8.0).unwrap();
+    transform_solid(&mut topo, hole, &Mat4::translation(15.0, 15.0, 0.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Cut, plate, hole).unwrap();
+    let removed = ring_volume(5.0, (1.0, 0.0), unit(-3.0, 8.0), 1.0);
+    assert_rim_fillet_changes_by(&mut topo, body, (5.0, 8.0), 1.0, -removed);
+}
+
+/// Fillets `rim` and checks it is refused, or the result is valid and
+/// watertight: never a band whose wall contact overruns the wall.
+fn assert_refused_or_sound(topo: &mut Topology, solid: SolidId, rim: (f64, f64), r: f64) {
+    let edge = rim_at(topo, solid, rim.0, rim.1);
+    let Ok(result) = fillet_v2(topo, solid, &[edge], r) else {
+        return;
+    };
+    if !result.failed.is_empty() || result.solid == solid {
+        return;
+    }
+    let report = validate_solid(topo, result.solid).unwrap();
+    assert!(report.is_valid(), "r = {r}: {:?}", report.issues);
+    let mesh = tessellate_solid(topo, result.solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "r = {r}: mesh not watertight");
+}
+
+/// A wall shorter than the fillet reaches: the contact would land past the
+/// wall's far rim.
+#[test]
+fn a_rim_fillet_reaching_past_a_short_wall_is_refused() {
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 2.99, 0.2).unwrap();
+    assert_refused_or_sound(&mut topo, frustum, (2.99, 0.2), 0.3);
+
+    let mut topo = Topology::new();
+    let disc = make_cylinder(&mut topo, RADIUS, 0.2).unwrap();
+    assert_refused_or_sound(&mut topo, disc, (RADIUS, 0.2), 0.3);
+
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 30.0, 30.0, 4.0).unwrap();
+    let post = make_cone(&mut topo, 5.0, 4.99, 0.2).unwrap();
+    transform_solid(&mut topo, post, &Mat4::translation(15.0, 15.0, 4.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Fuse, plate, post).unwrap();
+    assert_refused_or_sound(&mut topo, body, (5.0, 4.0), 0.3);
+}
+
+/// Fillets all of `rims` in a single call.
+fn fillet_rims(
+    topo: &mut Topology,
+    solid: SolidId,
+    rims: &[(f64, f64)],
+    r: f64,
+) -> Option<SolidId> {
+    let edges: Vec<EdgeId> = rims
+        .iter()
+        .map(|&(rim, z)| rim_at(topo, solid, rim, z))
+        .collect();
+    let result = fillet_v2(topo, solid, &edges, r).ok()?;
+    (result.failed.is_empty() && result.solid != solid).then_some(result.solid)
+}
+
+/// Each rim's contact fits the wall alone, but the two land past each other
+/// and their bands would overlap.
+#[test]
+fn both_rims_of_a_wall_too_short_for_their_two_fillets_are_refused() {
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 2.99, 0.5).unwrap();
+    assert!(fillet_rims(&mut topo, frustum, &[(3.0, 0.0), (2.99, 0.5)], 0.3).is_none());
+
+    let mut topo = Topology::new();
+    let disc = make_cylinder(&mut topo, RADIUS, 0.5).unwrap();
+    assert!(fillet_rims(&mut topo, disc, &[(RADIUS, 0.0), (RADIUS, 0.5)], 0.3).is_none());
+
+    let mut topo = Topology::new();
+    let plate = make_box(&mut topo, 30.0, 30.0, 0.5).unwrap();
+    let bore = make_cylinder(&mut topo, RADIUS, 0.5).unwrap();
+    transform_solid(&mut topo, bore, &Mat4::translation(15.0, 15.0, 0.0)).unwrap();
+    let body = boolean(&mut topo, BooleanOp::Cut, plate, bore).unwrap();
+    assert!(fillet_rims(&mut topo, body, &[(RADIUS, 0.0), (RADIUS, 0.5)], 0.3).is_none());
+}
+
+/// A wall tall enough for both fillets keeps a strip between their contacts.
+#[test]
+fn both_rims_of_a_wall_round_off_in_one_call() {
+    let r = 0.3;
+    let mut topo = Topology::new();
+    let frustum = make_cone(&mut topo, 3.0, 2.99, 1.0).unwrap();
+    let before = solid_volume(&topo, frustum, 0.001).unwrap();
+    let removed = ring_volume(3.0, (-1.0, 0.0), unit(-0.01, 1.0), r)
+        + ring_volume(2.99, (-1.0, 0.0), unit(0.01, 1.0), r);
+    let rounded = fillet_rims(&mut topo, frustum, &[(3.0, 0.0), (2.99, 1.0)], r).unwrap();
+    assert_sound_and_changed_by(&topo, rounded, before, -removed);
+
+    let mut topo = Topology::new();
+    let disc = make_cylinder(&mut topo, RADIUS, 1.0).unwrap();
+    let before = solid_volume(&topo, disc, 0.001).unwrap();
+    let rounded = fillet_rims(&mut topo, disc, &[(RADIUS, 0.0), (RADIUS, 1.0)], r).unwrap();
+    assert_sound_and_changed_by(&topo, rounded, before, -2.0 * rounded_off(RADIUS, r));
+}
+
+/// Both rims of a frustum rebuild every face it has, so no input face is
+/// left to anchor the orientation: the result must point outward wherever
+/// the part sits.
+#[test]
+fn both_rims_of_a_frustum_point_outward_wherever_it_sits() {
+    let r = 0.3;
+    for dz in [0.0, -100.0] {
+        let mut topo = Topology::new();
+        let frustum = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
+        transform_solid(&mut topo, frustum, &Mat4::translation(0.0, 0.0, dz)).unwrap();
+        let before = solid_volume(&topo, frustum, 0.001).unwrap();
+        let removed = ring_volume(3.0, (-1.0, 0.0), unit(-3.0, 6.0), r)
+            + ring_volume(1.0, (-1.0, 0.0), unit(2.0, 4.0), r);
+        let rounded = fillet_rims(&mut topo, frustum, &[(3.0, dz), (1.0, 4.0 + dz)], r)
+            .unwrap_or_else(|| unreachable!("dz = {dz}: both rims must round off"));
+        assert_sound_and_changed_by(&topo, rounded, before, -removed);
+        let oriented = oriented_solid_volume(&topo, rounded, 0.001).unwrap();
+        assert!(
+            oriented > 0.0,
+            "dz = {dz}: the shell points inward ({oriented})"
+        );
+    }
+}
+
+/// A tube's outer and inner rims share its two caps, and a wall 0.5 tall
+/// leaves no room for the two contacts of either wall at r 0.3.
+#[test]
+fn rims_sharing_their_caps_on_walls_too_short_for_two_fillets_are_refused() {
+    let mut topo = Topology::new();
+    let outer = make_cylinder(&mut topo, RADIUS, 0.5).unwrap();
+    let inner = make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+    transform_solid(&mut topo, inner, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+    let tube = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
+    let rims = [(RADIUS, 0.0), (RADIUS, 0.5), (1.0, 0.0), (1.0, 0.5)];
+    assert!(fillet_rims(&mut topo, tube, &rims, 0.3).is_none());
+}
+
+fn assert_sound_and_changed_by(topo: &Topology, solid: SolidId, before: f64, change: f64) {
+    let report = validate_solid(topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let mesh = tessellate_solid(topo, solid, 0.01).unwrap();
+    assert!(is_watertight(&mesh), "mesh not watertight");
+    let changed = solid_volume(topo, solid, 0.001).unwrap() - before;
+    assert!(
+        (changed - change).abs() < 1e-6 * before,
+        "changed by {changed}, truth {change}"
+    );
 }
