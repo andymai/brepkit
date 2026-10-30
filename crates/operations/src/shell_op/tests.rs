@@ -1062,3 +1062,56 @@ fn shell_cube_open_on_three_faces() {
         "volume {vol}, expected {expected}"
     );
 }
+
+/// A unit box built from two prisms, split across its top from (0.2, 0) to
+/// (1, 0.4), the triangle's wire starting at (1, 0): open on both pieces of
+/// its top, it is a box open on one plane, with one rim, holding the box
+/// less a cavity open through it. Its bottom and the two sides the split
+/// reaches stay in two pieces each, so it has 17 faces.
+#[test]
+fn shell_box_open_on_a_top_split_in_two() {
+    use brepkit_math::vec::Point3;
+
+    use crate::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+
+    let mut topo = Topology::new();
+    let mut prism = |corners: &[(f64, f64)]| {
+        let pts: Vec<Point3> = corners
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let base = brepkit_topology::builder::make_planar_face(&mut topo, &pts, 1e-7).unwrap();
+        crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap()
+    };
+    let corner = prism(&[(1.0, 0.0), (1.0, 0.4), (0.2, 0.0)]);
+    let rest = prism(&[(0.0, 0.0), (0.2, 0.0), (1.0, 0.4), (1.0, 1.0), (0.0, 1.0)]);
+    let keep_pieces = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let b = boolean_with_options(&mut topo, BooleanOp::Fuse, corner, rest, keep_pieces).unwrap();
+    let open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    assert_eq!(open.len(), 2);
+    let result = shell(&mut topo, b, 0.1, &open).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let planes: Vec<String> = faces
+        .iter()
+        .map(|&f| match topo.face(f).unwrap().surface() {
+            FaceSurface::Plane { normal, d } => format!("{normal:?} {d:.3}"),
+            other => other.type_tag().to_string(),
+        })
+        .collect();
+    assert_eq!(faces.len(), 17, "{planes:#?}");
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.8 * 0.9;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
+    );
+}

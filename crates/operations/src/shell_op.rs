@@ -706,6 +706,30 @@ fn planar_rims(
             (p.z() * scale).round() as i64,
         )
     };
+    // Open faces sharing an edge in one plane are one opening: the strip
+    // along the edge between them has no inner copy on it, and the rim built
+    // from the walls' free edges, all in that plane, is the one to keep.
+    let mut sides: HashMap<[i64; 6], Vec3> = HashMap::new();
+    for (fid, verts) in face_verts {
+        if !open_set.contains(&fid.index()) {
+            continue;
+        }
+        let face = topo.face(*fid)?;
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            return Ok(None);
+        };
+        let n = verts.len();
+        for k in 0..n {
+            let (a, b) = (key(verts[k]), key(verts[(k + 1) % n]));
+            let (a, b) = if a < b { (a, b) } else { (b, a) };
+            let side = [a.0, a.1, a.2, b.0, b.1, b.2];
+            if let Some(other) = sides.insert(side, *normal)
+                && other.cross(*normal).length() <= 1e-9
+            {
+                return Ok(None);
+            }
+        }
+    }
     let mut rims = Vec::new();
     for (fid, verts) in face_verts {
         if !open_set.contains(&fid.index()) {
