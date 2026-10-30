@@ -1230,47 +1230,54 @@ impl BrepKernel {
                 let dist = (proj - target).length();
                 Ok(vec![best_u, best_v, proj.x(), proj.y(), proj.z(), dist])
             }
-            _ => {
-                // For analytic surfaces, use grid search (no Newton for now)
-                let mut best_u = 0.0;
-                let mut best_v = 0.0;
-                let mut best_dist = f64::MAX;
-                let n_grid = 16;
-                for iu in 0..=n_grid {
-                    for iv in 0..=n_grid {
-                        #[allow(clippy::cast_precision_loss)]
-                        let u = 2.0 * PI * (iu as f64) / (n_grid as f64);
-                        #[allow(clippy::cast_precision_loss)]
-                        let v = -PI + 2.0 * PI * (iv as f64) / (n_grid as f64);
-                        let p = match face_data.surface() {
-                            FaceSurface::Cylinder(cyl) => cyl.evaluate(u, v),
-                            FaceSurface::Cone(cone) => cone.evaluate(u, v),
-                            FaceSurface::Sphere(sph) => sph.evaluate(u, v),
-                            FaceSurface::Torus(tor) => tor.evaluate(u, v),
-                            _ => continue,
-                        };
-                        let d = (p - target).length();
-                        if d < best_dist {
-                            best_dist = d;
-                            best_u = u;
-                            best_v = v;
-                        }
-                    }
-                }
-                let proj = match face_data.surface() {
-                    FaceSurface::Cylinder(cyl) => cyl.evaluate(best_u, best_v),
-                    FaceSurface::Cone(cone) => cone.evaluate(best_u, best_v),
-                    FaceSurface::Sphere(sph) => sph.evaluate(best_u, best_v),
-                    FaceSurface::Torus(tor) => tor.evaluate(best_u, best_v),
-                    _ => target,
-                };
+            // A cone's own projection keeps the point's height; the nearest
+            // point lies along the generator across it.
+            FaceSurface::Cone(cone) => {
+                let foot = brepkit_geometry::extrema::point_to_cone(target, cone);
                 Ok(vec![
-                    best_u,
-                    best_v,
+                    foot.u,
+                    foot.v,
+                    foot.point.x(),
+                    foot.point.y(),
+                    foot.point.z(),
+                    foot.distance,
+                ])
+            }
+            // A spindle torus's nearest point can lie on the tube swung
+            // across its axis.
+            FaceSurface::Torus(torus) => {
+                let (u, v) = torus.project_point_nearest(target);
+                let proj = torus.evaluate(u, v);
+                Ok(vec![
+                    u,
+                    v,
                     proj.x(),
                     proj.y(),
                     proj.z(),
-                    best_dist,
+                    (proj - target).length(),
+                ])
+            }
+            surface @ (FaceSurface::Cylinder(_) | FaceSurface::Sphere(_)) => {
+                // An analytic surface projects in closed form, in its own
+                // parameters (a cylinder's `v` runs along its axis).
+                let (u, v) =
+                    surface
+                        .project_point(target)
+                        .ok_or_else(|| WasmError::InvalidInput {
+                            reason: "the face's surface does not project points".into(),
+                        })?;
+                let proj = surface
+                    .evaluate(u, v)
+                    .ok_or_else(|| WasmError::InvalidInput {
+                        reason: "the face's surface does not evaluate parameters".into(),
+                    })?;
+                Ok(vec![
+                    u,
+                    v,
+                    proj.x(),
+                    proj.y(),
+                    proj.z(),
+                    (proj - target).length(),
                 ])
             }
         }

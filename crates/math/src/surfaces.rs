@@ -1036,6 +1036,30 @@ impl ToroidalSurface {
         (u, v)
     }
 
+    /// The parameters of the torus's point nearest `point`. A spindle
+    /// torus's tube runs across its axis, so a point there can lie on the
+    /// tube circle half a turn round (where `R + r cos v` is negative), while
+    /// [`Self::project_point`] reads it on the near tube circle, a sheet's
+    /// spacing away.
+    #[must_use]
+    pub fn project_point_nearest(&self, point: Point3) -> (f64, f64) {
+        let near = self.project_point(point);
+        if self.major_radius >= self.minor_radius {
+            return near;
+        }
+        let rel = point - self.center;
+        let rho = self.x_axis.dot(rel).hypot(self.y_axis.dot(rel));
+        let far = (
+            (near.0 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU),
+            self.z_axis
+                .dot(rel)
+                .atan2(-rho - self.major_radius)
+                .rem_euclid(std::f64::consts::TAU),
+        );
+        let off = |(u, v): (f64, f64)| (self.evaluate(u, v) - point).length();
+        if off(far) < off(near) { far } else { near }
+    }
+
     /// Convert to an approximate NURBS surface.
     ///
     /// # Errors
