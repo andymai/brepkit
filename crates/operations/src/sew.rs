@@ -5,9 +5,7 @@
 
 use std::collections::HashMap;
 
-use brepkit_geometry::extrema::{CurveProjection, point_to_curve};
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::traits::ParametricCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -67,6 +65,7 @@ pub fn sew_faces(
                 edges.push(EdgeSnapshot {
                     span: Span::new(edge.curve().clone(), start, end),
                     forward: oe.is_forward(),
+                    source: oe.edge().index(),
                 });
             }
             wires.push(edges);
@@ -92,8 +91,10 @@ pub fn sew_faces(
             .or_insert_with(|| topo.add_vertex(Vertex::new(p, tol)))
     };
 
-    // The edges made so far between each pair of vertices.
+    // The edges made so far between each pair of vertices, and the edge
+    // each input edge became, with whether it runs the same way.
     let mut edge_map: HashMap<(usize, usize), Vec<MadeEdge>> = HashMap::new();
+    let mut by_source: HashMap<usize, (EdgeId, bool)> = HashMap::new();
     let mut new_face_ids: Vec<FaceId> = Vec::with_capacity(face_snapshots.len());
 
     for snap in &face_snapshots {
@@ -109,7 +110,9 @@ pub fn sew_faces(
                     (v_end.index(), v_start.index())
                 };
                 let made = edge_map.entry(key).or_default();
-                let (edge_id, along) = if let Some(m) = made
+                let (edge_id, along) = if let Some(&shared) = by_source.get(&e.source) {
+                    shared
+                } else if let Some(m) = made
                     .iter()
                     .find(|m| e.span.lies_on(&m.span, tol) && m.span.lies_on(&e.span, tol))
                 {
@@ -128,6 +131,7 @@ pub fn sew_faces(
                     });
                     (edge, true)
                 };
+                by_source.insert(e.source, (edge_id, along));
                 // An edge met again the other way along runs against its
                 // first face's traversal in this one.
                 let forward = e.forward == along;
@@ -165,9 +169,12 @@ struct MadeEdge {
 struct EdgeSnapshot {
     span: Span,
     forward: bool,
+    /// The input edge's index.
+    source: usize,
 }
 
-/// An edge's curve from its start to its end.
+/// An edge's curve from its start to its end, read by the fraction of the
+/// way along its parameter range, so a range of any scale reads alike.
 #[derive(Clone)]
 struct Span {
     curve: EdgeCurve,
@@ -175,60 +182,136 @@ struct Span {
     end: Point3,
     t0: f64,
     t1: f64,
+    /// The fractions where the curve's pieces meet, 0 and 1 among them: a
+    /// NURBS curve's knots, eighths of a turn round a circle or an ellipse.
+    breaks: Vec<f64>,
+    /// How many points inside each piece decide whether it lies on another
+    /// curve.
+    per_piece: usize,
 }
 
 impl Span {
     fn new(curve: EdgeCurve, start: Point3, end: Point3) -> Self {
         let (t0, t1) = curve.domain_with_endpoints(start, end);
+        let (mut breaks, per_piece) = match &curve {
+            EdgeCurve::Line => (vec![0.0, 1.0], 3),
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let pieces = ((t1 - t0).abs() / std::f64::consts::FRAC_PI_4)
+                    .ceil()
+                    .max(1.0) as u32;
+                (
+                    (0..=pieces)
+                        .map(|k| f64::from(k) / f64::from(pieces))
+                        .collect(),
+                    4,
+                )
+            }
+            EdgeCurve::NurbsCurve(nurbs) => (
+                nurbs
+                    .knots()
+                    .iter()
+                    .map(|&k| (k - t0) / (t1 - t0))
+                    .filter(|f| *f > 0.0 && *f < 1.0)
+                    .chain([0.0, 1.0])
+                    .collect(),
+                nurbs.degree() + 3,
+            ),
+        };
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12);
         Self {
             curve,
             start,
             end,
             t0,
             t1,
+            breaks,
+            per_piece,
         }
     }
 
     /// The point a fraction `f` of the way along the parameter range.
     fn at(&self, f: f64) -> Point3 {
-        ParametricCurve::evaluate(self, f.mul_add(self.t1 - self.t0, self.t0))
+        self.curve.evaluate_with_endpoints(
+            f.mul_add(self.t1 - self.t0, self.t0),
+            self.start,
+            self.end,
+        )
     }
 
-    fn nearest(&self, p: Point3) -> CurveProjection {
-        point_to_curve(p, self, self.t0.min(self.t1), self.t0.max(self.t1))
+    /// The fractions inside each piece that decide whether it lies on
+    /// another curve.
+    fn samples(&self) -> impl Iterator<Item = f64> + '_ {
+        #[allow(clippy::cast_precision_loss)]
+        let n = (self.per_piece + 1) as f64;
+        self.breaks.windows(2).flat_map(move |w| {
+            #[allow(clippy::cast_precision_loss)]
+            (1..=self.per_piece).map(move |k| (w[1] - w[0]).mul_add(k as f64 / n, w[0]))
+        })
     }
 
-    /// The direction the edge runs at parameter `t`.
-    fn heading(&self, t: f64) -> Vec3 {
-        ParametricCurve::tangent(self, t) * (self.t1 - self.t0).signum()
+    /// The fraction along this span nearest `p`, and its distance. Each
+    /// piece is read at eight points, and every least distance among them
+    /// is closed in on by golden section, so a curve folding back near
+    /// itself is not read on the wrong fold.
+    fn nearest(&self, p: Point3) -> (f64, f64) {
+        let dist = |f: f64| (self.at(f) - p).length();
+        let mut fs: Vec<f64> = self
+            .breaks
+            .windows(2)
+            .flat_map(|w| (0..8).map(move |k| (w[1] - w[0]).mul_add(f64::from(k) / 8.0, w[0])))
+            .collect();
+        fs.push(1.0);
+        let d: Vec<f64> = fs.iter().map(|&f| dist(f)).collect();
+        let golden = (5.0_f64.sqrt() - 1.0) / 2.0;
+        let mut best = (0.0, f64::INFINITY);
+        for i in 0..fs.len() {
+            let left = if i > 0 { d[i - 1] } else { f64::INFINITY };
+            let right = d.get(i + 1).copied().unwrap_or(f64::INFINITY);
+            if d[i] > left || d[i] > right {
+                continue;
+            }
+            let (mut a, mut b) = (fs[i.saturating_sub(1)], fs[(i + 1).min(fs.len() - 1)]);
+            let (mut c, mut e) = (b - golden * (b - a), golden.mul_add(b - a, a));
+            let (mut dc, mut de) = (dist(c), dist(e));
+            for _ in 0..80 {
+                if dc <= de {
+                    (b, e, de) = (e, c, dc);
+                    c = b - golden * (b - a);
+                    dc = dist(c);
+                } else {
+                    (a, c, dc) = (c, e, de);
+                    e = golden.mul_add(b - a, a);
+                    de = dist(e);
+                }
+            }
+            for found in [(fs[i], d[i]), (c, dc), (e, de)] {
+                if found.1 < best.1 {
+                    best = found;
+                }
+            }
+        }
+        best
     }
 
-    /// Whether points spread along this span all lie on `other`, however
-    /// either is parameterized.
+    /// Whether points through every piece of this span lie on `other`,
+    /// however either is parameterized.
     fn lies_on(&self, other: &Self, tol: f64) -> bool {
-        (1..=5).all(|k| other.nearest(self.at(f64::from(k) / 6.0)).distance <= tol)
+        self.samples().all(|f| other.nearest(self.at(f)).1 <= tol)
+    }
+
+    /// The way the span runs at fraction `f`.
+    fn heading(&self, f: f64) -> Vec3 {
+        let h = 1e-6;
+        self.at((f + h).min(1.0)) - self.at((f - h).max(0.0))
     }
 
     /// Whether this span runs the same way along as `other`, which it lies
     /// on. A closed edge's ends cannot tell.
     fn runs_with(&self, other: &Self) -> bool {
-        let t = 0.5 * (self.t0 + self.t1);
-        let there = other.nearest(ParametricCurve::evaluate(self, t)).parameter;
-        self.heading(t).dot(other.heading(there)) > 0.0
-    }
-}
-
-impl ParametricCurve for Span {
-    fn evaluate(&self, t: f64) -> Point3 {
-        self.curve.evaluate_with_endpoints(t, self.start, self.end)
-    }
-
-    fn tangent(&self, t: f64) -> Vec3 {
-        self.curve.tangent_with_endpoints(t, self.start, self.end)
-    }
-
-    fn domain(&self) -> (f64, f64) {
-        (self.t0, self.t1)
+        let there = other.nearest(self.at(0.5)).0;
+        self.heading(0.5).dot(other.heading(there)) > 0.0
     }
 }
 
@@ -597,6 +680,56 @@ mod tests {
         let area = crate::measure::face_area(&topo, first, 0.001).unwrap();
         let exact = 25.0 * std::f64::consts::PI;
         assert!((area - exact).abs() < 1e-3 * exact, "{area}");
+    }
+
+    /// A span of a degree-1 curve through `points` in the plane z = 0 over
+    /// `knots`, from its first point to its last.
+    fn polyline_span(knots: Vec<f64>, points: &[(f64, f64)]) -> Span {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let pts: Vec<Point3> = points
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let (start, end) = (pts[0], pts[pts.len() - 1]);
+        let curve = NurbsCurve::new(1, knots, pts.clone(), vec![1.0; pts.len()]).unwrap();
+        Span::new(EdgeCurve::NurbsCurve(curve), start, end)
+    }
+
+    /// A unit segment whose knots run to 1e9 lies on its copy.
+    #[test]
+    fn a_span_lies_on_its_copy_however_far_its_knots_run() {
+        let span = polyline_span(vec![0.0, 0.0, 1e9, 1e9], &[(0.0, 0.0), (1.0, 0.0)]);
+        assert!(span.lies_on(&span.clone(), 1e-7));
+    }
+
+    /// A curve folding back 0.001 above itself lies on its copy: a point on
+    /// its second leg is read on that leg, not on the first.
+    #[test]
+    fn a_folded_span_lies_on_its_copy() {
+        let span = polyline_span(
+            vec![0.0, 0.0, 0.4, 0.5, 1.0, 1.0],
+            &[(0.0, 0.0), (1.0, 0.0), (1.0, 0.001), (0.0, 0.001)],
+        );
+        assert!(span.lies_on(&span.clone(), 1e-7));
+    }
+
+    /// A curve with a bump 0.1 high inside its first knot span, from 0 to
+    /// 0.1, does not lie on the unit segment. The segment's points all lie
+    /// on the curve's long straight span, so the bump is what keeps the two
+    /// apart, merging needing each on the other.
+    #[test]
+    fn a_bump_in_a_short_knot_span_keeps_curves_apart() {
+        let bumped = polyline_span(
+            vec![0.0, 0.0, 0.05, 0.1, 1.0, 1.0],
+            &[(0.0, 0.0), (0.05, 0.1), (0.1, 0.0), (1.0, 0.0)],
+        );
+        let straight = Span::new(
+            EdgeCurve::Line,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        );
+        assert!(!bumped.lies_on(&straight, 1e-7));
+        assert!(straight.lies_on(&bumped, 1e-7));
     }
 
     /// The cylinder's faces with one cap's rim swapped for `curve`, used
