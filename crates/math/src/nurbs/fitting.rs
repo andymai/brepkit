@@ -953,8 +953,9 @@ mod tests {
         }
     }
 
-    /// Points bunched at both ends of a segment, a nanometre apart there:
-    /// the band's partial pivoting solves them as the whole matrix did.
+    /// Points bunched at both ends of a unit segment, nanometres apart at
+    /// one end: the band's partial pivoting solves them as the whole matrix
+    /// did.
     #[test]
     fn interpolate_points_bunched_at_both_ends() {
         let pts: Vec<Point3> = [
