@@ -518,13 +518,16 @@ fn coaxial_corner_surface(
     }
     // Cone: apex on the axis through the corner center where the generator
     // radius reaches zero (same construction as `build_coaxial_band_stack`,
-    // offset to the corner center instead of the global axis).
+    // offset to the corner center instead of the global axis). The cone
+    // opens from its apex toward the wider arc, which lies along
+    // `n` only when the arcs' own normal runs from the first to the second:
+    // a clockwise (concave) arc's normal points back down the stack.
     let s_apex = -r0 * height / (r1 - r0);
     let apex = o0 + n * s_apex;
     let (axis_sign, r_ref, axial_to_ref) = if r1 > r0 {
-        (1.0_f64, r1, height - s_apex)
+        (height.signum(), r1, height - s_apex)
     } else {
-        (-1.0_f64, r0, s_apex)
+        (-height.signum(), r0, s_apex)
     };
     let half_angle = axial_to_ref.abs().atan2(r_ref);
     let cone = brepkit_math::surfaces::ConicalSurface::new(apex, n * axis_sign, half_angle).ok()?;
@@ -798,6 +801,30 @@ fn match_profiles_by_angle(
         .map(|p| profile_centre(p))
         .collect::<Option<_>>()?;
     let m = profs.len();
+    // A lone circle's seam is no corner of it, yet it would cut the other
+    // profiles there and restart their rulings at the cut, so the loft would
+    // change with the seam. It moves to where the first profile with corners
+    // has its first, a cut every profile takes anyway.
+    let lone_circle = |p: &[ProfileEdgeGeom]| {
+        matches!(p, [only] if matches!(only.curve, EdgeCurve::Circle(_))
+            && (only.start - only.end).length() <= tol)
+    };
+    if let Some(r) = (0..m).find(|&k| !lone_circle(&profs[k])) {
+        let mut dir = profs[r][0].start - centres[r];
+        dir = dir - normal * dir.dot(normal);
+        if dir.length() > tol {
+            for p in profs.iter_mut() {
+                if lone_circle(p)
+                    && let [only] = p.as_mut_slice()
+                    && let EdgeCurve::Circle(c) = &only.curve
+                {
+                    let seam = c.evaluate(c.project(c.center() + dir));
+                    only.start = seam;
+                    only.end = seam;
+                }
+            }
+        }
+    }
     let order = (1..m)
         .rev()
         .map(|i| (i, i - 1))
@@ -841,9 +868,10 @@ fn match_profiles_by_angle(
 
 /// Turns each profile after the first to start at the vertex whose angle
 /// about its centre lies nearest the first profile's start. Whether every
-/// vertex then lies at its counterpart's angle: a profile a ray from its
-/// centre meets more than once can run back in angle where the others do
-/// not, and its vertices pair across angles.
+/// vertex then lies at its counterpart's angle and every edge runs round its
+/// profile's centre one way: a profile a ray from its centre meets more than
+/// once can run back in angle where the others do not, between its vertices
+/// as well as at them, and its pieces pair across angles.
 fn start_at_matching_angles(
     profs: &mut [Vec<ProfileEdgeGeom>],
     centres: &[Point3],
@@ -861,14 +889,59 @@ fn start_at_matching_angles(
             p.rotate_left(k);
         }
     }
-    profs.iter().zip(centres).skip(1).all(|(p, &c)| {
-        p.iter().zip(&profs[0]).all(|(e, first)| {
-            let (d, along) = (
-                flat(e.start - c),
-                flat(first.start - centres[0]).normalize(),
-            );
-            along.is_ok_and(|a| d.dot(a) > 0.0 && d.cross(a).length() <= 10.0 * tol)
+    let junctions: Vec<Point3> = profs[0].iter().map(|e| e.start).collect();
+    let up = normal
+        * crate::winding::newell_normal(&junctions)
+            .dot(normal)
+            .signum();
+    profs
+        .iter()
+        .zip(centres)
+        .all(|(p, &c)| turns_one_way_about(p, c, up, tol))
+        && profs.iter().zip(centres).skip(1).all(|(p, &c)| {
+            p.iter().zip(&profs[0]).all(|(e, first)| {
+                let (d, along) = (
+                    flat(e.start - c),
+                    flat(first.start - centres[0]).normalize(),
+                );
+                along.is_ok_and(|a| d.dot(a) > 0.0 && d.cross(a).length() <= 10.0 * tol)
+            })
         })
+}
+
+/// Whether every edge of `p` runs counterclockwise about `up` round `centre`
+/// all along it, its angle never standing still or turning back: a line
+/// that passes the centre on its left, an arc whose every point does.
+fn turns_one_way_about(p: &[ProfileEdgeGeom], centre: Point3, up: Vec3, tol: f64) -> bool {
+    p.iter().all(|e| match &e.curve {
+        EdgeCurve::Line => {
+            (e.start - centre).cross(e.end - e.start).dot(up) > tol * (e.end - e.start).length()
+        }
+        EdgeCurve::Circle(c) => {
+            // At angle t the arc turns about the centre at a rate whose sign
+            // is that of sense (r + a cos t + b sin t), with (a, b) the arc's
+            // centre seen from the profile's in the circle's frame: least at
+            // an end of the arc or where t - atan2(b, a) is a multiple of π.
+            let (t0, t1) = e.curve.domain_with_endpoints(e.start, e.end);
+            let r = c.radius();
+            let (u, v) = (
+                (c.evaluate(0.0) - c.center()) * (1.0 / r),
+                (c.evaluate(std::f64::consts::FRAC_PI_2) - c.center()) * (1.0 / r),
+            );
+            let sense = u.cross(v).dot(up).signum();
+            let (a, b) = ((c.center() - centre).dot(u), (c.center() - centre).dot(v));
+            let rate = |t: f64| sense * (r + a.mul_add(t.cos(), b * t.sin()));
+            let phi = b.atan2(a);
+            let first = ((t0 - phi) / std::f64::consts::PI).ceil();
+            // An arc spans at most a turn, so holds at most three such t.
+            (0..3_u8)
+                .map(|k| (first + f64::from(k)).mul_add(std::f64::consts::PI, phi))
+                .filter(|&t| t <= t1)
+                .map(rate)
+                .fold(rate(t0).min(rate(t1)), f64::min)
+                > tol
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
     })
 }
 
@@ -1858,9 +1931,9 @@ mod square_to_circle_tests {
     use brepkit_topology::wire::{OrientedEdge, Wire};
 
     /// A 40 x 40 square at z = 0 lofted to a circle of radius 10 at z = 40,
-    /// either way up. The circle is cut at the square's corners' angles and
-    /// the square at the circle's seam, each side ruled to its arc meeting it
-    /// at even angles, which holds 35125.497. Pairing the square's corners
+    /// either way up. The circle is cut at the square's corners' angles, its
+    /// seam moved onto the first, each side ruled to its arc meeting it at
+    /// even angles, which holds 35125.497. Pairing the square's corners
     /// with the circle's samples from wherever each starts gave 34 planar
     /// faces holding 19274.751, or 2599.671 with the circle first.
     #[test]
@@ -1901,7 +1974,7 @@ mod square_to_circle_tests {
                 2,
                 "{kinds:?}"
             );
-            assert_eq!(kinds.len(), 7, "{kinds:?}");
+            assert_eq!(kinds.len(), 6, "{kinds:?}");
             assert!(
                 crate::validate::validate_solid(&topo, solid)
                     .unwrap()
@@ -2011,7 +2084,7 @@ mod square_to_circle_tests {
     /// A 40 square lofted to a circle of radius 10 whose plane tilts 1e-5
     /// about x: rays in the square's plane meet the circle's sphere up to
     /// 7e-5 off the circle, and the cuts are taken on the circle, so the
-    /// loft keeps its 7 faces rather than falling back to a polygon.
+    /// loft keeps its 6 faces rather than falling back to a polygon.
     #[test]
     fn a_square_lofts_to_a_slightly_tilted_circle_with_its_cuts_on_it() {
         let mut topo = Topology::new();
@@ -2049,7 +2122,7 @@ mod square_to_circle_tests {
             .iter()
             .map(|&f| topo.face(f).unwrap().surface().type_tag())
             .collect();
-        assert_eq!(kinds.len(), 7, "{kinds:?}");
+        assert_eq!(kinds.len(), 6, "{kinds:?}");
         assert!(lies_on_its_geometry(&topo, solid));
         assert!(
             crate::validate::validate_solid(&topo, solid)
@@ -2443,5 +2516,232 @@ mod square_to_circle_tests {
             .filter(|&&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
             .count();
         assert_eq!(arcs, 0);
+    }
+
+    /// A 40 square at z = 0 lofted to a circle of radius 10 at z = 40 whose
+    /// rim starts at its frame's angle 0, π/8, π/3 or 1: the seam is no
+    /// corner of the circle, so each loft keeps its arcs and holds the same
+    /// 35125.497.
+    #[test]
+    fn a_square_lofts_to_a_circle_the_same_wherever_its_seam_lies() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        let mut volumes = Vec::new();
+        for seam in [
+            0.0,
+            std::f64::consts::PI / 8.0,
+            std::f64::consts::FRAC_PI_3,
+            1.0,
+        ] {
+            let mut topo = Topology::new();
+            let square = profile(
+                &mut topo,
+                0.0,
+                &[
+                    ((20.0, -20.0), None),
+                    ((20.0, 20.0), None),
+                    ((-20.0, 20.0), None),
+                    ((-20.0, -20.0), None),
+                ],
+            );
+            let up = Vec3::new(0.0, 0.0, 1.0);
+            let circle =
+                brepkit_math::curves::Circle3D::new(Point3::new(0.0, 0.0, 40.0), up, 10.0).unwrap();
+            let v = topo.add_vertex(Vertex::new(circle.evaluate(seam), 1e-7));
+            let rim = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+            let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+            let circle = topo.add_face(Face::new(
+                rim,
+                vec![],
+                FaceSurface::Plane {
+                    normal: up,
+                    d: 40.0,
+                },
+            ));
+            let solid = try_loft_matching_curved_profiles(&mut topo, &[square, circle]).unwrap();
+            assert!(solid.is_some(), "seam {seam}: not lofted along its arcs");
+            let solid = solid.unwrap();
+            assert!(lies_on_its_geometry(&topo, solid), "seam {seam}");
+            assert!(
+                crate::validate::validate_solid(&topo, solid)
+                    .unwrap()
+                    .is_valid(),
+                "seam {seam}"
+            );
+            volumes.push(crate::measure::solid_volume(&topo, solid, 1e-4).unwrap());
+        }
+        assert!(
+            volumes
+                .iter()
+                .all(|v| (v - 35125.497).abs() < 1e-6 * 35125.497),
+            "{volumes:?}"
+        );
+    }
+
+    /// The square of half-size `half` about the origin at height `z`, run
+    /// counterclockwise, its top side notched by the circle of `radius`
+    /// about `centre`: the notch runs clockwise, below the top side.
+    fn notched_by_an_arc(
+        topo: &mut Topology,
+        z: f64,
+        half: f64,
+        centre: (f64, f64),
+        radius: f64,
+    ) -> FaceId {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        let reach = (radius * radius - (half - centre.1).powi(2)).sqrt();
+        let at = |x: f64, y: f64| Point3::new(x, y, z);
+        let v = [
+            at(-half, -half),
+            at(half, -half),
+            at(half, half),
+            at(centre.0 + reach, half),
+            at(centre.0 - reach, half),
+            at(-half, half),
+        ]
+        .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let notch = brepkit_math::curves::Circle3D::new(
+            at(centre.0, centre.1),
+            Vec3::new(0.0, 0.0, -1.0),
+            radius,
+        )
+        .unwrap();
+        let edges = (0..6)
+            .map(|k| {
+                let curve = if k == 3 {
+                    EdgeCurve::Circle(notch.clone())
+                } else {
+                    EdgeCurve::Line
+                };
+                OrientedEdge::new(topo.add_edge(Edge::new(v[k], v[(k + 1) % 6], curve)), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    }
+
+    /// A 20 square notched by a circle of radius 4 about (0, 8), its notch a
+    /// clockwise arc of 240° from (√12, 10) to (−√12, 10), lofted to a
+    /// circle of radius 3 above it. Its vertices run round its centre in
+    /// order of angle, but the notch runs back, so a ray from the centre
+    /// meets the boundary three times: the loft is not paired by angle and
+    /// keeps the polygon loft, valid, with no edge a circle.
+    #[test]
+    fn a_square_notched_by_an_arc_is_not_paired_by_angle() {
+        let mut topo = Topology::new();
+        let notched = notched_by_an_arc(&mut topo, 0.0, 10.0, (0.0, 8.0), 4.0);
+        let rim = brepkit_topology::builder::make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            1e-7,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let circle = brepkit_topology::builder::make_face_from_wire(&mut topo, rim).unwrap();
+        let curved = try_loft_matching_curved_profiles(&mut topo, &[notched, circle]).unwrap();
+        assert!(curved.is_none(), "paired by angle");
+        let solid = loft(&mut topo, &[notched, circle]).unwrap();
+        assert!(lies_on_its_geometry(&topo, solid));
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+        let arcs = brepkit_topology::explorer::solid_edges(&topo, solid)
+            .unwrap()
+            .iter()
+            .filter(|&&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
+            .count();
+        assert_eq!(arcs, 0);
+    }
+
+    /// Arcs of circles about (10, 0) seen from the origin, counterclockwise.
+    /// From -80° to 80° on a radius of 6 the far side turns one way about
+    /// the origin. From 100° to 260° the arc's ends do too, but between them
+    /// it passes the side facing the origin: on a radius of 6 it turns back
+    /// there, and on a radius of 10 it stands still where the ray along x
+    /// touches it.
+    #[test]
+    fn an_arc_turning_back_between_its_ends_turns_two_ways() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let arc = |radius: f64, from: f64, to: f64| {
+            let c = brepkit_math::curves::Circle3D::new_with_ref(
+                Point3::new(10.0, 0.0, 0.0),
+                up,
+                radius,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap();
+            vec![ProfileEdgeGeom {
+                start: c.evaluate(from.to_radians()),
+                end: c.evaluate(to.to_radians()),
+                curve: EdgeCurve::Circle(c),
+            }]
+        };
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        assert!(turns_one_way_about(
+            &arc(6.0, -80.0, 80.0),
+            origin,
+            up,
+            1e-7
+        ));
+        assert!(!turns_one_way_about(
+            &arc(6.0, 100.0, 260.0),
+            origin,
+            up,
+            1e-7
+        ));
+        assert!(!turns_one_way_about(
+            &arc(10.0, 100.0, 260.0),
+            origin,
+            up,
+            1e-7
+        ));
+    }
+
+    /// A 20 square at z = 0 notched by a half circle of radius 2 about the
+    /// middle of its top side, lofted to the same square at z = 10 notched
+    /// by a half circle of radius 4: the notches run clockwise, so their
+    /// circles face down, and the band between them is the cone widening
+    /// upward. It holds 4000 less half the frustum, π 10 (2² + 2·4 + 4²) / 6.
+    #[test]
+    fn a_concave_notch_widening_up_a_loft_is_a_cone() {
+        let mut topo = Topology::new();
+        let low = notched_by_an_arc(&mut topo, 0.0, 10.0, (0.0, 10.0), 2.0);
+        let high = notched_by_an_arc(&mut topo, 10.0, 10.0, (0.0, 10.0), 4.0);
+        let solid = try_loft_matching_curved_profiles(&mut topo, &[low, high]).unwrap();
+        assert!(solid.is_some(), "not lofted along its arcs");
+        let solid = solid.unwrap();
+        let kinds: Vec<_> = brepkit_topology::explorer::solid_faces(&topo, solid)
+            .unwrap()
+            .iter()
+            .map(|&f| topo.face(f).unwrap().surface().type_tag())
+            .collect();
+        assert_eq!(
+            kinds.iter().filter(|&&k| k == "cone").count(),
+            1,
+            "{kinds:?}"
+        );
+        assert!(lies_on_its_geometry(&topo, solid));
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+        let volume = crate::measure::solid_volume(&topo, solid, 1e-4).unwrap();
+        let exact = 4000.0 - std::f64::consts::PI * 10.0 * 28.0 / 6.0;
+        assert!((volume - exact).abs() < 1e-6 * exact, "{volume} of {exact}");
     }
 }
