@@ -255,6 +255,17 @@ pub fn try_chamfer(
             reason: "some requested edges are not on the solid".to_owned(),
         });
     }
+    // Neither engine chamfers a cavity's edges: the walking one refuses
+    // them, and the planar one would chamfer the rest and drop them.
+    let mut on_outer = std::collections::HashSet::new();
+    for &face in topo.shell(topo.solid(solid_id)?.outer_shell())?.faces() {
+        on_outer.extend(brepkit_topology::explorer::face_edges(topo, face)?);
+    }
+    if edge_ids.iter().any(|e| !on_outer.contains(e)) {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "chamfering an edge of a cavity is not supported".to_owned(),
+        });
+    }
     let orientation_deflection = gate_deflection(topo, solid_id, distance)?;
     if let Ok(r) =
         brepkit_operations::blend_ops::chamfer_v2(topo, solid_id, edge_ids, distance, distance)
@@ -929,6 +940,21 @@ mod fillet_tests {
         let mut topo = Topology::new();
         let (near, edge) = hollow_block(&mut topo, (3.5, 0.05, 6.5));
         assert!(try_chamfer(&mut topo, near, &[edge], 1.0).is_err());
+    }
+
+    /// A chamfer naming an edge of a hollow block's cavity, alone or with an
+    /// outer edge, is refused rather than chamfering the outer edge and
+    /// dropping the cavity's.
+    #[test]
+    fn try_chamfer_refuses_a_cavitys_edge() {
+        let mut topo = Topology::new();
+        let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+        let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+        let cavity_face = topo.shell(cavity).unwrap().faces()[0];
+        let cavity_edge = brepkit_topology::explorer::face_edges(&topo, cavity_face).unwrap()[0];
+        assert!(try_chamfer(&mut topo, hollow, &[edge, cavity_edge], 0.5).is_err());
+        assert!(try_chamfer(&mut topo, hollow, &[cavity_edge], 0.5).is_err());
+        assert!(try_chamfer(&mut topo, hollow, &[edge], 0.5).is_ok());
     }
 
     /// A chamfer naming an edge of another solid is refused rather than
