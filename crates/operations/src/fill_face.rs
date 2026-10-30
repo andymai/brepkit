@@ -169,10 +169,7 @@ fn chain_loop(curves: &[Vec<Point3>]) -> Result<Vec<Vec<Point3>>, OperationsErro
         let (first, last) = ends(c);
         (first - at).length().min((last - at).length())
     };
-    let size = curves.iter().flatten().fold(0.0_f64, |m, p| {
-        m.max(p.x().abs()).max(p.y().abs()).max(p.z().abs())
-    });
-    let reach = 1e-6 * (1.0 + size);
+    let reach = brepkit_math::tolerance::Tolerance::new().linear;
     let mut first = curves[0].clone();
     if gap(&curves[1], first[0]) < gap(&curves[1], ends(&first).1) {
         first.reverse();
@@ -375,6 +372,26 @@ mod tests {
             vec![p(0.0, 1.0), p(0.0, 0.5)],
         ];
         assert!(fill_coons_patch(&mut topo, &curves).is_err());
+    }
+
+    #[test]
+    fn coons_patch_refuses_a_far_loop_that_does_not_close() {
+        let mut topo = Topology::new();
+        let p = |x: f64, y: f64| Point3::new(1e6 + x, y, 0.0);
+        let curves = [
+            vec![p(0.0, 0.0), p(1.0, 0.0)],
+            vec![p(1.0, 0.0), p(1.0, 1.0)],
+            vec![p(1.0, 1.0), p(0.0, 1.0)],
+            vec![p(0.0, 1.0), p(0.0, 0.5)],
+        ];
+        assert!(fill_coons_patch(&mut topo, &curves).is_err());
+        let closed = [
+            vec![p(0.0, 0.0), p(1.0, 0.0)],
+            vec![p(1.0, 0.0), p(1.0, 1.0)],
+            vec![p(1.0, 1.0), p(0.0, 1.0)],
+            vec![p(0.0, 1.0), p(0.0, 0.0)],
+        ];
+        assert!(fill_coons_patch(&mut topo, &closed).is_ok());
     }
 
     #[test]
