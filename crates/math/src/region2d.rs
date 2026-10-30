@@ -246,9 +246,18 @@ fn crossings(piece: &Boundary2, p: Point2, d: Vec2, tol: f64) -> Crossing {
                 a.min(b)
             };
             let end = |t: f64| center + u * (a * t.cos()) + v * (b * t.sin());
+            // Along a slender ellipse the ray from its center meets the curve
+            // nearly tangent, so the radial offset can be many times the true
+            // distance; it is never less than the square of the axes' ratio
+            // of it. Within that margin the arc's own distance decides.
+            let squash = (size / a.min(b)).powi(2);
             if (radial <= tol && on_arc(y0.atan2(x0)))
                 || (p - end(t0)).length() <= tol
                 || (p - end(t1)).length() <= tol
+                || (squash > 1.0 + 1e-12
+                    && squash.is_finite()
+                    && radial <= tol * squash
+                    && distance_to_piece(piece, p) <= tol)
             {
                 return Crossing::OnBoundary;
             }
@@ -641,6 +650,31 @@ mod tests {
     /// short of it by no more than a millionth: from outside, from near the
     /// centre where two angles are nearest, from on and beside the curve,
     /// and from past an arc's end.
+    #[test]
+    fn a_point_beside_a_slender_ellipse_is_on_it() {
+        // An ellipse 10 by 0.1, and a point 5e-8 off it along its normal at
+        // the angle 0.1, where the ray from the centre runs 84 degrees off
+        // that normal and meets the curve some ten times farther away.
+        let piece = Boundary2::Arc {
+            center: Point2::new(0.0, 0.0),
+            u: Vec2::new(1.0, 0.0),
+            v: Vec2::new(0.0, 1.0),
+            a: 10.0,
+            b: 0.1,
+            t0: 0.0,
+            t1: TAU,
+        };
+        let t: f64 = 0.1;
+        let on = Point2::new(10.0 * t.cos(), 0.1 * t.sin());
+        let normal = Vec2::new(0.1 * t.cos(), 10.0 * t.sin());
+        let normal = normal * (1.0 / normal.length());
+        for side in [1.0, -1.0] {
+            let p = on + normal * (side * 5e-8);
+            assert!(distance_to_piece(&piece, p) < 1e-7);
+            assert_eq!(point_in_region(&[piece], p, 1e-7), None, "side {side}");
+        }
+    }
+
     #[test]
     fn distance_to_an_elliptical_arc() {
         let (c, s) = (0.5_f64.cos(), 0.5_f64.sin());
