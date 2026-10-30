@@ -346,11 +346,14 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                     sums
                 };
                 let mut piece = sums(ta, tb, nodes);
-                // A NURBS edge's parameter can run unevenly along it (a
-                // rational arc whose weights grow along it), so its piece is
-                // kept only where its halves agree with it, and halved
-                // otherwise: none at a thousandth of the edge.
-                if matches!(edge.curve, EdgeCurve::NurbsCurve(_)) {
+                // A rational edge's parameter can run unevenly along it (an
+                // arc whose weights grow along it), so its piece is kept only
+                // where its halves agree with it, and halved otherwise. Equal
+                // weights make a polynomial, which one rule per knot span
+                // holds; the check would only chase rounding in their spans.
+                let uneven = matches!(edge.curve, EdgeCurve::NurbsCurve(n)
+                    if n.weights().windows(2).any(|w| (w[0] - w[1]).abs() > 1e-12 * w[0].abs().max(w[1].abs())));
+                if uneven {
                     let (left, right) = (
                         sums(ta, mid, nodes_over(ta, mid)),
                         sums(mid, tb, nodes_over(mid, tb)),
@@ -362,15 +365,19 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                         .zip(&halves)
                         .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
                     // The gap measures the whole piece's error; the halves
-                    // kept are far closer. Their derivative stencil's
-                    // rounding bounds how well a short piece can agree.
+                    // kept are far closer. At a thousandth of the edge the
+                    // derivative stencil's rounding, not the rule, sets the
+                    // gap, so a piece is given up only if its halves still
+                    // differ from it by more than a millionth.
                     if gap > 1e-9 * size {
-                        if (tb - ta).abs() <= floor {
+                        if (tb - ta).abs() > floor {
+                            pending.push((mid, tb));
+                            pending.push((ta, mid));
+                            continue;
+                        }
+                        if gap > 1e-6 * size {
                             return None;
                         }
-                        pending.push((mid, tb));
-                        pending.push((ta, mid));
-                        continue;
                     }
                     piece = halves;
                 }
