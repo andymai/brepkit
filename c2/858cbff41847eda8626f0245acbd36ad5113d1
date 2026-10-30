@@ -1,0 +1,98 @@
+crates/blend/src/analytic.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 446
+crates/algo/src/builder/mod.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 65-68,689-693,1098-1103,1673-1703
+crates/operations/src/boolean/mod.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 450-451,2484-2488,2824-2825,2832,2840,2963-3033
+  s_a2dc21dbec3f2b::t_28327f7a5c9d5e 3034
+crates/io/tests/step_voids.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 12,14,18,88-109
+  s_a2dc21dbec3f2b::t_0635dbbef3b9d3 110-111
+crates/operations/src/sweep.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 49-103,120,124-126,621-629,784-789,795,2540-2597,2626-2649,2664-2665,2667-2690,2734-2736
+crates/operations/src/tessellate/nonplanar.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 2773-2781,2797-2800,2919,4465-4519,5156,5209-5211,5213-5218
+crates/operations/src/thicken.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 1,3-7,9-15,17-22,26-27,29-33,37-40,46,53-201,203-304,306-432,434-443,445-490,493-567,569-579,581-584,588-773,782-819,850-1375,1439-1526
+crates/algo/src/builder/classify_2d.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 16,19-32,37-41,44,54,139
+crates/blend/src/fillet_builder.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 2985-3024,3081-3102,3104-3105,3129-3133,3313-3317,3319-3332,4071-4145
+  s_a2dc21dbec3f2b::t_dd3c06262225fe 4146
+crates/math/src/region2d.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 249-253,257-260,653-677
+crates/operations/src/extrude.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 791-951,954-963,1175-1176,1180-1181,1353
+crates/wasm/src/bindings/shapes.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 762-766,770
+crates/operations/src/sweep/tests.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 2310-2582
+crates/wasm/src/helpers.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 234-237,241-242,245-248,250-288,304,307-325,506-516,518-530,532-534,536-556,797,1032-1189,1555-1751
+crates/wasm/src/bindings/operations.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 21,143,147-156,161-167,996
+crates/check/src/properties/mod.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 93-96,410-684
+  s_a2dc21dbec3f2b::t_0eef36ae5c84db 685
+crates/operations/src/loft.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 257-481,564,640,665-710,722,746-749,753,755,839-1209,1238-1244,1246-1260,1333-1337,1348,1350-1362,1365-1367,1408-1411,1414,1756-1802,1821-1831,1833-1842,1844,1846-1855,1859-1861,1869-1871,1876-1877,1880,1882,1888,1891-1892,1895,1897,1929-1938,1946-1947,1950,1952,2199-3441
+crates/wasm/src/bindings/batch.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 866-868
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 8724,8992-8994,8996-9000,9044-9045,9050-9060,9184,9216,9222,9226,9237,10657-10658,10665-10794
+crates/operations/src/extrude/tests.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 307-308,310,1519-2064
+crates/operations/src/split.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 5-6,12,30-33,37-38,46-71,73-93,96-98,171-425
+  s_a2dc21dbec3f2b::t_dca3d1bc1da72d 426
+crates/algo/src/builder/face_splitter/containment.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 4,62-156
+  s_a2dc21dbec3f2b::t_3bf11552ae5b41 157
+crates/math/src/nurbs/fitting.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 207-215,223-224,227-237,239,245-291,940-972,974-976
+  s_a2dc21dbec3f2b::t_3e9a441aa5c65f 973,977
+crates/check/src/properties/boundary.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 69-72,269-270,292,295-314,326-342,344-353,355-387,389-392,394,407-418,449-464,486-496,499,602-605,609-614,632,656,701-714,722-808
+  s_a2dc21dbec3f2b::t_16d58f7e7df95f 809
+crates/algo/src/builder/fill_images_faces.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 346,400,558,629,645-653,662
+crates/algo/src/bop.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 335
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 7141-7144,7147-7150,7154-7161,9228,9230,9234,9236-9240,9243-9246
+  s_a2dc21dbec3f2b::t_ac8d5bd988c8bc 9088-9129,9224-9227,9229,9231-9233,9235,9241-9242,9247-9264
+  s_a2dc21dbec3f2b::t_d06a954cfc8411 9130-9134,9265-9268
+crates/algo/src/builder/same_domain/tests.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 34,160,850,924,1259,1267
+crates/operations/src/measure/bounding_box.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 158-203
+crates/geometry/src/convert/recognize_surface.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 128-133,135-143,145-153,1064-1132
+  s_a2dc21dbec3f2b::t_eff0e9e6e14a0d 1133
+crates/operations/src/measure/mod.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 11
+crates/operations/src/fillet/radius_law.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 40-49
+crates/operations/src/fillet/mod.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 902
+crates/operations/tests/torus_plane_cut.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 1051-1094
+crates/math/src/nurbs/projection.rs
+  s_a2dc21dbec3f2b::t_8aadb0b89ff6ac 613-632,646-675,1653-1733
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c2858cbff41847eda8626f0245acbd36ad5113d1",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
