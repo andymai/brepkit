@@ -125,24 +125,32 @@ fn try_recognize_plane(surface: &NurbsSurface, tolerance: f64) -> Option<(Vec3, 
         return None;
     }
 
-    // Find a normal from the first 3 non-collinear points.
+    // Take the normal from three points spread across the net: the first,
+    // the one farthest from it, and the one farthest off the line through
+    // those two. Points crowded together tilt their plane by their own
+    // deviation over their spacing, which can far exceed the tolerance
+    // across the rest of the net. A net within `tolerance` of a point or a
+    // line spans no plane.
     let p0 = all_pts[0];
-    let mut normal: Option<Vec3> = None;
-    'outer: for i in 1..all_pts.len() {
-        let v1 = all_pts[i] - p0;
-        for pt in all_pts.iter().skip(i + 1) {
-            let v2 = *pt - p0;
-            let n = v1.cross(v2);
-            if n.length() > tolerance
-                && let Ok(normalized) = n.normalize()
-            {
-                normal = Some(normalized);
-                break 'outer;
-            }
-        }
+    let farthest = |measure: &dyn Fn(Point3) -> f64| {
+        all_pts
+            .iter()
+            .map(|&p| (p, measure(p)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    };
+    let (p1, base) = farthest(&|p| (p - p0).length())?;
+    if base <= tolerance {
+        return None;
     }
-
-    let n = normal?;
+    let along = (p1 - p0) * (1.0 / base);
+    let (p2, height) = farthest(&|p| {
+        let v = p - p0;
+        (v - along * along.dot(v)).length()
+    })?;
+    if height <= tolerance {
+        return None;
+    }
+    let n = (p1 - p0).cross(p2 - p0).normalize().ok()?;
     let d = n.dot(Vec3::new(p0.x(), p0.y(), p0.z()));
 
     // Check all control points lie within tolerance of the plane.
@@ -1050,6 +1058,76 @@ mod tests {
                 );
             }
             other => panic!("expected Torus, got {other:?}"),
+        }
+    }
+
+    /// A flat bilinear square of side 1e-4 in the plane x + y + z = 1 spans
+    /// control-point areas of 1e-8, under a tolerance of 1e-7, yet each corner
+    /// lies 1e-4 off the line through two others: it is a plane.
+    #[test]
+    fn recognize_a_tiny_plane() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let side = 1e-4;
+        let base = Point3::new(1.0, 0.0, 0.0);
+        let u = Vec3::new(-1.0, 1.0, 0.0).normalize().unwrap() * side;
+        let v = Vec3::new(-1.0, -1.0, 2.0).normalize().unwrap() * side;
+        let nurbs = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![base, base + v], vec![base + u, base + u + v]],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        match recognize_surface(&nurbs, 1e-7) {
+            RecognizedSurface::Plane { normal, d } => {
+                let expected = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+                let sign = normal.dot(expected).signum();
+                assert!(
+                    (normal * sign - expected).length() < 1e-9,
+                    "normal {normal:?}"
+                );
+                assert!((d * sign - expected.x()).abs() < 1e-12, "d {d}");
+            }
+            other => panic!("expected Plane, got {other:?}"),
+        }
+    }
+
+    /// A 3 by 3 net over x in {0, 1e-6, 1} and y in {0, 1e-4, 1}, flat but
+    /// for z = 5e-8 at (1e-6, 0), lies within 1e-7 of z = 0. Its first
+    /// points crowd the origin, where the third of them stands 1e-6 off the
+    /// line of the first two and tilts their plane by about 0.05: the
+    /// normal comes from points spread across the net instead.
+    #[test]
+    fn recognize_a_plane_whose_first_points_crowd_together() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let (xs, ys) = ([0.0, 1e-6, 1.0], [0.0, 1e-4, 1.0]);
+        let net: Vec<Vec<Point3>> = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 0) { 5e-8 } else { 0.0 };
+                        Point3::new(xs[i], ys[j], z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let nurbs = NurbsSurface::new(
+            2,
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            net,
+            vec![vec![1.0; 3]; 3],
+        )
+        .unwrap();
+        match recognize_surface(&nurbs, 1e-7) {
+            RecognizedSurface::Plane { normal, d } => {
+                assert!(normal.z().abs() > 1.0 - 1e-12, "normal {normal:?}");
+                assert!(d.abs() < 1e-7, "d {d}");
+            }
+            other => panic!("expected Plane, got {other:?}"),
         }
     }
 

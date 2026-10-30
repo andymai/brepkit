@@ -672,7 +672,7 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
 /// booleans handle far more robustly than a generic ruled NURBS. Mirrors the
 /// reference `BRepFill_Generator`. Returns `None` for non-coaxial arcs (caller
 /// falls back to a ruled NURBS).
-fn coaxial_corner_surface(
+pub(crate) fn coaxial_corner_surface(
     c0: &brepkit_math::curves::Circle3D,
     c1: &brepkit_math::curves::Circle3D,
     tol: Tolerance,

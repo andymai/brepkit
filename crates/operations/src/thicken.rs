@@ -1,79 +1,821 @@
-//! Thicken a face into a solid by offsetting along its normal.
+//! Thicken a face into a solid of even thickness.
 //!
-//! A convenience operation that extrudes a face along its own normal
-//! direction. Supports planar, NURBS, and analytic surface faces.
+//! A planar face is extruded along its normal. A face on a cylinder, cone,
+//! sphere or torus is grown along its surface's normal: its far side lies on
+//! the offset surface, each edge is carried to it along the normals, and
+//! each side between an edge and its image is the ruled surface the normals
+//! sweep.
 
-use brepkit_math::vec::Vec3;
+use std::collections::HashMap;
+
+use brepkit_math::curves::Circle3D;
+use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::tolerance::Tolerance;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::{FaceId, FaceSurface};
-use brepkit_topology::solid::SolidId;
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
+use brepkit_topology::shell::Shell;
+use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::vertex::{Vertex, VertexId};
+use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::extrude::extrude;
 
-/// Thicken a face into a solid by extruding along its normal.
+/// Thicken a face into a solid by growing it `thickness` along its normal
+/// (against it when negative).
 ///
-/// Positive `thickness` extrudes in the face normal direction;
-/// negative extrudes in the opposite direction.
-///
-/// For planar faces, the normal is the plane's normal vector.
-/// For NURBS and analytic faces, the normal is estimated at the
-/// surface center (u=0.5, v=0.5).
+/// A planar face, or a NURBS face that is a plane, is extruded. A face on a
+/// cylinder or sphere grows to the offset surface by a radial scaling that
+/// carries every edge exactly. A face on a cone or torus does too when each
+/// of its edges is a line or a circle the offset carries to a line or a
+/// circle.
 ///
 /// # Errors
 ///
-/// Returns an error if `thickness` is zero or the extrusion fails.
+/// Returns an error if `thickness` is zero, the offset surface collapses,
+/// the face or its offset reaches a cone's or torus's axis, the face lies on
+/// a curved NURBS surface, or an edge of a cone or torus face is not carried
+/// to a line or circle.
 pub fn thicken(
     topo: &mut Topology,
     face: FaceId,
     thickness: f64,
 ) -> Result<SolidId, crate::OperationsError> {
-    let tol = brepkit_math::tolerance::Tolerance::new();
-
+    let tol = Tolerance::new();
     if tol.approx_eq(thickness, 0.0) {
         return Err(crate::OperationsError::InvalidInput {
             reason: "thickness must be non-zero".into(),
         });
     }
-
     let face_data = topo.face(face)?;
-    let normal = face_normal(face_data.surface())?;
-
-    let (direction, distance) = if thickness > 0.0 {
-        (normal, thickness)
-    } else {
-        (-normal, -thickness)
+    let reversed = face_data.is_reversed();
+    let plane_normal = match face_data.surface() {
+        FaceSurface::Plane { normal, .. } => Some(*normal),
+        FaceSurface::Nurbs(nurbs) => {
+            match brepkit_geometry::convert::recognize_surface(nurbs, tol.linear) {
+                brepkit_geometry::convert::RecognizedSurface::Plane { .. } => {
+                    Some(nurbs.normal(0.5, 0.5).map_err(|e| {
+                        crate::OperationsError::InvalidInput {
+                            reason: format!("NURBS normal computation failed: {e}"),
+                        }
+                    })?)
+                }
+                _ => {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: "thicken does not take a face on a curved NURBS surface".into(),
+                    });
+                }
+            }
+        }
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => None,
     };
-
-    extrude(topo, face, direction, distance)
+    if let Some(normal) = plane_normal {
+        let normal = if reversed { -normal } else { normal };
+        let (direction, distance) = if thickness > 0.0 {
+            (normal, thickness)
+        } else {
+            (-normal, -thickness)
+        };
+        return extrude(topo, face, direction, distance);
+    }
+    thicken_curved(topo, face, thickness)
 }
 
-/// Extract or compute a representative outward normal for any surface type.
-fn face_normal(surface: &FaceSurface) -> Result<Vec3, crate::OperationsError> {
-    match surface {
-        FaceSurface::Plane { normal, .. } => Ok(*normal),
-        FaceSurface::Nurbs(nurbs) => {
-            nurbs
-                .normal(0.5, 0.5)
-                .map_err(|e| crate::OperationsError::InvalidInput {
-                    reason: format!("NURBS normal computation failed: {e}"),
-                })
+/// A boundary edge of the face being thickened, as its wire runs it.
+struct Run {
+    edge: EdgeId,
+    forward: bool,
+}
+
+/// [`thicken`] for a face on a cylinder, cone, sphere or torus.
+#[allow(clippy::too_many_lines)]
+fn thicken_curved(
+    topo: &mut Topology,
+    face: FaceId,
+    thickness: f64,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+    let base = crate::copy::copy_face(topo, face)?;
+    let base_data = topo.face(base)?;
+    let surface = base_data.surface().clone();
+    let reversed = base_data.is_reversed();
+    // The face grows along `grow`, the surface's normal turned to its side,
+    // by `depth`; `along` is `grow` read against the surface's own normal.
+    let along = if reversed == (thickness > 0.0) {
+        -1.0
+    } else {
+        1.0
+    };
+    let depth = thickness.abs();
+    let grow = |p: Point3| -> Vec3 { surface_normal(&surface, p) * along };
+    let offset = offset_surface(&surface, along * depth)?;
+    keep_off_the_axis(topo, base, &surface, along * depth)?;
+    let carry = |p: Point3| p + grow(p) * depth;
+    let affine = affine_carry(&surface, along * depth);
+
+    // The wires as the face runs them about `grow`: stored wires run about
+    // the surface's own normal, so turned when the face grows against it.
+    let wire_ids: Vec<_> = std::iter::once(base_data.outer_wire())
+        .chain(base_data.inner_wires().iter().copied())
+        .collect();
+    let mut loops: Vec<Vec<Run>> = Vec::with_capacity(wire_ids.len());
+    for wid in &wire_ids {
+        let mut runs: Vec<Run> = topo
+            .wire(*wid)?
+            .edges()
+            .iter()
+            .map(|oe| Run {
+                edge: oe.edge(),
+                forward: oe.is_forward(),
+            })
+            .collect();
+        if along < 0.0 {
+            runs.reverse();
+            for r in &mut runs {
+                r.forward = !r.forward;
+            }
         }
-        FaceSurface::Cylinder(cyl) => Ok(cyl.normal(0.0, 0.0)),
-        FaceSurface::Cone(cone) => Ok(cone.normal(0.0, 0.0)),
-        FaceSurface::Sphere(sphere) => Ok(sphere.normal(0.0, 0.0)),
-        FaceSurface::Torus(torus) => Ok(torus.normal(0.0, 0.0)),
+        loops.push(runs);
     }
+    let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+    for r in loops.iter().flatten() {
+        *uses.entry(r.edge).or_default() += 1;
+    }
+
+    // Each vertex and edge carried to the far side, and each vertex's rail.
+    let mut far_vertex: HashMap<VertexId, VertexId> = HashMap::new();
+    let mut far_edge: HashMap<EdgeId, EdgeId> = HashMap::new();
+    let mut rails: HashMap<VertexId, EdgeId> = HashMap::new();
+    for r in loops.iter().flatten() {
+        if far_edge.contains_key(&r.edge) {
+            continue;
+        }
+        let e = topo.edge(r.edge)?;
+        let (vs, ve, curve) = (e.start(), e.end(), e.curve().clone());
+        for v in [vs, ve] {
+            if let std::collections::hash_map::Entry::Vacant(slot) = far_vertex.entry(v) {
+                let p = topo.vertex(v)?.point();
+                slot.insert(topo.add_vertex(Vertex::new(carry(p), tol.linear)));
+            }
+        }
+        let (a, b) = (topo.vertex(vs)?.point(), topo.vertex(ve)?.point());
+        let far_curve =
+            carry_curve(&curve, a, b, &carry, affine.as_deref(), tol).ok_or_else(|| {
+                crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "thicken: a {} edge of a {} face is not carried to a line or circle",
+                        curve.type_tag(),
+                        surface.type_tag()
+                    ),
+                }
+            })?;
+        let far = topo.add_edge(Edge::new(far_vertex[&vs], far_vertex[&ve], far_curve));
+        far_edge.insert(r.edge, far);
+    }
+
+    let mut faces = Vec::new();
+    // The near side faces into the solid, the far side out of it.
+    let near_loops: Vec<Vec<OrientedEdge>> = loops
+        .iter()
+        .map(|runs| {
+            runs.iter()
+                .rev()
+                .map(|r| OrientedEdge::new(r.edge, !r.forward))
+                .collect()
+        })
+        .collect();
+    faces.push(add_face(topo, near_loops, surface.clone(), along < 0.0)?);
+    let far_loops: Vec<Vec<OrientedEdge>> = loops
+        .iter()
+        .map(|runs| {
+            runs.iter()
+                .map(|r| OrientedEdge::new(far_edge[&r.edge], r.forward))
+                .collect()
+        })
+        .collect();
+    faces.push(add_face(topo, far_loops, offset, along > 0.0)?);
+
+    // A side for each edge the face does not cross as a seam.
+    for r in loops.iter().flatten() {
+        if uses[&r.edge] > 1 {
+            continue;
+        }
+        let e = topo.edge(r.edge)?;
+        let (vs, ve, curve) = (e.start(), e.end(), e.curve().clone());
+        let (a, b) = (topo.vertex(vs)?.point(), topo.vertex(ve)?.point());
+        let far = far_edge[&r.edge];
+        let far_curve = topo.edge(far)?.curve().clone();
+        let (fa, fb) = (carry(a), carry(b));
+        // Out of the face: the run's tangent across the growth. The tangent
+        // follows the curve's parameter, which a span stored against its
+        // curve runs down.
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let mid_t = f64::midpoint(t0, t1);
+        let mid = curve.evaluate_with_endpoints(mid_t, a, b);
+        let tangent = curve.tangent_with_endpoints(mid_t, a, b)
+            * if r.forward == (t1 >= t0) { 1.0 } else { -1.0 };
+        let out = tangent.cross(grow(mid));
+        let (from, to) = if r.forward { (vs, ve) } else { (ve, vs) };
+        let side = side_surface(&curve, a, b, vs == ve, &far_curve, fa, fb, mid, out, tol)?;
+        if let SideSurface::Annulus(normal) = side {
+            // Two closed circles in one plane: the larger bounds it.
+            let near = OrientedEdge::new(r.edge, r.forward);
+            let far_run = OrientedEdge::new(far, !r.forward);
+            let (outer, inner) = if circle_radius(&far_curve) > circle_radius(&curve) {
+                (far_run, near)
+            } else {
+                (near, far_run)
+            };
+            let wire = |topo: &mut Topology, oe| -> Result<_, crate::OperationsError> {
+                Ok(topo.add_wire(Wire::new(vec![oe], true)?))
+            };
+            let (ow, iw) = (wire(topo, outer)?, wire(topo, inner)?);
+            faces.push(topo.add_face(Face::new(
+                ow,
+                vec![iw],
+                FaceSurface::Plane {
+                    normal,
+                    d: normal.dot(a - Point3::new(0.0, 0.0, 0.0)),
+                },
+            )));
+            continue;
+        }
+        let mut rail = |topo: &mut Topology, v: VertexId| -> EdgeId {
+            *rails
+                .entry(v)
+                .or_insert_with(|| topo.add_edge(Edge::new(v, far_vertex[&v], EdgeCurve::Line)))
+        };
+        let (rail_to, rail_from) = (rail(topo, to), rail(topo, from));
+        let run = vec![
+            OrientedEdge::new(r.edge, r.forward),
+            OrientedEdge::new(rail_to, true),
+            OrientedEdge::new(far, !r.forward),
+            OrientedEdge::new(rail_from, false),
+        ];
+        let SideSurface::Ruled(surface, outward) = side else {
+            continue;
+        };
+        faces.push(add_face(topo, vec![run], surface, outward)?);
+    }
+
+    // A closed face, every edge of it a seam, has no sides, so its two
+    // copies bound the wall apart: one outside, one round a cavity. Growing
+    // along a sphere's or torus's own normal moves it outward.
+    if let &[near, far] = faces.as_slice() {
+        let (outer, cavity) = if along > 0.0 {
+            (far, near)
+        } else {
+            (near, far)
+        };
+        let outer = topo.add_shell(Shell::new(vec![outer])?);
+        let cavity = topo.add_shell(Shell::new(vec![cavity])?);
+        return Ok(topo.add_solid(Solid::new(outer, vec![cavity])));
+    }
+    let shell = topo.add_shell(Shell::new(faces)?);
+    Ok(topo.add_solid(Solid::new(shell, vec![])))
+}
+
+/// A face whose loops run about its outward normal; when its surface's own
+/// normal points inward it is reversed and its loops stored the other way.
+fn add_face(
+    topo: &mut Topology,
+    loops: Vec<Vec<OrientedEdge>>,
+    surface: FaceSurface,
+    outward: bool,
+) -> Result<FaceId, crate::OperationsError> {
+    let mut wires = Vec::with_capacity(loops.len());
+    for mut edges in loops {
+        if !outward {
+            edges.reverse();
+            edges = edges
+                .into_iter()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+        }
+        wires.push(topo.add_wire(Wire::new(edges, true)?));
+    }
+    let outer = wires.remove(0);
+    Ok(topo.add_face(if outward {
+        Face::new(outer, wires, surface)
+    } else {
+        Face::new_reversed(outer, wires, surface)
+    }))
+}
+
+/// `surface` moved `distance` along its own normal.
+fn offset_surface(
+    surface: &FaceSurface,
+    distance: f64,
+) -> Result<FaceSurface, crate::OperationsError> {
+    use brepkit_math::surfaces::{
+        ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+    };
+    let collapses = |what: &str| crate::OperationsError::InvalidInput {
+        reason: format!("thicken: the {what} collapses at this thickness"),
+    };
+    Ok(match surface {
+        FaceSurface::Cylinder(c) => {
+            let r = c.radius() + distance;
+            if r <= 0.0 {
+                return Err(collapses("cylinder"));
+            }
+            FaceSurface::Cylinder(CylindricalSurface::with_ref_dir(
+                c.origin(),
+                c.axis(),
+                r,
+                c.x_axis(),
+            )?)
+        }
+        FaceSurface::Sphere(s) => {
+            let r = s.radius() + distance;
+            if r <= 0.0 {
+                return Err(collapses("sphere"));
+            }
+            FaceSurface::Sphere(SphericalSurface::with_axis_and_ref_dir(
+                s.center(),
+                r,
+                s.z_axis(),
+                s.x_axis(),
+            )?)
+        }
+        FaceSurface::Torus(t) => {
+            let r = t.minor_radius() + distance;
+            if r <= 0.0 {
+                return Err(collapses("torus"));
+            }
+            FaceSurface::Torus(ToroidalSurface::with_axis_and_ref_dir(
+                t.center(),
+                t.major_radius(),
+                r,
+                t.z_axis(),
+                t.x_axis(),
+            )?)
+        }
+        FaceSurface::Cone(c) => {
+            // The normal leans off the axis by the half angle's complement,
+            // so the apex moves along the axis by `distance / cos`.
+            let apex = c.apex() + c.axis() * (-distance / c.half_angle().cos());
+            FaceSurface::Cone(ConicalSurface::with_ref_dir(
+                apex,
+                c.axis(),
+                c.half_angle(),
+                c.x_axis(),
+            )?)
+        }
+        FaceSurface::Plane { normal, d } => FaceSurface::Plane {
+            normal: *normal,
+            d: d + distance,
+        },
+        FaceSurface::Nurbs(_) => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "thicken does not take a face on a curved NURBS surface".into(),
+            });
+        }
+    })
+}
+
+/// Refuses a thickness at which a cone or torus face, or its image
+/// `distance` along the normals, reaches the surface's axis. On a torus
+/// every ring angle there carries to one point, so the far side pinches or
+/// runs through itself; on a cone the image crosses to the other nappe,
+/// off the offset cone and the sides that should hold it.
+fn keep_off_the_axis(
+    topo: &Topology,
+    face: FaceId,
+    surface: &FaceSurface,
+    distance: f64,
+) -> Result<(), crate::OperationsError> {
+    let (near, far) = match surface {
+        FaceSurface::Torus(t) => {
+            // A point at tube angle v lies R + r cos v from the axis and its
+            // image R + (r + distance) cos v, both rising with cos v. The face
+            // comes nearest its inner equator on its boundary unless it holds
+            // that equator; one no edge reaches lies wholly in the face or out
+            // of it, so one point of it tells which.
+            let inner_equator = t.evaluate(0.0, std::f64::consts::PI);
+            let cos_v = if brepkit_check::classify::face_contains(topo, face, inner_equator)? {
+                -1.0
+            } else {
+                least_on_boundary(topo, face, |p| t.project_point(p).1.cos())?
+            };
+            let (big, small) = (t.major_radius(), t.minor_radius());
+            (
+                small.mul_add(cos_v, big),
+                (small + distance).mul_add(cos_v, big),
+            )
+        }
+        FaceSurface::Cone(c) => {
+            // A point v along a generator from the apex lies v cos a from the
+            // axis and its image v cos a + distance sin a, both rising with
+            // v, so a face the apex is not in comes nearest the axis on its
+            // edges. A face round the apex has no wall of even thickness:
+            // the points `distance` off its tip lie on a sphere about the
+            // apex, not on the offset cone.
+            if turns_about_axis(topo, face, c.apex(), c.axis())?.abs() > 0.5 {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "thicken: a cone face round its apex has no wall of even thickness"
+                        .into(),
+                });
+            }
+            let v = least_on_boundary(topo, face, |p| c.project_point(p).1)?;
+            let (sin, cos) = c.half_angle().sin_cos();
+            (v * cos, v.mul_add(cos, distance * sin))
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Nurbs(_) => return Ok(()),
+    };
+    if near.min(far) <= Tolerance::new().linear {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!(
+                "thicken: the {} wall reaches its axis at this thickness",
+                surface.type_tag()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// The turns a face's wires make together about the line through `origin`
+/// along `axis`: none for a face beside the axis or a band round it, whose
+/// rims run round it opposite ways, and one for a face round a point of it.
+fn turns_about_axis(
+    topo: &Topology,
+    face: FaceId,
+    origin: Point3,
+    axis: Vec3,
+) -> Result<f64, crate::OperationsError> {
+    const SAMPLES: u32 = 32;
+    let frame = brepkit_math::frame::Frame3::from_normal(origin, axis)?;
+    let angle = |p: Point3| {
+        let d = p - origin;
+        d.dot(frame.y).atan2(d.dot(frame.x))
+    };
+    let face_data = topo.face(face)?;
+    let mut total = 0.0;
+    for wid in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+            let at = |k: u32| {
+                angle(curve.evaluate_with_endpoints(
+                    (to - from).mul_add(f64::from(k) / f64::from(SAMPLES), from),
+                    a,
+                    b,
+                ))
+            };
+            let mut previous = at(0);
+            for k in 1..=SAMPLES {
+                let next = at(k);
+                total += (next - previous + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI;
+                previous = next;
+            }
+        }
+    }
+    Ok(total / std::f64::consts::TAU)
+}
+
+/// The least of `f` along the edges of `face`, sampled along each and
+/// refined about each least sample: a rim's least can sit between samples.
+fn least_on_boundary(
+    topo: &Topology,
+    face: FaceId,
+    f: impl Fn(Point3) -> f64,
+) -> Result<f64, crate::OperationsError> {
+    const SAMPLES: usize = 32;
+    let face_data = topo.face(face)?;
+    let mut least = f64::INFINITY;
+    for wid in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            #[allow(clippy::cast_precision_loss)]
+            let param = |k: usize| t0 + (t1 - t0) * (k as f64 / SAMPLES as f64);
+            let at = |t: f64| f(curve.evaluate_with_endpoints(t, a, b));
+            let values: Vec<f64> = (0..=SAMPLES).map(|k| at(param(k))).collect();
+            for (k, &value) in values.iter().enumerate() {
+                least = least.min(value);
+                let (before, after) = (k.saturating_sub(1), (k + 1).min(SAMPLES));
+                let (lo, hi) = (
+                    values[before].min(values[after]),
+                    values[before].max(values[after]),
+                );
+                if value <= lo && value < hi {
+                    least = least.min(golden_min(&at, param(before), param(after)));
+                }
+            }
+        }
+    }
+    Ok(least)
+}
+
+/// The least of `f` on `[a, b]`, where it has a single dip.
+fn golden_min(f: &impl Fn(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
+    let r = (5.0_f64.sqrt() - 1.0) / 2.0;
+    let (mut c, mut d) = (b - r * (b - a), a + r * (b - a));
+    let (mut fc, mut fd) = (f(c), f(d));
+    for _ in 0..64 {
+        if fc < fd {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - r * (b - a);
+            fc = f(c);
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + r * (b - a);
+            fd = f(d);
+        }
+    }
+    fc.min(fd)
+}
+
+/// The unit normal of `surface` at `p`, a point on it.
+fn surface_normal(surface: &FaceSurface, p: Point3) -> Vec3 {
+    surface
+        .project_point(p)
+        .map_or(Vec3::new(0.0, 0.0, 1.0), |(u, v)| surface.normal(u, v))
+}
+
+/// The offset of a cylinder or sphere by `distance` along its normal as an
+/// affine map, which carries any curve on it: a scaling about the axis or
+/// centre.
+fn affine_carry(surface: &FaceSurface, distance: f64) -> Option<Box<dyn Fn(Point3) -> Point3>> {
+    match surface {
+        FaceSurface::Cylinder(c) => {
+            let (o, a, k) = (c.origin(), c.axis(), (c.radius() + distance) / c.radius());
+            Some(Box::new(move |p: Point3| {
+                let d = p - o;
+                let up = a * a.dot(d);
+                o + up + (d - up) * k
+            }))
+        }
+        FaceSurface::Sphere(s) => {
+            let (c, k) = (s.center(), (s.radius() + distance) / s.radius());
+            Some(Box::new(move |p: Point3| c + (p - c) * k))
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Cone(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// `curve` from `a` to `b` carried along the normals by `carry`: a line
+/// stays a line and a circle a circle when the carried points say so, and
+/// any curve is carried exactly by `affine`. `None` when neither holds.
+fn carry_curve(
+    curve: &EdgeCurve,
+    a: Point3,
+    b: Point3,
+    carry: &dyn Fn(Point3) -> Point3,
+    affine: Option<&dyn Fn(Point3) -> Point3>,
+    tol: Tolerance,
+) -> Option<EdgeCurve> {
+    let close = 10.0 * tol.linear;
+    match curve {
+        EdgeCurve::Line if affine.is_some() => Some(EdgeCurve::Line),
+        EdgeCurve::Line => {
+            let (fa, fb) = (carry(a), carry(b));
+            let fm = carry(a + (b - a) * 0.5);
+            let chord = fb - fa;
+            let off =
+                (fm - fa) - chord * ((fm - fa).dot(chord) / chord.length_squared().max(1e-300));
+            (off.length() <= close).then_some(EdgeCurve::Line)
+        }
+        EdgeCurve::Circle(c) => {
+            let at = |k: f64| carry(c.evaluate(k * std::f64::consts::FRAC_PI_3));
+            let (p0, p2, p4) = (at(0.0), at(2.0), at(4.0));
+            let (x, y) = (p0 - p4, p2 - p4);
+            let n = x.cross(y);
+            let nn = n.length_squared();
+            if nn <= 0.0 {
+                return None;
+            }
+            let centre =
+                p4 + (y * x.length_squared() - x * y.length_squared()).cross(n) * (0.5 / nn);
+            let radius = (p0 - centre).length();
+            let fits = [1.0, 3.0, 5.0]
+                .into_iter()
+                .all(|k| ((at(k) - centre).length() - radius).abs() <= close);
+            if !fits {
+                return None;
+            }
+            Circle3D::new(centre, c.normal(), radius)
+                .ok()
+                .map(EdgeCurve::Circle)
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+            let affine = affine?;
+            let nurbs = as_nurbs(curve, a, b)?;
+            let points = nurbs.control_points().iter().map(|&p| affine(p)).collect();
+            NurbsCurve::new(
+                nurbs.degree(),
+                nurbs.knots().to_vec(),
+                points,
+                nurbs.weights().to_vec(),
+            )
+            .ok()
+            .map(EdgeCurve::NurbsCurve)
+        }
+    }
+}
+
+/// `curve` from `a` to `b` as a NURBS curve over the edge's span.
+fn as_nurbs(curve: &EdgeCurve, a: Point3, b: Point3) -> Option<NurbsCurve> {
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    match curve {
+        EdgeCurve::Line => {
+            NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![1.0; 2]).ok()
+        }
+        EdgeCurve::Circle(c) => brepkit_geometry::convert::circle_to_nurbs(c, t0, t1).ok(),
+        EdgeCurve::Ellipse(e) => brepkit_geometry::convert::ellipse_to_nurbs(e, t0, t1).ok(),
+        EdgeCurve::NurbsCurve(n) => Some(n.clone()),
+    }
+}
+
+fn circle_radius(curve: &EdgeCurve) -> f64 {
+    match curve {
+        EdgeCurve::Circle(c) => c.radius(),
+        EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => 0.0,
+    }
+}
+
+/// The surface a side sweeps between an edge and its far image.
+enum SideSurface {
+    /// A plane annulus between two closed circles, with its outward normal.
+    Annulus(Vec3),
+    /// A surface, and whether its own normal points out of the solid.
+    Ruled(FaceSurface, bool),
+}
+
+/// The side swept by the normals from `curve` (from `a` to `b`, one vertex
+/// when `closed`) to `far_curve` (from `fa` to `fb`), facing `out` at `mid`:
+/// a plane between lines or circles in one plane, an annulus when those
+/// circles are closed, a cylinder or cone between coaxial circles, else the
+/// ruled NURBS between the two curves.
+#[allow(clippy::too_many_arguments)]
+fn side_surface(
+    curve: &EdgeCurve,
+    a: Point3,
+    b: Point3,
+    closed: bool,
+    far_curve: &EdgeCurve,
+    fa: Point3,
+    fb: Point3,
+    mid: Point3,
+    out: Vec3,
+    tol: Tolerance,
+) -> Result<SideSurface, crate::OperationsError> {
+    let flat = |normal: Vec3| -> FaceSurface {
+        FaceSurface::Plane {
+            normal,
+            d: normal.dot(mid - Point3::new(0.0, 0.0, 0.0)),
+        }
+    };
+    let out = out.normalize()?;
+    match (curve, far_curve) {
+        (EdgeCurve::Line, EdgeCurve::Line) => {
+            let n = (b - a).cross(fa - a);
+            if let Ok(n) = n.normalize()
+                && n.dot(fb - a).abs() <= 10.0 * tol.linear
+            {
+                let n = if n.dot(out) < 0.0 { -n } else { n };
+                return Ok(SideSurface::Ruled(flat(n), true));
+            }
+        }
+        (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
+            let n = c0.normal().normalize()?;
+            let lateral = (c1.center() - c0.center()) - n * (c1.center() - c0.center()).dot(n);
+            let coplanar = (c1.center() - c0.center()).dot(n).abs() <= tol.linear
+                && lateral.length() <= tol.linear
+                && c1.normal().normalize()?.dot(n).abs() >= 1.0 - tol.angular;
+            if coplanar {
+                let n = if n.dot(out) < 0.0 { -n } else { n };
+                if closed {
+                    return Ok(SideSurface::Annulus(n));
+                }
+                return Ok(SideSurface::Ruled(flat(n), true));
+            }
+            // The band's cone opens from its apex toward the band when the
+            // circles' normal runs from the near one to the far.
+            let toward = if (c1.center() - c0.center()).dot(n) < 0.0 {
+                -n
+            } else {
+                n
+            };
+            let near = Circle3D::new(c0.center(), toward, c0.radius())?;
+            let far = Circle3D::new(c1.center(), toward, c1.radius())?;
+            if let Some(surface) = crate::loft::coaxial_corner_surface(&near, &far, tol) {
+                let outward = surface
+                    .project_point(mid)
+                    .is_some_and(|(u, v)| surface.normal(u, v).dot(out) > 0.0);
+                return Ok(SideSurface::Ruled(surface, outward));
+            }
+        }
+        _ => {}
+    }
+    let (near, far) = (as_nurbs(curve, a, b), as_nurbs(far_curve, fa, fb));
+    let ruled = near.zip(far).and_then(|(near, far)| {
+        (near.degree() == far.degree() && near.control_points().len() == far.control_points().len())
+            .then(|| {
+                NurbsSurface::new(
+                    1,
+                    near.degree(),
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    near.knots().to_vec(),
+                    vec![
+                        near.control_points().to_vec(),
+                        far.control_points().to_vec(),
+                    ],
+                    vec![near.weights().to_vec(), far.weights().to_vec()],
+                )
+                .ok()
+            })
+            .flatten()
+    });
+    let Some(ruled) = ruled else {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "thicken: no ruled surface between an edge and its image".into(),
+        });
+    };
+    // The ruled surface spans each curve's whole knot span, which can run
+    // past the edge, so its normal is read where the edge's middle lies.
+    let at_mid =
+        brepkit_math::nurbs::projection::project_point_to_surface(&ruled, mid, tol.linear)?;
+    let outward = ruled.normal(at_mid.u, at_mid.v)?.dot(out) > 0.0;
+    Ok(SideSurface::Ruled(FaceSurface::Nurbs(ruled), outward))
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use brepkit_math::tolerance::Tolerance;
-    use brepkit_topology::Topology;
     use brepkit_topology::test_utils::make_unit_square_face;
 
     use super::*;
+
+    /// The solid's meshes at a coarse and a fine deflection are closed and
+    /// manifold by their indices, and again with their vertices welded by
+    /// position: every edge between welded vertices bounds two triangles.
+    fn assert_meshes_closed(topo: &Topology, solid: SolidId, label: &str) {
+        for deflection in [0.1, 0.01] {
+            let mesh = crate::tessellate::tessellate_solid(topo, solid, deflection).unwrap();
+            let by_index = (
+                crate::tessellate::boundary_edge_count(&mesh),
+                crate::tessellate::non_manifold_edge_count(&mesh),
+            );
+            let mut welded: HashMap<(i64, i64, i64), usize> = HashMap::new();
+            #[allow(clippy::cast_possible_truncation)]
+            let at: Vec<usize> = mesh
+                .positions
+                .iter()
+                .map(|p| {
+                    let key = [p.x(), p.y(), p.z()].map(|c| (c * 1e6).round() as i64);
+                    let next = welded.len();
+                    *welded.entry((key[0], key[1], key[2])).or_insert(next)
+                })
+                .collect();
+            let mut uses: HashMap<(usize, usize), usize> = HashMap::new();
+            for t in mesh.indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| at[t[k] as usize]);
+                for (p, q) in [(a, b), (b, c), (c, a)] {
+                    *uses.entry((p.min(q), p.max(q))).or_default() += 1;
+                }
+            }
+            let by_position = uses.values().filter(|&&n| n != 2).count();
+            assert_eq!(
+                (by_index, by_position),
+                ((0, 0), 0),
+                "{label} at {deflection}: boundary and non-manifold edges, then welded edges \
+                 off two triangles"
+            );
+        }
+    }
 
     #[test]
     fn thicken_positive() {
@@ -103,6 +845,532 @@ mod tests {
             tol.approx_eq(vol, 1.5),
             "1×1 face thickened by -1.5 should have volume ~1.5, got {vol}"
         );
+    }
+
+    /// The side of a cylinder of radius 10 and height 20, thickened by 2,
+    /// is a tube wall of radii 10 and 12 holding π (12² − 10²) 20: its own
+    /// face, the offset cylinder and the two annuli between their rims.
+    /// Thickened by -2, the wall grows inward to radius 8.
+    #[test]
+    fn thicken_a_cylinders_side_into_a_wall() {
+        use std::f64::consts::PI;
+        for (thickness, inner, outer) in [(2.0, 10.0, 12.0), (-2.0, 8.0, 10.0)] {
+            let mut topo = Topology::new();
+            let cylinder = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+            let side = brepkit_topology::explorer::solid_faces(&topo, cylinder)
+                .unwrap()
+                .into_iter()
+                .find(|&f| !topo.face(f).unwrap().surface().is_planar())
+                .unwrap();
+            let wall = thicken(&mut topo, side, thickness).unwrap();
+            let faces = brepkit_topology::explorer::solid_faces(&topo, wall).unwrap();
+            let kinds: Vec<_> = faces
+                .iter()
+                .map(|&f| topo.face(f).unwrap().surface().type_tag())
+                .collect();
+            assert_eq!(kinds.len(), 4, "{kinds:?}");
+            let report = crate::validate::validate_solid(&topo, wall).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("cylinder {thickness}"));
+            let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+            let exact = PI * (outer * outer - inner * inner) * 20.0;
+            assert!(
+                (volume - exact).abs() < 1e-6 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+            let b = crate::measure::solid_bounding_box(&topo, wall).unwrap();
+            assert!((b.max.x() - outer).abs() < 1e-6 && (b.min.y() + outer).abs() < 1e-6);
+        }
+    }
+
+    /// A quarter of a cylinder of radius 10 and height 20 about an axis
+    /// through (3, -4, 5), its straight edge at angle 0 a NURBS line stored
+    /// from top to bottom over control points running up. The side
+    /// on that edge lies off the origin, where facing into the wall would
+    /// change the volume: thickened by 1 or -1 it holds a quarter of
+    /// π (11² − 10²) 20 or π (10² − 9²) 20.
+    #[test]
+    fn thicken_a_patch_whose_edge_runs_against_its_curve() {
+        use std::f64::consts::PI;
+        let p = |x: f64, y: f64, z: f64| Point3::new(x + 3.0, y - 4.0, z + 5.0);
+        for (thickness, inner, outer) in [(1.0, 10.0, 11.0), (-1.0, 9.0, 10.0)] {
+            let mut topo = Topology::new();
+            let (a, b, c, d) = (
+                p(10.0, 0.0, 0.0),
+                p(0.0, 10.0, 0.0),
+                p(0.0, 10.0, 20.0),
+                p(10.0, 0.0, 20.0),
+            );
+            let [va, vb, vc, vd] = [a, b, c, d].map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+            let z = Vec3::new(0.0, 0.0, 1.0);
+            let bottom = Circle3D::new(p(0.0, 0.0, 0.0), z, 10.0).unwrap();
+            let top = Circle3D::new(p(0.0, 0.0, 20.0), z, 10.0).unwrap();
+            let up =
+                NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, d], vec![1.0; 2]).unwrap();
+            let runs = [
+                (Edge::new(va, vb, EdgeCurve::Circle(bottom)), true),
+                (Edge::new(vb, vc, EdgeCurve::Line), true),
+                (Edge::new(vd, vc, EdgeCurve::Circle(top)), false),
+                (Edge::new(vd, va, EdgeCurve::NurbsCurve(up)), true),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(topo.add_edge(e), forward));
+            let w = topo.add_wire(Wire::new(runs.to_vec(), true).unwrap());
+            let cylinder =
+                brepkit_math::surfaces::CylindricalSurface::new(p(0.0, 0.0, 0.0), z, 10.0).unwrap();
+            let face = topo.add_face(Face::new(w, vec![], FaceSurface::Cylinder(cylinder)));
+            let wall = thicken(&mut topo, face, thickness).unwrap();
+            let report = crate::validate::validate_solid(&topo, wall).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("cylinder patch {thickness}"));
+            let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+            let exact = PI * (outer * outer - inner * inner) * 5.0;
+            assert!(
+                (volume - exact).abs() < 1e-9 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+        }
+    }
+
+    /// A sector of a cylinder of radius 10 and height 20 spanning 2π − 5e-9,
+    /// so its rims' ends lie 5e-8 apart, inside the linear tolerance, yet on
+    /// two vertices. Its rims are open arcs: each side on one is bounded by
+    /// the arc, its image and the rails the generators' sides share, so
+    /// every edge bounds two faces. Thickened by 1 or -1 it holds
+    /// (2π − 5e-9)/2 (11² − 10²) 20 or (2π − 5e-9)/2 (10² − 9²) 20. The
+    /// validator measures an open edge by its chord, so it flags the four
+    /// rims as it does the face's own, and nothing else.
+    #[test]
+    fn thicken_a_cylinder_sector_just_short_of_a_full_turn() {
+        let span = std::f64::consts::TAU - 5e-9;
+        for (thickness, inner, outer) in [(1.0, 10.0, 11.0), (-1.0, 9.0, 10.0)] {
+            let mut topo = Topology::new();
+            let z = Vec3::new(0.0, 0.0, 1.0);
+            let bottom = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 10.0).unwrap();
+            let top = Circle3D::new(Point3::new(0.0, 0.0, 20.0), z, 10.0).unwrap();
+            let [va, vb, vc, vd] = [
+                bottom.evaluate(0.0),
+                bottom.evaluate(span),
+                top.evaluate(span),
+                top.evaluate(0.0),
+            ]
+            .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+            let runs = [
+                (Edge::new(va, vb, EdgeCurve::Circle(bottom)), true),
+                (Edge::new(vb, vc, EdgeCurve::Line), true),
+                (Edge::new(vd, vc, EdgeCurve::Circle(top)), false),
+                (Edge::new(vd, va, EdgeCurve::Line), true),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(topo.add_edge(e), forward));
+            let w = topo.add_wire(Wire::new(runs.to_vec(), true).unwrap());
+            let cylinder = brepkit_math::surfaces::CylindricalSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                z,
+                10.0,
+            )
+            .unwrap();
+            let face = topo.add_face(Face::new(w, vec![], FaceSurface::Cylinder(cylinder)));
+            let wall = thicken(&mut topo, face, thickness).unwrap();
+            let faces = brepkit_topology::explorer::solid_faces(&topo, wall).unwrap();
+            assert_eq!(faces.len(), 6, "{thickness}");
+            let mut uses: HashMap<EdgeId, usize> = HashMap::new();
+            for &f in &faces {
+                let face = topo.face(f).unwrap();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        *uses.entry(oe.edge()).or_default() += 1;
+                    }
+                }
+            }
+            assert!(uses.values().all(|&n| n == 2), "{thickness}: {uses:?}");
+            let report = crate::validate::validate_solid(&topo, wall).unwrap();
+            let rims = report
+                .issues
+                .iter()
+                .filter(|i| i.description.contains("near-zero length"))
+                .count();
+            assert!(
+                rims == 4 && report.issues.len() == 4,
+                "{thickness}: {:?}",
+                report.issues
+            );
+            let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+            let exact = span / 2.0 * (outer * outer - inner * inner) * 20.0;
+            assert!(
+                (volume - exact).abs() < 1e-6 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+        }
+    }
+
+    /// The side of a frustum of radii 10 and 5 and height 12 (slant 13),
+    /// thickened by 1 or -1, is a wall whose cross-section, 13 by 1, turns
+    /// about the axis with its centre at radius 7.5 ± 12/26: by Pappus,
+    /// 2π (97.5 ± 6). Its rims carry to circles, joined by conical bands.
+    #[test]
+    fn thicken_a_frustums_side_into_a_wall() {
+        use std::f64::consts::PI;
+        for (thickness, exact) in [(1.0, 2.0 * PI * 103.5), (-1.0, 2.0 * PI * 91.5)] {
+            let mut topo = Topology::new();
+            let cone = crate::primitives::make_cone(&mut topo, 10.0, 5.0, 12.0).unwrap();
+            let side = brepkit_topology::explorer::solid_faces(&topo, cone)
+                .unwrap()
+                .into_iter()
+                .find(|&f| !topo.face(f).unwrap().surface().is_planar())
+                .unwrap();
+            let wall = thicken(&mut topo, side, thickness).unwrap();
+            let faces = brepkit_topology::explorer::solid_faces(&topo, wall).unwrap();
+            assert_eq!(faces.len(), 4);
+            let report = crate::validate::validate_solid(&topo, wall).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("frustum {thickness}"));
+            let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+            assert!(
+                (volume - exact).abs() < 1e-4 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+        }
+    }
+
+    /// A cone's face from its apex down to a base circle of radius 10, the
+    /// circle its only edge: thickened either way it is refused, as the
+    /// points one unit off its tip lie on a sphere about the apex.
+    #[test]
+    fn thicken_refuses_a_cone_face_round_its_apex() {
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let rim =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+        for forward in [true, false] {
+            let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap());
+            let face = topo.add_face(Face::new(w, vec![], FaceSurface::Cone(cone.clone())));
+            for distance in [1.0, -1.0] {
+                assert!(
+                    thicken(&mut topo, face, distance).is_err(),
+                    "forward {forward}, distance {distance}"
+                );
+            }
+        }
+    }
+
+    /// The frustum's side leans 12/13 of a unit off the axis per unit along
+    /// its normal, so thickened by t < 0 its rim of radius 5 is carried to
+    /// 5 + 12t/13. At -5 that is 5/13, a wall whose 13 by 5 cross-section
+    /// turns about the axis with its centre at 7.5 − 30/13: 2π 337.5. At
+    /// -65/12 the rim reaches the axis and at -6 it crosses to -7/13. A
+    /// cylinder or sphere of radius 10 thinned by 10 is refused as well.
+    #[test]
+    fn thicken_refuses_a_cone_wall_crossing_its_axis() {
+        let curved = |topo: &mut Topology, solid: SolidId| {
+            brepkit_topology::explorer::solid_faces(topo, solid)
+                .unwrap()
+                .into_iter()
+                .find(|&f| !topo.face(f).unwrap().surface().is_planar())
+                .unwrap()
+        };
+        let frustum = |topo: &mut Topology| {
+            let cone = crate::primitives::make_cone(topo, 10.0, 5.0, 12.0).unwrap();
+            curved(topo, cone)
+        };
+        let mut topo = Topology::new();
+        let side = frustum(&mut topo);
+        let wall = thicken(&mut topo, side, -5.0).unwrap();
+        let report = crate::validate::validate_solid(&topo, wall).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, wall, "frustum -5");
+        let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+        let exact = 2.0 * std::f64::consts::PI * 337.5;
+        assert!((volume - exact).abs() < 1e-6 * exact, "{volume} of {exact}");
+        for thickness in [-65.0 / 12.0, -6.0] {
+            let mut topo = Topology::new();
+            let side = frustum(&mut topo);
+            assert!(thicken(&mut topo, side, thickness).is_err(), "{thickness}");
+        }
+
+        let mut topo = Topology::new();
+        let cylinder = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+        let side = curved(&mut topo, cylinder);
+        assert!(thicken(&mut topo, side, -10.0).is_err());
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let half = curved(&mut topo, ball);
+        assert!(thicken(&mut topo, half, -10.0).is_err());
+    }
+
+    /// The torus face of a circle of radius 3 revolved a quarter turn at
+    /// radius 20: a bend covering the whole tube round.
+    fn quarter_bend(topo: &mut Topology) -> FaceId {
+        let c = Circle3D::new(Point3::new(0.0, 0.0, 30.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let v = topo.add_vertex(Vertex::new(c.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(c)));
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let disc = brepkit_topology::builder::make_face_from_wire(topo, w).unwrap();
+        let bend = crate::revolve::revolve(
+            topo,
+            disc,
+            Point3::new(20.0, 0.0, 30.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+        brepkit_topology::explorer::solid_faces(topo, bend)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
+            .unwrap()
+    }
+
+    /// The bend's torus face, thickened by 1, is a quarter of a tube wall
+    /// of radii 3 and 4: 7π swept 10π along, 70π². Its end circles carry to
+    /// concentric circles, so the wall's ends are annuli.
+    #[test]
+    fn thicken_a_bends_torus_face_into_a_wall() {
+        let mut topo = Topology::new();
+        let torus = quarter_bend(&mut topo);
+        let wall = thicken(&mut topo, torus, 1.0).unwrap();
+        assert_eq!(
+            brepkit_topology::explorer::solid_faces(&topo, wall)
+                .unwrap()
+                .len(),
+            4
+        );
+        let report = crate::validate::validate_solid(&topo, wall).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, wall, "bend 1");
+        let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+        let exact = 70.0 * std::f64::consts::PI * std::f64::consts::PI;
+        assert!((volume - exact).abs() < 1e-4 * exact, "{volume} of {exact}");
+    }
+
+    /// Thickened by t, a torus face of radii 20 and 3 covering the whole
+    /// tube round grows to minor radius 3 + t, whose inner equator lies
+    /// 17 − t from the axis. At 16 the bend is a quarter wall of radii 3
+    /// and 19, 3520π²; at 17 its far side pinches on the axis and at 18 runs
+    /// through itself. A whole torus's seams are lines of no length at one
+    /// point of its outer equator, so only the face itself reaches its inner
+    /// equator; it is refused at 18 too.
+    #[test]
+    fn thicken_refuses_a_torus_wall_reaching_its_axis() {
+        use std::f64::consts::PI;
+        let mut topo = Topology::new();
+        let bend = quarter_bend(&mut topo);
+        let wall = thicken(&mut topo, bend, 16.0).unwrap();
+        let report = crate::validate::validate_solid(&topo, wall).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, wall, "bend 16");
+        let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+        let exact = 3520.0 * PI * PI;
+        assert!((volume - exact).abs() < 1e-4 * exact, "{volume} of {exact}");
+        for thickness in [17.0, 18.0] {
+            let mut topo = Topology::new();
+            let bend = quarter_bend(&mut topo);
+            assert!(thicken(&mut topo, bend, thickness).is_err(), "{thickness}");
+        }
+
+        let whole = |topo: &mut Topology| {
+            let torus = crate::primitives::make_torus(topo, 20.0, 3.0, 16).unwrap();
+            brepkit_topology::explorer::solid_faces(topo, torus).unwrap()[0]
+        };
+        let mut topo = Topology::new();
+        let face = whole(&mut topo);
+        let ring = thicken(&mut topo, face, 16.0).unwrap();
+        let volume = crate::measure::solid_volume(&topo, ring, 1e-3).unwrap();
+        let exact = 2.0 * PI * PI * 20.0 * (19.0 * 19.0 - 9.0);
+        assert!((volume - exact).abs() < 1e-6 * exact, "{volume} of {exact}");
+        let mut topo = Topology::new();
+        let face = whole(&mut topo);
+        assert!(thicken(&mut topo, face, 18.0).is_err());
+    }
+
+    /// A whole torus of radii 20 and 3 is one face, every edge a seam, so
+    /// thickened by 1 it is a ring whose tube, of radius 4, holds a cavity
+    /// of radius 3 in a shell of its own: 2π² 20 (4² − 3²). Thickened by -1
+    /// the torus itself is outermost, round a cavity of radius 2.
+    #[test]
+    fn thicken_a_whole_torus_into_a_hollow_ring() {
+        for (thickness, outer, inner) in [(1.0, 4.0, 3.0), (-1.0, 3.0, 2.0)] {
+            let mut topo = Topology::new();
+            let torus = crate::primitives::make_torus(&mut topo, 20.0, 3.0, 16).unwrap();
+            let face = brepkit_topology::explorer::solid_faces(&topo, torus).unwrap()[0];
+            let ring = thicken(&mut topo, face, thickness).unwrap();
+            let solid = topo.solid(ring).unwrap();
+            assert_eq!(solid.inner_shells().len(), 1, "{thickness}");
+            let minor = |shell| {
+                let faces = topo.shell(shell).unwrap().faces();
+                assert_eq!(faces.len(), 1, "{thickness}");
+                let face = topo.face(faces[0]).unwrap();
+                let radius = match face.surface() {
+                    FaceSurface::Torus(t) => t.minor_radius(),
+                    _ => f64::NAN,
+                };
+                (radius, face.is_reversed())
+            };
+            assert_eq!(minor(solid.outer_shell()), (outer, false), "{thickness}");
+            assert_eq!(minor(solid.inner_shells()[0]), (inner, true), "{thickness}");
+            let report = crate::validate::validate_solid(&topo, ring).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, ring, &format!("ring {thickness}"));
+            let volume = crate::measure::solid_volume(&topo, ring, 1e-3).unwrap();
+            let exact = 2.0 * std::f64::consts::PI.powi(2) * 20.0 * (outer * outer - inner * inner);
+            assert!(
+                (volume - exact).abs() < 1e-6 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+        }
+    }
+
+    /// A ball's upper half, thickened by 1, is a hemispherical shell of
+    /// radii 10 and 11 holding about 2/3 π (11³ − 10³).
+    #[test]
+    fn thicken_a_hemisphere_into_a_shell() {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let top = brepkit_topology::explorer::solid_faces(&topo, ball)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                let face = topo.face(f).unwrap();
+                let FaceSurface::Sphere(s) = face.surface() else {
+                    return false;
+                };
+                let p = s.evaluate(0.3, 1.0);
+                let n = face.surface().normal(0.3, 1.0);
+                let n = if face.is_reversed() { -n } else { n };
+                p.z() > 0.0 && n.z() > 0.0
+            })
+            .unwrap();
+        let shell = thicken(&mut topo, top, 1.0).unwrap();
+        let report = crate::validate::validate_solid(&topo, shell).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, shell, "hemisphere 1");
+        let volume = crate::measure::solid_volume(&topo, shell, 1e-3).unwrap();
+        let exact = 2.0 / 3.0 * std::f64::consts::PI * (1331.0 - 1000.0);
+        assert!((volume - exact).abs() < 1e-2 * exact, "{volume} of {exact}");
+    }
+
+    /// A patch of a ball of radius 10 about (3, -4, 5) between polar angles
+    /// π/6 and π/3 and azimuths 0 and π/2, its upper edge a piece of a NURBS
+    /// arc from azimuth -0.05π to 1.9π. The arc's parametric middle, at
+    /// 0.925π, lies far round from the edge, where the side's ruled surface
+    /// faces another way. Thickened by 1 or -1 the patch holds a third of
+    /// r₁³ − r₀³ per unit of its solid angle, π/2 (cos π/6 − cos π/3).
+    #[test]
+    fn thicken_a_patch_whose_edge_is_a_piece_of_a_longer_curve() {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_6, PI};
+        let centre = Point3::new(3.0, -4.0, 5.0);
+        let at = |phi: f64, theta: f64| {
+            centre
+                + Vec3::new(
+                    10.0 * phi.sin() * theta.cos(),
+                    10.0 * phi.sin() * theta.sin(),
+                    10.0 * phi.cos(),
+                )
+        };
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let latitude =
+            |phi: f64| Circle3D::new(centre + z * (10.0 * phi.cos()), z, 10.0 * phi.sin()).unwrap();
+        let meridian = |normal: Vec3| Circle3D::new(centre, normal, 10.0).unwrap();
+        for (thickness, inner, outer) in [(1.0, 10.0, 11.0), (-1.0, 9.0, 10.0)] {
+            let mut topo = Topology::new();
+            let [v0, v1, v2, v3] = [
+                at(FRAC_PI_3, 0.0),
+                at(FRAC_PI_3, FRAC_PI_2),
+                at(FRAC_PI_6, FRAC_PI_2),
+                at(FRAC_PI_6, 0.0),
+            ]
+            .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+            let upper = latitude(FRAC_PI_6);
+            let from = upper.project(at(FRAC_PI_6, -0.05 * PI));
+            let longer =
+                brepkit_geometry::convert::circle_to_nurbs(&upper, from, from + 1.95 * PI).unwrap();
+            let runs = [
+                (
+                    Edge::new(v0, v1, EdgeCurve::Circle(latitude(FRAC_PI_3))),
+                    true,
+                ),
+                (
+                    Edge::new(
+                        v1,
+                        v2,
+                        EdgeCurve::Circle(meridian(Vec3::new(1.0, 0.0, 0.0))),
+                    ),
+                    true,
+                ),
+                (Edge::new(v3, v2, EdgeCurve::NurbsCurve(longer)), false),
+                (
+                    Edge::new(
+                        v3,
+                        v0,
+                        EdgeCurve::Circle(meridian(Vec3::new(0.0, 1.0, 0.0))),
+                    ),
+                    true,
+                ),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(topo.add_edge(e), forward));
+            let w = topo.add_wire(Wire::new(runs.to_vec(), true).unwrap());
+            let ball = brepkit_math::surfaces::SphericalSurface::new(centre, 10.0).unwrap();
+            let face = topo.add_face(Face::new(w, vec![], FaceSurface::Sphere(ball)));
+            let wall = thicken(&mut topo, face, thickness).unwrap();
+            let report = crate::validate::validate_solid(&topo, wall).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("sphere patch {thickness}"));
+            let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+            let exact = (outer * outer * outer - inner * inner * inner) / 3.0
+                * FRAC_PI_2
+                * (FRAC_PI_6.cos() - FRAC_PI_3.cos());
+            assert!(
+                (volume - exact).abs() < 1e-4 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+        }
+    }
+
+    /// A face on a twisted NURBS patch is refused rather than extruded
+    /// along one normal.
+    #[test]
+    fn thicken_refuses_a_curved_nurbs_face() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let p = Point3::new;
+        let corners = [
+            p(0.0, 0.0, 0.0),
+            p(1.0, 0.0, 0.0),
+            p(1.0, 1.0, 1.0),
+            p(0.0, 1.0, 0.0),
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![corners[0], corners[3]], vec![corners[1], corners[2]]],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let vs = corners.map(|c| topo.add_vertex(Vertex::new(c, 1e-7)));
+        let edges = (0..4)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(vs[i], vs[(i + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let w = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(w, vec![], FaceSurface::Nurbs(surface)));
+        assert!(thicken(&mut topo, face, 1.0).is_err());
     }
 
     #[test]
@@ -167,5 +1435,93 @@ mod tests {
             vol > 0.0,
             "thickened NURBS face should have positive volume, got {vol}"
         );
+    }
+
+    /// A flat bilinear NURBS square of side 1e-4, whose control points span
+    /// areas of 1e-8, below the linear tolerance, is still a plane: thickened
+    /// by 1e-4 it is extruded into a cube of 1e-12 standing on the square.
+    #[test]
+    fn thicken_a_tiny_planar_nurbs_patch() {
+        let side = 1e-4;
+        let mut topo = Topology::new();
+        let corners = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(side, 0.0, 0.0),
+            Point3::new(side, side, 0.0),
+            Point3::new(0.0, side, 0.0),
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![corners[0], corners[3]], vec![corners[1], corners[2]]],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let vs = corners.map(|c| topo.add_vertex(Vertex::new(c, 1e-9)));
+        let edges = (0..4)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(vs[i], vs[(i + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let w = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(w, vec![], FaceSurface::Nurbs(surface)));
+        let solid = thicken(&mut topo, face, side).unwrap();
+        let report = crate::validate::validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = crate::measure::solid_volume(&topo, solid, 1e-6).unwrap();
+        let exact = side * side * side;
+        assert!((volume - exact).abs() < 1e-6 * exact, "{volume} of {exact}");
+        let b = crate::measure::solid_bounding_box(&topo, solid).unwrap();
+        assert!(
+            b.min.z().abs() < 1e-12 && (b.max.z() - side).abs() < 1e-12,
+            "{b:?}"
+        );
+    }
+
+    /// A unit square on a quadratic NURBS net over x in {0, 1e-6, 1} and
+    /// y in {0, 1e-4, 1}, flat but for z = 5e-8 at (1e-6, 0): within the
+    /// tolerance of z = 0, though its first control points crowd the origin.
+    /// Thickened by 1 it is extruded into a unit cube.
+    #[test]
+    fn thicken_a_flat_nurbs_face_whose_control_points_crowd_together() {
+        let (xs, ys) = ([0.0, 1e-6, 1.0], [0.0, 1e-4, 1.0]);
+        let net: Vec<Vec<Point3>> = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 0) { 5e-8 } else { 0.0 };
+                        Point3::new(xs[i], ys[j], z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let surface = NurbsSurface::new(
+            2,
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            net,
+            vec![vec![1.0; 3]; 3],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let vs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let edges = (0..4)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(vs[i], vs[(i + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let w = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(w, vec![], FaceSurface::Nurbs(surface)));
+        let solid = thicken(&mut topo, face, 1.0).unwrap();
+        let report = crate::validate::validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = crate::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+        assert!((volume - 1.0).abs() < 1e-6, "{volume}");
     }
 }
