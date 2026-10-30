@@ -1471,18 +1471,45 @@ fn torus_section_loops(
         let v = f64::midpoint(lo, hi);
         (v, rhs_at(v).abs())
     };
+    // The least |rhs| between two samples, and where.
+    let dip = |lo: f64, hi: f64| {
+        let golden = 0.5 * (5.0_f64.sqrt() - 1.0);
+        let (mut lo, mut hi) = (lo, hi);
+        for _ in 0..80 {
+            let (m1, m2) = (hi - golden * (hi - lo), lo + golden * (hi - lo));
+            if rhs_at(m1).abs() < rhs_at(m2).abs() {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let v = f64::midpoint(lo, hi);
+        (v, rhs_at(v).abs())
+    };
     // A gap in the section narrower than a step (a plane just past tangent
     // to the tube's inner side) can fall between two samples inside it:
-    // its peak joins the scan as a sample outside.
+    // its peak joins the scan as a sample outside. Likewise a loop narrower
+    // than a step (a surface just past tangent to the tube) can fall between
+    // two samples outside it: its dip joins as a sample inside. A dip that
+    // only reaches 1 is a touch, which bounds no loop.
     let mut scan: Vec<f64> = Vec::with_capacity(n_v + 2);
     for i in 0..n_v {
         let v = (i as f64).mul_add(step, v_off);
         scan.push(v);
-        if inside(v) && inside(v + step) {
-            let (at, top) = peak(v, v + step);
-            if top > 1.0 + 1e-12 {
-                scan.push(at);
+        match (inside(v), inside(v + step)) {
+            (true, true) => {
+                let (at, top) = peak(v, v + step);
+                if top > 1.0 + 1e-12 {
+                    scan.push(at);
+                }
             }
+            (false, false) => {
+                let (at, low) = dip(v, v + step);
+                if low < 1.0 - 1e-12 {
+                    scan.push(at);
+                }
+            }
+            _ => {}
         }
     }
     let n = scan.len();
@@ -2565,6 +2592,22 @@ pub fn exact_sphere_torus(
         return Ok(None);
     }
     if offset.cross(axis).length() > 1e-9 * scale {
+        // A sphere centred on the core circle with the tube's own radius
+        // holds the meridian circle through its centre, and the tube round
+        // it: they meet along that circle alone.
+        let radial = offset - axis * offset.dot(axis);
+        let on = |a: f64, b: f64| (a - b).abs() <= 1e-9 * scale;
+        if on(offset.dot(axis), 0.0)
+            && on(radial.length(), torus.major_radius())
+            && on(sphere.radius(), torus.minor_radius())
+        {
+            let along = axis.cross(radial).normalize()?;
+            return Ok(Some(vec![ExactIntersectionCurve::Circle(Circle3D::new(
+                sphere.center(),
+                along,
+                sphere.radius(),
+            )?)]));
+        }
         return Ok(
             off_axis_touch(sphere, torus).map(|p| vec![ExactIntersectionCurve::Points(vec![p])])
         );
@@ -6105,7 +6148,8 @@ mod tests {
     }
 
     /// Balls off a ring torus's axis, one poking out of the tube's top, one
-    /// wider than the tube on its core circle, and one anywhere, meet the
+    /// wider than the tube on its core circle, one anywhere, and one just past
+    /// the tube's outside, in a loop narrower than the scan's step, meet the
     /// torus in curves whose points lie on both surfaces, given either way
     /// round, where the marcher found nothing with the torus first.
     #[test]
@@ -6116,6 +6160,7 @@ mod tests {
             (Point3::new(4.0, 0.0, 1.0), 1.0, 1),
             (Point3::new(4.0, 0.0, 0.0), 2.0, 2),
             (Point3::new(2.0, 1.0, 0.5), 1.2, 1),
+            (Point3::new(6.4999, 0.0, 0.0), 1.0, 1),
         ] {
             let ball = SphericalSurface::new(centre, radius).unwrap();
             let on_ball = |p: Point3| (p - centre).length() - radius;
@@ -6159,6 +6204,37 @@ mod tests {
                         assert!(off < 1e-7, "{case}: the curve strays {off:.2e}");
                     }
                 }
+            }
+        }
+    }
+
+    /// A ball centred on a ring torus's core circle with the tube's own
+    /// radius meets it along the meridian circle through its centre: one
+    /// circle, given either way round.
+    #[test]
+    fn a_ball_filling_a_torus_tube_meets_it_in_one_meridian_circle() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let centre = Point3::new(4.0, 0.0, 0.0);
+        let ball = SphericalSurface::new(centre, 1.5).unwrap();
+        for (a, b) in [
+            (
+                AnalyticSurface::Sphere(&ball),
+                AnalyticSurface::Torus(&torus),
+            ),
+            (
+                AnalyticSurface::Torus(&torus),
+                AnalyticSurface::Sphere(&ball),
+            ),
+        ] {
+            let curves = intersect_analytic_analytic(a, b, 32).unwrap();
+            assert_eq!(curves.len(), 1);
+            let (t0, t1) = curves[0].curve.domain();
+            for k in 0..=100 {
+                let p = curves[0]
+                    .curve
+                    .evaluate(t0 + (t1 - t0) * f64::from(k) / 100.0);
+                let off = ((p - centre).length() - 1.5).abs().max(p.y().abs());
+                assert!(off < 1e-9, "the circle strays {off:.2e}");
             }
         }
     }
@@ -7230,8 +7306,9 @@ mod tests {
     /// A ball off a ring's axis touches it at one point from outside the
     /// tube, from inside it, or holding the whole ring, and that point is
     /// all they share. A ball reaching 1e-6 further cuts the tube in a small
-    /// loop, and one centred on the core circle meets it along a meridian;
-    /// both are the marcher's.
+    /// loop, which is left to the section's closed form, and one centred on
+    /// the core circle with the tube's radius meets it along the meridian
+    /// circle through its centre.
     #[test]
     fn a_ball_off_a_rings_axis_touches_it_at_one_point() {
         let o = Point3::new(1.0, 2.0, 3.0);
@@ -7272,6 +7349,11 @@ mod tests {
         let past = SphericalSurface::new(o + out * 5.0, 1.0 + 1e-6).unwrap();
         assert!(exact_sphere_torus(&past, &ring).unwrap().is_none());
         let on_core = SphericalSurface::new(o + out * 3.0, 1.0).unwrap();
-        assert!(exact_sphere_torus(&on_core, &ring).unwrap().is_none());
+        let meridian = exact_sphere_torus(&on_core, &ring).unwrap().unwrap();
+        let [ExactIntersectionCurve::Circle(circle)] = meridian.as_slice() else {
+            unreachable!("one meridian circle");
+        };
+        assert!((circle.center() - (o + out * 3.0)).length() < 1e-12);
+        assert!((circle.radius() - 1.0).abs() < 1e-12);
     }
 }
