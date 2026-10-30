@@ -2443,3 +2443,43 @@ fn a_chain_follows_a_bend_inside_narrow_knot_spans() {
         "peak {peak:?}"
     );
 }
+
+/// The cubic of the chain above swept alone, its bend inside the knot spans
+/// at 0.5001..0.5005: even steps along it and even samples of its
+/// straightness both pass over the bend, which the tube must still hold.
+#[test]
+fn a_single_edge_follows_a_bend_inside_narrow_knot_spans() {
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let mut knots = vec![0.0; 4];
+    knots.extend((1..=5).map(|k| 0.5 + 1e-4 * f64::from(k)));
+    knots.extend([1.0; 4]);
+    let points: Vec<Point3> = (0..9)
+        .map(|k| Point3::new(f64::from(k), if k == 4 { 1.0 } else { 0.0 }, 0.0))
+        .collect();
+    let bend = NurbsCurve::new(3, knots, points, vec![1.0; 9]).unwrap();
+    let peak = bend.evaluate(0.5003);
+    let [a, b] = [Point3::new(0.0, 0.0, 0.0), Point3::new(8.0, 0.0, 0.0)]
+        .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+    let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(bend)));
+    let rim = brepkit_topology::builder::make_circle_edge(
+        &mut topo,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        0.1,
+        1e-7,
+    )
+    .unwrap();
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+    let disc = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+    let tube = sweep_along_edges(&mut topo, disc, &[edge]).unwrap();
+    let at_peak = crate::classify::classify_point(&topo, tube, peak, 1e-3, 1e-7).unwrap();
+    assert_eq!(
+        at_peak,
+        crate::classify::PointClassification::Inside,
+        "peak {peak:?}"
+    );
+}

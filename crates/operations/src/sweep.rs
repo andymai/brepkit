@@ -42,17 +42,61 @@ fn compute_frames(
     initial_up: Vec3,
     is_closed: bool,
 ) -> Result<Vec<Frame>, crate::OperationsError> {
-    let frame_count = if is_closed {
-        num_segments
-    } else {
-        num_segments + 1
-    };
-    let mut frames = Vec::with_capacity(frame_count);
-
     // Sample within the curve's own domain: split sub-curves keep their
     // parent's sub-range, and a clamped NURBS evaluated outside its domain
     // extrapolates the end spans linearly.
     let (u0, u1) = path.domain();
+    let last_k = if is_closed {
+        num_segments - 1
+    } else {
+        num_segments
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let params: Vec<f64> = (0..=last_k)
+        .map(|k| u0 + (u1 - u0) * (k as f64) / (num_segments as f64))
+        .collect();
+    frames_at(path, &params, initial_up)
+}
+
+/// The path's parameters for `num_segments` even steps across its domain,
+/// with each knot span narrower than a step read at its knots and three
+/// points between: a bend inside such a span lies between even steps. The
+/// end is left off a closed path, whose first frame closes it.
+fn frame_params(path: &NurbsCurve, num_segments: usize, is_closed: bool) -> Vec<f64> {
+    let (u0, u1) = path.domain();
+    #[allow(clippy::cast_precision_loss)]
+    let step = (u1 - u0) / num_segments as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let mut params: Vec<f64> = (0..=num_segments)
+        .map(|k| u0 + (u1 - u0) * (k as f64) / (num_segments as f64))
+        .collect();
+    let mut knots: Vec<f64> = path.knots().iter().map(|&k| k.clamp(u0, u1)).collect();
+    knots.dedup();
+    for w in knots.windows(2) {
+        let width = w[1] - w[0];
+        if width > 0.0 && width < step {
+            params.extend((0..=4).map(|j| width.mul_add(f64::from(j) / 4.0, w[0])));
+        }
+    }
+    params.sort_by(f64::total_cmp);
+    params.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (u1 - u0));
+    if is_closed {
+        params.pop();
+    }
+    params
+}
+
+/// Rotation-minimizing frames along `path` at `params`, ascending from its
+/// start, the first frame's up-vector seeded from `initial_up`.
+fn frames_at(
+    path: &NurbsCurve,
+    params: &[f64],
+    initial_up: Vec3,
+) -> Result<Vec<Frame>, crate::OperationsError> {
+    let mut frames = Vec::with_capacity(params.len());
+    let Some((&u0, rest)) = params.split_first() else {
+        return Ok(frames);
+    };
 
     let t0 = path.tangent(u0)?;
     let up0 = orthogonalize(initial_up, t0);
@@ -69,19 +113,13 @@ fn compute_frames(
     // Two reflections per step:
     //   1. Reflect across the plane bisecting consecutive origins (position change).
     //   2. Reflect across the plane bisecting the reflected tangent and new tangent.
-    let last_k = if is_closed {
-        num_segments - 1
-    } else {
-        num_segments
-    };
-    for k in 1..=last_k {
-        #[allow(clippy::cast_precision_loss)]
-        let t_param = u0 + (u1 - u0) * (k as f64) / (num_segments as f64);
-
+    for &t_param in rest {
         let origin = path.evaluate(t_param);
         let tangent = path.tangent(t_param)?;
 
-        let prev = &frames[k - 1];
+        let Some(prev) = frames.last() else {
+            break;
+        };
 
         // Reflection 1: across the plane bisecting the two consecutive origins.
         let v1 = origin - prev.origin;
@@ -576,6 +614,15 @@ fn try_straight_extrude(
         return Ok(None);
     };
 
+    // A curve lies on a line exactly when its control points do; a bend
+    // inside a narrow knot span lies between any even samples.
+    for &p in path.control_points() {
+        let v = p - start;
+        if (v - dir * v.dot(dir)).length() > tol.linear * 100.0 {
+            return Ok(None);
+        }
+    }
+
     // Confirm straightness: every interior sample stays on the start→end line
     // and advances monotonically along it.
     for k in 1..STRAIGHT_SAMPLES {
@@ -730,13 +777,18 @@ pub(crate) fn sweep_placed(
         input_normal = -input_normal;
     }
 
-    let num_segments = (path.control_points().len() * 2).max(4);
+    let params = frame_params(path, (path.control_points().len() * 2).max(4), is_closed);
+    let num_segments = if is_closed {
+        params.len()
+    } else {
+        params.len() - 1
+    };
 
     // Seed the first frame's up-vector from the profile normal, projected
     // perpendicular to the path tangent at t=0.
     let up_hint = orthogonalize(input_normal, path_tangent_0);
 
-    let frames = compute_frames(path, num_segments, up_hint, is_closed)?;
+    let frames = frames_at(path, &params, up_hint)?;
 
     // The decomposition basis and reference point pick the placement semantic:
     // frame-0's own basis and origin make ring 0 the identity map (profile
