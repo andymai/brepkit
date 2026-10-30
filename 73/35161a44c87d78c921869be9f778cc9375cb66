@@ -1,0 +1,23 @@
+crates/algo/src/builder/classify_2d.rs
+  s_a2dc21dbec3f2b::t_9415785f9e514e 16-24,46,128
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a2dc21dbec3f2b::t_35bda31236e935 10593-10652
+  s_a2dc21dbec3f2b::t_44a4dd282d0fbb 16
+  s_a2dc21dbec3f2b::t_e21b42510cb095 22,9034-9049
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7335161a44c87d78c921869be9f778cc9375cb66",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
