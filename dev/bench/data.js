@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793317801455,
+  "lastUpdate": 1793319538288,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60749,6 +60749,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17484160,
             "range": "± 317488",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a538a30b8ff05c00c331cf65f69ab86a18d532b8",
+          "message": "chore(main): release 4.5.9 (#2159)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.5.9](https://github.com/andymai/brepkit/compare/v4.5.8...v4.5.9)\n(2026-10-29)\n\n\n### Bug Fixes\n\n* **blend:** roll rim fillets in the wedge their faces form\n([#2155](https://github.com/andymai/brepkit/issues/2155))\n([c1e35a6](https://github.com/andymai/brepkit/commit/c1e35a6ae6bc8905f38852941e8562f841f5f2d8))\n* **blend:** sweep an open arc's fillet the way the arc runs\n([#2156](https://github.com/andymai/brepkit/issues/2156))\n([69c2f99](https://github.com/andymai/brepkit/commit/69c2f9918394624a41b4a869986040411cf2ded6))\n* **math:** intersect a flat NURBS patch with another as its plane's\nsection ([#2149](https://github.com/andymai/brepkit/issues/2149))\n([fa9f4b7](https://github.com/andymai/brepkit/commit/fa9f4b7839e3242dc165bcf8433331e11ddd9542))\n* **math:** trace where a plane touches a NURBS surface along a curve\n([#2148](https://github.com/andymai/brepkit/issues/2148))\n([4bfc29b](https://github.com/andymai/brepkit/commit/4bfc29bf721d591492603a0308c2059884017d26))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-30T00:15:47Z",
+          "tree_id": "d5662cacc2514ec463fc0caad1034a2f47c02e29",
+          "url": "https://github.com/andymai/brepkit/commit/a538a30b8ff05c00c331cf65f69ab86a18d532b8"
+        },
+        "date": 1793319529535,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1097868,
+            "range": "± 1282",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1174053,
+            "range": "± 1480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13183,
+            "range": "± 84",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 678194,
+            "range": "± 25850",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28625713,
+            "range": "± 589011",
             "unit": "ns/iter"
           }
         ]
