@@ -2079,6 +2079,9 @@ impl UvTrim {
                         i += 1;
                     }
                 }
+                if bends {
+                    insert_u_turns(&mut samples, &at);
+                }
                 edges.push(UvEdge {
                     curve,
                     start,
@@ -2178,6 +2181,93 @@ impl UvTrim {
         }
         (crossings % 2 == 1, suspicious)
     }
+}
+
+/// Adds to an edge's `samples` (in its curve's order, `at` mapping its
+/// parameter to `(u, v)`) each point where its `u` turns back between them,
+/// so `u` runs one way along every piece and a line of constant `u` meets a
+/// piece at most once. A turn shows as two pieces, or a piece and the
+/// curve's direction at an end, running opposite ways in `u`, and is found
+/// by a golden-section search over the pieces between.
+fn insert_u_turns(samples: &mut Vec<(f64, f64, f64)>, at: &dyn Fn(f64) -> (f64, f64)) {
+    const FLAT: f64 = 1e-9;
+    let n = samples.len();
+    if n < 2 {
+        return;
+    }
+    let (t0, t1) = (samples[0].0, samples[n - 1].0);
+    let span = (t1 - t0).abs();
+    if span <= 0.0 {
+        return;
+    }
+    // Each run `(t_from, t_to, rise)`: the ends' own directions, from a
+    // step a ten-thousandth of their piece long, and every piece between.
+    let step = |a: (f64, f64, f64), b: (f64, f64, f64)| {
+        let h = 1e-4 * (b.0 - a.0);
+        (a.0, a.0 + h, wrap_pi(at(a.0 + h).0 - a.1))
+    };
+    let first = step(samples[0], samples[1]);
+    let last = {
+        let (a, b) = (samples[n - 1], samples[n - 2]);
+        let (_, t, d) = step(a, b);
+        (t, a.0, -d)
+    };
+    let runs = std::iter::once(first)
+        .chain(
+            samples
+                .windows(2)
+                .map(|w| (w[0].0, w[1].0, wrap_pi(w[1].1 - w[0].1))),
+        )
+        .chain(std::iter::once(last));
+    let mut turns = Vec::new();
+    let mut prev: Option<(f64, f64)> = None;
+    for (ta, tb, du) in runs {
+        if du.abs() <= FLAT {
+            continue;
+        }
+        if let Some((from, rise)) = prev
+            && (rise > 0.0) != (du > 0.0)
+        {
+            turns.push(u_turn(at, from, tb, rise > 0.0));
+        }
+        prev = Some((ta, du));
+    }
+    let toward = t1 - t0;
+    for turn in turns {
+        let k = samples.partition_point(|s| (s.0 - turn.0) * toward < 0.0);
+        let apart = |j: usize| (samples[j].0 - turn.0).abs() > 1e-9 * span;
+        if k > 0 && k < samples.len() && apart(k - 1) && apart(k) {
+            samples.insert(k, turn);
+        }
+    }
+}
+
+/// The `(t, u, v)` where `u`, read by `at`, peaks (`peak`) or dips for `t`
+/// between `ta` and `tb`, by golden-section search.
+fn u_turn(at: &dyn Fn(f64) -> (f64, f64), ta: f64, tb: f64, peak: bool) -> (f64, f64, f64) {
+    let u_ref = at(ta).0;
+    let key = |t: f64| {
+        let d = wrap_pi(at(t).0 - u_ref);
+        if peak { -d } else { d }
+    };
+    let g = 0.5 * (5.0_f64.sqrt() - 1.0);
+    let (mut a, mut b) = (ta, tb);
+    let (mut c, mut d) = (g.mul_add(a - b, b), g.mul_add(b - a, a));
+    let (mut kc, mut kd) = (key(c), key(d));
+    for _ in 0..60 {
+        if kc < kd {
+            (b, d, kd) = (d, c, kc);
+            c = g.mul_add(a - b, b);
+            kc = key(c);
+        } else {
+            (a, c, kc) = (c, d, kd);
+            d = g.mul_add(b - a, a);
+            kd = key(d);
+        }
+    }
+    let t = f64::midpoint(a, b);
+    let (u, v) = at(t);
+    (t, u, v)
 }
 
 /// A cylinder or cone face's wires in its `(u, v)`, to read whether a point
@@ -4023,6 +4113,88 @@ mod tests {
             (1, false)
         );
         assert_eq!(ray_geom_crossings(p(0.8, 0.5, 5.0), down, &geom, tol).0, 0);
+    }
+
+    /// The surface `(u + v (17/16 - v), v, v (u + v (17/16 - v)))` trimmed
+    /// to `0.3 <= x <= 0.7`. Its left edge bows in `(u, v)` to its least `u`
+    /// at `v = 17/32`, halfway between two of the edge's samples, and a ray
+    /// down through `x = 0.3002` there, a hair inside the trim, crosses the
+    /// face once. Split at `v = 0.52`, the edge above holds the turn in its
+    /// last piece, a ray through `x = 0.30006` there crosses once.
+    #[test]
+    fn a_nurbs_trim_holds_a_turn_between_its_samples() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let p = Point3::new;
+        let e = |k: f64| k / 48.0;
+        let rows = vec![
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(e(17.0), e(16.0), 0.0),
+                p(e(18.0), e(32.0), e(17.0)),
+                p(e(3.0), 1.0, e(3.0)),
+            ],
+            vec![
+                p(1.0, 0.0, 0.0),
+                p(e(65.0), e(16.0), e(16.0)),
+                p(e(66.0), e(32.0), e(49.0)),
+                p(e(51.0), 1.0, e(51.0)),
+            ],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 4]; 2],
+        )
+        .unwrap();
+        let x = |u: f64, v: f64| v.mul_add(17.0 / 16.0 - v, u);
+        for (u, v) in [(0.2, 0.3), (0.9, 0.7)] {
+            let s = surface.evaluate(u, v);
+            assert!((s - p(x(u, v), v, v * x(u, v))).length() < 1e-12);
+        }
+        // The left edge whole, and split at `v = 0.52`: there the turn lies
+        // in the last piece of the edge above, which runs one way overall.
+        let mut face_of = |corners: &[(f64, f64, f64)]| {
+            let n = corners.len();
+            let vs: Vec<_> = corners
+                .iter()
+                .map(|&(x, y, z)| topo.add_vertex(Vertex::new(p(x, y, z), 1e-7)))
+                .collect();
+            let edges: Vec<_> = (0..n)
+                .map(|i| {
+                    let edge = Edge::new(vs[i], vs[(i + 1) % n], EdgeCurve::Line);
+                    OrientedEdge::new(topo.add_edge(edge), true)
+                })
+                .collect();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())))
+        };
+        let quad = [
+            (0.3, 0.0, 0.0),
+            (0.7, 0.0, 0.0),
+            (0.7, 1.0, 0.7),
+            (0.3, 1.0, 0.3),
+        ];
+        let whole = face_of(&quad);
+        let split = face_of(&[quad[0], quad[1], quad[2], quad[3], (0.3, 0.52, 0.156)]);
+        let down = Vec3::new(0.0, 0.0, -1.0);
+        let tol = Tolerance::new();
+        let v = 17.0 / 32.0;
+        for (face_id, inside) in [(whole, 0.3002), (split, 0.30006)] {
+            let face = topo.face(face_id).unwrap();
+            let geom = nurbs_geom(&topo, face, &surface).unwrap().unwrap();
+            assert_eq!(
+                ray_geom_crossings(p(inside, v, 5.0), down, &geom, tol),
+                (1, false)
+            );
+            assert_eq!(
+                ray_geom_crossings(p(0.2998, v, 5.0), down, &geom, tol),
+                (0, false)
+            );
+        }
     }
 
     /// The unit cube with its top the lid `z = 1 + 100 u (1 - u)^4 v (1 - v)`

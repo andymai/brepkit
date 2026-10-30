@@ -146,15 +146,30 @@ impl Patch {
 }
 
 impl RaySurface {
-    /// `surface` made ready, or `None` when a weight is not positive or the
-    /// surface cannot be cut into Bezier patches.
+    /// `surface` made ready, or `None` when a weight is not positive, a knot
+    /// vector is not clamped, or the surface cannot be cut into Bezier
+    /// patches.
     #[must_use]
     pub fn new(surface: &NurbsSurface) -> Option<Self> {
+        // An unclamped knot vector's end spans are not Bezier patches of the
+        // surface as decomposed, so the search would cross a different one.
+        let clamped = |knots: &[f64], degree: usize| {
+            let n = knots.len();
+            n > 2 * degree + 1
+                && knots[..=degree]
+                    .iter()
+                    .all(|&k| (k - knots[0]).abs() <= 0.0)
+                && knots[n - degree - 1..]
+                    .iter()
+                    .all(|&k| (k - knots[n - 1]).abs() <= 0.0)
+        };
         if surface
             .weights()
             .iter()
             .flatten()
             .any(|&w| !w.is_finite() || w <= 0.0)
+            || !clamped(surface.knots_u(), surface.degree_u())
+            || !clamped(surface.knots_v(), surface.degree_v())
         {
             return None;
         }
@@ -433,6 +448,29 @@ mod tests {
         assert_eq!(xs.len(), 2, "{xs:?}");
         assert!((xs[0] - (1.0 - root) / 2.0).abs() < 1e-9, "{xs:?}");
         assert!((xs[1] - f64::midpoint(1.0, root)).abs() < 1e-9, "{xs:?}");
+    }
+
+    /// A surface whose `u` knots run `[-2, -1, 0, 1, 2, 3]`, unclamped, is
+    /// not taken: its end patches as decomposed are not the surface.
+    #[test]
+    fn an_unclamped_surface_is_not_ready() {
+        let rows = (0..3)
+            .map(|i| {
+                (0..2)
+                    .map(|j| Point3::new(0.5 * f64::from(i), f64::from(j), 0.0))
+                    .collect()
+            })
+            .collect();
+        let s = NurbsSurface::new(
+            2,
+            1,
+            vec![-2.0, -1.0, 0.0, 1.0, 2.0, 3.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        assert!(RaySurface::new(&s).is_none());
     }
 
     #[test]
