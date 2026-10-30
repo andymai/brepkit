@@ -1439,6 +1439,56 @@ fn intersect_box_centered_sphere_is_analytic_collar() {
     );
 }
 
+/// A ball of radius 1 centred 1 above a ring torus's core circle (major 4,
+/// minor 1.5) pokes out of the tube's top: the two meet in a loop, and
+/// their intersection keeps only the ball's part inside the tube, on the
+/// ball's and the torus's own surfaces. Points of the ball above the tube
+/// lie outside it, points below inside, and the cut and the intersection
+/// share the torus's volume between them.
+#[test]
+fn intersect_torus_with_a_ball_poking_out_of_its_tube() {
+    use crate::classify::PointClassification::{Inside, Outside};
+    let mut topo = Topology::new();
+    let ring = crate::primitives::make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+    let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        ball,
+        &brepkit_math::mat::Mat4::translation(4.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let whole = crate::measure::solid_volume(&topo, ring, 0.001).unwrap();
+    let mut cut_topo = topo.clone();
+    let cut = boolean(&mut cut_topo, BooleanOp::Cut, ring, ball).unwrap();
+    let common = boolean(&mut topo, BooleanOp::Intersect, ring, ball).unwrap();
+    // Both keep the ball's and the torus's own surfaces, not a mesh's facets.
+    for (t, solid) in [(&topo, common), (&cut_topo, cut)] {
+        let kinds: Vec<&'static str> = brepkit_topology::explorer::solid_faces(t, solid)
+            .unwrap()
+            .iter()
+            .map(|&f| t.face(f).unwrap().surface().type_tag())
+            .collect();
+        assert!(
+            kinds.contains(&"sphere") && kinds.contains(&"torus"),
+            "faces {kinds:?}"
+        );
+    }
+
+    let class = |p: Point3| crate::classify::classify_point(&topo, common, p, 0.01, 1e-9).unwrap();
+    assert_eq!(class(Point3::new(4.0, 0.0, 1.9)), Outside);
+    assert_eq!(class(Point3::new(4.0, 0.0, 0.5)), Inside);
+    let kept = crate::measure::solid_volume(&topo, common, 0.001).unwrap();
+    let left = crate::measure::solid_volume(&cut_topo, cut, 0.001).unwrap();
+    assert!(
+        kept < 3.5,
+        "the intersection keeps {kept:.3}, more than the ball's part in the tube"
+    );
+    assert!(
+        ((kept + left) - whole).abs() < 1e-3 * whole,
+        "cut {left:.4} and intersection {kept:.4} do not make up the torus {whole:.4}"
+    );
+}
+
 #[test]
 /// Cut a box notch out of a torus (major 10, minor 3): the box [6,14]×[−4,4]×[−4,4]
 /// scoops a sector of the +x ring lobe, severing the ring into a capped C-tube.
@@ -2280,9 +2330,9 @@ fn compound_cut_single_tool_matches_boolean() {
 }
 
 /// One tool of two disjoint pieces, a dent in the tube's top whose cut stays
-/// exact and a ball beside the ring whose cut needs the mesh fallback, is cut
-/// piece by piece: the dent exactly, the ball last, and the result holds what
-/// cutting by the dent and then the ball leaves.
+/// exact and a rod through the ring off its tube's centre whose cut needs the
+/// mesh fallback, is cut piece by piece: the dent exactly, the rod last, and
+/// the result holds what cutting by the dent and then the rod leaves.
 #[test]
 fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
     use brepkit_math::mat::Mat4;
@@ -2292,12 +2342,17 @@ fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
         let torus = crate::primitives::make_torus(topo, 4.0, 1.5, 32).unwrap();
         let dent = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
         crate::transform::transform_solid(topo, dent, &Mat4::translation(-4.5, -0.5, 1.0)).unwrap();
-        let ball = crate::primitives::make_sphere(topo, 1.0, 32).unwrap();
-        crate::transform::transform_solid(topo, ball, &Mat4::translation(5.0, 0.0, 0.0)).unwrap();
-        (torus, dent, ball)
+        let rod = crate::primitives::make_cylinder(topo, 0.6, 20.0).unwrap();
+        crate::transform::transform_solid(
+            topo,
+            rod,
+            &(Mat4::translation(0.5, 10.0, 1.0) * Mat4::rotation_x(std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+        (torus, dent, rod)
     };
 
-    let (torus, dent, ball) = parts(&mut topo);
+    let (torus, dent, rod) = parts(&mut topo);
     let dented = boolean(&mut topo, BooleanOp::Cut, torus, dent).unwrap();
     let torus_faces = brepkit_topology::explorer::solid_faces(&topo, dented)
         .unwrap()
@@ -2305,16 +2360,16 @@ fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
         .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
         .count();
     assert!(torus_faces > 0, "the dent's cut stays exact");
-    let reference = boolean(&mut topo, BooleanOp::Cut, dented, ball).unwrap();
+    let reference = boolean(&mut topo, BooleanOp::Cut, dented, rod).unwrap();
     let expected = crate::measure::solid_volume(&topo, reference, 0.05).unwrap();
 
-    let (torus, dent, ball) = parts(&mut topo);
-    let tool = crate::compound_ops::merge_disjoint_solids(&mut topo, &[dent, ball]).unwrap();
+    let (torus, dent, rod) = parts(&mut topo);
+    let tool = crate::compound_ops::merge_disjoint_solids(&mut topo, &[dent, rod]).unwrap();
     let before = super::mesh_fallback_count();
     let result = compound_cut(&mut topo, torus, &[tool], BooleanOptions::default()).unwrap();
     assert!(
         super::mesh_fallback_count() > before,
-        "the ball's cut takes the mesh fallback"
+        "the rod's cut takes the mesh fallback"
     );
     assert_volume_near(&topo, result, expected, 1e-3);
 }
