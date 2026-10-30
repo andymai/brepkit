@@ -2373,7 +2373,7 @@ fn split_periodic_face_around_seam_holes(
         rank,
         precomputed_interior: None,
     };
-    let remainder_interior = cylinder_cone_remainder_interior(&probe)?;
+    let remainder_interior = cylinder_cone_remainder_interior(&probe, tol)?;
     sub_faces.insert(
         0,
         SplitSubFace {
@@ -5566,6 +5566,8 @@ fn distribute_cap_circles(
                 sf.reversed,
                 face_id,
                 &sub_wire_pts,
+                // A plane face: the wall search this clears is never run.
+                brepkit_math::tolerance::Tolerance::new().linear,
             );
             result.extend(carved);
         }
@@ -6289,6 +6291,7 @@ fn split_face_2d_impl(
             reversed,
             face_id,
             &wire_pts,
+            tol.linear,
         );
     }
 
@@ -8967,7 +8970,7 @@ fn split_face_2d_impl(
             )
         });
         sub_face.precomputed_interior = if lens {
-            cylinder_cone_remainder_interior(sub_face)
+            cylinder_cone_remainder_interior(sub_face, tol.linear)
         } else {
             interior_point_3d(sub_face, None, tol.linear)
         };

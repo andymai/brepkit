@@ -3819,6 +3819,7 @@ pub(super) fn split_face_with_internal_loops(
     reversed: bool,
     face_id: FaceId,
     wire_pts: &[Point3],
+    clearance: f64,
 ) -> Vec<SplitSubFace> {
     let tol_3d = brepkit_math::tolerance::Tolerance::new().linear;
 
@@ -4694,7 +4695,7 @@ pub(super) fn split_face_with_internal_loops(
         )
         && !remainder.inner_wires.is_empty()
     {
-        remainder.precomputed_interior = cylinder_cone_remainder_interior(&remainder);
+        remainder.precomputed_interior = cylinder_cone_remainder_interior(&remainder, clearance);
     }
     // A sphere's holes can run through a pole, where their `(u, v)` has no
     // longitude and the generic hole test cannot read them: the face fails
@@ -5395,7 +5396,10 @@ fn chain_single_closed_loop(
 /// the outline is largest: on the kept wall, well clear of its boundary.
 /// Returns `None` if the surface evaluator or boundary v-range is unusable,
 /// so the caller keeps the unset interior.
-pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Point3> {
+pub fn cylinder_cone_remainder_interior(
+    remainder: &SplitSubFace,
+    clearance: f64,
+) -> Option<Point3> {
     // Every hole loop, sampled along its curve: a lens hole is one closed edge
     // whose start/end UV coincide, so its endpoint UVs bound nothing.
     let mut holes = Vec::new();
@@ -5441,7 +5445,8 @@ pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Poin
         // frame: only the box then holds the search in.
         let outer_chords: &[UvChord] = if outline.closes { &outline.chords } else { &[] };
         let outer_segs: Vec<UvSegment> = outer_chords.iter().map(|c| c.segment).collect();
-        let clear = |u: f64, v: f64| stands_clear(hole_chords.iter().chain(outer_chords), u, v);
+        let clear =
+            |u: f64, v: f64| stands_clear(hole_chords.iter().chain(outer_chords), u, v, clearance);
         let search = |n_u: u32, n_v: u32| -> Option<Point3> {
             let mut best: Option<(f64, Point3)> = None;
             for iu in 0..n_u {
@@ -5488,10 +5493,6 @@ pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Poin
 /// A `(u, v)` segment, its lower-`u` end first.
 type UvSegment = (f64, f64, f64, f64);
 
-/// How far, in `(u, v)`, a wall's interior point stands at least off its
-/// boundary: the linear tolerance.
-const CLEARANCE: f64 = 1e-7;
-
 /// One chord of a loop sampled in an unwrapped `(u, v)` frame, with how far
 /// its curve strays from it: the farthest of the curve's own samples at a
 /// quarter, half and three quarters of the way between the chord's ends.
@@ -5502,13 +5503,18 @@ struct UvChord {
     stray: f64,
 }
 
-/// Whether `(u, v)` stands off every chord by twice its stray, and by the
-/// linear tolerance off a straight one: a point on a ruling is not inside the
-/// wall.
-fn stands_clear<'a>(chords: impl IntoIterator<Item = &'a UvChord>, u: f64, v: f64) -> bool {
+/// Whether `(u, v)` stands off every chord by twice its stray and
+/// `clearance`, the caller's linear tolerance, so off a straight one too: a
+/// point on a ruling is not inside the wall.
+fn stands_clear<'a>(
+    chords: impl IntoIterator<Item = &'a UvChord>,
+    u: f64,
+    v: f64,
+    clearance: f64,
+) -> bool {
     chords
         .into_iter()
-        .all(|c| c.distance(u, v) > 2.0f64.mul_add(c.stray, CLEARANCE))
+        .all(|c| c.distance(u, v) > 2.0f64.mul_add(c.stray, clearance))
 }
 
 impl UvChord {
@@ -6630,14 +6636,14 @@ mod tests {
             segment: (1.0, 0.0, 1.0, 10.0),
             stray: 0.0,
         };
-        assert!(!stands_clear([&ruling], 1.0, 5.0));
-        assert!(stands_clear([&ruling], 1.0 + 1e-6, 5.0));
+        assert!(!stands_clear([&ruling], 1.0, 5.0, 1e-7));
+        assert!(stands_clear([&ruling], 1.0 + 1e-6, 5.0, 1e-7));
         let arc = UvChord {
             segment: (0.0, 0.0, 1.0, 0.0),
             stray: 0.01,
         };
-        assert!(!stands_clear([&arc], 0.5, 0.015));
-        assert!(stands_clear([&arc], 0.5, 0.025));
+        assert!(!stands_clear([&arc], 0.5, 0.015, 1e-7));
+        assert!(stands_clear([&arc], 0.5, 0.025, 1e-7));
     }
 
     /// The rim where the plane z = 2 + x meets the unit cylinder, seamed at
@@ -6748,10 +6754,58 @@ mod tests {
             rank: crate::ds::Rank::A,
             precomputed_interior: None,
         };
-        let p = cylinder_cone_remainder_interior(&patch).expect("a point on the patch");
+        let p = cylinder_cone_remainder_interior(&patch, 1e-7).expect("a point on the patch");
         let a = p.y().atan2(p.x());
         assert!(a > 1.0 + 1e-7 && a < 1.2 - 1e-7, "{p:?} at angle {a}");
         assert!(p.z() > 0.0 && p.z() < 10.0, "{p:?}");
+    }
+
+    /// The unit cylinder's wall between its rims at z = 0 and 1e-7, with a lens
+    /// hole of radius 1e-8 about (0, 1, 5e-8). At a tolerance of 1e-11 the
+    /// search finds a point on the band; at 1e-7 no point stands that far off
+    /// both rims, and it finds none.
+    #[test]
+    fn a_remainder_point_on_a_thin_band_honours_the_tolerance() {
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let rim = |z: f64| {
+            Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, z),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap()
+        };
+        let (low, high) = (Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 0.0, 1e-7));
+        let centre = Point3::new(0.0, 1.0, 5e-8);
+        let lens = Circle3D::new(centre, Vec3::new(0.0, 1.0, 0.0), 1e-8).unwrap();
+        let lens_start = lens.evaluate(0.0);
+        let band = SplitSubFace {
+            surface,
+            outer_wire: vec![
+                wall_edge(EdgeCurve::Circle(rim(0.0)), low, low, true),
+                wall_edge(EdgeCurve::Line, low, high, true),
+                wall_edge(EdgeCurve::Circle(rim(1e-7)), high, high, false),
+                wall_edge(EdgeCurve::Line, high, low, true),
+            ],
+            inner_wires: vec![vec![wall_edge(
+                EdgeCurve::Circle(lens),
+                lens_start,
+                lens_start,
+                true,
+            )]],
+            reversed: false,
+            parent: dummy_face_id(),
+            rank: crate::ds::Rank::A,
+            precomputed_interior: None,
+        };
+        let p = cylinder_cone_remainder_interior(&band, 1e-11).expect("a point on the band");
+        assert!(p.z() > 0.0 && p.z() < 1e-7, "{p:?} off the band");
+        assert!((p - centre).length() > 1e-8, "{p:?} in the lens");
+        assert!(cylinder_cone_remainder_interior(&band, 1e-7).is_none());
     }
 
     /// The unit cylinder's wall between the planes z = 2 + x and
@@ -6787,7 +6841,7 @@ mod tests {
             rank: crate::ds::Rank::A,
             precomputed_interior: None,
         };
-        let p = cylinder_cone_remainder_interior(&band).expect("a point on the band");
+        let p = cylinder_cone_remainder_interior(&band, 1e-7).expect("a point on the band");
         assert!(
             (p.x().hypot(p.y()) - 1.0).abs() < 1e-9,
             "{p:?} off the wall"
@@ -6845,7 +6899,7 @@ mod tests {
             rank: crate::ds::Rank::A,
             precomputed_interior: None,
         };
-        let p = cylinder_cone_remainder_interior(&wall).unwrap();
+        let p = cylinder_cone_remainder_interior(&wall, 1e-7).unwrap();
         assert!(
             (p.x().hypot(p.y()) - 1.0).abs() < 1e-9,
             "{p:?} off the wall"
@@ -7252,7 +7306,7 @@ mod tests {
             precomputed_interior: None,
         };
 
-        let p = super::cylinder_cone_remainder_interior(&sub).unwrap();
+        let p = super::cylinder_cone_remainder_interior(&sub, 1e-7).unwrap();
         // The point is ON the cylinder (radius 3 from the axis).
         let radial = (p.x() * p.x() + p.y() * p.y()).sqrt();
         assert!((radial - 3.0).abs() < 1e-6, "interior point on the wall");
@@ -7310,7 +7364,7 @@ mod tests {
         };
 
         // The two-pass search must find a contained point in the thin kept strip.
-        let p = super::cylinder_cone_remainder_interior(&sub).unwrap();
+        let p = super::cylinder_cone_remainder_interior(&sub, 1e-7).unwrap();
         let radial = (p.x() * p.x() + p.y() * p.y()).sqrt();
         assert!((radial - 3.0).abs() < 1e-6, "interior point on the wall");
         assert!(
