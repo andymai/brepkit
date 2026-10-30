@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793338159491,
+  "lastUpdate": 1793338360708,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61127,6 +61127,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29158673,
             "range": "± 206174",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5f212ce333a6cd311e0b0d3072963bd0a4194e2d",
+          "message": "fix(wasm): give a reversed face's normal its outward direction (#2207)\n\n`evaluateSurfaceNormal` now returns a face's outward normal, turned\nround from its surface's normal on a reversed face, so a bore cut into a\nsolid reports a normal pointing out of the material.\n\nToday the binding returns the normal of the face's surface whatever the\nface's orientation. A boolean cut keeps the tool's cylinder as a\nreversed face, so the bore of a tube cut from a cylinder of radius 20 by\none of radius 17 reports `[0, 1, 0]` at `(0, 17, 30)`, into the tube's\nwall, where its outward normal is `[0, −1, 0]`. brepjs reads this\nbinding for `normalAt` and for a sweep's profile normal.\n\n## Change\n\n- The binding computes the surface's normal as before and negates it\nwhen the face is reversed. Its doc says it returns the face's outward\nnormal.\n\nCloses #2177.\n\n## Tests\n\n- `a_bores_normal_points_out_of_the_material`: on that tube, the outer\nwall's normal at `(0, 20, 30)` is `[0, 1, 0]` and the bore's at `(0, 17,\n30)` is `[0, −1, 0]`. With the surface's normal alone, the bore's reads\n`[0, 1, 0]`.\n- `cargo test -p brepkit-wasm --lib` passes 241 tests.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `evaluateSurfaceNormal` so a reversed face's normal points outward\ninstead of into the material. The binding previously returned the\nsurface's normal regardless of face orientation; the normal is now\nnegated on reversed faces, making a bore cut into a solid report a\nnormal pointing out of the material. Closes #2177.\n\n- Adds a test on a cylinder with a bore, verifying the outer wall\nreports `[0, 1, 0]` and the bore reports `[0, −1, 0]`.\n\n<sup>Written for commit 76229b1470109dcfc1d77cc09e783686ca81c668.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2207?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2207?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2207&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T05:27:05Z",
+          "tree_id": "2b60c3fd8c5778044b4ae7a80363770cc9cff497",
+          "url": "https://github.com/andymai/brepkit/commit/5f212ce333a6cd311e0b0d3072963bd0a4194e2d"
+        },
+        "date": 1793338352781,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1133426,
+            "range": "± 2642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1222088,
+            "range": "± 945",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13836,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 687611,
+            "range": "± 5564",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29582101,
+            "range": "± 76517",
             "unit": "ns/iter"
           }
         ]
