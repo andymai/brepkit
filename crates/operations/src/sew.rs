@@ -5,8 +5,10 @@
 
 use std::collections::HashMap;
 
+use brepkit_geometry::extrema::{CurveProjection, point_to_curve};
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::Point3;
+use brepkit_math::traits::ParametricCurve;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
@@ -24,9 +26,9 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 /// # Algorithm
 ///
 /// 1. Merge coincident vertices using spatial hashing
-/// 2. Merge coincident edges: the same two vertices and the same middle
-///    point, so the two halves of a circle, or two closed edges through one
-///    vertex, stay apart
+/// 2. Merge coincident edges: the same two vertices, and each edge's points
+///    on the other, so the two halves of a circle, or two closed edges
+///    through one vertex, stay apart
 /// 3. Rebuild each face, holes included, from the merged edges, each keeping
 ///    its own curve
 /// 4. Assemble into a shell and solid
@@ -62,15 +64,8 @@ pub fn sew_faces(
                 let edge = topo.edge(oe.edge())?;
                 let start = topo.vertex(edge.start())?.point();
                 let end = topo.vertex(edge.end())?.point();
-                let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-                let middle = edge
-                    .curve()
-                    .evaluate_with_endpoints(0.5 * (t0 + t1), start, end);
                 edges.push(EdgeSnapshot {
-                    curve: edge.curve().clone(),
-                    start,
-                    end,
-                    middle,
+                    span: Span::new(edge.curve().clone(), start, end),
                     forward: oe.is_forward(),
                 });
             }
@@ -97,7 +92,7 @@ pub fn sew_faces(
             .or_insert_with(|| topo.add_vertex(Vertex::new(p, tol)))
     };
 
-    // The edges made so far between each pair of vertices, by their middle.
+    // The edges made so far between each pair of vertices.
     let mut edge_map: HashMap<(usize, usize), Vec<MadeEdge>> = HashMap::new();
     let mut new_face_ids: Vec<FaceId> = Vec::with_capacity(face_snapshots.len());
 
@@ -106,29 +101,36 @@ pub fn sew_faces(
         for edges in &snap.wires {
             let mut oriented_edges: Vec<OrientedEdge> = Vec::with_capacity(edges.len());
             for e in edges {
-                let v_start = vertex_at(topo, e.start);
-                let v_end = vertex_at(topo, e.end);
+                let v_start = vertex_at(topo, e.span.start);
+                let v_end = vertex_at(topo, e.span.end);
                 let key = if v_start.index() <= v_end.index() {
                     (v_start.index(), v_end.index())
                 } else {
                     (v_end.index(), v_start.index())
                 };
                 let made = edge_map.entry(key).or_default();
-                let (edge_id, made_start) =
-                    if let Some(m) = made.iter().find(|m| (m.middle - e.middle).length() <= tol) {
-                        (m.edge, m.start)
+                let (edge_id, along) = if let Some(m) = made
+                    .iter()
+                    .find(|m| e.span.lies_on(&m.span, tol) && m.span.lies_on(&e.span, tol))
+                {
+                    let along = if v_start == v_end {
+                        e.span.runs_with(&m.span)
                     } else {
-                        let edge = topo.add_edge(Edge::new(v_start, v_end, e.curve.clone()));
-                        made.push(MadeEdge {
-                            middle: e.middle,
-                            edge,
-                            start: v_start,
-                        });
-                        (edge, v_start)
+                        m.start == v_start
                     };
+                    (m.edge, along)
+                } else {
+                    let edge = topo.add_edge(Edge::new(v_start, v_end, e.span.curve.clone()));
+                    made.push(MadeEdge {
+                        span: e.span.clone(),
+                        edge,
+                        start: v_start,
+                    });
+                    (edge, true)
+                };
                 // An edge met again the other way along runs against its
                 // first face's traversal in this one.
-                let forward = e.forward == (made_start == v_start);
+                let forward = e.forward == along;
                 oriented_edges.push(OrientedEdge::new(edge_id, forward));
             }
             let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
@@ -152,20 +154,82 @@ pub fn sew_faces(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
-/// An edge sewing has made: its middle, and the vertex it starts at.
+/// An edge sewing has made: its curve, and the vertex it starts at.
 struct MadeEdge {
-    middle: Point3,
+    span: Span,
     edge: EdgeId,
     start: VertexId,
 }
 
 /// One edge of a face to sew, as its wire runs it.
 struct EdgeSnapshot {
+    span: Span,
+    forward: bool,
+}
+
+/// An edge's curve from its start to its end.
+#[derive(Clone)]
+struct Span {
     curve: EdgeCurve,
     start: Point3,
     end: Point3,
-    middle: Point3,
-    forward: bool,
+    t0: f64,
+    t1: f64,
+}
+
+impl Span {
+    fn new(curve: EdgeCurve, start: Point3, end: Point3) -> Self {
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        Self {
+            curve,
+            start,
+            end,
+            t0,
+            t1,
+        }
+    }
+
+    /// The point a fraction `f` of the way along the parameter range.
+    fn at(&self, f: f64) -> Point3 {
+        ParametricCurve::evaluate(self, f.mul_add(self.t1 - self.t0, self.t0))
+    }
+
+    fn nearest(&self, p: Point3) -> CurveProjection {
+        point_to_curve(p, self, self.t0.min(self.t1), self.t0.max(self.t1))
+    }
+
+    /// The direction the edge runs at parameter `t`.
+    fn heading(&self, t: f64) -> Vec3 {
+        ParametricCurve::tangent(self, t) * (self.t1 - self.t0).signum()
+    }
+
+    /// Whether points spread along this span all lie on `other`, however
+    /// either is parameterized.
+    fn lies_on(&self, other: &Self, tol: f64) -> bool {
+        (1..=5).all(|k| other.nearest(self.at(f64::from(k) / 6.0)).distance <= tol)
+    }
+
+    /// Whether this span runs the same way along as `other`, which it lies
+    /// on. A closed edge's ends cannot tell.
+    fn runs_with(&self, other: &Self) -> bool {
+        let t = 0.5 * (self.t0 + self.t1);
+        let there = other.nearest(ParametricCurve::evaluate(self, t)).parameter;
+        self.heading(t).dot(other.heading(there)) > 0.0
+    }
+}
+
+impl ParametricCurve for Span {
+    fn evaluate(&self, t: f64) -> Point3 {
+        self.curve.evaluate_with_endpoints(t, self.start, self.end)
+    }
+
+    fn tangent(&self, t: f64) -> Vec3 {
+        self.curve.tangent_with_endpoints(t, self.start, self.end)
+    }
+
+    fn domain(&self) -> (f64, f64) {
+        (self.t0, self.t1)
+    }
 }
 
 /// Snapshot of a face's geometry for the sewing algorithm.
@@ -533,6 +597,273 @@ mod tests {
         let area = crate::measure::face_area(&topo, first, 0.001).unwrap();
         let exact = 25.0 * std::f64::consts::PI;
         assert!((area - exact).abs() < 1e-3 * exact, "{area}");
+    }
+
+    /// The cylinder's faces with one cap's rim swapped for `curve`, used
+    /// forward or not.
+    fn cylinder_with_rim(
+        topo: &mut Topology,
+        top: bool,
+        curve: brepkit_math::curves::Circle3D,
+        forward: bool,
+    ) -> Vec<FaceId> {
+        let cyl = crate::primitives::make_cylinder(topo, 10.0, 20.0).unwrap();
+        let mut faces = brepkit_topology::explorer::solid_faces(topo, cyl).unwrap();
+        let z = if top { 20.0 } else { 0.0 };
+        let at = faces
+            .iter()
+            .position(|&f| {
+                let face = topo.face(f).unwrap();
+                face.surface().is_planar() && {
+                    let wire = topo.wire(face.outer_wire()).unwrap();
+                    let edge = topo.edge(wire.edges()[0].edge()).unwrap();
+                    (topo.vertex(edge.start()).unwrap().point().z() - z).abs() < 1e-9
+                }
+            })
+            .unwrap();
+        let (surface, reversed, vertex) = {
+            let face = topo.face(faces[at]).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            let edge = topo.edge(wire.edges()[0].edge()).unwrap();
+            (face.surface().clone(), face.is_reversed(), edge.start())
+        };
+        let edge = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Circle(curve)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap());
+        let mut cap = Face::new(wire, vec![], surface);
+        cap.set_reversed(reversed);
+        faces[at] = topo.add_face(cap);
+        faces
+    }
+
+    fn assert_whole_cylinder(topo: &Topology, sewn: SolidId) {
+        let edges: std::collections::HashSet<usize> =
+            brepkit_topology::explorer::solid_faces(topo, sewn)
+                .unwrap()
+                .iter()
+                .flat_map(|&f| {
+                    let face = topo.face(f).unwrap();
+                    topo.wire(face.outer_wire()).unwrap().edges().to_vec()
+                })
+                .map(|oe| oe.edge().index())
+                .collect();
+        assert_eq!(edges.len(), 3);
+        assert!(
+            crate::validate::validate_solid(topo, sewn)
+                .unwrap()
+                .is_valid()
+        );
+        let volume = crate::measure::solid_volume(topo, sewn, 0.01).unwrap();
+        let exact = std::f64::consts::PI * 100.0 * 20.0;
+        assert!((volume - exact).abs() < 1e-3 * exact, "{volume}");
+    }
+
+    /// A bottom cap whose rim is the circle about -z, run forward, meets
+    /// the wall's circle about +z, from the same start, the other way along.
+    #[test]
+    fn sew_turns_a_closed_rim_running_the_other_way() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let rim = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            10.0,
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let faces = cylinder_with_rim(&mut topo, false, rim, true);
+        let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+        assert_whole_cylinder(&topo, sewn);
+    }
+
+    /// A top cap whose rim circle starts a quarter turn round from the
+    /// wall's still shares the wall's edge.
+    #[test]
+    fn sew_shares_a_closed_rim_whose_circle_starts_elsewhere() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let rim = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            10.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let faces = cylinder_with_rim(&mut topo, true, rim, true);
+        let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+        assert_whole_cylinder(&topo, sewn);
+    }
+
+    /// Two discs on perpendicular planes, both closed at (1, 0, 0) with the
+    /// same middle point, keep their own circles.
+    #[test]
+    fn sew_keeps_perpendicular_circles_through_one_point_apart() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let disc = |topo: &mut Topology, normal: Vec3| {
+            let v = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+            let circle =
+                Circle3D::new_with_ref(Point3::new(0.0, 0.0, 0.0), normal, 1.0, x).unwrap();
+            let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+            topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane { normal, d: 0.0 },
+            ))
+        };
+        let flat = disc(&mut topo, Vec3::new(0.0, 0.0, 1.0));
+        let upright = disc(&mut topo, Vec3::new(0.0, 1.0, 0.0));
+        let sewn = sew_faces(&mut topo, &[flat, upright], 1e-7).unwrap();
+        let rims: Vec<_> = brepkit_topology::explorer::solid_faces(&topo, sewn)
+            .unwrap()
+            .iter()
+            .map(|&f| {
+                let wire = topo.wire(topo.face(f).unwrap().outer_wire()).unwrap();
+                wire.edges()[0].edge()
+            })
+            .collect();
+        assert_ne!(rims[0], rims[1]);
+        let EdgeCurve::Circle(upright_rim) = topo.edge(rims[1]).unwrap().curve() else {
+            unreachable!("the rim is a circle")
+        };
+        assert!(upright_rim.evaluate(1.0).y().abs() < 1e-12);
+    }
+
+    /// A cube whose bottom and front meet along one segment carried by two
+    /// differently parameterized curves sews into the closed cube.
+    #[test]
+    fn sew_shares_a_segment_however_its_curves_run() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let mut topo = Topology::new();
+        let p = Point3::new;
+        let segment = |xs: [f64; 3]| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(
+                    2,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    xs.iter().map(|&x| p(x, 0.0, 0.0)).collect(),
+                    vec![1.0; 3],
+                )
+                .unwrap(),
+            )
+        };
+        let quad = |topo: &mut Topology,
+                    corners: [Point3; 4],
+                    normal: Vec3,
+                    d: f64,
+                    first: Option<(EdgeCurve, bool)>| {
+            let v: Vec<_> = corners
+                .iter()
+                .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+                .collect();
+            let mut edges = Vec::new();
+            for i in 0..4 {
+                let (a, b) = (v[i], v[(i + 1) % 4]);
+                let oriented = match (&first, i) {
+                    (Some((curve, true)), 0) => {
+                        OrientedEdge::new(topo.add_edge(Edge::new(a, b, curve.clone())), true)
+                    }
+                    (Some((curve, false)), 0) => {
+                        OrientedEdge::new(topo.add_edge(Edge::new(b, a, curve.clone())), false)
+                    }
+                    _ => OrientedEdge::new(topo.add_edge(Edge::new(a, b, EdgeCurve::Line)), true),
+                };
+                edges.push(oriented);
+            }
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d }))
+        };
+        let faces = [
+            quad(
+                &mut topo,
+                [
+                    p(0.0, 0.0, 0.0),
+                    p(1.0, 0.0, 0.0),
+                    p(1.0, 1.0, 0.0),
+                    p(0.0, 1.0, 0.0),
+                ],
+                Vec3::new(0.0, 0.0, -1.0),
+                0.0,
+                Some((segment([0.0, 0.2, 1.0]), true)),
+            ),
+            quad(
+                &mut topo,
+                [
+                    p(0.0, 0.0, 1.0),
+                    p(1.0, 0.0, 1.0),
+                    p(1.0, 1.0, 1.0),
+                    p(0.0, 1.0, 1.0),
+                ],
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                None,
+            ),
+            quad(
+                &mut topo,
+                [
+                    p(0.0, 0.0, 0.0),
+                    p(1.0, 0.0, 0.0),
+                    p(1.0, 0.0, 1.0),
+                    p(0.0, 0.0, 1.0),
+                ],
+                Vec3::new(0.0, -1.0, 0.0),
+                0.0,
+                Some((segment([1.0, 0.8, 0.0]), false)),
+            ),
+            quad(
+                &mut topo,
+                [
+                    p(0.0, 1.0, 0.0),
+                    p(1.0, 1.0, 0.0),
+                    p(1.0, 1.0, 1.0),
+                    p(0.0, 1.0, 1.0),
+                ],
+                Vec3::new(0.0, 1.0, 0.0),
+                1.0,
+                None,
+            ),
+            quad(
+                &mut topo,
+                [
+                    p(0.0, 0.0, 0.0),
+                    p(0.0, 1.0, 0.0),
+                    p(0.0, 1.0, 1.0),
+                    p(0.0, 0.0, 1.0),
+                ],
+                Vec3::new(-1.0, 0.0, 0.0),
+                0.0,
+                None,
+            ),
+            quad(
+                &mut topo,
+                [
+                    p(1.0, 0.0, 0.0),
+                    p(1.0, 1.0, 0.0),
+                    p(1.0, 1.0, 1.0),
+                    p(1.0, 0.0, 1.0),
+                ],
+                Vec3::new(1.0, 0.0, 0.0),
+                1.0,
+                None,
+            ),
+        ];
+        let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+        let edges: std::collections::HashSet<usize> =
+            brepkit_topology::explorer::solid_faces(&topo, sewn)
+                .unwrap()
+                .iter()
+                .flat_map(|&f| {
+                    let face = topo.face(f).unwrap();
+                    topo.wire(face.outer_wire()).unwrap().edges().to_vec()
+                })
+                .map(|oe| oe.edge().index())
+                .collect();
+        assert_eq!(edges.len(), 12);
     }
 
     /// A block with a round hole through it, its faces sewn again, keeps
