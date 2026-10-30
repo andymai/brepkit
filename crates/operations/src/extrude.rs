@@ -788,13 +788,13 @@ fn normalize_profile_wire_curves(
     Ok(())
 }
 
-/// Rebuild a wire traversing the same edges in reverse order with flipped
-/// senses.
 /// An extrusion's cap on `surface`, facing `outward`. A plane cap is built
-/// facing it; a NURBS cap keeps its surface, which faces where its normal
-/// at the cap's middle `centre` points, so where that runs against
-/// `outward` the cap is reversed, its wires rewound with it so its edges
-/// still pair with the sides'.
+/// facing it; a NURBS cap keeps its surface, so where its normal runs
+/// against `outward` the cap is reversed, its wires rewound with it so its
+/// edges still pair with the sides'. The normal is read at the cap's middle
+/// `centre` and along its edges, where it leans furthest along the sweep: a
+/// face that sweeps into a solid leans one way all over, but at a point
+/// where it stands edge-on to the sweep its normal tells nothing.
 fn cap_face(
     topo: &mut Topology,
     outer: WireId,
@@ -803,10 +803,40 @@ fn cap_face(
     centre: Point3,
     outward: Vec3,
 ) -> Result<FaceId, crate::OperationsError> {
-    let against = matches!(surface, FaceSurface::Nurbs(_))
-        && surface
-            .project_point(centre)
-            .is_some_and(|(u, v)| surface.normal(u, v).dot(outward) < 0.0);
+    let against = if let FaceSurface::Nurbs(nurbs) = &surface {
+        let mut samples = vec![centre];
+        for wid in std::iter::once(outer).chain(inner.iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (sp, ep) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                samples.extend([0.25, 0.5, 0.75].map(|f| {
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+                }));
+            }
+        }
+        let lean = samples
+            .into_iter()
+            .filter_map(|p| surface.project_point(p))
+            .filter_map(|(u, v)| nurbs.normal(u, v).ok())
+            .map(|n| n.dot(outward))
+            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+            .unwrap_or(0.0);
+        if lean.abs() <= 1e-9 * outward.length() {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "the face to extrude stands edge-on to the extrusion wherever its \
+                         normal could be read"
+                    .into(),
+            });
+        }
+        lean < 0.0
+    } else {
+        false
+    };
     if !against {
         return Ok(topo.add_face(Face::new(outer, inner, surface)));
     }
@@ -818,6 +848,8 @@ fn cap_face(
     Ok(topo.add_face(Face::new_reversed(outer, inner, surface)))
 }
 
+/// Rebuild a wire traversing the same edges in reverse order with flipped
+/// senses.
 fn rewound_wire(topo: &mut Topology, wid: WireId) -> Result<WireId, crate::OperationsError> {
     let oes: Vec<OrientedEdge> = topo
         .wire(wid)?

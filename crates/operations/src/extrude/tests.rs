@@ -1567,20 +1567,108 @@ fn a_planar_nurbs_face_extrudes_either_way_with_caps_facing_out() {
                 (volume - 3.0).abs() < 1e-9,
                 "up {up}, direction {direction:?}: {volume}"
             );
-            for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
-                let f = topo.face(fid).unwrap();
-                let FaceSurface::Nurbs(s) = f.surface() else {
-                    continue;
-                };
-                let n = s.normal(0.5, 0.5).unwrap();
-                let outward = if f.is_reversed() { -n } else { n };
-                let off = s.evaluate(0.5, 0.5) + outward * 0.01;
-                assert_eq!(
-                    crate::classify::classify_point(&topo, solid, off, 1e-3, 1e-7).unwrap(),
-                    crate::classify::PointClassification::Outside,
-                    "up {up}, direction {direction:?}: a cap faces in"
-                );
-            }
+            assert_nurbs_faces_face_out(&topo, solid, &format!("up {up}, direction {direction:?}"));
         }
+    }
+}
+
+/// A point 0.01 off the middle of each NURBS face of `solid`, along the
+/// face's outward normal, lies outside it.
+fn assert_nurbs_faces_face_out(
+    topo: &Topology,
+    solid: brepkit_topology::solid::SolidId,
+    label: &str,
+) {
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let f = topo.face(fid).unwrap();
+        let FaceSurface::Nurbs(s) = f.surface() else {
+            continue;
+        };
+        let n = s.normal(0.5, 0.5).unwrap();
+        let outward = if f.is_reversed() { -n } else { n };
+        let off = s.evaluate(0.5, 0.5) + outward * 0.01;
+        assert_eq!(
+            crate::classify::classify_point(topo, solid, off, 1e-3, 1e-7).unwrap(),
+            crate::classify::PointClassification::Outside,
+            "{label}: face {fid:?} faces in"
+        );
+    }
+}
+
+/// The patch S(u, v) = (6u(1 - u), -1 + 6u² - 4u³, v), cubic in u with
+/// control points (0, -1), (2, -1), (2, 1), (0, 1), swept 1.5 along x either
+/// way. Its vertices' centroid (0, 0, 0.5) lies nearest the patch at its
+/// u = 0 edge, where the face stands edge-on to x; inside, its normal
+/// leans along +x. Each solid is valid and has its caps facing out.
+#[test]
+fn a_curved_nurbs_face_edge_on_at_its_centroid_extrudes_with_caps_facing_out() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    for direction in [Vec3::new(1.0, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0)] {
+        let mut topo = Topology::new();
+        let at = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+        let bow = |z: f64| {
+            [
+                at(0.0, -1.0, z),
+                at(2.0, -1.0, z),
+                at(2.0, 1.0, z),
+                at(0.0, 1.0, z),
+            ]
+        };
+        let cubic = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let rows: Vec<Vec<Point3>> = (0..4).map(|i| vec![bow(0.0)[i], bow(1.0)[i]]).collect();
+        let patch = NurbsSurface::new(
+            3,
+            1,
+            cubic.clone(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 4],
+        )
+        .unwrap();
+        let [a, b, c, d] = [
+            at(0.0, -1.0, 0.0),
+            at(0.0, 1.0, 0.0),
+            at(0.0, 1.0, 1.0),
+            at(0.0, -1.0, 1.0),
+        ]
+        .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let curve = |z: f64| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(3, cubic.clone(), bow(z).to_vec(), vec![1.0; 4]).unwrap(),
+            )
+        };
+        let low = topo.add_edge(Edge::new(a, b, curve(0.0)));
+        let right = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+        let high = topo.add_edge(Edge::new(d, c, curve(1.0)));
+        let left = topo.add_edge(Edge::new(d, a, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(low, true),
+                OrientedEdge::new(right, true),
+                OrientedEdge::new(high, false),
+                OrientedEdge::new(left, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(patch)));
+        let solid = extrude(&mut topo, face, direction, 1.5).unwrap();
+
+        let label = format!("direction {direction:?}");
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid(),
+            "{label}"
+        );
+        assert_nurbs_faces_face_out(&topo, solid, &label);
     }
 }
