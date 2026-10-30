@@ -105,10 +105,16 @@ pub fn sew_faces(
             for e in edges {
                 let v_start = vertex_at(topo, e.span.start);
                 let v_end = vertex_at(topo, e.span.end);
-                // An edge whose two ends weld into one vertex is shorter
-                // than the tolerance: it closes nothing, and its curve as a
-                // closed edge would read as a whole turn.
-                if v_start == v_end && !e.closed {
+                // An edge whose two ends weld into one vertex and whose curve
+                // stays within the tolerance of them closes nothing. One that
+                // reaches farther, an arc just short of a whole turn, becomes
+                // a closed edge.
+                if v_start == v_end
+                    && !e.closed
+                    && e.span
+                        .samples()
+                        .all(|f| (e.span.at(f) - e.span.start).length() <= tol)
+                {
                     continue;
                 }
                 let key = if v_start.index() <= v_end.index() {
@@ -354,9 +360,11 @@ impl Span {
 
 /// A NURBS edge from `t0` to `t1` cut into its Bezier spans, each halved
 /// until its control points lie within half a percent of the chord between
-/// its ends, so a bump or a fold between samples is cut out. Each piece is
-/// held in the ball about its control points, which hold the curve where
-/// its weights are positive. `None` where a weight is not.
+/// its ends, so a bump or a fold between samples is cut out, and its
+/// weights lie within a factor of two of each other, so its points spread
+/// along it with its parameter. Each piece is held in the ball about its
+/// control points, which hold the curve where its weights are positive.
+/// `None` where a weight is not.
 fn nurbs_pieces(
     nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
     t0: f64,
@@ -367,29 +375,15 @@ fn nurbs_pieces(
         return None;
     }
     let (lo, hi) = (t0.min(t1), t0.max(t1));
-    let segments = brepkit_math::nurbs::decompose::curve_to_bezier_segments(nurbs).ok()?;
     let fraction = |t: f64| (t - t0) / (t1 - t0);
+    let knots = nurbs.knots();
     let mut pieces = Vec::new();
-    for segment in segments {
-        let (a, b) = segment.domain();
-        let (a, b) = (a.max(lo), b.min(hi));
+    for i in nurbs.degree()..nurbs.control_points().len() {
+        let (a, b) = (knots[i].max(lo), knots[i + 1].min(hi));
         if b <= a {
             continue;
         }
-        // Homogeneous control points of the segment trimmed to [a, b].
-        let (sa, sb) = segment.domain();
-        let mut pts: Vec<[f64; 4]> = segment
-            .control_points()
-            .iter()
-            .zip(segment.weights())
-            .map(|(p, &w)| [p.x() * w, p.y() * w, p.z() * w, w])
-            .collect();
-        if b < sb {
-            pts = split_bezier(&pts, (b - sa) / (sb - sa)).0;
-        }
-        if a > sa {
-            pts = split_bezier(&pts, (a - sa) / (b - sa)).1;
-        }
+        let pts = brepkit_math::nurbs::decompose::curve_bezier_between(nurbs, a, b).ok()?;
         let mut stack = vec![(a, b, pts, 0_u32)];
         while let Some((a, b, pts, depth)) = stack.pop() {
             let cart: Vec<Point3> = pts
@@ -408,7 +402,10 @@ fn nurbs_pieces(
                 };
                 m.max((d - chord * along.clamp(0.0, 1.0)).length())
             });
-            if bow > 0.005 * length && depth < MAX_DEPTH {
+            let (least, most) = pts.iter().fold((f64::INFINITY, 0.0_f64), |(l, m), h| {
+                (l.min(h[3]), m.max(h[3]))
+            });
+            if (bow > 0.005 * length || most > 2.0 * least) && depth < MAX_DEPTH {
                 let (left, right) = split_bezier(&pts, 0.5);
                 let mid = f64::midpoint(a, b);
                 stack.push((mid, b, right, depth + 1));
@@ -921,21 +918,51 @@ mod tests {
 
     /// A rational cubic through (0, 0), (0, 0.01), (0, 0) and (1, 0) with
     /// weights 1e-12, 1e-6, 1 and 1 strays about 0.0043 off the unit segment
-    /// near its start, and does not lie on it.
+    /// near its start, and does not lie on it; nor with its second point at
+    /// (0, 0.004), straying about 0.0017.
     #[test]
     fn a_rational_cubics_excursion_keeps_it_off_a_segment() {
         use brepkit_math::nurbs::curve::NurbsCurve;
         let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let straight = Span::new(EdgeCurve::Line, p(0.0, 0.0), p(1.0, 0.0));
+        for height in [0.01, 0.004] {
+            let curve = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![p(0.0, 0.0), p(0.0, height), p(0.0, 0.0), p(1.0, 0.0)],
+                vec![1e-12, 1e-6, 1.0, 1.0],
+            )
+            .unwrap();
+            let rational = Span::new(EdgeCurve::NurbsCurve(curve), p(0.0, 0.0), p(1.0, 0.0));
+            assert!(!rational.lies_on(&straight, 1e-7), "height {height}");
+        }
+    }
+
+    /// The quadratic through (0, 0), (1, 1) and (2, 0) on the unclamped
+    /// knots 0 to 5 runs from (0.5, 0.5) to (1.5, 0.5) through (1, 0.75):
+    /// each piece's ball holds it, and a copy lies on it.
+    #[test]
+    fn an_unclamped_quadratics_pieces_hold_it() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
         let curve = NurbsCurve::new(
-            3,
-            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
-            vec![p(0.0, 0.0), p(0.0, 0.01), p(0.0, 0.0), p(1.0, 0.0)],
-            vec![1e-12, 1e-6, 1.0, 1.0],
+            2,
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            vec![p(0.0, 0.0), p(1.0, 1.0), p(2.0, 0.0)],
+            vec![1.0; 3],
         )
         .unwrap();
-        let rational = Span::new(EdgeCurve::NurbsCurve(curve), p(0.0, 0.0), p(1.0, 0.0));
-        let straight = Span::new(EdgeCurve::Line, p(0.0, 0.0), p(1.0, 0.0));
-        assert!(!rational.lies_on(&straight, 1e-7));
+        assert!((curve.evaluate(2.5) - p(1.0, 0.75)).length() < 1e-12);
+        let span =
+            |c: &NurbsCurve| Span::new(EdgeCurve::NurbsCurve(c.clone()), p(0.5, 0.5), p(1.5, 0.5));
+        let (a, b) = (span(&curve), span(&curve));
+        for piece in &a.pieces {
+            for k in 0..=8 {
+                let f = (piece.to - piece.from).mul_add(f64::from(k) / 8.0, piece.from);
+                assert!((a.at(f) - piece.centre).length() <= piece.radius + 1e-12);
+            }
+        }
+        assert!(a.lies_on(&b, 1e-7) && b.lies_on(&a, 1e-7));
     }
 
     /// A unit circle's arc 4e-8 long, shorter than the tolerance, welds to
@@ -991,6 +1018,60 @@ mod tests {
                 .iter()
                 .all(|&kind| kind == "line")
         );
+    }
+
+    /// A unit circle's arc from angle 0 to 2π - 4e-8 welds its ends into one
+    /// vertex but runs almost the whole way round: it stays, as a closed
+    /// edge, while the chord closing it, shorter than the tolerance, goes.
+    #[test]
+    fn sew_keeps_an_arc_just_short_of_a_whole_turn() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            up,
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let [a, b] = [
+            Point3::new(1.0, 0.0, 0.0),
+            circle.evaluate(std::f64::consts::TAU - 4e-8),
+        ]
+        .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let edges = [
+            topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))),
+            topo.add_edge(Edge::new(b, a, EdgeCurve::Line)),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let disc = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: up, d: 0.0 },
+        ));
+        let far = make_loose_quad(
+            &mut topo,
+            Point3::new(100.0, 0.0, 0.0),
+            Point3::new(110.0, 0.0, 0.0),
+            Point3::new(110.0, 10.0, 0.0),
+            Point3::new(100.0, 10.0, 0.0),
+            up,
+            0.0,
+        );
+        let sewn = sew_faces(&mut topo, &[disc, far], 1e-7).unwrap();
+        assert_eq!(curve_kinds(&topo, sewn)[0], ["circle"]);
+        let face = brepkit_topology::explorer::solid_faces(&topo, sewn).unwrap()[0];
+        let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
+        let edge = topo.edge(wire.edges()[0].edge()).unwrap();
+        assert_eq!(edge.start(), edge.end());
     }
 
     /// The cylinder's faces with one cap's rim swapped for `curve`, used
