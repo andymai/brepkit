@@ -3,6 +3,7 @@
 //! Fills an N-sided boundary with a surface patch. For 4-sided boundaries,
 //! uses Coons patch interpolation.
 
+use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
@@ -15,15 +16,18 @@ use crate::OperationsError;
 
 /// Fill a 4-sided boundary with a Coons patch.
 ///
-/// Given 4 boundary curves as polylines (each connecting to the next),
+/// Given 4 boundary curves as polylines, each ending where the next begins,
 /// creates a smooth bilinear NURBS surface that interpolates the boundaries.
 ///
-/// The curves should be ordered: bottom, right, top (reversed), left (reversed).
+/// The curves run round the boundary: bottom, right, top, left. Each may be
+/// given either way along, so a wire's edges in its own order (top running
+/// back to the left, left running down) and the bottom-to-top,
+/// left-to-right reading give the same patch.
 ///
 /// # Errors
 ///
-/// Returns an error if fewer than 4 boundary curves are provided or if
-/// curves have mismatched lengths.
+/// Returns an error if fewer than 4 boundary curves are provided, if the
+/// curves do not close into a loop, or if curves have mismatched lengths.
 pub fn fill_coons_patch(
     topo: &mut Topology,
     curves: &[Vec<Point3>],
@@ -36,11 +40,17 @@ pub fn fill_coons_patch(
             ),
         });
     }
+    if curves[..4].iter().any(|c| c.len() < 2) {
+        return Err(OperationsError::InvalidInput {
+            reason: "boundary curves must have at least 2 points each".into(),
+        });
+    }
 
-    let bottom = &curves[0];
-    let right = &curves[1];
-    let top = &curves[2];
-    let left = &curves[3];
+    let around = chain_loop(&curves[..4])?;
+    let bottom = &around[0];
+    let right = &around[1];
+    let top: Vec<Point3> = around[2].iter().rev().copied().collect();
+    let left: Vec<Point3> = around[3].iter().rev().copied().collect();
 
     let n_u = bottom.len();
     let n_v = right.len();
@@ -51,35 +61,27 @@ pub fn fill_coons_patch(
         });
     }
 
-    if n_u < 2 || n_v < 2 {
-        return Err(OperationsError::InvalidInput {
-            reason: "boundary curves must have at least 2 points each".into(),
-        });
-    }
-
     // Build the Coons patch: P(u,v) = Lc(u,v) + Ld(u,v) - B(u,v)
     // where:
     //   Lc = (1-v)*bottom(u) + v*top(u)      (linear blend of u-curves)
     //   Ld = (1-u)*left(v) + u*right(v)       (linear blend of v-curves)
     //   B  = bilinear interpolation of corners
-    let mut control_points = Vec::with_capacity(n_v);
-    let mut weights = Vec::with_capacity(n_v);
-
     let p00 = bottom[0];
     let p10 = bottom[n_u - 1];
     let p01 = top[0];
     let p11 = top[n_u - 1];
 
-    for j in 0..n_v {
+    // The control net's rows run along u, one per bottom sample.
+    let mut control_points = Vec::with_capacity(n_u);
+    let mut weights = Vec::with_capacity(n_u);
+    for i in 0..n_u {
         #[allow(clippy::cast_precision_loss)]
-        let v = j as f64 / (n_v - 1) as f64;
+        let u = i as f64 / (n_u - 1) as f64;
 
-        let mut row = Vec::with_capacity(n_u);
-        let mut weight_row = Vec::with_capacity(n_u);
-
-        for i in 0..n_u {
+        let mut row = Vec::with_capacity(n_v);
+        for j in 0..n_v {
             #[allow(clippy::cast_precision_loss)]
-            let u = i as f64 / (n_u - 1) as f64;
+            let v = j as f64 / (n_v - 1) as f64;
 
             // Lc: linear blend along v
             let lc = blend(bottom[i], top[i], v);
@@ -91,18 +93,15 @@ pub fn fill_coons_patch(
             let b = bilinear(p00, p10, p01, p11, u, v);
 
             // Coons: Lc + Ld - B
-            let point = Point3::new(
+            row.push(Point3::new(
                 lc.x() + ld.x() - b.x(),
                 lc.y() + ld.y() - b.y(),
                 lc.z() + ld.z() - b.z(),
-            );
-
-            row.push(point);
-            weight_row.push(1.0);
+            ));
         }
 
         control_points.push(row);
-        weights.push(weight_row);
+        weights.push(vec![1.0; n_v]);
     }
 
     // Build NURBS surface (degree 1 for bilinear Coons)
@@ -127,13 +126,29 @@ pub fn fill_coons_patch(
         .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
         .collect();
 
-    let n_corners = verts.len();
-    let edges: Vec<_> = (0..n_corners)
-        .map(|i| {
-            let next = (i + 1) % n_corners;
-            topo.add_edge(Edge::new(verts[i], verts[next], EdgeCurve::Line))
-        })
-        .collect();
+    // Each edge runs along its boundary curve, which the patch's boundary
+    // follows sample for sample.
+    let mut edges = Vec::with_capacity(4);
+    for (i, curve) in around.iter().enumerate() {
+        let next = (i + 1) % 4;
+        let geometry = if curve.len() == 2 {
+            EdgeCurve::Line
+        } else {
+            let mut points = curve.clone();
+            let last = points.len() - 1;
+            (points[0], points[last]) = (corners[i], corners[next]);
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(
+                    1,
+                    build_clamped_knots(points.len(), 1),
+                    points,
+                    vec![1.0; curve.len()],
+                )
+                .map_err(OperationsError::Math)?,
+            )
+        };
+        edges.push(topo.add_edge(Edge::new(verts[i], verts[next], geometry)));
+    }
 
     let oriented: Vec<_> = edges
         .iter()
@@ -144,6 +159,45 @@ pub fn fill_coons_patch(
 
     let face = Face::new(wire_id, vec![], FaceSurface::Nurbs(surface));
     Ok(topo.add_face(face))
+}
+
+/// The four curves turned to run end to end round the loop the first two
+/// start: each after the first begins where the one before ends.
+fn chain_loop(curves: &[Vec<Point3>]) -> Result<Vec<Vec<Point3>>, OperationsError> {
+    let ends = |c: &[Point3]| (c[0], c[c.len() - 1]);
+    let gap = |c: &[Point3], at: Point3| {
+        let (first, last) = ends(c);
+        (first - at).length().min((last - at).length())
+    };
+    let size = curves.iter().flatten().fold(0.0_f64, |m, p| {
+        m.max(p.x().abs()).max(p.y().abs()).max(p.z().abs())
+    });
+    let reach = 1e-6 * (1.0 + size);
+    let mut first = curves[0].clone();
+    if gap(&curves[1], first[0]) < gap(&curves[1], ends(&first).1) {
+        first.reverse();
+    }
+    let mut around = vec![first];
+    for curve in &curves[1..] {
+        let at = ends(&around[around.len() - 1]).1;
+        let (start, end) = ends(curve);
+        let mut next = curve.clone();
+        if (end - at).length() < (start - at).length() {
+            next.reverse();
+        }
+        if (next[0] - at).length() > reach {
+            return Err(OperationsError::InvalidInput {
+                reason: "Coons patch boundary curves do not meet end to end".into(),
+            });
+        }
+        around.push(next);
+    }
+    if (ends(&around[3]).1 - around[0][0]).length() > reach {
+        return Err(OperationsError::InvalidInput {
+            reason: "Coons patch boundary curves do not close into a loop".into(),
+        });
+    }
+    Ok(around)
 }
 
 /// Linear blend: (1-t)*a + t*b
@@ -231,6 +285,96 @@ mod tests {
             assert!((center.x() - 0.5).abs() < 0.2);
             assert!((center.y() - 0.5).abs() < 0.2);
         }
+    }
+
+    /// The issue's patch over four lines, (0, 0, 0), (10, 0, 0), (10, 10, 5)
+    /// and (0, 10, 0): its curves taken in the wire's order or read bottom
+    /// to top and left to right give the surface z = x y / 20, of area
+    /// 107.904.
+    #[test]
+    fn coons_patch_takes_its_curves_either_way_along() {
+        let (a, b, c, d) = (
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 10.0, 5.0),
+            Point3::new(0.0, 10.0, 0.0),
+        );
+        for curves in [
+            vec![vec![a, b], vec![b, c], vec![c, d], vec![d, a]],
+            vec![vec![a, b], vec![b, c], vec![d, c], vec![a, d]],
+            vec![vec![b, a], vec![c, b], vec![c, d], vec![a, d]],
+        ] {
+            let mut topo = Topology::new();
+            let face = fill_coons_patch(&mut topo, &curves).unwrap();
+            let surface = topo.face(face).unwrap().surface();
+            assert!(matches!(surface, FaceSurface::Nurbs(_)));
+            if let FaceSurface::Nurbs(surf) = surface {
+                let along = surf.evaluate(0.25, 0.0);
+                assert!(
+                    (along - Point3::new(2.5, 0.0, 0.0)).length() < 1e-12,
+                    "{along:?}"
+                );
+                for (u, v) in [(0.25, 0.5), (0.5, 0.75), (0.9, 0.1)] {
+                    let p = surf.evaluate(u, v);
+                    assert!(
+                        (p.z() - p.x() * p.y() / 20.0).abs() < 1e-12,
+                        "{curves:?}: {p:?}"
+                    );
+                }
+            }
+            let area = crate::measure::face_area(&topo, face, 0.01).unwrap();
+            assert!(
+                (area - 107.904).abs() < 1e-3 * 107.904,
+                "{curves:?}: area {area}"
+            );
+        }
+    }
+
+    /// A boundary curve given as samples of an arc bounds the patch along
+    /// those samples, and its edge runs along them too, not along the chord
+    /// between its ends.
+    #[test]
+    fn coons_patch_edges_follow_their_curves() {
+        let arc: Vec<Point3> = (0..=10)
+            .map(|i| {
+                let t = f64::from(i) / 10.0;
+                Point3::new(10.0 * t, 0.0, 3.0 * (std::f64::consts::PI * t).sin())
+            })
+            .collect();
+        let right = vec![Point3::new(10.0, 0.0, 0.0), Point3::new(10.0, 10.0, 0.0)];
+        let top: Vec<Point3> = (0..=10)
+            .map(|i| Point3::new(10.0 - f64::from(i), 10.0, 0.0))
+            .collect();
+        let left = vec![Point3::new(0.0, 10.0, 0.0), Point3::new(0.0, 0.0, 0.0)];
+        let mut topo = Topology::new();
+        let face = fill_coons_patch(&mut topo, &[arc, right, top, left]).unwrap();
+        let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
+        let bottom = topo.edge(wire.edges()[0].edge()).unwrap();
+        let (p, q) = (
+            topo.vertex(bottom.start()).unwrap().point(),
+            topo.vertex(bottom.end()).unwrap().point(),
+        );
+        let (t0, t1) = bottom.curve().domain_with_endpoints(p, q);
+        let mid = bottom
+            .curve()
+            .evaluate_with_endpoints(0.5 * (t0 + t1), p, q);
+        assert!(
+            (mid - Point3::new(5.0, 0.0, 3.0)).length() < 1e-12,
+            "{mid:?}"
+        );
+    }
+
+    #[test]
+    fn coons_patch_refuses_curves_that_do_not_close() {
+        let mut topo = Topology::new();
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let curves = [
+            vec![p(0.0, 0.0), p(1.0, 0.0)],
+            vec![p(1.0, 0.0), p(1.0, 1.0)],
+            vec![p(1.0, 1.0), p(0.0, 1.0)],
+            vec![p(0.0, 1.0), p(0.0, 0.5)],
+        ];
+        assert!(fill_coons_patch(&mut topo, &curves).is_err());
     }
 
     #[test]
