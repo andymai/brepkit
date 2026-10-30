@@ -1,0 +1,21 @@
+crates/operations/src/thicken.rs
+  s_a2dc21dbec3f2b::t_50e18fbfd664bb 214-216,220-221
+  s_a2dc21dbec3f2b::t_63daa54268cb71 786,789-832
+  s_a2dc21dbec3f2b::t_88f26eb29013ca 787-788
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5c41b3b00d779ef70944659726fcdee57c856b99",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
