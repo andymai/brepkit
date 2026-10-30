@@ -66,6 +66,7 @@ pub fn sew_faces(
                     span: Span::new(edge.curve().clone(), start, end),
                     forward: oe.is_forward(),
                     source: oe.edge().index(),
+                    closed: edge.start() == edge.end(),
                 });
             }
             wires.push(edges);
@@ -104,6 +105,12 @@ pub fn sew_faces(
             for e in edges {
                 let v_start = vertex_at(topo, e.span.start);
                 let v_end = vertex_at(topo, e.span.end);
+                // An edge whose two ends weld into one vertex is shorter
+                // than the tolerance: it closes nothing, and its curve as a
+                // closed edge would read as a whole turn.
+                if v_start == v_end && !e.closed {
+                    continue;
+                }
                 let key = if v_start.index() <= v_end.index() {
                     (v_start.index(), v_end.index())
                 } else {
@@ -171,6 +178,8 @@ struct EdgeSnapshot {
     forward: bool,
     /// The input edge's index.
     source: usize,
+    /// The input edge starts and ends at one vertex.
+    closed: bool,
 }
 
 /// An edge's curve from its start to its end, read by the fraction of the
@@ -182,52 +191,67 @@ struct Span {
     end: Point3,
     t0: f64,
     t1: f64,
-    /// The fractions where the curve's pieces meet, 0 and 1 among them: a
-    /// NURBS curve's knots, eighths of a turn round a circle or an ellipse.
-    breaks: Vec<f64>,
-    /// How many points inside each piece decide whether it lies on another
-    /// curve.
-    per_piece: usize,
+    /// The span cut into pieces each held in a ball, together covering it.
+    pieces: Vec<Piece>,
+}
+
+/// A stretch of a [`Span`] from fraction `from` to `to`, held in the ball
+/// about `centre` of radius `radius`, with `inside` points read inside it.
+#[derive(Clone, Copy)]
+struct Piece {
+    from: f64,
+    to: f64,
+    centre: Point3,
+    radius: f64,
+    inside: u32,
 }
 
 impl Span {
     fn new(curve: EdgeCurve, start: Point3, end: Point3) -> Self {
         let (t0, t1) = curve.domain_with_endpoints(start, end);
-        let (mut breaks, per_piece) = match &curve {
-            EdgeCurve::Line => (vec![0.0, 1.0], 3),
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let pieces = ((t1 - t0).abs() / std::f64::consts::FRAC_PI_4)
-                    .ceil()
-                    .max(1.0) as u32;
-                (
-                    (0..=pieces)
-                        .map(|k| f64::from(k) / f64::from(pieces))
-                        .collect(),
-                    4,
-                )
-            }
-            EdgeCurve::NurbsCurve(nurbs) => (
-                nurbs
-                    .knots()
-                    .iter()
-                    .map(|&k| (k - t0) / (t1 - t0))
-                    .filter(|f| *f > 0.0 && *f < 1.0)
-                    .chain([0.0, 1.0])
-                    .collect(),
-                nurbs.degree() + 3,
-            ),
-        };
-        breaks.sort_by(f64::total_cmp);
-        breaks.dedup_by(|a, b| (*a - *b).abs() <= 1e-12);
-        Self {
+        let mut span = Self {
             curve,
             start,
             end,
             t0,
             t1,
-            breaks,
-            per_piece,
+            pieces: Vec::new(),
+        };
+        span.pieces = match &span.curve {
+            EdgeCurve::Line => vec![span.chord_piece(0.0, 1.0, 0.0, 3)],
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                let reach = match &span.curve {
+                    EdgeCurve::Circle(c) => c.radius(),
+                    EdgeCurve::Ellipse(e) => e.semi_major(),
+                    _ => 0.0,
+                };
+                let eighth = std::f64::consts::FRAC_PI_8;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let n = ((t1 - t0).abs() / eighth).ceil().max(1.0) as u32;
+                let bow = reach * (1.0 - (0.5 * eighth).cos());
+                (0..n)
+                    .map(|k| {
+                        let (a, b) = (f64::from(k) / f64::from(n), f64::from(k + 1) / f64::from(n));
+                        span.chord_piece(a, b, 2.0 * bow, 3)
+                    })
+                    .collect()
+            }
+            EdgeCurve::NurbsCurve(nurbs) => nurbs_pieces(nurbs, t0, t1)
+                .unwrap_or_else(|| vec![span.chord_piece(0.0, 1.0, f64::INFINITY, 16)]),
+        };
+        span
+    }
+
+    /// The piece from `a` to `b` held in the ball on its chord, widened by
+    /// `bow`, the most the curve strays from the chord there.
+    fn chord_piece(&self, a: f64, b: f64, bow: f64, inside: u32) -> Piece {
+        let (pa, pb) = (self.at(a), self.at(b));
+        Piece {
+            from: a,
+            to: b,
+            centre: pa + (pb - pa) * 0.5,
+            radius: 0.5 * (pb - pa).length() + bow,
+            inside,
         }
     }
 
@@ -240,38 +264,51 @@ impl Span {
         )
     }
 
-    /// The fractions inside each piece that decide whether it lies on
-    /// another curve.
+    /// The fractions that decide whether this span lies on another curve:
+    /// every piece's ends and points inside it.
     fn samples(&self) -> impl Iterator<Item = f64> + '_ {
-        #[allow(clippy::cast_precision_loss)]
-        let n = (self.per_piece + 1) as f64;
-        self.breaks.windows(2).flat_map(move |w| {
-            #[allow(clippy::cast_precision_loss)]
-            (1..=self.per_piece).map(move |k| (w[1] - w[0]).mul_add(k as f64 / n, w[0]))
+        self.pieces.iter().flat_map(|piece| {
+            let n = f64::from(piece.inside + 1);
+            (0..=piece.inside + 1)
+                .map(move |k| (piece.to - piece.from).mul_add(f64::from(k) / n, piece.from))
         })
     }
 
-    /// The fraction along this span nearest `p`, and its distance. Each
-    /// piece is read at eight points, and every least distance among them
-    /// is closed in on by golden section, so a curve folding back near
-    /// itself is not read on the wrong fold.
+    /// The fraction along this span nearest `p`, and its distance. Every
+    /// piece whose ball could hold a nearer point than the nearest piece end
+    /// is closed in on by golden section, nearest ball first.
     fn nearest(&self, p: Point3) -> (f64, f64) {
         let dist = |f: f64| (self.at(f) - p).length();
-        let mut fs: Vec<f64> = self
-            .breaks
-            .windows(2)
-            .flat_map(|w| (0..8).map(move |k| (w[1] - w[0]).mul_add(f64::from(k) / 8.0, w[0])))
-            .collect();
-        fs.push(1.0);
-        let d: Vec<f64> = fs.iter().map(|&f| dist(f)).collect();
-        let golden = (5.0_f64.sqrt() - 1.0) / 2.0;
         let mut best = (0.0, f64::INFINITY);
-        for i in 0..fs.len() {
-            let left = if i > 0 { d[i - 1] } else { f64::INFINITY };
-            let right = d.get(i + 1).copied().unwrap_or(f64::INFINITY);
-            if d[i] > left || d[i] > right {
-                continue;
+        for piece in &self.pieces {
+            for f in [piece.from, piece.to] {
+                let d = dist(f);
+                if d < best.1 {
+                    best = (f, d);
+                }
             }
+        }
+        let mut order: Vec<(f64, &Piece)> = self
+            .pieces
+            .iter()
+            .map(|piece| ((piece.centre - p).length() - piece.radius, piece))
+            .collect();
+        order.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let golden = (5.0_f64.sqrt() - 1.0) / 2.0;
+        for (bound, piece) in order {
+            if bound >= best.1 {
+                break;
+            }
+            // A piece is near enough flat that its distance has one least
+            // between a few samples: start from the least of them.
+            let n = piece.inside + 1;
+            let fs: Vec<f64> = (0..=n)
+                .map(|k| (piece.to - piece.from).mul_add(f64::from(k) / f64::from(n), piece.from))
+                .collect();
+            let ds: Vec<f64> = fs.iter().map(|&f| dist(f)).collect();
+            let i = (0..ds.len())
+                .min_by(|&a, &b| ds[a].total_cmp(&ds[b]))
+                .unwrap_or(0);
             let (mut a, mut b) = (fs[i.saturating_sub(1)], fs[(i + 1).min(fs.len() - 1)]);
             let (mut c, mut e) = (b - golden * (b - a), golden.mul_add(b - a, a));
             let (mut dc, mut de) = (dist(c), dist(e));
@@ -286,7 +323,7 @@ impl Span {
                     de = dist(e);
                 }
             }
-            for found in [(fs[i], d[i]), (c, dc), (e, de)] {
+            for found in [(fs[i], ds[i]), (c, dc), (e, de)] {
                 if found.1 < best.1 {
                     best = found;
                 }
@@ -313,6 +350,117 @@ impl Span {
         let there = other.nearest(self.at(0.5)).0;
         self.heading(0.5).dot(other.heading(there)) > 0.0
     }
+}
+
+/// A NURBS edge from `t0` to `t1` cut into its Bezier spans, each halved
+/// until its control points lie within half a percent of the chord between
+/// its ends, so a bump or a fold between samples is cut out. Each piece is
+/// held in the ball about its control points, which hold the curve where
+/// its weights are positive. `None` where a weight is not.
+fn nurbs_pieces(
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+) -> Option<Vec<Piece>> {
+    const MAX_DEPTH: u32 = 48;
+    if nurbs.weights().iter().any(|&w| !w.is_finite() || w <= 0.0) || (t1 - t0).abs() <= 0.0 {
+        return None;
+    }
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let segments = brepkit_math::nurbs::decompose::curve_to_bezier_segments(nurbs).ok()?;
+    let fraction = |t: f64| (t - t0) / (t1 - t0);
+    let mut pieces = Vec::new();
+    for segment in segments {
+        let (a, b) = segment.domain();
+        let (a, b) = (a.max(lo), b.min(hi));
+        if b <= a {
+            continue;
+        }
+        // Homogeneous control points of the segment trimmed to [a, b].
+        let (sa, sb) = segment.domain();
+        let mut pts: Vec<[f64; 4]> = segment
+            .control_points()
+            .iter()
+            .zip(segment.weights())
+            .map(|(p, &w)| [p.x() * w, p.y() * w, p.z() * w, w])
+            .collect();
+        if b < sb {
+            pts = split_bezier(&pts, (b - sa) / (sb - sa)).0;
+        }
+        if a > sa {
+            pts = split_bezier(&pts, (a - sa) / (b - sa)).1;
+        }
+        let mut stack = vec![(a, b, pts, 0_u32)];
+        while let Some((a, b, pts, depth)) = stack.pop() {
+            let cart: Vec<Point3> = pts
+                .iter()
+                .map(|h| Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3]))
+                .collect();
+            let (first, last) = (cart[0], cart[cart.len() - 1]);
+            let chord = last - first;
+            let length = chord.length();
+            let bow = cart.iter().fold(0.0_f64, |m, &q| {
+                let d = q - first;
+                let along = if length > 0.0 {
+                    d.dot(chord) / (length * length)
+                } else {
+                    0.0
+                };
+                m.max((d - chord * along.clamp(0.0, 1.0)).length())
+            });
+            if bow > 0.005 * length && depth < MAX_DEPTH {
+                let (left, right) = split_bezier(&pts, 0.5);
+                let mid = f64::midpoint(a, b);
+                stack.push((mid, b, right, depth + 1));
+                stack.push((a, mid, left, depth + 1));
+                continue;
+            }
+            let lo_corner = cart.iter().fold(cart[0], |m, q| {
+                Point3::new(m.x().min(q.x()), m.y().min(q.y()), m.z().min(q.z()))
+            });
+            let hi_corner = cart.iter().fold(cart[0], |m, q| {
+                Point3::new(m.x().max(q.x()), m.y().max(q.y()), m.z().max(q.z()))
+            });
+            let centre = lo_corner + (hi_corner - lo_corner) * 0.5;
+            let radius = cart
+                .iter()
+                .fold(0.0_f64, |m, &q| m.max((q - centre).length()));
+            #[allow(clippy::cast_possible_truncation)]
+            let inside = (pts.len() as u32).max(3);
+            let (fa, fb) = (fraction(a), fraction(b));
+            pieces.push(Piece {
+                from: fa.min(fb),
+                to: fa.max(fb),
+                centre,
+                radius,
+                inside,
+            });
+        }
+    }
+    pieces.sort_by(|x, y| x.from.total_cmp(&y.from));
+    (!pieces.is_empty()).then_some(pieces)
+}
+
+/// A Bezier curve's homogeneous control points split at `s` in `[0, 1]` of
+/// its parameter, by de Casteljau.
+fn split_bezier(pts: &[[f64; 4]], s: f64) -> (Vec<[f64; 4]>, Vec<[f64; 4]>) {
+    let n = pts.len();
+    let mut work = pts.to_vec();
+    let mut left = Vec::with_capacity(n);
+    let mut right = Vec::with_capacity(n);
+    left.push(work[0]);
+    right.push(work[n - 1]);
+    for r in 1..n {
+        for k in 0..n - r {
+            for c in 0..4 {
+                work[k][c] = (work[k + 1][c] - work[k][c]).mul_add(s, work[k][c]);
+            }
+        }
+        left.push(work[0]);
+        right.push(work[n - 1 - r]);
+    }
+    right.reverse();
+    (left, right)
 }
 
 /// Snapshot of a face's geometry for the sewing algorithm.
@@ -730,6 +878,119 @@ mod tests {
         );
         assert!(!bumped.lies_on(&straight, 1e-7));
         assert!(straight.lies_on(&bumped, 1e-7));
+    }
+
+    /// A bump 0.1 high inside a knot span 1e-13 long keeps the curve off
+    /// the unit segment: a short parameter span is no short stretch.
+    #[test]
+    fn a_bump_in_a_vanishing_knot_span_keeps_curves_apart() {
+        let bumped = polyline_span(
+            vec![0.0, 0.0, 1e-13, 2e-13, 1.0, 1.0],
+            &[(0.0, 0.0), (0.05, 0.1), (0.1, 0.0), (1.0, 0.0)],
+        );
+        let straight = Span::new(
+            EdgeCurve::Line,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        );
+        assert!(!bumped.lies_on(&straight, 1e-7));
+    }
+
+    /// Two copies of the cubic `(t (t - 0.2) (t - 0.25), 0.001 t, 0)`, which
+    /// folds back on itself twice within a thousandth, lie on each other.
+    #[test]
+    fn copies_of_a_folded_cubic_lie_on_each_other() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.05 / 3.0, 0.001 / 3.0, 0.0),
+            Point3::new(0.1 / 3.0 - 0.15, 0.002 / 3.0, 0.0),
+            Point3::new(0.6, 0.001, 0.0),
+        ];
+        let curve = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            pts.clone(),
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let fold = |c: &NurbsCurve| Span::new(EdgeCurve::NurbsCurve(c.clone()), pts[0], pts[3]);
+        let (a, b) = (fold(&curve), fold(&curve));
+        assert!(a.lies_on(&b, 1e-7) && b.lies_on(&a, 1e-7));
+    }
+
+    /// A rational cubic through (0, 0), (0, 0.01), (0, 0) and (1, 0) with
+    /// weights 1e-12, 1e-6, 1 and 1 strays about 0.0043 off the unit segment
+    /// near its start, and does not lie on it.
+    #[test]
+    fn a_rational_cubics_excursion_keeps_it_off_a_segment() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let curve = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![p(0.0, 0.0), p(0.0, 0.01), p(0.0, 0.0), p(1.0, 0.0)],
+            vec![1e-12, 1e-6, 1.0, 1.0],
+        )
+        .unwrap();
+        let rational = Span::new(EdgeCurve::NurbsCurve(curve), p(0.0, 0.0), p(1.0, 0.0));
+        let straight = Span::new(EdgeCurve::Line, p(0.0, 0.0), p(1.0, 0.0));
+        assert!(!rational.lies_on(&straight, 1e-7));
+    }
+
+    /// A unit circle's arc 4e-8 long, shorter than the tolerance, welds to
+    /// one vertex and is dropped, rather than kept as a whole circle.
+    #[test]
+    fn sew_drops_an_arc_shorter_than_the_tolerance() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let circle = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            up,
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let [a, b, c] = [
+            Point3::new(1.0, 0.0, 0.0),
+            circle.evaluate(4e-8),
+            Point3::new(0.0, 1.0, 0.0),
+        ]
+        .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let edges = [
+            topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))),
+            topo.add_edge(Edge::new(b, c, EdgeCurve::Line)),
+            topo.add_edge(Edge::new(c, a, EdgeCurve::Line)),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let sliver = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: up, d: 0.0 },
+        ));
+        let far = make_loose_quad(
+            &mut topo,
+            Point3::new(100.0, 0.0, 0.0),
+            Point3::new(110.0, 0.0, 0.0),
+            Point3::new(110.0, 10.0, 0.0),
+            Point3::new(100.0, 10.0, 0.0),
+            up,
+            0.0,
+        );
+        let sewn = sew_faces(&mut topo, &[sliver, far], 1e-7).unwrap();
+        assert!(
+            curve_kinds(&topo, sewn)[0]
+                .iter()
+                .all(|&kind| kind == "line")
+        );
     }
 
     /// The cylinder's faces with one cap's rim swapped for `curve`, used
