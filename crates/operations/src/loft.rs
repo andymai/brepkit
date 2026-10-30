@@ -211,16 +211,12 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
             let next_i = (i + 1) % n;
 
             // Quad: ring[s][i] → ring[s][next_i] → ring[s+1][next_i] → ring[s+1][i]
-            let p0 = profile_verts[s][i];
-            let p1 = profile_verts[s][next_i];
-            let p_next = profile_verts[s + 1][i];
-            let edge_dir = p1 - p0;
-            let connect_dir = p_next - p0;
-            let side_normal = edge_dir
-                .cross(connect_dir)
-                .normalize()
-                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-            let side_d = dot_normal_point(side_normal, p0);
+            let side_surface = ruled_quad(
+                profile_verts[s][i],
+                profile_verts[s][next_i],
+                profile_verts[s + 1][i],
+                profile_verts[s + 1][next_i],
+            )?;
 
             let side_wire = Wire::new(
                 vec![
@@ -234,14 +230,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
             .map_err(crate::OperationsError::Topology)?;
 
             let side_wire_id = topo.add_wire(side_wire);
-            let side_face = topo.add_face(Face::new(
-                side_wire_id,
-                vec![],
-                FaceSurface::Plane {
-                    normal: side_normal,
-                    d: side_d,
-                },
-            ));
+            let side_face = topo.add_face(Face::new(side_wire_id, vec![], side_surface));
             all_faces.push(side_face);
         }
     }
@@ -495,6 +484,41 @@ fn coaxial_corner_surface(
     Some(FaceSurface::Cone(cone))
 }
 
+/// The ruled surface between the segments `a0 → a1` and `b0 → b1`, `u`
+/// running along them and `v` from one to the other, its normal
+/// `(a1 − a0) × (b0 − a0)` at `a0`: their plane when `b1` lies in the plane
+/// of the other three corners, and otherwise the bilinear patch on all four,
+/// since a plane through three of a twisted quad's corners misses the fourth.
+fn ruled_quad(
+    a0: Point3,
+    a1: Point3,
+    b0: Point3,
+    b1: Point3,
+) -> Result<FaceSurface, crate::OperationsError> {
+    let Ok(normal) = (a1 - a0).cross(b0 - a0).normalize() else {
+        let normal = Vec3::new(1.0, 0.0, 0.0);
+        return Ok(FaceSurface::Plane {
+            normal,
+            d: dot_normal_point(normal, a0),
+        });
+    };
+    if normal.dot(b1 - a0).abs() <= Tolerance::default().linear {
+        return Ok(FaceSurface::Plane {
+            normal,
+            d: dot_normal_point(normal, a0),
+        });
+    }
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    Ok(FaceSurface::Nurbs(NurbsSurface::new(
+        1,
+        1,
+        knots.clone(),
+        knots,
+        vec![vec![a0, b0], vec![a1, b1]],
+        vec![vec![1.0; 2]; 2],
+    )?))
+}
+
 /// Build a degree-(1, p) ruled NURBS surface between two circular arcs, each
 /// reconstructed from its oriented endpoints (via the same `domain_with_endpoints`
 /// the ring edges use, so the surface matches them exactly). Returns `None` if
@@ -676,14 +700,7 @@ fn try_loft_matching_curved_profiles(
             let outward = (p0e - p0s).cross(p1s - p0s);
             let entry = match (&profs[s][i].curve, &profs[s + 1][i].curve) {
                 (EdgeCurve::Line, EdgeCurve::Line) => {
-                    let normal = outward.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-                    (
-                        FaceSurface::Plane {
-                            normal,
-                            d: dot_normal_point(normal, p0s),
-                        },
-                        false,
-                    )
+                    (ruled_quad(p0s, p0e, p1s, profs[s + 1][i].end)?, false)
                 }
                 (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
                     if let Some(surface) = coaxial_corner_surface(c0, c1, tol) {
@@ -1438,9 +1455,23 @@ mod rounded_l_loft_tests {
         let f2 = rounded_l_face(&mut topo, 1.0, 3.75 - 1.0, 4.4);
         let solid = loft(&mut topo, &[f0, f1, f2]).unwrap();
         let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        // The fixture's straight sides run askew from one section to the
+        // next, so their bands are twisted too; the corners' bands are the
+        // ones bounded by arcs.
         let curved = faces
             .iter()
-            .filter(|&&f| topo.face(f).unwrap().surface().type_tag() != "plane")
+            .filter(|&&f| {
+                let face = topo.face(f).unwrap();
+                face.surface().type_tag() != "plane"
+                    && topo
+                        .wire(face.outer_wire())
+                        .unwrap()
+                        .edges()
+                        .iter()
+                        .any(|oe| {
+                            matches!(topo.edge(oe.edge()).unwrap().curve(), EdgeCurve::Circle(_))
+                        })
+            })
             .count();
         assert_eq!(
             curved,
