@@ -265,6 +265,184 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
+/// A solid lofted from the planar face `profile` to the point `apex`.
+///
+/// The profile closes it as a cap, and each edge of its boundary sweeps to
+/// the apex as a plane (a line), a cone (an arc whose axis runs through the
+/// apex) or the ruled NURBS from the edge to the apex, meeting the others
+/// at the apex's one vertex.
+///
+/// # Errors
+///
+/// Returns an error if the profile is not planar, has holes, or the apex
+/// lies in its plane.
+#[allow(clippy::too_many_lines)]
+pub fn loft_to_point(
+    topo: &mut Topology,
+    profile: FaceId,
+    apex: Point3,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+    let base = crate::copy::copy_face(topo, profile)?;
+    let base_data = topo.face(base)?;
+    let FaceSurface::Plane { normal, d } = *base_data.surface() else {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "loft to a point needs a planar profile".into(),
+        });
+    };
+    if !base_data.inner_wires().is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "loft to a point needs a profile without holes".into(),
+        });
+    }
+    let unit = normal.normalize()?;
+    let height = unit.dot(apex - Point3::new(0.0, 0.0, 0.0)) - d / normal.length();
+    if height.abs() <= tol.linear {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "loft to a point needs the point off the profile's plane".into(),
+        });
+    }
+    // The boundary as it runs about the direction to the apex: stored wires
+    // run about the plane's own normal.
+    let reversed = base_data.is_reversed();
+    let toward = if height > 0.0 { unit } else { -unit };
+    let mut runs: Vec<OrientedEdge> = topo.wire(base_data.outer_wire())?.edges().to_vec();
+    if (height > 0.0) == reversed {
+        runs.reverse();
+        for oe in &mut runs {
+            *oe = OrientedEdge::new(oe.edge(), !oe.is_forward());
+        }
+    }
+    let v_apex = topo.add_vertex(Vertex::new(apex, tol.linear));
+    let mut rails: std::collections::HashMap<VertexId, EdgeId> = std::collections::HashMap::new();
+    let mut faces = Vec::with_capacity(runs.len() + 1);
+
+    // The cap faces away from the apex.
+    let cap_runs: Vec<OrientedEdge> = runs
+        .iter()
+        .rev()
+        .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+        .collect();
+    let cap_wire = topo.add_wire(Wire::new(cap_runs, true)?);
+    faces.push(topo.add_face(Face::new(
+        cap_wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: -toward,
+            d: -toward.dot(apex - Point3::new(0.0, 0.0, 0.0)) + height.abs(),
+        },
+    )));
+
+    for oe in &runs {
+        let edge = topo.edge(oe.edge())?;
+        let (vs, ve, curve) = (edge.start(), edge.end(), edge.curve().clone());
+        let (a, b) = (topo.vertex(vs)?.point(), topo.vertex(ve)?.point());
+        let (from, to) = if oe.is_forward() { (vs, ve) } else { (ve, vs) };
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let mid_t = f64::midpoint(t0, t1);
+        let mid = curve.evaluate_with_endpoints(mid_t, a, b);
+        let tangent =
+            curve.tangent_with_endpoints(mid_t, a, b) * if oe.is_forward() { 1.0 } else { -1.0 };
+        // Out of the solid: across the run, away from the profile's inside.
+        let out = tangent.cross(apex - mid);
+        let surface_and_outward = match &curve {
+            EdgeCurve::Line => {
+                let n = (b - a).cross(apex - a).normalize()?;
+                let n = if n.dot(out) < 0.0 { -n } else { n };
+                (
+                    FaceSurface::Plane {
+                        normal: n,
+                        d: n.dot(apex - Point3::new(0.0, 0.0, 0.0)),
+                    },
+                    true,
+                )
+            }
+            EdgeCurve::Circle(c) => {
+                let axis = (c.center() - apex).normalize()?;
+                let on_axis = axis.cross(c.normal().normalize()?).length() <= 1e-9;
+                if on_axis {
+                    let depth = (c.center() - apex).length();
+                    let cone = brepkit_math::surfaces::ConicalSurface::new(
+                        apex,
+                        axis,
+                        depth.atan2(c.radius()),
+                    )?;
+                    let surface = FaceSurface::Cone(cone);
+                    let outward = surface
+                        .project_point(mid)
+                        .is_some_and(|(u, v)| surface.normal(u, v).dot(out) > 0.0);
+                    (surface, outward)
+                } else {
+                    ruled_to_point(&curve, a, b, apex, out)?
+                }
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
+                ruled_to_point(&curve, a, b, apex, out)?
+            }
+        };
+        let mut rail = |topo: &mut Topology, v: VertexId| -> EdgeId {
+            *rails
+                .entry(v)
+                .or_insert_with(|| topo.add_edge(Edge::new(v, v_apex, EdgeCurve::Line)))
+        };
+        let (rail_to, rail_from) = (rail(topo, to), rail(topo, from));
+        let mut loop_edges = vec![
+            OrientedEdge::new(oe.edge(), oe.is_forward()),
+            OrientedEdge::new(rail_to, true),
+            OrientedEdge::new(rail_from, false),
+        ];
+        let (surface, outward) = surface_and_outward;
+        if !outward {
+            loop_edges.reverse();
+            for e in &mut loop_edges {
+                *e = OrientedEdge::new(e.edge(), !e.is_forward());
+            }
+        }
+        let wire = topo.add_wire(Wire::new(loop_edges, true)?);
+        faces.push(topo.add_face(if outward {
+            Face::new(wire, vec![], surface)
+        } else {
+            Face::new_reversed(wire, vec![], surface)
+        }));
+    }
+    let shell = topo.add_shell(Shell::new(faces)?);
+    Ok(topo.add_solid(Solid::new(shell, vec![])))
+}
+
+/// The ruled NURBS from `curve` (from `a` to `b`) to the point `apex`, and
+/// whether its own normal points along `out`.
+fn ruled_to_point(
+    curve: &EdgeCurve,
+    a: Point3,
+    b: Point3,
+    apex: Point3,
+    out: Vec3,
+) -> Result<(FaceSurface, bool), crate::OperationsError> {
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    let near = match curve {
+        EdgeCurve::Line => brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![a, b],
+            vec![1.0; 2],
+        )?,
+        EdgeCurve::Circle(c) => brepkit_geometry::convert::circle_to_nurbs(c, t0, t1)?,
+        EdgeCurve::Ellipse(e) => brepkit_geometry::convert::ellipse_to_nurbs(e, t0, t1)?,
+        EdgeCurve::NurbsCurve(n) => n.clone(),
+    };
+    let tip = vec![apex; near.control_points().len()];
+    let surface = NurbsSurface::new(
+        1,
+        near.degree(),
+        vec![0.0, 0.0, 1.0, 1.0],
+        near.knots().to_vec(),
+        vec![near.control_points().to_vec(), tip],
+        vec![near.weights().to_vec(), near.weights().to_vec()],
+    )?;
+    let outward = surface.normal(0.5, 0.25).is_ok_and(|n| n.dot(out) > 0.0);
+    Ok((FaceSurface::Nurbs(surface), outward))
+}
+
 /// Detect "loft across a stack of coaxial circles" and produce an exact
 /// chain of cylinder / cone / frustum bands. Returns `Ok(None)` when any
 /// profile is not a recognized circle, when the circles don't share a
@@ -1448,5 +1626,121 @@ mod rounded_l_loft_tests {
             "6 corners x 2 bands must stay curved, got {curved} of {}",
             faces.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod to_point_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    fn square(topo: &mut Topology) -> FaceId {
+        let p = Point3::new;
+        let wire = brepkit_topology::builder::make_polygon_wire(
+            topo,
+            &[
+                p(-20.0, -20.0, 0.0),
+                p(20.0, -20.0, 0.0),
+                p(20.0, 20.0, 0.0),
+                p(-20.0, 20.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap()
+    }
+
+    fn disc(topo: &mut Topology) -> FaceId {
+        let rim = brepkit_topology::builder::make_circle_edge(
+            topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            10.0,
+            1e-7,
+        )
+        .unwrap();
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap()
+    }
+
+    fn check(
+        topo: &Topology,
+        solid: SolidId,
+        counts: (usize, usize, usize),
+        exact: f64,
+        within: f64,
+    ) {
+        assert_eq!(
+            brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap(),
+            counts
+        );
+        let report = crate::validate::validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = crate::measure::solid_volume(topo, solid, 1e-3).unwrap();
+        assert!(
+            (volume - exact).abs() < within * exact,
+            "{volume} of {exact}"
+        );
+    }
+
+    /// A 40 square lofted to a point 30 above or below its middle is a
+    /// pyramid: 5 faces, 8 edges and 5 vertices holding 16000.
+    #[test]
+    fn a_square_lofts_to_a_point_as_a_pyramid() {
+        for z in [30.0, -30.0] {
+            let mut topo = Topology::new();
+            let base = square(&mut topo);
+            let pyramid = loft_to_point(&mut topo, base, Point3::new(0.0, 0.0, z)).unwrap();
+            check(&topo, pyramid, (5, 8, 5), 16000.0, 1e-9);
+            // The cap faces away from the point.
+            let cap = brepkit_topology::explorer::solid_faces(&topo, pyramid)
+                .unwrap()
+                .into_iter()
+                .find_map(|f| {
+                    let face = topo.face(f).unwrap();
+                    match face.surface() {
+                        FaceSurface::Plane { normal, d }
+                            if d.abs() < 1e-9 && normal.z().abs() > 0.5 =>
+                        {
+                            Some(if face.is_reversed() {
+                                -*normal
+                            } else {
+                                *normal
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+                .unwrap();
+            assert!(cap.z() * z < 0.0, "{cap:?}");
+        }
+    }
+
+    /// A disc of radius 10 lofted to a point 30 above it is a cone of
+    /// π 100 30 / 3, its side a cone over the disc's axis, or with the point
+    /// off the axis the ruled surface to it.
+    #[test]
+    fn a_disc_lofts_to_a_point_as_a_cone() {
+        let exact = std::f64::consts::PI * 100.0 * 10.0;
+        for (x, kind, within) in [(0.0, "cone", 1e-6), (5.0, "nurbs", 1e-3)] {
+            let mut topo = Topology::new();
+            let base = disc(&mut topo);
+            let cone = loft_to_point(&mut topo, base, Point3::new(x, 0.0, 30.0)).unwrap();
+            check(&topo, cone, (2, 2, 2), exact, within);
+            let kinds: Vec<_> = brepkit_topology::explorer::solid_faces(&topo, cone)
+                .unwrap()
+                .iter()
+                .map(|&f| topo.face(f).unwrap().surface().type_tag())
+                .collect();
+            assert!(kinds.contains(&kind), "{kinds:?}");
+        }
+    }
+
+    #[test]
+    fn a_point_in_the_profiles_plane_is_refused() {
+        let mut topo = Topology::new();
+        let base = square(&mut topo);
+        assert!(loft_to_point(&mut topo, base, Point3::new(50.0, 0.0, 0.0)).is_err());
     }
 }
