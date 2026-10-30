@@ -37,6 +37,7 @@ use brepkit_topology::face::FaceId;
 pub(crate) use face::sphere_face_is_off_grid;
 pub use face::{tessellate_with_uvs, tessellate_with_uvs_a};
 pub(crate) use mesh_ops::COINCIDENT_DEDUPE_GRID;
+pub(crate) use mesh_ops::drawn_edge_samples;
 pub use mesh_ops::{
     EdgeLines, boundary_edge_count, is_watertight, non_manifold_edge_count, sample_solid_edges,
     sample_solid_edges_filtered,

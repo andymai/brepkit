@@ -11,6 +11,33 @@ use brepkit_topology::test_utils::make_unit_cube_manifold;
 
 use super::*;
 
+/// A shelled result meshes with no open or non-manifold edge, and the ray
+/// cast puts each point of `wall` inside it and each of `hollow` outside.
+fn assert_shelled(
+    topo: &Topology,
+    result: SolidId,
+    wall: &[(f64, f64, f64)],
+    hollow: &[(f64, f64, f64)],
+) {
+    use crate::classify::{PointClassification, classify_point};
+    let mesh = crate::tessellate::tessellate_solid(topo, result, 0.01).unwrap();
+    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+    assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+    for (points, class) in [
+        (wall, PointClassification::Inside),
+        (hollow, PointClassification::Outside),
+    ] {
+        for &(x, y, z) in points {
+            let p = brepkit_math::vec::Point3::new(x, y, z);
+            assert_eq!(
+                classify_point(topo, result, p, 0.0, 1e-7).unwrap(),
+                class,
+                "{p:?}"
+            );
+        }
+    }
+}
+
 /// Helper: get face IDs matching a given normal direction.
 fn find_faces_by_normal(topo: &Topology, solid: SolidId, target_normal: Vec3) -> Vec<FaceId> {
     let tol = Tolerance::loose();
@@ -114,12 +141,25 @@ fn shell_two_open_faces_volume() {
     assert_eq!(open_faces.len(), 2);
 
     let result = shell(&mut topo, cube, 0.1, &open_faces).unwrap();
-    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
-    // Expected: 1.0 - 0.8*0.8*1.0 = 0.36
-    assert!(vol > 0.1, "tube shell volume should be positive, got {vol}");
+    // A tube: four walls inside and out, and a rim at each end.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(faces.len(), 10);
     assert!(
-        vol < 1.0,
-        "tube shell volume should be < original 1.0, got {vol}"
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.95, 0.5)],
+        &[(0.5, 0.5, 0.5), (0.5, 0.5, 0.02), (0.5, 0.5, 0.98)],
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.8;
+    assert!(
+        (vol - expected).abs() < 1e-9,
+        "tube volume {vol}, expected {expected}"
     );
 }
 
@@ -999,5 +1039,281 @@ fn shell_thickness_past_corner_radius_gives_a_sharp_corner() {
     assert_eq!(
         diagonal_planes, 4,
         "each swallowed corner cylinder must leave a 45-degree chamfer strip"
+    );
+}
+
+/// A box open on two faces that meet (its top and front) leaves a U-shaped
+/// rim on each: ten faces, holding the box less a cavity open through both.
+#[test]
+fn shell_box_open_on_two_adjacent_faces() {
+    let mut topo = Topology::new();
+    let b = crate::primitives::make_box(&mut topo, 50.0, 40.0, 30.0).unwrap();
+    let mut open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, -1.0, 0.0)));
+    assert_eq!(open.len(), 2);
+    let result = shell(&mut topo, b, 3.0, &open).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(faces.len(), 10);
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(1.5, 20.0, 15.0), (25.0, 20.0, 1.5), (25.0, 38.5, 15.0)],
+        &[(25.0, 20.0, 15.0), (25.0, 1.5, 15.0), (25.0, 20.0, 28.5)],
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 50.0 * 40.0 * 30.0 - 44.0 * 37.0 * 27.0;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
+    );
+}
+
+/// A unit cube open on its top, front and back keeps a strip of its top along
+/// each side wall: two rims on the top's plane, ten faces in all, holding the
+/// cube less a cavity open through all three.
+#[test]
+fn shell_cube_open_on_three_faces() {
+    let mut topo = Topology::new();
+    let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let mut open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, -1.0, 0.0)));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, 1.0, 0.0)));
+    assert_eq!(open.len(), 3);
+    let result = shell(&mut topo, b, 0.1, &open).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(faces.len(), 10);
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.95), (0.95, 0.5, 0.5), (0.5, 0.5, 0.05)],
+        &[
+            (0.5, 0.5, 0.5),
+            (0.5, 0.02, 0.5),
+            (0.5, 0.98, 0.5),
+            (0.5, 0.5, 0.97),
+        ],
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.9;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
+    );
+}
+
+/// A unit box built from two prisms, split across its top from (0.2, 0) to
+/// (1, 0.4), the triangle's wire starting at (1, 0): open on both pieces of
+/// its top, it is a box open on one plane, with one rim, holding the box
+/// less a cavity open through it. Its bottom and the two sides the split
+/// reaches stay in two pieces each, so it has 17 faces.
+#[test]
+fn shell_box_open_on_a_top_split_in_two() {
+    use brepkit_math::vec::Point3;
+
+    use crate::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+
+    let mut topo = Topology::new();
+    let mut prism = |corners: &[(f64, f64)]| {
+        let pts: Vec<Point3> = corners
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let base = brepkit_topology::builder::make_planar_face(&mut topo, &pts, 1e-7).unwrap();
+        crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap()
+    };
+    let corner = prism(&[(1.0, 0.0), (1.0, 0.4), (0.2, 0.0)]);
+    let rest = prism(&[(0.0, 0.0), (0.2, 0.0), (1.0, 0.4), (1.0, 1.0), (0.0, 1.0)]);
+    let keep_pieces = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let b = boolean_with_options(&mut topo, BooleanOp::Fuse, corner, rest, keep_pieces).unwrap();
+    let open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    assert_eq!(open.len(), 2);
+    let result = shell(&mut topo, b, 0.1, &open).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let planes: Vec<String> = faces
+        .iter()
+        .map(|&f| match topo.face(f).unwrap().surface() {
+            FaceSurface::Plane { normal, d } => format!("{normal:?} {d:.3}"),
+            other => other.type_tag().to_string(),
+        })
+        .collect();
+    assert_eq!(faces.len(), 17, "{planes:#?}");
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.05, 0.5), (0.5, 0.5, 0.05)],
+        &[(0.5, 0.5, 0.5), (0.8, 0.2, 0.5), (0.5, 0.5, 0.97)],
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.8 * 0.9;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
+    );
+}
+
+/// The two-prism box open at both split ends, with one piece of its top
+/// stored turned round: its plane faces down and its wire runs clockwise
+/// from above, and it is marked reversed, so it still faces up. Each end is
+/// still one opening with one rim, round walls 0.1 thick.
+#[test]
+fn shell_box_open_at_both_ends_one_piece_stored_turned_round() {
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    use crate::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+
+    let mut topo = Topology::new();
+    let mut prism = |corners: &[(f64, f64)]| {
+        let pts: Vec<Point3> = corners
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let base = brepkit_topology::builder::make_planar_face(&mut topo, &pts, 1e-7).unwrap();
+        crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap()
+    };
+    let corner = prism(&[(1.0, 0.0), (1.0, 0.4), (0.2, 0.0)]);
+    let rest = prism(&[(0.0, 0.0), (0.2, 0.0), (1.0, 0.4), (1.0, 1.0), (0.0, 1.0)]);
+    let keep_pieces = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let b = boolean_with_options(&mut topo, BooleanOp::Fuse, corner, rest, keep_pieces).unwrap();
+    let mut open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, -1.0)));
+    assert_eq!(open.len(), 4);
+
+    let (wire, normal, d, reversed) = {
+        let face = topo.face(open[0]).unwrap();
+        let FaceSurface::Plane { normal, d } = face.surface() else {
+            unreachable!("the top is planar")
+        };
+        (face.outer_wire(), *normal, *d, face.is_reversed())
+    };
+    let turned: Vec<OrientedEdge> = topo
+        .wire(wire)
+        .unwrap()
+        .edges()
+        .iter()
+        .rev()
+        .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+        .collect();
+    let turned = topo.add_wire(Wire::new(turned, true).unwrap());
+    let mut face = Face::new(
+        turned,
+        vec![],
+        FaceSurface::Plane {
+            normal: -normal,
+            d: -d,
+        },
+    );
+    face.set_reversed(!reversed);
+    *topo.face_mut(open[0]).unwrap() = face;
+
+    let result = shell(&mut topo, b, 0.1, &open).unwrap();
+    let ends = brepkit_topology::explorer::solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, .. }
+                if normal.z().abs() > 0.5)
+        })
+        .count();
+    assert_eq!(ends, 2);
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.95, 0.5)],
+        &[(0.5, 0.5, 0.5), (0.8, 0.2, 0.98), (0.5, 0.5, 0.02)],
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.8;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
+    );
+}
+
+/// The same two-prism box open at both ends, its top and its bottom each
+/// split in two: each end is one opening with one rim, and the box keeps
+/// four walls 0.1 thick round a cavity open through it.
+#[test]
+fn shell_box_open_at_both_split_ends() {
+    use brepkit_math::vec::Point3;
+
+    use crate::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+
+    let mut topo = Topology::new();
+    let mut prism = |corners: &[(f64, f64)]| {
+        let pts: Vec<Point3> = corners
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let base = brepkit_topology::builder::make_planar_face(&mut topo, &pts, 1e-7).unwrap();
+        crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap()
+    };
+    let corner = prism(&[(1.0, 0.0), (1.0, 0.4), (0.2, 0.0)]);
+    let rest = prism(&[(0.0, 0.0), (0.2, 0.0), (1.0, 0.4), (1.0, 1.0), (0.0, 1.0)]);
+    let keep_pieces = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let b = boolean_with_options(&mut topo, BooleanOp::Fuse, corner, rest, keep_pieces).unwrap();
+    let mut open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, -1.0)));
+    assert_eq!(open.len(), 4);
+    let result = shell(&mut topo, b, 0.1, &open).unwrap();
+
+    let ends = brepkit_topology::explorer::solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, .. }
+                if normal.z().abs() > 0.5)
+        })
+        .count();
+    assert_eq!(ends, 2);
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.95, 0.5)],
+        &[(0.5, 0.5, 0.5), (0.8, 0.2, 0.98), (0.5, 0.5, 0.02)],
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.8;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
     );
 }

@@ -297,8 +297,8 @@ pub fn make_regular_polygon_wire(
 ///
 /// # Errors
 ///
-/// Returns an error if the wire has no edges or fewer than 3 usable sample
-/// points (the wire is degenerate or collinear).
+/// Returns an error if the wire has no edges, does not close, or has fewer
+/// than 3 usable sample points (the wire is degenerate or collinear).
 pub fn make_face_from_wire(
     topo: &mut Topology,
     wire_id: WireId,
@@ -310,6 +310,7 @@ pub fn make_face_from_wire(
             entity: "wire (no edges)",
         });
     }
+    crate::validation::validate_wire_chain_closes(wire, topo)?;
 
     let sampled = sample_wire_for_planarity(topo, edges)?;
     let surface = match verified_plane(&sampled) {
@@ -329,8 +330,9 @@ pub fn make_face_from_wire(
 ///
 /// # Errors
 ///
-/// Returns an error if the wire has no edges, has fewer than 3 usable sample
-/// points, or its samples do not lie within tolerance of any single plane.
+/// Returns an error if the wire has no edges, does not close, has fewer
+/// than 3 usable sample points, or its samples do not lie within tolerance
+/// of any single plane.
 pub fn make_planar_face_from_wire(
     topo: &mut Topology,
     wire_id: WireId,
@@ -342,6 +344,7 @@ pub fn make_planar_face_from_wire(
             entity: "wire (no edges)",
         });
     }
+    crate::validation::validate_wire_chain_closes(wire, topo)?;
 
     let sampled = sample_wire_for_planarity(topo, edges)?;
     let (normal, d) = verified_plane(&sampled).ok_or(crate::TopologyError::NotPlanar)?;
@@ -1096,6 +1099,41 @@ mod tests {
         let wid = make_regular_polygon_wire(&mut topo, 1.0, 6, TOL).unwrap();
         let wire = topo.wire(wid).unwrap();
         assert_eq!(wire.edges().len(), 6);
+    }
+
+    /// A line and a half circle joined end to end, as a wire flagged closed
+    /// whose ends never meet, is refused rather than faced over its chord.
+    #[test]
+    fn a_face_needs_a_wire_that_closes() {
+        use crate::edge::{Edge, EdgeCurve};
+        use crate::vertex::Vertex;
+        use crate::wire::{OrientedEdge, Wire};
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let v = |topo: &mut Topology, x: f64| {
+            topo.add_vertex(Vertex::new(Point3::new(x, 0.0, 0.0), TOL))
+        };
+        let (a, b, c) = (v(&mut topo, 0.0), v(&mut topo, 10.0), v(&mut topo, 20.0));
+        let arc = Circle3D::new_with_ref(
+            Point3::new(15.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            5.0,
+            Vec3::new(-1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let edges = vec![
+            OrientedEdge::new(topo.add_edge(Edge::new(a, b, EdgeCurve::Line)), true),
+            OrientedEdge::new(topo.add_edge(Edge::new(b, c, EdgeCurve::Circle(arc))), true),
+        ];
+        let open = topo.add_wire(Wire::new(edges.clone(), true).unwrap());
+        assert!(make_face_from_wire(&mut topo, open).is_err());
+        assert!(make_planar_face_from_wire(&mut topo, open).is_err());
+
+        let back = OrientedEdge::new(topo.add_edge(Edge::new(c, a, EdgeCurve::Line)), true);
+        let closed = topo.add_wire(Wire::new([edges, vec![back]].concat(), true).unwrap());
+        assert!(make_face_from_wire(&mut topo, closed).is_ok());
+        assert!(make_planar_face_from_wire(&mut topo, closed).is_ok());
     }
 
     #[test]

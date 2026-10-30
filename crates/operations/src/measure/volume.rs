@@ -4597,4 +4597,72 @@ mod tests {
             PI / 6.0
         );
     }
+
+    /// The cap under the cubic Bezier through (0, 0), (5, 20), (25, 20) and
+    /// (30, 0), closed by its chord, holds 330, so extruded `h` it holds
+    /// 330 h, read along its curved side's boundary however long it runs.
+    #[test]
+    fn a_bezier_caps_extrusion_holds_its_exact_volume() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        for h in [1.0, 100.0] {
+            let mut topo = Topology::new();
+            let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+            let a = topo.add_vertex(Vertex::new(p(0.0, 0.0), 1e-7));
+            let b = topo.add_vertex(Vertex::new(p(30.0, 0.0), 1e-7));
+            let bezier = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![p(0.0, 0.0), p(5.0, 20.0), p(25.0, 20.0), p(30.0, 0.0)],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let arch = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(bezier)));
+            let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(arch, true),
+                        OrientedEdge::new(chord, true),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let cap = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+            let solid =
+                crate::extrude::extrude(&mut topo, cap, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+            let volume = solid_volume(&topo, solid, 0.01).unwrap();
+            assert!((volume - 330.0 * h).abs() < 1e-9 * 330.0 * h, "{volume}");
+        }
+    }
+
+    /// A 10 square lofted smoothly through 17 copies turned an eighth of a
+    /// turn over 40 holds 4000, every slice a 10 square: its lofted sides
+    /// lie within a micron of the twisted square's, and their volume reads
+    /// within 1e-8 of it.
+    #[test]
+    fn a_twisted_square_loft_holds_its_volume() {
+        let mut topo = Topology::new();
+        let faces: Vec<_> = (0..17)
+            .map(|i| {
+                let a = (45.0_f64 * f64::from(i) / 16.0).to_radians();
+                let z = 40.0 * f64::from(i) / 16.0;
+                let pts: Vec<Point3> = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]
+                    .iter()
+                    .map(|&(x, y): &(f64, f64)| {
+                        Point3::new(
+                            x.mul_add(a.cos(), -y * a.sin()),
+                            x.mul_add(a.sin(), y * a.cos()),
+                            z,
+                        )
+                    })
+                    .collect();
+                brepkit_topology::builder::make_planar_face(&mut topo, &pts, 1e-7).unwrap()
+            })
+            .collect();
+        let solid = crate::loft::loft_smooth(&mut topo, &faces).unwrap();
+        let volume = solid_volume(&topo, solid, 0.01).unwrap();
+        assert!((volume - 4000.0).abs() < 1e-8 * 4000.0, "{volume}");
+    }
 }
