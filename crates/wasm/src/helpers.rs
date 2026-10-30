@@ -246,17 +246,24 @@ pub fn try_chamfer(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     distance: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    let orientation_deflection = (distance * 0.1).clamp(0.01, 0.1);
     if let Ok(r) =
         brepkit_operations::blend_ops::chamfer_v2(topo, solid_id, edge_ids, distance, distance)
         && r.solid != solid_id
         && !r.is_partial
         && r.failed.is_empty()
         && r.succeeded.len() == edge_ids.len()
-        && blend_result_holds(topo, r.solid, (distance * 0.1).clamp(0.01, 0.1))
+        && blend_result_holds(topo, r.solid, orientation_deflection)
     {
         return Ok(r.solid);
     }
-    brepkit_operations::chamfer::chamfer(topo, solid_id, edge_ids, distance)
+    let s = brepkit_operations::chamfer::chamfer(topo, solid_id, edge_ids, distance)?;
+    if s != solid_id && blend_result_holds(topo, s, orientation_deflection) {
+        return Ok(s);
+    }
+    Err(brepkit_operations::OperationsError::InvalidInput {
+        reason: "no chamfer engine produced a changed, closed, outward-oriented result".to_owned(),
+    })
 }
 
 /// Whether a fillet's or chamfer's result is a solid to keep, its volume
@@ -811,6 +818,13 @@ mod fillet_tests {
             if fillet_first {
                 let inside = near(&topo, solid, Point3::new(40.0, 42.0, 8.0));
                 solid = try_fillet(&mut topo, solid, &[inside], 5.0).unwrap();
+                assert!(
+                    brepkit_topology::explorer::solid_faces(&topo, solid)
+                        .unwrap()
+                        .iter()
+                        .any(|&f| !topo.face(f).unwrap().surface().is_planar()),
+                    "the fillet should leave a round, not a bevel"
+                );
             }
             let before = brepkit_operations::measure::solid_volume(&topo, solid, 0.01).unwrap();
             let corners = [
