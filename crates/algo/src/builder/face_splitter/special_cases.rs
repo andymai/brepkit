@@ -4476,7 +4476,7 @@ pub(super) fn split_face_with_internal_loops(
                     let inner = super::super::classify_2d::sample_interior_point(&flat);
                     frame.evaluate(inner.x(), inner.y())
                 }
-                _ => centroid,
+                _ => curved_loop_interior(surface, &ring, centroid).unwrap_or(centroid),
             };
             // Offset along the face normal by a small amount to ensure
             // the point is clearly inside the opposing solid (not on the
@@ -4738,6 +4738,67 @@ fn sample_edges_3d(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
         pts.extend(span);
     }
     pts
+}
+
+/// A point of a curved `surface` inside the loop through `ring` (its samples
+/// in traversal order) when the loop's `centroid` lies outside it, as it does
+/// in the notch of an L- or V-shaped loop. The point comes from the loop's
+/// own `(u, v)` polygon. `None` when the centroid already lies inside, or
+/// when the loop winds a periodic direction of the surface and so bounds no
+/// polygon in `(u, v)`.
+fn curved_loop_interior(
+    surface: &FaceSurface,
+    ring: &[Point3],
+    centroid: Point3,
+) -> Option<Point3> {
+    use super::super::classify_2d::{
+        boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d, sample_interior_point,
+    };
+    let (u_period, v_period) = parameter_periods(surface);
+    let unwrap = |x: f64, prev: f64, period: Option<f64>| {
+        period.map_or(x, |p| x - ((x - prev) / p).round() * p)
+    };
+    let mut uv: Vec<Point2> = Vec::with_capacity(ring.len());
+    for &p in ring {
+        let (u, v) = surface.project_point(p)?;
+        let (u, v) = uv.last().map_or((u, v), |prev| {
+            (unwrap(u, prev.x(), u_period), unwrap(v, prev.y(), v_period))
+        });
+        uv.push(Point2::new(u, v));
+    }
+    let (Some(&first), Some(&last)) = (uv.first(), uv.last()) else {
+        return None;
+    };
+    let winds = |x: f64, prev: f64, period: Option<f64>| {
+        period.is_some_and(|p| (unwrap(x, prev, period) - x).abs() > 0.5 * p)
+    };
+    if uv.len() < 3 || winds(first.x(), last.x(), u_period) || winds(first.y(), last.y(), v_period)
+    {
+        return None;
+    }
+    let mid = |coord: fn(Point2) -> f64| {
+        let (lo, hi) = uv
+            .iter()
+            .copied()
+            .map(coord)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
+                (lo.min(x), hi.max(x))
+            });
+        f64::midpoint(lo, hi)
+    };
+    let (cu, cv) = surface.project_point(centroid)?;
+    let c = Point2::new(
+        unwrap(cu, mid(Point2::x), u_period),
+        unwrap(cv, mid(Point2::y), v_period),
+    );
+    if point_in_polygon_2d(c, &uv) && distance_to_polygon_boundary(c, &uv) > boundary_eps(&uv) {
+        return None;
+    }
+    let inner = sample_interior_point(&uv);
+    if !point_in_polygon_2d(inner, &uv) {
+        return None;
+    }
+    surface.evaluate(inner.x(), inner.y())
 }
 
 /// The parameter period of each periodic direction of a curved surface.
