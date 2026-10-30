@@ -3154,6 +3154,30 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         !(zero_length_lines && faces.all(|f| Some(f) == first))
     });
 
+    // A ball's equator is chords standing for arcs of its circle. Where a
+    // section arc shares a chord's ends, the arc is the edge both faces
+    // should keep: it lies on the plane and on the ball, the chord on
+    // neither face's true boundary.
+    let mut on_sphere: HashSet<EdgeId> = HashSet::new();
+    for entry in &entries {
+        if matches!(
+            topo.face(face_ids[entry.face_idx])?.surface(),
+            brepkit_topology::face::FaceSurface::Sphere(_)
+        ) {
+            on_sphere.insert(entry.edge_id);
+        }
+    }
+    let is_line = |e: EdgeId| {
+        topo.edge(e)
+            .is_ok_and(|edge| matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line))
+    };
+    let is_arc = |e: EdgeId| {
+        topo.edge(e).is_ok_and(|edge| {
+            edge.start() != edge.end()
+                && matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+        })
+    };
+
     // Build edge replacement map: duplicate EdgeId → (canonical EdgeId, needs_flip).
     // needs_flip is true when the duplicate's vertex order is reversed vs canonical,
     // requiring the OrientedEdge's forward flag to be flipped during wire rebuilding.
@@ -3168,14 +3192,27 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             continue; // Only one unique edge — no merge needed
         }
 
-        // Pick the first (lowest index) as canonical
-        let canonical = unique[0];
+        // Pick the first (lowest index) as canonical, or the arc a ball's
+        // equator chords stand for.
+        let chords_of_arc = unique.iter().filter(|&&e| is_arc(e)).count() == 1
+            && unique
+                .iter()
+                .all(|&e| is_arc(e) || (is_line(e) && on_sphere.contains(&e)));
+        let canonical = if chords_of_arc {
+            unique
+                .iter()
+                .copied()
+                .find(|&e| is_arc(e))
+                .unwrap_or(unique[0])
+        } else {
+            unique[0]
+        };
         let canon_start = topo.edge(canonical)?.start();
         let canon_end = topo.edge(canonical)?.end();
         let canon_qs = quantize_point(topo.vertex(canon_start)?.point(), tol);
         let canon_qe = quantize_point(topo.vertex(canon_end)?.point(), tol);
 
-        for &dup in &unique[1..] {
+        for &dup in unique.iter().filter(|&&e| e != canonical) {
             let dup_edge = topo.edge(dup)?;
             let dup_qs = quantize_point(topo.vertex(dup_edge.start())?.point(), tol);
             let dup_qe = quantize_point(topo.vertex(dup_edge.end())?.point(), tol);
