@@ -377,6 +377,9 @@ fn nurbs_between(
 ) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
     use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_math::nurbs::knot_ops::curve_split;
+    // The knot routines' resolution: within it of an end there is no room to
+    // cut, and nothing past it to cut off.
+    const AT_END: f64 = 1e-15;
     let (d0, d1) = curve.domain();
     let length = d1 - d0;
     if length.is_nan() || length <= 0.0 {
@@ -390,11 +393,13 @@ fn nurbs_between(
         curve.weights().to_vec(),
     )
     .ok()?;
+    // Cut wherever the span leaves the domain, however near its end: a knot
+    // span as narrow as a parameter's noise can hold a long piece.
     let (lo, hi) = (unit(t0.min(t1)), unit(t0.max(t1)));
-    if hi < 1.0 - 1e-12 {
+    if hi < 1.0 - AT_END {
         span = curve_split(&span, hi).ok()?.0;
     }
-    if lo > 1e-12 {
+    if lo > AT_END {
         span = curve_split(&span, lo).ok()?.1;
     }
     if t1 >= t0 {
@@ -1131,6 +1136,46 @@ mod tests {
     /// 3.8e-8 apart and weld: the edge becomes a closed edge one turn long,
     /// cut from the curve, not the curve's whole turn and a quarter, whether
     /// its knots run over 1 or over 1e-13.
+    /// A polyline whose first or last knot span is a millionth of a
+    /// millionth of its domain yet holds a unit segment: a cut halfway along
+    /// that span drops half the segment, at either end and either way along.
+    #[test]
+    fn nurbs_between_cuts_inside_a_narrow_knot_span() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let polyline = |knot: f64, corner: Point3| {
+            NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, knot, 1.0, 1.0],
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    corner,
+                    Point3::new(1.0, 1.0, 0.0),
+                ],
+                vec![1.0; 3],
+            )
+            .unwrap()
+        };
+        let cuts_to = |c: &NurbsCurve, t0: f64, t1: f64| {
+            let piece = nurbs_between(c, t0, t1).unwrap();
+            let (a, b) = piece.domain();
+            (piece.evaluate(a) - c.evaluate(t0)).length() < 1e-12
+                && (piece.evaluate(b) - c.evaluate(t1)).length() < 1e-12
+        };
+
+        let first = polyline(1e-12, Point3::new(1.0, 0.0, 0.0));
+        let half = 5e-13;
+        assert!((first.evaluate(half) - Point3::new(0.5, 0.0, 0.0)).length() < 1e-3);
+        assert!(cuts_to(&first, half, 1.0));
+        assert!(cuts_to(&first, 1.0, half));
+
+        let last = polyline(1.0 - 1e-12, Point3::new(0.0, 1.0, 0.0));
+        let half = 1.0 - 5e-13;
+        assert!((last.evaluate(half) - Point3::new(0.5, 1.0, 0.0)).length() < 1e-3);
+        assert!(cuts_to(&last, 0.0, half));
+        assert!(cuts_to(&last, half, 0.0));
+        assert!(cuts_to(&last, 0.0, 1.0));
+    }
+
     #[test]
     fn sew_cuts_a_welded_piece_of_a_longer_curve_to_its_span() {
         for scale in [1.0, 1e-13] {
