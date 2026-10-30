@@ -448,6 +448,38 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
             }
             c => c.clone(),
         };
+        // A circle runs counterclockwise about its normal from `start`: turn
+        // it over when the edge runs the other way, or its arc between the
+        // ends reads as the complement.
+        let curve = match curve {
+            EdgeCurve::Circle(c) => {
+                let (t0, t1) = edge.curve().domain_with_endpoints(s, e);
+                let quarter = if oe.is_forward() { 0.25 } else { 0.75 };
+                let probe =
+                    edge.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(quarter, t0), s, e);
+                let from = c.project(start);
+                let along = |p: Point3| (c.project(p) - from).rem_euclid(std::f64::consts::TAU);
+                let span = if (start - end).length() < recog_tol {
+                    std::f64::consts::TAU
+                } else {
+                    along(end)
+                };
+                if along(probe) < 0.5 * span {
+                    EdgeCurve::Circle(c)
+                } else {
+                    EdgeCurve::Circle(
+                        brepkit_math::curves::Circle3D::new(
+                            c.center(),
+                            c.normal() * -1.0,
+                            c.radius(),
+                        )
+                        .ok()?,
+                    )
+                }
+            }
+            c => c,
+        };
         out.push(ProfileEdgeGeom { curve, start, end });
     }
     Some(merge_cocircular_arcs(out))
@@ -2005,6 +2037,87 @@ mod square_to_circle_tests {
             crate::validate::validate_solid(&topo, solid)
                 .unwrap()
                 .is_valid()
+        );
+    }
+
+    /// A quarter disc of radius 10, its arc a circle edge stored either way
+    /// round, lofted to a copy 10 above it and to a circle of radius 3 above
+    /// the middle of its boundary: stored either way, each loft is the same
+    /// valid solid, the prism holding 250π.
+    #[test]
+    fn a_reversed_arc_edge_lofts_as_the_arc_it_bounds() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        let quarter = |topo: &mut Topology, z: f64, stored_reversed: bool| {
+            let at = |x: f64, y: f64| Point3::new(x, y, z);
+            let [o, a, b] = [at(0.0, 0.0), at(10.0, 0.0), at(0.0, 10.0)]
+                .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let up = Vec3::new(0.0, 0.0, if stored_reversed { -1.0 } else { 1.0 });
+            let circle = brepkit_math::curves::Circle3D::new(at(0.0, 0.0), up, 10.0).unwrap();
+            let arc = if stored_reversed {
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(b, a, EdgeCurve::Circle(circle))),
+                    false,
+                )
+            } else {
+                OrientedEdge::new(
+                    topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))),
+                    true,
+                )
+            };
+            let edges = vec![
+                OrientedEdge::new(topo.add_edge(Edge::new(o, a, EdgeCurve::Line)), true),
+                arc,
+                OrientedEdge::new(topo.add_edge(Edge::new(b, o, EdgeCurve::Line)), true),
+            ];
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: z,
+                },
+            ))
+        };
+        let mut volumes = Vec::new();
+        for stored_reversed in [false, true] {
+            let mut topo = Topology::new();
+            let low = quarter(&mut topo, 0.0, stored_reversed);
+            let high = quarter(&mut topo, 10.0, stored_reversed);
+            let rim = brepkit_topology::builder::make_circle_edge(
+                &mut topo,
+                Point3::new(4.2, 4.2, 10.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                3.0,
+                1e-7,
+            )
+            .unwrap();
+            let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+            let circle = brepkit_topology::builder::make_face_from_wire(&mut topo, rim).unwrap();
+            let mut found = Vec::new();
+            for (profiles, label) in [([low, high], "prism"), ([low, circle], "to a circle")] {
+                let solid = loft(&mut topo, &profiles).unwrap();
+                assert!(
+                    lies_on_its_geometry(&topo, solid),
+                    "{label}, reversed {stored_reversed}"
+                );
+                assert!(
+                    crate::validate::validate_solid(&topo, solid)
+                        .unwrap()
+                        .is_valid(),
+                    "{label}, reversed {stored_reversed}"
+                );
+                found.push(crate::measure::solid_volume(&topo, solid, 1e-4).unwrap());
+            }
+            let prism = 250.0 * std::f64::consts::PI;
+            assert!((found[0] - prism).abs() < 1e-4 * prism, "{found:?}");
+            volumes.push(found);
+        }
+        assert!(
+            (volumes[0][1] - volumes[1][1]).abs() < 1e-9 * volumes[0][1],
+            "{volumes:?}"
         );
     }
 
