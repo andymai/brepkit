@@ -1,0 +1,21 @@
+crates/operations/src/sew.rs
+  s_a2dc21dbec3f2b::t_0717245a2b270a 8,10-11,29-31,68,95,104-105,112-117,119,121-130,133,157,159,166-172,176-232
+  s_a2dc21dbec3f2b::t_34279de1a2fd0b 602-660,662-670,672-689,691-868
+  s_a2dc21dbec3f2b::t_358697dcd173a1 661,671,690
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "706af69f8ff5ca54a814214e897fa27289281fa0",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
