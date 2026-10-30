@@ -2364,3 +2364,78 @@ fn sweep_along_curved_edges_follows_them() {
         );
     }
 }
+
+/// A line from z = 0 to z = 10 as a degree-1 NURBS, its edge running from
+/// z = 5 to 10: a 2 x 2 square at z = 5 sweeps along the edge's own span to
+/// a 20 block, not along the whole curve.
+#[test]
+fn a_trimmed_curved_edge_sweeps_over_its_own_span() {
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+
+    let mut topo = Topology::new();
+    let line = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 10.0)],
+        vec![1.0, 1.0],
+    )
+    .unwrap();
+    let [a, b] = [5.0, 10.0].map(|z| topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, z), 1e-7)));
+    let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(line)));
+    let corners =
+        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y)| Point3::new(x, y, 5.0));
+    let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+    let square = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+    let swept = sweep_along_edges(&mut topo, square, &[edge]).unwrap();
+    let volume = crate::measure::solid_volume(&topo, swept, 1e-3).unwrap();
+    assert!((volume - 20.0).abs() < 1e-6, "{volume}");
+}
+
+/// A chain of a line and a cubic whose interior knots crowd into
+/// 0.5001..0.5005, where the cubic bends up 1 through its middle control
+/// point: a thin tube swept along the chain holds the cubic's peak, read
+/// through each of those knot spans rather than stepped over them.
+#[test]
+fn a_chain_follows_a_bend_inside_narrow_knot_spans() {
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let mut knots = vec![0.0; 4];
+    knots.extend((1..=5).map(|k| 0.5 + 1e-4 * f64::from(k)));
+    knots.extend([1.0; 4]);
+    let points: Vec<Point3> = (0..9)
+        .map(|k| Point3::new(f64::from(k), if k == 4 { 1.0 } else { 0.0 }, 0.0))
+        .collect();
+    let bend = NurbsCurve::new(3, knots, points, vec![1.0; 9]).unwrap();
+    let peak = bend.evaluate(0.5003);
+    let [start, a, b] = [
+        Point3::new(-5.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(8.0, 0.0, 0.0),
+    ]
+    .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+    let chain = [
+        topo.add_edge(Edge::new(start, a, EdgeCurve::Line)),
+        topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(bend))),
+    ];
+    let rim = brepkit_topology::builder::make_circle_edge(
+        &mut topo,
+        Point3::new(-5.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        0.1,
+        1e-7,
+    )
+    .unwrap();
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+    let disc = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+    let tube = sweep_along_edges(&mut topo, disc, &chain).unwrap();
+    let at_peak = crate::classify::classify_point(&topo, tube, peak, 1e-3, 1e-7).unwrap();
+    assert_eq!(
+        at_peak,
+        crate::classify::PointClassification::Inside,
+        "peak {peak:?}"
+    );
+}

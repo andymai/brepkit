@@ -204,9 +204,78 @@ pub(crate) fn build_approximation_knots(params: &[f64], p: usize, m: usize, n: u
 
 /// Solve the interpolation linear system for control points.
 ///
-/// Sets up `N[i][j] = B_{j,p}(t_i)` and solves `N * P = Q`.
+/// Sets up `N[i][j] = B_{j,p}(t_i)` and solves `N * P = Q`. Row `i` holds
+/// only the `p + 1` basis functions alive at `t_i`, from column `lo_i`, and
+/// `lo_i` never falls as `t_i` grows. Such a collocation matrix is totally
+/// positive, so elimination needs no pivoting and fills nothing outside
+/// each row's band: it is stored and solved in `n (p + 1)` numbers, not
+/// `n^2`, so a path sampled at tens of thousands of points still fits.
 #[allow(clippy::cast_precision_loss, clippy::needless_range_loop)]
 fn solve_interpolation(
+    points: &[Point3],
+    params: &[f64],
+    knots: &[f64],
+    degree: usize,
+) -> Result<Vec<Point3>, MathError> {
+    let n = points.len();
+    let mut lo = Vec::with_capacity(n);
+    let mut rows = Vec::with_capacity(n);
+    for &t in params {
+        let span = find_span(t, degree, knots, n);
+        lo.push(span - degree);
+        rows.push(basis_funs(span, t, degree, knots));
+    }
+    let banded = lo.windows(2).all(|w| w[0] <= w[1])
+        && lo
+            .iter()
+            .enumerate()
+            .all(|(i, &l)| l <= i && i <= l + degree)
+        && lo.last().is_some_and(|&l| l + degree < n);
+    if !banded {
+        return solve_interpolation_dense(points, params, knots, degree);
+    }
+    let mut rhs: Vec<[f64; 3]> = points.iter().map(|p| [p.x(), p.y(), p.z()]).collect();
+    for k in 0..n {
+        let pivot = rows[k][k - lo[k]];
+        if pivot.abs() < 1e-15 {
+            return Err(MathError::SingularMatrix);
+        }
+        let reach = lo[k] + degree;
+        for i in (k + 1)..n {
+            if lo[i] > k {
+                break;
+            }
+            let factor = rows[i][k - lo[i]] / pivot;
+            if factor == 0.0 {
+                continue;
+            }
+            for j in (k + 1)..=reach {
+                rows[i][j - lo[i]] -= factor * rows[k][j - lo[k]];
+            }
+            rows[i][k - lo[i]] = 0.0;
+            for c in 0..3 {
+                rhs[i][c] -= factor * rhs[k][c];
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        let mut sum = rhs[i];
+        for j in (i + 1)..=(lo[i] + degree) {
+            for c in 0..3 {
+                sum[c] -= rows[i][j - lo[i]] * rhs[j][c];
+            }
+        }
+        for c in 0..3 {
+            rhs[i][c] = sum[c] / rows[i][i - lo[i]];
+        }
+    }
+    Ok(rhs.iter().map(|&[x, y, z]| Point3::new(x, y, z)).collect())
+}
+
+/// [`solve_interpolation`] over the whole matrix with partial pivoting,
+/// for parameters whose rows do not keep to a band.
+#[allow(clippy::cast_precision_loss, clippy::needless_range_loop)]
+fn solve_interpolation_dense(
     points: &[Point3],
     params: &[f64],
     knots: &[f64],
@@ -873,6 +942,22 @@ mod tests {
             .collect();
         let curve = interpolate(&pts, 3).unwrap();
         for (p, t) in pts.iter().zip(chord_length_params(&pts)) {
+            assert!((curve.evaluate(t) - *p).length() < 1e-9, "missed {p:?}");
+        }
+    }
+
+    /// Forty thousand points, a dense system of 12.8 GB, are solved in the
+    /// band their rows hold.
+    #[test]
+    fn interpolate_forty_thousand_points_in_their_band() {
+        let pts: Vec<Point3> = (0..40_000)
+            .map(|i| {
+                let t = i as f64 * 0.001;
+                Point3::new(t.cos(), t.sin(), 0.05 * t)
+            })
+            .collect();
+        let curve = interpolate(&pts, 3).unwrap();
+        for (p, t) in pts.iter().zip(chord_length_params(&pts)).step_by(97) {
             assert!((curve.evaluate(t) - *p).length() < 1e-9, "missed {p:?}");
         }
     }

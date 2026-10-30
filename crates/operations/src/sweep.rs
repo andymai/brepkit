@@ -2542,7 +2542,15 @@ pub fn sweep_along_edges(
             let start = topo.vertex(edge.start())?.point();
             let end = topo.vertex(edge.end())?.point();
             let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-            let path = curve_between(curve, t0, t1)?;
+            let span = curve_between(curve, t0, t1)?;
+            // `sweep` reads its path over [0, 1].
+            let (a, b) = span.domain();
+            let path = NurbsCurve::new(
+                span.degree(),
+                span.knots().iter().map(|&k| (k - a) / (b - a)).collect(),
+                span.control_points().to_vec(),
+                span.weights().to_vec(),
+            )?;
             return sweep(topo, profile, &path);
         }
     }
@@ -2563,20 +2571,30 @@ pub fn sweep_along_edges(
 
         match edge_data.curve() {
             EdgeCurve::NurbsCurve(curve) => {
-                // Eight samples through each knot span the edge runs over.
+                // Eight samples through each knot span the edge runs over,
+                // however narrow, in the order the edge runs.
                 let end = topo.vertex(edge_data.end())?.point();
                 let (t0, t1) = edge_data.curve().domain_with_endpoints(start, end);
-                let spans = curve
-                    .knots()
-                    .windows(2)
-                    .filter(|k| k[1] > k[0] && k[0] < t0.max(t1) && k[1] > t0.min(t1))
-                    .count()
-                    .max(1);
-                let n_samples = 8 * spans;
-                for i in 1..n_samples {
-                    #[allow(clippy::cast_precision_loss)]
-                    let frac = i as f64 / n_samples as f64;
-                    points.push(curve.evaluate((t1 - t0).mul_add(frac, t0)));
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let mut breaks: Vec<f64> = std::iter::once(t0)
+                    .chain(curve.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                    .chain(std::iter::once(t1))
+                    .collect();
+                if t1 < t0 {
+                    breaks[1..].sort_by(|a, b| b.total_cmp(a));
+                } else {
+                    breaks.sort_by(f64::total_cmp);
+                }
+                breaks.dedup();
+                let last = breaks.len().saturating_sub(2);
+                for (k, w) in breaks.windows(2).enumerate() {
+                    for i in 1..=8 {
+                        if k == last && i == 8 {
+                            continue;
+                        }
+                        points
+                            .push(curve.evaluate((w[1] - w[0]).mul_add(f64::from(i) / 8.0, w[0])));
+                    }
                 }
             }
             EdgeCurve::Circle(circle) => {
