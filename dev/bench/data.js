@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793385941040,
+  "lastUpdate": 1793388961221,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62477,6 +62477,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22980483,
             "range": "± 87171",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "159d849a9c04ccccd842575fb1e61690fa848fbc",
+          "message": "fix(operations): loft a profile to a point as a pyramid or cone (#2234)\n\nLofting a profile to a start or end point now builds a pyramid or cone\nthat meets the point at one vertex, instead of lofting to a tiny polygon\nthere.\n\nToday `loftWithOptions` meets `startPoint` or `endPoint` by adding a\npolygon 1e-6 across at the point, with as many corners as the first\nprofile, and lofting to it. A 40 square lofted to a point 30 above it\nholds the right 16000, but keeps that tiny polygon as a cap: 6 faces, 12\nedges and 8 vertices, where a pyramid has 5, 8 and 5.\n\n## Change\n\n- `loft::loft_to_point` builds the solid from a planar profile without\nholes to a point off its plane. The profile caps it, facing away from\nthe point. Each edge sweeps to the point as a plane (a line), a cone (an\narc whose circle's axis runs through the point), or the ruled NURBS from\nthe edge to the point (an arc off that axis, an ellipse or a spline),\nall meeting at the point's one vertex.\n- The sides face out by the boundary's own winding, the Newell normal of\nits edges sampled in traversal order, rather than the face's reversal\nflag, which does not change the way its wire runs. Each edge's run\nfollows its traversal even when a NURBS edge is stored against its\ncurve. A ruled side's facing comes from its parameter direction and its\nedge's sense, not from a sampled tangent: the side is `(1 − u) C(v) + u\nP` toward the point `P`, its normal `(1 − u)(P − C) × C′`, so it faces\nout exactly when the edge runs against `v`.\n- Projecting a point onto a NURBS surface no longer stops where the\nsurface stands still. When Newton's step vanishes with the point still\nbeyond tolerance and one partial vanishes against the other, it tries a\nthousandth of the domain either way along each parameter and goes on\nfrom a nearer one. A step clamped to nothing at the patch's edge is no\ncandidate, and candidates are measured by the same evaluator as the\npoint they would replace.\n- `loftWithOptions` with one profile and a point lofts it to the point.\nWith more profiles, ruled, each point's piece is fused onto the loft\nthrough them, on the profile it ends. Smooth, each point is one more\nsection of `loft::loft_smooth_with_points`, held by a single vertex, so\nevery rail runs on smoothly to it and the side faces meet there.\n\nRefs #2169: this is its point case; the square-to-circle loft is #2230.\n\n## Tests\n\n- `a_square_lofts_to_a_point_as_a_pyramid`: a 40 square to a point 30\nabove or below its middle is 5 faces, 8 edges and 5 vertices, valid,\nholding 16000 to 1e-9, its cap facing away from the point.\n- `a_disc_lofts_to_a_point_as_a_cone`: a disc of radius 10 to a point 30\nabove its centre is a cone face and a cap holding 1000π to 1e-6; to a\npoint 5 off the axis, a ruled NURBS face holding the same to 1e-3.\n- `a_point_in_the_profiles_plane_is_refused`.\n- `a_square_and_an_end_point_loft_to_a_pyramid` and\n`profiles_and_an_end_point_fuse_to_one_solid` (the binding's helper):\nthe square to a point is 5, 8 and 5; squares of 40 at z = 0 and 20 at z\n= 20 lofted on to a point at z = 40 fuse to one valid solid holding 40³\n/ 3.\n- Making the arc's side a ruled NURBS fails the cone; reversing the\nsides' loops fails both; flipping the cap fails the pyramid's cap check.\n- `a_profile_lofts_to_a_point_by_its_boundarys_winding`: a 40 square\nwound either way, on a plane facing up or down, reversed or not, lofts\nto a point 30 above or below with every face facing out. Choosing the\nfacing by the reversal flag turns all four sides inward in half of the\nsetups.\n- `a_nurbs_edge_stored_against_its_curve_lofts_outward`: a half disc\nwhose arc is a NURBS edge stored against its curve lofts outward,\nholding 500π. Following only the oriented edge's flag turns that side\ninward.\n- `an_oblique_cone_faces_out_whatever_its_rims_parameters`: a disc of\nradius 10 lofted to (−20, 0, 30), its rim a circle or a NURBS circle\nover [0, 10] or [10, 20], faces out and holds 1000π. Reading the side's\nfacing a quarter of the way along the parameters turns it inward.\n- `a_nurbs_edge_standing_still_at_its_middle_lofts_outward`: a 40 square\nwhose left edge is a cubic with its middle derivative zero, run\nbackward, lofted to (0, 0, 30), is valid with every face out, holding\n16000 to 1e-6. Reading the side's facing from the tangent there turns it\ninward, to 8000, and the solid still validates.\n-\n`a_point_beside_a_row_where_the_surface_stands_still_projects_onto_it`:\non the side swept from that cubic, a point 0.147 beside the row where\nthe surface stands still projects to within 1e-9 of it. Without the\nextra step every point within about 0.15 of that row projects onto one\nspot of it, and the side's mesh tears.\n- `a_point_beyond_a_rational_patchs_edge_projects_onto_the_edge`: points\nstraight out from a rational patch's u = 0 edge project onto it.\nStepping off wherever the step vanished, 287 of 400 such points ran out\nof iterations.\n- The ruled point-loft tests also mesh at deflections 0.01 and 0.001\nwith no open or non-manifold edge. Before the projection fix the pyramid\nwith the cubic edge had 8 open edges at 0.01 and 32 at 0.001.\n- `smooth_profiles_run_on_smoothly_to_a_point` and\n`a_profile_between_two_points_lofts_smoothly`: squares of 40 at z = 0\nand 30 at z = 25 smoothed on to (0, 0, 40), and the mirror with a start\npoint, are 5 faces, 8 edges and 5 vertices holding 121600/3; one square\nbetween two points is 4 faces, 4 edges and 2 vertices holding 512000/15.\nBoth mesh closed at 0.01 and 0.001. Fusing a ruled piece on at the point\ninstead, kinked at the last profile, fails both.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nLofting a profile to a start or end point now builds a pyramid or cone\nthat meets the point at one vertex, instead of lofting to a tiny polygon\nthere, so a 40-square lofted to a point is 5 faces, 8 edges and 5\nvertices holding 16000 rather than 6, 12 and 8.\n\n**Lofting to a point**\n\n- `loft::loft_to_point` builds the solid from a planar profile without\nholes to an off-plane point, with the profile as a cap facing away from\nit.\n- The side faces' orientation comes from the boundary's own winding and\nparameter span, so reversed profiles, NURBS edges stored backward\nagainst their curves, and edges without a defined midpoint tangent stay\noutward.\n- Each boundary edge sweeps to the point as a plane, a cone whose axis\nruns through the point, or a ruled NURBS.\n- `loftWithOptions` with one profile and a point lofts straight to it;\nsmooth mode runs the rails on through the point as a collapsed section,\nand ruled multi-profile lofts fuse each point's piece onto the\nthrough-loft.\n- The wasm bindings route through the `loft_with_points` helper instead\nof fabricating a degenerate apex face.\n\n**Projection fix**\n\n- Surface projection steps off an iso-line only where one partial\nderivative vanishes against the other, so Newton's method no longer\nstalls at a critical point; a step clamped at a patch's edge stays put.\n\nTests cover square-to-pyramid, disc-to-cone, off-axis and oblique cones,\nbackward-stored and mid-span-stalling NURBS edges, reversed profiles,\nin-plane point rejection, fused multi-profile, and smooth rails-to-point\ncases; the test, pose sweep, and truth audit suites all pass.\n\n<sup>Written for commit 22a5321734ddab1e7c256d6e9c97887f3bd2ddca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2234?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2234?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2234&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T12:32:36-07:00",
+          "tree_id": "ec9f0aeb2b059a63947778b309ba449753d416bf",
+          "url": "https://github.com/andymai/brepkit/commit/159d849a9c04ccccd842575fb1e61690fa848fbc"
+        },
+        "date": 1793388952873,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1102966,
+            "range": "± 1346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1184644,
+            "range": "± 6551",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13195,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674998,
+            "range": "± 1868",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29367385,
+            "range": "± 74127",
             "unit": "ns/iter"
           }
         ]
