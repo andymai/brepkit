@@ -3893,7 +3893,10 @@ fn shell_is_closed_manifold(
 /// one wire occurrence. A free edge means the shell is open (e.g. a phantom
 /// membrane face left a circle edge unmatched), which is never a valid
 /// boolean result even when Euler accidentally balances.
-fn has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
+pub(crate) fn has_free_edges(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<bool, crate::OperationsError> {
     let counts = solid_edge_use_counts(topo, solid)?;
     Ok(counts.values().any(|&c| c == 1))
 }

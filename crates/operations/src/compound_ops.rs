@@ -304,6 +304,99 @@ pub(crate) fn merge_disjoint_solids(
     Ok(topo.add_solid(Solid::new(outer_id, inner_shell_ids)))
 }
 
+/// Split a solid into one solid per separate piece of material.
+///
+/// A boolean that leaves separate pieces returns them in one solid whose
+/// outer shell holds every piece's faces. Each set of faces joined through
+/// shared edges bounds a region; a region inside an odd number of closed
+/// regions is a cavity of the innermost one around it, and every other
+/// region is the outside of a piece. A solid whose outer shell is one
+/// connected set of faces comes back as is.
+///
+/// The pieces share the solid's faces rather than copying them.
+///
+/// # Errors
+///
+/// Returns an error if the solid holds invalid topology references or a
+/// point cannot be classified against one of its regions.
+pub fn solid_pieces(
+    topo: &mut Topology,
+    solid: SolidId,
+) -> Result<Vec<SolidId>, crate::OperationsError> {
+    use brepkit_check::classify::{ClassifyOptions, PointClassification, SolidClassifier};
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    if crate::boolean::assembly::face_components(topo, solid).len() < 2 {
+        return Ok(vec![solid]);
+    }
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let groups = crate::boolean::assembly::edge_connected_faces(topo, &faces);
+
+    let mut regions = Vec::with_capacity(groups.len());
+    for group in groups {
+        let shell = topo.add_shell(Shell::new(group).map_err(crate::OperationsError::Topology)?);
+        regions.push(topo.add_solid(Solid::new(shell, Vec::new())));
+    }
+
+    let mut probes = Vec::with_capacity(regions.len());
+    let mut boxes = Vec::with_capacity(regions.len());
+    let mut closed = Vec::with_capacity(regions.len());
+    for &region in &regions {
+        let mut points = Vec::new();
+        for vid in brepkit_topology::explorer::solid_vertices(topo, region)? {
+            points.push(topo.vertex(vid)?.point());
+        }
+        probes.push(points);
+        boxes.push(crate::measure::solid_bounding_box(topo, region)?);
+        closed.push(!crate::boolean::has_free_edges(topo, region)?);
+    }
+
+    // `around[i]` lists the closed regions that region `i` lies inside. A
+    // probe on the other region's boundary (the two touch there) decides
+    // nothing, so the first probe off it does.
+    let options = ClassifyOptions::default();
+    let mut around: Vec<Vec<usize>> = vec![Vec::new(); regions.len()];
+    for (j, &container) in regions.iter().enumerate() {
+        if !closed[j] {
+            continue;
+        }
+        let classifier = SolidClassifier::new(topo, container)?;
+        for (i, points) in probes.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            for &p in points {
+                if !boxes[j].contains_point(p) {
+                    break;
+                }
+                match classifier.classify(p, &options)? {
+                    PointClassification::Inside => {
+                        around[i].push(j);
+                        break;
+                    }
+                    PointClassification::Outside => break,
+                    PointClassification::OnBoundary => {}
+                }
+            }
+        }
+    }
+
+    let mut pieces = Vec::new();
+    for (i, containers) in around.iter().enumerate() {
+        if containers.len() % 2 == 0 {
+            pieces.push(regions[i]);
+            continue;
+        }
+        let Some(&owner) = containers.iter().max_by_key(|&&j| around[j].len()) else {
+            continue;
+        };
+        let cavity = topo.solid(regions[i])?.outer_shell();
+        topo.solid_mut(regions[owner])?.add_inner_shell(cavity);
+    }
+    Ok(pieces)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -498,5 +591,83 @@ mod tests {
             (vol - expected).abs() < expected * 0.02,
             "fused volume {vol:.2} should match {expected:.2} (n disjoint prisms)"
         );
+    }
+
+    fn centred_box(topo: &mut Topology, size: f64, centre: [f64; 3]) -> SolidId {
+        let b = crate::primitives::make_box(topo, size, size, size).unwrap();
+        let h = size / 2.0;
+        crate::transform::transform_solid(
+            topo,
+            b,
+            &brepkit_math::mat::Mat4::translation(centre[0] - h, centre[1] - h, centre[2] - h),
+        )
+        .unwrap();
+        b
+    }
+
+    /// Each piece's shell count and volume, smallest piece first.
+    fn piece_census(topo: &Topology, pieces: &[SolidId]) -> Vec<(usize, f64)> {
+        let mut census: Vec<(usize, f64)> = pieces
+            .iter()
+            .map(|&p| {
+                let shells = 1 + topo.solid(p).unwrap().inner_shells().len();
+                (shells, crate::measure::solid_volume(topo, p, 0.01).unwrap())
+            })
+            .collect();
+        census.sort_by(|a, b| a.1.total_cmp(&b.1));
+        census
+    }
+
+    #[test]
+    fn a_slot_through_a_bar_leaves_two_pieces() {
+        use crate::boolean::{BooleanOp, boolean};
+
+        let mut topo = Topology::new();
+        let bar = crate::primitives::make_box(&mut topo, 80.0, 5.0, 2.5).unwrap();
+        let slot = crate::primitives::make_box(&mut topo, 10.0, 20.0, 20.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            slot,
+            &brepkit_math::mat::Mat4::translation(35.0, -5.0, -5.0),
+        )
+        .unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, bar, slot).unwrap();
+
+        let pieces = solid_pieces(&mut topo, cut).unwrap();
+        let census = piece_census(&topo, &pieces);
+        assert_eq!(census.len(), 2, "{census:?}");
+        for (shells, volume) in census {
+            assert_eq!(shells, 1);
+            assert!((volume - 437.5).abs() < 1e-6, "{volume}");
+        }
+    }
+
+    #[test]
+    fn a_cube_left_in_a_hollow_boxs_cavity_is_its_own_piece() {
+        use crate::boolean::{BooleanOp, boolean};
+
+        let mut topo = Topology::new();
+        let outer = centred_box(&mut topo, 20.0, [0.0, 0.0, 10.0]);
+        let inner = centred_box(&mut topo, 10.0, [0.0, 0.0, 10.0]);
+        let hollow = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
+        assert_eq!(solid_pieces(&mut topo, hollow).unwrap(), vec![hollow]);
+
+        let block = centred_box(&mut topo, 22.0, [0.0, 0.0, 10.0]);
+        let left = boolean(&mut topo, BooleanOp::Cut, block, hollow).unwrap();
+
+        let pieces = solid_pieces(&mut topo, left).unwrap();
+        let census = piece_census(&topo, &pieces);
+        assert_eq!(census.len(), 2, "{census:?}");
+        assert_eq!(census[0].0, 1);
+        assert!((census[0].1 - 1000.0).abs() < 1e-6, "{census:?}");
+        assert_eq!(census[1].0, 2);
+        assert!((census[1].1 - 2648.0).abs() < 1e-6, "{census:?}");
+    }
+
+    #[test]
+    fn a_solid_in_one_piece_comes_back_as_is() {
+        let mut topo = Topology::new();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+        assert_eq!(solid_pieces(&mut topo, b).unwrap(), vec![b]);
     }
 }
