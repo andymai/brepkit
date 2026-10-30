@@ -667,3 +667,43 @@ fn a_point_projects_onto_a_cones_wall_at_its_nearest_point() {
     );
     assert!((r[5] - 2.0_f64.sqrt()).abs() < 1e-9, "distance {}", r[5]);
 }
+
+/// A spindle torus (ring radius 1, tube radius 2) whose tube runs across its
+/// axis: `(1, 0, 0)` lies on the tube swung half a turn round, at
+/// `(u, v) = (π, π)`, and projects onto itself, not onto the near tube at
+/// `(3, 0, 0)`.
+#[test]
+fn a_point_on_a_spindle_torus_projects_onto_itself() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ToroidalSurface;
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut k = crate::kernel::BrepKernel::new();
+    let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0, 2.0).unwrap();
+    let topo = k.topo_mut();
+    let rim = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+    let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+    let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+    let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+    let face =
+        face_id_to_u32(topo.add_face(Face::new(w, vec![], FaceSurface::Torus(torus.clone()))));
+    for target in [
+        Point3::new(1.0, 0.0, 0.0),
+        torus.evaluate(0.3, 0.5),
+        torus.evaluate(2.0, 2.5),
+    ] {
+        let r = k
+            .project_point_on_surface(face, target.x(), target.y(), target.z())
+            .unwrap();
+        let got = Point3::new(r[2], r[3], r[4]);
+        assert!(
+            (got - target).length() < 1e-9,
+            "{target:?} lands at {got:?}"
+        );
+        assert!(r[5] < 1e-9, "{target:?}: distance {}", r[5]);
+    }
+}

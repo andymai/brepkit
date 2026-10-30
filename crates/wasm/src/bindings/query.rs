@@ -1232,9 +1232,21 @@ impl BrepKernel {
                     foot.distance,
                 ])
             }
-            surface @ (FaceSurface::Cylinder(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_)) => {
+            // A spindle torus's nearest point can lie on the tube swung
+            // across its axis.
+            FaceSurface::Torus(torus) => {
+                let (u, v) = torus.project_point_nearest(target);
+                let proj = torus.evaluate(u, v);
+                Ok(vec![
+                    u,
+                    v,
+                    proj.x(),
+                    proj.y(),
+                    proj.z(),
+                    (proj - target).length(),
+                ])
+            }
+            surface @ (FaceSurface::Cylinder(_) | FaceSurface::Sphere(_)) => {
                 // An analytic surface projects in closed form, in its own
                 // parameters (a cylinder's `v` runs along its axis).
                 let (u, v) =
