@@ -791,21 +791,28 @@ fn normalize_profile_wire_curves(
 /// An extrusion's cap on `surface`, facing `outward`. A plane cap is built
 /// facing it; a NURBS cap keeps its surface, so where its normal runs
 /// against `outward` the cap is reversed, its wires rewound with it so its
-/// edges still pair with the sides'. The normal is read at the cap's middle
-/// `centre` and along its edges, where it leans furthest along the sweep: a
-/// face that sweeps into a solid leans one way all over, but at a point
-/// where it stands edge-on to the sweep its normal tells nothing.
+/// edges still pair with the sides'. Which way the normal runs is read off
+/// the wires: the normal's flux along the sweep is the signed area of the
+/// face's shadow across it, the outer wire's taken counterclockwise in the
+/// surface's parameters less each hole's. No point inside is read, which
+/// could fall in a hole or off a concave trim, and no normal, which could
+/// stand edge-on.
 fn cap_face(
     topo: &mut Topology,
     outer: WireId,
     inner: Vec<WireId>,
     surface: FaceSurface,
-    centre: Point3,
     outward: Vec3,
 ) -> Result<FaceId, crate::OperationsError> {
-    let against = if let FaceSurface::Nurbs(nurbs) = &surface {
-        let mut samples = vec![centre];
-        for wid in std::iter::once(outer).chain(inner.iter().copied()) {
+    let against = if matches!(surface, FaceSurface::Nurbs(_)) {
+        let along = outward.normalize()?;
+        // A wire's shadow across the sweep and its area in the surface's
+        // parameters, both signed the way it runs, and its size: the
+        // shadow taken counterclockwise in the parameters is the flux of
+        // the normal through the region the wire bounds.
+        let read = |wid: WireId| -> Result<(f64, f64, f64), crate::OperationsError> {
+            const PER_EDGE: u32 = 16;
+            let mut points = Vec::new();
             for oe in topo.wire(wid)?.edges() {
                 let edge = topo.edge(oe.edge())?;
                 let (sp, ep) = (
@@ -813,27 +820,48 @@ fn cap_face(
                     topo.vertex(edge.end())?.point(),
                 );
                 let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-                samples.extend([0.25, 0.5, 0.75].map(|f| {
-                    edge.curve()
-                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), sp, ep)
+                let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+                points.extend((0..PER_EDGE).map(|k| {
+                    edge.curve().evaluate_with_endpoints(
+                        (to - from).mul_add(f64::from(k) / f64::from(PER_EDGE), from),
+                        sp,
+                        ep,
+                    )
                 }));
             }
+            let uv = points
+                .iter()
+                .map(|&p| surface.project_point(p))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| crate::OperationsError::InvalidInput {
+                    reason: "the face to extrude has a boundary point off its surface".into(),
+                })?;
+            let (p0, (u0, v0)) = (points[0], uv[0]);
+            let (mut shadow, mut domain, mut reach) = (0.0, 0.0, 0.0_f64);
+            for i in 0..points.len() {
+                let j = (i + 1) % points.len();
+                let (a, b) = (points[i] - p0, points[j] - p0);
+                shadow += a.cross(b).dot(along);
+                domain += (uv[i].0 - u0).mul_add(uv[j].1 - v0, -((uv[j].0 - u0) * (uv[i].1 - v0)));
+                reach = reach.max(a.length());
+            }
+            if domain == 0.0 {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "the face to extrude has a wire enclosing no parameters".into(),
+                });
+            }
+            Ok((shadow * domain.signum(), domain, reach))
+        };
+        let (mut flux, _, reach) = read(outer)?;
+        for &hole in &inner {
+            flux -= read(hole)?.0;
         }
-        let lean = samples
-            .into_iter()
-            .filter_map(|p| surface.project_point(p))
-            .filter_map(|(u, v)| nurbs.normal(u, v).ok())
-            .map(|n| n.dot(outward))
-            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
-            .unwrap_or(0.0);
-        if lean.abs() <= 1e-9 * outward.length() {
+        if flux.abs() <= 1e-12 * reach * reach {
             return Err(crate::OperationsError::InvalidInput {
-                reason: "the face to extrude stands edge-on to the extrusion wherever its \
-                         normal could be read"
-                    .into(),
+                reason: "the face to extrude casts no shadow across the extrusion".into(),
             });
         }
-        lean < 0.0
+        flux < 0.0
     } else {
         false
     };
@@ -1061,13 +1089,11 @@ pub fn extrude(
         FaceSurface::Nurbs(nurbs) => FaceSurface::Nurbs(nurbs.clone()),
         other => other.clone(),
     };
-    let centroid = crate::winding::polygon_centroid(&input_positions);
     let bottom_face = cap_face(
         topo,
         bottom_wire_id,
         bottom_inner_wire_ids,
         bottom_surface,
-        centroid,
         -offset,
     )?;
     all_faces.push(bottom_face);
@@ -1241,14 +1267,7 @@ pub fn extrude(
         FaceSurface::Sphere(sph) => FaceSurface::Sphere(sph.translated(offset)),
         FaceSurface::Torus(tor) => FaceSurface::Torus(tor.translated(offset)),
     };
-    let top_face = cap_face(
-        topo,
-        top_wire_id,
-        top_inner_wire_ids,
-        top_surface,
-        centroid + offset,
-        offset,
-    )?;
+    let top_face = cap_face(topo, top_wire_id, top_inner_wire_ids, top_surface, offset)?;
     all_faces.push(top_face);
 
     // Assemble shell and solid.

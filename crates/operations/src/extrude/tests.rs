@@ -1672,3 +1672,232 @@ fn a_curved_nurbs_face_edge_on_at_its_centroid_extrudes_with_caps_facing_out() {
         assert_nurbs_faces_face_out(&topo, solid, &label);
     }
 }
+
+/// The patch S(u, v) = (u, F(u), v) over the unit square, F of degree 11
+/// with F' a multiple of [u (u - 1/4) (u - 1/2) (u - 3/4) (u - 1)]^2 rising
+/// from 0 to 1, swept 1 along x. Its x-normal F' vanishes at its vertices'
+/// centroid and at every quarter of its edges, yet the sweep is a solid:
+/// it is valid and has its caps facing out.
+#[test]
+fn a_nurbs_face_edge_on_at_its_quarters_extrudes_with_caps_facing_out() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let f = [
+        0.0, 0.0, 0.0, 5.04, -11.34, 18.3, -17.3, 12.34, -4.04, 1.0, 1.0, 1.0,
+    ];
+    let row = |z: f64| -> Vec<Point3> {
+        (0..12)
+            .map(|i| Point3::new(f64::from(i) / 11.0, f[i as usize], z))
+            .collect()
+    };
+    let mut knots = vec![0.0; 12];
+    knots.extend([1.0; 12]);
+    let mut topo = Topology::new();
+    let rows: Vec<Vec<Point3>> = (0..12).map(|i| vec![row(0.0)[i], row(1.0)[i]]).collect();
+    let patch = NurbsSurface::new(
+        11,
+        1,
+        knots.clone(),
+        vec![0.0, 0.0, 1.0, 1.0],
+        rows,
+        vec![vec![1.0; 2]; 12],
+    )
+    .unwrap();
+    let at = |x: f64, y: f64, z: f64| Point3::new(x, y, z);
+    let [a, b, c, d] = [
+        at(0.0, 0.0, 0.0),
+        at(1.0, 1.0, 0.0),
+        at(1.0, 1.0, 1.0),
+        at(0.0, 0.0, 1.0),
+    ]
+    .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+    let curve = |z: f64| {
+        EdgeCurve::NurbsCurve(NurbsCurve::new(11, knots.clone(), row(z), vec![1.0; 12]).unwrap())
+    };
+    let low = topo.add_edge(Edge::new(a, b, curve(0.0)));
+    let right = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+    let high = topo.add_edge(Edge::new(d, c, curve(1.0)));
+    let left = topo.add_edge(Edge::new(d, a, EdgeCurve::Line));
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(low, true),
+            OrientedEdge::new(right, true),
+            OrientedEdge::new(high, false),
+            OrientedEdge::new(left, true),
+        ],
+        true,
+    )
+    .unwrap();
+    let wire = topo.add_wire(wire);
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(patch)));
+    let solid = extrude(&mut topo, face, Vec3::new(1.0, 0.0, 0.0), 1.0).unwrap();
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+    assert_nurbs_faces_face_out(&topo, solid, "edge-on at its quarters");
+}
+
+/// The patch S(u, v) = (u, v, u³/3 + uv² - u) trimmed to the annulus
+/// 1.1 ≤ √(u² + v²) ≤ 1.2, its rims lifted exactly as rational sextic
+/// quarters, swept 1 along +x. Its x-normal 1 - u² - v² is negative all
+/// over the face but +1 at its vertices' centroid, the hole's centre: the
+/// cap at the face faces -x and the one at its end +x.
+#[test]
+fn a_holed_nurbs_face_extrudes_with_caps_facing_out() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    // Polynomials as coefficients, lowest first.
+    let mul = |a: &[f64], b: &[f64]| {
+        let mut r = vec![0.0; a.len() + b.len() - 1];
+        for (i, x) in a.iter().enumerate() {
+            for (j, y) in b.iter().enumerate() {
+                r[i + j] += x * y;
+            }
+        }
+        r
+    };
+    let choose = |n: usize, k: usize| (0..k).fold(1.0, |c, i| c * (n - i) as f64 / (i + 1) as f64);
+    let bernstein = |a: &[f64]| -> Vec<f64> {
+        (0..=6)
+            .map(|i| {
+                (0..=i)
+                    .map(|k| choose(i, k) / choose(6, k) * a.get(k).copied().unwrap_or(0.0))
+                    .sum()
+            })
+            .collect()
+    };
+    // The quarter turn `k` of the rim of radius `r`, lifted onto the patch:
+    // with c = 1 + s², x = X/c and y = Y/c for (X, Y) = (r (1 - s²), 2 r s)
+    // turned k quarters, so x, y and the height x³/3 + x y² - x times c³
+    // are sextics over the weight c³.
+    let quarter = |r: f64, k: usize| {
+        let (a, b) = (vec![r, 0.0, -r], vec![0.0, 2.0 * r]);
+        let neg = |p: &[f64]| p.iter().map(|x| -x).collect::<Vec<f64>>();
+        let (x, y) = match k {
+            0 => (a, b),
+            1 => (neg(&b), a),
+            2 => (neg(&a), neg(&b)),
+            _ => (b, neg(&a)),
+        };
+        let c2 = mul(&[1.0, 0.0, 1.0], &[1.0, 0.0, 1.0]);
+        let c3 = mul(&c2, &[1.0, 0.0, 1.0]);
+        let height: Vec<f64> = {
+            let cube: Vec<f64> = mul(&mul(&x, &x), &x).iter().map(|v| v / 3.0).collect();
+            let cross = mul(&x, &mul(&y, &y));
+            let line = mul(&x, &c2);
+            (0..7)
+                .map(|i| {
+                    cube.get(i).copied().unwrap_or(0.0) + cross.get(i).copied().unwrap_or(0.0)
+                        - line.get(i).copied().unwrap_or(0.0)
+                })
+                .collect()
+        };
+        let w = bernstein(&c3);
+        let (xs, ys, zs) = (
+            bernstein(&mul(&x, &c2)),
+            bernstein(&mul(&y, &c2)),
+            bernstein(&height),
+        );
+        let points = (0..7)
+            .map(|i| Point3::new(xs[i] / w[i], ys[i] / w[i], zs[i] / w[i]))
+            .collect();
+        let mut knots = vec![0.0; 7];
+        knots.extend([1.0; 7]);
+        NurbsCurve::new(6, knots, points, w).unwrap()
+    };
+
+    let mut topo = Topology::new();
+    let (z0, z1) = (-611.0 / 375.0, 4147.0 / 1500.0);
+    let (y0, y1) = (13.0 / 30.0, 949.0 / 500.0);
+    let rows: Vec<Vec<Point3>> = [[z0, z1, z0], [y0, y1, y0], [-y0, -y1, -y0], [-z0, -z1, -z0]]
+        .iter()
+        .enumerate()
+        .map(|(i, zs)| {
+            (0..3)
+                .map(|j| {
+                    Point3::new(
+                        2.6f64.mul_add(i as f64 / 3.0, -1.3),
+                        1.3f64.mul_add(j as f64, -1.3),
+                        zs[j],
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let patch = NurbsSurface::new(
+        3,
+        2,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        rows,
+        vec![vec![1.0; 3]; 4],
+    )
+    .unwrap();
+    // A rim as four quarters, counterclockwise about +z or clockwise.
+    let rim = |topo: &mut Topology, r: f64, ccw: bool| {
+        let curves: Vec<NurbsCurve> = (0..4).map(|k| quarter(r, k)).collect();
+        let vertices: Vec<_> = curves
+            .iter()
+            .map(|c| topo.add_vertex(Vertex::new(c.control_points()[0], 1e-7)))
+            .collect();
+        let mut edges: Vec<OrientedEdge> = curves
+            .into_iter()
+            .enumerate()
+            .map(|(k, c)| {
+                let e = Edge::new(vertices[k], vertices[(k + 1) % 4], EdgeCurve::NurbsCurve(c));
+                OrientedEdge::new(topo.add_edge(e), ccw)
+            })
+            .collect();
+        if !ccw {
+            edges.reverse();
+        }
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    };
+    let outer = rim(&mut topo, 1.2, true);
+    let hole = rim(&mut topo, 1.1, false);
+    let face = topo.add_face(Face::new(
+        outer,
+        vec![hole],
+        FaceSurface::Nurbs(patch.clone()),
+    ));
+    let solid = extrude(&mut topo, face, Vec3::new(1.0, 0.0, 0.0), 1.0).unwrap();
+
+    // A point well inside the annulus, at radius 1.15 and 30 degrees.
+    let (u, v) = (
+        1.15 * 30f64.to_radians().cos(),
+        1.15 * 30f64.to_radians().sin(),
+    );
+    let (s, t) = ((u + 1.3) / 2.6, (v + 1.3) / 2.6);
+    let n = patch.normal(s, t).unwrap();
+    assert!(n.x() < 0.0, "{n:?}");
+    let mut caps = 0;
+    for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+        let f = topo.face(fid).unwrap();
+        let FaceSurface::Nurbs(surface) = f.surface() else {
+            continue;
+        };
+        let shift = surface.evaluate(s, t).x() - patch.evaluate(s, t).x();
+        if (shift.abs() > 1e-9 && (shift - 1.0).abs() > 1e-9) || surface.degree_u() != 3 {
+            continue;
+        }
+        let facing = if f.is_reversed() { -n.x() } else { n.x() };
+        let outward = if shift.abs() <= 1e-9 { -1.0 } else { 1.0 };
+        assert!(facing * outward > 0.0, "the cap {shift} along x faces in");
+        caps += 1;
+    }
+    assert_eq!(caps, 2);
+}
