@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793333589584,
+  "lastUpdate": 1793334012841,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60911,6 +60911,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29188099,
             "range": "± 190475",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3bbc5d9152f8609a3faf605def0ff3ae97add3d8",
+          "message": "fix(wasm): give an arc's curve parameters its own span (#2205)\n\n`getEdgeCurveParameters` now returns a circular or elliptic arc's own\nspan on its curve, so walking an arc by its parameters stays on the arc.\n\nToday it returns `[0, 2π]` for every circle and ellipse edge, whatever\nthe arc's span. `evaluateEdgeCurve` evaluates the curve at the parameter\nit is given, so a caller stepping through that range walks the arc's\nwhole circle: for the half circle from `(10, 0, 0)` over `(15, 5, 0)` to\n`(20, 0, 0)`, the middle of the range lands on the arc's end and the end\nof the range on its start.\n\n## Change\n\n- For a circle or ellipse edge, the binding returns\n`EdgeCurve::domain_with_endpoints` from the edge's start vertex to its\nend: the arc's span in the direction it runs, a whole turn for a closed\nedge, the same span the kernel's own edge sampling uses.\n\nCloses #2191.\n\n## Tests\n\n- `an_arcs_parameters_span_the_arc`: that half circle's parameters span\nπ, and `evaluateEdgeCurve` at their start, middle and end gives `(10, 0,\n0)`, `(15, 5, 0)` and `(20, 0, 0)`. With `[0, 2π]` it fails.\n- `cargo test -p brepkit-wasm --lib` passes 241 tests.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `getEdgeCurveParameters` returning `[0, 2π]` for every circle and\nellipse edge, so callers walking the parameters no longer trace the\nwhole circle. Now it returns the arc's span from its start vertex to its\nend—a full turn for closed edges, matching the kernel's own edge\nsampling. Closes #2191.\n\n<sup>Written for commit fae7692d8a891257a2a514e0f0ec6015bfee27b3.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2205?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2205?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2205&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T04:17:03Z",
+          "tree_id": "25a3c44def50cfc1b4ede045a139bff57d2010d1",
+          "url": "https://github.com/andymai/brepkit/commit/3bbc5d9152f8609a3faf605def0ff3ae97add3d8"
+        },
+        "date": 1793334005022,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1096463,
+            "range": "± 1626",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1175677,
+            "range": "± 3602",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13325,
+            "range": "± 983",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673982,
+            "range": "± 797",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28610971,
+            "range": "± 80585",
             "unit": "ns/iter"
           }
         ]
