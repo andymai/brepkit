@@ -2481,28 +2481,54 @@ pub fn sweep_guided(
 
 mod spine;
 
-/// `curve` from parameter `t0` to `t1`, traced backward when `t1 < t0`.
+/// `curve` from parameter `t0` to `t1`, traced backward when `t1 < t0`,
+/// over `[0, 1]` as `sweep` reads its path. The curve is cut over its domain
+/// moved to `[0, 1]`, so a domain of any width is cut alike.
 fn curve_between(
     curve: &NurbsCurve,
     t0: f64,
     t1: f64,
 ) -> Result<NurbsCurve, crate::OperationsError> {
     use brepkit_math::nurbs::knot_ops::curve_split;
-    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    // The knot routines' resolution: within it of an end there is no room
+    // to cut, and nothing past it to cut off.
+    const AT_END: f64 = 1e-15;
     let (d0, d1) = curve.domain();
-    let eps = 1e-12 * (d1 - d0).abs().max(1.0);
-    let mut span = curve.clone();
-    if hi < d1 - eps {
+    let length = d1 - d0;
+    if length.is_nan() || length <= 0.0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "a curve with no parameter span".into(),
+        });
+    }
+    let unit = |t: f64| (t - d0) / length;
+    let rescale = |c: &NurbsCurve, knots: Vec<f64>| {
+        NurbsCurve::new(
+            c.degree(),
+            knots,
+            c.control_points().to_vec(),
+            c.weights().to_vec(),
+        )
+    };
+    let mut span = rescale(curve, curve.knots().iter().map(|&k| unit(k)).collect())?;
+    let (lo, hi) = (unit(t0.min(t1)), unit(t0.max(t1)));
+    if hi < 1.0 - AT_END {
         span = curve_split(&span, hi)?.0;
     }
-    if lo > d0 + eps {
+    if lo > AT_END {
         span = curve_split(&span, lo)?.1;
     }
-    if t1 >= t0 {
-        return Ok(span);
-    }
     let (a, b) = span.domain();
-    let knots = span.knots().iter().rev().map(|&k| a + b - k).collect();
+    let to_unit = |k: f64| (k - a) / (b - a);
+    if t1 >= t0 {
+        let knots = span.knots().iter().map(|&k| to_unit(k)).collect();
+        return Ok(rescale(&span, knots)?);
+    }
+    let knots = span
+        .knots()
+        .iter()
+        .rev()
+        .map(|&k| 1.0 - to_unit(k))
+        .collect();
     let points = span.control_points().iter().rev().copied().collect();
     let weights = span.weights().iter().rev().copied().collect();
     Ok(NurbsCurve::new(span.degree(), knots, points, weights)?)
@@ -2542,15 +2568,7 @@ pub fn sweep_along_edges(
             let start = topo.vertex(edge.start())?.point();
             let end = topo.vertex(edge.end())?.point();
             let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-            let span = curve_between(curve, t0, t1)?;
-            // `sweep` reads its path over [0, 1].
-            let (a, b) = span.domain();
-            let path = NurbsCurve::new(
-                span.degree(),
-                span.knots().iter().map(|&k| (k - a) / (b - a)).collect(),
-                span.control_points().to_vec(),
-                span.weights().to_vec(),
-            )?;
+            let path = curve_between(curve, t0, t1)?;
             return sweep(topo, profile, &path);
         }
     }

@@ -2365,31 +2365,35 @@ fn sweep_along_curved_edges_follows_them() {
     }
 }
 
-/// A line from z = 0 to z = 10 as a degree-1 NURBS, its edge running from
-/// z = 5 to 10: a 2 x 2 square at z = 5 sweeps along the edge's own span to
-/// a 20 block, not along the whole curve.
+/// A line from z = 0 to z = 10 as a degree-1 NURBS whose knots run over 1
+/// or over 1e-13, its edge running from z = 5 to 10: a 2 x 2 square at
+/// z = 5 sweeps along the edge's own span to a 20 block, not along the
+/// whole curve.
 #[test]
 fn a_trimmed_curved_edge_sweeps_over_its_own_span() {
     use brepkit_topology::edge::Edge;
     use brepkit_topology::vertex::Vertex;
 
-    let mut topo = Topology::new();
-    let line = NurbsCurve::new(
-        1,
-        vec![0.0, 0.0, 1.0, 1.0],
-        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 10.0)],
-        vec![1.0, 1.0],
-    )
-    .unwrap();
-    let [a, b] = [5.0, 10.0].map(|z| topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, z), 1e-7)));
-    let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(line)));
-    let corners =
-        [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|(x, y)| Point3::new(x, y, 5.0));
-    let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
-    let square = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
-    let swept = sweep_along_edges(&mut topo, square, &[edge]).unwrap();
-    let volume = crate::measure::solid_volume(&topo, swept, 1e-3).unwrap();
-    assert!((volume - 20.0).abs() < 1e-6, "{volume}");
+    for width in [1.0, 1e-13] {
+        let mut topo = Topology::new();
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, width, width],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 10.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let [a, b] =
+            [5.0, 10.0].map(|z| topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, z), 1e-7)));
+        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(line)));
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+            .map(|(x, y)| Point3::new(x, y, 5.0));
+        let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+        let square = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+        let swept = sweep_along_edges(&mut topo, square, &[edge]).unwrap();
+        let volume = crate::measure::solid_volume(&topo, swept, 1e-3).unwrap();
+        assert!((volume - 20.0).abs() < 1e-6, "knots over {width}: {volume}");
+    }
 }
 
 /// A chain of a line and a cubic whose interior knots crowd into
