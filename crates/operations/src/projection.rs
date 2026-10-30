@@ -156,8 +156,10 @@ pub fn project_solids_edges(
             if classifier.ray_crossings(from, -view)? > 0 {
                 return Ok(true);
             }
+            // Lines a hair aside start further out, past where they would
+            // clip the faces the edge bounds at a grazing angle.
             for s in &sideways {
-                if classifier.ray_crossings(from + *s, -view)? > 0 {
+                if classifier.ray_crossings(from + *s - view * (100.0 * hair), -view)? > 0 {
                     return Ok(true);
                 }
             }
@@ -166,86 +168,175 @@ pub fn project_solids_edges(
     };
 
     // Each edge is read on its own curve at the drawing's samples, closer
-    // where its view is long, and cut where it passes behind a solid or
-    // comes out, found by halving the step that changes.
+    // where its view is long, and on either side of each point where its
+    // view crosses another edge's, where it may pass behind a solid however
+    // narrow. It is cut where it passes behind a solid or comes out, found
+    // by halving the step that changes.
     let resolution = diag / 64.0;
-    let mut result = ProjectedEdges::default();
+    let mut drawn = Vec::new();
     for (own, &solid) in solids.iter().enumerate() {
-        let edges = crate::tessellate::drawn_edge_samples(
+        for (edge_id, samples) in crate::tessellate::drawn_edge_samples(
             topo,
             solid,
             deflection,
             brepkit_math::chord::DEFAULT_ANGULAR_TOL,
             true,
-        )?;
-        for (edge_id, samples) in edges {
-            if samples.len() < 2 {
+        )? {
+            if samples.len() >= 2 {
+                let seen: Vec<Point2> = samples.iter().map(|&q| project(q)).collect();
+                drawn.push((own, edge_id, seen));
+            }
+        }
+    }
+    let views = SegmentGrid::new(&drawn, resolution);
+    let mut result = ProjectedEdges::default();
+    for (index, (own, edge_id, seen)) in drawn.iter().enumerate() {
+        let own = *own;
+        let edge = topo.edge(*edge_id)?;
+        let a = topo.vertex(edge.start())?.point();
+        let b = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let at = |t: f64| curve.evaluate_with_endpoints(t, a, b);
+        let seen_length: f64 = seen
+            .windows(2)
+            .map(|w| (w[1].x() - w[0].x()).hypot(w[1].y() - w[0].y()))
+            .sum();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let steps = (seen.len() - 1).max((seen_length / resolution).ceil() as usize);
+        #[allow(clippy::cast_precision_loss)]
+        let mut params: Vec<f64> = (0..=steps)
+            .map(|k| (t1 - t0).mul_add(k as f64 / steps as f64, t0))
+            .collect();
+        let grid_view: Vec<Point2> = params.iter().map(|&t| project(at(t))).collect();
+        let aside = 1e-4 / steps.max(1) as f64 * (t1 - t0);
+        let mut extra = Vec::new();
+        for (k, w) in grid_view.windows(2).enumerate() {
+            for f in views.crossings(w[0], w[1], index) {
+                let t = (params[k + 1] - params[k]).mul_add(f, params[k]);
+                extra.extend([t - aside, t + aside]);
+            }
+        }
+        let (lo_t, hi_t) = (t0.min(t1), t0.max(t1));
+        params.extend(extra.into_iter().filter(|t| *t > lo_t && *t < hi_t));
+        params.sort_by(|p, q| {
+            if t1 >= t0 {
+                p.total_cmp(q)
+            } else {
+                q.total_cmp(p)
+            }
+        });
+        params.dedup_by(|p, q| (*p - *q).abs() <= 1e-12 * (t1 - t0).abs());
+        let last = params.len() - 1;
+        // The ends are read a hair inside, off the vertex they share.
+        let inset = 1e-6 * (t1 - t0);
+        let probe_at = |k: usize| match k {
+            0 => t0 + inset,
+            k if k == last => t1 - inset,
+            k => params[k],
+        };
+        let hidden = (0..=last)
+            .map(|k| is_hidden(at(probe_at(k)), own))
+            .collect::<Result<Vec<bool>, _>>()?;
+        let mut runs: Vec<(bool, Vec<Point3>)> = vec![(hidden[0], vec![at(t0)])];
+        for k in 0..last {
+            if hidden[k] != hidden[k + 1] {
+                let (mut lo, mut hi) = (probe_at(k), probe_at(k + 1));
+                for _ in 0..24 {
+                    let mid = f64::midpoint(lo, hi);
+                    if is_hidden(at(mid), own)? == hidden[k] {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let cut = at(f64::midpoint(lo, hi));
+                if let Some(run) = runs.last_mut() {
+                    run.1.push(cut);
+                }
+                runs.push((hidden[k + 1], vec![cut]));
+            }
+            if let Some(run) = runs.last_mut() {
+                run.1.push(at(params[k + 1]));
+            }
+        }
+        for (is_hidden_run, points) in runs {
+            if is_hidden_run && !hidden_lines {
                 continue;
             }
-            let edge = topo.edge(edge_id)?;
-            let a = topo.vertex(edge.start())?.point();
-            let b = topo.vertex(edge.end())?.point();
-            let curve = edge.curve();
-            let (t0, t1) = curve.domain_with_endpoints(a, b);
-            let at = |t: f64| curve.evaluate_with_endpoints(t, a, b);
-            let seen_length: f64 = samples
-                .windows(2)
-                .map(|w| {
-                    let d = w[1] - w[0];
-                    x.dot(d).hypot(y.dot(d))
-                })
-                .sum();
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let steps = (samples.len() - 1).max((seen_length / resolution).ceil() as usize);
-            #[allow(clippy::cast_precision_loss)]
-            let param = |k: usize| (t1 - t0).mul_add(k as f64 / steps as f64, t0);
-            // The ends are read a hair inside, off the vertex they share.
-            let inset = 1e-6 * (t1 - t0);
-            let probe_at = |k: usize| match k {
-                0 => t0 + inset,
-                k if k == steps => t1 - inset,
-                k => param(k),
-            };
-            let hidden = (0..=steps)
-                .map(|k| is_hidden(at(probe_at(k)), own))
-                .collect::<Result<Vec<bool>, _>>()?;
-            let mut runs: Vec<(bool, Vec<Point3>)> = vec![(hidden[0], vec![at(t0)])];
-            for k in 0..steps {
-                if hidden[k] != hidden[k + 1] {
-                    let (mut lo, mut hi) = (probe_at(k), probe_at(k + 1));
-                    for _ in 0..24 {
-                        let mid = f64::midpoint(lo, hi);
-                        if is_hidden(at(mid), own)? == hidden[k] {
-                            lo = mid;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    let cut = at(f64::midpoint(lo, hi));
-                    if let Some(run) = runs.last_mut() {
-                        run.1.push(cut);
-                    }
-                    runs.push((hidden[k + 1], vec![cut]));
-                }
-                if let Some(run) = runs.last_mut() {
-                    run.1.push(at(param(k + 1)));
-                }
-            }
-            for (is_hidden_run, points) in runs {
-                if is_hidden_run && !hidden_lines {
-                    continue;
-                }
-                let poly: Vec<Point2> = points.into_iter().map(project).collect();
-                if is_hidden_run {
-                    result.hidden.push(poly);
-                } else {
-                    result.visible.push(poly);
-                }
+            let poly: Vec<Point2> = points.into_iter().map(project).collect();
+            if is_hidden_run {
+                result.hidden.push(poly);
+            } else {
+                result.visible.push(poly);
             }
         }
     }
 
     Ok(result)
+}
+
+/// The drawn edges' views on the drawing, filed by cell, to find where one
+/// edge's view crosses another's.
+struct SegmentGrid {
+    cell: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<Segment>>,
+}
+
+/// A piece of one drawn edge's view: the edge's index and the piece's ends.
+type Segment = (usize, Point2, Point2);
+
+impl SegmentGrid {
+    fn new(drawn: &[(usize, brepkit_topology::edge::EdgeId, Vec<Point2>)], cell: f64) -> Self {
+        let mut grid = Self {
+            cell: cell.max(1e-12),
+            cells: std::collections::HashMap::new(),
+        };
+        for (index, (_, _, seen)) in drawn.iter().enumerate() {
+            for w in seen.windows(2) {
+                for key in grid.keys(w[0], w[1]) {
+                    grid.cells.entry(key).or_default().push((index, w[0], w[1]));
+                }
+            }
+        }
+        grid
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn keys(&self, a: Point2, b: Point2) -> Vec<(i64, i64)> {
+        let at = |v: f64| (v / self.cell).floor() as i64;
+        let (x0, x1) = (at(a.x().min(b.x())), at(a.x().max(b.x())));
+        let (y0, y1) = (at(a.y().min(b.y())), at(a.y().max(b.y())));
+        (x0..=x1)
+            .flat_map(|i| (y0..=y1).map(move |j| (i, j)))
+            .collect()
+    }
+
+    /// The fractions along `a`..`b` where it crosses a view of an edge
+    /// other than `skip`.
+    fn crossings(&self, a: Point2, b: Point2, skip: usize) -> Vec<f64> {
+        let r = (b.x() - a.x(), b.y() - a.y());
+        let mut out = Vec::new();
+        for key in self.keys(a, b) {
+            for &(index, c, d) in self.cells.get(&key).into_iter().flatten() {
+                if index == skip {
+                    continue;
+                }
+                let w = (d.x() - c.x(), d.y() - c.y());
+                let denom = r.0 * w.1 - r.1 * w.0;
+                if denom.abs() <= 1e-300 {
+                    continue;
+                }
+                let (qx, qy) = (c.x() - a.x(), c.y() - a.y());
+                let f = (qx * w.1 - qy * w.0) / denom;
+                let g = (qx * r.1 - qy * r.0) / denom;
+                if (0.0..=1.0).contains(&f) && (0.0..=1.0).contains(&g) {
+                    out.push(f);
+                }
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -443,6 +534,56 @@ mod tests {
             length(&result.visible)
         );
         assert!((length(&result.hidden) - 40.0).abs() < 1e-5);
+    }
+
+    /// The 10 cube seen along (1, 1, 1) shows the 9 edges of its three near
+    /// faces, its outline among them, and hides the 3 at its far corner,
+    /// each 10 √(2/3) long on the drawing. Lines a hair aside of an outline
+    /// edge clip the face it bounds at a grazing angle, which hid it.
+    #[test]
+    fn a_cube_seen_corner_on_shows_its_outline() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let (o, d, x) = oblique();
+        let edge = 10.0 * (2.0_f64 / 3.0).sqrt();
+        let shown = project_edges(&topo, cube, o, d, x, false, 0.1).unwrap();
+        assert!(
+            (length(&shown.visible) - 9.0 * edge).abs() < 1e-5,
+            "{}",
+            length(&shown.visible)
+        );
+        let all = project_edges(&topo, cube, o, d, x, true, 0.1).unwrap();
+        assert!(
+            (length(&all.hidden) - 3.0 * edge).abs() < 1e-5,
+            "{}",
+            length(&all.hidden)
+        );
+    }
+
+    /// A bar 0.2 wide in front of a box 100 long hides 0.2 of each of the
+    /// box's front horizontals, far narrower than the steps the edges are
+    /// read at: their views cross the bar's sides, and are read either side.
+    #[test]
+    fn a_narrow_bar_hides_its_width_of_a_long_box() {
+        let mut topo = Topology::new();
+        let long = placed_box(&mut topo, (100.0, 1.0, 1.0), Point3::new(0.0, 10.0, 0.0));
+        let bar = placed_box(&mut topo, (0.2, 1.0, 3.0), Point3::new(0.4, 0.0, -1.0));
+        let (o, d, x) = (
+            Point3::new(50.0, -100.0, 0.5),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        let result = project_solids_edges(&topo, &[long, bar], o, d, x, true, 0.001).unwrap();
+        assert!(
+            (length(&result.visible) - 208.0).abs() < 1e-5,
+            "{}",
+            length(&result.visible)
+        );
+        assert!(
+            (length(&result.hidden) - 208.8).abs() < 1e-5,
+            "{}",
+            length(&result.hidden)
+        );
     }
 
     #[test]
