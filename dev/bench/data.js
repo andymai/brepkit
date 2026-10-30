@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793350931709,
+  "lastUpdate": 1793354115483,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61721,6 +61721,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18295456,
             "range": "± 1470567",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5bb5af6239a1d0554f3a3594730955e8df975954",
+          "message": "fix(topology): refuse to face a wire whose edges do not close (#2222)\n\n`makeFaceFromWire` and `makePlanarFaceFromWire` now refuse a wire whose\nedges don't run end to end round a loop, so sweeping an open wire\nreports an error instead of sweeping a face over a boundary that never\ncloses.\n\nToday both build a face on any wire. brepjs's `sweep` turns its profile\nwire into a face this way before sweeping, and its `makeWire` marks the\nwire closed, so the open wire of #2192 (a line and a half circle, 25.708\nlong) swept 30 along a line gives a surface measuring 1281.748, where\nthe swept wire holds 771.239.\n\n## Change\n\n- `make_face_from_wire` and `make_planar_face_from_wire` check that each\nedge's end meets the next edge's start and the last edge's end the\nfirst's start, by the new `validation::validate_wire_chain_closes`. It\nis `validate_wire_closed` without the closed flag, which a caller can\nset on an open wire.\n\nRefs #2192.\n\n## Tests\n\n- `a_face_needs_a_wire_that_closes`: the issue's line and half circle,\nas a wire flagged closed, are refused by both builders; with a line back\nto the start they make a face. Without the check, both face the open\nwire.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3800 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `make_face_from_wire` and `make_planar_face_from_wire` to reject\nwires whose edges don't run end to end as a loop, so sweeping an open\nwire reports an error instead of building a face over a boundary that\nnever closes. Previously both functions accepted any wire, and the\nclosed flag alone wasn't reliable because callers could set it on an\nopen wire, as in #2192 where an open line-and-arc profile swept into an\noversized surface.\n\n**Changes**\n- Both face builders now call the new `validate_wire_chain_closes`,\nwhich checks that each edge's end meets the next edge's start regardless\nof the closed flag; `validate_wire_closed` reuses it after flag\nverification.\n- Adds a regression test reproducing the issue's open wire (line plus\nhalf circle flagged closed) and verifies both builders refuse it while\naccepting the same wire once closed with a line back to the start.\n\n<sup>Written for commit 479b7b175542f54cf44372d9ce4e5ebb38692101.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2222?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2222?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2222&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T09:52:08Z",
+          "tree_id": "f7f4b364fe5716db2c74f0a49da2bcffdafaa717",
+          "url": "https://github.com/andymai/brepkit/commit/5bb5af6239a1d0554f3a3594730955e8df975954"
+        },
+        "date": 1793354108122,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1024086,
+            "range": "± 11736",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1105210,
+            "range": "± 16632",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11971,
+            "range": "± 234",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 655486,
+            "range": "± 5126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26669376,
+            "range": "± 225322",
             "unit": "ns/iter"
           }
         ]
