@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793364025041,
+  "lastUpdate": 1793366686423,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62045,6 +62045,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28513229,
             "range": "± 33620",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd7ee1013629570de0976637d58bc0cfa2e269be",
+          "message": "fix(operations): hide a projected edge wherever a solid lies on its line of sight (#2223)\n\nHidden-line projection now hides an edge wherever a solid lies on its\nline of sight toward the camera, cuts each edge where it passes behind\none, and can project several solids together, each hiding the others'\nedges.\n\nToday `project_edges` decides each sampled segment by its midpoint,\nhidden only when the point one small step toward the camera lies inside\nthe solid. Anything farther forward never hides it, so a second lump of\nthe same solid behind the first shows in full. An edge lying in a face\nseen edge-on reads as on that face rather than inside, so it shows too:\na box seen square on comes back with its back rectangle visible over its\nfront one, 280 mm visible and nothing hidden, where 140 is hidden. The\nbinding takes one solid, so a compound has no way in.\n\n## Change\n\n- A point on an edge is hidden when its line of sight toward the camera\nmeets a solid: `SolidClassifier::ray_crossings`, the exact per-face ray\ntest the point classifier counts with, finds a face ahead. The line\nstarts 1e-6 toward the camera, clear of the faces the edge bounds yet\nshort of a thin plate in front. Four lines 1e-6 to either side across\nthe view, starting 1e-4 further out so they clear the faces an outline\nedge bounds at a grazing angle, catch one that runs along a face or past\nits edge, where the point lies behind a nearer edge on the drawing.\n- Each edge is read at points on its own curve, at the drawing's samples\nand closer where its view is long (a sixty-fourth of the model's\ndiagonal), and on either side of each point where its view crosses\nanother drawn edge's, found through a grid of the views, so a solid\nnarrower than the step still hides it. It is cut where it passes behind\na solid or comes out, found by halving the step that changes. A curved\nface's outline that is not an edge is still found only to that step. A\nstraight edge is no longer decided by its middle, nor a rim by its\nchords' middles.\n- `project_solids_edges` projects every edge of several solids, each\nhidden by any of them, and tests another solid only when its box, seen\nfrom the camera, could cover the point. `project_edges` is that for one\nsolid, and the `projectSolidsEdges` binding takes a list of solid\nhandles and returns `projectEdges`'s JSON.\n\nRefs #2185: the brepjs adapter passes a compound's handle where\n`projectEdges` expects a solid, and needs to call `projectSolidsEdges`\nwith the compound's solids.\n\n## Tests\n\nThe view is from (0, −100, 15) along +y, on the block from x −20 to 20,\ny −5 to 5 and z 0 to 30.\n\n- `a_box_seen_square_on_hides_its_back_rectangle`: 140 visible, 140\nhidden.\n- `a_cube_behind_the_block_is_hidden`: a 10 cube from y 25 to 35, fused\ninto the block as a second lump and projected with it as a separate\nsolid, gives 140 visible and 220 hidden each way.\n- `a_tower_behind_the_block_shows_only_above_it`: a 10 x 10 x 40 tower\nfused against the block's back shows nothing on its side lines below z =\n30, and 170 visible and 290 hidden in all.\n`a_separate_tower_behind_the_block_shows_above_it`: the tower as its own\nsolid gives 170 visible and 310 hidden.\n- `a_box_aligned_behind_the_block_is_hidden`: a box the block's size 20\nbehind it, its lines of sight running along the block's faces and past\nits edges, leaves 140 visible and 420 hidden.\n- `a_thin_plate_just_in_front_hides_the_cube`: a 120 square plate 0.002\nthick, 0.004 in front of a 100 cube, hides the whole cube; only the\nplate's front 480 shows.\n- `a_cube_seen_corner_on_shows_its_outline`: the 10 cube seen along (1,\n1, 1) shows 9 edges and hides 3, each 10 √(2/3) long on the drawing.\nStarting the lines aside at the hair hides an outline edge.\n- `a_narrow_bar_hides_its_width_of_a_long_box`: a bar 0.2 wide in front\nof a box 100 long hides 0.2 of each of its front horizontals, 208\nshowing and 208.8 hidden in all. Without the reads either side of a\ncrossing, the bar hides nothing.\n- `a_cylinder_seen_side_on_shows_its_rims_front_halves`: a cylinder of\nradius 10 and height 10 seen side on shows its rims' front halves, 40,\nand hides their back halves, 40.\n- Without the lines to either side, seven of these fail. Starting lines\nof sight 0.01 out fails the plate, and cutting edges mid-step without\nhalving fails the separate tower. Each of the last four fails on the\nearlier midpoint reading.\n\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3808 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T06:22:18-07:00",
+          "tree_id": "1366b4462e1831a6609b319b10ad751bc92c584a",
+          "url": "https://github.com/andymai/brepkit/commit/bd7ee1013629570de0976637d58bc0cfa2e269be"
+        },
+        "date": 1793366677698,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 626253,
+            "range": "± 14070",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 667925,
+            "range": "± 53279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7889,
+            "range": "± 207",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 388373,
+            "range": "± 5532",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17323783,
+            "range": "± 950106",
             "unit": "ns/iter"
           }
         ]
