@@ -23,17 +23,18 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 ///
 /// # Algorithm
 ///
-/// 1. Collect all edge endpoints from all faces
-/// 2. Merge coincident vertices using spatial hashing
-/// 3. Merge coincident edges (same start/end vertices after merging)
-/// 4. Rebuild faces with the merged edges
-/// 5. Assemble into a shell and solid
+/// 1. Merge coincident vertices using spatial hashing
+/// 2. Merge coincident edges: the same two vertices and the same middle
+///    point, so the two halves of a circle, or two closed edges through one
+///    vertex, stay apart
+/// 3. Rebuild each face, holes included, from the merged edges, each keeping
+///    its own curve
+/// 4. Assemble into a shell and solid
 ///
 /// # Errors
 ///
-/// Returns an error if fewer than 2 faces are provided, or if the
-/// faces contain NURBS surfaces.
-#[allow(clippy::too_many_lines)]
+/// Returns an error if fewer than 2 faces are provided or a topology lookup
+/// fails.
 pub fn sew_faces(
     topo: &mut Topology,
     faces: &[FaceId],
@@ -52,80 +53,98 @@ pub fn sew_faces(
     };
 
     let mut face_snapshots: Vec<FaceSnapshot> = Vec::with_capacity(faces.len());
-
     for &fid in faces {
         let face = topo.face(fid)?;
-        let surface = face.surface().clone();
-        let wire = topo.wire(face.outer_wire())?;
-
-        let mut edge_points: Vec<(Point3, Point3)> = Vec::new();
-        for oe in wire.edges() {
-            let edge = topo.edge(oe.edge())?;
-            let start = topo.vertex(edge.start())?.point();
-            let end = topo.vertex(edge.end())?.point();
-            if oe.is_forward() {
-                edge_points.push((start, end));
-            } else {
-                edge_points.push((end, start));
+        let mut wires = Vec::with_capacity(1 + face.inner_wires().len());
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let mut edges = Vec::new();
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let start = topo.vertex(edge.start())?.point();
+                let end = topo.vertex(edge.end())?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                let middle = edge
+                    .curve()
+                    .evaluate_with_endpoints(0.5 * (t0 + t1), start, end);
+                edges.push(EdgeSnapshot {
+                    curve: edge.curve().clone(),
+                    start,
+                    end,
+                    middle,
+                    forward: oe.is_forward(),
+                });
             }
+            wires.push(edges);
         }
-
         face_snapshots.push(FaceSnapshot {
-            surface,
-            edge_points,
+            surface: face.surface().clone(),
+            reversed: face.is_reversed(),
+            wires,
         });
     }
 
     let resolution = 1.0 / tol;
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
+    let mut vertex_at = |topo: &mut Topology, p: Point3| {
+        #[allow(clippy::cast_possible_truncation)]
+        let key = (
+            (p.x() * resolution).round() as i64,
+            (p.y() * resolution).round() as i64,
+            (p.z() * resolution).round() as i64,
+        );
+        *vertex_map
+            .entry(key)
+            .or_insert_with(|| topo.add_vertex(Vertex::new(p, tol)))
+    };
 
-    let get_or_create_vertex =
-        |topo: &mut Topology, p: Point3, map: &mut HashMap<(i64, i64, i64), VertexId>| {
-            #[allow(clippy::cast_possible_truncation)]
-            let key = (
-                (p.x() * resolution).round() as i64,
-                (p.y() * resolution).round() as i64,
-                (p.z() * resolution).round() as i64,
-            );
-            *map.entry(key)
-                .or_insert_with(|| topo.add_vertex(Vertex::new(p, tol)))
-        };
-
-    let mut edge_map: HashMap<(usize, usize), EdgeId> = HashMap::new();
+    // The edges made so far between each pair of vertices, by their middle.
+    let mut edge_map: HashMap<(usize, usize), Vec<MadeEdge>> = HashMap::new();
     let mut new_face_ids: Vec<FaceId> = Vec::with_capacity(face_snapshots.len());
 
     for snap in &face_snapshots {
-        let mut oriented_edges: Vec<OrientedEdge> = Vec::with_capacity(snap.edge_points.len());
-
-        for &(start_pt, end_pt) in &snap.edge_points {
-            let v_start = get_or_create_vertex(topo, start_pt, &mut vertex_map);
-            let v_end = get_or_create_vertex(topo, end_pt, &mut vertex_map);
-
-            // Canonical edge key: sorted vertex indices.
-            let (key_min, key_max) = if v_start.index() <= v_end.index() {
-                (v_start.index(), v_end.index())
-            } else {
-                (v_end.index(), v_start.index())
-            };
-            let is_forward = v_start.index() <= v_end.index();
-
-            let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                let (canonical_start, canonical_end) = if v_start.index() <= v_end.index() {
-                    (v_start, v_end)
+        let mut wire_ids = Vec::with_capacity(snap.wires.len());
+        for edges in &snap.wires {
+            let mut oriented_edges: Vec<OrientedEdge> = Vec::with_capacity(edges.len());
+            for e in edges {
+                let v_start = vertex_at(topo, e.start);
+                let v_end = vertex_at(topo, e.end);
+                let key = if v_start.index() <= v_end.index() {
+                    (v_start.index(), v_end.index())
                 } else {
-                    (v_end, v_start)
+                    (v_end.index(), v_start.index())
                 };
-                topo.add_edge(Edge::new(canonical_start, canonical_end, EdgeCurve::Line))
-            });
-
-            oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
+                let made = edge_map.entry(key).or_default();
+                let (edge_id, made_start) =
+                    if let Some(m) = made.iter().find(|m| (m.middle - e.middle).length() <= tol) {
+                        (m.edge, m.start)
+                    } else {
+                        let edge = topo.add_edge(Edge::new(v_start, v_end, e.curve.clone()));
+                        made.push(MadeEdge {
+                            middle: e.middle,
+                            edge,
+                            start: v_start,
+                        });
+                        (edge, v_start)
+                    };
+                // An edge met again the other way along runs against its
+                // first face's traversal in this one.
+                let forward = e.forward == (made_start == v_start);
+                oriented_edges.push(OrientedEdge::new(edge_id, forward));
+            }
+            let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+            wire_ids.push(topo.add_wire(wire));
         }
-
-        let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-        let wire_id = topo.add_wire(wire);
-
-        let face_id = topo.add_face(Face::new(wire_id, vec![], snap.surface.clone()));
-        new_face_ids.push(face_id);
+        let (outer, holes) = wire_ids
+            .split_first()
+            .map(|(o, h)| (*o, h.to_vec()))
+            .ok_or_else(|| crate::OperationsError::InvalidInput {
+                reason: "a face to sew has no boundary".into(),
+            })?;
+        let mut face = Face::new(outer, holes, snap.surface.clone());
+        if snap.reversed {
+            face.set_reversed(true);
+        }
+        new_face_ids.push(topo.add_face(face));
     }
 
     let shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
@@ -133,11 +152,28 @@ pub fn sew_faces(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
+/// An edge sewing has made: its middle, and the vertex it starts at.
+struct MadeEdge {
+    middle: Point3,
+    edge: EdgeId,
+    start: VertexId,
+}
+
+/// One edge of a face to sew, as its wire runs it.
+struct EdgeSnapshot {
+    curve: EdgeCurve,
+    start: Point3,
+    end: Point3,
+    middle: Point3,
+    forward: bool,
+}
+
 /// Snapshot of a face's geometry for the sewing algorithm.
 struct FaceSnapshot {
     surface: FaceSurface,
-    /// Edge endpoints in traversal order: `[(start, end), ...]`
-    edge_points: Vec<(Point3, Point3)>,
+    reversed: bool,
+    /// The outer wire first, then the holes.
+    wires: Vec<Vec<EdgeSnapshot>>,
 }
 
 #[cfg(test)]
@@ -360,5 +396,179 @@ mod tests {
             0.0,
         );
         assert!(sew_faces(&mut topo, &[f], 1e-6).is_err());
+    }
+
+    /// The kinds of curve a solid's edges carry, in face order.
+    fn curve_kinds(topo: &Topology, solid: SolidId) -> Vec<Vec<&'static str>> {
+        brepkit_topology::explorer::solid_faces(topo, solid)
+            .unwrap()
+            .iter()
+            .map(|&f| {
+                let face = topo.face(f).unwrap();
+                std::iter::once(face.outer_wire())
+                    .chain(face.inner_wires().iter().copied())
+                    .flat_map(|w| topo.wire(w).unwrap().edges().to_vec())
+                    .map(|oe| topo.edge(oe.edge()).unwrap().curve().type_tag())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// A cylinder's three faces sew back into the cylinder: its rims stay
+    /// circles and it holds π r² h.
+    #[test]
+    fn sew_a_cylinders_faces_keeps_its_circles() {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, cyl).unwrap();
+        let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+        assert_eq!(curve_kinds(&topo, sewn), curve_kinds(&topo, cyl));
+        assert!(
+            crate::validate::validate_solid(&topo, sewn)
+                .unwrap()
+                .is_valid()
+        );
+        let volume = crate::measure::solid_volume(&topo, sewn, 0.01).unwrap();
+        let exact = std::f64::consts::PI * 100.0 * 20.0;
+        assert!((volume - exact).abs() < 1e-3 * exact, "{volume}");
+    }
+
+    /// A quarter-circle sector sewn beside a far triangle keeps its arc and
+    /// its area of 25π/4.
+    #[test]
+    fn sew_keeps_a_sectors_arc() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let v = |topo: &mut Topology, x: f64, y: f64| {
+            topo.add_vertex(Vertex::new(Point3::new(x, y, 20.0), 1e-7))
+        };
+        let (c, a, b) = (
+            v(&mut topo, 20.0, 15.0),
+            v(&mut topo, 20.0, 20.0),
+            v(&mut topo, 25.0, 15.0),
+        );
+        let circle = Circle3D::new(
+            Point3::new(20.0, 15.0, 20.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            5.0,
+        )
+        .unwrap();
+        let edges = [
+            topo.add_edge(Edge::new(c, a, EdgeCurve::Line)),
+            topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))),
+            topo.add_edge(Edge::new(b, c, EdgeCurve::Line)),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let sector = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: -20.0,
+            },
+        ));
+        let far = make_loose_quad(
+            &mut topo,
+            Point3::new(100.0, 0.0, 0.0),
+            Point3::new(110.0, 0.0, 0.0),
+            Point3::new(110.0, 10.0, 0.0),
+            Point3::new(100.0, 10.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            0.0,
+        );
+        let sewn = sew_faces(&mut topo, &[sector, far], 1e-7).unwrap();
+        let first = brepkit_topology::explorer::solid_faces(&topo, sewn).unwrap()[0];
+        let area = crate::measure::face_area(&topo, first, 0.001).unwrap();
+        let exact = 25.0 * std::f64::consts::FRAC_PI_4;
+        assert!((area - exact).abs() < 1e-3 * exact, "{area}");
+        assert!(curve_kinds(&topo, sewn)[0].contains(&"circle"));
+    }
+
+    /// A disc bounded by two half circles between the same two points keeps
+    /// both: its area stays 25π.
+    #[test]
+    fn sew_keeps_two_arcs_between_one_pair_of_points() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(Point3::new(5.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(-5.0, 0.0, 0.0), 1e-7));
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let circle =
+            || EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, 0.0), up, 5.0).unwrap());
+        let edges = [
+            topo.add_edge(Edge::new(a, b, circle())),
+            topo.add_edge(Edge::new(b, a, circle())),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let disc = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: up, d: 0.0 },
+        ));
+        let far = make_loose_quad(
+            &mut topo,
+            Point3::new(100.0, 0.0, 0.0),
+            Point3::new(110.0, 0.0, 0.0),
+            Point3::new(110.0, 10.0, 0.0),
+            Point3::new(100.0, 10.0, 0.0),
+            up,
+            0.0,
+        );
+        let sewn = sew_faces(&mut topo, &[disc, far], 1e-7).unwrap();
+        let first = brepkit_topology::explorer::solid_faces(&topo, sewn).unwrap()[0];
+        let area = crate::measure::face_area(&topo, first, 0.001).unwrap();
+        let exact = 25.0 * std::f64::consts::PI;
+        assert!((area - exact).abs() < 1e-3 * exact, "{area}");
+    }
+
+    /// A block with a round hole through it, its faces sewn again, keeps
+    /// the hole: the caps keep their inner circles and the solid its volume.
+    #[test]
+    fn sew_keeps_a_faces_holes() {
+        use crate::boolean::{BooleanOp, boolean};
+
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+        let rod = crate::primitives::make_cylinder(&mut topo, 4.0, 30.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            rod,
+            &brepkit_math::mat::Mat4::translation(10.0, 10.0, -10.0),
+        )
+        .unwrap();
+        let holed = boolean(&mut topo, BooleanOp::Cut, block, rod).unwrap();
+        let before = crate::measure::solid_volume(&topo, holed, 0.01).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, holed).unwrap();
+        let sewn = sew_faces(&mut topo, &faces, 1e-7).unwrap();
+        let holes: usize = brepkit_topology::explorer::solid_faces(&topo, sewn)
+            .unwrap()
+            .iter()
+            .map(|&f| topo.face(f).unwrap().inner_wires().len())
+            .sum();
+        assert_eq!(holes, 2);
+        assert!(
+            crate::validate::validate_solid(&topo, sewn)
+                .unwrap()
+                .is_valid()
+        );
+        let after = crate::measure::solid_volume(&topo, sewn, 0.01).unwrap();
+        assert!(
+            (after - before).abs() < 1e-6 * before,
+            "{after} vs {before}"
+        );
     }
 }
