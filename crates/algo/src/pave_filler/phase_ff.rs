@@ -4758,13 +4758,24 @@ fn trim_open_curve_to_plane_face_lines(
                 crossings.push(t_star);
             }
         }
+        // Each witness is answered by its own exact crossing off the straight
+        // edges within a sample of it; a straight edge's crossing nearby, or
+        // one curved crossing near two witnesses, leaves a crossing unfound.
         let step = (raw.t_range.1 - raw.t_range.0).abs()
             / f64::from(u32::try_from(n_samples).unwrap_or(u32::MAX));
-        if witnesses
+        let mut curved: Vec<f64> = crossings
             .iter()
-            .any(|&w| !crossings.iter().any(|&c| (c - w).abs() <= step))
-        {
-            return None;
+            .copied()
+            .filter(|&t| !straight.iter().any(|&seg| on_segment(eval_at(t), seg)))
+            .collect();
+        for &w in &witnesses {
+            let nearest = curved
+                .iter()
+                .enumerate()
+                .filter(|&(_, &c)| (c - w).abs() <= step)
+                .min_by(|a, b| (a.1 - w).abs().total_cmp(&(b.1 - w).abs()))
+                .map(|(k, _)| k)?;
+            curved.swap_remove(nearest);
         }
     } else if straight_crossings_only
         && !crossings
@@ -9060,30 +9071,14 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
-    /// The line x = -100 + 200 t, lying on a NURBS face standing in the plane
-    /// y = 0, crosses the unit disc about (1.5, 0, 0) at t = 0.5025 and 0.5125,
-    /// both between the trim's neighbouring samples. The trim keeps the span
-    /// across the disc or leaves the section to the generic trim; it never
-    /// drops the section.
-    #[test]
-    fn a_section_crossing_an_arc_twice_between_samples_is_kept() {
+    /// The line x = -100 + 200 t on a NURBS face standing in the plane y = 0,
+    /// trimmed to the plane face `plane_face` in z = 0.
+    fn trim_line_across(topo: &mut Topology, plane_face: FaceId) -> Option<Vec<RawCurve>> {
         use brepkit_math::nurbs::curve::NurbsCurve;
         use brepkit_math::nurbs::surface::NurbsSurface;
-        use brepkit_topology::builder::{make_circle_edge, make_face_from_wire, make_polygon_wire};
+        use brepkit_topology::builder::make_polygon_wire;
         use brepkit_topology::face::Face;
-        use brepkit_topology::wire::{OrientedEdge, Wire};
         let tol = Tolerance::new();
-        let mut topo = Topology::new();
-        let rim = make_circle_edge(
-            &mut topo,
-            Point3::new(1.5, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            1.0,
-            1e-7,
-        )
-        .unwrap();
-        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
-        let disc = make_face_from_wire(&mut topo, rim).unwrap();
         let corners = [
             Point3::new(-100.0, 0.0, -1.0),
             Point3::new(100.0, 0.0, -1.0),
@@ -9100,7 +9095,7 @@ mod tests {
             vec![vec![1.0; 2]; 2],
         )
         .unwrap();
-        let wire = make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+        let wire = make_polygon_wire(topo, &corners, 1e-7).unwrap();
         let wall_face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(wall)));
         let (a, b) = (Point3::new(-100.0, 0.0, 0.0), Point3::new(100.0, 0.0, 0.0));
         let line = NurbsCurve::new(1, knots, vec![a, b], vec![1.0; 2]).unwrap();
@@ -9111,24 +9106,45 @@ mod tests {
             p_start: a,
             p_end: b,
         };
-        let disc_surface = topo.face(disc).unwrap().surface().clone();
+        let plane_surface = topo.face(plane_face).unwrap().surface().clone();
         let wall_surface = topo.face(wall_face).unwrap().surface().clone();
-        let ext_disc = FaceExtent::new(&topo, disc, &disc_surface, None, tol).unwrap();
-        let wall_range = face_v_range(&topo, wall_face, &wall_surface);
-        let ext_wall = FaceExtent::new(&topo, wall_face, &wall_surface, wall_range, tol).unwrap();
-        let trimmed = trim_open_curve_to_plane_face_lines(
-            &topo,
-            disc,
-            &disc_surface,
+        let ext_plane = FaceExtent::new(topo, plane_face, &plane_surface, None, tol).unwrap();
+        let wall_range = face_v_range(topo, wall_face, &wall_surface);
+        let ext_wall = FaceExtent::new(topo, wall_face, &wall_surface, wall_range, tol).unwrap();
+        trim_open_curve_to_plane_face_lines(
+            topo,
+            plane_face,
+            &plane_surface,
             wall_face,
             &wall_surface,
             &raw,
-            &ext_disc,
+            &ext_plane,
             &ext_wall,
             tol,
             &JunctionRegistry::default(),
-        );
-        if let Some(pieces) = trimmed {
+        )
+    }
+
+    /// That line crosses the unit disc about (1.5, 0, 0) at t = 0.5025 and
+    /// 0.5125, both between the trim's neighbouring samples. The trim keeps
+    /// the span across the disc or leaves the section to the generic trim;
+    /// it never drops the section.
+    #[test]
+    fn a_section_crossing_an_arc_twice_between_samples_is_kept() {
+        use brepkit_topology::builder::{make_circle_edge, make_face_from_wire};
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let rim = make_circle_edge(
+            &mut topo,
+            Point3::new(1.5, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            1e-7,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let disc = make_face_from_wire(&mut topo, rim).unwrap();
+        if let Some(pieces) = trim_line_across(&mut topo, disc) {
             assert!(
                 !pieces.is_empty(),
                 "the section across the disc was dropped"
@@ -9141,6 +9157,68 @@ mod tests {
                     piece.p_end
                 );
             }
+        }
+    }
+
+    /// That line across the rectangle x = -0.5 to 2.5, y = -2 to 2 with a
+    /// hole of radius 0.25 about (1, 0): the hole's crossings at x = 0.75
+    /// and 1.25 lie between samples, each within a sample of a straight
+    /// edge's. The trim keeps the spans either side of the hole and nothing
+    /// through it, or leaves the section to the generic trim.
+    #[test]
+    fn a_section_crossing_a_small_hole_between_samples_keeps_its_spans() {
+        use brepkit_topology::builder::{make_circle_edge, make_polygon_wire};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let outer = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(-0.5, -2.0, 0.0),
+                Point3::new(2.5, -2.0, 0.0),
+                Point3::new(2.5, 2.0, 0.0),
+                Point3::new(-0.5, 2.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let rim = make_circle_edge(
+            &mut topo,
+            Point3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            0.25,
+            1e-7,
+        )
+        .unwrap();
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let plate = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        if let Some(pieces) = trim_line_across(&mut topo, plate) {
+            let mut spans: Vec<(f64, f64)> = pieces
+                .iter()
+                .map(|p| {
+                    (
+                        p.p_start.x().min(p.p_end.x()),
+                        p.p_start.x().max(p.p_end.x()),
+                    )
+                })
+                .collect();
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            assert_eq!(spans.len(), 2, "{spans:?}");
+            let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+            assert!(
+                close(spans[0].0, -0.5)
+                    && close(spans[0].1, 0.75)
+                    && close(spans[1].0, 1.25)
+                    && close(spans[1].1, 2.5),
+                "{spans:?}"
+            );
         }
     }
 
