@@ -295,11 +295,54 @@ fn gate_deflection(
     solid: brepkit_topology::solid::SolidId,
     size: f64,
 ) -> Result<f64, brepkit_operations::OperationsError> {
-    let bounds = brepkit_operations::measure::solid_bounding_box(topo, solid)?;
-    let extent = bounds.max - bounds.min;
-    let least = extent.x().min(extent.y()).min(extent.z());
-    let floor = (1e-3 * least).min(0.01);
+    let floor = (1e-3 * least_extent(topo, solid)?).min(0.01);
     Ok((size * 0.1).clamp(floor, 0.1))
+}
+
+/// The solid's least extent across the box that best fits points along its
+/// edges, a ball face's six farthest points in its own frame, and a NURBS
+/// face's control points, so the part reads as thick however it is turned.
+fn least_extent(
+    topo: &brepkit_topology::Topology,
+    solid: brepkit_topology::solid::SolidId,
+) -> Result<f64, brepkit_operations::OperationsError> {
+    use brepkit_topology::face::FaceSurface;
+    const SAMPLES: u32 = 16;
+    let mut points = Vec::new();
+    for eid in brepkit_topology::explorer::solid_edges(topo, solid)? {
+        let edge = topo.edge(eid)?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        points.extend((0..=SAMPLES).map(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            curve.evaluate_with_endpoints(t, start, end)
+        }));
+    }
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        match topo.face(fid)?.surface() {
+            FaceSurface::Sphere(s) => {
+                use std::f64::consts::{FRAC_PI_2, PI};
+                points.extend(
+                    [(0.0, 0.0), (FRAC_PI_2, 0.0), (PI, 0.0), (-FRAC_PI_2, 0.0)]
+                        .into_iter()
+                        .chain([(0.0, FRAC_PI_2), (0.0, -FRAC_PI_2)])
+                        .map(|(u, v)| s.evaluate(u, v)),
+                );
+            }
+            FaceSurface::Nurbs(n) => points.extend(n.control_points().iter().flatten()),
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Torus(_) => {}
+        }
+    }
+    if points.is_empty() {
+        return Ok(0.0);
+    }
+    let fit = brepkit_math::obb::Obb3::from_points_slice(&points);
+    Ok(2.0 * fit.half_extents.into_iter().fold(f64::INFINITY, f64::min))
 }
 
 /// Whether a fillet's or chamfer's result is a solid to keep, its volume
@@ -1002,6 +1045,32 @@ mod fillet_tests {
                 let edge = topo.edge(e).unwrap();
                 matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
                     if c.center().z() > 50.0)
+            })
+            .unwrap();
+        let cut = try_chamfer(&mut topo, cyl, &[rim], 0.002).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-5).unwrap();
+        let full = std::f64::consts::PI * 1e-4 * 100.0;
+        assert!(volume < full && volume > 0.999 * full, "{volume} of {full}");
+    }
+
+    /// The same cylinder turned to run along the cube's diagonal, its top
+    /// rim chamfered alike, is kept too, though its axis-aligned box is some
+    /// 58 across every way: the gate reads the part's thickness across the
+    /// box that fits it, which turning leaves alone.
+    #[test]
+    fn try_chamfer_keeps_a_turned_slender_cylinders_rim_chamfer() {
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 0.01, 100.0).unwrap();
+        let tilt = (1.0_f64 / 2.0_f64.sqrt()).atan();
+        let turn = brepkit_math::mat::Mat4::rotation_x(-tilt)
+            * brepkit_math::mat::Mat4::rotation_y(std::f64::consts::FRAC_PI_4);
+        brepkit_operations::transform::transform_solid(&mut topo, cyl, &turn).unwrap();
+        let rim = solid_edge_ids(&topo, cyl)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().z() > 30.0)
             })
             .unwrap();
         let cut = try_chamfer(&mut topo, cyl, &[rim], 0.002).unwrap();
