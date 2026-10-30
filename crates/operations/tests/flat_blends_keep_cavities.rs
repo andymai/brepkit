@@ -416,3 +416,88 @@ fn walking_blends_keep_their_own_cavity() {
         );
     }
 }
+
+/// A cylinder of radius 10 and height 100 holding a 3 cube cavity near its
+/// bottom, turned 45° about y: a fillet round its top rim keeps the cavity.
+/// The untouched bottom cap's box meets the cavity's, but the cap is no
+/// face the fillet made. The outer shell loses what a plain cylinder's
+/// does.
+#[test]
+fn a_walking_fillet_far_from_a_cavity_keeps_it_on_a_turned_solid() {
+    use brepkit_operations::blend_ops::{all_blended, fillet_v2};
+    use brepkit_operations::primitives::make_cylinder;
+    use brepkit_topology::solid::Solid;
+
+    let build = |topo: &mut Topology, hollow: bool| {
+        let mut solid = make_cylinder(topo, 10.0, 100.0).unwrap();
+        if hollow {
+            let cube = make_box(topo, 3.0, 3.0, 3.0).unwrap();
+            transform_solid(topo, cube, &Mat4::translation(-1.5, -1.5, 3.5)).unwrap();
+            solid = boolean(topo, BooleanOp::Cut, solid, cube).unwrap();
+        }
+        transform_solid(topo, solid, &Mat4::rotation_y(std::f64::consts::FRAC_PI_4)).unwrap();
+        let rim = solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().x() > 50.0)
+            })
+            .unwrap();
+        all_blended(fillet_v2(topo, solid, &[rim], 1.0).unwrap()).unwrap()
+    };
+    let shell_volume = |topo: &mut Topology, shell| {
+        let alone = topo.add_solid(Solid::new(shell, Vec::new()));
+        solid_volume(topo, alone, 0.001).unwrap()
+    };
+    let mut topo = Topology::new();
+    let hollow = build(&mut topo, true);
+    let cavities = topo.solid(hollow).unwrap().inner_shells().to_vec();
+    assert_eq!(cavities.len(), 1);
+    let outer = topo.solid(hollow).unwrap().outer_shell();
+    let hollow_outer = shell_volume(&mut topo, outer);
+    let cavity = shell_volume(&mut topo, cavities[0]);
+    let mut plain_topo = Topology::new();
+    let plain = build(&mut plain_topo, false);
+    let plain = solid_volume(&plain_topo, plain, 0.001).unwrap();
+    assert!(
+        (hollow_outer - plain).abs() < 1e-6 * plain,
+        "{hollow_outer} vs {plain}"
+    );
+    assert!((cavity - 27.0).abs() < 1e-9, "{cavity}");
+}
+
+/// A walking chamfer's result shares nothing with its input: moving it
+/// leaves every vertex of the input box where it was.
+#[test]
+fn a_walking_chamfers_result_is_its_own() {
+    use brepkit_operations::blend_ops::{all_blended, chamfer_v2};
+
+    let mut topo = Topology::new();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let edge = solid_edges(&topo, block)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()].iter().all(|&v| {
+                let p = topo.vertex(v).unwrap().point();
+                p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9
+            })
+        })
+        .unwrap();
+    let corners = |topo: &Topology| -> Vec<Point3> {
+        brepkit_topology::explorer::solid_vertices(topo, block)
+            .unwrap()
+            .iter()
+            .map(|&v| topo.vertex(v).unwrap().point())
+            .collect()
+    };
+    let before = corners(&topo);
+    let cut = all_blended(chamfer_v2(&mut topo, block, &[edge], 1.0, 1.0).unwrap()).unwrap();
+    transform_solid(&mut topo, cut, &Mat4::translation(0.0, 0.0, 100.0)).unwrap();
+    assert_eq!(corners(&topo), before);
+    let report = validate_solid(&topo, block).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}

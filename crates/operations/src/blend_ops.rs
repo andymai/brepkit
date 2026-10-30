@@ -6,7 +6,7 @@ use brepkit_blend::fillet_builder::FilletBuilder;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
-use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
 
@@ -32,23 +32,20 @@ pub fn all_blended(result: BlendResult) -> Result<SolidId, OperationsError> {
     }
 }
 
-/// `result` with the cavities of `solid` as its own. The walking builders
-/// rebuild only the outer shell and carry the cavity shells over as they
-/// are, so a blend reaching a cavity is refused, and each kept cavity is
-/// copied: a shell shared with the input would move with it under an
-/// in-place transform of either.
+/// `result` as a solid of its own: the walking builders share the input's
+/// unchanged edges and its cavity shells with the result, which would move
+/// with it under an in-place transform of either. A blend reaching a cavity
+/// is refused.
 fn own_cavities(
     topo: &mut Topology,
     solid: SolidId,
     mut result: BlendResult,
     what: &str,
 ) -> Result<BlendResult, OperationsError> {
-    if result.solid == solid || topo.solid(solid)?.inner_shells().is_empty() {
+    if result.solid == solid {
         return Ok(result);
     }
-    let outer = topo.solid(result.solid)?.outer_shell();
-    let bare = topo.add_solid(Solid::new(outer, Vec::new()));
-    result.solid = crate::cavities::keep_cavities(topo, solid, bare, what)?;
+    result.solid = crate::cavities::detach_walked(topo, solid, result.solid, what)?;
     Ok(result)
 }
 

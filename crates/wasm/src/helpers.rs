@@ -201,7 +201,7 @@ pub fn try_fillet(
     }
     let edges = filtered.as_slice();
 
-    let orientation_deflection = (radius * 0.1).clamp(0.01, 0.1);
+    let orientation_deflection = gate_deflection(topo, solid_id, radius)?;
     let is_valid = |topo: &brepkit_topology::Topology, s: brepkit_topology::solid::SolidId| {
         blend_result_holds(topo, s, orientation_deflection)
     };
@@ -246,7 +246,16 @@ pub fn try_chamfer(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     distance: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    let orientation_deflection = (distance * 0.1).clamp(0.01, 0.1);
+    let on_solid: std::collections::HashSet<_> =
+        brepkit_topology::explorer::solid_edges(topo, solid_id)?
+            .into_iter()
+            .collect();
+    if edge_ids.iter().any(|e| !on_solid.contains(e)) {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "some requested edges are not on the solid".to_owned(),
+        });
+    }
+    let orientation_deflection = gate_deflection(topo, solid_id, distance)?;
     if let Ok(r) =
         brepkit_operations::blend_ops::chamfer_v2(topo, solid_id, edge_ids, distance, distance)
         && r.solid != solid_id
@@ -264,6 +273,20 @@ pub fn try_chamfer(
     Err(brepkit_operations::OperationsError::InvalidInput {
         reason: "no chamfer engine produced a changed, closed, outward-oriented result".to_owned(),
     })
+}
+
+/// The deflection [`blend_result_holds`] reads a blend of `size` on `solid`
+/// at: a tenth of the blend, at most 0.1, and at least a thousandth of the
+/// solid's diagonal up to 0.01, so a small part's curves still mesh within
+/// the check's 1%.
+fn gate_deflection(
+    topo: &brepkit_topology::Topology,
+    solid: brepkit_topology::solid::SolidId,
+    size: f64,
+) -> Result<f64, brepkit_operations::OperationsError> {
+    let bounds = brepkit_operations::measure::solid_bounding_box(topo, solid)?;
+    let floor = (1e-3 * (bounds.max - bounds.min).length()).min(0.01);
+    Ok((size * 0.1).clamp(floor, 0.1))
 }
 
 /// Whether a fillet's or chamfer's result is a solid to keep, its volume
@@ -906,6 +929,37 @@ mod fillet_tests {
         let mut topo = Topology::new();
         let (near, edge) = hollow_block(&mut topo, (3.5, 0.05, 6.5));
         assert!(try_chamfer(&mut topo, near, &[edge], 1.0).is_err());
+    }
+
+    /// A chamfer naming an edge of another solid is refused rather than
+    /// chamfering the rest.
+    #[test]
+    fn try_chamfer_refuses_an_edge_off_the_solid() {
+        let mut topo = Topology::new();
+        let a = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = [solid_edge_ids(&topo, a)[0], solid_edge_ids(&topo, b)[0]];
+        assert!(try_chamfer(&mut topo, a, &edges, 1.0).is_err());
+    }
+
+    /// A 0.002 chamfer round the top rim of a cylinder of radius 0.01 and
+    /// height 0.03 is kept: its curves mesh finely enough for the check.
+    #[test]
+    fn try_chamfer_keeps_a_small_cylinders_rim_chamfer() {
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 0.01, 0.03).unwrap();
+        let rim = solid_edge_ids(&topo, cyl)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().z() > 0.02)
+            })
+            .unwrap();
+        let cut = try_chamfer(&mut topo, cyl, &[rim], 0.002).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-5).unwrap();
+        let full = std::f64::consts::PI * 1e-4 * 0.03;
+        assert!(volume < full && volume > 0.97 * full, "{volume} of {full}");
     }
 
     /// A chamfer of 2e-5 on a box of side 1e-4 is kept: its volume of about

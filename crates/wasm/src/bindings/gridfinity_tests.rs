@@ -613,7 +613,6 @@ fn compound_cut_bbox_accurate() {
 /// makeBox → fillet edge → fuse lip shape → measure volume.
 /// Exercises the NURBS/torus surface path that caused face explosion.
 ///
-/// Solids: 0=box, 1=filleted, 2=lip_box, 3=fused
 #[test]
 fn gridfinity_lip_fillet_fuse_volume() {
     let mut k = BrepKernel::new();
@@ -643,17 +642,25 @@ fn gridfinity_lip_fillet_fuse_volume() {
     let filleted_handle = p2[0]["ok"].as_u64().unwrap();
 
     // Create lip shape, fuse, then measure volume.
-    let r3 = k.execute_batch(&format!(
+    let r3 =
+        k.execute_batch(r#"[{"op": "makeBox", "args": {"width": 44, "height": 44, "depth": 2}}]"#);
+    let p3 = parse_batch(&r3);
+    assert_ok(&p3, 0);
+    let lip = p3[0]["ok"].as_u64().unwrap();
+    let r4 = k.execute_batch(&format!(
         r#"[
-        {{"op": "makeBox", "args": {{"width": 44, "height": 44, "depth": 2}}}},
-        {{"op": "transform", "args": {{"solid": 2, "matrix": [1,0,0,-1, 0,1,0,-1, 0,0,1,7, 0,0,0,1]}}}},
-        {{"op": "fuse", "args": {{"solidA": {filleted_handle}, "solidB": 2}}}},
-        {{"op": "volume", "args": {{"solid": 3}}}}
+        {{"op": "transform", "args": {{"solid": {lip}, "matrix": [1,0,0,-1, 0,1,0,-1, 0,0,1,7, 0,0,0,1]}}}},
+        {{"op": "fuse", "args": {{"solidA": {filleted_handle}, "solidB": {lip}}}}}
     ]"#,
     ));
-    let p3 = parse_batch(&r3);
-    assert_ok(&p3, 2);
-    let vol = ok_f64(&p3, 3);
+    let p4 = parse_batch(&r4);
+    assert_ok(&p4, 1);
+    let fused = p4[1]["ok"].as_u64().unwrap();
+    let r5 = k.execute_batch(&format!(
+        r#"[{{"op": "volume", "args": {{"solid": {fused}}}}}]"#
+    ));
+    let p5 = parse_batch(&r5);
+    let vol = ok_f64(&p5, 0);
     // Box 42×42×7 = 12348, lip 44×44×2 = 3872, adjacent at z=7.
     // Expected ≈ 16220 minus fillet material.
     assert!(
