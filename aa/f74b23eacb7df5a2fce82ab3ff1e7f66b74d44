@@ -1,0 +1,23 @@
+crates/operations/src/loft.rs
+  s_a2dc21dbec3f2b::t_3055840714ab35 1844-1937,1941-1972,1979-2051
+  s_a2dc21dbec3f2b::t_6a34728caecbfc 692-695,697
+  s_a2dc21dbec3f2b::t_2d55a8d8fb68bc 773-782,794-832,965-968,1017-1019,1938-1940,1978,2052
+  s_a2dc21dbec3f2b::t_53fc65b8d5bf8f 1973-1977
+  s_a2dc21dbec3f2b::t_349d739bd7130c 2053-2055
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aaf74b23eacb7df5a2fce82ab3ff1e7f66b74d44",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
