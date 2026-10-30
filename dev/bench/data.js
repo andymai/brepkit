@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793345276731,
+  "lastUpdate": 1793346853794,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61559,6 +61559,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17800130,
             "range": "± 181594",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e41ca8708c8ca8e05420e7aa0133fa7dc2141d64",
+          "message": "chore(main): release 4.6.2 (#2219)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.6.2](https://github.com/andymai/brepkit/compare/v4.6.1...v4.6.2)\n(2026-10-30)\n\n\n### Bug Fixes\n\n* **operations:** fill a Coons patch from its curves whichever way they\nrun ([#2216](https://github.com/andymai/brepkit/issues/2216))\n([32f73db](https://github.com/andymai/brepkit/commit/32f73db336b3ffe48c010729be0148d10a72697c))\n* **wasm:** give each face of a grouped mesh its own vertices so creases\nshade sharp ([#2215](https://github.com/andymai/brepkit/issues/2215))\n([0fac49c](https://github.com/andymai/brepkit/commit/0fac49cfc2d15b62c43909383a834158553d0894))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` 4.6.2 with fixes for surface creation and mesh\nshading.\n\n- Coons patches now fill correctly regardless of curve direction.\n- Grouped mesh faces use separate vertices so creases shade sharply.\n- Updates the changelog and workspace crate versions to 4.6.2.\n\n<sup>Written for commit 0e331262b77b384e74f3c592943009c57939065c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2219?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2219?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2219&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-30T07:51:06Z",
+          "tree_id": "b7e67c7c9b63efd86b8a8d73cd27431c245b2d74",
+          "url": "https://github.com/andymai/brepkit/commit/e41ca8708c8ca8e05420e7aa0133fa7dc2141d64"
+        },
+        "date": 1793346847810,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1102567,
+            "range": "± 3607",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1175914,
+            "range": "± 2237",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13192,
+            "range": "± 602",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 673243,
+            "range": "± 16420",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28667471,
+            "range": "± 70509",
             "unit": "ns/iter"
           }
         ]
