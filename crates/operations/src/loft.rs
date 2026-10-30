@@ -689,10 +689,12 @@ fn ray_meets_profile(
                         (-b - disc.sqrt()) / (2.0 * a),
                         (-b + disc.sqrt()) / (2.0 * a),
                     ] {
-                        let q = from + dir * s;
-                        let along = (c.project(q) - t0).rem_euclid(std::f64::consts::TAU);
+                        // A ray off the circle's plane meets its sphere,
+                        // not the circle: the cut is taken on the circle.
+                        let at = c.project(from + dir * s);
+                        let along = (at - t0).rem_euclid(std::f64::consts::TAU);
                         if s > 0.0 && along <= (t1 - t0) + SLACK {
-                            hits.push(q);
+                            hits.push(c.evaluate(at));
                         }
                     }
                 }
@@ -768,8 +770,16 @@ fn match_profiles_by_angle(
 }
 
 /// Turns each profile after the first to start at the vertex whose angle
-/// about its centre lies nearest the first profile's start.
-fn start_at_matching_angles(profs: &mut [Vec<ProfileEdgeGeom>], centres: &[Point3], normal: Vec3) {
+/// about its centre lies nearest the first profile's start. Whether every
+/// vertex then lies at its counterpart's angle: a profile a ray from its
+/// centre meets more than once can run back in angle where the others do
+/// not, and its vertices pair across angles.
+fn start_at_matching_angles(
+    profs: &mut [Vec<ProfileEdgeGeom>],
+    centres: &[Point3],
+    normal: Vec3,
+    tol: f64,
+) -> bool {
     let flat = |v: Vec3| v - normal * v.dot(normal);
     let reference = flat(profs[0][0].start - centres[0]);
     for (p, &c) in profs.iter_mut().zip(centres).skip(1) {
@@ -781,6 +791,45 @@ fn start_at_matching_angles(profs: &mut [Vec<ProfileEdgeGeom>], centres: &[Point
             p.rotate_left(k);
         }
     }
+    profs.iter().zip(centres).skip(1).all(|(p, &c)| {
+        p.iter().zip(&profs[0]).all(|(e, first)| {
+            let (d, along) = (
+                flat(e.start - c),
+                flat(first.start - centres[0]).normalize(),
+            );
+            along.is_ok_and(|a| d.dot(a) > 0.0 && d.cross(a).length() <= 10.0 * tol)
+        })
+    })
+}
+
+/// Whether arcs on coaxial circles `c0` and `c1` end at matching angles
+/// about their shared axis, start with start and end with end: only then do
+/// the lines joining their ends rule the cylinder or cone through both.
+fn ends_meet_radially(
+    c0: &brepkit_math::curves::Circle3D,
+    ends0: (Point3, Point3),
+    c1: &brepkit_math::curves::Circle3D,
+    ends1: (Point3, Point3),
+    tol: Tolerance,
+) -> bool {
+    let Ok(n) = c0.normal().normalize() else {
+        return false;
+    };
+    let radial = |p: Point3, o: Point3| {
+        let d = p - o;
+        (d - n * d.dot(n)).normalize().ok()
+    };
+    let reach = c0.radius().max(c1.radius());
+    [(ends0.0, ends1.0), (ends0.1, ends1.1)]
+        .into_iter()
+        .all(
+            |(a, b)| match (radial(a, c0.center()), radial(b, c1.center())) {
+                (Some(ra), Some(rb)) => {
+                    ra.dot(rb) > 0.0 && ra.cross(rb).length() * reach <= tol.linear
+                }
+                _ => false,
+            },
+        )
 }
 
 /// Loft profiles of lines and arcs while preserving curved edges (arcs stay
@@ -913,8 +962,10 @@ fn try_loft_matching_curved_profiles(
     } else if windings.iter().any(|&w| w < 0.0) {
         return Ok(None);
     }
-    if let Some((centres, normal)) = &centres {
-        start_at_matching_angles(&mut profs, centres, *normal);
+    if let Some((centres, normal)) = &centres
+        && !start_at_matching_angles(&mut profs, centres, *normal, tol.linear)
+    {
+        return Ok(None);
     }
 
     // 3b. Pre-compute every side face's surface BEFORE mutating `topo`. A
@@ -963,7 +1014,9 @@ fn try_loft_matching_curved_profiles(
                     }
                 }
                 (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
-                    if let Some(surface) = coaxial_corner_surface(c0, c1, tol) {
+                    if ends_meet_radially(c0, (p0s, p0e), c1, (p1s, p1e), tol)
+                        && let Some(surface) = coaxial_corner_surface(c0, c1, tol)
+                    {
                         // Radial-outward equals solid-outward only for a
                         // CONVEX corner arc (material inside the arc). A
                         // concave rounding puts the material outside the
@@ -1787,5 +1840,217 @@ mod square_to_circle_tests {
             let volume = crate::measure::solid_volume(&topo, solid, 1e-4).unwrap();
             assert!((volume - 35125.497).abs() < 1e-4 * 35125.497, "{volume}");
         }
+    }
+    /// Every vertex of `solid` lies on each of its edges' curves, and each
+    /// edge of a cylinder or cone face on that surface, to 1e-7.
+    fn lies_on_its_geometry(topo: &Topology, solid: SolidId) -> bool {
+        let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+        faces.iter().all(|&f| {
+            let face = topo.face(f).unwrap();
+            let surface = face.surface();
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .flat_map(|w| topo.wire(w).unwrap().edges().to_vec())
+                .all(|oe| {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    let (s, t) = (
+                        topo.vertex(e.start()).unwrap().point(),
+                        topo.vertex(e.end()).unwrap().point(),
+                    );
+                    let (t0, t1) = e.curve().domain_with_endpoints(s, t);
+                    let at = |x: f64| e.curve().evaluate_with_endpoints(x, s, t);
+                    let ends = (at(t0) - s).length() <= 1e-7 && (at(t1) - t).length() <= 1e-7;
+                    let on_surface = match surface {
+                        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {
+                            let mid = at(f64::midpoint(t0, t1));
+                            surface.project_point(mid).is_some_and(|(u, v)| {
+                                surface
+                                    .evaluate(u, v)
+                                    .is_some_and(|q| (q - mid).length() <= 1e-7)
+                            })
+                        }
+                        _ => true,
+                    };
+                    ends && on_surface
+                })
+        })
+    }
+
+    /// A profile piece: the point it runs to, and the centre it runs round
+    /// when it is an arc.
+    type Piece = ((f64, f64), Option<(f64, f64)>);
+
+    /// A planar profile at height `z` from `pieces`: each runs from the
+    /// previous one's end to its point, straight or round the given centre.
+    fn profile(topo: &mut Topology, z: f64, pieces: &[Piece]) -> FaceId {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        let at = |(x, y): (f64, f64)| Point3::new(x, y, z);
+        let vertices: Vec<_> = pieces
+            .iter()
+            .map(|&(q, _)| topo.add_vertex(Vertex::new(at(q), 1e-7)))
+            .collect();
+        let n = pieces.len();
+        let edges = (0..n)
+            .map(|k| {
+                let (from, to) = (vertices[(k + n - 1) % n], vertices[k]);
+                let curve = pieces[k].1.map_or(EdgeCurve::Line, |c| {
+                    let radius = (at(pieces[k].0) - at(c)).length();
+                    EdgeCurve::Circle(
+                        brepkit_math::curves::Circle3D::new(
+                            at(c),
+                            Vec3::new(0.0, 0.0, 1.0),
+                            radius,
+                        )
+                        .unwrap(),
+                    )
+                });
+                OrientedEdge::new(topo.add_edge(Edge::new(from, to, curve)), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    }
+
+    /// A square of half-size `h` with corners rounded to radius `r`, run
+    /// counterclockwise, its bottom side cut at `x = cut` when given.
+    fn rounded_square(h: f64, r: f64, cut: Option<f64>) -> Vec<Piece> {
+        let k = h - r;
+        let mut pieces = vec![((-k, -h), Some((-k, -k)))];
+        pieces.extend(cut.map(|x| ((x, -h), None)));
+        pieces.extend([
+            ((k, -h), None),
+            ((h, -k), Some((k, -k))),
+            ((h, k), None),
+            ((k, h), Some((k, k))),
+            ((-k, h), None),
+            ((-h, k), Some((-k, k))),
+            ((-h, -k), None),
+        ]);
+        pieces
+    }
+
+    /// A 40 square lofted to a circle of radius 10 whose plane tilts 1e-5
+    /// about x: rays in the square's plane meet the circle's sphere up to
+    /// 7e-5 off the circle, and the cuts are taken on the circle, so the
+    /// loft keeps its 7 faces rather than falling back to a polygon.
+    #[test]
+    fn a_square_lofts_to_a_slightly_tilted_circle_with_its_cuts_on_it() {
+        let mut topo = Topology::new();
+        let square = profile(
+            &mut topo,
+            0.0,
+            &[
+                ((20.0, -20.0), None),
+                ((20.0, 20.0), None),
+                ((-20.0, 20.0), None),
+                ((-20.0, -20.0), None),
+            ],
+        );
+        let normal = Vec3::new(0.0, -(1e-5_f64).sin(), (1e-5_f64).cos());
+        let rim = brepkit_topology::builder::make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 40.0),
+            normal,
+            10.0,
+            1e-7,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let circle = topo.add_face(brepkit_topology::face::Face::new(
+            rim,
+            vec![],
+            FaceSurface::Plane {
+                normal,
+                d: 40.0 * normal.z(),
+            },
+        ));
+        let solid = loft(&mut topo, &[square, circle]).unwrap();
+        let kinds: Vec<_> = brepkit_topology::explorer::solid_faces(&topo, solid)
+            .unwrap()
+            .iter()
+            .map(|&f| topo.face(f).unwrap().surface().type_tag())
+            .collect();
+        assert_eq!(kinds.len(), 7, "{kinds:?}");
+        assert!(lies_on_its_geometry(&topo, solid));
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+    }
+
+    /// Rounded squares of half-size 10 and corner radius 2 at z = 0, one side
+    /// cut in two, and of half-size 12 and corner radius 4 at z = 10. Their
+    /// corners share axes, but matching by angle cuts the second's corner
+    /// arcs at the first's corners' angles about the squares' centre, so the
+    /// arcs it pairs no longer end at matching angles about their own axis:
+    /// each such band is ruled between them, every edge on its surface.
+    #[test]
+    fn coaxial_corner_arcs_cut_at_other_angles_are_ruled() {
+        let mut topo = Topology::new();
+        let low = profile(&mut topo, 0.0, &rounded_square(10.0, 2.0, Some(0.3)));
+        let high = profile(&mut topo, 10.0, &rounded_square(12.0, 4.0, None));
+        let solid = loft(&mut topo, &[low, high]).unwrap();
+        assert!(lies_on_its_geometry(&topo, solid));
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+    }
+
+    /// A square notched at its top, lofted to a circle: a ray from its centre
+    /// meets it more than once, so its cuts do not run round it in order of
+    /// angle as the circle's do. Such a loft is not paired by angle; it
+    /// keeps the polygon loft, valid.
+    #[test]
+    fn a_notched_square_is_not_paired_by_angle() {
+        let mut topo = Topology::new();
+        let notched = profile(
+            &mut topo,
+            0.0,
+            &[
+                ((3.0, -3.0), None),
+                ((3.0, 3.0), None),
+                ((1.0, 3.0), None),
+                ((1.0, 1.0), None),
+                ((-1.0, 1.0), None),
+                ((-1.0, 3.0), None),
+                ((-3.0, 3.0), None),
+                ((-3.0, -3.0), None),
+            ],
+        );
+        let rim = brepkit_topology::builder::make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            1e-7,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let circle = brepkit_topology::builder::make_face_from_wire(&mut topo, rim).unwrap();
+        let solid = loft(&mut topo, &[notched, circle]).unwrap();
+        assert!(lies_on_its_geometry(&topo, solid));
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+        let curved = brepkit_topology::explorer::solid_faces(&topo, solid)
+            .unwrap()
+            .iter()
+            .filter(|&&f| !topo.face(f).unwrap().surface().is_planar())
+            .count();
+        assert_eq!(curved, 0);
     }
 }
