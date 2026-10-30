@@ -328,3 +328,63 @@ fn mitred_rod_cut_by_a_slab_across_its_rim() {
         }
     }
 }
+
+/// A rod under an oblique plane that reaches its top cap. Crossing the cap,
+/// the plane leaves the wall a lens over its ellipse and the cap a segment
+/// past the chord where it rises over the cap; level with the rim at one
+/// point, it keeps the rod up to the ellipse. Either way the solid is the
+/// rod's own analytic faces, trimmed, and holds the volume under the lower
+/// of the plane and the cap.
+#[test]
+fn rod_under_an_oblique_plane_reaching_its_top_cap() {
+    let (radius, base, at_axis, slope) = (5.0_f64, 20.0_f64, 5.0_f64, 0.2_f64);
+    for (height, face_count) in [(5.9_f64, 4), (6.0, 3), (6.1, 3)] {
+        let label = format!("height {height}");
+        let mut topo = Topology::new();
+        let rod = make_cylinder(&mut topo, radius, height).unwrap();
+        transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, base)).unwrap();
+        // Everything under the plane z = base + at_axis + slope x.
+        let below = make_box(&mut topo, 40.0, 40.0, 40.0).unwrap();
+        let place = Mat4::translation(0.0, 0.0, base + at_axis)
+            * Mat4::rotation_y(-slope.atan())
+            * Mat4::translation(-20.0, -20.0, -40.0);
+        transform_solid(&mut topo, below, &place).unwrap();
+        let kept = boolean(&mut topo, BooleanOp::Intersect, rod, below).unwrap();
+
+        let report = validate_solid(&topo, kept).unwrap();
+        assert!(report.is_valid(), "{label}: {:?}", report.issues);
+        let faces = solid_faces(&topo, kept).unwrap();
+        assert_eq!(faces.len(), face_count, "{label}: faces");
+        for &f in &faces {
+            let surface = topo.face(f).unwrap().surface();
+            assert!(
+                matches!(
+                    surface,
+                    FaceSurface::Plane { .. } | FaceSurface::Cylinder(_)
+                ),
+                "{label}: a {} face",
+                surface.type_tag()
+            );
+        }
+
+        // Past x0 the cap is lower than the plane: the disc's segment there
+        // loses the plane's height over the cap.
+        let x0 = (height - at_axis) / slope;
+        let full = PI * radius * radius * at_axis;
+        let truth = if x0 >= radius {
+            full
+        } else {
+            let w = radius.mul_add(radius, -(x0 * x0)).sqrt();
+            let segment = (radius * radius).mul_add((x0 / radius).acos(), -(x0 * w));
+            full - (2.0 / 3.0 * slope).mul_add(w.powi(3), -((height - at_axis) * segment))
+        };
+        let volume = solid_volume(&topo, kept, 0.01).unwrap();
+        assert!(
+            (volume - truth).abs() < 1e-6 * truth,
+            "{label}: volume {volume}, truth {truth}"
+        );
+
+        let mesh = tessellate_solid(&topo, kept, 0.01).unwrap();
+        assert!(is_watertight(&mesh), "{label}: open or non-manifold mesh");
+    }
+}
