@@ -2679,9 +2679,9 @@ fn detect_trivial_relation(
     // volume witnesses this is a sample, not a proof of containment.
     let boundary_probe_outside =
         |topo: &Topology, inner: SolidId, outer: SolidId, bb: &Option<(Point3, Point3)>| -> bool {
-            let Some((lo, hi)) = *bb else { return false };
-            let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
-            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            if bb.is_none() {
+                return false;
+            }
             let Ok(s) = topo.solid(inner) else {
                 return false;
             };
@@ -2702,16 +2702,43 @@ fn detect_trivial_relation(
                     }
                 }
             }
+            // One classifier for every probe: its face index is built once.
+            let Ok(classifier) = brepkit_check::classify::SolidClassifier::new(topo, outer) else {
+                return false;
+            };
+            let options = brepkit_check::classify::ClassifyOptions {
+                tolerance: tol.linear,
+                ..brepkit_check::classify::ClassifyOptions::default()
+            };
             let clear_outside = |p: Point3| {
                 matches!(
-                    crate::classify::classify_point(topo, outer, p, defl, tol.linear),
-                    Ok(crate::classify::PointClassification::Outside)
+                    classifier.classify(p, &options),
+                    Ok(brepkit_check::classify::PointClassification::Outside)
                 ) && crate::distance::point_to_solid_distance(topo, p, outer)
                     .is_ok_and(|d| d.distance > tol.linear * 10.0)
             };
             let planes = outward_planes(topo, outer);
-            let stride = edges.len().div_ceil(24).max(1);
-            edges.iter().step_by(stride).any(|&eid| {
+            // Every edge is probed, the longest first: an edge that leaves the
+            // outer solid can lie among sides split into many short collinear
+            // edges, which a sample of the edges can skip over.
+            let reach_of = |eid: brepkit_topology::edge::EdgeId| {
+                let Ok(e) = topo.edge(eid) else { return 0.0 };
+                let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+                    return 0.0;
+                };
+                let (ps, pe) = (vs.point(), ve.point());
+                let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+                let at = |k: u8| {
+                    let f = f64::from(k) / 4.0;
+                    e.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                };
+                (0..4).map(|k| (at(k + 1) - at(k)).length()).sum::<f64>()
+            };
+            let mut edges: Vec<(f64, brepkit_topology::edge::EdgeId)> =
+                edges.into_iter().map(|eid| (reach_of(eid), eid)).collect();
+            edges.sort_by(|a, b| b.0.total_cmp(&a.0));
+            edges.iter().map(|&(_, eid)| eid).any(|eid| {
                 let Ok(e) = topo.edge(eid) else { return false };
                 let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
                     return false;
