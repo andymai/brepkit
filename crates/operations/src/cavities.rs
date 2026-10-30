@@ -322,13 +322,147 @@ pub fn keep_cavities(
     let mut made = Vec::new();
     for &face in topo.shell(topo.solid(result)?.outer_shell())?.faces() {
         if !on_source_face(topo, face, &source_faces)? {
-            made.push(face_bounds(topo, face)?);
+            made.push(face);
         }
     }
+    clear_of_cavities(topo, &cavities, result, &made, what)?;
+    // The result gets its own copy: a shell shared with the source would
+    // move with it under an in-place transform of either.
+    let copied = crate::copy::copy_shells(topo, &cavities)?;
+    for (&original, &copy) in cavities.iter().zip(&copied) {
+        copy_pcurves(topo, original, copy)?;
+    }
+    let solid = topo.solid_mut(result)?;
+    for cavity in copied {
+        solid.add_inner_shell(cavity);
+    }
+    Ok(result)
+}
+
+/// A walking blend's `result` as a solid of its own, holding copies of
+/// `source`'s cavities.
+///
+/// The walking engine rebuilds only the outer shell: the faces it leaves
+/// as they were come back as clones whose wires run on `source`'s own
+/// edges, and the cavity shells as they are. The result's outer shell and
+/// the cavities are copied, with their pcurves, so moving the result in
+/// place leaves `source` where it was. The faces the blend made are those
+/// whose edges are no face of `source`'s and that lie on no face of it, and
+/// a cavity one of them could reach refuses the blend, named `what` in the
+/// error, as in [`keep_cavities`].
+///
+/// # Errors
+///
+/// Returns [`OperationsError::InvalidInput`] if a cavity could meet the
+/// material taken off, or a topology error if a lookup fails.
+pub fn detach_walked(
+    topo: &mut Topology,
+    source: SolidId,
+    result: SolidId,
+    what: &str,
+) -> Result<SolidId, OperationsError> {
+    let edges_of = |topo: &Topology, face: FaceId| -> Result<Vec<usize>, OperationsError> {
+        let data = topo.face(face)?;
+        let mut edges = Vec::new();
+        for wire in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+            edges.extend(topo.wire(wire)?.edges().iter().map(|oe| oe.edge().index()));
+        }
+        edges.sort_unstable();
+        Ok(edges)
+    };
+    let outer = topo.solid(result)?.outer_shell();
+    let cavities = topo.solid(source)?.inner_shells().to_vec();
+    if !cavities.is_empty() {
+        let source_faces = topo
+            .shell(topo.solid(source)?.outer_shell())?
+            .faces()
+            .to_vec();
+        let mut kept = std::collections::HashSet::new();
+        for &face in &source_faces {
+            kept.insert(edges_of(topo, face)?);
+        }
+        let mut made = Vec::new();
+        for &face in topo.shell(outer)?.faces() {
+            if !kept.contains(&edges_of(topo, face)?) && !on_source_face(topo, face, &source_faces)?
+            {
+                made.push(face);
+            }
+        }
+        // The cavities are read against the outer shell alone: the walked
+        // result still holds them, so their vertices lie on its boundary.
+        let bare = topo.add_solid(brepkit_topology::solid::Solid::new(outer, Vec::new()));
+        clear_of_cavities(topo, &cavities, bare, &made, what)?;
+    }
+
+    let shells: Vec<ShellId> = std::iter::once(outer)
+        .chain(cavities.iter().copied())
+        .collect();
+    let copied = crate::copy::copy_shells(topo, &shells)?;
+    for (&original, &copy) in shells.iter().zip(&copied) {
+        copy_pcurves(topo, original, copy)?;
+    }
+    let (&own_outer, own_cavities) =
+        copied
+            .split_first()
+            .ok_or_else(|| OperationsError::InvalidInput {
+                reason: format!("the {what} left no shell"),
+            })?;
+    Ok(topo.add_solid(brepkit_topology::solid::Solid::new(
+        own_outer,
+        own_cavities.to_vec(),
+    )))
+}
+
+/// Refuses a blend that made `made` on `result`, which carries its input's
+/// cavities, if one of the cavities holding none of `made` could meet the
+/// material the blend took off.
+///
+/// # Errors
+///
+/// Returns [`OperationsError::InvalidInput`] if a cavity could, and
+/// propagates topology and classification errors.
+pub fn clear_of_own_cavities(
+    topo: &mut Topology,
+    result: SolidId,
+    made: &[FaceId],
+    what: &str,
+) -> Result<(), OperationsError> {
+    let data = topo.solid(result)?;
+    let outer = data.outer_shell();
+    let mut untouched = Vec::new();
+    for &cavity in data.inner_shells() {
+        if !topo.shell(cavity)?.faces().iter().any(|f| made.contains(f)) {
+            untouched.push(cavity);
+        }
+    }
+    if untouched.is_empty() {
+        return Ok(());
+    }
+    // The cavities are read against the outer shell alone: the result holds
+    // them, so their vertices lie on its boundary.
+    let bare = topo.add_solid(brepkit_topology::solid::Solid::new(outer, Vec::new()));
+    clear_of_cavities(topo, &untouched, bare, made, what)
+}
+
+/// Refuses an operation that made `made` on `result` if a cavity could
+/// meet the material it took off: a cavity whose box meets a made face's
+/// box, or whose vertex is not inside `result`.
+fn clear_of_cavities(
+    topo: &Topology,
+    cavities: &[ShellId],
+    result: SolidId,
+    made: &[FaceId],
+    what: &str,
+) -> Result<(), OperationsError> {
+    let mut made_bounds = Vec::with_capacity(made.len());
+    for &face in made {
+        made_bounds.push(face_bounds(topo, face)?);
+    }
+    let made = made_bounds;
     let refused = || OperationsError::InvalidInput {
         reason: format!("the {what} would cut into a cavity of the solid"),
     };
-    for &cavity in &cavities {
+    for &cavity in cavities {
         let bounds = shell_bounds(topo, cavity)?;
         if made.iter().any(|m| m.intersects(bounds)) {
             return Err(refused());
@@ -348,17 +482,7 @@ pub fn keep_cavities(
             }
         }
     }
-    // The result gets its own copy: a shell shared with the source would
-    // move with it under an in-place transform of either.
-    let copied = crate::copy::copy_shells(topo, &cavities)?;
-    for (&original, &copy) in cavities.iter().zip(&copied) {
-        copy_pcurves(topo, original, copy)?;
-    }
-    let solid = topo.solid_mut(result)?;
-    for cavity in copied {
-        solid.add_inner_shell(cavity);
-    }
-    Ok(result)
+    Ok(())
 }
 
 #[cfg(test)]

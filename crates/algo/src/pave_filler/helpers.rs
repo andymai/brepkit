@@ -3,6 +3,8 @@
 //! Extracted from phase_ee, phase_ef, and phase_ve to eliminate
 //! duplicated vertex-lookup and pave-insertion logic.
 
+use brepkit_math::aabb::Aabb3;
+use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
@@ -11,6 +13,88 @@ use brepkit_topology::face::FaceId;
 use brepkit_topology::vertex::VertexId;
 
 use crate::ds::{GfaArena, Pave};
+use crate::error::AlgoError;
+
+/// A NURBS face's box grown to where its surface rises off the boundary
+/// between its edges (a lid flat along its rim), past `bounds`, the box of
+/// its boundary. Each knot span lies in the box of the control points it
+/// blends, so the spans under the face's parameters hold the face. A face
+/// whose control points all lie in `bounds` keeps it. A boundary sample
+/// that does not project, or a surface closed on itself, takes every span;
+/// a weight that is not positive leaves `bounds`, the control points then
+/// bounding nothing.
+pub(super) fn nurbs_face_box(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &NurbsSurface,
+    bounds: Aabb3,
+    tol: Tolerance,
+) -> Result<Aabb3, AlgoError> {
+    const SAMPLES: u32 = 8;
+    let whole = surface.aabb();
+    let held = bounds.expanded(tol.linear);
+    if !surface.weights().iter().flatten().all(|&w| w > 0.0)
+        || (held.contains_point(whole.min) && held.contains_point(whole.max))
+    {
+        return Ok(bounds);
+    }
+    if surface.is_periodic_u() || surface.is_periodic_v() {
+        return Ok(bounds.union(whole));
+    }
+    // The parameter range the boundary samples reach, widened by the largest
+    // step between neighbouring samples, which an edge can swing out across.
+    let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    let (mut step_u, mut step_v) = (0.0_f64, 0.0_f64);
+    for eid in brepkit_topology::explorer::face_edges(topo, face_id)? {
+        let edge = topo.edge(eid)?;
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let mut last: Option<(f64, f64)> = None;
+        for i in 0..=SAMPLES {
+            let t = t0 + (t1 - t0) * f64::from(i) / f64::from(SAMPLES);
+            let p = edge.curve().evaluate_with_endpoints(t, sp, ep);
+            let Ok(foot) =
+                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, tol.linear)
+            else {
+                return Ok(bounds.union(whole));
+            };
+            (u0, u1, v0, v1) = (
+                u0.min(foot.u),
+                u1.max(foot.u),
+                v0.min(foot.v),
+                v1.max(foot.v),
+            );
+            if let Some((u, v)) = last {
+                step_u = step_u.max((foot.u - u).abs());
+                step_v = step_v.max((foot.v - v).abs());
+            }
+            last = Some((foot.u, foot.v));
+        }
+    }
+    if u0 > u1 {
+        return Ok(bounds);
+    }
+    let cps = surface.control_points();
+    let (pu, pv) = (surface.degree_u(), surface.degree_v());
+    let (nu, nv) = (cps.len(), cps[0].len());
+    let span = |n, p, x, knots: &[f64]| brepkit_math::nurbs::basis::find_span(n, p, x, knots);
+    let (iu0, iu1) = (
+        span(nu, pu, u0 - step_u, surface.knots_u()),
+        span(nu, pu, u1 + step_u, surface.knots_u()),
+    );
+    let (iv0, iv1) = (
+        span(nv, pv, v0 - step_v, surface.knots_v()),
+        span(nv, pv, v1 + step_v, surface.knots_v()),
+    );
+    Ok(bounds.union(Aabb3::from_points(
+        cps[iu0 - pu..=iu1]
+            .iter()
+            .flat_map(|row| row[iv0 - pv..=iv1].iter().copied()),
+    )))
+}
 
 /// Find a vertex near the given point among all pave block vertices.
 ///

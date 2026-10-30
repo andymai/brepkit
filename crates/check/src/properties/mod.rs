@@ -93,7 +93,8 @@ pub fn exact_solid_volume(topo: &Topology, solid: SolidId) -> Result<Option<f64>
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
                 boundary::curved_face_by_boundary(topo, face, sign, about)?
             }
-            FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => None,
+            FaceSurface::Nurbs(_) => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
+            FaceSurface::Torus(_) => None,
         };
         let Some(contribution) = contribution else {
             return Ok(None);
@@ -404,5 +405,178 @@ mod tests {
         for &c in &props.inertia {
             assert!(c.abs() < 1e-15);
         }
+    }
+
+    /// The unit cube with its top face's surface swapped for `top`, a
+    /// NURBS surface over the same unit square at z = 1.
+    fn cube_topped_by(top: brepkit_math::nurbs::surface::NurbsSurface) -> (Topology, SolidId) {
+        use brepkit_topology::face::FaceSurface;
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let shell = topo.solid(cube).unwrap().outer_shell();
+        let lid = topo
+            .shell(shell)
+            .unwrap()
+            .faces()
+            .iter()
+            .copied()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && (d - 1.0).abs() < 1e-9)
+            })
+            .unwrap();
+        topo.face_mut(lid)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(top));
+        (topo, cube)
+    }
+
+    /// A top `(100u / (1 + 99u), v, 1)`, a unit square run at a hundredth of
+    /// its pace at one side, still holds the cube's 1: the integrals are
+    /// halved until they settle, where a fixed rule gave 0.9445.
+    #[test]
+    fn a_cube_under_a_crowded_rational_top_holds_its_volume() {
+        let p = Point3::new;
+        let top = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 1.0), p(0.0, 1.0, 1.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![100.0, 100.0]],
+        )
+        .unwrap();
+        let (topo, cube) = cube_topped_by(top);
+        let volume = exact_solid_volume(&topo, cube).unwrap().unwrap();
+        assert!((volume.abs() - 1.0).abs() < 1e-9, "{volume}");
+    }
+
+    /// A flat top whose `v` runs twice as fast past its knot at 0.25: the
+    /// cube's side edges, read at eighths, land on that knot line at their
+    /// middles, and the cube still holds 1.
+    #[test]
+    fn a_cube_under_a_top_with_a_sampled_knot_holds_its_volume() {
+        let p = Point3::new;
+        let top = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.25, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 1.0), p(0.0, 0.5, 1.0), p(0.0, 1.0, 1.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 0.5, 1.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 3]; 2],
+        )
+        .unwrap();
+        let (topo, cube) = cube_topped_by(top);
+        let volume = exact_solid_volume(&topo, cube).unwrap().unwrap();
+        assert!((volume.abs() - 1.0).abs() < 1e-12, "{volume}");
+    }
+
+    /// The flat NURBS patch `(u, v, 1)` over the unit square.
+    fn flat_top() -> brepkit_math::nurbs::surface::NurbsSurface {
+        let p = Point3::new;
+        brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 1.0), p(0.0, 1.0, 1.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap()
+    }
+
+    /// A closed wire at z = 1 through `corners` in turn, each edge a line
+    /// unless `curve` gives the curve of the edge from that corner.
+    fn wire_through(
+        topo: &mut Topology,
+        corners: &[(f64, f64)],
+        curve: impl Fn(usize) -> Option<brepkit_topology::edge::EdgeCurve>,
+    ) -> brepkit_topology::wire::WireId {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let vertices: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 1.0), 1e-7)))
+            .collect();
+        let edges = (0..vertices.len())
+            .map(|k| {
+                let (a, b) = (vertices[k], vertices[(k + 1) % vertices.len()]);
+                let e = topo.add_edge(Edge::new(a, b, curve(k).unwrap_or(EdgeCurve::Line)));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    }
+
+    /// The flat patch with a centred half-unit square hole holds three
+    /// quarters of the square, and a third of that for its volume term,
+    /// whichever way each of its wires runs.
+    #[test]
+    fn a_nurbs_face_takes_its_hole_away_whichever_way_it_runs() {
+        use brepkit_topology::face::{Face, FaceSurface};
+        let square = |lo: f64, hi: f64, ccw: bool| {
+            let mut corners = vec![(lo, lo), (hi, lo), (hi, hi), (lo, hi)];
+            if !ccw {
+                corners.reverse();
+            }
+            corners
+        };
+        for (outer_ccw, hole_ccw) in [(true, false), (true, true), (false, true), (false, false)] {
+            let mut topo = Topology::new();
+            let outer = wire_through(&mut topo, &square(0.0, 1.0, outer_ccw), |_| None);
+            let hole = wire_through(&mut topo, &square(0.25, 0.75, hole_ccw), |_| None);
+            let face = Face::new(outer, vec![hole], FaceSurface::Nurbs(flat_top()));
+            let c = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .unwrap();
+            assert!(
+                (c.area - 0.75).abs() < 1e-12 && (c.volume - 0.25).abs() < 1e-12,
+                "outer ccw {outer_ccw}, hole ccw {hole_ccw}: area {}, volume {}",
+                c.area,
+                c.volume
+            );
+        }
+    }
+
+    /// The flat patch with its side at u = 1 the rational line
+    /// `(1, 100t / (1 + 99t), 1)`, weights 1 and 100, which runs at a
+    /// hundredth of its pace at one end: a third for its volume term, read
+    /// from the curve's own velocity.
+    #[test]
+    fn a_nurbs_face_reads_a_crowded_edge_by_its_velocity() {
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::face::{Face, FaceSurface};
+        let rational = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
+            vec![1.0, 100.0],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let outer = wire_through(&mut topo, &corners, |k| {
+            (k == 1).then(|| EdgeCurve::NurbsCurve(rational.clone()))
+        });
+        let face = Face::new(outer, vec![], FaceSurface::Nurbs(flat_top()));
+        let c = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
+        assert!(
+            (c.area - 1.0).abs() < 1e-12 && (c.volume - 1.0 / 3.0).abs() < 1e-12,
+            "area {}, volume {}",
+            c.area,
+            c.volume
+        );
     }
 }

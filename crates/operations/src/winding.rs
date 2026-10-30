@@ -106,21 +106,25 @@ pub fn inner_wire_is_cw(positions: &[Point3], offset: &Vec3) -> bool {
 
 /// Reverse all profiles if they wind CW relative to the stacking direction.
 ///
-/// Stacking direction is inferred from first→last profile centroids.
+/// The stacking direction is the way the loft leaves its first profile:
+/// toward the first later profile whose centroid stands off its plane. The
+/// last profile can lie anywhere, square to the first's normal or behind it
+/// on a loft that turns, as a thread's sections do.
 /// Returns `true` if profiles were reversed.
 pub fn ensure_ccw_profiles(profile_verts: &mut [Vec<Point3>]) -> bool {
     let c0 = polygon_centroid(&profile_verts[0]);
-    let c1 = polygon_centroid(&profile_verts[profile_verts.len() - 1]);
-    let stack_dir = c1 - c0;
     let newell = newell_normal(&profile_verts[0]);
-    let dot = newell.dot(stack_dir);
+    let dot = profile_verts[1..]
+        .iter()
+        .map(|p| newell.dot(polygon_centroid(p) - c0))
+        .find(|d| d.abs() >= WINDING_DOT_TOL);
 
-    // Degenerate case: profiles share the same centroid (coplanar loft) or
-    // the Newell normal is zero (degenerate polygon). Cannot determine
-    // winding — leave unchanged.
-    if dot.abs() < WINDING_DOT_TOL {
+    // Degenerate case: every profile's centroid lies in the first's plane
+    // (coplanar loft) or the Newell normal is zero (degenerate polygon).
+    // Cannot determine winding — leave unchanged.
+    let Some(dot) = dot else {
         return false;
-    }
+    };
 
     if dot < 0.0 {
         for verts in profile_verts.iter_mut() {
