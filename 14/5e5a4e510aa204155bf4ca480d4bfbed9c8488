@@ -1,0 +1,91 @@
+crates/wasm/src/helpers.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 204-206,234-411,722,849-1093
+  s_a2dc21dbec3f2b::t_f78ebe42d5b7ea 1094
+crates/topology/src/builder.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 300-301,313,333-335,347,1104-1136
+  s_a2dc21dbec3f2b::t_2ffa4cb1ea0de1 1137-1138
+crates/math/src/nurbs/intersection/mod.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 28,39
+CHANGELOG.md
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 3-47
+crates/algo/src/pave_filler/helpers.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 6-7,16-97
+crates/math/src/nurbs/intersection/ray.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 1-535
+crates/operations/src/sew.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 9,26-32,36-37,58-70,72,75-77,83-93,95-98,102-121,123,125-163,165-175,183-519,523-525,749-1556
+Cargo.toml
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 15,58-68
+crates/operations/src/boolean/tests.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 9135-9254
+crates/operations/src/boolean/assembly.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 773-777,785-791,793
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 5516,5525-5529
+crates/operations/src/cavities.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 325,328-461,465,485
+.release-please-manifest.json
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 2
+crates/algo/src/classifier/ray_cast.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 30-37,795-798,1021,1520-1526,1748-1851,1978-1999,2018,2060-2067,2069-2076,2082-2084,2186-2272,2577-2579,2583-2608,4056-4251
+  s_a2dc21dbec3f2b::t_eddeda176dc4cc 4252
+crates/check/src/properties/boundary.rs
+  s_a2dc21dbec3f2b::t_9d21e1356f2265 753
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 87-126,754-988
+crates/operations/tests/flat_blends_keep_cavities.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 365-545
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 288-291,293-313,414,420,425-431,439,445,447-449,451-471,573,575,580-586,676-681,683-684,687-694
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 236-238,240-243
+crates/operations/src/measure/volume.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 4600-4667
+crates/math/src/nurbs/projection.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 409
+crates/operations/src/projection.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 3-7,9,46-72,92-99,101-167,170-191,193-218,220-239,241-260,262-264,267-268,279-341,358-587
+  s_a2dc21dbec3f2b::t_95f5fb63b392f8 588
+crates/check/src/properties/mod.rs
+  s_a2dc21dbec3f2b::t_9d21e1356f2265 533
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 97,534-705
+crates/operations/src/shell_op.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 511-517,687-863
+  s_a2dc21dbec3f2b::t_4a608fe3372ca8 864-865
+crates/check/src/classify/mod.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 103-112
+crates/operations/src/blend_ops.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 35-51,81-82,109-110,139-140,172-173,238-239
+crates/operations/src/shell_op/tests.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 14-40,144-157,159,161-162,1044-1319
+crates/operations/src/tessellate/mesh_ops.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 434-444,446-455,461-462,473-477,479
+crates/operations/src/tessellate/mod.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 40
+crates/operations/src/chamfer.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 1218-1221
+crates/wasm/src/bindings/batch.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 794-796
+crates/topology/src/validation.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 38-39,41-49
+crates/algo/src/builder/builder_solid.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 3157-3180,3195-3209,3215
+crates/wasm/src/bindings/operations.rs
+  s_a2dc21dbec3f2b::t_be27e5d512d80a 240,1272-1322
+  s_a2dc21dbec3f2b::t_28660e2aeab594 1323-1336
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "145e5a4e510aa204155bf4ca480d4bfbed9c8488",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
