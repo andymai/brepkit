@@ -341,8 +341,14 @@ pub fn loft_to_point(
         let (t0, t1) = curve.domain_with_endpoints(a, b);
         let mid_t = f64::midpoint(t0, t1);
         let mid = curve.evaluate_with_endpoints(mid_t, a, b);
-        let tangent =
-            curve.tangent_with_endpoints(mid_t, a, b) * if oe.is_forward() { 1.0 } else { -1.0 };
+        // A NURBS edge stored against its curve spans its parameters
+        // downward, running against the curve's derivative.
+        let along = if (t1 >= t0) == oe.is_forward() {
+            1.0
+        } else {
+            -1.0
+        };
+        let tangent = curve.tangent_with_endpoints(mid_t, a, b) * along;
         // Out of the solid: across the run, away from the profile's inside.
         let out = tangent.cross(apex - mid);
         let surface_and_outward = match &curve {
@@ -1780,6 +1786,69 @@ mod to_point_tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A half disc of radius 10 whose arc is a NURBS edge stored against
+    /// its curve, either way round in its wire, lofts to a point 30 above
+    /// as an outward solid of 50π 30 / 3.
+    #[test]
+    fn a_nurbs_edge_stored_against_its_curve_lofts_outward() {
+        let p = Point3::new;
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let knots = vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0];
+        let left_to_right = vec![
+            p(-10.0, 0.0, 0.0),
+            p(-10.0, 10.0, 0.0),
+            p(0.0, 10.0, 0.0),
+            p(10.0, 10.0, 0.0),
+            p(10.0, 0.0, 0.0),
+        ];
+        let weights = vec![1.0, s, 1.0, s, 1.0];
+        let arc = |points: Vec<Point3>| {
+            EdgeCurve::NurbsCurve(
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    2,
+                    knots.clone(),
+                    points,
+                    weights.clone(),
+                )
+                .unwrap(),
+            )
+        };
+        let right_to_left: Vec<Point3> = left_to_right.iter().rev().copied().collect();
+        for forward in [true, false] {
+            let mut topo = Topology::new();
+            let l = topo.add_vertex(Vertex::new(p(-10.0, 0.0, 0.0), 1e-7));
+            let r = topo.add_vertex(Vertex::new(p(10.0, 0.0, 0.0), 1e-7));
+            let chord = topo.add_edge(Edge::new(l, r, EdgeCurve::Line));
+            // Either way the wire runs the arc from r back to l over y > 0.
+            let rim = if forward {
+                topo.add_edge(Edge::new(r, l, arc(left_to_right.clone())))
+            } else {
+                topo.add_edge(Edge::new(l, r, arc(right_to_left.clone())))
+            };
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(chord, true),
+                        OrientedEdge::new(rim, forward),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let base = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+            ));
+            let solid = loft_to_point(&mut topo, base, p(0.0, 3.0, 30.0)).unwrap();
+            check(&topo, solid, (3, 4, 3), 500.0 * std::f64::consts::PI, 1e-3);
+            assert_outward(&topo, solid, p(0.0, 2.0, 5.0));
         }
     }
 
