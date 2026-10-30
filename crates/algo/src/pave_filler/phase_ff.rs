@@ -4697,7 +4697,60 @@ fn trim_open_curve_to_plane_face_lines(
         };
         (p - (a + ab * w)).length() <= tol.linear * 10.0
     };
-    if straight_crossings_only
+    // A face with curved edges, none of them NURBS, has its boundary taken
+    // as its own segments and conic arcs: a piece is read against the curves
+    // themselves rather than their chords, whose sag holds a sliver the face
+    // does not (a half-ellipse cap grazing a cone by less than that sag).
+    let exact_region = if has_curved_boundary {
+        brepkit_topology::planar::face_boundary_2d(
+            topo,
+            plane_face,
+            frame.origin(),
+            frame.u_axis(),
+            frame.v_axis(),
+        )
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+    let inside_exact = |q: Point3| {
+        exact_region.as_ref().and_then(|region| {
+            brepkit_math::region2d::point_in_region(region, frame.project(q), tol.linear * 10.0)
+        })
+    };
+    // With the boundary exact, the section's crossings of its curved edges
+    // are found on the curves, where the inside test flips: a crossing of an
+    // arc can lie in its chord's sag, past every chord, and a crossing of a
+    // chord is not one of the face. Crossings of straight edges stay as the
+    // polygon scan found them.
+    if exact_region.is_some() {
+        crossings.retain(|&t| straight.iter().any(|&seg| on_segment(eval_at(t), seg)));
+        let states: Vec<(f64, bool)> = (0..=n_samples)
+            .filter_map(|i| inside_exact(eval_at(sample_t(i))).map(|s| (sample_t(i), s)))
+            .collect();
+        for w in states.windows(2) {
+            let ((mut lo, side), (mut hi, other)) = (w[0], w[1]);
+            if side == other {
+                continue;
+            }
+            for _ in 0..60 {
+                let mid = f64::midpoint(lo, hi);
+                match inside_exact(eval_at(mid)) {
+                    Some(s) if s == side => lo = mid,
+                    Some(_) => hi = mid,
+                    None => {
+                        (lo, hi) = (mid, mid);
+                        break;
+                    }
+                }
+            }
+            let t_star = f64::midpoint(lo, hi);
+            if !crossings.iter().any(|&c| (c - t_star).abs() < 1e-9) {
+                crossings.push(t_star);
+            }
+        }
+    } else if straight_crossings_only
         && !crossings
             .iter()
             .all(|&t| straight.iter().any(|&seg| on_segment(eval_at(t), seg)))
@@ -5060,28 +5113,6 @@ fn trim_open_curve_to_plane_face_lines(
             dense_loops.push(loop_uv);
         }
     }
-    // A face with curved edges, none of them NURBS, has its boundary taken
-    // as its own segments and conic arcs: a piece is read against the curves
-    // themselves rather than their chords, whose sag holds a sliver the face
-    // does not (a half-ellipse cap grazing a cone by less than that sag).
-    let exact_region = if has_curved_boundary {
-        brepkit_topology::planar::face_boundary_2d(
-            topo,
-            plane_face,
-            frame.origin(),
-            frame.u_axis(),
-            frame.v_axis(),
-        )
-        .ok()
-        .flatten()
-    } else {
-        None
-    };
-    let inside_exact = |q: Point3| {
-        exact_region.as_ref().and_then(|region| {
-            brepkit_math::region2d::point_in_region(region, frame.project(q), tol.linear * 10.0)
-        })
-    };
     let inside_dense = |q: Point3| {
         let uv = frame.project(q);
         dense_loops.split_first().is_none_or(|(outer, holes)| {
