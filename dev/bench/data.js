@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793335745392,
+  "lastUpdate": 1793336456367,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61019,6 +61019,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29575346,
             "range": "± 314185",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "aa5565c901e9d2fccbe3e10cc2ce9d73c005f256",
+          "message": "fix(operations): revolve a ring into one torus per circle (#2204)\n\nRevolving a ring, or either half of one, about an axis in its plane now\ngives the solid of the right volume: a ring sweeps one exact torus per\ncircle, and a profile's winding is read from its arcs as well as its\nvertices.\n\nToday the exact torus path for a revolved circle refuses any face with a\nhole, and the general revolve sweeps the ring into segmented bands. A\nring of radii 5 and 4 in the plane x = 30, revolved a quarter turn about\nthe +Z axis through `(30, 20, 0)`, comes back with two planes, four\ntorus faces and four NURBS faces where the hole should be, fails\nvalidation, and measures 4381.557 where Pappus gives 90π² ≈ 888.264.\nSplit along its diameter, the ring's lower half revolves to 538.380\nwhere each half holds 444.132: its four vertices lie on that diameter,\nso the winding test reads the clockwise half as counter-clockwise and\nboth end caps face inward.\n\n## Change\n\n- `try_circle_revolution_torus` takes a face whose holes are closed\ncircles too, each clearing the axis. Every circle sweeps a `Torus` band,\nand a hole's band faces into the hole. A partial turn closes with two\nplanar caps, each holding the holes; a full turn gives each hole's torus\na cavity shell of its own.\n- A planar profile's winding about its normal is read from its vertices\nand three samples along each curved edge, the samples\n`profile_chart_is_ccw` already took, now shared as `traversal_samples`.\n\nRefs #2183: these fix its two volume errors. Fusing the two half solids\nand cutting the revolved r = 4 disc from the revolved r = 5 disc still\nfall back to the mesh boolean, at 1992 and 2217 planar faces.\n\n## Tests\n\n- `revolve_ring_sweeps_a_torus_for_its_hole`: that ring revolved a\nquarter turn is two torus bands and two caps in one shell, and a whole\nturn is the outer torus with the hole's torus as a cavity. Each is\nvalid, holds `9π · 20 · angle` to 1e-3, and classifies a point in the\ntube's wall as inside and points in its hole and past it as outside.\nRefusing the holes, as before, fails it.\n- `revolve_half_rings_sweep_equal_halves`: both halves, built on the\nsame face normal so one winds each way about it, hold `4.5π · 20 · π/2`\nto 1e-3. Reading the winding from the vertices alone gives the second\nhalf 538.380.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3771 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nRevolving a ring previously fell back to segmented bands or rejected the\ntorus path for profiles with holes, producing incorrect volumes. Each\nboundary circle now sweeps its own correctly oriented torus, and winding\nchecks sample curved edges so half-ring profiles with collinear vertices\nalso produce the correct volume.\n\n- Sweeping a torus requires the axis to lie in the profile's plane and\npass through it; a ring beside its axis falls back to the general path.\n- Partial turns close with caps that preserve the holes; full turns\nplace each hole's torus in a cavity shell.\n- Adds tests for validity, volume, and point classification on ring and\nhalf-ring revolutions.\n\n<sup>Written for commit 4bd5a06263b9f2a426fef7ceec925daf6d079fe6.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2204?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2204?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2204&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T04:58:33Z",
+          "tree_id": "24d810c6ebb0544ee7edd8e812a951e60186214d",
+          "url": "https://github.com/andymai/brepkit/commit/aa5565c901e9d2fccbe3e10cc2ce9d73c005f256"
+        },
+        "date": 1793336447963,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 608927,
+            "range": "± 3671",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 660849,
+            "range": "± 7949",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7668,
+            "range": "± 302",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 375006,
+            "range": "± 29608",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17141734,
+            "range": "± 403179",
             "unit": "ns/iter"
           }
         ]
