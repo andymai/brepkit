@@ -100,6 +100,16 @@ impl<'a> SolidClassifier<'a> {
     ) -> Result<PointClassification, CheckError> {
         classify_in(self.topo, &self.faces, point, options)
     }
+
+    /// How many times the ray from `origin` along `direction` crosses the
+    /// solid's faces ahead of `origin`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a face contains invalid topology references.
+    pub fn ray_crossings(&self, origin: Point3, direction: Vec3) -> Result<u32, CheckError> {
+        count_ray_crossings(self.topo, &self.faces, origin, direction)
+    }
 }
 
 #[allow(clippy::cast_precision_loss, clippy::too_many_lines)]

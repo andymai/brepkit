@@ -201,69 +201,9 @@ pub fn try_fillet(
     }
     let edges = filtered.as_slice();
 
-    // A candidate is acceptable only if its outer shell is a CLOSED 2-manifold
-    // (every edge used by exactly two faces — no free/boundary edges) with
-    // opposite effective edge senses on adjacent faces and positive oriented
-    // volume. Edge senses alone cannot detect a globally inverted shell, which
-    // sends the next boolean through a corrupt mesh fallback.
-    let orientation_deflection = (radius * 0.1).clamp(0.01, 0.1);
-    let is_valid = |topo: &brepkit_topology::Topology,
-                    s: brepkit_topology::solid::SolidId|
-     -> bool {
-        let Ok(solid) = topo.solid(s) else {
-            return false;
-        };
-        let shell_id = solid.outer_shell();
-        let Ok(shell) = topo.shell(shell_id) else {
-            return false;
-        };
-        // Closure by edge id is blind to a face that overlays a neighbour or
-        // winds against it; the position-quantized view is the mesh, whose
-        // directed edges must all pair. A result that fails this is
-        // consumed as garbage downstream (a slot cut through it falls back
-        // to a mesh), while a clean failure lets the caller keep its input.
-        let watertight = || {
-            brepkit_operations::tessellate::tessellate_solid_with_tolerance(
-                topo,
-                s,
-                orientation_deflection,
-                10.0_f64.to_radians(),
-            )
-            .is_ok_and(|mesh| brepkit_operations::tessellate::boundary_edge_count(&mesh) == 0)
-        };
-        brepkit_topology::validation::validate_shell_closed(shell, topo).is_ok()
-            && brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
-                .is_ok_and(|issues| issues.is_empty())
-            && brepkit_operations::measure::oriented_solid_volume(topo, s, orientation_deflection)
-                .is_ok_and(|meshed| {
-                    // A solid whose exact volume and meshed volume disagree
-                    // is not a consistent B-rep (a second-pass band thrown
-                    // past its neighbouring blend reads 1010.11 exact and
-                    // 985.42 meshed); a sound one agrees to the mesh's chord
-                    // error, far inside 1%.
-                    // Chord error alone can pass 1% at the coarse deflection
-                    // (a plain r = 10 cylinder meshes 1.24% short at 0.1), so
-                    // a disagreement is re-read ten times finer, where a sound
-                    // solid converges and an inconsistent one does not.
-                    let agrees =
-                        |exact: f64, meshed: f64| (exact - meshed).abs() <= 0.01 * exact.abs();
-                    meshed > 1e-12
-                        && brepkit_operations::measure::solid_volume(
-                            topo,
-                            s,
-                            orientation_deflection,
-                        )
-                        .is_ok_and(|exact| {
-                            agrees(exact, meshed)
-                                || brepkit_operations::measure::oriented_solid_volume(
-                                    topo,
-                                    s,
-                                    orientation_deflection * 0.1,
-                                )
-                                .is_ok_and(|fine| agrees(exact, fine))
-                        })
-                })
-            && watertight()
+    let orientation_deflection = gate_deflection(topo, solid_id, radius)?;
+    let is_valid = |topo: &brepkit_topology::Topology, s: brepkit_topology::solid::SolidId| {
+        blend_result_holds(topo, s, orientation_deflection)
     };
 
     // Try engines in preference order; accept the first changed, valid result.
@@ -289,6 +229,241 @@ pub fn try_fillet(
     Err(brepkit_operations::OperationsError::InvalidInput {
         reason: "no fillet engine produced a changed, closed, outward-oriented result".to_owned(),
     })
+}
+
+/// Fillet edges each along its radius law, as [`try_fillet`] fillets them at
+/// one radius: the walking engine's band is kept when it is a changed,
+/// closed, outward-oriented solid, and the planar rebuild, which closes each
+/// band's ends with straight chords, is the fallback.
+///
+/// # Errors
+///
+/// Returns an error if neither engine fillets the edges.
+pub fn try_fillet_variable(
+    topo: &mut brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_laws: &[(
+        brepkit_topology::edge::EdgeId,
+        brepkit_operations::fillet::FilletRadiusLaw,
+    )],
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    let edges: Vec<_> = edge_laws.iter().map(|(edge, _)| *edge).collect();
+    refuse_edges_off_the_outer_shell(topo, solid_id, &edges, "filleting")?;
+    let widest = edge_laws
+        .iter()
+        .flat_map(|(_, law)| [0.0, 0.5, 1.0].map(|t| law.evaluate(t)))
+        .fold(0.0_f64, f64::max);
+    let orientation_deflection = gate_deflection(topo, solid_id, widest)?;
+    let laws = edge_laws
+        .iter()
+        .map(|(edge, law)| (*edge, law.into()))
+        .collect();
+    if let Ok(r) = brepkit_operations::blend_ops::fillet_v2_variable(topo, solid_id, laws)
+        && r.solid != solid_id
+        && !r.is_partial
+        && r.failed.is_empty()
+        && r.succeeded.len() == edge_laws.len()
+        && blend_result_holds(topo, r.solid, orientation_deflection)
+    {
+        return Ok(r.solid);
+    }
+    let s = brepkit_operations::fillet::fillet_variable(topo, solid_id, edge_laws)?;
+    if s != solid_id && blend_result_holds(topo, s, orientation_deflection) {
+        return Ok(s);
+    }
+    Err(brepkit_operations::OperationsError::InvalidInput {
+        reason: "no fillet engine produced a changed, closed, outward-oriented result".to_owned(),
+    })
+}
+
+/// Refuses edges a blend cannot take from `solid`: an edge of another solid,
+/// which a planar engine skips while it rebuilds the rest under a new id, so
+/// the result reads as done; and an edge of a cavity, which the walking
+/// engines refuse and a planar one would drop the same way.
+fn refuse_edges_off_the_outer_shell(
+    topo: &brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_ids: &[brepkit_topology::edge::EdgeId],
+    blending: &str,
+) -> Result<(), brepkit_operations::OperationsError> {
+    let on_solid: std::collections::HashSet<_> =
+        brepkit_topology::explorer::solid_edges(topo, solid_id)?
+            .into_iter()
+            .collect();
+    if edge_ids.iter().any(|e| !on_solid.contains(e)) {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "some requested edges are not on the solid".to_owned(),
+        });
+    }
+    let mut on_outer = std::collections::HashSet::new();
+    for &face in topo.shell(topo.solid(solid_id)?.outer_shell())?.faces() {
+        on_outer.extend(brepkit_topology::explorer::face_edges(topo, face)?);
+    }
+    if edge_ids.iter().any(|e| !on_outer.contains(e)) {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: format!("{blending} an edge of a cavity is not supported"),
+        });
+    }
+    Ok(())
+}
+
+/// Chamfer edges at an equal `distance` on both faces, as [`try_fillet`]
+/// fillets them: the walking engine's chamfer is kept when it is a changed,
+/// closed, outward-oriented solid, and the planar chamfer, which rebuilds
+/// every face from its polygon and so cannot carry a curved one, is the
+/// fallback.
+///
+/// # Errors
+///
+/// Returns an error if neither engine chamfers the edges.
+pub fn try_chamfer(
+    topo: &mut brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_ids: &[brepkit_topology::edge::EdgeId],
+    distance: f64,
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    refuse_edges_off_the_outer_shell(topo, solid_id, edge_ids, "chamfering")?;
+    let orientation_deflection = gate_deflection(topo, solid_id, distance)?;
+    if let Ok(r) =
+        brepkit_operations::blend_ops::chamfer_v2(topo, solid_id, edge_ids, distance, distance)
+        && r.solid != solid_id
+        && !r.is_partial
+        && r.failed.is_empty()
+        && r.succeeded.len() == edge_ids.len()
+        && blend_result_holds(topo, r.solid, orientation_deflection)
+    {
+        return Ok(r.solid);
+    }
+    let s = brepkit_operations::chamfer::chamfer(topo, solid_id, edge_ids, distance)?;
+    if s != solid_id && blend_result_holds(topo, s, orientation_deflection) {
+        return Ok(s);
+    }
+    Err(brepkit_operations::OperationsError::InvalidInput {
+        reason: "no chamfer engine produced a changed, closed, outward-oriented result".to_owned(),
+    })
+}
+
+/// The deflection [`blend_result_holds`] reads a blend of `size` on `solid`
+/// at: a tenth of the blend, at most 0.1, and at least a thousandth of the
+/// solid's least extent up to 0.01, so a small or slender part's curves
+/// still mesh within the check's 1%.
+fn gate_deflection(
+    topo: &brepkit_topology::Topology,
+    solid: brepkit_topology::solid::SolidId,
+    size: f64,
+) -> Result<f64, brepkit_operations::OperationsError> {
+    let floor = (1e-3 * least_extent(topo, solid)?).min(0.01);
+    Ok((size * 0.1).clamp(floor, 0.1))
+}
+
+/// The solid's least extent across the box that best fits points along its
+/// edges, a ball face's six farthest points in its own frame, and a NURBS
+/// face's control points, so the part reads as thick however it is turned.
+fn least_extent(
+    topo: &brepkit_topology::Topology,
+    solid: brepkit_topology::solid::SolidId,
+) -> Result<f64, brepkit_operations::OperationsError> {
+    use brepkit_topology::face::FaceSurface;
+    const SAMPLES: u32 = 16;
+    let mut points = Vec::new();
+    for eid in brepkit_topology::explorer::solid_edges(topo, solid)? {
+        let edge = topo.edge(eid)?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        points.extend((0..=SAMPLES).map(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            curve.evaluate_with_endpoints(t, start, end)
+        }));
+    }
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        match topo.face(fid)?.surface() {
+            FaceSurface::Sphere(s) => {
+                use std::f64::consts::{FRAC_PI_2, PI};
+                points.extend(
+                    [(0.0, 0.0), (FRAC_PI_2, 0.0), (PI, 0.0), (-FRAC_PI_2, 0.0)]
+                        .into_iter()
+                        .chain([(0.0, FRAC_PI_2), (0.0, -FRAC_PI_2)])
+                        .map(|(u, v)| s.evaluate(u, v)),
+                );
+            }
+            FaceSurface::Nurbs(n) => points.extend(n.control_points().iter().flatten()),
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Torus(_) => {}
+        }
+    }
+    if points.is_empty() {
+        return Ok(0.0);
+    }
+    let fit = brepkit_math::obb::Obb3::from_points_slice(&points);
+    Ok(2.0 * fit.half_extents.into_iter().fold(f64::INFINITY, f64::min))
+}
+
+/// Whether a fillet's or chamfer's result is a solid to keep, its volume
+/// read at `orientation_deflection`.
+///
+/// A candidate is acceptable only if its outer shell is a CLOSED 2-manifold
+/// (every edge used by exactly two faces — no free/boundary edges) with
+/// opposite effective edge senses on adjacent faces and positive oriented
+/// volume. Edge senses alone cannot detect a globally inverted shell, which
+/// sends the next boolean through a corrupt mesh fallback.
+fn blend_result_holds(
+    topo: &brepkit_topology::Topology,
+    s: brepkit_topology::solid::SolidId,
+    orientation_deflection: f64,
+) -> bool {
+    let Ok(solid) = topo.solid(s) else {
+        return false;
+    };
+    let shell_id = solid.outer_shell();
+    let Ok(shell) = topo.shell(shell_id) else {
+        return false;
+    };
+    // Closure by edge id is blind to a face that overlays a neighbour or
+    // winds against it; the position-quantized view is the mesh, whose
+    // directed edges must all pair. A result that fails this is
+    // consumed as garbage downstream (a slot cut through it falls back
+    // to a mesh), while a clean failure lets the caller keep its input.
+    let watertight = || {
+        brepkit_operations::tessellate::tessellate_solid_with_tolerance(
+            topo,
+            s,
+            orientation_deflection,
+            10.0_f64.to_radians(),
+        )
+        .is_ok_and(|mesh| brepkit_operations::tessellate::boundary_edge_count(&mesh) == 0)
+    };
+    brepkit_topology::validation::validate_shell_closed(shell, topo).is_ok()
+        && brepkit_check::validate::shell::check_shell_orientation(topo, shell_id)
+            .is_ok_and(|issues| issues.is_empty())
+        && brepkit_operations::measure::oriented_solid_volume(topo, s, orientation_deflection)
+            .is_ok_and(|meshed| {
+                // A solid whose exact volume and meshed volume disagree
+                // is not a consistent B-rep (a second-pass band thrown
+                // past its neighbouring blend reads 1010.11 exact and
+                // 985.42 meshed); a sound one agrees to the mesh's chord
+                // error, far inside 1%.
+                // Chord error alone can pass 1% at the coarse deflection
+                // (a plain r = 10 cylinder meshes 1.24% short at 0.1), so
+                // a disagreement is re-read ten times finer, where a sound
+                // solid converges and an inconsistent one does not.
+                let agrees = |exact: f64, meshed: f64| (exact - meshed).abs() <= 0.01 * exact.abs();
+                meshed > 0.0
+                    && brepkit_operations::measure::solid_volume(topo, s, orientation_deflection)
+                        .is_ok_and(|exact| {
+                            agrees(exact, meshed)
+                                || brepkit_operations::measure::oriented_solid_volume(
+                                    topo,
+                                    s,
+                                    orientation_deflection * 0.1,
+                                )
+                                .is_ok_and(|fine| agrees(exact, fine))
+                        })
+            })
+        && watertight()
 }
 
 /// Extract a human-readable message from a `catch_unwind` panic payload.
@@ -328,39 +503,57 @@ pub fn sample_full_period_curve(n: usize, evaluate: impl Fn(f64) -> Point3) -> V
     result
 }
 
-/// Create a tiny degenerate polygon face at a point, matching the vertex
-/// count of the first existing profile. Used for loft start/end points.
-pub fn create_apex_face(
+/// A loft through `profiles`, closed at `start` and `end` to a point when
+/// given. Ruled, a lone profile with a point is lofted to it, and with more
+/// profiles each point's piece is fused onto the loft through them, on the
+/// profile it ends. Smooth, the rails run on through the profiles to meet
+/// at each point.
+///
+/// # Errors
+///
+/// Returns an error if there are no profiles, a lone profile has no point,
+/// or a loft or the fuse fails.
+pub fn loft_with_points(
     topo: &mut Topology,
-    point: Point3,
-    existing_profiles: &[brepkit_topology::face::FaceId],
-) -> Result<brepkit_topology::face::FaceId, JsError> {
-    // Determine target vertex count from the first profile.
-    let n = if let Some(&fid) = existing_profiles.first() {
-        let verts = brepkit_operations::boolean::face_polygon(topo, fid)
-            .map_err(|e: brepkit_operations::OperationsError| JsError::new(&e.to_string()))?;
-        verts.len().max(3)
-    } else {
-        3
-    };
-
-    // Create a tiny polygon at the apex point.
-    let epsilon = 1e-6;
-    let mut pts = Vec::with_capacity(n);
-    for i in 0..n {
-        let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
-        pts.push(Point3::new(
-            point.x() + epsilon * angle.cos(),
-            point.y() + epsilon * angle.sin(),
-            point.z(),
-        ));
+    profiles: &[brepkit_topology::face::FaceId],
+    start: Option<Point3>,
+    end: Option<Point3>,
+    ruled: bool,
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    use brepkit_operations::loft::{loft, loft_smooth_with_points, loft_to_point};
+    if !ruled {
+        return loft_smooth_with_points(topo, profiles, start, end);
     }
-
-    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts, TOL)
-        .map_err(|e| JsError::new(&e.to_string()))?;
-    let face_id = brepkit_topology::builder::make_face_from_wire(topo, wire_id)
-        .map_err(|e| JsError::new(&e.to_string()))?;
-    Ok(face_id)
+    let (Some(&first), Some(&last)) = (profiles.first(), profiles.last()) else {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "loft needs at least one profile".into(),
+        });
+    };
+    let mut pieces = Vec::new();
+    if profiles.len() > 1 {
+        pieces.push(loft(topo, profiles)?);
+    }
+    if let Some(p) = start {
+        pieces.push(loft_to_point(topo, first, p)?);
+    }
+    if let Some(p) = end {
+        pieces.push(loft_to_point(topo, last, p)?);
+    }
+    let mut pieces = pieces.into_iter();
+    let Some(mut solid) = pieces.next() else {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "a loft through one profile needs a start or end point".into(),
+        });
+    };
+    for piece in pieces {
+        solid = brepkit_operations::boolean::boolean(
+            topo,
+            brepkit_operations::boolean::BooleanOp::Fuse,
+            solid,
+            piece,
+        )?;
+    }
+    Ok(solid)
 }
 
 // ── Mesh / tessellation helpers ───────────────────────────────────
@@ -601,7 +794,7 @@ mod fillet_tests {
     use brepkit_topology::edge::EdgeId;
     use brepkit_topology::solid::SolidId;
 
-    use super::try_fillet;
+    use super::{try_chamfer, try_fillet, try_fillet_variable};
 
     fn solid_edge_ids(topo: &Topology, solid_id: SolidId) -> Vec<EdgeId> {
         let solid = topo.solid(solid_id).expect("solid");
@@ -726,6 +919,410 @@ mod fillet_tests {
                 .is_valid(),
             "rounded rim solid must be watertight"
         );
+    }
+
+    // An L bracket whose inside edge is filleted at 5, then two outer corner
+    // edges chamfered by 3: the chamfers take two 3 x 3 triangles 8 tall,
+    // 72 in all, from the filleted solid, as from the bare L.
+    #[test]
+    fn try_chamfer_cuts_a_filleted_bracket() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Point3;
+        use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+
+        let near = |topo: &Topology, s, p: Point3| {
+            solid_edge_ids(topo, s)
+                .into_iter()
+                .min_by(|&a, &b| {
+                    let reach = |e| {
+                        let edge = topo.edge(e).unwrap();
+                        let (x, y) = (
+                            topo.vertex(edge.start()).unwrap().point(),
+                            topo.vertex(edge.end()).unwrap().point(),
+                        );
+                        (Point3::new(
+                            f64::midpoint(x.x(), y.x()),
+                            f64::midpoint(x.y(), y.y()),
+                            f64::midpoint(x.z(), y.z()),
+                        ) - p)
+                            .length()
+                    };
+                    reach(a).total_cmp(&reach(b))
+                })
+                .unwrap()
+        };
+        for fillet_first in [true, false] {
+            let mut topo = Topology::new();
+            let base =
+                brepkit_operations::primitives::make_box(&mut topo, 80.0, 50.0, 8.0).unwrap();
+            let wall =
+                brepkit_operations::primitives::make_box(&mut topo, 80.0, 8.0, 42.0).unwrap();
+            brepkit_operations::transform::transform_solid(
+                &mut topo,
+                wall,
+                &Mat4::translation(0.0, 42.0, 8.0),
+            )
+            .unwrap();
+            let simplify = BooleanOptions {
+                unify_faces: true,
+                ..Default::default()
+            };
+            let mut solid =
+                boolean_with_options(&mut topo, BooleanOp::Fuse, base, wall, simplify).unwrap();
+            if fillet_first {
+                let inside = near(&topo, solid, Point3::new(40.0, 42.0, 8.0));
+                solid = try_fillet(&mut topo, solid, &[inside], 5.0).unwrap();
+                assert!(
+                    brepkit_topology::explorer::solid_faces(&topo, solid)
+                        .unwrap()
+                        .iter()
+                        .any(|&f| !topo.face(f).unwrap().surface().is_planar()),
+                    "the fillet should leave a round, not a bevel"
+                );
+            }
+            let before = brepkit_operations::measure::solid_volume(&topo, solid, 0.01).unwrap();
+            let corners = [
+                near(&topo, solid, Point3::new(80.0, 0.0, 4.0)),
+                near(&topo, solid, Point3::new(0.0, 0.0, 4.0)),
+            ];
+            let cut = try_chamfer(&mut topo, solid, &corners, 3.0).unwrap();
+            let after = brepkit_operations::measure::solid_volume(&topo, cut, 0.01).unwrap();
+            assert!(
+                (before - after - 72.0).abs() < 1e-3 * 72.0,
+                "fillet first {fillet_first}: {before} became {after}"
+            );
+            assert!(
+                brepkit_operations::validate::validate_solid(&topo, cut)
+                    .unwrap()
+                    .is_valid()
+            );
+        }
+    }
+
+    /// A 10 cube less a 3 cube cavity at `corner`, and its top edge along
+    /// x at y = 0.
+    fn hollow_block(
+        topo: &mut Topology,
+        corner: (f64, f64, f64),
+    ) -> (SolidId, brepkit_topology::edge::EdgeId) {
+        use brepkit_operations::boolean::{BooleanOp, boolean};
+
+        let block = brepkit_operations::primitives::make_box(topo, 10.0, 10.0, 10.0).unwrap();
+        let cube = brepkit_operations::primitives::make_box(topo, 3.0, 3.0, 3.0).unwrap();
+        brepkit_operations::transform::transform_solid(
+            topo,
+            cube,
+            &brepkit_math::mat::Mat4::translation(corner.0, corner.1, corner.2),
+        )
+        .unwrap();
+        let hollow = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
+        let edge = solid_edge_ids(topo, hollow)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                [edge.start(), edge.end()].iter().all(|&v| {
+                    let p = topo.vertex(v).unwrap().point();
+                    p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9
+                })
+            })
+            .unwrap();
+        (hollow, edge)
+    }
+
+    /// The largest distance from a NURBS face of `solid` to the points along its
+    /// edges, read at eight interior samples per edge. `None` for a face whose
+    /// surface does not project a point.
+    fn nurbs_edge_gap(
+        topo: &brepkit_topology::Topology,
+        solid: brepkit_topology::solid::SolidId,
+    ) -> Option<f64> {
+        use brepkit_topology::face::FaceSurface;
+        let mut widest = 0.0_f64;
+        for face_id in brepkit_topology::explorer::solid_faces(topo, solid).ok()? {
+            let face = topo.face(face_id).ok()?;
+            let surface = face.surface();
+            if !matches!(surface, FaceSurface::Nurbs(_)) {
+                continue;
+            }
+            for edge_id in brepkit_topology::explorer::face_edges(topo, face_id).ok()? {
+                let edge = topo.edge(edge_id).ok()?;
+                let a = topo.vertex(edge.start()).ok()?.point();
+                let b = topo.vertex(edge.end()).ok()?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                for k in 1..8 {
+                    let p = edge.curve().evaluate_with_endpoints(
+                        (t1 - t0).mul_add(f64::from(k) / 8.0, t0),
+                        a,
+                        b,
+                    );
+                    let (u, v) = surface.project_point(p)?;
+                    widest = widest.max((surface.evaluate(u, v)? - p).length());
+                }
+            }
+        }
+        Some(widest)
+    }
+
+    /// A box's top front edge, 40 long, filleted along a radius running 2
+    /// to 5 straight or along a smooth step, and along a constant 2 given as
+    /// a law: each is a round inside the box, its band ending in arcs on the
+    /// end faces and holding its edges, and the solid loses
+    /// `(1 − π/4) ∫ r²` along the edge.
+    #[test]
+    fn try_fillet_variable_rounds_an_edge() {
+        use brepkit_operations::fillet::FilletRadiusLaw;
+        use std::f64::consts::FRAC_PI_4;
+
+        // Simpson's rule over the step's square, a polynomial of degree six.
+        let stepped = |t: f64| {
+            3.0_f64
+                .mul_add(t * t * 2.0_f64.mul_add(-t, 3.0), 2.0)
+                .powi(2)
+        };
+        let steps = 600;
+        let simpson: f64 = (0..=steps)
+            .map(|k| {
+                let weight = if k == 0 || k == steps {
+                    1.0
+                } else if k % 2 == 1 {
+                    4.0
+                } else {
+                    2.0
+                };
+                weight * stepped(f64::from(k) / f64::from(steps))
+            })
+            .sum::<f64>()
+            / (3.0 * f64::from(steps));
+        for (law, removed) in [
+            (
+                FilletRadiusLaw::Linear {
+                    start: 2.0,
+                    end: 5.0,
+                },
+                (1.0 - FRAC_PI_4) * 40.0 * (4.0 + 10.0 + 25.0) / 3.0,
+            ),
+            (
+                FilletRadiusLaw::SCurve {
+                    start: 2.0,
+                    end: 5.0,
+                },
+                (1.0 - FRAC_PI_4) * 40.0 * simpson,
+            ),
+            (
+                FilletRadiusLaw::Constant(2.0),
+                (1.0 - FRAC_PI_4) * 4.0 * 40.0,
+            ),
+        ] {
+            let mut topo = Topology::new();
+            let block =
+                brepkit_operations::primitives::make_box(&mut topo, 40.0, 30.0, 20.0).unwrap();
+            let edge = solid_edge_ids(&topo, block)
+                .into_iter()
+                .find(|&e| {
+                    let edge = topo.edge(e).unwrap();
+                    [edge.start(), edge.end()].iter().all(|&v| {
+                        let p = topo.vertex(v).unwrap().point();
+                        p.y().abs() < 1e-9 && (p.z() - 20.0).abs() < 1e-9
+                    })
+                })
+                .unwrap();
+            let rounded = try_fillet_variable(&mut topo, block, &[(edge, law.clone())]).unwrap();
+            assert!(
+                brepkit_operations::validate::validate_solid(&topo, rounded)
+                    .unwrap()
+                    .is_valid()
+            );
+            let arcs = solid_edge_ids(&topo, rounded)
+                .into_iter()
+                .filter(|&e| {
+                    matches!(
+                        topo.edge(e).unwrap().curve(),
+                        brepkit_topology::edge::EdgeCurve::Circle(_)
+                    )
+                })
+                .count();
+            assert_eq!(arcs, 2, "{law:?}");
+            let gap = nurbs_edge_gap(&topo, rounded).unwrap();
+            assert!(gap < 1e-6, "{law:?}: an edge {gap} off its band");
+            let bounds = brepkit_operations::measure::solid_bounding_box(&topo, rounded).unwrap();
+            assert!(
+                bounds.min.y() > -1e-9 && bounds.max.z() < 20.0 + 1e-9,
+                "{bounds:?}"
+            );
+            let volume = brepkit_operations::measure::solid_volume(&topo, rounded, 0.01).unwrap();
+            let expected = 24000.0 - removed;
+            assert!(
+                (volume - expected).abs() < 1e-2 * removed,
+                "{law:?}: volume {volume}, expected {expected}"
+            );
+        }
+    }
+
+    /// A fillet along a law is refused an edge of another box, alone or
+    /// with one of its own, and an edge of its cavity: a planar rebuild
+    /// would skip them and still return a new solid.
+    #[test]
+    fn try_fillet_variable_refuses_edges_it_cannot_round() {
+        use brepkit_operations::fillet::FilletRadiusLaw;
+        let law = FilletRadiusLaw::Linear {
+            start: 1.0,
+            end: 2.0,
+        };
+        let mut topo = Topology::new();
+        let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+        let other = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let foreign = solid_edge_ids(&topo, other)[0];
+        let mut cavity_edges = Vec::new();
+        for &shell in topo.solid(hollow).unwrap().inner_shells() {
+            for &face in topo.shell(shell).unwrap().faces() {
+                cavity_edges.extend(brepkit_topology::explorer::face_edges(&topo, face).unwrap());
+            }
+        }
+        for edges in [vec![foreign], vec![edge, foreign], vec![cavity_edges[0]]] {
+            let laws: Vec<_> = edges.iter().map(|&e| (e, law.clone())).collect();
+            assert!(
+                try_fillet_variable(&mut topo, hollow, &laws).is_err(),
+                "{edges:?}"
+            );
+        }
+    }
+
+    /// A chamfer of a hollow block keeps a cavity of its own: moving the
+    /// result leaves the input's cavity where it was. A chamfer that would
+    /// open a cavity 0.05 behind the front face is refused.
+    #[test]
+    fn try_chamfer_keeps_a_cavity_of_its_own() {
+        let mut topo = Topology::new();
+        let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+        let cut = try_chamfer(&mut topo, hollow, &[edge], 1.0).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 0.01).unwrap();
+        assert!((volume - (1000.0 - 27.0 - 5.0)).abs() < 1e-6, "{volume}");
+        let input_cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+        assert_ne!(topo.solid(cut).unwrap().inner_shells(), &[input_cavity]);
+        brepkit_operations::transform::transform_solid(
+            &mut topo,
+            cut,
+            &brepkit_math::mat::Mat4::translation(0.0, 0.0, 100.0),
+        )
+        .unwrap();
+        for &face in topo.shell(input_cavity).unwrap().faces() {
+            for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+                let z = topo.vertex(v).unwrap().point().z();
+                assert!(
+                    (3.5 - 1e-9..=6.5 + 1e-9).contains(&z),
+                    "input cavity at z {z}"
+                );
+            }
+        }
+
+        let mut topo = Topology::new();
+        let (near, edge) = hollow_block(&mut topo, (3.5, 0.05, 6.5));
+        assert!(try_chamfer(&mut topo, near, &[edge], 1.0).is_err());
+    }
+
+    /// A chamfer naming an edge of a hollow block's cavity, alone or with an
+    /// outer edge, is refused rather than chamfering the outer edge and
+    /// dropping the cavity's.
+    #[test]
+    fn try_chamfer_refuses_a_cavitys_edge() {
+        let mut topo = Topology::new();
+        let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+        let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+        let cavity_face = topo.shell(cavity).unwrap().faces()[0];
+        let cavity_edge = brepkit_topology::explorer::face_edges(&topo, cavity_face).unwrap()[0];
+        assert!(try_chamfer(&mut topo, hollow, &[edge, cavity_edge], 0.5).is_err());
+        assert!(try_chamfer(&mut topo, hollow, &[cavity_edge], 0.5).is_err());
+        assert!(try_chamfer(&mut topo, hollow, &[edge], 0.5).is_ok());
+    }
+
+    /// A chamfer naming an edge of another solid is refused rather than
+    /// chamfering the rest.
+    #[test]
+    fn try_chamfer_refuses_an_edge_off_the_solid() {
+        let mut topo = Topology::new();
+        let a = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = [solid_edge_ids(&topo, a)[0], solid_edge_ids(&topo, b)[0]];
+        assert!(try_chamfer(&mut topo, a, &edges, 1.0).is_err());
+    }
+
+    /// A 0.002 chamfer round the top rim of a cylinder of radius 0.01 and
+    /// height 0.03 is kept: its curves mesh finely enough for the check.
+    #[test]
+    fn try_chamfer_keeps_a_small_cylinders_rim_chamfer() {
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 0.01, 0.03).unwrap();
+        let rim = solid_edge_ids(&topo, cyl)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().z() > 0.02)
+            })
+            .unwrap();
+        let cut = try_chamfer(&mut topo, cyl, &[rim], 0.002).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-5).unwrap();
+        let full = std::f64::consts::PI * 1e-4 * 0.03;
+        assert!(volume < full && volume > 0.97 * full, "{volume} of {full}");
+    }
+
+    /// A 0.002 chamfer round the top rim of a cylinder of radius 0.01 and
+    /// height 100 is kept: the part is long, but its curves are small.
+    #[test]
+    fn try_chamfer_keeps_a_slender_cylinders_rim_chamfer() {
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 0.01, 100.0).unwrap();
+        let rim = solid_edge_ids(&topo, cyl)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().z() > 50.0)
+            })
+            .unwrap();
+        let cut = try_chamfer(&mut topo, cyl, &[rim], 0.002).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-5).unwrap();
+        let full = std::f64::consts::PI * 1e-4 * 100.0;
+        assert!(volume < full && volume > 0.999 * full, "{volume} of {full}");
+    }
+
+    /// The same cylinder turned to run along the cube's diagonal, its top
+    /// rim chamfered alike, is kept too, though its axis-aligned box is some
+    /// 58 across every way: the gate reads the part's thickness across the
+    /// box that fits it, which turning leaves alone.
+    #[test]
+    fn try_chamfer_keeps_a_turned_slender_cylinders_rim_chamfer() {
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 0.01, 100.0).unwrap();
+        let tilt = (1.0_f64 / 2.0_f64.sqrt()).atan();
+        let turn = brepkit_math::mat::Mat4::rotation_x(-tilt)
+            * brepkit_math::mat::Mat4::rotation_y(std::f64::consts::FRAC_PI_4);
+        brepkit_operations::transform::transform_solid(&mut topo, cyl, &turn).unwrap();
+        let rim = solid_edge_ids(&topo, cyl)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().z() > 30.0)
+            })
+            .unwrap();
+        let cut = try_chamfer(&mut topo, cyl, &[rim], 0.002).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-5).unwrap();
+        let full = std::f64::consts::PI * 1e-4 * 100.0;
+        assert!(volume < full && volume > 0.999 * full, "{volume} of {full}");
+    }
+
+    /// A chamfer of 2e-5 on a box of side 1e-4 is kept: its volume of about
+    /// 1e-12 is small only at that scale.
+    #[test]
+    fn try_chamfer_keeps_a_small_parts_chamfer() {
+        let mut topo = Topology::new();
+        let b = brepkit_operations::primitives::make_box(&mut topo, 1e-4, 1e-4, 1e-4).unwrap();
+        let edge = solid_edge_ids(&topo, b)[0];
+        let cut = try_chamfer(&mut topo, b, &[edge], 2e-5).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-6).unwrap();
+        let expected = 1e-12 - 0.5 * 2e-5 * 2e-5 * 1e-4;
+        assert!((volume - expected).abs() < 1e-3 * expected, "{volume}");
     }
 
     // A wide rim's chord error alone reads past 1% at the gate's coarse
@@ -953,5 +1550,202 @@ mod fillet_tests {
                 .contains("none of the requested edges are filletable"),
             "unexpected error: {error}"
         );
+    }
+}
+
+#[cfg(test)]
+mod loft_point_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    fn square(topo: &mut Topology, half: f64, z: f64) -> brepkit_topology::face::FaceId {
+        let p = |x: f64, y: f64| Point3::new(x, y, z);
+        let wire = brepkit_topology::builder::make_polygon_wire(
+            topo,
+            &[
+                p(-half, -half),
+                p(half, -half),
+                p(half, half),
+                p(-half, half),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap()
+    }
+
+    /// A 40 square lofted to a point 30 above it is a pyramid of 5 faces,
+    /// 8 edges and 5 vertices holding 16000, with no cap at its tip.
+    #[test]
+    fn a_square_and_an_end_point_loft_to_a_pyramid() {
+        let mut topo = Topology::new();
+        let base = square(&mut topo, 20.0, 0.0);
+        let solid = loft_with_points(
+            &mut topo,
+            &[base],
+            None,
+            Some(Point3::new(0.0, 0.0, 30.0)),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap(),
+            (5, 8, 5)
+        );
+        let volume = brepkit_operations::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+        assert!((volume - 16000.0).abs() < 1e-6, "{volume}");
+    }
+
+    /// Squares of 40 at z = 0 and 20 at z = 20, lofted on to a point at
+    /// z = 40, make one pyramid of 40 by 40 holding 40³/3: the frustum and
+    /// the tip fuse along the smaller square.
+    #[test]
+    fn profiles_and_an_end_point_fuse_to_one_solid() {
+        let mut topo = Topology::new();
+        let bottom = square(&mut topo, 20.0, 0.0);
+        let top = square(&mut topo, 10.0, 20.0);
+        let solid = loft_with_points(
+            &mut topo,
+            &[bottom, top],
+            None,
+            Some(Point3::new(0.0, 0.0, 40.0)),
+            true,
+        )
+        .unwrap();
+        let report = brepkit_operations::validate::validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = brepkit_operations::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+        assert!((volume - 64000.0 / 3.0).abs() < 1e-6, "{volume}");
+    }
+
+    fn check_smooth(
+        topo: &Topology,
+        solid: brepkit_topology::solid::SolidId,
+        counts: (usize, usize, usize),
+        exact: f64,
+    ) {
+        assert_eq!(
+            brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap(),
+            counts
+        );
+        let report = brepkit_operations::validate::validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        // The signed volume sums an open mesh as readily as a closed one.
+        for deflection in [0.01, 0.001] {
+            let mesh = tessellate::tessellate_solid(topo, solid, deflection).unwrap();
+            assert_eq!(
+                (
+                    tessellate::boundary_edge_count(&mesh),
+                    tessellate::non_manifold_edge_count(&mesh)
+                ),
+                (0, 0),
+                "open or branching mesh at {deflection}"
+            );
+        }
+        let volume = brepkit_operations::measure::oriented_solid_volume(topo, solid, 1e-3).unwrap();
+        assert!((volume - exact).abs() < 1e-3 * exact, "{volume} of {exact}");
+    }
+
+    /// Smooth through squares of 40 at z = 0 and 30 at z = 25 on to a point
+    /// at z = 40 (or the same mirrored, from a point at z = 0), each rail is
+    /// one quadratic: equal chords put the middle square at t = 1/2, so the
+    /// half-width is 20 (1 - t²) at height 60t - 20t². The four sides run
+    /// unbroken from the end square to the point and hold 121600 / 3, where
+    /// a frustum and a pyramid would hold 106000 / 3.
+    #[test]
+    fn smooth_profiles_run_on_smoothly_to_a_point() {
+        for from_start in [false, true] {
+            let mut topo = Topology::new();
+            let (profiles, point) = if from_start {
+                (
+                    [square(&mut topo, 15.0, 15.0), square(&mut topo, 20.0, 40.0)],
+                    Point3::new(0.0, 0.0, 0.0),
+                )
+            } else {
+                (
+                    [square(&mut topo, 20.0, 0.0), square(&mut topo, 15.0, 25.0)],
+                    Point3::new(0.0, 0.0, 40.0),
+                )
+            };
+            let solid = loft_with_points(
+                &mut topo,
+                &profiles,
+                from_start.then_some(point),
+                (!from_start).then_some(point),
+                false,
+            )
+            .unwrap();
+            check_smooth(&topo, solid, (5, 8, 5), 121_600.0 / 3.0);
+        }
+    }
+
+    /// A 40 square at z = 0 lofted smoothly from a point at z = -20 to one
+    /// at z = 20 has rails of half-width 80t (1 - t) at height 40t - 20:
+    /// four sides meeting at both points, holding 512000 / 15 where two
+    /// pyramids would hold 64000 / 3.
+    #[test]
+    fn a_profile_between_two_points_lofts_smoothly() {
+        let mut topo = Topology::new();
+        let middle = square(&mut topo, 20.0, 0.0);
+        let solid = loft_with_points(
+            &mut topo,
+            &[middle],
+            Some(Point3::new(0.0, 0.0, -20.0)),
+            Some(Point3::new(0.0, 0.0, 20.0)),
+            false,
+        )
+        .unwrap();
+        check_smooth(&topo, solid, (4, 4, 2), 512_000.0 / 15.0);
+    }
+}
+
+/// The solid `shell` bounds, refused unless every edge of the shell bounds
+/// exactly two of its faces: an open shell encloses nothing, and a volume
+/// measured off it is not a solid's.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] naming the shell's free or
+/// non-manifold edges, or an error from a bad topology reference.
+pub fn solid_from_closed_shell(
+    topo: &mut Topology,
+    shell: brepkit_topology::shell::ShellId,
+) -> Result<brepkit_topology::solid::SolidId, WasmError> {
+    let issues = brepkit_check::validate::shell::check_shell_closed(topo, shell)
+        .map_err(brepkit_operations::OperationsError::from)?;
+    if !issues.is_empty() {
+        let found: Vec<&str> = issues.iter().map(|i| i.description.as_str()).collect();
+        return Err(WasmError::InvalidInput {
+            reason: format!("a solid needs a closed shell: {}", found.join("; ")),
+        });
+    }
+    Ok(topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![])))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    /// A box's and a cylinder's own shells make solids, the cylinder's seam
+    /// bounding its wall on both sides; three of the box's faces do not.
+    #[test]
+    fn only_a_closed_shell_makes_a_solid() {
+        let mut topo = Topology::new();
+        for solid in [
+            brepkit_operations::primitives::make_box(&mut topo, 10.0, 20.0, 30.0).unwrap(),
+            brepkit_operations::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap(),
+        ] {
+            let shell = topo.solid(solid).unwrap().outer_shell();
+            assert!(solid_from_closed_shell(&mut topo, shell).is_ok());
+        }
+        let block = brepkit_operations::primitives::make_box(&mut topo, 10.0, 20.0, 30.0).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, block).unwrap();
+        let open =
+            topo.add_shell(brepkit_topology::shell::Shell::new(faces[..3].to_vec()).unwrap());
+        assert!(matches!(
+            solid_from_closed_shell(&mut topo, open),
+            Err(WasmError::InvalidInput { .. })
+        ));
     }
 }

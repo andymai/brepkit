@@ -31,6 +31,7 @@ fn rect_sub_face(
         classification: FaceClass::Unknown,
         rank,
         interior_point: Some(interior),
+        interior_unclear: false,
     }
 }
 
@@ -156,6 +157,7 @@ fn contained_shim_with_outside_edge_user_is_kept() {
         classification: FaceClass::Unknown,
         rank: Rank::A,
         interior_point: Some(Point3::new(f64::midpoint(p0.x(), p1.x()), p0.y(), 1.0)),
+        interior_unclear: false,
     };
 
     let sub_faces = vec![large, small, witness];
@@ -845,6 +847,7 @@ fn cylinder_patch(
         classification: FaceClass::Unknown,
         rank,
         interior_point: Some(pt(um, zm)),
+        interior_unclear: false,
     }
 }
 
@@ -918,6 +921,7 @@ fn cone_patch(
         classification: FaceClass::Unknown,
         rank,
         interior_point: Some(pt(um, zm)),
+        interior_unclear: false,
     }
 }
 
@@ -1252,6 +1256,7 @@ fn chord_split_disc_halves_are_not_duplicates() {
             classification: FaceClass::Unknown,
             rank: Rank::B,
             interior_point: Some(Point3::new(10.0, 8.5, 0.0)),
+            interior_unclear: false,
         },
         SubFace {
             face_id: outside,
@@ -1259,6 +1264,7 @@ fn chord_split_disc_halves_are_not_duplicates() {
             classification: FaceClass::Unknown,
             rank: Rank::B,
             interior_point: Some(Point3::new(10.0, 11.5, 0.0)),
+            interior_unclear: false,
         },
     ];
     let arena = GfaArena::new();

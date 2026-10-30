@@ -1048,3 +1048,47 @@ fn a_wall_cutting_a_lobe_from_the_ring_is_exact() {
         );
     }
 }
+
+/// A leg of radius 3 and length 30 fused to the quarter turn that bends on
+/// from its top, a torus of radii 20 and 3, holds the leg's 270π and the
+/// bend's 90π² exactly: each torus face is integrated along its boundary,
+/// not read off a mesh.
+#[test]
+fn a_leg_fused_to_its_bend_holds_its_exact_volume() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let disc = |topo: &mut Topology, z: f64| {
+        let c = Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let v = topo.add_vertex(Vertex::new(c.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(c)));
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        brepkit_topology::builder::make_face_from_wire(topo, w).unwrap()
+    };
+    let foot = disc(&mut topo, 0.0);
+    let leg = brepkit_operations::extrude::extrude(&mut topo, foot, Vec3::new(0.0, 0.0, 1.0), 30.0)
+        .unwrap();
+    let top = disc(&mut topo, 30.0);
+    let bend = brepkit_operations::revolve::revolve(
+        &mut topo,
+        top,
+        Point3::new(20.0, 0.0, 30.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        PI / 2.0,
+    )
+    .unwrap();
+    let fused = boolean(&mut topo, BooleanOp::Fuse, leg, bend).unwrap();
+    assert!(
+        solid_faces(&topo, fused)
+            .unwrap()
+            .iter()
+            .any(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
+    );
+    let exact = 270.0 * PI + 90.0 * PI * PI;
+    let volume = solid_volume(&topo, fused, 0.01).unwrap();
+    assert!((volume - exact).abs() < 1e-9 * exact, "{volume} of {exact}");
+}

@@ -791,13 +791,9 @@ impl BrepKernel {
                     .iter()
                     .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
-                let result = brepkit_operations::chamfer::chamfer(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    dist,
-                )
-                .map_err(|e| e.to_string())?;
+                let result =
+                    crate::helpers::try_chamfer(self.topo_mut(), solid_id, &edge_ids, dist)
+                        .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "fillet" => {
@@ -867,12 +863,9 @@ impl BrepKernel {
                     };
                     edge_laws.push((edge_id, law));
                 }
-                let result = brepkit_operations::fillet::fillet_variable(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_laws,
-                )
-                .map_err(|e| e.to_string())?;
+                let result =
+                    crate::helpers::try_fillet_variable(self.topo_mut(), solid_id, &edge_laws)
+                        .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "filletV2" => {

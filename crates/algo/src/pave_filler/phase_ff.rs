@@ -5513,7 +5513,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         _ => None,
     };
 
-    Ok(match (points.is_empty(), surface_bbox) {
+    let bounds = match (points.is_empty(), surface_bbox) {
         (false, Some(sb)) => Aabb3::from_points(points).union(sb),
         (false, None) => Aabb3::from_points(points),
         (true, Some(sb)) => sb,
@@ -5522,7 +5522,11 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
             min: Point3::new(0.0, 0.0, 0.0),
             max: Point3::new(0.0, 0.0, 0.0),
         },
-    })
+    };
+    match topo.face(face_id)?.surface() {
+        FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, face_id, n, bounds, tol),
+        _ => Ok(bounds),
+    }
 }
 
 /// Pole-side axis of a spherical face, from its boundary winding: the summed
@@ -7076,13 +7080,27 @@ fn analytic_nurbs_intersection(
         let pad = (hi - lo).abs().mul_add(0.1, 1.0);
         (lo - pad, hi + pad)
     };
+    // The partner's control points hold it, so they bound where along the
+    // axis it can meet the surface; a band much longer than that leaves the
+    // intersector seeding a long patch for a short crossing near one end.
+    let band = |near: (f64, f64)| v_range.map_or(near, |(v0, v1)| (v0.max(near.0), v1.min(near.1)));
     let converted = match surf {
         FaceSurface::Cylinder(c) => {
-            let (v0, v1) = v_range.unwrap_or_else(|| axial_range(c.origin(), c.axis()));
+            let (v0, v1) = band(axial_range(c.origin(), c.axis()));
+            if v0 >= v1 {
+                return Ok(Vec::new());
+            }
             c.to_nurbs(v0, v1)
         }
         FaceSurface::Cone(c) => {
-            let (v0, v1) = v_range.unwrap_or_else(|| axial_range(c.apex(), c.axis()));
+            // A cone's `v` runs along its generator, `sin(half_angle)` of it
+            // along the axis.
+            let (h0, h1) = axial_range(c.apex(), c.axis());
+            let along = c.half_angle().sin();
+            let (v0, v1) = band((h0 / along, h1 / along));
+            if v0 >= v1 {
+                return Ok(Vec::new());
+            }
             c.to_rational_nurbs(v0, v1)
         }
         FaceSurface::Sphere(s) => s.to_rational_nurbs(),
@@ -9008,6 +9026,98 @@ fn clip_line_to_polygon_general(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// A cone about z with half-angle π/6 from its radial plane, stored over
+    /// its generator from 18 to 22, meets the flat NURBS rectangle x = 16 to
+    /// 19, y = -1 to 1 at z = 10, the height 20 along its generator reaches.
+    /// The crossing is found, on the cone and in the plane z = 10 to its
+    /// fit's 1e-5.
+    #[test]
+    fn a_nurbs_face_meets_a_cone_where_its_generator_reaches_it() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::surfaces::ConicalSurface;
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_6,
+        )
+        .unwrap();
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let at = |x: f64, y: f64| Point3::new(x, y, 10.0);
+        let plate = NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots,
+            vec![
+                vec![at(16.0, -1.0), at(16.0, 1.0)],
+                vec![at(19.0, -1.0), at(19.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let wall = FaceSurface::Cone(cone);
+        let curves = analytic_nurbs_intersection(&wall, Some((18.0, 22.0)), &plate).unwrap();
+        assert!(!curves.is_empty(), "no crossing");
+        let radius = 20.0 * std::f64::consts::FRAC_PI_6.cos();
+        for raw in &curves {
+            let (t0, t1) = raw.t_range;
+            for k in 0..=8 {
+                let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                // A marched section, fitted through its points.
+                assert!(
+                    (p.x().hypot(p.y()) - radius).abs() < 1e-5 && (p.z() - 10.0).abs() < 1e-5,
+                    "{p:?}"
+                );
+            }
+        }
+    }
+
+    /// A thread's flank between two tooth sections, a twisted bilinear patch
+    /// from z = -0.3 to 0.7, crosses a cylinder of radius 7 stored from z = 0
+    /// up to 2, 20 or 127 only over its last 0.041 above z = 0. However long
+    /// the cylinder, the crossing is found, on the cylinder and above z = 0.
+    #[test]
+    fn a_short_crossing_near_a_long_cylinders_end_is_found() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::surfaces::CylindricalSurface;
+        let at = |turn: f64, r: f64, z: f64| Point3::new(r * turn.cos(), r * turn.sin(), z);
+        let (t7, t8) = (126.0_f64.to_radians(), 144.0_f64.to_radians());
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let flank = NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots,
+            vec![
+                vec![at(t7, 6.7, -0.3), at(t8, 6.7, -0.1)],
+                vec![at(t7, 8.4, 0.5), at(t8, 8.4, 0.7)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let wall = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 7.0)
+                .unwrap(),
+        );
+        for top in [2.0, 20.0, 127.0] {
+            let curves = analytic_nurbs_intersection(&wall, Some((0.0, top)), &flank).unwrap();
+            assert!(!curves.is_empty(), "stored up to {top}: no crossing");
+            for raw in &curves {
+                let (t0, t1) = raw.t_range;
+                for k in 0..=8 {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                    let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                    let r = p.x().hypot(p.y());
+                    assert!(
+                        (r - 7.0).abs() < 1e-6 && p.z() > -1e-6 && p.z() < 0.05,
+                        "stored up to {top}: {p:?} at radius {r}"
+                    );
+                }
+            }
+        }
+    }
 
     fn boxes(
         a: ([f64; 3], [f64; 3]),
