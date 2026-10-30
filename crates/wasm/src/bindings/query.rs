@@ -1219,47 +1219,30 @@ impl BrepKernel {
                 let dist = (proj - target).length();
                 Ok(vec![best_u, best_v, proj.x(), proj.y(), proj.z(), dist])
             }
-            _ => {
-                // For analytic surfaces, use grid search (no Newton for now)
-                let mut best_u = 0.0;
-                let mut best_v = 0.0;
-                let mut best_dist = f64::MAX;
-                let n_grid = 16;
-                for iu in 0..=n_grid {
-                    for iv in 0..=n_grid {
-                        #[allow(clippy::cast_precision_loss)]
-                        let u = 2.0 * PI * (iu as f64) / (n_grid as f64);
-                        #[allow(clippy::cast_precision_loss)]
-                        let v = -PI + 2.0 * PI * (iv as f64) / (n_grid as f64);
-                        let p = match face_data.surface() {
-                            FaceSurface::Cylinder(cyl) => cyl.evaluate(u, v),
-                            FaceSurface::Cone(cone) => cone.evaluate(u, v),
-                            FaceSurface::Sphere(sph) => sph.evaluate(u, v),
-                            FaceSurface::Torus(tor) => tor.evaluate(u, v),
-                            _ => continue,
-                        };
-                        let d = (p - target).length();
-                        if d < best_dist {
-                            best_dist = d;
-                            best_u = u;
-                            best_v = v;
-                        }
-                    }
-                }
-                let proj = match face_data.surface() {
-                    FaceSurface::Cylinder(cyl) => cyl.evaluate(best_u, best_v),
-                    FaceSurface::Cone(cone) => cone.evaluate(best_u, best_v),
-                    FaceSurface::Sphere(sph) => sph.evaluate(best_u, best_v),
-                    FaceSurface::Torus(tor) => tor.evaluate(best_u, best_v),
-                    _ => target,
-                };
+            surface @ (FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)) => {
+                // An analytic surface projects in closed form, in its own
+                // parameters (a cylinder's `v` runs along its axis).
+                let (u, v) =
+                    surface
+                        .project_point(target)
+                        .ok_or_else(|| WasmError::InvalidInput {
+                            reason: "the face's surface does not project points".into(),
+                        })?;
+                let proj = surface
+                    .evaluate(u, v)
+                    .ok_or_else(|| WasmError::InvalidInput {
+                        reason: "the face's surface does not evaluate parameters".into(),
+                    })?;
                 Ok(vec![
-                    best_u,
-                    best_v,
+                    u,
+                    v,
                     proj.x(),
                     proj.y(),
                     proj.z(),
-                    best_dist,
+                    (proj - target).length(),
                 ])
             }
         }

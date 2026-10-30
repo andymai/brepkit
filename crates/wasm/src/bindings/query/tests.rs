@@ -591,3 +591,52 @@ fn make_planar_face_from_wire_rejects_noncoplanar() {
         "error must mention 'not planar', got {msg}"
     );
 }
+
+// ── project_point_on_surface ─────────────────────────────────
+
+/// Points on a cylinder's wall, round its axis and up its height, project
+/// back onto themselves, and one off the wall lands at its foot; the normal
+/// at each returned `(u, v)` points straight out from the axis.
+#[test]
+fn a_point_projects_onto_a_cylinders_wall_exactly() {
+    let mut k = crate::kernel::BrepKernel::new();
+    let cylinder = brepkit_operations::primitives::make_cylinder(k.topo_mut(), 10.0, 10.0).unwrap();
+    let wall = brepkit_topology::explorer::solid_faces(k.topo(), cylinder)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(
+                k.topo().face(f).unwrap().surface(),
+                brepkit_topology::face::FaceSurface::Cylinder(_)
+            )
+        })
+        .unwrap();
+    let wall = face_id_to_u32(wall);
+    let turn = |degrees: f64, height: f64, reach: f64| {
+        let a = degrees.to_radians();
+        Point3::new(reach * a.cos(), reach * a.sin(), height)
+    };
+    for (target, foot) in [
+        (turn(0.0, 5.0, 10.0), turn(0.0, 5.0, 10.0)),
+        (turn(60.0, 8.0, 10.0), turn(60.0, 8.0, 10.0)),
+        (turn(100.0, 9.5, 10.0), turn(100.0, 9.5, 10.0)),
+        (turn(0.0, 3.0, 12.0), turn(0.0, 3.0, 10.0)),
+    ] {
+        let r = k
+            .project_point_on_surface(wall, target.x(), target.y(), target.z())
+            .unwrap();
+        let got = Point3::new(r[2], r[3], r[4]);
+        assert!((got - foot).length() < 1e-9, "{target:?} lands at {got:?}");
+        assert!(
+            (r[5] - (target - foot).length()).abs() < 1e-9,
+            "{target:?}: distance {}",
+            r[5]
+        );
+        let n = k.evaluate_surface_normal(wall, r[0], r[1]).unwrap();
+        let out = turn((target.y()).atan2(target.x()).to_degrees(), 0.0, 1.0);
+        assert!(
+            (n[0] - out.x()).abs() < 1e-9 && (n[1] - out.y()).abs() < 1e-9 && n[2].abs() < 1e-9,
+            "{target:?}: normal {n:?}"
+        );
+    }
+}
