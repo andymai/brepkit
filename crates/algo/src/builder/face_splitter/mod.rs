@@ -8580,7 +8580,7 @@ fn split_face_2d_impl(
         // sampler folds away: take the interior point from the halves.
         let rejoined = rejoin_untouched_rims(sub_face.outer_wire.clone(), &closed_rims, tol.linear);
         if rejoined.len() != sub_face.outer_wire.len() {
-            sub_face.precomputed_interior = Some(interior_point_3d(&sub_face, None));
+            sub_face.precomputed_interior = interior_point_3d(&sub_face, None);
             sub_face.outer_wire = rejoined;
         }
         sub_faces.push(sub_face);
@@ -8848,8 +8848,11 @@ pub fn face_has_curved_lens_holes(topo: &Topology, face_id: FaceId) -> bool {
 
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
 /// not inside any inner wire (hole), then evaluate it to 3D via the surface.
+/// `None` for a plane piece bounded by lines and conic arcs when no point
+/// inside them stands clear of them: a point off its own curves would
+/// classify a neighbour.
 #[allow(clippy::too_many_lines)]
-pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) -> Point3 {
+pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) -> Option<Point3> {
     // For a lateral analytic band (cylinder/cone), the section edges' pcurves
     // can evaluate to a different 2pi window than the boundary edges' stored
     // (already-unwrapped) UV — e.g. a rounded-rect corner band split by a
@@ -8891,15 +8894,13 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
         (FaceSurface::Plane { .. }, Some(f)) => containment::exact_hole(&sub_face.outer_wire, f),
         _ => None,
     };
-    let mut interior_uv = exact
-        .as_ref()
-        .and_then(|pieces| {
-            sample_interior_point_where(&pts_2d, |p| {
-                point_in_region(pieces, p, containment::SEED_CLEARANCE) == Some(true)
-            })
-            .or_else(|| containment::point_stepped_into_region(pieces, &pts_2d))
+    let mut interior_uv = match exact.as_ref() {
+        Some(pieces) => sample_interior_point_where(&pts_2d, |p| {
+            point_in_region(pieces, p, containment::SEED_CLEARANCE) == Some(true)
         })
-        .unwrap_or_else(|| sample_interior_point(&pts_2d));
+        .or_else(|| containment::point_stepped_into_region(pieces, &pts_2d))?,
+        None => sample_interior_point(&pts_2d),
+    };
 
     // Periodic lateral walls (cone/cylinder): the closed boundary circles
     // share a seam, and `sample_wire_loop_uv` can emit a lopsided uv polygon
@@ -9023,7 +9024,7 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
                             super::classify_2d::point_in_polygon_2d(Point2::new(at, v), hole)
                         });
                         if !covered && let Some(p) = sub_face.surface.evaluate(u, v) {
-                            return p;
+                            return Some(p);
                         }
                     }
                     interior_uv = Point2::new(outer[0].x(), v);
@@ -9055,17 +9056,17 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
 
     // Evaluate back to 3D.
     if let Some(p) = sub_face.surface.evaluate(interior_uv.x(), interior_uv.y()) {
-        return p;
+        return Some(p);
     }
 
     // For plane faces, evaluate via PlaneFrame.
     if let FaceSurface::Plane { normal, .. } = &sub_face.surface {
         if let Some(f) = frame {
-            return f.evaluate(interior_uv.x(), interior_uv.y());
+            return Some(f.evaluate(interior_uv.x(), interior_uv.y()));
         }
         let wire_pts: Vec<Point3> = sub_face.outer_wire.iter().map(|e| e.start_3d).collect();
         let f = PlaneFrame::from_plane_face(*normal, &wire_pts);
-        return f.evaluate(interior_uv.x(), interior_uv.y());
+        return Some(f.evaluate(interior_uv.x(), interior_uv.y()));
     }
 
     // Last resort: average of 3D endpoints.
@@ -9076,7 +9077,7 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
             acc + (e.start_3d - Point3::new(0.0, 0.0, 0.0))
         });
     let n = sub_face.outer_wire.len() as f64;
-    Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
+    Some(Point3::new(sum.x() / n, sum.y() / n, sum.z() / n))
 }
 
 /// Give each of a sphere face's holes, none of which a section touches, to the
@@ -10496,7 +10497,7 @@ mod tests {
                 rank: Rank::A,
                 precomputed_interior: None,
             };
-            let pt = interior_point_3d(&crescent, Some(&frame));
+            let pt = interior_point_3d(&crescent, Some(&frame)).unwrap();
             assert!(
                 (pt - b).length() < r && (pt - a).length() > r,
                 "turned {degree} degrees: {pt:?}"
@@ -10504,11 +10505,13 @@ mod tests {
         }
     }
 
-    /// The crescent a disc of radius 5 keeps outside a second of that radius
-    /// whose centre lies 0.001 from its own, turned every 15 degrees in its
-    /// plane. It is far thinner than its arcs' chords' sag, so no candidate
-    /// taken across its sampled polygon lies inside it; the interior point
-    /// must still lie in the crescent.
+    /// The crescent a disc keeps outside a second of its radius whose centre
+    /// lies `gap` from its own, turned every 15 degrees in its plane: of
+    /// radius 5 with a gap of 0.001, and of radius 1e6 with a gap of 1e-4.
+    /// Each is far thinner than its arcs' chords' sag, so no candidate taken
+    /// across its sampled polygon lies inside it; the interior point must
+    /// still lie in the crescent. One of radius 5 with a gap of 1e-8 holds no
+    /// point clear of its arcs, and gets none.
     #[test]
     fn a_thin_crescents_interior_point_lies_inside_it() {
         use brepkit_math::curves::Circle3D;
@@ -10516,12 +10519,11 @@ mod tests {
         let frame = PlaneFrame::from_normal_and_point(z, Point3::new(0.0, 0.0, 0.0));
         let mut topo = Topology::new();
         let face_id = make_unit_square_face(&mut topo);
-        let (r, gap) = (5.0_f64, 0.001_f64);
-        let reach = gap.mul_add(-gap * 0.25, r * r).sqrt();
-        for step in 0..24 {
-            let turn = f64::from(step * 15).to_radians();
+        let point_in = |r: f64, gap: f64, degrees: i32| {
+            let turn = f64::from(degrees).to_radians();
             let (c, s) = (turn.cos(), turn.sin());
             let at = |x: f64, y: f64| Point3::new(c * x - s * y, s * x + c * y, 0.0);
+            let reach = gap.mul_add(-gap * 0.25, r * r).sqrt();
             let (kept, cut) = (at(0.0, 0.0), at(gap, 0.0));
             let (top, bottom) = (at(gap * 0.5, reach), at(gap * 0.5, -reach));
             let arc =
@@ -10545,12 +10547,19 @@ mod tests {
                 rank: Rank::A,
                 precomputed_interior: None,
             };
-            let pt = interior_point_3d(&crescent, Some(&frame));
-            assert!(
-                (pt - kept).length() < r && (pt - cut).length() > r,
-                "turned {} degrees: {pt:?}",
-                step * 15
-            );
+            (interior_point_3d(&crescent, Some(&frame)), kept, cut)
+        };
+        for (r, gap) in [(5.0_f64, 0.001_f64), (1e6, 1e-4)] {
+            for step in 0..24 {
+                let (pt, kept, cut) = point_in(r, gap, step * 15);
+                let pt = pt.unwrap();
+                assert!(
+                    (pt - kept).length() < r && (pt - cut).length() > r,
+                    "radius {r}, turned {} degrees: {pt:?}",
+                    step * 15
+                );
+            }
         }
+        assert!(point_in(5.0, 1e-8, 0).0.is_none());
     }
 }

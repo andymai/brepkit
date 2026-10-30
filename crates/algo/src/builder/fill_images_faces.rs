@@ -638,10 +638,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     // classifier abort to mesh.
                     super::face_splitter::cylinder_cone_remainder_interior(split)
                 }
-                None => Some(super::face_splitter::interior_point_3d(
-                    split,
-                    parent_frame.as_ref(),
-                )),
+                None => super::face_splitter::interior_point_3d(split, parent_frame.as_ref()),
             };
 
             sub_faces.push(SubFace {
