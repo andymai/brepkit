@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.5](https://github.com/andymai/brepkit/compare/v4.6.4...v4.6.5) (2026-10-30)
+
+
+### Bug Fixes
+
+* **algo:** bound a plane on a ball's equator by arcs, not chords ([#2225](https://github.com/andymai/brepkit/issues/2225)) ([3a2a366](https://github.com/andymai/brepkit/commit/3a2a366419cce88a6fa8c598b854add3dcf18edf))
+
 ## [4.6.4](https://github.com/andymai/brepkit/compare/v4.6.3...v4.6.4) (2026-10-30)
 
 
