@@ -13,12 +13,13 @@ pub(in crate::builder) use special_cases::cylinder_cone_remainder_interior;
 
 pub use conversion::collect_wire_points;
 
+use brepkit_math::region2d::point_in_region;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
-use super::classify_2d::{sample_interior_point, signed_area_2d};
+use super::classify_2d::{sample_interior_point, sample_interior_point_where, signed_area_2d};
 use super::pcurve_compute::{
     compute_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface,
 };
@@ -9030,7 +9031,22 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     } else {
         sample_wire_loop_uv(&sub_face.outer_wire)
     };
-    let mut interior_uv = sample_interior_point(&pts_2d);
+    // A plane loop of lines and conic arcs is read on its curves: its sampled
+    // polygon runs on each arc's chords, and the centroid of a crescent whose
+    // inner arc passes near it can sit between that arc and its chords, in the
+    // neighbouring region.
+    let exact = match (&sub_face.surface, frame) {
+        (FaceSurface::Plane { .. }, Some(f)) => containment::exact_hole(&sub_face.outer_wire, f),
+        _ => None,
+    };
+    let mut interior_uv = exact.as_ref().map_or_else(
+        || sample_interior_point(&pts_2d),
+        |pieces| {
+            sample_interior_point_where(&pts_2d, |p| {
+                point_in_region(pieces, p, containment::SEED_CLEARANCE) == Some(true)
+            })
+        },
+    );
 
     // Periodic lateral walls (cone/cylinder): the closed boundary circles
     // share a seam, and `sample_wire_loop_uv` can emit a lopsided uv polygon
@@ -10573,5 +10589,65 @@ mod tests {
         let out = split_loop_at_pinch_vertices(&wire, 1e-7);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].len(), 4);
+    }
+
+    /// The crescent a disc keeps outside a second disc of its radius whose
+    /// rim runs through its centre, turned through every degree in its
+    /// plane. The longest chord across its sampled polygon starts beside its
+    /// seam and runs past the disc's centre along the other rim, between
+    /// that arc and its chords; the interior point must lie in the crescent.
+    #[test]
+    fn a_crescents_interior_point_lies_off_its_inner_arc() {
+        use brepkit_math::curves::Circle3D;
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_3};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let frame = PlaneFrame::from_normal_and_point(z, Point3::new(0.0, 0.0, 0.0));
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let r = 5.0_f64;
+        let b = Point3::new(0.0, 0.0, 0.0);
+        for degree in 0..360 {
+            let turn = f64::from(degree).to_radians();
+            let on = |c: Point3, at: f64| {
+                Point3::new(
+                    r.mul_add((turn + at).cos(), c.x()),
+                    r.mul_add((turn + at).sin(), c.y()),
+                    0.0,
+                )
+            };
+            let a = on(b, 0.0);
+            let (seam, p, q) = (on(b, FRAC_PI_2), on(b, FRAC_PI_3), on(b, -FRAC_PI_3));
+            let arc =
+                |centre: Point3, from: Point3, to: Point3, forward: bool| OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Circle(Circle3D::new(centre, z, r).unwrap()),
+                    pcurve: dummy_pcurve(),
+                    start_uv: frame.project(from),
+                    end_uv: frame.project(to),
+                    start_3d: from,
+                    end_3d: to,
+                    forward,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                };
+            let crescent = SplitSubFace {
+                surface: FaceSurface::Plane { normal: z, d: 0.0 },
+                outer_wire: vec![
+                    arc(b, seam, p, false),
+                    arc(a, p, b, true),
+                    arc(a, b, q, true),
+                    arc(b, q, seam, false),
+                ],
+                inner_wires: vec![],
+                reversed: false,
+                parent: face_id,
+                rank: Rank::A,
+                precomputed_interior: None,
+            };
+            let pt = interior_point_3d(&crescent, Some(&frame));
+            assert!(
+                (pt - b).length() < r && (pt - a).length() > r,
+                "turned {degree} degrees: {pt:?}"
+            );
+        }
     }
 }

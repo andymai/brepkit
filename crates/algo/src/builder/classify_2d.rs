@@ -13,6 +13,15 @@ use brepkit_math::vec::{Point2, Vec2};
 ///
 /// `loop_pts` must be the vertices of a closed polygon (>=3 points).
 pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
+    sample_interior_point_where(loop_pts, |_| true)
+}
+
+/// [`sample_interior_point`], taking only a point `inside` also accepts.
+///
+/// A polygon sampled from curved edges runs on each arc's chords, so a point
+/// between an arc and its chords passes the polygon's own tests while lying
+/// outside the region; `inside` reads the region on its curves.
+pub fn sample_interior_point_where(loop_pts: &[Point2], inside: impl Fn(Point2) -> bool) -> Point2 {
     // Graceful fallback for degenerate inputs instead of panicking.
     if loop_pts.is_empty() {
         return Point2::new(0.0, 0.0);
@@ -34,6 +43,7 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
     // the even-odd test unpredictably and is not a safe interior sample.
     if point_in_polygon_2d(centroid, loop_pts)
         && distance_to_polygon_boundary(centroid, loop_pts) > boundary_eps(loop_pts)
+        && inside(centroid)
     {
         return centroid;
     }
@@ -115,6 +125,7 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
         if better
             && point_in_polygon_2d(cand, loop_pts)
             && distance_to_polygon_boundary(cand, loop_pts) > eps
+            && inside(cand)
         {
             best = Some((cand, t_hit));
         }
