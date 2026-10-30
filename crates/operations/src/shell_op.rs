@@ -508,6 +508,13 @@ pub fn shell(
         });
     }
 
+    let inner_of = |p: Point3| inner_pos.get(&quantize_pt(p)).copied().unwrap_or(p);
+    if !open_set.is_empty()
+        && let Some(rims) = planar_rims(topo, &face_verts, &open_set, inner_of, tol.linear)?
+    {
+        result_specs.extend(rims);
+    }
+
     let solid = assemble_solid_mixed(topo, &result_specs, tol)?;
 
     let edge_face_map = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
@@ -675,6 +682,102 @@ pub fn shell(
     *topo.shell_mut(shell_id)? = new_shell;
 
     Ok(solid)
+}
+
+/// The rim each open face leaves on its own plane, or `None` when an open
+/// face is not planar. Along each of the face's edges the rim holds the strip
+/// between the edge and its inner copy; an edge it shares with another open
+/// face has no strip, its inner copy lying on it. The strips' shared sides
+/// cancel, leaving the rim's boundary: an annulus when every neighbour stays
+/// closed, a U when one is open too. Each loop runs counter-clockwise about
+/// the face's outward normal, its holes the other way.
+fn planar_rims(
+    topo: &Topology,
+    face_verts: &[(FaceId, Vec<Point3>)],
+    open_set: &HashSet<usize>,
+    inner_of: impl Fn(Point3) -> Point3,
+    tol: f64,
+) -> Result<Option<Vec<FaceSpec>>, crate::OperationsError> {
+    let key = |p: Point3| {
+        let scale = 1.0 / tol;
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+    let mut rims = Vec::new();
+    for (fid, verts) in face_verts {
+        if !open_set.contains(&fid.index()) {
+            continue;
+        }
+        let face = topo.face(*fid)?;
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            return Ok(None);
+        };
+        let outward = if face.is_reversed() {
+            -*normal
+        } else {
+            *normal
+        };
+        let n = verts.len();
+        let mut sides: Vec<(Point3, Point3)> = Vec::with_capacity(4 * n);
+        for k in 0..n {
+            let (a, b) = (verts[k], verts[(k + 1) % n]);
+            let (ia, ib) = (inner_of(a), inner_of(b));
+            let width = crate::winding::newell_normal(&[a, b, ib, ia]).length();
+            if width <= tol * (b - a).length() {
+                continue;
+            }
+            for (p, q) in [(a, b), (b, ib), (ib, ia), (ia, a)] {
+                if key(p) == key(q) {
+                    continue;
+                }
+                if let Some(i) = sides
+                    .iter()
+                    .position(|&(s, e)| key(s) == key(q) && key(e) == key(p))
+                {
+                    sides.swap_remove(i);
+                } else {
+                    sides.push((p, q));
+                }
+            }
+        }
+        let mut loops: Vec<Vec<Point3>> = Vec::new();
+        while let Some((start, mut at)) = sides.pop() {
+            let mut lp = vec![start];
+            while key(at) != key(start) {
+                let Some(i) = sides.iter().position(|&(s, _)| key(s) == key(at)) else {
+                    return Ok(None);
+                };
+                lp.push(at);
+                at = sides.swap_remove(i).1;
+            }
+            loops.push(lp);
+        }
+        let Some(outer) = (0..loops.len()).max_by(|&i, &j| {
+            let area = |k: usize| crate::winding::newell_normal(&loops[k]).length();
+            area(i).total_cmp(&area(j))
+        }) else {
+            continue;
+        };
+        let mut outer_loop = loops.swap_remove(outer);
+        if crate::winding::newell_normal(&outer_loop).dot(outward) < 0.0 {
+            outer_loop.reverse();
+        }
+        for hole in &mut loops {
+            if crate::winding::newell_normal(hole).dot(outward) > 0.0 {
+                hole.reverse();
+            }
+        }
+        rims.push(FaceSpec::Planar {
+            d: dot_normal_point(outward, outer_loop[0]),
+            vertices: outer_loop,
+            normal: outward,
+            inner_wires: loops,
+        });
+    }
+    Ok(Some(rims))
 }
 
 /// Sort oriented edges into connected loops.

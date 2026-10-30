@@ -114,12 +114,19 @@ fn shell_two_open_faces_volume() {
     assert_eq!(open_faces.len(), 2);
 
     let result = shell(&mut topo, cube, 0.1, &open_faces).unwrap();
-    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
-    // Expected: 1.0 - 0.8*0.8*1.0 = 0.36
-    assert!(vol > 0.1, "tube shell volume should be positive, got {vol}");
+    // A tube: four walls inside and out, and a rim at each end.
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(faces.len(), 10);
     assert!(
-        vol < 1.0,
-        "tube shell volume should be < original 1.0, got {vol}"
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.8;
+    assert!(
+        (vol - expected).abs() < 1e-9,
+        "tube volume {vol}, expected {expected}"
     );
 }
 
@@ -999,5 +1006,31 @@ fn shell_thickness_past_corner_radius_gives_a_sharp_corner() {
     assert_eq!(
         diagonal_planes, 4,
         "each swallowed corner cylinder must leave a 45-degree chamfer strip"
+    );
+}
+
+/// A box open on two faces that meet (its top and front) leaves a U-shaped
+/// rim on each: ten faces, holding the box less a cavity open through both.
+#[test]
+fn shell_box_open_on_two_adjacent_faces() {
+    let mut topo = Topology::new();
+    let b = crate::primitives::make_box(&mut topo, 50.0, 40.0, 30.0).unwrap();
+    let mut open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, -1.0, 0.0)));
+    assert_eq!(open.len(), 2);
+    let result = shell(&mut topo, b, 3.0, &open).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(faces.len(), 10);
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 50.0 * 40.0 * 30.0 - 44.0 * 37.0 * 27.0;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
     );
 }
