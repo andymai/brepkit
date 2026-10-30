@@ -5454,7 +5454,9 @@ fn distribute_cap_circles(
                 .iter()
                 .flat_map(|e| [e.start_3d, e.end_3d])
                 .collect();
-            let carved = split_face_with_internal_loops(
+            // Caps are closed curves, which the internal-loops path never
+            // declines.
+            if let Some(carved) = split_face_with_internal_loops(
                 &sf.surface,
                 &sf.outer_wire,
                 &sf.inner_wires,
@@ -5463,8 +5465,11 @@ fn distribute_cap_circles(
                 sf.reversed,
                 face_id,
                 &sub_wire_pts,
-            );
-            result.extend(carved);
+            ) {
+                result.extend(carved);
+            } else {
+                result.push(sf);
+            }
         }
     }
     result
@@ -6177,7 +6182,7 @@ fn split_face_2d_impl(
             "split_face_2d: face {face_id:?} routed to internal-loops path ({} sections)",
             secs.len()
         );
-        return split_face_with_internal_loops(
+        if let Some(pieces) = split_face_with_internal_loops(
             &surface,
             &boundary_edges,
             &original_inner_wires,
@@ -6186,7 +6191,9 @@ fn split_face_2d_impl(
             reversed,
             face_id,
             &wire_pts,
-        );
+        ) {
+            return pieces;
+        }
     }
 
     let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();

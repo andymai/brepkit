@@ -3809,6 +3809,11 @@ impl LoopEnclosers {
 /// sphere caps). Cylinder/cone laterals are routed to
 /// [`split_periodic_face_into_bands`] first and only reach this fallback
 /// when the band preconditions don't hold.
+///
+/// `None` when a plane face's loop chained from open sections crosses one of
+/// the face's holes and could not be merged with it: the loop's disc and the
+/// hole would overlap, so the caller hands the sections to the general
+/// splitter, which trims them against the hole.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_face_with_internal_loops(
     surface: &FaceSurface,
@@ -3819,7 +3824,7 @@ pub(super) fn split_face_with_internal_loops(
     reversed: bool,
     face_id: FaceId,
     wire_pts: &[Point3],
-) -> Vec<SplitSubFace> {
+) -> Option<Vec<SplitSubFace>> {
     let tol_3d = brepkit_math::tolerance::Tolerance::new().linear;
 
     // Convert each section edge to an OrientedPCurveEdge, preserving the
@@ -4197,6 +4202,30 @@ pub(super) fn split_face_with_internal_loops(
                 hole_absorbed[li] = true;
             }
             consumed_holes.insert(hi);
+        }
+    }
+
+    // A loop that still crosses a hole after both unions bounds no region of
+    // this face: a slab bridging a boss's foot stamps its whole footprint on
+    // the plate's top, but the strip over the foot belongs to the boss, so the
+    // loop's disc would overlap the hole. The general splitter trims such
+    // sections against the hole. A closed section curve stays here, since that
+    // splitter leaves closed curves on a plane to this path.
+    if let Some(frame) = plane_frame.as_ref() {
+        for (li, loop_edges) in loops.iter().enumerate() {
+            if loop_edges.len() < 2 {
+                continue;
+            }
+            for (hi, hole) in original_inner_wires.iter().enumerate() {
+                if !consumed_holes.contains(&hi)
+                    && loop_crosses_hole(loop_edges, hole, frame, tol_3d)
+                {
+                    log::debug!(
+                        "split_face_with_internal_loops: face {face_id:?} loop {li} crosses hole {hi}"
+                    );
+                    return None;
+                }
+            }
         }
     }
 
@@ -4704,13 +4733,13 @@ pub(super) fn split_face_with_internal_loops(
         && !remainder.inner_wires.is_empty()
     {
         let Some(inside) = region_sample(surface, boundary_edges, &remainder.inner_wires) else {
-            return Vec::new();
+            return Some(Vec::new());
         };
         remainder.precomputed_interior = Some(inside);
     }
     result.push(remainder);
 
-    result
+    Some(result)
 }
 
 /// 3D samples along a wire's edges: two per line, 32 per curved edge, never
@@ -5151,6 +5180,94 @@ fn internal_loop_hole_interact(
     };
     lp.iter().any(|&p| strictly_inside(p, &hp, &hs))
         || hp.iter().any(|&p| strictly_inside(p, &lp, &ls))
+}
+
+/// Whether a section loop runs into a hole or holds part of one: a point of
+/// the loop lies clearly inside the hole, or the hole's rim lies partly
+/// clearly inside the loop and partly clearly outside it. A hole wholly
+/// inside the loop or wholly outside it, touching it or not, does not count.
+/// Points on the true curves are read against chord outlines, so each
+/// outline's own sag joins the clearance.
+fn loop_crosses_hole(
+    loop_edges: &[OrientedPCurveEdge],
+    hole: &[OrientedPCurveEdge],
+    frame: &PlaneFrame,
+    tol: f64,
+) -> bool {
+    use super::super::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
+    const CHORDS: usize = 64;
+    const PROBES: usize = 16;
+    let outline = |edges: &[OrientedPCurveEdge]| -> (Vec<Point2>, f64) {
+        let mut poly = Vec::new();
+        let mut sag = 0.0_f64;
+        for e in edges {
+            let n = if matches!(e.curve_3d, EdgeCurve::Line) {
+                1
+            } else {
+                CHORDS
+            };
+            let pts: Vec<Point2> = edge_samples(e, 2 * n)
+                .into_iter()
+                .map(|p| frame.project(p))
+                .collect();
+            for k in 0..n {
+                let (a, mid, b) = (pts[2 * k], pts[2 * k + 1], pts[2 * k + 2]);
+                sag = sag.max(point_seg_dist_2d(mid, a, b));
+                poly.push(a);
+            }
+        }
+        (poly, sag)
+    };
+    let probes = |edges: &[OrientedPCurveEdge]| -> Vec<Point2> {
+        edges
+            .iter()
+            .flat_map(|e| edge_samples(e, PROBES))
+            .map(|p| frame.project(p))
+            .collect()
+    };
+    let bounds = |poly: &[Point2]| -> (Point2, Point2) {
+        poly.iter().fold(
+            (
+                Point2::new(f64::INFINITY, f64::INFINITY),
+                Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+            ),
+            |(lo, hi), p| {
+                (
+                    Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                    Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+                )
+            },
+        )
+    };
+    let (loop_poly, loop_sag) = outline(loop_edges);
+    let (hole_poly, hole_sag) = outline(hole);
+    if loop_poly.len() < 3 || hole_poly.len() < 3 {
+        return false;
+    }
+    let clear = tol * 100.0 + loop_sag.max(hole_sag);
+    let ((llo, lhi), (hlo, hhi)) = (bounds(&loop_poly), bounds(&hole_poly));
+    if llo.x() > hhi.x() + clear
+        || hlo.x() > lhi.x() + clear
+        || llo.y() > hhi.y() + clear
+        || hlo.y() > lhi.y() + clear
+    {
+        return false;
+    }
+    // Some(true) clearly inside, Some(false) clearly outside, None on the rim.
+    let side = |p: Point2, poly: &[Point2]| -> Option<bool> {
+        (distance_to_polygon_boundary(p, poly) > clear).then(|| point_in_polygon_2d(p, poly))
+    };
+    if probes(loop_edges)
+        .into_iter()
+        .any(|p| side(p, &hole_poly) == Some(true))
+    {
+        return true;
+    }
+    let rim: Vec<Option<bool>> = probes(hole)
+        .into_iter()
+        .map(|p| side(p, &loop_poly))
+        .collect();
+    rim.contains(&Some(true)) && rim.contains(&Some(false))
 }
 
 fn point_seg_dist_2d(p: Point2, a: Point2, b: Point2) -> f64 {
