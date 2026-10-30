@@ -1,7 +1,7 @@
 //! Point containment tests for UV-space hole detection.
 
 use brepkit_math::curves2d::Curve2D;
-use brepkit_math::region2d::{Boundary2, point_in_region};
+use brepkit_math::region2d::{Boundary2, distance_to_boundary, point_in_region};
 use brepkit_math::vec::{Point2, Vec2, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 
@@ -58,6 +58,66 @@ pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveE
 
 /// How near a hole's boundary a seed may lie and still be read outside it.
 pub(super) const SEED_CLEARANCE: f64 = 1e-7;
+
+/// The point deepest in `region` among those stepped off each of `loop_pts`
+/// along the normal of its neighbours' chord, the longest step that lands
+/// inside on each side, or `None` when none does.
+///
+/// For a region too thin for a candidate taken across its chord polygon:
+/// each sample lies on the region's curves, so a step shorter than the
+/// region's width there lands inside.
+pub(super) fn point_stepped_into_region(
+    region: &[Boundary2],
+    loop_pts: &[Point2],
+) -> Option<Point2> {
+    let n = loop_pts.len();
+    if n < 3 {
+        return None;
+    }
+    let (lo, hi) = loop_pts.iter().fold(
+        (
+            Point2::new(f64::INFINITY, f64::INFINITY),
+            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(lo, hi), p| {
+            (
+                Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+            )
+        },
+    );
+    let extent = (hi - lo).length();
+    if !extent.is_finite() || extent <= 0.0 {
+        return None;
+    }
+    let mut best: Option<(Point2, f64)> = None;
+    for i in 0..n {
+        let p = loop_pts[i];
+        let chord = loop_pts[(i + 1) % n] - loop_pts[(i + n - 1) % n];
+        let len = chord.length();
+        if len < 1e-15 {
+            continue;
+        }
+        let normal = Vec2::new(-chord.y() / len, chord.x() / len);
+        for side in [1.0, -1.0] {
+            let Some(q) = (0..32)
+                .map(|k| p + normal * (side * extent * 0.25 * 0.5_f64.powi(k)))
+                .find(|&q| point_in_region(region, q, SEED_CLEARANCE) == Some(true))
+            else {
+                continue;
+            };
+            let depth = distance_to_boundary(region, q);
+            let better = best.is_none_or(|(bq, bd)| {
+                depth > bd + 1e-12
+                    || ((depth - bd).abs() <= 1e-12 && (q.x(), q.y()) < (bq.x(), bq.y()))
+            });
+            if better {
+                best = Some((q, depth));
+            }
+        }
+    }
+    best.map(|(q, _)| q)
+}
 
 /// A hole's boundary flattened into the plane frame, each line a segment and
 /// each circle or ellipse the arc it is. `None` when an edge is a NURBS curve.

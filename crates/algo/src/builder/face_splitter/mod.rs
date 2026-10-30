@@ -8885,19 +8885,21 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // A plane loop of lines and conic arcs is read on its curves: its sampled
     // polygon runs on each arc's chords, and the centroid of a crescent whose
     // inner arc passes near it can sit between that arc and its chords, in the
-    // neighbouring region.
+    // neighbouring region. A crescent thinner than its chords' sag has no
+    // candidate across its polygon inside it, so one is stepped off its curves.
     let exact = match (&sub_face.surface, frame) {
         (FaceSurface::Plane { .. }, Some(f)) => containment::exact_hole(&sub_face.outer_wire, f),
         _ => None,
     };
-    let mut interior_uv = exact.as_ref().map_or_else(
-        || sample_interior_point(&pts_2d),
-        |pieces| {
+    let mut interior_uv = exact
+        .as_ref()
+        .and_then(|pieces| {
             sample_interior_point_where(&pts_2d, |p| {
                 point_in_region(pieces, p, containment::SEED_CLEARANCE) == Some(true)
             })
-        },
-    );
+            .or_else(|| containment::point_stepped_into_region(pieces, &pts_2d))
+        })
+        .unwrap_or_else(|| sample_interior_point(&pts_2d));
 
     // Periodic lateral walls (cone/cylinder): the closed boundary circles
     // share a seam, and `sample_wire_loop_uv` can emit a lopsided uv polygon
@@ -10498,6 +10500,56 @@ mod tests {
             assert!(
                 (pt - b).length() < r && (pt - a).length() > r,
                 "turned {degree} degrees: {pt:?}"
+            );
+        }
+    }
+
+    /// The crescent a disc of radius 5 keeps outside a second of that radius
+    /// whose centre lies 0.001 from its own, turned every 15 degrees in its
+    /// plane. It is far thinner than its arcs' chords' sag, so no candidate
+    /// taken across its sampled polygon lies inside it; the interior point
+    /// must still lie in the crescent.
+    #[test]
+    fn a_thin_crescents_interior_point_lies_inside_it() {
+        use brepkit_math::curves::Circle3D;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let frame = PlaneFrame::from_normal_and_point(z, Point3::new(0.0, 0.0, 0.0));
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let (r, gap) = (5.0_f64, 0.001_f64);
+        let reach = gap.mul_add(-gap * 0.25, r * r).sqrt();
+        for step in 0..24 {
+            let turn = f64::from(step * 15).to_radians();
+            let (c, s) = (turn.cos(), turn.sin());
+            let at = |x: f64, y: f64| Point3::new(c * x - s * y, s * x + c * y, 0.0);
+            let (kept, cut) = (at(0.0, 0.0), at(gap, 0.0));
+            let (top, bottom) = (at(gap * 0.5, reach), at(gap * 0.5, -reach));
+            let arc =
+                |centre: Point3, from: Point3, to: Point3, forward: bool| OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Circle(Circle3D::new(centre, z, r).unwrap()),
+                    pcurve: dummy_pcurve(),
+                    start_uv: frame.project(from),
+                    end_uv: frame.project(to),
+                    start_3d: from,
+                    end_3d: to,
+                    forward,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                };
+            let crescent = SplitSubFace {
+                surface: FaceSurface::Plane { normal: z, d: 0.0 },
+                outer_wire: vec![arc(kept, top, bottom, true), arc(cut, bottom, top, false)],
+                inner_wires: vec![],
+                reversed: false,
+                parent: face_id,
+                rank: Rank::A,
+                precomputed_interior: None,
+            };
+            let pt = interior_point_3d(&crescent, Some(&frame));
+            assert!(
+                (pt - kept).length() < r && (pt - cut).length() > r,
+                "turned {} degrees: {pt:?}",
+                step * 15
             );
         }
     }
