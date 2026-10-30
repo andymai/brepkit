@@ -11,6 +11,33 @@ use brepkit_topology::test_utils::make_unit_cube_manifold;
 
 use super::*;
 
+/// A shelled result meshes with no open or non-manifold edge, and the ray
+/// cast puts each point of `wall` inside it and each of `hollow` outside.
+fn assert_shelled(
+    topo: &Topology,
+    result: SolidId,
+    wall: &[(f64, f64, f64)],
+    hollow: &[(f64, f64, f64)],
+) {
+    use crate::classify::{PointClassification, classify_point};
+    let mesh = crate::tessellate::tessellate_solid(topo, result, 0.01).unwrap();
+    assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+    assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+    for (points, class) in [
+        (wall, PointClassification::Inside),
+        (hollow, PointClassification::Outside),
+    ] {
+        for &(x, y, z) in points {
+            let p = brepkit_math::vec::Point3::new(x, y, z);
+            assert_eq!(
+                classify_point(topo, result, p, 0.0, 1e-7).unwrap(),
+                class,
+                "{p:?}"
+            );
+        }
+    }
+}
+
 /// Helper: get face IDs matching a given normal direction.
 fn find_faces_by_normal(topo: &Topology, solid: SolidId, target_normal: Vec3) -> Vec<FaceId> {
     let tol = Tolerance::loose();
@@ -121,6 +148,12 @@ fn shell_two_open_faces_volume() {
         crate::validate::validate_solid(&topo, result)
             .unwrap()
             .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.95, 0.5)],
+        &[(0.5, 0.5, 0.5), (0.5, 0.5, 0.02), (0.5, 0.5, 0.98)],
     );
     let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
     let expected = 1.0 - 0.8 * 0.8;
@@ -1027,6 +1060,12 @@ fn shell_box_open_on_two_adjacent_faces() {
             .unwrap()
             .is_valid()
     );
+    assert_shelled(
+        &topo,
+        result,
+        &[(1.5, 20.0, 15.0), (25.0, 20.0, 1.5), (25.0, 38.5, 15.0)],
+        &[(25.0, 20.0, 15.0), (25.0, 1.5, 15.0), (25.0, 20.0, 28.5)],
+    );
     let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
     let expected = 50.0 * 40.0 * 30.0 - 44.0 * 37.0 * 27.0;
     assert!(
@@ -1054,6 +1093,17 @@ fn shell_cube_open_on_three_faces() {
         crate::validate::validate_solid(&topo, result)
             .unwrap()
             .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.95), (0.95, 0.5, 0.5), (0.5, 0.5, 0.05)],
+        &[
+            (0.5, 0.5, 0.5),
+            (0.5, 0.02, 0.5),
+            (0.5, 0.98, 0.5),
+            (0.5, 0.5, 0.97),
+        ],
     );
     let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
     let expected = 1.0 - 0.8 * 0.9;
@@ -1107,6 +1157,12 @@ fn shell_box_open_on_a_top_split_in_two() {
         crate::validate::validate_solid(&topo, result)
             .unwrap()
             .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.05, 0.5), (0.5, 0.5, 0.05)],
+        &[(0.5, 0.5, 0.5), (0.8, 0.2, 0.5), (0.5, 0.5, 0.97)],
     );
     let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
     let expected = 1.0 - 0.8 * 0.8 * 0.9;
@@ -1190,6 +1246,12 @@ fn shell_box_open_at_both_ends_one_piece_stored_turned_round() {
             .unwrap()
             .is_valid()
     );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.95, 0.5)],
+        &[(0.5, 0.5, 0.5), (0.8, 0.2, 0.98), (0.5, 0.5, 0.02)],
+    );
     let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
     let expected = 1.0 - 0.8 * 0.8;
     assert!(
@@ -1241,6 +1303,12 @@ fn shell_box_open_at_both_split_ends() {
         crate::validate::validate_solid(&topo, result)
             .unwrap()
             .is_valid()
+    );
+    assert_shelled(
+        &topo,
+        result,
+        &[(0.05, 0.5, 0.5), (0.5, 0.95, 0.5)],
+        &[(0.5, 0.5, 0.5), (0.8, 0.2, 0.98), (0.5, 0.5, 0.02)],
     );
     let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
     let expected = 1.0 - 0.8 * 0.8;
