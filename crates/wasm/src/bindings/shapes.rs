@@ -759,11 +759,15 @@ impl BrepKernel {
     /// Create a solid from a shell.
     ///
     /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the shell does not close: an edge bounds only one
+    /// of its faces, or more than two.
     #[wasm_bindgen(js_name = "solidFromShell")]
     pub fn solid_from_shell(&mut self, shell: u32) -> Result<u32, JsError> {
         let shell_id = self.resolve_shell(shell)?;
-        let solid = brepkit_topology::solid::Solid::new(shell_id, vec![]);
-        let sid = self.topo_mut().add_solid(solid);
+        let sid = crate::helpers::solid_from_closed_shell(self.topo_mut(), shell_id)?;
         Ok(solid_id_to_u32(sid))
     }
 
