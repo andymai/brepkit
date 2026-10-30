@@ -125,15 +125,21 @@ fn try_recognize_plane(surface: &NurbsSurface, tolerance: f64) -> Option<(Vec3, 
         return None;
     }
 
-    // Find a normal from the first 3 non-collinear points.
+    // Find a normal from the first 3 non-collinear points, the third lying
+    // farther than `tolerance` off the line through the first two: the cross
+    // product is an area, the base's length times that distance.
     let p0 = all_pts[0];
     let mut normal: Option<Vec3> = None;
     'outer: for i in 1..all_pts.len() {
         let v1 = all_pts[i] - p0;
+        let base = v1.length();
+        if base <= tolerance {
+            continue;
+        }
         for pt in all_pts.iter().skip(i + 1) {
             let v2 = *pt - p0;
             let n = v1.cross(v2);
-            if n.length() > tolerance
+            if n.length() > tolerance * base
                 && let Ok(normalized) = n.normalize()
             {
                 normal = Some(normalized);
@@ -1050,6 +1056,39 @@ mod tests {
                 );
             }
             other => panic!("expected Torus, got {other:?}"),
+        }
+    }
+
+    /// A flat bilinear square of side 1e-4 in the plane x + y + z = 1 spans
+    /// control-point areas of 1e-8, under a tolerance of 1e-7, yet each corner
+    /// lies 1e-4 off the line through two others: it is a plane.
+    #[test]
+    fn recognize_a_tiny_plane() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let side = 1e-4;
+        let base = Point3::new(1.0, 0.0, 0.0);
+        let u = Vec3::new(-1.0, 1.0, 0.0).normalize().unwrap() * side;
+        let v = Vec3::new(-1.0, -1.0, 2.0).normalize().unwrap() * side;
+        let nurbs = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![vec![base, base + v], vec![base + u, base + u + v]],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        match recognize_surface(&nurbs, 1e-7) {
+            RecognizedSurface::Plane { normal, d } => {
+                let expected = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+                let sign = normal.dot(expected).signum();
+                assert!(
+                    (normal * sign - expected).length() < 1e-9,
+                    "normal {normal:?}"
+                );
+                assert!((d * sign - expected.x()).abs() < 1e-12, "d {d}");
+            }
+            other => panic!("expected Plane, got {other:?}"),
         }
     }
 
