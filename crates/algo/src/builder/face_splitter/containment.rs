@@ -1,7 +1,7 @@
 //! Point containment tests for UV-space hole detection.
 
 use brepkit_math::curves2d::Curve2D;
-use brepkit_math::region2d::{Boundary2, point_in_region};
+use brepkit_math::region2d::{Boundary2, distance_to_boundary, point_in_region};
 use brepkit_math::vec::{Point2, Vec2, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 
@@ -58,6 +58,102 @@ pub(super) fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveE
 
 /// How near a hole's boundary a seed may lie and still be read outside it.
 pub(super) const SEED_CLEARANCE: f64 = 1e-7;
+
+/// The point deepest in `region` among those stepped off each of `loop_pts`
+/// along the normal of its neighbours' chord, the longest step that lands
+/// inside on each side, or `None` when none does. Steps halve from a quarter
+/// of the region's extent down to `clearance`, short of which no point can
+/// stand clear of the boundary it leaves; where none lands clear, the point
+/// halfway to where the region ends along the normal is tried.
+///
+/// For a region too thin for a candidate taken across its chord polygon:
+/// each sample lies on the region's curves, so a step shorter than the
+/// region's width there lands inside.
+pub(super) fn point_stepped_into_region(
+    region: &[Boundary2],
+    loop_pts: &[Point2],
+    clearance: f64,
+) -> Option<Point2> {
+    let n = loop_pts.len();
+    if n < 3 {
+        return None;
+    }
+    let (lo, hi) = loop_pts.iter().fold(
+        (
+            Point2::new(f64::INFINITY, f64::INFINITY),
+            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        ),
+        |(lo, hi), p| {
+            (
+                Point2::new(lo.x().min(p.x()), lo.y().min(p.y())),
+                Point2::new(hi.x().max(p.x()), hi.y().max(p.y())),
+            )
+        },
+    );
+    let extent = (hi - lo).length();
+    if !extent.is_finite() || extent <= 0.0 {
+        return None;
+    }
+    let mut best: Option<(Point2, f64)> = None;
+    for i in 0..n {
+        let p = loop_pts[i];
+        let chord = loop_pts[(i + 1) % n] - loop_pts[(i + n - 1) % n];
+        let len = chord.length();
+        if len < 1e-15 {
+            continue;
+        }
+        let normal = Vec2::new(-chord.y() / len, chord.x() / len);
+        for side in [1.0, -1.0] {
+            let at = |step: f64| p + normal * (side * step);
+            let state = |step: f64| point_in_region(region, at(step), clearance);
+            let steps: Vec<(f64, Option<bool>)> =
+                std::iter::successors(Some(0.25 * extent), |step| Some(0.5 * step))
+                    .take_while(|&step| step > clearance)
+                    .map(|step| (step, state(step)))
+                    .collect();
+            // A region less than a step's ratio wider than twice the
+            // clearance can hold its clear points between two steps: where no
+            // step lands clear, find where it ends along the normal and try
+            // halfway.
+            let q = if let Some(&(step, _)) = steps.iter().find(|(_, s)| *s == Some(true)) {
+                at(step)
+            } else {
+                let Some(w) = steps
+                    .windows(2)
+                    .find(|w| w[0].1 == Some(false) && w[1].1 != Some(false))
+                else {
+                    continue;
+                };
+                let (mut inside, mut outside) = (w[1].0, w[0].0);
+                for _ in 0..60 {
+                    let mid = f64::midpoint(inside, outside);
+                    if state(mid) == Some(false) {
+                        outside = mid;
+                    } else {
+                        inside = mid;
+                    }
+                }
+                // Points within the clearance of the far side read as
+                // unsure, so the region ends a clearance short of where
+                // they turn outside.
+                let middle = 0.5 * (outside - clearance);
+                if state(middle) != Some(true) {
+                    continue;
+                }
+                at(middle)
+            };
+            let depth = distance_to_boundary(region, q);
+            let better = best.is_none_or(|(bq, bd)| {
+                depth > bd + 1e-12
+                    || ((depth - bd).abs() <= 1e-12 && (q.x(), q.y()) < (bq.x(), bq.y()))
+            });
+            if better {
+                best = Some((q, depth));
+            }
+        }
+    }
+    best.map(|(q, _)| q)
+}
 
 /// A hole's boundary flattened into the plane frame, each line a segment and
 /// each circle or ellipse the arc it is. `None` when an edge is a NURBS curve.

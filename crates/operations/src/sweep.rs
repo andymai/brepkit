@@ -42,17 +42,65 @@ fn compute_frames(
     initial_up: Vec3,
     is_closed: bool,
 ) -> Result<Vec<Frame>, crate::OperationsError> {
-    let frame_count = if is_closed {
-        num_segments
-    } else {
-        num_segments + 1
-    };
-    let mut frames = Vec::with_capacity(frame_count);
-
     // Sample within the curve's own domain: split sub-curves keep their
     // parent's sub-range, and a clamped NURBS evaluated outside its domain
     // extrapolates the end spans linearly.
     let (u0, u1) = path.domain();
+    let last_k = if is_closed {
+        num_segments - 1
+    } else {
+        num_segments
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let params: Vec<f64> = (0..=last_k)
+        .map(|k| u0 + (u1 - u0) * (k as f64) / (num_segments as f64))
+        .collect();
+    frames_at(path, &params, initial_up)
+}
+
+/// The path's parameters for `num_segments` even steps across its domain,
+/// with each knot span narrower than a step read at its knots and three
+/// points between: a bend inside such a span lies between even steps.
+/// Samples at one point merge. The end is left off a closed path, whose
+/// first frame closes it.
+fn frame_params(path: &NurbsCurve, num_segments: usize, is_closed: bool) -> Vec<f64> {
+    let (u0, u1) = path.domain();
+    #[allow(clippy::cast_precision_loss)]
+    let step = (u1 - u0) / num_segments as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let mut params: Vec<f64> = (0..=num_segments)
+        .map(|k| u0 + (u1 - u0) * (k as f64) / (num_segments as f64))
+        .collect();
+    let mut knots: Vec<f64> = path.knots().iter().map(|&k| k.clamp(u0, u1)).collect();
+    knots.dedup();
+    for w in knots.windows(2) {
+        let width = w[1] - w[0];
+        if width > 0.0 && width < step {
+            params.extend((0..=4).map(|j| width.mul_add(f64::from(j) / 4.0, w[0])));
+        }
+    }
+    // Only samples at one point merge: a span narrow in parameter can still
+    // carry a bend, but a frame at a point already sampled adds nothing.
+    let tol = Tolerance::new().linear;
+    params.sort_by(f64::total_cmp);
+    params.dedup_by(|a, b| (path.evaluate(*a) - path.evaluate(*b)).length() <= tol);
+    if is_closed {
+        params.pop();
+    }
+    params
+}
+
+/// Rotation-minimizing frames along `path` at `params`, ascending from its
+/// start, the first frame's up-vector seeded from `initial_up`.
+fn frames_at(
+    path: &NurbsCurve,
+    params: &[f64],
+    initial_up: Vec3,
+) -> Result<Vec<Frame>, crate::OperationsError> {
+    let mut frames = Vec::with_capacity(params.len());
+    let Some((&u0, rest)) = params.split_first() else {
+        return Ok(frames);
+    };
 
     let t0 = path.tangent(u0)?;
     let up0 = orthogonalize(initial_up, t0);
@@ -69,19 +117,13 @@ fn compute_frames(
     // Two reflections per step:
     //   1. Reflect across the plane bisecting consecutive origins (position change).
     //   2. Reflect across the plane bisecting the reflected tangent and new tangent.
-    let last_k = if is_closed {
-        num_segments - 1
-    } else {
-        num_segments
-    };
-    for k in 1..=last_k {
-        #[allow(clippy::cast_precision_loss)]
-        let t_param = u0 + (u1 - u0) * (k as f64) / (num_segments as f64);
-
+    for &t_param in rest {
         let origin = path.evaluate(t_param);
         let tangent = path.tangent(t_param)?;
 
-        let prev = &frames[k - 1];
+        let Some(prev) = frames.last() else {
+            break;
+        };
 
         // Reflection 1: across the plane bisecting the two consecutive origins.
         let v1 = origin - prev.origin;
@@ -576,6 +618,15 @@ fn try_straight_extrude(
         return Ok(None);
     };
 
+    // A curve lies on a line exactly when its control points do; a bend
+    // inside a narrow knot span lies between any even samples.
+    for &p in path.control_points() {
+        let v = p - start;
+        if (v - dir * v.dot(dir)).length() > tol.linear * 100.0 {
+            return Ok(None);
+        }
+    }
+
     // Confirm straightness: every interior sample stays on the start→end line
     // and advances monotonically along it.
     for k in 1..STRAIGHT_SAMPLES {
@@ -730,13 +781,18 @@ pub(crate) fn sweep_placed(
         input_normal = -input_normal;
     }
 
-    let num_segments = (path.control_points().len() * 2).max(4);
+    let params = frame_params(path, (path.control_points().len() * 2).max(4), is_closed);
+    let num_segments = if is_closed {
+        params.len()
+    } else {
+        params.len() - 1
+    };
 
     // Seed the first frame's up-vector from the profile normal, projected
     // perpendicular to the path tangent at t=0.
     let up_hint = orthogonalize(input_normal, path_tangent_0);
 
-    let frames = compute_frames(path, num_segments, up_hint, is_closed)?;
+    let frames = frames_at(path, &params, up_hint)?;
 
     // The decomposition basis and reference point pick the placement semantic:
     // frame-0's own basis and origin make ring 0 the identity map (profile
@@ -2481,6 +2537,64 @@ pub fn sweep_guided(
 
 mod spine;
 
+/// `curve` from parameter `t0` to `t1`, traced backward when `t1 < t0`,
+/// over `[0, 1]` as `sweep` reads its path. The curve is cut over its domain
+/// moved to `[0, 1]`, so a domain of any width is cut alike.
+fn curve_between(
+    curve: &NurbsCurve,
+    t0: f64,
+    t1: f64,
+) -> Result<NurbsCurve, crate::OperationsError> {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    // The knot routines' resolution: within it of an end there is no room
+    // to cut, and nothing past it to cut off.
+    const AT_END: f64 = 1e-15;
+    let (d0, d1) = curve.domain();
+    let length = d1 - d0;
+    if length.is_nan() || length <= 0.0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "a curve with no parameter span".into(),
+        });
+    }
+    let unit = |t: f64| (t - d0) / length;
+    let rescale = |c: &NurbsCurve, knots: Vec<f64>| {
+        NurbsCurve::new(
+            c.degree(),
+            knots,
+            c.control_points().to_vec(),
+            c.weights().to_vec(),
+        )
+    };
+    let mut span = rescale(curve, curve.knots().iter().map(|&k| unit(k)).collect())?;
+    let (lo, hi) = (unit(t0.min(t1)), unit(t0.max(t1)));
+    if hi - lo <= AT_END {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "a span too narrow to cut from its curve".into(),
+        });
+    }
+    if hi < 1.0 - AT_END {
+        span = curve_split(&span, hi)?.0;
+    }
+    if lo > AT_END {
+        span = curve_split(&span, lo)?.1;
+    }
+    let (a, b) = span.domain();
+    let to_unit = |k: f64| (k - a) / (b - a);
+    if t1 >= t0 {
+        let knots = span.knots().iter().map(|&k| to_unit(k)).collect();
+        return Ok(rescale(&span, knots)?);
+    }
+    let knots = span
+        .knots()
+        .iter()
+        .rev()
+        .map(|&k| 1.0 - to_unit(k))
+        .collect();
+    let points = span.control_points().iter().rev().copied().collect();
+    let weights = span.weights().iter().rev().copied().collect();
+    Ok(NurbsCurve::new(span.degree(), knots, points, weights)?)
+}
+
 /// Sweep a face profile along a path defined by a chain of edges.
 ///
 /// A closed planar G1 chain of lines and tangent circular arcs (a rounded
@@ -2509,6 +2623,30 @@ pub fn sweep_along_edges(
     }
 
     let tol = Tolerance::new();
+    // An edge whose ends meet reads as its curve's whole closed domain; on an
+    // open curve it runs nowhere, and its curve is no part of the path.
+    let runs_nowhere = |curve: &NurbsCurve, start: Point3, end: Point3| {
+        let (d0, d1) = curve.domain();
+        (start - end).length() <= tol.linear
+            && (curve.evaluate(d0) - curve.evaluate(d1)).length() > tol.linear
+    };
+
+    // One curved edge is its own path, run from its start to its end.
+    if let [eid] = edges {
+        let edge = topo.edge(*eid)?;
+        if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
+            let start = topo.vertex(edge.start())?.point();
+            let end = topo.vertex(edge.end())?.point();
+            if runs_nowhere(curve, start, end) {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "sweep_along_edges: the edge has no length along its curve".into(),
+                });
+            }
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let path = curve_between(curve, t0, t1)?;
+            return sweep(topo, profile, &path);
+        }
+    }
 
     // Collect ordered points from the edge chain, sampling curved edges.
     let mut points: Vec<Point3> = Vec::new();
@@ -2523,13 +2661,33 @@ pub fn sweep_along_edges(
         }
 
         match edge_data.curve() {
+            EdgeCurve::NurbsCurve(curve)
+                if runs_nowhere(curve, start, topo.vertex(edge_data.end())?.point()) => {}
             EdgeCurve::NurbsCurve(curve) => {
-                let (u0, u1) = curve.domain();
-                let n_samples = 4;
-                for i in 1..n_samples {
-                    #[allow(clippy::cast_precision_loss)]
-                    let frac = i as f64 / n_samples as f64;
-                    points.push(curve.evaluate(u0 + frac * (u1 - u0)));
+                // Eight samples through each knot span the edge runs over,
+                // however narrow, in the order the edge runs.
+                let end = topo.vertex(edge_data.end())?.point();
+                let (t0, t1) = edge_data.curve().domain_with_endpoints(start, end);
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let mut breaks: Vec<f64> = std::iter::once(t0)
+                    .chain(curve.knots().iter().copied().filter(|&k| k > lo && k < hi))
+                    .chain(std::iter::once(t1))
+                    .collect();
+                if t1 < t0 {
+                    breaks[1..].sort_by(|a, b| b.total_cmp(a));
+                } else {
+                    breaks.sort_by(f64::total_cmp);
+                }
+                breaks.dedup();
+                let last = breaks.len().saturating_sub(2);
+                for (k, w) in breaks.windows(2).enumerate() {
+                    for i in 1..=8 {
+                        if k == last && i == 8 {
+                            continue;
+                        }
+                        points
+                            .push(curve.evaluate((w[1] - w[0]).mul_add(f64::from(i) / 8.0, w[0])));
+                    }
                 }
             }
             EdgeCurve::Circle(circle) => {
@@ -2573,6 +2731,9 @@ pub fn sweep_along_edges(
         });
     }
 
+    // Samples at one point (a knot within rounding of another, or of an
+    // edge's end) would give the fit's chord parameters a zero step.
+    points.dedup_by(|a, b| (*a - *b).length() <= tol.linear);
     // Densify long, sparsely-sampled spans so the global interpolating fit
     // does not overshoot at adjacent high-curvature corners.
     let points = densify_path_points(&points);

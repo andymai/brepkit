@@ -9,11 +9,13 @@ use brepkit_io::step::writer::write_step;
 use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::{make_box, make_sphere};
+use brepkit_operations::primitives::{make_box, make_sphere, make_torus};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
+use brepkit_operations::thicken::thicken;
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::solid::SolidId;
 
 /// The box `[-5, 5]³` less balls of radius 1.5 at `centres`.
@@ -81,6 +83,30 @@ fn cavities_survive_a_round_trip() {
             step = write_step(&back, &[solid]).unwrap();
         }
     }
+}
+
+/// A whole torus of radii 20 and 3 thickened by 1 is a ring round a cavity
+/// of the torus's own size, written as a void and read back as one.
+#[test]
+fn a_thickened_torus_keeps_its_cavity_as_a_void() {
+    let truth = 2.0 * PI * PI * 20.0 * (16.0 - 9.0);
+    let mut topo = Topology::new();
+    let torus = make_torus(&mut topo, 20.0, 3.0, 16).unwrap();
+    let face = solid_faces(&topo, torus).unwrap()[0];
+    let ring = thicken(&mut topo, face, 1.0).unwrap();
+    let step = write_step(&topo, &[ring]).unwrap();
+    assert!(step.contains("BREP_WITH_VOIDS("), "no BREP_WITH_VOIDS");
+    let mut back = Topology::new();
+    let solids = read_step(&step, &mut back).unwrap();
+    assert_eq!(solids.len(), 1);
+    assert_eq!(back.solid(solids[0]).unwrap().inner_shells().len(), 1);
+    let report = validate_solid(&back, solids[0]).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let volume = solid_volume(&back, solids[0], 0.01).unwrap();
+    assert!(
+        (volume - truth).abs() < 1e-6 * truth,
+        "volume {volume}, truth {truth}"
+    );
 }
 
 #[test]

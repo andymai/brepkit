@@ -343,6 +343,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
+                interior_unclear: false,
             });
             continue;
         }
@@ -396,6 +397,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
+                interior_unclear: false,
             });
             continue;
         }
@@ -553,6 +555,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
+                interior_unclear: false,
             });
             continue;
         }
@@ -623,6 +626,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             // `precomputed_interior`. When it is unset for such a face, leave the
             // interior unset so the classifier aborts the analytic split (→ mesh
             // fallback) instead of classifying the wall from inside the lens.
+            let mut interior_unclear = false;
             let interior_point = match split.precomputed_interior {
                 Some(pt) => Some(pt),
                 None if super::face_splitter::face_has_curved_lens_holes(
@@ -638,10 +642,15 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     // classifier abort to mesh.
                     super::face_splitter::cylinder_cone_remainder_interior(split)
                 }
-                None => Some(super::face_splitter::interior_point_3d(
-                    split,
-                    parent_frame.as_ref(),
-                )),
+                None => {
+                    let pt = super::face_splitter::interior_point_3d(
+                        split,
+                        parent_frame.as_ref(),
+                        tol.linear,
+                    );
+                    interior_unclear = pt.is_none();
+                    pt
+                }
             };
 
             sub_faces.push(SubFace {
@@ -650,6 +659,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point,
+                interior_unclear,
             });
         }
     }
