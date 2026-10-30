@@ -1429,7 +1429,7 @@ fn plane_torus_loops(
         num: [d_local, 0.0, -small_r * c],
         den: [s * big_r, s * small_r],
         clearance: |p: Point3| (dot_np(normal, p) - d) / length,
-        slack: 64.0 * f64::EPSILON * (big_r + small_r + d_local.abs()),
+        slack: 64.0 * f64::EPSILON * (big_r + small_r + d_local.abs() / length),
     }
     .loops(n_v, PLANE_TORUS_LOOP_SAMPLES)
 }
@@ -2662,16 +2662,16 @@ pub fn exact_sphere_torus(
     if offset.cross(axis).length() > 1e-9 * scale {
         // A sphere centred on the core circle with the tube's own radius
         // holds the meridian circle through its centre, and the tube round
-        // it: they meet along that circle alone.
+        // it: they meet along that circle alone. The circle strays from the
+        // tube by the centre's distance from the core circle and the radii's
+        // difference, which must both be rounding and within tolerance.
         let radial = offset - axis * offset.dot(axis);
         let slack = 64.0
             * f64::EPSILON
             * (torus.major_radius() + torus.minor_radius() + sphere.radius() + offset.length());
-        let on = |a: f64, b: f64| (a - b).abs() <= slack;
-        if on(offset.dot(axis), 0.0)
-            && on(radial.length(), torus.major_radius())
-            && on(sphere.radius(), torus.minor_radius())
-        {
+        let stray = (radial.length() - torus.major_radius()).hypot(offset.dot(axis))
+            + (sphere.radius() - torus.minor_radius()).abs();
+        if stray <= slack.min(Tolerance::new().linear) {
             let along = axis.cross(radial).normalize()?;
             return Ok(Some(vec![ExactIntersectionCurve::Circle(Circle3D::new(
                 sphere.center(),
@@ -2757,6 +2757,19 @@ fn sphere_torus_curves(
     let section = sphere_torus_section(sphere, torus)?;
     let tol = Tolerance::new().linear;
     let (big, small) = (torus.major_radius(), torus.minor_radius());
+    // The centre's least and greatest distance to the torus: the ball meets
+    // it whenever its radius lies between them. A section that comes out
+    // empty for such a ball has lost its loops to rounding, so the marcher
+    // takes it rather than the pair being called apart.
+    let offset = sphere.center() - torus.center();
+    let rise = offset.dot(torus.z_axis());
+    let reach = (offset - torus.z_axis() * rise).length();
+    let (nearest, farthest) = (
+        ((reach - big).hypot(rise) - small).abs(),
+        (reach + big).hypot(rise) + small,
+    );
+    let margin = 8.0 * f64::EPSILON * (big + small + offset.length() + sphere.radius());
+    let crosses = sphere.radius() > nearest + margin && sphere.radius() < farthest - margin;
     let off = |p: Point3| {
         let local = p - torus.center();
         let (x, y, z) = (
@@ -2799,8 +2812,12 @@ fn sphere_torus_curves(
         }
         best
     };
+    let loops = section.loops(256, SPHERE_TORUS_LOOP_SAMPLES);
+    if loops.is_empty() && crosses {
+        return None;
+    }
     let mut curves = Vec::new();
-    for points in section.loops(256, SPHERE_TORUS_LOOP_SAMPLES) {
+    for points in loops {
         let mut points: Vec<IntersectionPoint> = points.into_iter().map(polish).collect();
         if points.iter().any(|q| off(q.point) > tol) {
             return None;
@@ -6408,6 +6425,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Sections a closed form can lose to scale or rounding: a plane whose
+    /// equation is scaled by 1e14 keeps the loop of the plane it describes; a
+    /// ball 1e-5 across poking out of a large torus, and a ball a micron wider
+    /// than the tube of a ring 1e8 across, defer to the marcher instead of
+    /// reading as apart, and the last is not taken for the meridian circle.
+    #[test]
+    fn scaled_and_ill_conditioned_sections_are_kept_or_deferred() {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let torus = ToroidalSurface::new(origin, 4.0, 1.5).unwrap();
+        let unit = plane_torus_loops(&torus, Vec3::new(1.0, 0.0, 0.0), 4.0, 128).len();
+        let scaled = plane_torus_loops(&torus, Vec3::new(1e14, 0.0, 0.0), 4e14, 128).len();
+        assert_eq!((unit, scaled), (1, 1));
+
+        let large = ToroidalSurface::new(origin, 4000.0, 1500.0).unwrap();
+        let speck = SphericalSurface::new(Point3::new(5_500.000_001, 0.0, 0.0), 1e-5).unwrap();
+        assert!(sphere_torus_curves(&speck, &large, true).is_none());
+
+        let ring = ToroidalSurface::new(origin, 1e8, 1.0).unwrap();
+        let ball = SphericalSurface::new(Point3::new(1e8, 0.0, 0.0), 1.000_001).unwrap();
+        assert!(exact_sphere_torus(&ball, &ring).unwrap().is_none());
+        assert!(sphere_torus_curves(&ball, &ring, true).is_none());
     }
 
     /// A ball centred on a ring torus's core circle with the tube's own

@@ -1472,6 +1472,17 @@ fn intersect_torus_with_a_ball_poking_out_of_its_tube() {
             kinds.contains(&"sphere") && kinds.contains(&"torus"),
             "faces {kinds:?}"
         );
+        // The seam where the ball and the tube were split closes both.
+        assert!(
+            crate::validate::validate_solid(t, solid)
+                .unwrap()
+                .is_valid()
+        );
+        let adj = brepkit_topology::adjacency::AdjacencyIndex::build(t, solid).unwrap();
+        assert!(adj.boundary_edges().is_empty() && adj.non_manifold_edges().is_empty());
+        let mesh = crate::tessellate::tessellate_solid(t, solid, 0.01).unwrap();
+        assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+        assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
     }
 
     let class = |p: Point3| crate::classify::classify_point(&topo, common, p, 0.01, 1e-9).unwrap();
