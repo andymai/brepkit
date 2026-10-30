@@ -315,7 +315,7 @@ fn blend_result_holds(
                 // a disagreement is re-read ten times finer, where a sound
                 // solid converges and an inconsistent one does not.
                 let agrees = |exact: f64, meshed: f64| (exact - meshed).abs() <= 0.01 * exact.abs();
-                meshed > 1e-12
+                meshed > 0.0
                     && brepkit_operations::measure::solid_volume(topo, s, orientation_deflection)
                         .is_ok_and(|exact| {
                             agrees(exact, meshed)
@@ -843,6 +843,82 @@ mod fillet_tests {
                     .is_valid()
             );
         }
+    }
+
+    /// A 10 cube less a 3 cube cavity at `corner`, and its top edge along
+    /// x at y = 0.
+    fn hollow_block(
+        topo: &mut Topology,
+        corner: (f64, f64, f64),
+    ) -> (SolidId, brepkit_topology::edge::EdgeId) {
+        use brepkit_operations::boolean::{BooleanOp, boolean};
+
+        let block = brepkit_operations::primitives::make_box(topo, 10.0, 10.0, 10.0).unwrap();
+        let cube = brepkit_operations::primitives::make_box(topo, 3.0, 3.0, 3.0).unwrap();
+        brepkit_operations::transform::transform_solid(
+            topo,
+            cube,
+            &brepkit_math::mat::Mat4::translation(corner.0, corner.1, corner.2),
+        )
+        .unwrap();
+        let hollow = boolean(topo, BooleanOp::Cut, block, cube).unwrap();
+        let edge = solid_edge_ids(topo, hollow)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                [edge.start(), edge.end()].iter().all(|&v| {
+                    let p = topo.vertex(v).unwrap().point();
+                    p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9
+                })
+            })
+            .unwrap();
+        (hollow, edge)
+    }
+
+    /// A chamfer of a hollow block keeps a cavity of its own: moving the
+    /// result leaves the input's cavity where it was. A chamfer that would
+    /// open a cavity 0.05 behind the front face is refused.
+    #[test]
+    fn try_chamfer_keeps_a_cavity_of_its_own() {
+        let mut topo = Topology::new();
+        let (hollow, edge) = hollow_block(&mut topo, (3.5, 3.5, 3.5));
+        let cut = try_chamfer(&mut topo, hollow, &[edge], 1.0).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 0.01).unwrap();
+        assert!((volume - (1000.0 - 27.0 - 5.0)).abs() < 1e-6, "{volume}");
+        let input_cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+        assert_ne!(topo.solid(cut).unwrap().inner_shells(), &[input_cavity]);
+        brepkit_operations::transform::transform_solid(
+            &mut topo,
+            cut,
+            &brepkit_math::mat::Mat4::translation(0.0, 0.0, 100.0),
+        )
+        .unwrap();
+        for &face in topo.shell(input_cavity).unwrap().faces() {
+            for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+                let z = topo.vertex(v).unwrap().point().z();
+                assert!(
+                    (3.5 - 1e-9..=6.5 + 1e-9).contains(&z),
+                    "input cavity at z {z}"
+                );
+            }
+        }
+
+        let mut topo = Topology::new();
+        let (near, edge) = hollow_block(&mut topo, (3.5, 0.05, 6.5));
+        assert!(try_chamfer(&mut topo, near, &[edge], 1.0).is_err());
+    }
+
+    /// A chamfer of 2e-5 on a box of side 1e-4 is kept: its volume of about
+    /// 1e-12 is small only at that scale.
+    #[test]
+    fn try_chamfer_keeps_a_small_parts_chamfer() {
+        let mut topo = Topology::new();
+        let b = brepkit_operations::primitives::make_box(&mut topo, 1e-4, 1e-4, 1e-4).unwrap();
+        let edge = solid_edge_ids(&topo, b)[0];
+        let cut = try_chamfer(&mut topo, b, &[edge], 2e-5).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-6).unwrap();
+        let expected = 1e-12 - 0.5 * 2e-5 * 2e-5 * 1e-4;
+        assert!((volume - expected).abs() < 1e-3 * expected, "{volume}");
     }
 
     // A wide rim's chord error alone reads past 1% at the gate's coarse

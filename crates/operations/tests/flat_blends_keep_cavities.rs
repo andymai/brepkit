@@ -362,3 +362,57 @@ fn a_kept_cavity_keeps_its_pcurves() {
     let copied_face = topo.shell(kept).unwrap().faces()[0];
     assert_eq!(topo.pcurves().pcurves_for_face(copied_face).len(), 1);
 }
+
+/// The walking engine's chamfer and fillet keep a cavity of their own and
+/// refuse to open one.
+#[test]
+fn walking_blends_keep_their_own_cavity() {
+    use brepkit_operations::blend_ops::{chamfer_v2, fillet_v2};
+
+    for chamfer in [true, false] {
+        let mut topo = Topology::new();
+        let (hollow, edge) = hollow_block(&mut topo, CLEAR);
+        let blend = if chamfer {
+            chamfer_v2(&mut topo, hollow, &[edge], 1.0, 1.0)
+        } else {
+            fillet_v2(&mut topo, hollow, &[edge], 1.0)
+        };
+        let result = brepkit_operations::blend_ops::all_blended(blend.unwrap()).unwrap();
+        let volume = kept(&topo, result);
+        let removed = if chamfer {
+            0.5
+        } else {
+            1.0 - std::f64::consts::FRAC_PI_4
+        };
+        assert!(
+            (volume - (1000.0 - 27.0 - 10.0 * removed)).abs() < 1e-2,
+            "chamfer {chamfer}: {volume}"
+        );
+        let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+        assert_ne!(topo.solid(result).unwrap().inner_shells(), &[cavity]);
+        transform_solid(&mut topo, result, &Mat4::translation(0.0, 0.0, 100.0)).unwrap();
+        for &face in topo.shell(cavity).unwrap().faces() {
+            for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+                let z = topo.vertex(v).unwrap().point().z();
+                assert!(
+                    (3.5 - 1e-9..=6.5 + 1e-9).contains(&z),
+                    "input cavity at z {z}"
+                );
+            }
+        }
+
+        let mut topo = Topology::new();
+        let (near, edge) = hollow_block(&mut topo, NEAR);
+        let refused = if chamfer {
+            chamfer_v2(&mut topo, near, &[edge], 1.0, 1.0)
+        } else {
+            fillet_v2(&mut topo, near, &[edge], 1.0)
+        };
+        assert!(
+            refused
+                .and_then(brepkit_operations::blend_ops::all_blended)
+                .is_err(),
+            "chamfer {chamfer}"
+        );
+    }
+}
