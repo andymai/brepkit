@@ -62,6 +62,10 @@ pub struct SubFace {
     /// When `Some`, the classifier uses this instead of sampling from face geometry.
     /// Set by the face splitter for split sub-faces.
     pub interior_point: Option<Point3>,
+    /// The splitter searched the piece's own curves for an interior point and
+    /// found none clear of them. It is then not classified at all: any point
+    /// sampled in its place could lie off the piece, in a neighbour.
+    pub interior_unclear: bool,
 }
 
 /// `BK_SUBFACE_BOX=x0,x1,y0,y1,z0,z1`: report every sub-face whose vertices
@@ -682,6 +686,11 @@ impl Builder {
 
             let sample = if let Some(pt) = sf.interior_point {
                 Ok(pt)
+            } else if sf.interior_unclear {
+                return Err(AlgoError::ClassificationFailed(format!(
+                    "no point of {:?} stands clear of its curves; aborting analytic split",
+                    sf.face_id
+                )));
             } else if face_splitter::face_has_curved_lens_holes(&self.topo, sf.face_id) {
                 // A curved-lens-hole wall (cylinder/cone with closed
                 // Circle/Ellipse/NURBS holes) whose contained-interior search
@@ -1086,6 +1095,12 @@ pub fn build_fuse_n<S: std::hash::BuildHasher>(
         let own = sub_source[idx];
         let sample = match sf.interior_point {
             Some(pt) => pt,
+            None if sf.interior_unclear => {
+                return Err(AlgoError::ClassificationFailed(format!(
+                    "no point of {:?} stands clear of its curves; aborting analytic split",
+                    sf.face_id
+                )));
+            }
             None => sample_face_interior(&topo, sf.face_id, tol)?,
         };
 
@@ -1655,6 +1670,37 @@ fn sample_face_interior(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// A sub-face whose splitter found no point clear of its curves is not
+    /// classified: the analytic split aborts rather than sample a point that
+    /// could lie off the piece. The same face, merely unsampled, classifies.
+    #[test]
+    fn a_sub_face_with_no_clear_point_aborts_classification() {
+        use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+        for unclear in [true, false] {
+            let mut topo = Topology::new();
+            let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+            let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.5, 0.5);
+            let shell = topo.solid(a).unwrap().outer_shell();
+            let face = topo.shell(shell).unwrap().faces()[0];
+            let mut builder =
+                Builder::with_tolerance(topo, GfaArena::new(), a, b, Tolerance::default());
+            builder.sub_faces = vec![SubFace {
+                face_id: face,
+                source_face: face,
+                classification: FaceClass::Unknown,
+                rank: Rank::A,
+                interior_point: None,
+                interior_unclear: unclear,
+            }];
+            let result = builder.classify_sub_faces();
+            assert_eq!(
+                matches!(result, Err(AlgoError::ClassificationFailed(_))),
+                unclear,
+                "unclear {unclear}: {result:?}"
+            );
+        }
+    }
     use brepkit_math::vec::Vec3;
     use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
 

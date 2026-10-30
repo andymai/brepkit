@@ -10507,7 +10507,9 @@ mod tests {
 
     /// The crescent a disc keeps outside a second of its radius whose centre
     /// lies `gap` from its own, turned every 15 degrees in its plane: of
-    /// radius 5 with a gap of 0.001, and of radius 1e6 with a gap of 1e-4.
+    /// radius 5 with a gap of 0.001, of radius 1e6 with a gap of 1e-4, and of
+    /// radius 5 with a gap of 3e-7, whose widest point clears both arcs by
+    /// only 1.5e-7.
     /// Each is far thinner than its arcs' chords' sag, so no candidate taken
     /// across its sampled polygon lies inside it; the interior point must
     /// still lie in the crescent. One of radius 5 with a gap of 1e-8 holds no
@@ -10549,7 +10551,7 @@ mod tests {
             };
             (interior_point_3d(&crescent, Some(&frame)), kept, cut)
         };
-        for (r, gap) in [(5.0_f64, 0.001_f64), (1e6, 1e-4)] {
+        for (r, gap) in [(5.0_f64, 0.001_f64), (1e6, 1e-4), (5.0, 3e-7)] {
             for step in 0..24 {
                 let (pt, kept, cut) = point_in(r, gap, step * 15);
                 let pt = pt.unwrap();

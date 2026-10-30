@@ -62,8 +62,8 @@ pub(super) const SEED_CLEARANCE: f64 = 1e-7;
 /// The point deepest in `region` among those stepped off each of `loop_pts`
 /// along the normal of its neighbours' chord, the longest step that lands
 /// inside on each side, or `None` when none does. Steps halve from a quarter
-/// of the region's extent down to twice the seed clearance, short of which
-/// no point can stand clear of the boundary it leaves.
+/// of the region's extent down to the seed clearance, short of which no
+/// point can stand clear of the boundary it leaves.
 ///
 /// For a region too thin for a candidate taken across its chord polygon:
 /// each sample lies on the region's curves, so a step shorter than the
@@ -103,7 +103,7 @@ pub(super) fn point_stepped_into_region(
         let normal = Vec2::new(-chord.y() / len, chord.x() / len);
         for side in [1.0, -1.0] {
             let Some(q) = std::iter::successors(Some(0.25 * extent), |step| Some(0.5 * step))
-                .take_while(|&step| step > 2.0 * SEED_CLEARANCE)
+                .take_while(|&step| step > SEED_CLEARANCE)
                 .map(|step| p + normal * (side * step))
                 .find(|&q| point_in_region(region, q, SEED_CLEARANCE) == Some(true))
             else {
