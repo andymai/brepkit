@@ -412,9 +412,16 @@ fn keep_off_the_axis(
         FaceSurface::Cone(c) => {
             // A point v along a generator from the apex lies v cos a from the
             // axis and its image v cos a + distance sin a, both rising with
-            // v. Only the edges, which the rails and sides run from, can
-            // reach the axis: a face round the apex grows to one round the
-            // offset cone's apex.
+            // v, so a face the apex is not in comes nearest the axis on its
+            // edges. A face round the apex has no wall of even thickness:
+            // the points `distance` off its tip lie on a sphere about the
+            // apex, not on the offset cone.
+            if turns_about_axis(topo, face, c.apex(), c.axis())?.abs() > 0.5 {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "thicken: a cone face round its apex has no wall of even thickness"
+                        .into(),
+                });
+            }
             let v = least_on_boundary(topo, face, |p| c.project_point(p).1)?;
             let (sin, cos) = c.half_angle().sin_cos();
             (v * cos, v.mul_add(cos, distance * sin))
@@ -433,6 +440,54 @@ fn keep_off_the_axis(
         });
     }
     Ok(())
+}
+
+/// The turns a face's wires make together about the line through `origin`
+/// along `axis`: none for a face beside the axis or a band round it, whose
+/// rims run round it opposite ways, and one for a face round a point of it.
+fn turns_about_axis(
+    topo: &Topology,
+    face: FaceId,
+    origin: Point3,
+    axis: Vec3,
+) -> Result<f64, crate::OperationsError> {
+    const SAMPLES: u32 = 32;
+    let frame = brepkit_math::frame::Frame3::from_normal(origin, axis)?;
+    let angle = |p: Point3| {
+        let d = p - origin;
+        d.dot(frame.y).atan2(d.dot(frame.x))
+    };
+    let face_data = topo.face(face)?;
+    let mut total = 0.0;
+    for wid in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
+            let at = |k: u32| {
+                angle(curve.evaluate_with_endpoints(
+                    (to - from).mul_add(f64::from(k) / f64::from(SAMPLES), from),
+                    a,
+                    b,
+                ))
+            };
+            let mut previous = at(0);
+            for k in 1..=SAMPLES {
+                let next = at(k);
+                total += (next - previous + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI;
+                previous = next;
+            }
+        }
+    }
+    Ok(total / std::f64::consts::TAU)
 }
 
 /// The least of `f` along the edges of `face`, sampled along each and
@@ -859,6 +914,37 @@ mod tests {
                 (volume - exact).abs() < 1e-4 * exact,
                 "{thickness}: {volume} of {exact}"
             );
+        }
+    }
+
+    /// A cone's face from its apex down to a base circle of radius 10, the
+    /// circle its only edge: thickened either way it is refused, as the
+    /// points one unit off its tip lie on a sphere about the apex.
+    #[test]
+    fn thicken_refuses_a_cone_face_round_its_apex() {
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let rim =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+        for forward in [true, false] {
+            let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap());
+            let face = topo.add_face(Face::new(w, vec![], FaceSurface::Cone(cone.clone())));
+            for distance in [1.0, -1.0] {
+                assert!(
+                    thicken(&mut topo, face, distance).is_err(),
+                    "forward {forward}, distance {distance}"
+                );
+            }
         }
     }
 
