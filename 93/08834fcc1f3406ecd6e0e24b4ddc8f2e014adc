@@ -1,0 +1,129 @@
+crates/check/src/properties/boundary.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 69-72,87-126,269-270,292,295-314,326-342,344-385,387-390,392,394,407-418,449-464,486-496,499,602-605,609-614,632,656,701-714,721-1044
+crates/math/src/nurbs/intersection/ray.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 1-535
+crates/operations/src/loft.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 214-219,233,257-481,712-746,928,1334-1380,1399-1409,1411-1420,1422,1424-1433,1437-1439,1447-1449,1454-1455,1458,1460,1466,1469-1470,1473,1475,1507-1516,1524-1525,1528,1530,1751-1753,1756-1767,1777-2127
+crates/operations/src/winding.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 109-112,117-120,122-125,127
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 5516,5525-5529,7083-7086,7089-7092,7096-7103,9030-9120
+  s_a2dc21dbec3f2b::t_2b8bfc30c9b82d 9121
+crates/algo/src/builder/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 65-68,689-693,1098-1103,1673-1703
+.release-please-manifest.json
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 2
+crates/operations/src/fillet/radius_law.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 40-49
+crates/operations/src/tessellate/nonplanar.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 2773-2781,2797-2800,2919,4465-4519,5156,5209-5211,5213-5218
+crates/operations/src/measure/bounding_box.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 158-203
+crates/operations/src/extrude/tests.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 307-308,310,1519-2064
+crates/operations/src/sew.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 9,26-32,36-37,58-70,72,75-77,83-93,95-98,102-121,123,125-163,165-175,183-519,523-525,749-1556
+crates/check/src/classify/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 103-112
+crates/operations/src/boolean/assembly.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 773-777,785-791,793
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 288-291,293-313,414,420,425-431,439,445,447-449,451-471,573,575,580-586,676-681,683-684,687-694
+crates/operations/src/blend_ops.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 35-51,81-82,109-110,139-140,172-173,238-239
+Cargo.toml
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 15,58-68
+crates/wasm/src/helpers.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 204-206,234-468,506-516,518-530,532-534,536-556,797,924-1327,1555-1751
+crates/algo/src/bop.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 335
+crates/operations/src/projection.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 3-7,9,46-72,92-99,101-167,170-191,193-218,220-239,241-260,262-264,267-268,279-341,358-587
+  s_a2dc21dbec3f2b::t_d28f3260e3a7e9 588
+crates/operations/tests/flat_blends_keep_cavities.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 365-545
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 236-238,240-243
+crates/math/src/nurbs/intersection/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 28,39
+crates/operations/src/chamfer.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 1218-1221
+crates/wasm/src/bindings/shapes.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 762-766,770
+crates/operations/src/fillet/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 902
+crates/algo/src/builder/face_splitter/containment.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 4,62-156
+  s_a2dc21dbec3f2b::t_d0be000696b00e 157
+crates/operations/src/extrude.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 791-951,954-963,1175-1176,1180-1181,1353
+crates/operations/src/boolean/tests.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 9136-9211
+crates/algo/src/builder/classify_2d.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 16,19-32,37-41,44,54,139
+crates/algo/src/builder/fill_images_faces.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 346,400,558,629,645-653,662
+crates/check/src/properties/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 93-97,409-857
+crates/math/src/region2d.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 249-253,257-260,653-677
+crates/operations/src/cavities.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 325,328-461,465,485
+crates/wasm/src/bindings/batch.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 794-796,866-868
+crates/operations/src/tessellate/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 40
+crates/operations/tests/torus_plane_cut.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 1051-1094
+crates/wasm/src/bindings/operations.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 21,143,147-156,161-167,227,996,1258-1308,1314,1320
+  s_a2dc21dbec3f2b::t_fdb0a9121096da 1309-1313,1315-1319,1321-1322
+crates/operations/src/boolean/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 450-451,2484-2488,2824-2825,2832,2840,2963-3033
+  s_a2dc21dbec3f2b::t_dfd4cdc4eb2cac 3034
+crates/blend/src/fillet_builder.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 2985-3024,3081-3102,3104-3105,3129-3133,3313-3317,3319-3332,4071-4145
+  s_a2dc21dbec3f2b::t_fae1bddce7ecb4 4146
+crates/operations/src/tessellate/mesh_ops.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 434-444,446-455,461-462,473-477,479
+crates/operations/src/measure/volume.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 4600-4667
+CHANGELOG.md
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 3-32
+crates/operations/tests/threaded_rod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 1-128
+crates/algo/src/classifier/ray_cast.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 30-37,795-798,1021,1520-1526,1748-1851,1978-1999,2018,2060-2067,2069-2076,2082-2084,2186-2272,2577-2579,2583-2608,4056-4251
+  s_a2dc21dbec3f2b::t_5a7e0a81c087ac 4252
+crates/algo/src/pave_filler/helpers.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 6-7,16-97
+crates/operations/src/split.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 5-6,12,30-33,37-38,46-71,73-93,96-98,171-425
+  s_a2dc21dbec3f2b::t_803a7297556358 426
+crates/operations/src/measure/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 11
+crates/algo/src/builder/same_domain/tests.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 34,160,850,924,1259,1267
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 8724,8992-8994,8996-9000,9044-9045,9050-9060,9184,9216,9222,9226,9237,10657-10658,10665-10794
+crates/math/src/nurbs/projection.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 409,613-632,646-675,1653-1733
+crates/blend/src/analytic.rs
+  s_a2dc21dbec3f2b::t_cb996a56b9c3e3 446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9308834fcc1f3406ecd6e0e24b4ddc8f2e014adc",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
