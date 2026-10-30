@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793393118329,
+  "lastUpdate": 1793393325471,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62747,6 +62747,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18313116,
             "range": "± 447903",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "98a64a10289d1f8f038d3f8720b2a8eaa2ccf02f",
+          "message": "fix(algo): read a plane sub-face's interior point on its curves (#2237)\n\nA plane sub-face's sample point, the point the boolean classifies to\nkeep or drop the piece, now lies inside the piece's own curves rather\nthan only inside the polygon of their chords. A piece with no point\nclear of its curves is not classified at all.\n\nToday the face splitter samples a plane piece's outer wire into a\npolygon, eight points to an edge, and takes the polygon's centroid or\nthe midpoint of its longest inward chord whenever the polygon holds it\nclear of its sides. The polygon runs on each arc's chords, so a point\nbetween an arc and its chords passes while lying outside the piece. A\ncrescent, the part of a disc of radius 5 outside a second disc of that\nradius whose rim runs through the first's centre, met this: the longest\nchord across it starts beside its seam and runs past the disc's centre\nalong the other rim, inside the chords' sag, so its midpoint landed\n0.043 from the centre and 0.0012 inside the other disc. In the fuse of\ntwo such rods (#2166, row 1), turned 0.7 about z and 0.4 about x with\none rod spun a quarter turn, that cap read as inside the other rod and\nwas dropped, and the fuse fell back to the mesh once its walls were\ntraced.\n\n## Change\n\n- A plane piece whose outer wire is lines and conic arcs takes a\ncandidate sample point only when the region bounded by those curves\nholds it clear of them, read by `region2d::point_in_region` on the\nwire's own arcs, at the operation's linear tolerance. The centroid and\nthe longest-chord candidates are tried in their usual order, each\nchecked this way.\n- When none passes, as in a crescent thinner than its arcs' chords' sag,\nthe point is stepped off each boundary sample along its neighbours'\nchord normal, in steps halving from a quarter of the region's extent\ndown to the clearance, and the deepest point inside is kept. Where no\nstep lands clear, the point halfway to where the region ends along that\nnormal is tried. The polygon's own sample is taken last, when it clears\nthe curves (a thin rectangle's centre).\n- When no point of the piece stands clear of its curves, the sub-face\ncarries `interior_unclear`, and both classification paths, the boolean's\nand the multi-solid fuse's, return `ClassificationFailed`: the analytic\nsplit aborts rather than sample the piece afresh with relaxed clearance.\n- `classify_2d::sample_interior_point_where` is `sample_interior_point`\nwith that extra test; other pieces keep the polygon's.\n- `region2d::point_in_region` reads a point as on an elliptical arc by\nthe arc's true distance wherever the offset along the ray from its\ncentre is within the tolerance times the square of its axes' ratio.\nAlong a slender ellipse that ray meets the curve nearly tangent, so the\nradial offset alone let a point within tolerance of the arc read as\nclear of it.\n\nRefs #2166.\n\n## Tests\n\n- `a_crescents_interior_point_lies_off_its_inner_arc`: that crescent,\nturned through every degree in its plane, gets a sample point inside its\nown disc and outside the other at each turn. Taking the polygon's point\nfails it at 1 degree, 0.043 from the centre.\n- `a_thin_crescents_interior_point_lies_inside_it`: crescents of radius\n5 with gaps of 0.001, 3e-7 and 2.2e-7, and of radius 1e6 with a gap of\n1e-4, turned every 15 degrees, get points inside them; the 3e-7 and\n2.2e-7 ones clear their arcs by only 1.5e-7 and 1.1e-7, between two\nhalving steps. One of radius 5 with a gap of 1e-8 gets none. Without the\nhalfway point, the 2.2e-7 crescent gets none.\n- `a_thin_rectangles_interior_point_lies_inside_it`: 1 by 1e-6 and 100\nby 1e-5 rectangles get a point at the default clearance, their centres,\nthough their sampled polygons ask for more room and steps from their\ncorners stay too near their ends; a 1e-3 by 1.5e-7 one gets a point at a\ntolerance of 1e-11 and none at 1e-7. Without the polygon's point, or\nwith a fixed clearance, it fails.\n- `a_point_beside_a_slender_ellipse_is_on_it`: a point 5e-8 off an\nellipse 10 by 0.1, at the angle 0.1 where the ray from the centre meets\nit about ten times farther away, reads as on the boundary at a tolerance\nof 1e-7, either side. Read by the radial offset alone, it reads as\nclear.\n- `a_sub_face_with_no_clear_point_aborts_classification`: a cube face\nflagged as having no clear point makes classification return\n`ClassificationFailed`; unflagged, it classifies.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a plane sub-face's interior sample point so it lies inside the\npiece's own curves instead of only inside the polygon of its chords. The\nold sampling ran on each arc's chords, so a point between an arc and its\nchords could pass while lying outside the piece — a crescent's\nlongest-chord midpoint landed 0.0012 inside the neighboring disc and the\ncap was dropped from a fuse (issue #2166).\n\n- Plane pieces whose outer wire is lines and conic arcs validate\ncandidates with `point_in_region` on the wire's curves.\n- When no such candidate exists, a point is stepped off a boundary\nsample along its neighbors' chord normal; where no step lands clear, the\npoint halfway to the region end on the normal is tried.\n- A piece with no point clear of its curves carries `interior_unclear`,\nso the classifier aborts the analytic split instead of sampling a point\nthat could lie in a neighbor.\n- A slender elliptical arc now reads a nearby point by its true\ndistance, since the radial ray can overshoot it severalfold.\n- Tests sweep crescents through every degree and thin crescents through\nevery 15, require thin rectangles' interior points, and pin ellipse\nproximity.\n\n<sup>Written for commit 269ad03e7e0c7cafd1bd4f475f91677659d9d066.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2237?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2237?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2237&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T13:43:19-07:00",
+          "tree_id": "eea70bbe68fd9a0622d9a7767f573bf6c91c4991",
+          "url": "https://github.com/andymai/brepkit/commit/98a64a10289d1f8f038d3f8720b2a8eaa2ccf02f"
+        },
+        "date": 1793393315839,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1097376,
+            "range": "± 2695",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1182175,
+            "range": "± 2684",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12623,
+            "range": "± 118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 690709,
+            "range": "± 1485",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28662478,
+            "range": "± 125338",
             "unit": "ns/iter"
           }
         ]
