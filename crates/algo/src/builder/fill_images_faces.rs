@@ -643,7 +643,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     super::face_splitter::cylinder_cone_remainder_interior(split)
                 }
                 None => {
-                    let pt = super::face_splitter::interior_point_3d(split, parent_frame.as_ref());
+                    let pt = super::face_splitter::interior_point_3d(
+                        split,
+                        parent_frame.as_ref(),
+                        tol.linear,
+                    );
                     interior_unclear = pt.is_none();
                     pt
                 }

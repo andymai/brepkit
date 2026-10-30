@@ -62,8 +62,9 @@ pub(super) const SEED_CLEARANCE: f64 = 1e-7;
 /// The point deepest in `region` among those stepped off each of `loop_pts`
 /// along the normal of its neighbours' chord, the longest step that lands
 /// inside on each side, or `None` when none does. Steps halve from a quarter
-/// of the region's extent down to the seed clearance, short of which no
-/// point can stand clear of the boundary it leaves.
+/// of the region's extent down to `clearance`, short of which no point can
+/// stand clear of the boundary it leaves; where none lands clear, the point
+/// halfway to where the region ends along the normal is tried.
 ///
 /// For a region too thin for a candidate taken across its chord polygon:
 /// each sample lies on the region's curves, so a step shorter than the
@@ -71,6 +72,7 @@ pub(super) const SEED_CLEARANCE: f64 = 1e-7;
 pub(super) fn point_stepped_into_region(
     region: &[Boundary2],
     loop_pts: &[Point2],
+    clearance: f64,
 ) -> Option<Point2> {
     let n = loop_pts.len();
     if n < 3 {
@@ -102,12 +104,43 @@ pub(super) fn point_stepped_into_region(
         }
         let normal = Vec2::new(-chord.y() / len, chord.x() / len);
         for side in [1.0, -1.0] {
-            let Some(q) = std::iter::successors(Some(0.25 * extent), |step| Some(0.5 * step))
-                .take_while(|&step| step > SEED_CLEARANCE)
-                .map(|step| p + normal * (side * step))
-                .find(|&q| point_in_region(region, q, SEED_CLEARANCE) == Some(true))
-            else {
-                continue;
+            let at = |step: f64| p + normal * (side * step);
+            let state = |step: f64| point_in_region(region, at(step), clearance);
+            let steps: Vec<(f64, Option<bool>)> =
+                std::iter::successors(Some(0.25 * extent), |step| Some(0.5 * step))
+                    .take_while(|&step| step > clearance)
+                    .map(|step| (step, state(step)))
+                    .collect();
+            // A region less than a step's ratio wider than twice the
+            // clearance can hold its clear points between two steps: where no
+            // step lands clear, find where it ends along the normal and try
+            // halfway.
+            let q = if let Some(&(step, _)) = steps.iter().find(|(_, s)| *s == Some(true)) {
+                at(step)
+            } else {
+                let Some(w) = steps
+                    .windows(2)
+                    .find(|w| w[0].1 == Some(false) && w[1].1 != Some(false))
+                else {
+                    continue;
+                };
+                let (mut inside, mut outside) = (w[1].0, w[0].0);
+                for _ in 0..60 {
+                    let mid = f64::midpoint(inside, outside);
+                    if state(mid) == Some(false) {
+                        outside = mid;
+                    } else {
+                        inside = mid;
+                    }
+                }
+                // Points within the clearance of the far side read as
+                // unsure, so the region ends a clearance short of where
+                // they turn outside.
+                let middle = 0.5 * (outside - clearance);
+                if state(middle) != Some(true) {
+                    continue;
+                }
+                at(middle)
             };
             let depth = distance_to_boundary(region, q);
             let better = best.is_none_or(|(bq, bd)| {
