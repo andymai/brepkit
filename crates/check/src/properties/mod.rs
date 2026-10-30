@@ -93,7 +93,8 @@ pub fn exact_solid_volume(topo: &Topology, solid: SolidId) -> Result<Option<f64>
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
                 boundary::curved_face_by_boundary(topo, face, sign, about)?
             }
-            FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => None,
+            FaceSurface::Nurbs(_) => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
+            FaceSurface::Torus(_) => None,
         };
         let Some(contribution) = contribution else {
             return Ok(None);

@@ -544,3 +544,211 @@ pub(super) fn curved_face_by_boundary(
         FaceSurface::Plane { .. } | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => None,
     })
 }
+
+/// A face on an open NURBS surface, its integrals by Green's theorem as
+/// [`integrate_by_boundary`] takes them, with `F(u, v) = ∫ g(s, v) ds` from
+/// the start of `u`'s domain in panels between the surface's knots, and
+/// each edge cut where it crosses a knot line, so every panel's integrand
+/// is smooth. `None` for a surface that closes on itself or shrinks to a
+/// point along a side (its `(u, v)` would not be one-to-one), a wire a
+/// point of which does not project, or a region of no area.
+pub(super) fn nurbs_face_by_boundary(
+    topo: &Topology,
+    face: &Face,
+    sign: f64,
+    about: Vec3,
+) -> Result<Option<FaceContribution>, CheckError> {
+    use brepkit_math::nurbs::projection::{
+        project_point_to_surface, project_point_to_surface_from,
+    };
+    let FaceSurface::Nurbs(s) = face.surface() else {
+        return Ok(None);
+    };
+    if !open_and_poleless(s) {
+        return Ok(None);
+    }
+    let Some(wires) = boundary_wires(topo, face)? else {
+        return Ok(None);
+    };
+    let (u0, u1) = s.domain_u();
+    let (v0, v1) = s.domain_v();
+    let interior = |knots: &[f64], lo: f64, hi: f64| {
+        let mut k: Vec<f64> = knots
+            .iter()
+            .copied()
+            .filter(|&k| k > lo && k < hi)
+            .collect();
+        k.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (hi - lo));
+        k
+    };
+    let (u_knots, v_knots) = (interior(s.knots_u(), u0, u1), interior(s.knots_v(), v0, v1));
+    let gauss_u = gauss_legendre_points(10);
+    let antiderivative = |u: f64, v: f64| {
+        let mut acc = [0.0; 8];
+        let mut from = u0;
+        for to in u_knots.iter().copied().filter(|&k| k < u).chain([u]) {
+            let (half, mid) = (0.5 * (to - from), 0.5 * (to + from));
+            for gp in gauss_u {
+                add(
+                    &mut acc,
+                    &integrand(s, half.mul_add(gp.x, mid), v, about),
+                    half * gp.w,
+                );
+            }
+            from = to;
+        }
+        acc
+    };
+    let gauss = gauss_legendre_points(8);
+    let size = (s.evaluate(u1, v1) - s.evaluate(u0, v0))
+        .length()
+        .max((s.evaluate(u1, v0) - s.evaluate(u0, v1)).length());
+    let reach = 1e-6 * size.max(1.0);
+    let mut total = [0.0; 8];
+    for wire in &wires {
+        for edge in wire {
+            let point = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
+            // A point's `(u, v)` by Newton from a neighbour's where that lands
+            // on the surface, else by a search of the whole surface.
+            let on = |t: f64, seed: Option<(f64, f64)>| -> Option<(f64, f64)> {
+                let p = point(t);
+                if let Some(seed) = seed
+                    && let Ok(q) = project_point_to_surface_from(s, p, seed, 1e-12)
+                    && q.distance <= reach
+                {
+                    return Some((q.u, q.v));
+                }
+                project_point_to_surface(s, p, 1e-12)
+                    .ok()
+                    .filter(|q| q.distance <= reach)
+                    .map(|q| (q.u, q.v))
+            };
+            let mut pieces = Vec::new();
+            for (ta, tb) in edge_pieces(edge) {
+                // Where the edge crosses a knot line the integrand bends:
+                // cut there, found by bisection between samples astride it.
+                let mut samples: Vec<(f64, (f64, f64))> = Vec::with_capacity(9);
+                let mut seed = None;
+                for k in 0..=8 {
+                    let t = (tb - ta).mul_add(f64::from(k) / 8.0, ta);
+                    let Some(q) = on(t, seed) else {
+                        return Ok(None);
+                    };
+                    samples.push((t, q));
+                    seed = Some(q);
+                }
+                let mut cuts = vec![ta, tb];
+                for w in samples.windows(2) {
+                    let ((t_a, a), (t_b, b)) = (w[0], w[1]);
+                    for (knots, pick) in [(&u_knots, 0_usize), (&v_knots, 1_usize)] {
+                        let coord = |q: (f64, f64)| if pick == 0 { q.0 } else { q.1 };
+                        for &k in knots {
+                            if (coord(a) - k) * (coord(b) - k) >= 0.0 {
+                                continue;
+                            }
+                            let (mut lo, mut hi) = (t_a, t_b);
+                            for _ in 0..50 {
+                                let mid = 0.5 * (lo + hi);
+                                let Some(q) = on(mid, Some(a)) else {
+                                    return Ok(None);
+                                };
+                                if (coord(q) - k) * (coord(a) - k) > 0.0 {
+                                    lo = mid;
+                                } else {
+                                    hi = mid;
+                                }
+                            }
+                            cuts.push(0.5 * (lo + hi));
+                        }
+                    }
+                }
+                cuts.sort_by(f64::total_cmp);
+                if tb < ta {
+                    cuts.reverse();
+                }
+                cuts.dedup_by(|x, y| (*x - *y).abs() <= 1e-12 * (tb - ta).abs());
+                let start = samples[0].1;
+                pieces.extend(cuts.windows(2).map(|w| (w[0], w[1], start)));
+            }
+            for (ta, tb, start) in pieces {
+                let (half, mid) = (0.5 * (tb - ta), 0.5 * (ta + tb));
+                let h = 1e-3 * (tb - ta);
+                let mut seed = start;
+                for gp in gauss {
+                    let t = half.mul_add(gp.x, mid);
+                    let Some(c) = on(t, Some(seed)) else {
+                        return Ok(None);
+                    };
+                    seed = c;
+                    // `dv/dt` from the curve's velocity in the surface's
+                    // tangent plane, by the first fundamental form.
+                    let velocity = (point(t + h) - point(t - h)) * (8.0 / (12.0 * h))
+                        - (point(t + 2.0 * h) - point(t - 2.0 * h)) * (1.0 / (12.0 * h));
+                    let d = s.derivatives(c.0, c.1, 1);
+                    let (su, sv) = (d[1][0], d[0][1]);
+                    let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
+                    let det = e.mul_add(g, -f * f);
+                    if det <= 1e-24 * (e * g).max(1e-300) {
+                        return Ok(None);
+                    }
+                    let dv = e.mul_add(sv.dot(velocity), -f * su.dot(velocity)) / det;
+                    add(&mut total, &antiderivative(c.0, c.1), half * gp.w * dv);
+                }
+            }
+        }
+    }
+    // Wires running clockwise in `(u, v)` hold the region on their right.
+    if total[0] < 0.0 {
+        for x in &mut total {
+            *x = -*x;
+        }
+    }
+    if total[0] <= 1e-12 {
+        return Ok(None);
+    }
+    Ok(Some(FaceContribution {
+        area: total[0],
+        volume: total[1] * sign,
+        volume_moment_x: total[2] * sign,
+        volume_moment_y: total[3] * sign,
+        volume_moment_z: total[4] * sign,
+        centroid_x: total[5],
+        centroid_y: total[6],
+        centroid_z: total[7],
+    }))
+}
+
+/// Whether a NURBS surface neither closes on itself along `u` or `v` nor
+/// shrinks to a point along a side.
+fn open_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
+    const N: u32 = 8;
+    let (u0, u1) = s.domain_u();
+    let (v0, v1) = s.domain_v();
+    let lerp = |a: f64, b: f64, k: u32| (b - a).mul_add(f64::from(k) / f64::from(N), a);
+    let side = |along_u: bool, at: f64| -> Vec<Point3> {
+        (0..=N)
+            .map(|k| {
+                if along_u {
+                    s.evaluate(lerp(u0, u1, k), at)
+                } else {
+                    s.evaluate(at, lerp(v0, v1, k))
+                }
+            })
+            .collect()
+    };
+    let length = |pts: &[Point3]| pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>();
+    let sides = [
+        side(false, u0),
+        side(false, u1),
+        side(true, v0),
+        side(true, v1),
+    ];
+    let size = sides.iter().map(|p| length(p)).fold(0.0_f64, f64::max);
+    let near = 1e-9 * size.max(1.0);
+    let same =
+        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
+    size > near
+        && !same(&sides[0], &sides[1])
+        && !same(&sides[2], &sides[3])
+        && sides.iter().all(|p| length(p) > near)
+}
