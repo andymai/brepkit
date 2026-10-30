@@ -1,0 +1,27 @@
+crates/math/src/nurbs/fitting.rs
+  s_a2dc21dbec3f2b::t_e7879867777867 207-212,221-228,233-278
+  s_a2dc21dbec3f2b::t_f17ed5f45fedd9 229-232
+  s_a2dc21dbec3f2b::t_0a01afaa260209 949-964
+  s_a2dc21dbec3f2b::t_ba81e3c768f197 279-284
+crates/operations/src/sweep/tests.rs
+  s_a2dc21dbec3f2b::t_38952b844ac2a5 2367-2441
+crates/operations/src/sweep.rs
+  s_a2dc21dbec3f2b::t_6cab4601073e14 2545-2553,2574-2575,2578-2594,2597
+  s_a2dc21dbec3f2b::t_f17ed5f45fedd9 2595-2596
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2773783e3219a39d005eab5f87e7dc58f1f34187",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
