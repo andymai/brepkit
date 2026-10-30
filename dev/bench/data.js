@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793393325471,
+  "lastUpdate": 1793393530246,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62801,6 +62801,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28662478,
             "range": "± 125338",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e3ff9f23b9459e613de056249ef2421879722968",
+          "message": "fix(operations): thicken a curved face into a wall of even thickness (#2233)\n\n`thicken` now grows a face on a cylinder, cone, sphere or torus into a\nwall of even thickness along its surface's normal, instead of extruding\nit along one direction.\n\nToday `thicken` takes the normal at one point of the face and extrudes\nthe face along it, which is right for a plane only. The side of a\ncylinder of radius 10 and height 20, thickened by 2, comes back as the\nface, a copy moved 2 along y and the strips between them, holding\n5850.422 where the wall holds π (12² − 10²) 20 = 2764.602.\n\n## Change\n\n- A planar face, or a NURBS face that is a plane, is extruded along its\nnormal as before.\n- A face on a cylinder, cone, sphere or torus grows along its surface's\nnormal, turned to the face's side and against it for a negative\nthickness. Its far side is the face on the offset surface: the cylinder,\nsphere or torus with its radius moved, or the cone with its apex moved\nalong the axis.\n- Each edge is carried to the far side along the normals. On a cylinder\nor sphere that carrying is a scaling about the axis or centre, so any\nedge goes across exactly: lines and circles stay lines and circles, and\nan ellipse or NURBS edge has its control points scaled. On a cone or\ntorus a line or circle is carried when the carried points stay on a line\nor circle, and any other edge is refused.\n- Each side between an edge and its image is the surface the normals\nsweep: a plane between lines, an annulus between closed circles in one\nplane, a cylinder or cone between coaxial circles, else the ruled NURBS\nbetween the two curves. A seam the face crosses twice gets no side, so a\nwhole cylinder face thickens to a tube.\n- A face on a curved NURBS surface is refused rather than extruded along\none normal. A NURBS face counts as a plane when every control point lies\nwithin tolerance of the plane through three spread across its net: the\nfirst, the one farthest from it, and the one farthest off the line\nthrough those two. The recognizer took the first three whose cross\nproduct passed the tolerance, an area: on a flat patch of side 1e-4 none\ndid, and on a net whose first points crowd within 1e-6 of each other a\npoorly placed triple tilted the plane, which then read as a cylinder of\nradius 4.3e6.\n- A thickness that carries an edge across the axis is refused: on a cone\nwhere an edge or its image reaches the axis (a frustum side of radii 10\nand 5 from −65/12 inward), and on a torus where the face or its image\ndoes (the bend above from 17 outward, where its far side pinches). A\ncone face round its apex, whose wires turn round the axis together, is\nrefused: a point one unit off its tip lies on a sphere about the apex,\nnot on the offset cone.\n- A side's outward direction comes from the edge's tangent turned by the\nedge's sense and by its span's direction, so a NURBS edge stored against\nits curve faces out. A ruled side's normal is read at the edge's middle\nprojected onto it, not at the middle of the curve's whole knot span.\n- A side between two circles in one plane is an annulus only for an edge\nthat starts and ends on one vertex; an arc whose ends lie within\ntolerance of each other keeps its four-edge side.\n- A closed face with no sides (the one face of a whole torus) thickens\nto an outer shell and a cavity shell, not one shell of two disconnected\nfaces.\n\nCloses #2195.\n\n## Tests\n\n- `thicken_a_cylinders_side_into_a_wall`: that cylinder's side thickened\nby 2 is 4 faces, valid, holding π (12² − 10²) 20 to 1e-6, its box\nreaching radius 12; thickened by −2, π (10² − 8²) 20 reaching radius 10.\n- `thicken_a_frustums_side_into_a_wall`: the side of a frustum of radii\n10 and 5 and height 12 thickened by 1 or −1 is 4 faces, valid, holding\n2π (97.5 ± 6) by Pappus to 1e-4.\n- `thicken_a_bends_torus_face_into_a_wall`: the torus face of a circle\nof radius 3 revolved a quarter turn at radius 20, thickened by 1, is 4\nfaces, valid, holding 70π² to 1e-4.\n- `thicken_a_hemisphere_into_a_shell`: the upper half of a ball of\nradius 10, thickened by 1, is valid and holds 2/3 π (11³ − 10³) to 1e-2,\nits rim being the primitive's chords.\n- `thicken_refuses_a_curved_nurbs_face`: a face on a twisted bilinear\npatch is refused.\n- `thicken_a_tiny_planar_nurbs_patch` and `recognize_a_tiny_plane`: a\nflat bilinear square of side 1e-4 is recognized as its plane and\nthickens by 1e-4 to a valid solid of 1e-12. Taking the cross product\nagainst the tolerance, it is refused as curved.\n- `recognize_a_plane_whose_first_points_crowd_together` and\n`thicken_a_flat_nurbs_face_whose_control_points_crowd_together`: a 3 by\n3 net at x = 0, 1e-6, 1 and y = 0, 1e-4, 1, flat but for 5e-8 at one\npoint, is recognized as the plane z = 0 and a unit square on it thickens\nby 1 to a valid solid of 1. Taking the first passing triple, it reads as\na cylinder and is refused.\n- `thicken_a_cylinder_sector_just_short_of_a_full_turn`: a sector of\nradius 10 and height 20 spanning 2π − 5e-9, its rims ending 5e-8 apart\non two vertices, thickens by 1 or −1 to 6 faces with every edge on two\nfaces, holding its exact wall to 1e-6. With the annulus for its open\narcs, four rails lie on one face each.\n- `thicken_refuses_a_cone_wall_crossing_its_axis`,\n`thicken_refuses_a_torus_wall_reaching_its_axis` and\n`thicken_refuses_a_cone_face_round_its_apex`: the thicknesses above are\nrefused. Unchecked, the frustum's band leaves its rails, the bend\nvalidates and measures the formula's 4320π², and the apex face validates\nholding 158.75.\n- `thicken_a_patch_whose_edge_runs_against_its_curve`: a quarter of a\ncylinder of radius 10 and height 20 about an axis through (3, −4, 5),\nbounded by a NURBS line stored against its curve, thickens by 1 to\n329.87; with the curve's tangent unturned, 276.53.\n- `thicken_a_patch_whose_edge_is_a_piece_of_a_longer_curve`: a patch of\na ball of radius 10 about (3, −4, 5), its upper edge a quarter of a\nNURBS arc spanning nearly a turn, thickens by 1 to 63.44; read at the\nmiddle of the whole span, 46.66.\n- `thicken_a_whole_torus_into_a_hollow_ring` and\n`a_thickened_torus_keeps_its_cavity_as_a_void`: the torus of radii 20\nand 3 thickened by 1 has an outer and a cavity shell, and writes to STEP\nas a solid with a void.\n- Nine of the curved-wall tests also mesh their walls at deflections 0.1\nand 0.01 with no open or non-manifold edge, by index and after welding\nvertices within 1e-6: the cylinder and frustum walls, the patches with\nruled NURBS sides, the bend, the hemisphere and the whole torus with its\ncavity. Carried edges stopping 0.05 short of their vertices pass\nvalidation but leave 3 edges off two triangles at 0.01.\n- The earlier `thicken` fails all five. Building the cone bands with the\ncircles' own normals, rather than turned from the near circle to the\nfar, gives the inward frustum wall 247.2. Giving a seam a side fails the\ncylinder, frustum and torus walls.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`thicken` now offsets cylindrical, conical, spherical, and toroidal\nfaces along their surface normals, instead of extruding them in one\ndirection. Planar faces keep their existing behavior; curved NURBS faces\nare now rejected rather than thickened inaccurately.\n\n- Cone and torus faces are supported only when their boundary edges\ncarry to lines or circles; walls that reach the surface's axis, or a\ncone face round its apex, are refused.\n- A closed face that thickens with no sides (such as a whole torus) now\nkeeps its cavity as a separate inner shell, and a STEP round-trip\npreserves it as a `BREP_WITH_VOIDS`.\n- Small flat NURBS patches and nets whose control points crowd together\nare now recognized as planes and extruded, taking the normal from points\nspread across the net, and open arcs whose ends lie within tolerance no\nlonger collapse into an annular side.\n- Tests cover positive and negative thickness, solid validity, expected\nvolumes for representative curved faces, and the orientation of ruled\nsides where edges run against their curves.\n\n<sup>Written for commit d55f5b1b1cb3220b4565399cb85d4f2721e5dace.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2233?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2233?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2233&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T13:48:03-07:00",
+          "tree_id": "8d40c47aaaf8fed0fe187319d69d73b850d07d59",
+          "url": "https://github.com/andymai/brepkit/commit/e3ff9f23b9459e613de056249ef2421879722968"
+        },
+        "date": 1793393520680,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1056247,
+            "range": "± 6541",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1141810,
+            "range": "± 4859",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12223,
+            "range": "± 142",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 669324,
+            "range": "± 3237",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27513418,
+            "range": "± 81463",
             "unit": "ns/iter"
           }
         ]
