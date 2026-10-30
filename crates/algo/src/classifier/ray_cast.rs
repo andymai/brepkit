@@ -27,6 +27,14 @@ enum FaceGeom {
         along: Vec3,
         trim: Option<ExtrusionTrim>,
     },
+    /// Any other open NURBS face, crossed where the ray meets its surface,
+    /// found through the surface's Bezier patches, and on the face when its
+    /// wires hold the hit. A flat polygon through its boundary stands where
+    /// a bulging face does not.
+    Nurbs {
+        surface: brepkit_math::nurbs::intersection::RaySurface,
+        trim: NurbsTrim,
+    },
     /// A planar (or planar-approximated) face: boundary polygon, hole
     /// polygons, and the supporting plane.
     Planar {
@@ -784,6 +792,10 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
             finite_box([b.min, b.max])?
         }
         FaceGeom::Extrusion { .. } => return None,
+        FaceGeom::Nurbs { surface, .. } => {
+            let b = surface.surface().aabb();
+            finite_box([b.min, b.max])?
+        }
     };
     let coords = [
         raw.min.x(),
@@ -1006,6 +1018,7 @@ fn votes_from_geoms(
                         FaceGeom::Sphere { loops, .. } => format!("sphere[{} loops]", loops.len()),
                         FaceGeom::SphereTrim { .. } => "sphere trim".to_string(),
                         FaceGeom::Extrusion { .. } => "extrusion".to_string(),
+                        FaceGeom::Nurbs { .. } => "nurbs".to_string(),
                     };
                     log::debug!(
                         "RAYHIT {label} dir=({:.3},{:.3},{:.3}) geom#{gi} {tag} c={c} susp={s}",
@@ -1504,6 +1517,13 @@ fn collect_geoms_of(
             continue;
         }
 
+        if let brepkit_topology::face::FaceSurface::Nurbs(n) = face.surface()
+            && let Some(geom) = nurbs_geom(topo, face, n)?
+        {
+            result.push(geom);
+            continue;
+        }
+
         if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
             && let Some(geom) = torus_trim_geom(topo, face, t)?
         {
@@ -1723,6 +1743,109 @@ fn extrusion_geom(
             trim: Some(trim),
         }),
     )
+}
+
+/// A NURBS face's wires in its surface's `(u, v)`, read by a [`UvTrim`]: `u`
+/// scaled to `[0, 1]`, so its angular reading of `u` never wraps, at a
+/// radius of the surface's length along `u`, and `v` scaled to its length
+/// along `v`.
+struct NurbsTrim {
+    trim: UvTrim,
+    u_domain: (f64, f64),
+    v_domain: (f64, f64),
+    u_len: f64,
+    v_len: f64,
+}
+
+impl NurbsTrim {
+    fn scaled(&self, u: f64, v: f64) -> (f64, f64) {
+        let (u0, u1) = self.u_domain;
+        let (v0, v1) = self.v_domain;
+        ((u - u0) / (u1 - u0), (v - v0) / (v1 - v0) * self.v_len)
+    }
+
+    fn project(
+        &self,
+        surface: &brepkit_math::nurbs::surface::NurbsSurface,
+        p: Point3,
+    ) -> (f64, f64) {
+        let (u, v) = brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12)
+            .map_or((self.u_domain.0, self.v_domain.0), |q| (q.u, q.v));
+        self.scaled(u, v)
+    }
+}
+
+/// A [`FaceGeom::Nurbs`] for a face on a NURBS surface whose weights are all
+/// positive and that neither closes on itself nor shrinks to a point along
+/// a side: on such a surface each point of the face has one `(u, v)`.
+fn nurbs_geom(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> Result<Option<FaceGeom>, AlgoError> {
+    const SAMPLES: u32 = 8;
+    let Some(ray_surface) = brepkit_math::nurbs::intersection::RaySurface::new(surface) else {
+        return Ok(None);
+    };
+    let (u0, u1) = surface.domain_u();
+    let (v0, v1) = surface.domain_v();
+    if !(u1 > u0 && v1 > v0) {
+        return Ok(None);
+    }
+    let lerp = |a: f64, b: f64, k: u32| (b - a).mul_add(f64::from(k) / f64::from(SAMPLES), a);
+    let iso_u = |u: f64| -> Vec<Point3> {
+        (0..=SAMPLES)
+            .map(|k| surface.evaluate(u, lerp(v0, v1, k)))
+            .collect()
+    };
+    let iso_v = |v: f64| -> Vec<Point3> {
+        (0..=SAMPLES)
+            .map(|k| surface.evaluate(lerp(u0, u1, k), v))
+            .collect()
+    };
+    let length = |pts: &[Point3]| pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>();
+    let (lo_u, hi_u, lo_v, hi_v) = (iso_u(u0), iso_u(u1), iso_v(v0), iso_v(v1));
+    let size = [&lo_u, &hi_u, &lo_v, &hi_v]
+        .iter()
+        .map(|side| length(side))
+        .fold(0.0_f64, f64::max);
+    let near = 1e-9 * size.max(1.0);
+    let same =
+        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
+    let collapsed = |side: &[Point3]| length(side) <= near;
+    if size <= near
+        || same(&lo_u, &hi_u)
+        || same(&lo_v, &hi_v)
+        || [&lo_u, &hi_u, &lo_v, &hi_v]
+            .iter()
+            .any(|side| collapsed(side))
+    {
+        return Ok(None);
+    }
+    let u_len = (0..=SAMPLES)
+        .map(|k| length(&iso_v(lerp(v0, v1, k))))
+        .fold(0.0_f64, f64::max);
+    let v_len = (0..=SAMPLES)
+        .map(|k| length(&iso_u(lerp(u0, u1, k))))
+        .fold(0.0_f64, f64::max);
+    if u_len <= near || v_len <= near {
+        return Ok(None);
+    }
+    let mut trim = NurbsTrim {
+        trim: UvTrim { edges: Vec::new() },
+        u_domain: (u0, u1),
+        v_domain: (v0, v1),
+        u_len,
+        v_len,
+    };
+    let Some(uv) = UvTrim::new(topo, face, &|p| trim.project(surface, p), &|_| u_len)? else {
+        return Ok(None);
+    };
+    trim.trim = uv;
+    Ok(Some(FaceGeom::Nurbs {
+        surface: ray_surface,
+        trim,
+    }))
 }
 
 /// A trimmed extrusion face's wires in `(u, s)`: `u` the profile's parameter
@@ -2329,7 +2452,36 @@ fn ray_geom_crossings(
             along,
             trim,
         } => ray_extrusion_crossings(origin, ray_dir, profile, *along, trim.as_ref(), tol),
+        FaceGeom::Nurbs { surface, trim } => {
+            ray_nurbs_crossings(origin, ray_dir, surface, trim, tol)
+        }
     }
+}
+
+/// Count ray crossings with a NURBS face: each place the ray meets its
+/// surface ahead of `origin` that its wires hold.
+fn ray_nurbs_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::nurbs::intersection::RaySurface,
+    trim: &NurbsTrim,
+    tol: Tolerance,
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
+    let found = surface.hits(origin, ray_dir, near);
+    let mut crossings = 0;
+    let mut suspicious = found.grazed;
+    for hit in found.hits {
+        let (u, v) = trim.scaled(hit.u, hit.v);
+        let (on_face, by_wire) = trim.trim.contains(u, v, 1.0, trim.u_len, near, &|p| {
+            trim.project(surface.surface(), p)
+        });
+        suspicious |= hit.t.abs() <= near || by_wire;
+        if hit.t > near && on_face {
+            crossings += 1;
+        }
+    }
+    (crossings, suspicious)
 }
 
 /// Count ray crossings with an extrusion `profile(v) + s along`, `s` in
@@ -3778,6 +3930,59 @@ mod tests {
     use brepkit_topology::solid::Solid;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The unit cube with its top the lid `z = 1 + 100 u (1 - u)^4 v (1 - v)`
+    /// over the unit square, flat along its rim: the solid rises to 3.048 at
+    /// `(0.2, 0.5)`, between the lid's boundary edges, all at `z = 1`.
+    #[test]
+    fn a_point_under_a_nurbs_lids_bulge_is_inside() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let cube = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+        let shell = topo.solid(cube).unwrap().outer_shell();
+        let top = topo
+            .shell(shell)
+            .unwrap()
+            .faces()
+            .iter()
+            .copied()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && (d - 1.0).abs() < 1e-9)
+            })
+            .unwrap();
+        let rows = (0..6)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 1) { 11.0 } else { 1.0 };
+                        Point3::new(f64::from(i) / 5.0, f64::from(j) / 2.0, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let lid = NurbsSurface::new(
+            5,
+            2,
+            [vec![0.0; 6], vec![1.0; 6]].concat(),
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 3]; 6],
+        )
+        .unwrap();
+        topo.face_mut(top)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(lid));
+        for (p, class) in [
+            (Point3::new(0.2, 0.5, 2.9), FaceClass::Inside),
+            (Point3::new(0.5, 0.5, 1.5), FaceClass::Inside),
+            (Point3::new(0.2, 0.5, 3.1), FaceClass::Outside),
+            (Point3::new(0.9, 0.9, 1.02), FaceClass::Outside),
+            (Point3::new(0.5, 0.5, 0.5), FaceClass::Inside),
+        ] {
+            assert_eq!(classify_ray_cast(&topo, cube, p).unwrap(), class, "{p:?}");
+        }
+    }
 
     /// The extrusion `(x, v, v^2)` of a parabola along x over `[0, 1]`,
     /// bounded by its two end rulings, its far profile, and `near` from
