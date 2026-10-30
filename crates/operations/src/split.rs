@@ -265,21 +265,17 @@ mod tests {
         assert!(result.is_err(), "the plane x + y + z = 2.1 misses the ball");
     }
 
-    /// A block whose top is the Bezier lid `z = 100 u (1 − u)⁴ v (1 − v)`
-    /// over the unit square, flat along its rim. The lid peaks at 2.048 at
-    /// `(0.2, 0.5)`, between the samples that put it at 1.98, and the plane
-    /// z = 2 cuts its peak off: a tip of 2.24432e-4 in the bulge and a disc,
-    /// and the rest of the block's 1 + 5/9, on the sides the plane faces.
-    #[test]
-    fn split_takes_a_nurbs_lids_peak_off_above_its_samples() {
+    /// A unit block below z = 0 whose top is the Bezier lid
+    /// `z = 100 u (1 − u)⁴ v (1 − v)` over the unit square, flat along its
+    /// rim, holding 1 + 5/9. The lid peaks at 2.048 at `(0.2, 0.5)`, between
+    /// the samples that put it at 1.98.
+    fn block_under_a_nurbs_lid(topo: &mut Topology) -> SolidId {
         use brepkit_math::nurbs::surface::NurbsSurface;
         use brepkit_topology::face::FaceSurface;
 
-        let mut topo = Topology::new();
-        let block = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(0.0, 0.0, -1.0))
-            .unwrap();
-        let top = brepkit_topology::explorer::solid_faces(&topo, block)
+        let block = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
+        crate::transform::transform_solid(topo, block, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+        let top = brepkit_topology::explorer::solid_faces(topo, block)
             .unwrap()
             .into_iter()
             .find(|&f| {
@@ -309,31 +305,23 @@ mod tests {
         topo.face_mut(top)
             .unwrap()
             .set_surface(FaceSurface::Nurbs(lid));
+        block
+    }
 
-        let top = crate::measure::solid_outer_bounds(&topo, block)
-            .unwrap()
-            .max
-            .z();
-        assert!(top >= 2.048, "the lid reaches 2.048, its extent {top}");
-
-        let tip = (2, 2.244_32e-4);
-        let rest = (7, 1.0 + 1.0 / 1.8 - tip.1);
-        // The plane faced down, its halves swap sides.
-        for (up, above, below) in [(1.0, tip, rest), (-1.0, rest, tip)] {
-            let halves = split(
-                &mut topo,
-                block,
-                Point3::new(0.0, 0.0, 2.0),
-                Vec3::new(0.0, 0.0, up),
-            )
-            .unwrap();
+    /// The lid's halves at a plane, `(faces, volume)` on each side it faces,
+    /// with the plane faced the other way swapping them.
+    fn split_the_lid(origin: Point3, normal: Vec3, above: (usize, f64), below: (usize, f64)) {
+        let mut topo = Topology::new();
+        let block = block_under_a_nurbs_lid(&mut topo);
+        for (n, above, below) in [(normal, above, below), (-normal, below, above)] {
+            let halves = split(&mut topo, block, origin, n).unwrap();
             for (piece, (faces, volume)) in [(halves.positive, above), (halves.negative, below)] {
                 assert_eq!(
                     brepkit_topology::explorer::solid_faces(&topo, piece)
                         .unwrap()
                         .len(),
                     faces,
-                    "facing {up}"
+                    "facing {n:?}"
                 );
                 assert!(
                     crate::validate::validate_solid(&topo, piece)
@@ -343,10 +331,47 @@ mod tests {
                 let measured = crate::measure::solid_volume(&topo, piece, 1e-4).unwrap();
                 assert!(
                     (measured - volume).abs() < 1e-2 * volume,
-                    "facing {up}: {measured} vs {volume}"
+                    "facing {n:?}: {measured} vs {volume}"
                 );
             }
         }
+    }
+
+    /// The plane z = 2 cuts the lid's peak off: a tip of 2.24432e-4 in the
+    /// bulge and a disc, and the rest of the block.
+    #[test]
+    fn split_takes_a_nurbs_lids_peak_off_above_its_samples() {
+        let mut topo = Topology::new();
+        let block = block_under_a_nurbs_lid(&mut topo);
+        let top = crate::measure::solid_outer_bounds(&topo, block)
+            .unwrap()
+            .max
+            .z();
+        assert!(top >= 2.048, "the lid reaches 2.048, its extent {top}");
+
+        let tip = (2, 2.244_32e-4);
+        let rest = (7, 1.0 + 1.0 / 1.8 - tip.1);
+        split_the_lid(
+            Point3::new(0.0, 0.0, 2.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            tip,
+            rest,
+        );
+    }
+
+    /// The plane z = 4x + 0.5 runs above the block's rim and cuts through
+    /// the lid's bulge only, between every vertex and sampled point: a tip
+    /// of 0.0647068 above it, and the rest of the block below.
+    #[test]
+    fn split_a_nurbs_lid_at_a_tilted_plane_through_its_bulge() {
+        let tip = (2, 0.064_706_8);
+        let rest = (7, 1.0 + 1.0 / 1.8 - tip.1);
+        split_the_lid(
+            Point3::new(0.0, 0.0, 0.5),
+            Vec3::new(4.0, 0.0, -1.0),
+            rest,
+            tip,
+        );
     }
 
     /// A block whose top is a biquadratic patch with row weights 1, -1.5

@@ -2535,15 +2535,6 @@ fn detect_trivial_relation(
     };
     let aabb_a = sample_aabb(topo, a);
     let aabb_b = sample_aabb(topo, b);
-    // The solid that must fit inside reads its box from bounds holding every
-    // face: a sampled box can stop short of a NURBS face's bulge between its
-    // samples, and a lid whose peak rises past the other solid then reads as
-    // inside it.
-    let hull = |topo: &Topology, solid: SolidId| -> Option<(Point3, Point3)> {
-        let bb = crate::measure::solid_outer_bounds(topo, solid).ok()?;
-        Some((bb.min, bb.max))
-    };
-    let (hull_a, hull_b) = (hull(topo, a), hull(topo, b));
     // AABB-encloses check (lenient): does `inner` fit inside `outer`?
     let aabb_encloses =
         |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
@@ -2830,19 +2821,23 @@ fn detect_trivial_relation(
     // can hold every vertex inside the blank while its rims leave it. A
     // container with a cavity holds nothing trivially: the other solid can
     // swallow the cavity with every vertex, probe and its centre in material.
+    // A NURBS face can bulge out of the other solid between every vertex,
+    // probe and sampled box corner, so it is held inside only when proved.
     let hollow = |s: SolidId| topo.solid(s).is_ok_and(|s| !s.inner_shells().is_empty());
     let b_in_a = !hollow(a)
-        && ((all_b_verts_in_a && aabb_encloses(&hull_b, &aabb_a))
+        && ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
             || (ca.is_none()
-                && aabb_strictly_contains(&hull_b, &aabb_a)
+                && aabb_strictly_contains(&aabb_b, &aabb_a)
                 && !volume_refutes(topo, b, a)))
+        && nurbs_faces_proved_inside(topo, b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
         && !boundary_probe_outside(topo, b, a, &aabb_b);
     let a_in_b = !hollow(b)
-        && ((all_a_verts_in_b && aabb_encloses(&hull_a, &aabb_b))
+        && ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
             || (cb.is_none()
-                && aabb_strictly_contains(&hull_a, &aabb_b)
+                && aabb_strictly_contains(&aabb_a, &aabb_b)
                 && !volume_refutes(topo, a, b)))
+        && nurbs_faces_proved_inside(topo, a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
         && !boundary_probe_outside(topo, a, b, &aabb_a);
 
@@ -2963,6 +2958,78 @@ fn outward_planes(topo: &Topology, solid: SolidId) -> Vec<(Vec3, f64)> {
             })
         })
         .collect()
+}
+
+/// Whether every NURBS face of `inner` provably lies in `outer`: true with
+/// none, and otherwise only when `outer` is a convex polyhedron and each
+/// face's control points lie inside every one of its planes, which holds a
+/// surface with positive weights in their hull.
+fn nurbs_faces_proved_inside(
+    topo: &Topology,
+    inner: SolidId,
+    outer: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, inner) else {
+        return false;
+    };
+    let mut surfaces = Vec::new();
+    for fid in faces {
+        let Ok(face) = topo.face(fid) else {
+            return false;
+        };
+        if let FaceSurface::Nurbs(surface) = face.surface() {
+            surfaces.push(surface);
+        }
+    }
+    if surfaces.is_empty() {
+        return true;
+    }
+    let Some(planes) = convex_planes(topo, outer, tol.linear) else {
+        return false;
+    };
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    surfaces.iter().all(|surface| {
+        surface
+            .weights()
+            .iter()
+            .flatten()
+            .all(|&w| w.is_finite() && w > 0.0)
+            && surface.control_points().iter().flatten().all(|&p| {
+                planes
+                    .iter()
+                    .all(|&(n, offset)| n.dot(p - origin) - offset <= tol.linear)
+            })
+    })
+}
+
+/// The outward planes of `solid` when it is a convex polyhedron: every face
+/// planar, with every vertex inside each face's plane. `None` otherwise.
+fn convex_planes(topo: &Topology, solid: SolidId, tol: f64) -> Option<Vec<(Vec3, f64)>> {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid).ok()?;
+    let mut vertices = Vec::new();
+    for &fid in &faces {
+        let face = topo.face(fid).ok()?;
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            return None;
+        }
+        for oe in topo.wire(face.outer_wire()).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                return None;
+            }
+            vertices.push(topo.vertex(edge.start()).ok()?.point());
+        }
+    }
+    let planes = outward_planes(topo, solid);
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let convex = planes.len() == faces.len()
+        && vertices.iter().all(|&v| {
+            planes
+                .iter()
+                .all(|&(n, offset)| n.dot(v - origin) - offset <= tol)
+        });
+    convex.then_some(planes)
 }
 
 /// Check whether every boundary vertex of `solid` is classified as
