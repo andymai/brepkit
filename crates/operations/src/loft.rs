@@ -302,12 +302,12 @@ pub fn loft_to_point(
             reason: "loft to a point needs the point off the profile's plane".into(),
         });
     }
-    // The boundary as it runs about the direction to the apex: stored wires
-    // run about the plane's own normal.
-    let reversed = base_data.is_reversed();
+    // Run the boundary anticlockwise about the direction to the apex, judged
+    // by how it actually winds: neither the plane's normal nor the face's
+    // reversal flag says which way a profile's wire runs.
     let toward = if height > 0.0 { unit } else { -unit };
     let mut runs: Vec<OrientedEdge> = topo.wire(base_data.outer_wire())?.edges().to_vec();
-    if (height > 0.0) == reversed {
+    if boundary_winding(topo, &runs)?.dot(toward) < 0.0 {
         runs.reverse();
         for oe in &mut runs {
             *oe = OrientedEdge::new(oe.edge(), !oe.is_forward());
@@ -407,6 +407,41 @@ pub fn loft_to_point(
     }
     let shell = topo.add_shell(Shell::new(faces)?);
     Ok(topo.add_solid(Solid::new(shell, vec![])))
+}
+
+/// The Newell normal of the loop the oriented edges `runs` trace, each
+/// curved edge sampled along its span.
+fn boundary_winding(
+    topo: &Topology,
+    runs: &[OrientedEdge],
+) -> Result<Vec3, crate::OperationsError> {
+    const CURVE_SAMPLES: usize = 16;
+    let mut points = Vec::new();
+    for oe in runs {
+        let edge = topo.edge(oe.edge())?;
+        let curve = edge.curve();
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        let samples = if matches!(curve, EdgeCurve::Line) {
+            1
+        } else {
+            CURVE_SAMPLES
+        };
+        for i in 0..samples {
+            #[allow(clippy::cast_precision_loss)]
+            let f = i as f64 / samples as f64;
+            let t = if oe.is_forward() {
+                t0 + (t1 - t0) * f
+            } else {
+                t1 - (t1 - t0) * f
+            };
+            points.push(curve.evaluate_with_endpoints(t, a, b));
+        }
+    }
+    Ok(crate::winding::newell_normal(&points))
 }
 
 /// The ruled NURBS from `curve` (from `a` to `b`) to the point `apex`, and
@@ -1682,6 +1717,70 @@ mod to_point_tests {
             (volume - exact).abs() < within * exact,
             "{volume} of {exact}"
         );
+    }
+
+    /// Each face of the convex `solid`, at a point of it, faces away from
+    /// `inside`.
+    fn assert_outward(topo: &Topology, solid: SolidId, inside: Point3) {
+        for f in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+            let face = topo.face(f).unwrap();
+            let surface = face.surface();
+            let mean =
+                crate::winding::polygon_centroid(&crate::boolean::face_polygon(topo, f).unwrap());
+            let (at, normal) = match surface.project_point(mean) {
+                Some((u, v)) => (surface.evaluate(u, v).unwrap(), surface.normal(u, v)),
+                None => (mean, surface.normal(0.0, 0.0)),
+            };
+            let normal = if face.is_reversed() { -normal } else { normal };
+            assert!(
+                normal.dot(at - inside) > 0.0,
+                "{} face at {at:?} faces {normal:?}",
+                surface.type_tag()
+            );
+        }
+    }
+
+    /// A 40 square lofted to a point 30 above or below it is an outward
+    /// pyramid whichever way its wire runs and whichever side its face
+    /// states: a +z or -z plane (reversing a face negates its plane and
+    /// keeps its wire), reversed or not.
+    #[test]
+    fn a_profile_lofts_to_a_point_by_its_boundarys_winding() {
+        let p = Point3::new;
+        let corners = [
+            p(-20.0, -20.0, 0.0),
+            p(20.0, -20.0, 0.0),
+            p(20.0, 20.0, 0.0),
+            p(-20.0, 20.0, 0.0),
+        ];
+        for z in [30.0, -30.0] {
+            for anticlockwise in [true, false] {
+                for normal_z in [1.0, -1.0] {
+                    for reversed in [false, true] {
+                        let mut topo = Topology::new();
+                        let mut ring = corners.to_vec();
+                        if !anticlockwise {
+                            ring.reverse();
+                        }
+                        let wire =
+                            brepkit_topology::builder::make_polygon_wire(&mut topo, &ring, 1e-7)
+                                .unwrap();
+                        let surface = FaceSurface::Plane {
+                            normal: Vec3::new(0.0, 0.0, normal_z),
+                            d: 0.0,
+                        };
+                        let base = topo.add_face(if reversed {
+                            Face::new_reversed(wire, vec![], surface)
+                        } else {
+                            Face::new(wire, vec![], surface)
+                        });
+                        let pyramid = loft_to_point(&mut topo, base, p(0.0, 0.0, z)).unwrap();
+                        check(&topo, pyramid, (5, 8, 5), 16000.0, 1e-9);
+                        assert_outward(&topo, pyramid, p(0.0, 0.0, z / 4.0));
+                    }
+                }
+            }
+        }
     }
 
     /// A 40 square lofted to a point 30 above or below its middle is a
