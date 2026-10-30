@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.6.7](https://github.com/andymai/brepkit/compare/v4.6.6...v4.6.7) (2026-10-30)
+
+
+### Bug Fixes
+
+* **algo:** find and classify a NURBS face's bulge between its edges ([#2220](https://github.com/andymai/brepkit/issues/2220)) ([68ea6a7](https://github.com/andymai/brepkit/commit/68ea6a77bc100fc841630cacdf8bf4f3dccc14c1))
+* **operations:** hide a projected edge wherever a solid lies on its line of sight ([#2223](https://github.com/andymai/brepkit/issues/2223)) ([bd7ee10](https://github.com/andymai/brepkit/commit/bd7ee1013629570de0976637d58bc0cfa2e269be))
+* **operations:** sew faces keeping their curves, holes and sense ([#2217](https://github.com/andymai/brepkit/issues/2217)) ([b74efcb](https://github.com/andymai/brepkit/commit/b74efcbf15c8a92d61104d72b49caf1be73165b8))
+
 ## [4.6.6](https://github.com/andymai/brepkit/compare/v4.6.5...v4.6.6) (2026-10-30)
 
 
