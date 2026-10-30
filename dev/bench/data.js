@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793371512186,
+  "lastUpdate": 1793372635882,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62261,6 +62261,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29200556,
             "range": "± 225480",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9055cc33bda5e5492dcd0c0b109105be07e06fd3",
+          "message": "fix(check): integrate a NURBS face's volume exactly along its boundary (#2227)\n\n`solid_volume` now integrates a NURBS face exactly along its boundary,\nas it already does a cylinder, cone or sphere face, so a solid with\nBezier, spline, elliptic or lofted sides holds its exact volume instead\nof reading low.\n\nToday a solid with any NURBS face is measured off a mesh, which\ninscribes its curved faces. The cap under the cubic Bezier through (0,\n0), (5, 20), (25, 20) and (30, 0), closed by its chord, holds 330, but\nextruded 1 it measures 329.962125, and the shortfall grows with the\nextrusion. A 10 square lofted through 17 copies turned an eighth of a\nturn over 40 measures 3980.825 where it holds 4000.\n\n## Change\n\n- `check::properties::exact_solid_volume` takes a NURBS face by Green's\ntheorem in its `(u, v)`. The inner integral runs from the start of `u`'s\ndomain in panels between the surface's knots; the outer one runs along\neach edge, cut at the edge's own knots or eighths of a turn and where it\ncrosses a knot line of the surface, so every panel is smooth. Each\npoint's `(u, v)` is found by Newton from its neighbour's, falling back\nto a search of the whole surface, and `dv/dt` comes from the curve's own\nderivative through the surface's first fundamental form.\n- Each wire counts the region it bounds, whichever way it runs in `(u,\nv)`, and holes are taken away.\n- Each integral is halved until two levels agree to 1e-12, since a\nrational surface can crowd its area into a sliver of its parameter, and\na face whose integrals have not settled after 24 halvings keeps the\nmesh. A sample landing exactly on a knot line is a cut too.\n- A surface that closes on itself or shrinks to a point along a side\nkeeps the mesh, its `(u, v)` not being one-to-one there.\n- `nurbs::projection::project_point_to_surface_from`, Newton from a\ngiven `(u, v)`, is public.\n\nCloses #2182. Closes #2194.\n\n## Tests\n\n- `a_bezier_caps_extrusion_holds_its_exact_volume`: that cap extruded 1\nand 100 holds 330 and 33000 to 1e-9. The mesh gives 329.962125 at height\n1.\n- `a_twisted_square_loft_holds_its_volume`: that loft holds 4000 to 1e-8\n(4000.000022, its lofted sides lying within a micron of the twisted\nsquare's). The mesh gives 3980.825.\n- `a_cube_under_a_crowded_rational_top_holds_its_volume`: a unit cube\nwhose top is `(100u / (1 + 99u), v, 1)` holds 1 to 1e-9. One level of\nthe rule gives 0.9445.\n- `a_cube_under_a_top_with_a_sampled_knot_holds_its_volume`: a flat top\nwhose `v` runs twice as fast past its knot at 0.25, met by the side\nedges at their sampled middles, holds 1 to 1e-12. The halving settles it\nwith or without that cut; the cut spares it the halving.\n- `a_nurbs_face_takes_its_hole_away_whichever_way_it_runs`: the flat\npatch `(u, v, 1)` with a centred half-unit square hole holds 0.75 and a\nvolume term of 0.25 for each way round of its two wires. Turning only\nthe sum round gives 1.25 with both counterclockwise.\n- `a_nurbs_face_reads_a_crowded_edge_by_its_velocity`: the flat patch\nwith its side at u = 1 the rational line `(1, 100t / (1 + 99t), 1)`\ngives a volume term of a third to 1e-12. A central difference of the\nedge gives 0.3333065.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3805 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T08:00:44-07:00",
+          "tree_id": "de20685c23d49dd834a76e2f1f2cb739f8551660",
+          "url": "https://github.com/andymai/brepkit/commit/9055cc33bda5e5492dcd0c0b109105be07e06fd3"
+        },
+        "date": 1793372626644,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1144376,
+            "range": "± 2331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1226510,
+            "range": "± 7081",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14234,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 699864,
+            "range": "± 2695",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29608759,
+            "range": "± 115066",
             "unit": "ns/iter"
           }
         ]
