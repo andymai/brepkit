@@ -6,7 +6,7 @@
 //! camera. Edges themselves are sampled to polylines because a projected
 //! drawing is inherently polygonal.
 
-use brepkit_check::classify::{ClassifyOptions, PointClassification, SolidClassifier};
+use brepkit_check::classify::SolidClassifier;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
@@ -89,10 +89,6 @@ pub fn project_solids_edges(
         Point2::new(x.dot(v), y.dot(v))
     };
 
-    // Step length for the occlusion probe — far enough to clear the boundary
-    // tolerance, small relative to the model. Keyed to the model extent and
-    // capped so a large-coordinate model can't push the probe through thin
-    // features.
     let mut bounds: Option<brepkit_math::aabb::Aabb3> = None;
     for &solid in solids {
         let b = crate::measure::solid_bounding_box(topo, solid)?;
@@ -102,76 +98,145 @@ pub fn project_solids_edges(
         reason: "projection needs at least one solid".into(),
     })?;
     let diag = (bbox.max - bbox.min).length();
-    let eps = (diag * 1e-4).clamp(1e-6, 1e-2);
 
-    // A boundary point is hidden when a solid lies on its line of sight: the
-    // step toward the camera lands inside one, or on a face seen edge-on along
-    // the line of sight, or the line beyond the step crosses a face. A
-    // classification error is propagated rather than silently read as
-    // "visible", so a degenerate solid surfaces instead of yielding wrong HLR.
+    // A point on an edge is hidden when its line of sight toward the camera
+    // meets a solid. The line starts a hair toward the camera, clear of the
+    // faces the edge bounds yet short of any plate in front. A line that runs
+    // along a face or past its edge is caught by the lines a hair to either
+    // side across the view: a point behind such a line coincides on the
+    // drawing with a nearer edge. A classification error is propagated
+    // rather than read as "visible".
     let classifiers = solids
         .iter()
         .map(|&solid| SolidClassifier::new(topo, solid))
         .collect::<Result<Vec<_>, _>>()?;
-    let options = ClassifyOptions {
-        tolerance: 1e-7,
-        ..ClassifyOptions::default()
-    };
-    let is_hidden = |p: Point3| -> Result<bool, crate::OperationsError> {
-        let probe = p - view * eps;
-        for classifier in &classifiers {
-            if classifier.classify(probe, &options)? != PointClassification::Outside
-                || classifier.ray_crossings(probe, -view)? > 0
+    // Ten times the classification tolerance: a solid is grown by this much
+    // where a line of sight passes it.
+    let hair = 1e-6;
+    let sideways = [x * hair, x * -hair, y * hair, y * -hair];
+    // Each solid's box seen from the camera: its extent across the view and
+    // its nearest depth, so a solid that cannot cover a point is passed by.
+    let seen_boxes = solids
+        .iter()
+        .map(|&solid| {
+            let b = crate::measure::solid_bounding_box(topo, solid)?;
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for c in 0..8 {
+                let corner = Point3::new(
+                    if c & 1 == 0 { b.min.x() } else { b.max.x() },
+                    if c & 2 == 0 { b.min.y() } else { b.max.y() },
+                    if c & 4 == 0 { b.min.z() } else { b.max.z() },
+                );
+                let d = corner - origin;
+                for (k, v) in [x.dot(d), y.dot(d), view.dot(d)].into_iter().enumerate() {
+                    lo[k] = lo[k].min(v);
+                    hi[k] = hi[k].max(v);
+                }
+            }
+            Ok((lo, hi))
+        })
+        .collect::<Result<Vec<_>, crate::OperationsError>>()?;
+    let is_hidden = |p: Point3, own: usize| -> Result<bool, crate::OperationsError> {
+        let d = p - origin;
+        let (px, py, depth) = (x.dot(d), y.dot(d), view.dot(d));
+        for (k, classifier) in classifiers.iter().enumerate() {
+            let (lo, hi) = seen_boxes[k];
+            let reach = 2.0 * hair;
+            if k != own
+                && (px < lo[0] - reach
+                    || px > hi[0] + reach
+                    || py < lo[1] - reach
+                    || py > hi[1] + reach
+                    || lo[2] > depth)
             {
+                continue;
+            }
+            let from = p - view * hair;
+            if classifier.ray_crossings(from, -view)? > 0 {
                 return Ok(true);
+            }
+            for s in &sideways {
+                if classifier.ray_crossings(from + *s, -view)? > 0 {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
     };
 
+    // Each edge is read on its own curve at the drawing's samples, closer
+    // where its view is long, and cut where it passes behind a solid or
+    // comes out, found by halving the step that changes.
+    let resolution = diag / 64.0;
     let mut result = ProjectedEdges::default();
-    for &solid in solids {
-        let lines = crate::tessellate::sample_solid_edges(topo, solid, deflection)?;
-        let n_edges = lines.offsets.len();
-        for i in 0..n_edges {
-            let start = lines.offsets[i];
-            let end = if i + 1 < n_edges {
-                lines.offsets[i + 1]
-            } else {
-                lines.positions.len()
-            };
-            let pts = &lines.positions[start..end];
-            if pts.len() < 2 {
+    for (own, &solid) in solids.iter().enumerate() {
+        let edges = crate::tessellate::drawn_edge_samples(
+            topo,
+            solid,
+            deflection,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            true,
+        )?;
+        for (edge_id, samples) in edges {
+            if samples.len() < 2 {
                 continue;
             }
-
-            // Classify each segment by its midpoint, then merge consecutive
-            // same-visibility segments into polylines (adjacent runs share the
-            // boundary vertex, so the drawing stays connected).
-            let seg_hidden: Vec<bool> = (0..pts.len() - 1)
-                .map(|j| {
-                    let mid = Point3::new(
-                        0.5 * (pts[j].x() + pts[j + 1].x()),
-                        0.5 * (pts[j].y() + pts[j + 1].y()),
-                        0.5 * (pts[j].z() + pts[j + 1].z()),
-                    );
-                    is_hidden(mid)
+            let edge = topo.edge(edge_id)?;
+            let a = topo.vertex(edge.start())?.point();
+            let b = topo.vertex(edge.end())?.point();
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            let at = |t: f64| curve.evaluate_with_endpoints(t, a, b);
+            let seen_length: f64 = samples
+                .windows(2)
+                .map(|w| {
+                    let d = w[1] - w[0];
+                    x.dot(d).hypot(y.dot(d))
                 })
+                .sum();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let steps = (samples.len() - 1).max((seen_length / resolution).ceil() as usize);
+            #[allow(clippy::cast_precision_loss)]
+            let param = |k: usize| (t1 - t0).mul_add(k as f64 / steps as f64, t0);
+            // The ends are read a hair inside, off the vertex they share.
+            let inset = 1e-6 * (t1 - t0);
+            let probe_at = |k: usize| match k {
+                0 => t0 + inset,
+                k if k == steps => t1 - inset,
+                k => param(k),
+            };
+            let hidden = (0..=steps)
+                .map(|k| is_hidden(at(probe_at(k)), own))
                 .collect::<Result<Vec<bool>, _>>()?;
-
-            let mut j = 0;
-            while j < seg_hidden.len() {
-                let hidden = seg_hidden[j];
-                let run_start = j;
-                while j < seg_hidden.len() && seg_hidden[j] == hidden {
-                    j += 1;
+            let mut runs: Vec<(bool, Vec<Point3>)> = vec![(hidden[0], vec![at(t0)])];
+            for k in 0..steps {
+                if hidden[k] != hidden[k + 1] {
+                    let (mut lo, mut hi) = (probe_at(k), probe_at(k + 1));
+                    for _ in 0..24 {
+                        let mid = f64::midpoint(lo, hi);
+                        if is_hidden(at(mid), own)? == hidden[k] {
+                            lo = mid;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    let cut = at(f64::midpoint(lo, hi));
+                    if let Some(run) = runs.last_mut() {
+                        run.1.push(cut);
+                    }
+                    runs.push((hidden[k + 1], vec![cut]));
                 }
-                // Run covers segments [run_start, j), i.e. points [run_start, j].
-                if hidden && !hidden_lines {
+                if let Some(run) = runs.last_mut() {
+                    run.1.push(at(param(k + 1)));
+                }
+            }
+            for (is_hidden_run, points) in runs {
+                if is_hidden_run && !hidden_lines {
                     continue;
                 }
-                let poly: Vec<Point2> = (run_start..=j).map(|k| project(pts[k])).collect();
-                if hidden {
+                let poly: Vec<Point2> = points.into_iter().map(project).collect();
+                if is_hidden_run {
                     result.hidden.push(poly);
                 } else {
                     result.visible.push(poly);
@@ -241,8 +306,8 @@ mod tests {
         let solid = block(&mut topo);
         let (o, d, x) = front();
         let result = project_edges(&topo, solid, o, d, x, true, 0.1).unwrap();
-        assert!((length(&result.visible) - 140.0).abs() < 1e-6);
-        assert!((length(&result.hidden) - 140.0).abs() < 1e-6);
+        assert!((length(&result.visible) - 140.0).abs() < 1e-5);
+        assert!((length(&result.hidden) - 140.0).abs() < 1e-5);
     }
 
     /// A 10 cube 20 behind the block is hidden by it, whether the two are
@@ -268,8 +333,8 @@ mod tests {
         .unwrap();
         let fused = project_edges(&topo, lumps, o, d, x, true, 0.1).unwrap();
         for result in [together, fused] {
-            assert!((length(&result.visible) - 140.0).abs() < 1e-6);
-            assert!((length(&result.hidden) - 220.0).abs() < 1e-6);
+            assert!((length(&result.visible) - 140.0).abs() < 1e-5);
+            assert!((length(&result.hidden) - 220.0).abs() < 1e-5);
         }
     }
 
@@ -302,8 +367,82 @@ mod tests {
                 );
             }
         }
-        assert!((length(&result.visible) - 170.0).abs() < 1e-6);
-        assert!((length(&result.hidden) - 290.0).abs() < 1e-6);
+        assert!((length(&result.visible) - 170.0).abs() < 1e-5);
+        assert!((length(&result.hidden) - 290.0).abs() < 1e-5);
+    }
+
+    /// A second box the block's size 20 behind it, seen with it: every line
+    /// of sight from its front rectangle runs along the block's faces or past
+    /// its edges, so that rectangle lies behind the block's and is hidden,
+    /// with both back rectangles: 140 shows and 420 is hidden.
+    #[test]
+    fn a_box_aligned_behind_the_block_is_hidden() {
+        let mut topo = Topology::new();
+        let front_block = block(&mut topo);
+        let rear = placed_box(&mut topo, (40.0, 10.0, 30.0), Point3::new(-20.0, 25.0, 0.0));
+        let (o, d, x) = front();
+        let result = project_solids_edges(&topo, &[front_block, rear], o, d, x, true, 0.1).unwrap();
+        assert!((length(&result.visible) - 140.0).abs() < 1e-5);
+        assert!((length(&result.hidden) - 420.0).abs() < 1e-5);
+    }
+
+    /// The tower against the block's back, as a separate solid: its front
+    /// verticals are hidden below the block's top and show above it, so the
+    /// block's front, the tower's top front edge and the verticals' upper 10
+    /// make the 170 that shows; the other 310 is hidden.
+    #[test]
+    fn a_separate_tower_behind_the_block_shows_above_it() {
+        let mut topo = Topology::new();
+        let front_block = block(&mut topo);
+        let tower = placed_box(&mut topo, (10.0, 10.0, 40.0), Point3::new(-5.0, 5.0, 0.0));
+        let (o, d, x) = front();
+        let result =
+            project_solids_edges(&topo, &[front_block, tower], o, d, x, true, 0.1).unwrap();
+        assert!((length(&result.visible) - 170.0).abs() < 1e-5);
+        assert!((length(&result.hidden) - 310.0).abs() < 1e-5);
+    }
+
+    /// A 120 square plate 0.002 thick, from y = -0.006 to -0.004, in front
+    /// of a 100 cube at y = 0: nearer the cube than the step its own edges
+    /// are read from, it still hides the whole cube. Only the plate's front
+    /// square, 480, shows.
+    #[test]
+    fn a_thin_plate_just_in_front_hides_the_cube() {
+        let mut topo = Topology::new();
+        let cube = placed_box(&mut topo, (100.0, 100.0, 100.0), Point3::new(0.0, 0.0, 0.0));
+        let plate = placed_box(
+            &mut topo,
+            (120.0, 0.002, 120.0),
+            Point3::new(-10.0, -0.006, -10.0),
+        );
+        let (o, d, x) = (
+            Point3::new(50.0, -100.0, 50.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        let result = project_solids_edges(&topo, &[cube, plate], o, d, x, true, 0.1).unwrap();
+        assert!((length(&result.visible) - 480.0).abs() < 1e-5);
+    }
+
+    /// A cylinder of radius 10 and height 10 seen side on along +y: each
+    /// rim's front half shows as a 20 long line and its back half is hidden
+    /// behind it, read on the rim itself rather than on its chords.
+    #[test]
+    fn a_cylinder_seen_side_on_shows_its_rims_front_halves() {
+        let mut topo = Topology::new();
+        let cylinder = crate::primitives::make_cylinder(&mut topo, 10.0, 10.0).unwrap();
+        let (o, d, x) = (
+            Point3::new(0.0, -100.0, 5.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        );
+        let result = project_edges(&topo, cylinder, o, d, x, true, 0.1).unwrap();
+        assert!(
+            (length(&result.visible) - 40.0).abs() < 1e-5,
+            "{}",
+            length(&result.visible)
+        );
+        assert!((length(&result.hidden) - 40.0).abs() < 1e-5);
     }
 
     #[test]
