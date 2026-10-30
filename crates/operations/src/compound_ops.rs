@@ -361,17 +361,33 @@ pub fn solid_pieces(
         tolerance: brepkit_math::tolerance::Tolerance::new().linear,
         ..ClassifyOptions::default()
     };
+    // A region inside another lies inside its box, which a NURBS face's
+    // control points bound where its sampled extent can fall short; only
+    // regions that do are classified.
+    let tol = brepkit_math::tolerance::Tolerance::new().linear;
+    let mut boxes = Vec::with_capacity(regions.len());
+    for &region in &regions {
+        let mut bounds = crate::measure::solid_bounding_box(topo, region)?;
+        for face in brepkit_topology::explorer::solid_faces(topo, region)? {
+            if let brepkit_topology::face::FaceSurface::Nurbs(nurbs) = topo.face(face)?.surface() {
+                bounds = bounds.union(nurbs.aabb());
+            }
+        }
+        boxes.push(bounds.expanded(tol));
+    }
     let mut around: Vec<Vec<usize>> = vec![Vec::new(); regions.len()];
     for (j, &container) in regions.iter().enumerate() {
-        if !closed[j] {
+        let held: Vec<usize> = (0..regions.len())
+            .filter(|&i| {
+                closed[j] && i != j && probes[i].iter().all(|&p| boxes[j].contains_point(p))
+            })
+            .collect();
+        if held.is_empty() {
             continue;
         }
         let classifier = SolidClassifier::new(topo, container)?;
-        for (i, points) in probes.iter().enumerate() {
-            if i == j {
-                continue;
-            }
-            for &p in points {
+        for i in held {
+            for &p in &probes[i] {
                 match classifier.classify(p, &options)? {
                     PointClassification::Inside => {
                         around[i].push(j);
@@ -692,6 +708,10 @@ mod tests {
         let wall = 5e-7;
         let outer = centred_box(&mut topo, 10.0, [0.0, 0.0, 0.0]);
         let cavity = centred_box(&mut topo, 2.0f64.mul_add(-wall, 10.0), [0.0, 0.0, 0.0]);
+        for f in brepkit_topology::explorer::solid_faces(&topo, cavity).unwrap() {
+            let face = topo.face_mut(f).unwrap();
+            face.set_reversed(!face.is_reversed());
+        }
         let beside = centred_box(&mut topo, 4.0, [20.0, 0.0, 0.0]);
         let mut faces = Vec::new();
         for b in [outer, cavity, beside] {
@@ -701,11 +721,97 @@ mod tests {
         let all = topo.add_solid(Solid::new(shell, Vec::new()));
 
         let pieces = solid_pieces(&mut topo, all).unwrap();
-        let mut shells: Vec<usize> = pieces
-            .iter()
-            .map(|&p| 1 + topo.solid(p).unwrap().inner_shells().len())
-            .collect();
-        shells.sort_unstable();
-        assert_eq!(shells, vec![1, 2]);
+        let census = piece_census(&topo, &pieces);
+        assert_eq!(census.len(), 2, "{census:?}");
+        let hollow = 1000.0 - 2.0f64.mul_add(-wall, 10.0).powi(3);
+        assert_eq!(census[0].0, 2);
+        assert!((census[0].1 - hollow).abs() < 1e-9, "{census:?}");
+        assert_eq!(census[1].0, 1);
+        assert!((census[1].1 - 64.0).abs() < 1e-9, "{census:?}");
+    }
+
+    /// A ball of radius 10 hollowed to radius 5, fused with a cylinder
+    /// standing apart from it: two pieces, each valid and meshing closed,
+    /// the ball holding its cavity and the cylinder its own material.
+    #[test]
+    fn a_hollow_ball_and_a_cylinder_apart_are_two_pieces() {
+        use std::f64::consts::PI;
+
+        use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
+        use brepkit_math::vec::Point3;
+
+        use crate::boolean::{BooleanOp, boolean};
+
+        let mut topo = Topology::new();
+        let outer = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let inner = crate::primitives::make_sphere(&mut topo, 5.0, 32).unwrap();
+        let rod = crate::primitives::make_cylinder(&mut topo, 3.0, 8.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            rod,
+            &brepkit_math::mat::Mat4::translation(30.0, 0.0, -4.0),
+        )
+        .unwrap();
+        // The primitive ball's equator is a polygon of chords, so the ball
+        // is measured against its balls as built.
+        let [outer_v, inner_v] =
+            [outer, inner].map(|b| crate::measure::solid_volume(&topo, b, 0.01).unwrap());
+        let hollow = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
+        let both = boolean(&mut topo, BooleanOp::Fuse, hollow, rod).unwrap();
+
+        let pieces = solid_pieces(&mut topo, both).unwrap();
+        assert_eq!(pieces.len(), 2);
+        let classes = |piece: SolidId| {
+            [0.0, 7.5, 30.0].map(|x| {
+                classify_point(
+                    &topo,
+                    piece,
+                    Point3::new(x, 0.0, 0.0),
+                    &ClassifyOptions::default(),
+                )
+                .unwrap()
+            })
+        };
+        for &piece in &pieces {
+            assert!(
+                crate::validate::validate_solid(&topo, piece)
+                    .unwrap()
+                    .is_valid()
+            );
+            let mesh = crate::tessellate::tessellate_solid(&topo, piece, 0.01).unwrap();
+            assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+            assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+            let faces = brepkit_topology::explorer::solid_faces(&topo, piece).unwrap();
+            assert!(
+                faces
+                    .iter()
+                    .any(|&f| !topo.face(f).unwrap().surface().is_planar())
+            );
+            let volume = crate::measure::solid_volume(&topo, piece, 0.01).unwrap();
+            let (expected, class) = if topo.solid(piece).unwrap().inner_shells().is_empty() {
+                (
+                    PI * 9.0 * 8.0,
+                    [
+                        PointClassification::Outside,
+                        PointClassification::Outside,
+                        PointClassification::Inside,
+                    ],
+                )
+            } else {
+                (
+                    outer_v - inner_v,
+                    [
+                        PointClassification::Outside,
+                        PointClassification::Inside,
+                        PointClassification::Outside,
+                    ],
+                )
+            };
+            assert!(
+                (volume - expected).abs() < 1e-3 * expected,
+                "volume {volume}, expected {expected}"
+            );
+            assert_eq!(classes(piece), class);
+        }
     }
 }
