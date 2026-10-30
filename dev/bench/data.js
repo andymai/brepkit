@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793319538288,
+  "lastUpdate": 1793333170170,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60803,6 +60803,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28625713,
             "range": "± 589011",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e20f5596a25a4e29e5ee6a832949b0610062102c",
+          "message": "fix(operations): probe every edge of a tool before calling it contained (#2202)\n\nA boolean no longer calls a tool contained in the other solid because a\nsample of its edges stays inside: every edge of the tool is now probed,\nso a fuse that used to return the first solid unchanged fuses both.\n\nToday, before running the full boolean, `detect_trivial_relation` checks\nwhether one solid lies inside the other. When the tool's vertices all\nlie in the blank, it looks for a point of the tool's boundary outside\nthe blank, but probes only every `ceil(edges / 24)`-th edge. A rib prism\nstanding in an L's corner, with every vertex inside the L and a slanted\nside running out of it, has 27 edges once its two straight sides are\neach split into 3 collinear edges, so only every second edge is probed\nand the slanted side's edges are skipped. The shortcut calls the rib\ncontained, and the fuse returns the L unchanged: 23000 where the L and\nthe rib hold 26200.\n\n## Change\n\n- The boundary witness probes every edge of the tool, longest first,\neach at its start and quarter points as before.\n- The probes share one point classifier for the blank, built once per\ncheck; `classify_point` built the blank's face index again for every\nprobe.\n\nCloses #2186.\n\n## Tests\n\n- `fuse_l_with_a_rib_whose_sides_are_split_into_collinear_edges`: the L\nfused with the rib, its two straight sides split into 1, 2, 3, 4 and 8\ncollinear edges, holds 26200 each time. Without the change, 3, 4 and 8\npieces hold 23000.\n- `fuse_l_with_a_prism_whose_longest_edges_all_lie_inside`: a prism in\nthe same L whose two sides from its inside corner are split into 130\nedges each, so its 256 longest edges all lie in the L and only its short\nfar side runs out, fuses to 23005. Probing only its 256 longest edges\nreturns the L unchanged, 23000.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3771 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s, in the same time.",
+          "timestamp": "2026-10-30T04:02:24Z",
+          "tree_id": "c5be9052a8148bcf60c105d17d987a978ea8f7d3",
+          "url": "https://github.com/andymai/brepkit/commit/e20f5596a25a4e29e5ee6a832949b0610062102c"
+        },
+        "date": 1793333161739,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1079982,
+            "range": "± 6620",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1166540,
+            "range": "± 7221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12635,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689844,
+            "range": "± 1464",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28051226,
+            "range": "± 38876",
             "unit": "ns/iter"
           }
         ]
