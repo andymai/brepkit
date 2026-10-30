@@ -413,6 +413,37 @@ pub fn detach_walked(
     )))
 }
 
+/// Refuses a blend that made `made` on `result`, which carries its input's
+/// cavities, if one of the cavities holding none of `made` could meet the
+/// material the blend took off.
+///
+/// # Errors
+///
+/// Returns [`OperationsError::InvalidInput`] if a cavity could, and
+/// propagates topology and classification errors.
+pub fn clear_of_own_cavities(
+    topo: &mut Topology,
+    result: SolidId,
+    made: &[FaceId],
+    what: &str,
+) -> Result<(), OperationsError> {
+    let data = topo.solid(result)?;
+    let outer = data.outer_shell();
+    let mut untouched = Vec::new();
+    for &cavity in data.inner_shells() {
+        if !topo.shell(cavity)?.faces().iter().any(|f| made.contains(f)) {
+            untouched.push(cavity);
+        }
+    }
+    if untouched.is_empty() {
+        return Ok(());
+    }
+    // The cavities are read against the outer shell alone: the result holds
+    // them, so their vertices lie on its boundary.
+    let bare = topo.add_solid(brepkit_topology::solid::Solid::new(outer, Vec::new()));
+    clear_of_cavities(topo, &untouched, bare, made, what)
+}
+
 /// Refuses an operation that made `made` on `result` if a cavity could
 /// meet the material it took off: a cavity whose box meets a made face's
 /// box, or whose vertex is not inside `result`.

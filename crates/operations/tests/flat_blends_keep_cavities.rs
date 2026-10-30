@@ -501,3 +501,45 @@ fn a_walking_chamfers_result_is_its_own() {
     let report = validate_solid(&topo, block).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
 }
+
+/// A cylinder of radius 5 and height 10 less a 0.4 cube cavity whose least
+/// corner is `corner`, and its top rim.
+fn hollow_cylinder(topo: &mut Topology, corner: (f64, f64, f64)) -> (SolidId, EdgeId) {
+    let cyl = brepkit_operations::primitives::make_cylinder(topo, 5.0, 10.0).unwrap();
+    let cube = make_box(topo, 0.4, 0.4, 0.4).unwrap();
+    transform_solid(topo, cube, &Mat4::translation(corner.0, corner.1, corner.2)).unwrap();
+    let hollow = boolean(topo, BooleanOp::Cut, cyl, cube).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let rim = solid_edges(topo, hollow)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                if c.center().z() > 9.0 && (c.radius() - 5.0).abs() < 1e-9)
+        })
+        .unwrap();
+    (hollow, rim)
+}
+
+/// A 1 chamfer round a cylinder's top rim takes off the ring where
+/// `r + z > 14`: it keeps a cavity at the cylinder's middle, and is refused
+/// where a cavity just under the rim reaches into that ring.
+#[test]
+fn a_rim_chamfer_keeps_a_cavity_clear_of_it_and_refuses_one_it_reaches() {
+    let mut topo = Topology::new();
+    let (hollow, rim) = hollow_cylinder(&mut topo, (-0.2, -0.2, 4.8));
+    let result = chamfer(&mut topo, hollow, &[rim], 1.0).unwrap();
+    let volume = kept(&topo, result);
+    // The ring is a unit right triangle swept about the axis, its centroid
+    // at radius 14/3: 14π/3 by Pappus.
+    let expected = std::f64::consts::PI * (250.0 - 14.0 / 3.0) - 0.064;
+    assert!(
+        (volume - expected).abs() < 1e-6 * expected,
+        "{volume} vs {expected}"
+    );
+
+    let mut topo = Topology::new();
+    let (near, rim) = hollow_cylinder(&mut topo, (4.2, -0.2, 9.2));
+    assert!(chamfer(&mut topo, near, &[rim], 1.0).is_err());
+}

@@ -288,15 +288,17 @@ pub fn try_chamfer(
 
 /// The deflection [`blend_result_holds`] reads a blend of `size` on `solid`
 /// at: a tenth of the blend, at most 0.1, and at least a thousandth of the
-/// solid's diagonal up to 0.01, so a small part's curves still mesh within
-/// the check's 1%.
+/// solid's least extent up to 0.01, so a small or slender part's curves
+/// still mesh within the check's 1%.
 fn gate_deflection(
     topo: &brepkit_topology::Topology,
     solid: brepkit_topology::solid::SolidId,
     size: f64,
 ) -> Result<f64, brepkit_operations::OperationsError> {
     let bounds = brepkit_operations::measure::solid_bounding_box(topo, solid)?;
-    let floor = (1e-3 * (bounds.max - bounds.min).length()).min(0.01);
+    let extent = bounds.max - bounds.min;
+    let least = extent.x().min(extent.y()).min(extent.z());
+    let floor = (1e-3 * least).min(0.01);
     Ok((size * 0.1).clamp(floor, 0.1))
 }
 
@@ -986,6 +988,26 @@ mod fillet_tests {
         let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-5).unwrap();
         let full = std::f64::consts::PI * 1e-4 * 0.03;
         assert!(volume < full && volume > 0.97 * full, "{volume} of {full}");
+    }
+
+    /// A 0.002 chamfer round the top rim of a cylinder of radius 0.01 and
+    /// height 100 is kept: the part is long, but its curves are small.
+    #[test]
+    fn try_chamfer_keeps_a_slender_cylinders_rim_chamfer() {
+        let mut topo = Topology::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(&mut topo, 0.01, 100.0).unwrap();
+        let rim = solid_edge_ids(&topo, cyl)
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().z() > 50.0)
+            })
+            .unwrap();
+        let cut = try_chamfer(&mut topo, cyl, &[rim], 0.002).unwrap();
+        let volume = brepkit_operations::measure::solid_volume(&topo, cut, 1e-5).unwrap();
+        let full = std::f64::consts::PI * 1e-4 * 100.0;
+        assert!(volume < full && volume > 0.999 * full, "{volume} of {full}");
     }
 
     /// A chamfer of 2e-5 on a box of side 1e-4 is kept: its volume of about
