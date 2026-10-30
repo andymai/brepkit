@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793388961221,
+  "lastUpdate": 1793389243224,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62531,6 +62531,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29367385,
             "range": "± 74127",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "934a5e7477ea4300aba83912b7d1904114f3ae5d",
+          "message": "fix(check): integrate a ring torus face's volume exactly along its boundary (#2228)\n\n`solid_volume` now integrates a ring torus face exactly along its\nboundary, as it does a cylinder, cone or sphere face, so a solid with a\ntorus face holds its exact volume instead of reading off a mesh.\n\nToday one torus face sends the whole solid to the mesh, which inscribes\nits curved faces. A radius 3 leg 30 long fused to the quarter-turn bend\nthat continues it, a torus of radii 20 and 3, measures 1735.346 where it\nholds 270π + 90π² = 1736.494. The bend alone reads exactly, through a\nclosed form for a torus sector.\n\n## Change\n\n- The boundary integrator, Green's theorem in a face's `(u, v)` with `u`\nthe angle about the axis, takes a ring torus face too. Its tube angle\n`v` wraps as `u` does, so it is carried continuously along each wire. A\nhorn or spindle torus, whose tube meets its axis, keeps the mesh.\n- A wire winding round the tube, or round the axis, can start a turn\naway from where the face's other wire starts, and a turn moves its\nintegral by the whole torus's. A face with such wires drops the whole\nturns that would leave its area outside the surface's: it holds more\nthan none of the torus and less than all of it.\n- On any surface of revolution, a NURBS edge's integral over each knot\nspan is checked against its two halves, and the piece is halved until\nthey agree to a billionth of it, or to within what the derivative\nstencil's rounding allows, which does not shrink with the piece. A piece\nstill apart at a thousandth of the edge gives no result. A rational\narc's parameter can bunch along it, and so can a polynomial's speed\nswing, and one rule per span misread both.\n\nCloses #2171.\n\n## Tests\n\n- `a_leg_fused_to_its_bend_holds_its_exact_volume`: the leg and bend\nabove fuse to a solid with a torus face that holds 270π + 90π² to 1e-9.\nMeasured off the mesh, as before, it reads 1735.346.\n- `a_torus_band_between_tube_circles_holds_its_share` and\n`a_torus_band_between_circles_about_its_axis_holds_its_share`: bands of\nthe torus of radii 4 and 1 between its tube's circles at u = −0.1 and\n0.1, and between its circles about the axis at v = 3.0 and 3.3 across\nthe inner equator, hold their share of the torus's area and volume,\nwherever their wires start. Before, each read a negative area and fell\nback to the mesh.\n- `a_torus_band_between_rational_tube_circles_holds_its_share`: a band\nbetween tube circles drawn as quarter arcs weighted 1, 100/√2 and 10000\nholds its 2.513; one rule per span read 1.817.\n- `a_cone_quarter_reads_its_generators_however_they_run`: a quarter of a\ncone whose generators are degree-12 polynomials run as t¹² holds the\narea and volume term of the same quarter bounded by lines. One rule per\nspan read 4.442823 of 4.442883.\n- `a_wall_cutting_a_lobe_from_the_ring_is_exact` still passes: walls at\neight places cut a lobe from a ring torus, and each lobe and the ring\nless it sum to the ring within 1e-9.\n- The pose sweep and truth audit outputs differ from `main`'s only in\nvolume residuals, by rounding: none grows tenfold, and the largest,\n7.1e-10, is 7.2e-10 on `main`.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`solid_volume` now integrates a ring torus face exactly along its\nboundary instead of sending the whole solid to a mesh-based volume\nestimate, so a solid with a torus face holds its exact volume. Horn and\nspindle tori still use the mesh.\n\n- Carries the tube angle continuously along each wire, and drops whole\nturns when a wire's projection crosses 0 in either `u` or `v`, so a band\nspanning a seam holds its exact share.\n- Integrates a whole ring torus (with holes) over the full parameter\nsquare, reading each hole from its wire.\n- Checks every NURBS edge's pieces against their halves, halving only\nwhile they disagree past the derivative stencil's rounding, and giving\nup below a thousandth of the edge; a rational arc whose weights bunch\nits parameter or a polynomial edge run unevenly no longer misreads, and\nrounding in a narrow span isn't mistaken for error.\n- Adds regression tests for bands between tube circles and between\ncircles about the axis, for rational tube circles, for a cone quarter\nread along degree-12 generator polynomials, and for a cylindrical leg\nfused to a quarter-turn torus bend.\n\n<sup>Written for commit 3dc3f0c0b6a89f90c62a9e4f1db97e1535f60cc9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2228?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2228?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2228&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T12:36:40-07:00",
+          "tree_id": "cb5691593654240435f25cfa890dea325adf5ddb",
+          "url": "https://github.com/andymai/brepkit/commit/934a5e7477ea4300aba83912b7d1904114f3ae5d"
+        },
+        "date": 1793389234859,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1190485,
+            "range": "± 20397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1232135,
+            "range": "± 2550",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14523,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 698062,
+            "range": "± 1645",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29836377,
+            "range": "± 62202",
             "unit": "ns/iter"
           }
         ]
