@@ -5513,7 +5513,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         _ => None,
     };
 
-    Ok(match (points.is_empty(), surface_bbox) {
+    let bounds = match (points.is_empty(), surface_bbox) {
         (false, Some(sb)) => Aabb3::from_points(points).union(sb),
         (false, None) => Aabb3::from_points(points),
         (true, Some(sb)) => sb,
@@ -5522,7 +5522,11 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
             min: Point3::new(0.0, 0.0, 0.0),
             max: Point3::new(0.0, 0.0, 0.0),
         },
-    })
+    };
+    match topo.face(face_id)?.surface() {
+        FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, face_id, n, bounds, tol),
+        _ => Ok(bounds),
+    }
 }
 
 /// Pole-side axis of a spherical face, from its boundary winding: the summed

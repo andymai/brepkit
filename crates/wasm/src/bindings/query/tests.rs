@@ -591,3 +591,201 @@ fn make_planar_face_from_wire_rejects_noncoplanar() {
         "error must mention 'not planar', got {msg}"
     );
 }
+
+// ── get_edge_curve_parameters ────────────────────────────────
+
+/// A half circle from (10, 0, 0) over (15, 5, 0) to (20, 0, 0) runs half a
+/// turn: its parameters reach its start, its top and its end, not round its
+/// whole circle.
+#[test]
+fn an_arcs_parameters_span_the_arc() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+
+    let mut k = crate::kernel::BrepKernel::new();
+    let circle =
+        Circle3D::new(Point3::new(15.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0), 5.0).unwrap();
+    let topo = k.topo_mut();
+    let a = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, 0.0), 1e-7));
+    let b = topo.add_vertex(Vertex::new(Point3::new(20.0, 0.0, 0.0), 1e-7));
+    let arc =
+        crate::handles::edge_id_to_u32(topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))));
+
+    let span = k.get_edge_curve_parameters(arc).unwrap();
+    assert!(
+        (span[1] - span[0] - std::f64::consts::PI).abs() < 1e-12,
+        "{span:?}"
+    );
+    for (t, expected) in [
+        (span[0], Point3::new(10.0, 0.0, 0.0)),
+        (f64::midpoint(span[0], span[1]), Point3::new(15.0, 5.0, 0.0)),
+        (span[1], Point3::new(20.0, 0.0, 0.0)),
+    ] {
+        let p = k.evaluate_edge_curve(arc, t).unwrap();
+        let got = Point3::new(p[0], p[1], p[2]);
+        assert!(
+            (got - expected).length() < 1e-9,
+            "at {t}: {got:?}, expected {expected:?}"
+        );
+    }
+}
+
+// ── evaluate_surface_normal ──────────────────────────────────
+
+/// A tube cut from a cylinder of radius 20 by one of radius 17: its outer
+/// wall's normal points away from the axis and its bore's toward it, out
+/// of the material each time.
+#[test]
+fn a_bores_normal_points_out_of_the_material() {
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_topology::face::FaceSurface;
+
+    let mut k = crate::kernel::BrepKernel::new();
+    let topo = k.topo_mut();
+    let outer = brepkit_operations::primitives::make_cylinder(topo, 20.0, 60.0).unwrap();
+    let inner = brepkit_operations::primitives::make_cylinder(topo, 17.0, 60.0).unwrap();
+    let tube = boolean(topo, BooleanOp::Cut, outer, inner).unwrap();
+    for (radius, outward) in [(20.0, 1.0), (17.0, -1.0)] {
+        let wall = brepkit_topology::explorer::solid_faces(k.topo(), tube)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(k.topo().face(f).unwrap().surface(),
+                    FaceSurface::Cylinder(c) if (c.radius() - radius).abs() < 1e-9)
+            })
+            .unwrap();
+        let at = Point3::new(0.0, radius, 30.0);
+        let (u, v) = k
+            .topo()
+            .face(wall)
+            .unwrap()
+            .surface()
+            .project_point(at)
+            .unwrap();
+        let n = k
+            .evaluate_surface_normal(face_id_to_u32(wall), u, v)
+            .unwrap();
+        assert!(
+            n[0].abs() < 1e-9 && (n[1] - outward).abs() < 1e-9 && n[2].abs() < 1e-9,
+            "radius {radius}: normal {n:?}"
+        );
+    }
+}
+
+// ── project_point_on_surface ─────────────────────────────────
+
+/// Points on a cylinder's wall, round its axis and up its height, project
+/// back onto themselves, and one off the wall lands at its foot; the normal
+/// at each returned `(u, v)` points straight out from the axis.
+#[test]
+fn a_point_projects_onto_a_cylinders_wall_exactly() {
+    let mut k = crate::kernel::BrepKernel::new();
+    let cylinder = brepkit_operations::primitives::make_cylinder(k.topo_mut(), 10.0, 10.0).unwrap();
+    let wall = brepkit_topology::explorer::solid_faces(k.topo(), cylinder)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(
+                k.topo().face(f).unwrap().surface(),
+                brepkit_topology::face::FaceSurface::Cylinder(_)
+            )
+        })
+        .unwrap();
+    let wall = face_id_to_u32(wall);
+    let turn = |degrees: f64, height: f64, reach: f64| {
+        let a = degrees.to_radians();
+        Point3::new(reach * a.cos(), reach * a.sin(), height)
+    };
+    for (target, foot) in [
+        (turn(0.0, 5.0, 10.0), turn(0.0, 5.0, 10.0)),
+        (turn(60.0, 8.0, 10.0), turn(60.0, 8.0, 10.0)),
+        (turn(100.0, 9.5, 10.0), turn(100.0, 9.5, 10.0)),
+        (turn(0.0, 3.0, 12.0), turn(0.0, 3.0, 10.0)),
+    ] {
+        let r = k
+            .project_point_on_surface(wall, target.x(), target.y(), target.z())
+            .unwrap();
+        let got = Point3::new(r[2], r[3], r[4]);
+        assert!((got - foot).length() < 1e-9, "{target:?} lands at {got:?}");
+        assert!(
+            (r[5] - (target - foot).length()).abs() < 1e-9,
+            "{target:?}: distance {}",
+            r[5]
+        );
+        let n = k.evaluate_surface_normal(wall, r[0], r[1]).unwrap();
+        let out = turn((target.y()).atan2(target.x()).to_degrees(), 0.0, 1.0);
+        assert!(
+            (n[0] - out.x()).abs() < 1e-9 && (n[1] - out.y()).abs() < 1e-9 && n[2].abs() < 1e-9,
+            "{target:?}: normal {n:?}"
+        );
+    }
+}
+
+/// A point off a 45° cone's wall lands at its nearest point, down the
+/// generator across from it, not at the wall's point at its own height.
+#[test]
+fn a_point_projects_onto_a_cones_wall_at_its_nearest_point() {
+    let mut k = crate::kernel::BrepKernel::new();
+    let cone = brepkit_operations::primitives::make_cone(k.topo_mut(), 3.0, 0.0, 3.0).unwrap();
+    let wall = brepkit_topology::explorer::solid_faces(k.topo(), cone)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(
+                k.topo().face(f).unwrap().surface(),
+                brepkit_topology::face::FaceSurface::Cone(_)
+            )
+        })
+        .unwrap();
+    let r = k
+        .project_point_on_surface(face_id_to_u32(wall), 3.0, 0.0, 2.0)
+        .unwrap();
+    let got = Point3::new(r[2], r[3], r[4]);
+    assert!(
+        (got - Point3::new(2.0, 0.0, 1.0)).length() < 1e-9,
+        "{got:?}"
+    );
+    assert!((r[5] - 2.0_f64.sqrt()).abs() < 1e-9, "distance {}", r[5]);
+}
+
+/// A spindle torus (ring radius 1, tube radius 2) whose tube runs across its
+/// axis: `(1, 0, 0)` lies on the tube swung half a turn round, at
+/// `(u, v) = (π, π)`, and projects onto itself, not onto the near tube at
+/// `(3, 0, 0)`.
+#[test]
+fn a_point_on_a_spindle_torus_projects_onto_itself() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::ToroidalSurface;
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut k = crate::kernel::BrepKernel::new();
+    let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0, 2.0).unwrap();
+    let topo = k.topo_mut();
+    let rim = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+    let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+    let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+    let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+    let face =
+        face_id_to_u32(topo.add_face(Face::new(w, vec![], FaceSurface::Torus(torus.clone()))));
+    for target in [
+        Point3::new(1.0, 0.0, 0.0),
+        torus.evaluate(0.3, 0.5),
+        torus.evaluate(2.0, 2.5),
+    ] {
+        let r = k
+            .project_point_on_surface(face, target.x(), target.y(), target.z())
+            .unwrap();
+        let got = Point3::new(r[2], r[3], r[4]);
+        assert!(
+            (got - target).length() < 1e-9,
+            "{target:?} lands at {got:?}"
+        );
+        assert!(r[5] < 1e-9, "{target:?}: distance {}", r[5]);
+    }
+}

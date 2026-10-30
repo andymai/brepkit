@@ -770,9 +770,11 @@ pub(super) fn validate_boolean_result_lenient(
     let shell = topo.shell(s.outer_shell())?;
     let face_count = shell.faces().len();
     // A sphere or torus face closes on itself, and a cone face closes at an
-    // apex on its boundary, so a solid with one needs fewer faces: a ring
-    // drilled through its tube is the ring's face and the tunnel wall, and a
-    // cone's tip cut off by a plane is its wall and a disc.
+    // apex on its boundary, so a solid of one face can be whole. Two faces
+    // bound a solid when one of them curves: a ring drilled through its tube
+    // is the ring's face and the tunnel wall, a cone's tip cut off by a
+    // plane is its wall and a disc, and a bulge cut off a NURBS face is the
+    // bulge and a disc.
     let closes_on_itself = shell.faces().iter().any(|&fid| {
         topo.face(fid).is_ok_and(|face| match face.surface() {
             FaceSurface::Sphere(_) | FaceSurface::Torus(_) => true,
@@ -780,8 +782,15 @@ pub(super) fn validate_boolean_result_lenient(
             _ => false,
         })
     });
+    let curves = shell.faces().iter().any(|&fid| {
+        topo.face(fid)
+            .is_ok_and(|face| !matches!(face.surface(), FaceSurface::Plane { .. }))
+    });
+    let enough = face_count >= MIN_SOLID_FACES
+        || (face_count > 0 && closes_on_itself)
+        || (face_count == 2 && curves);
 
-    if face_count == 0 || (face_count < MIN_SOLID_FACES && !closes_on_itself) {
+    if !enough {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!(
                 "boolean result has only {face_count} faces (minimum {MIN_SOLID_FACES} required for a closed solid)"
@@ -848,12 +857,16 @@ fn face_touches_point(topo: &Topology, face: &Face, point: Point3) -> bool {
 /// Two faces are adjacent if they share an edge. Returns each connected
 /// group as a Vec<FaceId> — a single-component solid produces one group,
 /// a multi-region solid (disjoint pieces in one shell) produces N groups.
-pub(super) fn face_components(topo: &Topology, solid: SolidId) -> Vec<Vec<FaceId>> {
-    let shell = match topo.solid(solid).and_then(|s| topo.shell(s.outer_shell())) {
-        Ok(sh) => sh,
-        Err(_) => return Vec::new(),
-    };
-    let face_ids: Vec<FaceId> = shell.faces().to_vec();
+pub(crate) fn face_components(topo: &Topology, solid: SolidId) -> Vec<Vec<FaceId>> {
+    match topo.solid(solid).and_then(|s| topo.shell(s.outer_shell())) {
+        Ok(shell) => edge_connected_faces(topo, shell.faces()),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Group `face_ids` into sets of faces joined through shared edges, each
+/// set in a stable order.
+pub(crate) fn edge_connected_faces(topo: &Topology, face_ids: &[FaceId]) -> Vec<Vec<FaceId>> {
     if face_ids.is_empty() {
         return Vec::new();
     }

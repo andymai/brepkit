@@ -864,6 +864,95 @@ fn cut_overlapping_3d() {
     assert_volume_near(&topo, result, 0.875, 0.001);
 }
 
+/// An L of two boxes fused with a rib prism standing in its corner, whose
+/// every vertex lies in the L but whose slanted side runs out of it, fuses
+/// to the L and the rib together however many collinear edges the rib's
+/// straight sides are split into: the containment shortcut must not call
+/// the rib inside the L because a sample of its edges stays there.
+#[test]
+fn fuse_l_with_a_rib_whose_sides_are_split_into_collinear_edges() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
+
+    // The rib's (x, z) corners, its bottom and left sides each split into
+    // `pieces` collinear edges.
+    let outline = |pieces: u32| {
+        let mut pts = vec![(3.0, 47.0), (5.0, 45.0), (45.0, 5.0), (47.0, 3.0)];
+        let step = 44.0 / f64::from(pieces);
+        pts.extend((1..pieces).map(|k| (f64::from(k).mul_add(-step, 47.0), 3.0)));
+        pts.push((3.0, 3.0));
+        pts.extend((1..pieces).map(|k| (3.0, f64::from(k).mul_add(step, 3.0))));
+        pts
+    };
+    for pieces in [1, 2, 3, 4, 8] {
+        let mut topo = Topology::new();
+        let base = crate::primitives::make_box(&mut topo, 60.0, 40.0, 5.0).unwrap();
+        let wall = crate::primitives::make_box(&mut topo, 5.0, 40.0, 60.0).unwrap();
+        for b in [base, wall] {
+            crate::transform::transform_solid(&mut topo, b, &Mat4::translation(0.0, -20.0, 0.0))
+                .unwrap();
+        }
+        let l = boolean(&mut topo, BooleanOp::Fuse, base, wall).unwrap();
+        let points: Vec<Point3> = outline(pieces)
+            .into_iter()
+            .map(|(x, z)| Point3::new(x, -2.0, z))
+            .collect();
+        let wire = make_polygon_wire(&mut topo, &points, 1e-7).unwrap();
+        let face = make_face_from_wire(&mut topo, wire).unwrap();
+        let rib = crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 1.0, 0.0), 4.0).unwrap();
+        let both = boolean(&mut topo, BooleanOp::Fuse, l, rib).unwrap();
+        let volume = crate::measure::solid_volume(&topo, both, 0.01).unwrap();
+        assert!(
+            (volume - 26200.0).abs() < 1e-6 * 26200.0,
+            "{pieces} pieces: the fuse holds {volume:.3}"
+        );
+    }
+}
+
+/// A prism in the same L whose two sides from its inside corner are split
+/// into 130 edges each: its 256 longest edges all lie in the L, and only its
+/// short far side runs out of it. The shortcut must not call it contained.
+#[test]
+fn fuse_l_with_a_prism_whose_longest_edges_all_lie_inside() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
+
+    let mut topo = Topology::new();
+    let base = crate::primitives::make_box(&mut topo, 60.0, 40.0, 5.0).unwrap();
+    let wall = crate::primitives::make_box(&mut topo, 5.0, 40.0, 60.0).unwrap();
+    for b in [base, wall] {
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(0.0, -20.0, 0.0))
+            .unwrap();
+    }
+    let l = boolean(&mut topo, BooleanOp::Fuse, base, wall).unwrap();
+    let pieces = 130;
+    let along = |from: (f64, f64), to: (f64, f64)| {
+        (0..pieces).map(move |k| {
+            let f = f64::from(k) / f64::from(pieces);
+            (
+                f.mul_add(to.0 - from.0, from.0),
+                f.mul_add(to.1 - from.1, from.1),
+            )
+        })
+    };
+    let points: Vec<Point3> = along((2.0, 2.0), (7.0, 4.0))
+        .chain(std::iter::once((7.0, 4.0)))
+        .chain(along((4.0, 7.0), (2.0, 2.0)))
+        .map(|(x, z)| Point3::new(x, -5.0, z))
+        .collect();
+    let wire = make_polygon_wire(&mut topo, &points, 1e-7).unwrap();
+    let face = make_face_from_wire(&mut topo, wire).unwrap();
+    let prism = crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 1.0, 0.0), 10.0).unwrap();
+    let both = boolean(&mut topo, BooleanOp::Fuse, l, prism).unwrap();
+    // The prism adds the corner past the L's inner corner, a right triangle
+    // of legs 1, ten deep.
+    let volume = crate::measure::solid_volume(&topo, both, 0.01).unwrap();
+    assert!(
+        (volume - 23005.0).abs() < 1e-6 * 23005.0,
+        "the fuse holds {volume:.3}"
+    );
+}
+
 #[test]
 fn fuse_flush_face_cubes() {
     let mut topo = Topology::new();
@@ -1436,6 +1525,67 @@ fn intersect_box_centered_sphere_is_analytic_collar() {
     assert!(
         (vol - expected).abs() / expected < 0.01,
         "volume {vol:.3} should be within 1% of analytic {expected:.3}"
+    );
+}
+
+/// A ball of radius 1 centred 1 above a ring torus's core circle (major 4,
+/// minor 1.5) pokes out of the tube's top: the two meet in a loop, and
+/// their intersection keeps only the ball's part inside the tube, on the
+/// ball's and the torus's own surfaces. Points of the ball above the tube
+/// lie outside it, points below inside, and the cut and the intersection
+/// share the torus's volume between them.
+#[test]
+fn intersect_torus_with_a_ball_poking_out_of_its_tube() {
+    use crate::classify::PointClassification::{Inside, Outside};
+    let mut topo = Topology::new();
+    let ring = crate::primitives::make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+    let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        ball,
+        &brepkit_math::mat::Mat4::translation(4.0, 0.0, 1.0),
+    )
+    .unwrap();
+    let whole = crate::measure::solid_volume(&topo, ring, 0.001).unwrap();
+    let mut cut_topo = topo.clone();
+    let cut = boolean(&mut cut_topo, BooleanOp::Cut, ring, ball).unwrap();
+    let common = boolean(&mut topo, BooleanOp::Intersect, ring, ball).unwrap();
+    // Both keep the ball's and the torus's own surfaces, not a mesh's facets.
+    for (t, solid) in [(&topo, common), (&cut_topo, cut)] {
+        let kinds: Vec<&'static str> = brepkit_topology::explorer::solid_faces(t, solid)
+            .unwrap()
+            .iter()
+            .map(|&f| t.face(f).unwrap().surface().type_tag())
+            .collect();
+        assert!(
+            kinds.contains(&"sphere") && kinds.contains(&"torus"),
+            "faces {kinds:?}"
+        );
+        // The seam where the ball and the tube were split closes both.
+        assert!(
+            crate::validate::validate_solid(t, solid)
+                .unwrap()
+                .is_valid()
+        );
+        let adj = brepkit_topology::adjacency::AdjacencyIndex::build(t, solid).unwrap();
+        assert!(adj.boundary_edges().is_empty() && adj.non_manifold_edges().is_empty());
+        let mesh = crate::tessellate::tessellate_solid(t, solid, 0.01).unwrap();
+        assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+        assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+    }
+
+    let class = |p: Point3| crate::classify::classify_point(&topo, common, p, 0.01, 1e-9).unwrap();
+    assert_eq!(class(Point3::new(4.0, 0.0, 1.9)), Outside);
+    assert_eq!(class(Point3::new(4.0, 0.0, 0.5)), Inside);
+    let kept = crate::measure::solid_volume(&topo, common, 0.001).unwrap();
+    let left = crate::measure::solid_volume(&cut_topo, cut, 0.001).unwrap();
+    assert!(
+        kept < 3.5,
+        "the intersection keeps {kept:.3}, more than the ball's part in the tube"
+    );
+    assert!(
+        ((kept + left) - whole).abs() < 1e-3 * whole,
+        "cut {left:.4} and intersection {kept:.4} do not make up the torus {whole:.4}"
     );
 }
 
@@ -2280,9 +2430,9 @@ fn compound_cut_single_tool_matches_boolean() {
 }
 
 /// One tool of two disjoint pieces, a dent in the tube's top whose cut stays
-/// exact and a ball beside the ring whose cut needs the mesh fallback, is cut
-/// piece by piece: the dent exactly, the ball last, and the result holds what
-/// cutting by the dent and then the ball leaves.
+/// exact and a rod through the ring off its tube's centre whose cut needs the
+/// mesh fallback, is cut piece by piece: the dent exactly, the rod last, and
+/// the result holds what cutting by the dent and then the rod leaves.
 #[test]
 fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
     use brepkit_math::mat::Mat4;
@@ -2292,12 +2442,17 @@ fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
         let torus = crate::primitives::make_torus(topo, 4.0, 1.5, 32).unwrap();
         let dent = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
         crate::transform::transform_solid(topo, dent, &Mat4::translation(-4.5, -0.5, 1.0)).unwrap();
-        let ball = crate::primitives::make_sphere(topo, 1.0, 32).unwrap();
-        crate::transform::transform_solid(topo, ball, &Mat4::translation(5.0, 0.0, 0.0)).unwrap();
-        (torus, dent, ball)
+        let rod = crate::primitives::make_cylinder(topo, 0.6, 20.0).unwrap();
+        crate::transform::transform_solid(
+            topo,
+            rod,
+            &(Mat4::translation(0.5, 10.0, 1.0) * Mat4::rotation_x(std::f64::consts::FRAC_PI_2)),
+        )
+        .unwrap();
+        (torus, dent, rod)
     };
 
-    let (torus, dent, ball) = parts(&mut topo);
+    let (torus, dent, rod) = parts(&mut topo);
     let dented = boolean(&mut topo, BooleanOp::Cut, torus, dent).unwrap();
     let torus_faces = brepkit_topology::explorer::solid_faces(&topo, dented)
         .unwrap()
@@ -2305,16 +2460,16 @@ fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
         .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
         .count();
     assert!(torus_faces > 0, "the dent's cut stays exact");
-    let reference = boolean(&mut topo, BooleanOp::Cut, dented, ball).unwrap();
+    let reference = boolean(&mut topo, BooleanOp::Cut, dented, rod).unwrap();
     let expected = crate::measure::solid_volume(&topo, reference, 0.05).unwrap();
 
-    let (torus, dent, ball) = parts(&mut topo);
-    let tool = crate::compound_ops::merge_disjoint_solids(&mut topo, &[dent, ball]).unwrap();
+    let (torus, dent, rod) = parts(&mut topo);
+    let tool = crate::compound_ops::merge_disjoint_solids(&mut topo, &[dent, rod]).unwrap();
     let before = super::mesh_fallback_count();
     let result = compound_cut(&mut topo, torus, &[tool], BooleanOptions::default()).unwrap();
     assert!(
         super::mesh_fallback_count() > before,
-        "the ball's cut takes the mesh fallback"
+        "the rod's cut takes the mesh fallback"
     );
     assert_volume_near(&topo, result, expected, 1e-3);
 }
@@ -8975,5 +9130,125 @@ fn a_box_grazing_a_ball_leaves_it_whole() {
                 .iter()
                 .all(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
         );
+    }
+}
+
+/// A unit block whose top is the lid `z = 100 u (1 - u)^4 v (1 - v)` over
+/// the unit square, flat along its rim and peaking at 2.048, and a box over
+/// everything above `z = 1.5`. The plane meets the lid only in a loop inside
+/// its face, under the bulge.
+fn lid_block_and_box_above(topo: &mut Topology) -> (SolidId, SolidId) {
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::nurbs::surface::NurbsSurface;
+
+    let block = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(topo, block, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+    let top = brepkit_topology::explorer::solid_faces(topo, block)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                if normal.z() > 0.5 && d.abs() < 1e-9)
+        })
+        .unwrap();
+    let rows = (0..6)
+        .map(|i| {
+            (0..3)
+                .map(|j| {
+                    let z = if (i, j) == (1, 1) { 10.0 } else { 0.0 };
+                    Point3::new(f64::from(i) / 5.0, f64::from(j) / 2.0, z)
+                })
+                .collect()
+        })
+        .collect();
+    let lid = NurbsSurface::new(
+        5,
+        2,
+        [vec![0.0; 6], vec![1.0; 6]].concat(),
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        rows,
+        vec![vec![1.0; 3]; 6],
+    )
+    .unwrap();
+    topo.face_mut(top)
+        .unwrap()
+        .set_surface(FaceSurface::Nurbs(lid));
+    let above = crate::primitives::make_box(topo, 10.0, 10.0, 10.0).unwrap();
+    crate::transform::transform_solid(topo, above, &Mat4::translation(-5.0, -5.0, 1.5)).unwrap();
+    (block, above)
+}
+
+/// The box takes the lid's tip off whole: the tip is the bulge above 1.5 and
+/// the disc the plane cuts under it, 0.0306289; the rest keeps the block's
+/// five flat faces, the lid with a hole and the disc, and the remaining
+/// 1 + 1/18 - 0.0306289.
+#[test]
+fn a_box_takes_the_tip_off_a_nurbs_lid() {
+    let tip = 0.030_628_9;
+    let whole = 1.0 + 100.0 / 30.0 / 6.0;
+    for (op, faces, volume) in [
+        (BooleanOp::Intersect, 2, tip),
+        (BooleanOp::Cut, 7, whole - tip),
+    ] {
+        let mut topo = Topology::new();
+        let (block, above) = lid_block_and_box_above(&mut topo);
+        let result = boolean(&mut topo, op, block, above).unwrap();
+        let found = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert_eq!(found.len(), faces, "{op:?}");
+        assert!(
+            crate::validate::validate_solid(&topo, result)
+                .unwrap()
+                .is_valid(),
+            "{op:?}"
+        );
+        let measured = crate::measure::solid_volume(&topo, result, 1e-4).unwrap();
+        assert!(
+            (measured - volume).abs() < 1e-3 * volume,
+            "{op:?}: {measured} vs {volume}"
+        );
+    }
+}
+
+/// A ball of radius 10 whose equator lies in a 40 x 40 x 20 box's top face
+/// leaves that face bounded by the equator's arcs, not their chords: the
+/// intersection is the lower hemisphere, the cut the box less it, and the
+/// fuse the box with the upper hemisphere, each exact.
+#[test]
+fn a_ball_with_its_equator_on_a_box_face_meets_it_exactly() {
+    use brepkit_math::mat::Mat4;
+
+    let hemisphere = 2.0 / 3.0 * std::f64::consts::PI * 1000.0;
+    for (op, faces, volume) in [
+        (BooleanOp::Intersect, 2, hemisphere),
+        (BooleanOp::Cut, 7, 32_000.0 - hemisphere),
+        (BooleanOp::Fuse, 7, 32_000.0 + hemisphere),
+    ] {
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 40.0, 40.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-20.0, -20.0, 0.0))
+            .unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, ball, &Mat4::translation(0.0, 0.0, 20.0))
+            .unwrap();
+        let result = boolean(&mut topo, op, block, ball).unwrap();
+        let found = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert_eq!(found.len(), faces, "{op:?}");
+        for edge in brepkit_topology::explorer::solid_edges(&topo, result).unwrap() {
+            let edge = topo.edge(edge).unwrap();
+            let z = topo.vertex(edge.start()).unwrap().point().z();
+            if (z - 20.0).abs() < 1e-9 && edge.start() != edge.end() {
+                let ends = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
+                if (ends[0].x().hypot(ends[0].y()) - 10.0).abs() < 1e-9 {
+                    assert!(matches!(edge.curve(), EdgeCurve::Circle(_)), "{op:?}");
+                }
+            }
+        }
+        assert!(
+            crate::validate::validate_solid(&topo, result)
+                .unwrap()
+                .is_valid(),
+            "{op:?}"
+        );
+        assert_volume_near(&topo, result, volume, 1e-6);
     }
 }

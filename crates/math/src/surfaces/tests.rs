@@ -151,6 +151,19 @@ fn torus_inner_point() {
     assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 3.0));
 }
 
+/// On a spindle torus (ring radius 1, tube radius 2) the point `(1, 0, 0)`
+/// lies on the tube swung half a turn round; the nearest projection finds it
+/// there, where the near tube's is 2 away.
+#[test]
+fn spindle_torus_projects_onto_its_far_tube() {
+    let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0, 2.0).unwrap();
+    let p = Point3::new(1.0, 0.0, 0.0);
+    let (u, v) = t.project_point_nearest(p);
+    assert!((t.evaluate(u, v) - p).length() < 1e-12, "({u}, {v})");
+    let (u, v) = t.project_point(p);
+    assert!(approx_eq((t.evaluate(u, v) - p).length(), 2.0));
+}
+
 #[test]
 fn torus_zero_radius_error() {
     assert!(ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 0.0, 1.0).is_err());

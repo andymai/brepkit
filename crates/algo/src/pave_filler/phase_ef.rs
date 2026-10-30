@@ -233,9 +233,14 @@ fn build_face_containment(
     }
 
     // Curved faces can bulge past their boundary AABB (e.g. a hemisphere
-    // bounded by its equator), so expand generously by half the diagonal.
+    // bounded by its equator), so expand generously by half the diagonal. A
+    // NURBS face can rise further, which its control points bound.
+    let bbox = bbox.expanded((diag * 0.5).max(tol.linear * 10.0));
     Ok(FaceContainment {
-        bbox: bbox.expanded((diag * 0.5).max(tol.linear * 10.0)),
+        bbox: match &surface {
+            FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, fid, n, bbox, tol)?,
+            _ => bbox,
+        },
         planar: None,
     })
 }
