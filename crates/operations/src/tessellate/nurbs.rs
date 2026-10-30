@@ -914,31 +914,26 @@ pub(super) fn untwisted_grid(
     max_divisions: usize,
 ) -> (usize, usize) {
     const SAMPLES: usize = 8;
+    // Evenly spread cells of the grid, not every one, its first and last
+    // included: a taper's worst cell sits at its narrow end.
+    let spread = |n: usize| {
+        let cells = n.min(SAMPLES);
+        (0..cells).map(move |k| {
+            if cells > 1 {
+                k * (n - 1) / (cells - 1)
+            } else {
+                0
+            }
+        })
+    };
     let fits = |n_u: usize, n_v: usize| {
-        let (cells_u, cells_v) = (n_u.min(SAMPLES), n_v.min(SAMPLES));
-        (0..cells_u).all(|i| {
-            (0..cells_v).all(|j| {
-                // An evenly spread cell of the grid, not every one.
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
+        spread(n_u).all(|i| {
+            spread(n_v).all(|j| {
                 #[allow(clippy::cast_precision_loss)]
-                let (ci, cj) = ((i * n_u / cells_u) as f64, (j * n_v / cells_v) as f64);
-                #[allow(clippy::cast_precision_loss)]
-                let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
-                let (u0, v0) = (du.mul_add(ci, u_lo), dv.mul_add(cj, v_lo));
-                let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
-                let (p00, p10, p01, p11) = (
-                    corner(0.0, 0.0),
-                    corner(1.0, 0.0),
-                    corner(0.0, 1.0),
-                    corner(1.0, 1.0),
-                );
-                let middle = corner(0.5, 0.5);
-                // The middle's distance to the two triangles the cell splits
-                // into, along either diagonal: a mesh may take either.
-                let split = |a: Point3, b: Point3, c: Point3, d: Point3| {
-                    point_triangle_distance(middle, a, b, c)
-                        .min(point_triangle_distance(middle, a, c, d))
-                };
-                split(p00, p10, p11, p01).max(split(p10, p11, p01, p00)) <= 0.5 * deflection
+                let corner = (du.mul_add(i as f64, u_lo), dv.mul_add(j as f64, v_lo));
+                cell_twist(at, corner, (du, dv)) <= 0.5 * deflection
             })
         })
     };
@@ -947,6 +942,28 @@ pub(super) fn untwisted_grid(
         n_v = (n_v * 2).min(max_divisions);
     }
     (n_u, n_v)
+}
+
+/// How far the middle of the cell from `(u0, v0)` across `(du, dv)` lies
+/// from the two triangles the cell splits into, along either diagonal: a
+/// mesh may take either.
+pub(super) fn cell_twist(
+    at: &dyn Fn(f64, f64) -> Point3,
+    (u0, v0): (f64, f64),
+    (du, dv): (f64, f64),
+) -> f64 {
+    let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
+    let (p00, p10, p01, p11) = (
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(0.0, 1.0),
+        corner(1.0, 1.0),
+    );
+    let middle = corner(0.5, 0.5);
+    let split = |a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(middle, a, b, c).min(point_triangle_distance(middle, a, c, d))
+    };
+    split(p00, p10, p11, p01).max(split(p10, p11, p01, p00))
 }
 
 /// The distance from `p` to the triangle `a`, `b`, `c`; to its longest side

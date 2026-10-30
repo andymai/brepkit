@@ -3465,6 +3465,18 @@ pub(super) fn tessellate_holed_face_local(
     let mut merged = TriangleMesh::default();
     let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
     let mut pool: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
+    // A twisted face's straight edges are sampled as finely as its grid, as
+    // the solid mesher samples them.
+    let mut straight: DetHashMap<usize, Vec<Point3>> =
+        super::edge_sampling::twisted_straight_edge_samples(
+            topo,
+            face_data,
+            deflection,
+            angular_tol,
+            circle_floor,
+        )?
+        .into_iter()
+        .collect();
     for wire_id in
         std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
     {
@@ -3473,7 +3485,11 @@ pub(super) fn tessellate_holed_face_local(
                 continue;
             }
             let edge = topo.edge(oe.edge())?;
-            let gids = sample_edge(topo, edge, deflection, angular_tol, circle_floor)?
+            let points = match straight.remove(&oe.edge().index()) {
+                Some(points) => points,
+                None => sample_edge(topo, edge, deflection, angular_tol, circle_floor)?,
+            };
+            let gids = points
                 .into_iter()
                 .map(|pt| {
                     *point_to_global
@@ -4481,7 +4497,7 @@ fn ruled_metric(
     }
 }
 
-const NURBS_MAX_DIVISIONS: usize = 1024;
+pub(super) const NURBS_MAX_DIVISIONS: usize = 1024;
 
 /// The chord divisions of a NURBS face's iso-lines across its box, along `u`
 /// and along `v`. `None` for any other surface.

@@ -245,6 +245,92 @@ pub(super) fn circle_param_range(
     }
 }
 
+/// The samples of each straight edge of a twisted bilinear NURBS face, as
+/// fine as the grid its twist needs across the face's own parameter box: an
+/// edge is cut into as many pieces as the grid's cells its parameters cross.
+/// Empty for a face that needs no such grid.
+///
+/// # Errors
+///
+/// Returns an error if a wire, edge or vertex lookup fails.
+pub(super) fn twisted_straight_edge_samples(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    deflection: f64,
+    angular_tol: f64,
+    circle_floor: bool,
+) -> Result<Vec<(usize, Vec<Point3>)>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+
+    let surface = face.surface();
+    let FaceSurface::Nurbs(nurbs) = surface else {
+        return Ok(Vec::new());
+    };
+    if nurbs.degree_u() != 1 || nurbs.degree_v() != 1 {
+        return Ok(Vec::new());
+    }
+    let (mut u_lo, mut u_hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut v_lo, mut v_hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut lines = Vec::new();
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wire_id)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let uvs: Vec<(f64, f64)> =
+                sample_edge(topo, edge, deflection, angular_tol, circle_floor)?
+                    .into_iter()
+                    .filter_map(|p| surface.project_point(p))
+                    .collect();
+            for &(u, v) in &uvs {
+                (u_lo, u_hi) = (u_lo.min(u), u_hi.max(u));
+                (v_lo, v_hi) = (v_lo.min(v), v_hi.max(v));
+            }
+            if matches!(edge.curve(), EdgeCurve::Line)
+                && let (Some(&start_uv), Some(&end_uv)) = (uvs.first(), uvs.last())
+            {
+                let ends = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                lines.push((oe.edge().index(), ends, start_uv, end_uv));
+            }
+        }
+    }
+    let (du, dv) = (u_hi - u_lo, v_hi - v_lo);
+    if !(du > 1e-15 && dv > 1e-15) {
+        return Ok(Vec::new());
+    }
+    let at = |u: f64, v: f64| nurbs.evaluate(u, v);
+    let (n_u, n_v) = super::nurbs::untwisted_grid(
+        &at,
+        ((u_lo, u_hi), (v_lo, v_hi)),
+        (1, 1),
+        deflection,
+        super::nonplanar::NURBS_MAX_DIVISIONS,
+    );
+    if n_u.max(n_v) <= 1 {
+        return Ok(Vec::new());
+    }
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let samples = lines
+        .into_iter()
+        .map(|(idx, (a, b), (ua, va), (ub, vb))| {
+            let cells = ((ub - ua).abs() / du * n_u as f64).max((vb - va).abs() / dv * n_v as f64);
+            // A whole number of cells, read past its rounding.
+            let pieces = ((cells * (1.0 - 1e-9)).ceil() as usize).max(1);
+            let points = (0..=pieces)
+                .map(|k| a + (b - a) * (k as f64 / pieces as f64))
+                .collect();
+            (idx, points)
+        })
+        .collect();
+    Ok(samples)
+}
+
 /// Sample an edge curve to produce a list of 3D points (start to end).
 ///
 /// The sampling density is driven by `deflection`. For a `Line`, only the

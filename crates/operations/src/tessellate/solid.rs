@@ -451,51 +451,26 @@ pub(super) fn tessellate_solid_core(
     // A bilinear patch twisted between skew lines is meshed on a grid fine
     // enough for its twist, but its straight edges keep only their ends, so
     // the triangles joining such an edge to the grid reach across the face.
-    // Each straight edge of such a face is sampled as finely as its grid.
-    // Edge samples are shared, so the face across the edge takes them too.
+    // Each straight edge of such a face is sampled as finely as its grid
+    // across the face's own parameter box. Edge samples are shared, so the
+    // face across the edge takes them too.
     // Other patches mesh their straight edges on rows of their own.
     for &face_id in &all_faces {
         let face_data = topo.face(face_id)?;
-        let FaceSurface::Nurbs(nurbs) = face_data.surface() else {
-            continue;
-        };
-        if nurbs.degree_u() != 1 || nurbs.degree_v() != 1 {
-            continue;
-        }
-        let at = |u: f64, v: f64| nurbs.evaluate(u, v);
-        let (n_u, n_v) = super::nurbs::untwisted_grid(
-            &at,
-            (nurbs.domain_u(), nurbs.domain_v()),
-            (1, 1),
+        for (idx, points) in super::edge_sampling::twisted_straight_edge_samples(
+            topo,
+            face_data,
             deflection,
-            1024,
-        );
-        let wanted = n_u.max(n_v) + 1;
-        if wanted <= 2 {
-            continue;
-        }
-        let mut wire_ids = vec![face_data.outer_wire()];
-        wire_ids.extend_from_slice(face_data.inner_wires());
-        for &wire_id in &wire_ids {
-            for oe in topo.wire(wire_id)?.edges() {
-                let edge_data = topo.edge(oe.edge())?;
-                if !matches!(edge_data.curve(), EdgeCurve::Line) {
-                    continue;
-                }
-                let idx = oe.edge().index();
-                if edge_points.get(&idx).is_some_and(|pts| pts.len() >= wanted) {
-                    continue;
-                }
-                let (a, b) = (
-                    topo.vertex(edge_data.start())?.point(),
-                    topo.vertex(edge_data.end())?.point(),
-                );
-                #[allow(clippy::cast_precision_loss)]
-                let points = (0..wanted)
-                    .map(|k| a + (b - a) * (k as f64 / (wanted - 1) as f64))
-                    .collect();
-                edge_points.insert(idx, points);
+            angular_tol,
+            circle_floor,
+        )? {
+            if edge_points
+                .get(&idx)
+                .is_some_and(|pts| pts.len() >= points.len())
+            {
+                continue;
             }
+            edge_points.insert(idx, points);
         }
     }
 
