@@ -1,0 +1,23 @@
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_a2dc21dbec3f2b::t_540fce0a97efe7 288-289,293-313,445,447,451-471
+  s_a2dc21dbec3f2b::t_625d0b5d9dcd1f 414,420,425-431,439
+  s_a2dc21dbec3f2b::t_07096fdfee6fb9 290-291,448-449
+crates/operations/src/cavities.rs
+  s_a2dc21dbec3f2b::t_07096fdfee6fb9 376-390
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "095771a2de038215277da95656feda7c61f107eb",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
