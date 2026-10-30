@@ -1,0 +1,22 @@
+crates/operations/src/tessellate/tests.rs
+  s_a2dc21dbec3f2b::t_1087eefdd848f0 3721-3794
+crates/operations/src/tessellate/solid.rs
+  s_a2dc21dbec3f2b::t_8fcb1ed7aa6231 161-166,240-246,265-276
+  s_a2dc21dbec3f2b::t_3b1b14dc2b87ef 277-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "548801fab28ad167106fed9ef8ac605419c2beb4",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
