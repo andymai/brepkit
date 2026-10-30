@@ -10583,8 +10583,9 @@ mod tests {
         assert!(point_in(5.0, 1e-8, 0).0.is_none());
     }
 
-    /// A rectangle 1 by 1e-6 gets a point inside it at the default
-    /// clearance, though its sampled polygon asks for more room; one 1e-3 by
+    /// Rectangles 1 by 1e-6 and 100 by 1e-5 get a point inside them at the
+    /// default clearance, though their sampled polygons ask for more room,
+    /// and corner steps stay too near their ends; one 1e-3 by
     /// 1.5e-7 gets one at a clearance of 1e-11, but none at 1e-7, which no
     /// point of it clears.
     #[test]
@@ -10634,6 +10635,9 @@ mod tests {
         )
         .unwrap();
         assert!(inside(p, 1.0, 1e-6), "{p:?}");
+        let long = rectangle(100.0, 1e-5);
+        let p = interior_point_3d(&long, Some(&frame), containment::SEED_CLEARANCE).unwrap();
+        assert!(inside(p, 100.0, 1e-5), "{p:?}");
         let thin = rectangle(1e-3, 1.5e-7);
         let p = interior_point_3d(&thin, Some(&frame), 1e-11).unwrap();
         assert!(inside(p, 1e-3, 1.5e-7), "{p:?}");
