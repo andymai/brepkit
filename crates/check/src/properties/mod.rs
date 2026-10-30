@@ -90,10 +90,11 @@ pub fn exact_solid_volume(topo: &Topology, solid: SolidId) -> Result<Option<f64>
             FaceSurface::Plane { normal, .. } => {
                 face_integrator::planar_face_by_edges(topo, fid, *normal * sign, about)?
             }
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_) => {
-                boundary::curved_face_by_boundary(topo, face, sign, about)?
-            }
-            FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => None,
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => boundary::curved_face_by_boundary(topo, face, sign, about)?,
+            FaceSurface::Nurbs(_) => None,
         };
         let Some(contribution) = contribution else {
             return Ok(None);
