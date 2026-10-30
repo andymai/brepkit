@@ -368,28 +368,40 @@ impl Span {
 }
 
 /// `curve` from parameter `t0` to `t1`, run backward when `t1 < t0`, or
-/// `None` if it cannot be cut there.
+/// `None` if it cannot be cut there. The curve is cut over its domain moved
+/// to `[0, 1]`, so a domain of any scale is cut alike.
 fn nurbs_between(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     t0: f64,
     t1: f64,
 ) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+    use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_math::nurbs::knot_ops::curve_split;
-    let (lo, hi) = (t0.min(t1), t0.max(t1));
     let (d0, d1) = curve.domain();
-    let slack = 1e-12 * (d1 - d0).abs().max(1.0);
-    let mut span = curve.clone();
-    if hi < d1 - slack {
+    let length = d1 - d0;
+    if length.is_nan() || length <= 0.0 {
+        return None;
+    }
+    let unit = |t: f64| (t - d0) / length;
+    let mut span = NurbsCurve::new(
+        curve.degree(),
+        curve.knots().iter().map(|&k| unit(k)).collect(),
+        curve.control_points().to_vec(),
+        curve.weights().to_vec(),
+    )
+    .ok()?;
+    let (lo, hi) = (unit(t0.min(t1)), unit(t0.max(t1)));
+    if hi < 1.0 - 1e-12 {
         span = curve_split(&span, hi).ok()?.0;
     }
-    if lo > d0 + slack {
+    if lo > 1e-12 {
         span = curve_split(&span, lo).ok()?.1;
     }
     if t1 >= t0 {
         return Some(span);
     }
     let (a, b) = span.domain();
-    brepkit_math::nurbs::curve::NurbsCurve::new(
+    NurbsCurve::new(
         span.degree(),
         span.knots().iter().rev().map(|&k| a + b - k).collect(),
         span.control_points().iter().rev().copied().collect(),
@@ -1117,9 +1129,16 @@ mod tests {
     /// A spiral `r = 1 + 6e-9 θ` from θ = -π/2 to 2π, fit through 81 of its
     /// points, with an edge on it from θ = 0 to its end, whose ends lie
     /// 3.8e-8 apart and weld: the edge becomes a closed edge one turn long,
-    /// cut from the curve, not the curve's whole turn and a quarter.
+    /// cut from the curve, not the curve's whole turn and a quarter, whether
+    /// its knots run over 1 or over 1e-13.
     #[test]
     fn sew_cuts_a_welded_piece_of_a_longer_curve_to_its_span() {
+        for scale in [1.0, 1e-13] {
+            sew_a_welded_spiral_piece(scale);
+        }
+    }
+
+    fn sew_a_welded_spiral_piece(scale: f64) {
         let mut topo = Topology::new();
         let up = Vec3::new(0.0, 0.0, 1.0);
         let spiral = |theta: f64| {
@@ -1130,7 +1149,14 @@ mod tests {
         let points: Vec<Point3> = (0..=80)
             .map(|k| spiral((5.0 * quarter).mul_add(f64::from(k) / 80.0, -quarter)))
             .collect();
-        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+        let fit = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            fit.degree(),
+            fit.knots().iter().map(|k| k * scale).collect(),
+            fit.control_points().to_vec(),
+            fit.weights().to_vec(),
+        )
+        .unwrap();
         let [a, b] = [points[16], points[80]].map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
         let edges = [
             topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(curve))),
@@ -1174,7 +1200,10 @@ mod tests {
                 (at(k + 1) - at(k)).length()
             })
             .sum();
-        assert!((length - std::f64::consts::TAU).abs() < 1e-3, "{length}");
+        assert!(
+            (length - std::f64::consts::TAU).abs() < 1e-3,
+            "knots over {scale}: {length}"
+        );
     }
 
     /// The cylinder's faces with one cap's rim swapped for `curve`, used
