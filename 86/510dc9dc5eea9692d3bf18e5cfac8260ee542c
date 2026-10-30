@@ -1,0 +1,25 @@
+crates/operations/src/thicken.rs
+  s_a2dc21dbec3f2b::t_9e955f6b257e55 393-401
+  s_a2dc21dbec3f2b::t_938e13085f34eb 834-837,841-872
+  s_a2dc21dbec3f2b::t_e45e2588662c55 838-840
+  s_a2dc21dbec3f2b::t_af4f1eba602a10 790-792,797,799,806,810-819
+  s_a2dc21dbec3f2b::t_29c1bd88685488 116
+  s_a2dc21dbec3f2b::t_28058e667a2a38 379-392,402-443,445-477
+  s_a2dc21dbec3f2b::t_fa08bfadc0b4e4 444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86510dc9dc5eea9692d3bf18e5cfac8260ee542c",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
