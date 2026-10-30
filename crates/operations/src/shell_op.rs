@@ -508,6 +508,13 @@ pub fn shell(
         });
     }
 
+    let inner_of = |p: Point3| inner_pos.get(&quantize_pt(p)).copied().unwrap_or(p);
+    if !open_set.is_empty()
+        && let Some(rims) = planar_rims(topo, &face_verts, &open_set, inner_of, tol.linear)?
+    {
+        result_specs.extend(rims);
+    }
+
     let solid = assemble_solid_mixed(topo, &result_specs, tol)?;
 
     let edge_face_map = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
@@ -675,6 +682,185 @@ pub fn shell(
     *topo.shell_mut(shell_id)? = new_shell;
 
     Ok(solid)
+}
+
+/// The rim each open face leaves on its own plane, or `None` when an open
+/// face is not planar. Along each of the face's edges the rim holds the strip
+/// between the edge and its inner copy; an edge it shares with another open
+/// face has no strip, its inner copy lying on it. The strips' shared sides
+/// cancel, leaving the rim's boundary: an annulus when every neighbour stays
+/// closed, a U when one is open too. Each loop runs counter-clockwise about
+/// the face's outward normal, its holes the other way.
+fn planar_rims(
+    topo: &Topology,
+    face_verts: &[(FaceId, Vec<Point3>)],
+    open_set: &HashSet<usize>,
+    inner_of: impl Fn(Point3) -> Point3,
+    tol: f64,
+) -> Result<Option<Vec<FaceSpec>>, crate::OperationsError> {
+    let key = |p: Point3| {
+        let scale = 1.0 / tol;
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+    // Each planar open face, by its place in `face_verts`, with its outward
+    // normal.
+    let mut open = Vec::new();
+    for (i, (fid, _)) in face_verts.iter().enumerate() {
+        if !open_set.contains(&fid.index()) {
+            continue;
+        }
+        let face = topo.face(*fid)?;
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            return Ok(None);
+        };
+        open.push((
+            i,
+            if face.is_reversed() {
+                -*normal
+            } else {
+                *normal
+            },
+        ));
+    }
+    // Open faces sharing an edge in one plane are one opening, whose strips
+    // are taken together: the strip along an edge between two of them comes
+    // from each face the other way round, and the two cancel.
+    let mut group: Vec<usize> = (0..open.len()).collect();
+    let find = |group: &mut Vec<usize>, mut x: usize| {
+        while group[x] != x {
+            group[x] = group[group[x]];
+            x = group[x];
+        }
+        x
+    };
+    let mut first_on: HashMap<[i64; 6], usize> = HashMap::new();
+    for (g, &(i, outward)) in open.iter().enumerate() {
+        let verts = &face_verts[i].1;
+        let n = verts.len();
+        for k in 0..n {
+            let (a, b) = (key(verts[k]), key(verts[(k + 1) % n]));
+            let (a, b) = if a < b { (a, b) } else { (b, a) };
+            let side = [a.0, a.1, a.2, b.0, b.1, b.2];
+            match first_on.get(&side) {
+                Some(&h)
+                    if open[h].1.cross(outward).length() <= 1e-9
+                        && open[h].1.dot(outward) > 0.0 =>
+                {
+                    let (rg, rh) = (find(&mut group, g), find(&mut group, h));
+                    group[rg] = rh;
+                }
+                Some(_) => {}
+                None => {
+                    first_on.insert(side, g);
+                }
+            }
+        }
+    }
+    let mut openings: HashMap<usize, Vec<usize>> = HashMap::new();
+    for g in 0..open.len() {
+        let root = find(&mut group, g);
+        openings.entry(root).or_default().push(g);
+    }
+    let mut openings: Vec<Vec<usize>> = openings.into_values().collect();
+    openings.sort_unstable();
+
+    let mut rims = Vec::new();
+    for members in openings {
+        let outward = open[members[0]].1;
+        let mut sides: Vec<(Point3, Point3)> = Vec::new();
+        for &g in &members {
+            // Each face's strips run round it about the outward normal, so
+            // the strip between two of them comes from each the other way
+            // round, however their wires are stored.
+            let mut verts = face_verts[open[g].0].1.clone();
+            if crate::winding::newell_normal(&verts).dot(open[g].1) < 0.0 {
+                verts.reverse();
+            }
+            let n = verts.len();
+            for k in 0..n {
+                let (a, b) = (verts[k], verts[(k + 1) % n]);
+                let (ia, ib) = (inner_of(a), inner_of(b));
+                let width = crate::winding::newell_normal(&[a, b, ib, ia]).length();
+                if width <= tol * (b - a).length() {
+                    continue;
+                }
+                for (p, q) in [(a, b), (b, ib), (ib, ia), (ia, a)] {
+                    if key(p) == key(q) {
+                        continue;
+                    }
+                    if let Some(i) = sides
+                        .iter()
+                        .position(|&(s, e)| key(s) == key(q) && key(e) == key(p))
+                    {
+                        sides.swap_remove(i);
+                    } else {
+                        sides.push((p, q));
+                    }
+                }
+            }
+        }
+        let mut loops: Vec<Vec<Point3>> = Vec::new();
+        while let Some((start, mut at)) = sides.pop() {
+            let mut lp = vec![start];
+            while key(at) != key(start) {
+                let Some(i) = sides.iter().position(|&(s, _)| key(s) == key(at)) else {
+                    return Ok(None);
+                };
+                lp.push(at);
+                at = sides.swap_remove(i).1;
+            }
+            loops.push(lp);
+        }
+        // With three neighbours open around it, an open face's strips fall
+        // into separate pieces, each a face of its own. A loop winding as the
+        // largest does is a piece's outline; the others are holes, each in
+        // the smallest outline around it.
+        let area = |lp: &[Point3]| crate::winding::newell_normal(lp).dot(outward);
+        let Some(sense) = loops
+            .iter()
+            .map(|lp| area(lp))
+            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+        else {
+            continue;
+        };
+        let (outlines, holes): (Vec<_>, Vec<_>) =
+            loops.into_iter().partition(|lp| area(lp) * sense > 0.0);
+        let mut holes_of: Vec<Vec<Vec<Point3>>> = vec![Vec::new(); outlines.len()];
+        for hole in holes {
+            let Some(k) = (0..outlines.len())
+                .filter(|&k| crate::distance::point_in_polygon_3d(&hole[0], &outlines[k], &outward))
+                .min_by(|&a, &b| {
+                    area(&outlines[a])
+                        .abs()
+                        .total_cmp(&area(&outlines[b]).abs())
+                })
+            else {
+                return Ok(None);
+            };
+            holes_of[k].push(hole);
+        }
+        for (mut outline, mut holes) in outlines.into_iter().zip(holes_of) {
+            if area(&outline) < 0.0 {
+                outline.reverse();
+            }
+            for hole in &mut holes {
+                if area(hole) > 0.0 {
+                    hole.reverse();
+                }
+            }
+            rims.push(FaceSpec::Planar {
+                d: dot_normal_point(outward, outline[0]),
+                vertices: outline,
+                normal: outward,
+                inner_wires: holes,
+            });
+        }
+    }
+    Ok(Some(rims))
 }
 
 /// Sort oriented edges into connected loops.

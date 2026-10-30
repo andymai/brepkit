@@ -1,5 +1,70 @@
 # Changelog
 
+## [4.6.5](https://github.com/andymai/brepkit/compare/v4.6.4...v4.6.5) (2026-10-30)
+
+
+### Bug Fixes
+
+* **algo:** bound a plane on a ball's equator by arcs, not chords ([#2225](https://github.com/andymai/brepkit/issues/2225)) ([3a2a366](https://github.com/andymai/brepkit/commit/3a2a366419cce88a6fa8c598b854add3dcf18edf))
+
+## [4.6.4](https://github.com/andymai/brepkit/compare/v4.6.3...v4.6.4) (2026-10-30)
+
+
+### Bug Fixes
+
+* **topology:** refuse to face a wire whose edges do not close ([#2222](https://github.com/andymai/brepkit/issues/2222)) ([5bb5af6](https://github.com/andymai/brepkit/commit/5bb5af6239a1d0554f3a3594730955e8df975954))
+
+## [4.6.3](https://github.com/andymai/brepkit/compare/v4.6.2...v4.6.3) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** leave a rim on each open face when shelling ([#2211](https://github.com/andymai/brepkit/issues/2211)) ([af556b6](https://github.com/andymai/brepkit/commit/af556b60f1aae91d0cabe263ca3ebb940de3d232))
+
+## [4.6.2](https://github.com/andymai/brepkit/compare/v4.6.1...v4.6.2) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** fill a Coons patch from its curves whichever way they run ([#2216](https://github.com/andymai/brepkit/issues/2216)) ([32f73db](https://github.com/andymai/brepkit/commit/32f73db336b3ffe48c010729be0148d10a72697c))
+* **wasm:** give each face of a grouped mesh its own vertices so creases shade sharp ([#2215](https://github.com/andymai/brepkit/issues/2215)) ([0fac49c](https://github.com/andymai/brepkit/commit/0fac49cfc2d15b62c43909383a834158553d0894))
+
+## [4.6.1](https://github.com/andymai/brepkit/compare/v4.6.0...v4.6.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** weld a face two solids share after round-off in fuse_all ([#2214](https://github.com/andymai/brepkit/issues/2214)) ([1b97ed0](https://github.com/andymai/brepkit/commit/1b97ed0548f45492b9c822f4ca53103e4ed2bf96))
+
+## [4.6.0](https://github.com/andymai/brepkit/compare/v4.5.11...v4.6.0) (2026-10-30)
+
+
+### Features
+
+* **operations:** split a solid holding separate pieces into one solid per piece ([#2203](https://github.com/andymai/brepkit/issues/2203)) ([f3302b5](https://github.com/andymai/brepkit/commit/f3302b536e7be5a72beec7d207915910bea56496))
+
+
+### Bug Fixes
+
+* **wasm:** give a reversed face's normal its outward direction ([#2207](https://github.com/andymai/brepkit/issues/2207)) ([5f212ce](https://github.com/andymai/brepkit/commit/5f212ce333a6cd311e0b0d3072963bd0a4194e2d))
+* **wasm:** project a point onto an analytic face in closed form ([#2206](https://github.com/andymai/brepkit/issues/2206)) ([1ddd6a1](https://github.com/andymai/brepkit/commit/1ddd6a113a7c916b56bb672306b9b46cd9a90fe5))
+
+## [4.5.11](https://github.com/andymai/brepkit/compare/v4.5.10...v4.5.11) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** revolve a ring into one torus per circle ([#2204](https://github.com/andymai/brepkit/issues/2204)) ([aa5565c](https://github.com/andymai/brepkit/commit/aa5565c901e9d2fccbe3e10cc2ce9d73c005f256))
+
+## [4.5.10](https://github.com/andymai/brepkit/compare/v4.5.9...v4.5.10) (2026-10-30)
+
+
+### Bug Fixes
+
+* **math:** meet a ball off a torus's axis in the loops its closed form gives ([#2160](https://github.com/andymai/brepkit/issues/2160)) ([848285a](https://github.com/andymai/brepkit/commit/848285a4780f22dd6648ab779638da5d1165d616))
+* **operations:** probe every edge of a tool before calling it contained ([#2202](https://github.com/andymai/brepkit/issues/2202)) ([e20f559](https://github.com/andymai/brepkit/commit/e20f5596a25a4e29e5ee6a832949b0610062102c))
+* **wasm:** give an arc's curve parameters its own span ([#2205](https://github.com/andymai/brepkit/issues/2205)) ([3bbc5d9](https://github.com/andymai/brepkit/commit/3bbc5d9152f8609a3faf605def0ff3ae97add3d8))
+
 ## [4.5.9](https://github.com/andymai/brepkit/compare/v4.5.8...v4.5.9) (2026-10-29)
 
 

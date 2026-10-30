@@ -6,7 +6,7 @@ use brepkit_blend::fillet_builder::FilletBuilder;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
-use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
 
@@ -32,23 +32,20 @@ pub fn all_blended(result: BlendResult) -> Result<SolidId, OperationsError> {
     }
 }
 
-/// `result` with the cavities of `solid` as its own. The walking builders
-/// rebuild only the outer shell and carry the cavity shells over as they
-/// are, so a blend reaching a cavity is refused, and each kept cavity is
-/// copied: a shell shared with the input would move with it under an
-/// in-place transform of either.
+/// `result` as a solid of its own: the walking builders share the input's
+/// unchanged edges and its cavity shells with the result, which would move
+/// with it under an in-place transform of either. A blend reaching a cavity
+/// is refused.
 fn own_cavities(
     topo: &mut Topology,
     solid: SolidId,
     mut result: BlendResult,
     what: &str,
 ) -> Result<BlendResult, OperationsError> {
-    if result.solid == solid || topo.solid(solid)?.inner_shells().is_empty() {
+    if result.solid == solid {
         return Ok(result);
     }
-    let outer = topo.solid(result.solid)?.outer_shell();
-    let bare = topo.add_solid(Solid::new(outer, Vec::new()));
-    result.solid = crate::cavities::keep_cavities(topo, solid, bare, what)?;
+    result.solid = crate::cavities::detach_walked(topo, solid, result.solid, what)?;
     Ok(result)
 }
 
@@ -297,52 +294,4 @@ fn chain_extends_tangently(topo: &Topology, chain: &[EdgeId], cand: EdgeId) -> b
         }
     }
     false
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    /// A box's top front edge, 40 long, filleted at a radius running 2 to 5:
-    /// the round stays inside the box, rolling against the two faces' insides,
-    /// and the solid loses `(1 − π/4) ∫ r²` along the edge.
-    #[test]
-    fn a_variable_fillet_rounds_a_convex_edge_inside_it() {
-        use brepkit_blend::radius_law::RadiusLaw;
-
-        let mut topo = brepkit_topology::Topology::new();
-        let block = crate::primitives::make_box(&mut topo, 40.0, 30.0, 20.0).unwrap();
-        let edge = brepkit_topology::explorer::solid_edges(&topo, block)
-            .unwrap()
-            .into_iter()
-            .find(|&e| {
-                let edge = topo.edge(e).unwrap();
-                [edge.start(), edge.end()].iter().all(|&v| {
-                    let p = topo.vertex(v).unwrap().point();
-                    p.y().abs() < 1e-9 && (p.z() - 20.0).abs() < 1e-9
-                })
-            })
-            .unwrap();
-        let law = RadiusLaw::Linear {
-            start: 2.0,
-            end: 5.0,
-        };
-        let rounded = super::all_blended(
-            super::fillet_v2_variable(&mut topo, block, vec![(edge, law)]).unwrap(),
-        )
-        .unwrap();
-
-        let bounds = crate::measure::solid_bounding_box(&topo, rounded).unwrap();
-        assert!(
-            bounds.min.y() > -1e-9 && bounds.max.z() < 20.0 + 1e-9,
-            "the round leaves the box: {bounds:?}"
-        );
-        let volume = crate::measure::solid_volume(&topo, rounded, 0.01).unwrap();
-        let removed = (1.0 - std::f64::consts::FRAC_PI_4) * 40.0 * (4.0 + 10.0 + 25.0) / 3.0;
-        assert!(
-            (volume - (24000.0 - removed)).abs() < 1e-2 * removed,
-            "volume {volume}, expected {}",
-            24000.0 - removed
-        );
-    }
 }

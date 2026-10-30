@@ -259,28 +259,6 @@ where
     Ok(false)
 }
 
-/// The `(u, v)` at which a torus passes through a point on it. A spindle
-/// torus's tube runs across its axis, and a point there lies on the tube
-/// circle half a turn round (where `R + r cos v` is negative), while the
-/// projection reads it on the near tube circle, a sheet's spacing away.
-fn torus_parameters(tor: &brepkit_math::surfaces::ToroidalSurface, p: Point3) -> (f64, f64) {
-    let near = tor.project_point(p);
-    if tor.major_radius() >= tor.minor_radius() {
-        return near;
-    }
-    let rel = p - tor.center();
-    let rho = tor.x_axis().dot(rel).hypot(tor.y_axis().dot(rel));
-    let far = (
-        (near.0 + PI).rem_euclid(std::f64::consts::TAU),
-        tor.z_axis()
-            .dot(rel)
-            .atan2(-rho - tor.major_radius())
-            .rem_euclid(std::f64::consts::TAU),
-    );
-    let off = |(u, v): (f64, f64)| (tor.evaluate(u, v) - p).length();
-    if off(far) < off(near) { far } else { near }
-}
-
 /// Count crossings for analytic (non-planar) faces using UV containment.
 ///
 /// Given ray parameter roots (where the ray hits the infinite surface),
@@ -506,7 +484,7 @@ pub fn face_contains_each(
                 .collect()
         }
         FaceSurface::Torus(tor) => {
-            let project = |q: Point3| torus_parameters(tor, q);
+            let project = |q: Point3| tor.project_point_nearest(q);
             let apex = torus_axis_vertex(topo, face_id, tor)?;
             let region = uv_region(topo, face_id, &project, true, apex)?;
             points
@@ -1024,7 +1002,7 @@ pub fn count_face_ray_crossings(
                 origin,
                 direction,
                 &roots,
-                |p| torus_parameters(&tor, p),
+                |p| tor.project_point_nearest(p),
                 true,
                 apex,
             )
@@ -1221,7 +1199,7 @@ mod tests {
         for (u, v) in [(2.3, 4.0), (0.4, 3.6), (5.9, 2.9)] {
             assert!(0.1 + 2.45 * f64::cos(v) < 0.0);
             let p = tor.evaluate(u, v);
-            let (pu, pv) = torus_parameters(&tor, p);
+            let (pu, pv) = tor.project_point_nearest(p);
             assert!((tor.evaluate(pu, pv) - p).length() < 1e-9, "({u}, {v})");
             assert!(
                 pv > FRAC_PI_2 && pv < 3.0 * FRAC_PI_2,
@@ -1229,7 +1207,7 @@ mod tests {
             );
         }
         let p = tor.evaluate(0.3, 5.5);
-        let (pu, pv) = torus_parameters(&tor, p);
+        let (pu, pv) = tor.project_point_nearest(p);
         assert!((pu - 0.3).abs() < 1e-9 && (pv - 5.5).abs() < 1e-9);
     }
 
