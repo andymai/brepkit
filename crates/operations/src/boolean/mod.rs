@@ -2710,8 +2710,29 @@ fn detect_trivial_relation(
                     .is_ok_and(|d| d.distance > tol.linear * 10.0)
             };
             let planes = outward_planes(topo, outer);
-            let stride = edges.len().div_ceil(24).max(1);
-            edges.iter().step_by(stride).any(|&eid| {
+            // Every edge is probed, the longest first: an edge that leaves the
+            // outer solid can lie among sides split into many short collinear
+            // edges, which a sample of the edges can skip over. Past
+            // `BOUNDARY_PROBE_EDGES` only the longest are.
+            let reach_of = |eid: brepkit_topology::edge::EdgeId| {
+                let Ok(e) = topo.edge(eid) else { return 0.0 };
+                let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
+                    return 0.0;
+                };
+                let (ps, pe) = (vs.point(), ve.point());
+                let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+                let at = |k: u8| {
+                    let f = f64::from(k) / 4.0;
+                    e.curve()
+                        .evaluate_with_endpoints((t1 - t0).mul_add(f, t0), ps, pe)
+                };
+                (0..4).map(|k| (at(k + 1) - at(k)).length()).sum::<f64>()
+            };
+            let mut edges: Vec<(f64, brepkit_topology::edge::EdgeId)> =
+                edges.into_iter().map(|eid| (reach_of(eid), eid)).collect();
+            edges.sort_by(|a, b| b.0.total_cmp(&a.0));
+            edges.truncate(BOUNDARY_PROBE_EDGES);
+            edges.iter().map(|&(_, eid)| eid).any(|eid| {
                 let Ok(e) = topo.edge(eid) else { return false };
                 let (Ok(vs), Ok(ve)) = (topo.vertex(e.start()), topo.vertex(e.end())) else {
                     return false;
@@ -2812,6 +2833,10 @@ fn detect_trivial_relation(
         b_in_a,
     }
 }
+
+/// How many of a tool's edges, the longest, the containment shortcut's
+/// boundary witness probes.
+const BOUNDARY_PROBE_EDGES: usize = 256;
 
 /// The point of a circle or ellipse edge, within its span `(t0, t1)`,
 /// farthest along the unit direction `n`; `None` for other curves, a
