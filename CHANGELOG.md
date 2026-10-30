@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.3](https://github.com/andymai/brepkit/compare/v4.6.2...v4.6.3) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** leave a rim on each open face when shelling ([#2211](https://github.com/andymai/brepkit/issues/2211)) ([af556b6](https://github.com/andymai/brepkit/commit/af556b60f1aae91d0cabe263ca3ebb940de3d232))
+
 ## [4.6.2](https://github.com/andymai/brepkit/compare/v4.6.1...v4.6.2) (2026-10-30)
 
 
