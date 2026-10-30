@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793355600710,
+  "lastUpdate": 1793356724125,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61829,6 +61829,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23230770,
             "range": "± 49423",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3a2a366419cce88a6fa8c598b854add3dcf18edf",
+          "message": "fix(algo): bound a plane on a ball's equator by arcs, not chords (#2225)\n\nA boolean whose plane lies on a primitive ball's equator now bounds the\nnew plane face, and the kept hemisphere, by arcs of the equator circle\nrather than its chords, so the result holds its exact volume.\n\nA primitive ball's two hemispheres meet along its equator as straight\nedges between `segments` vertices on the circle, which stand for the\narcs between them. When a plane lies on the equator, the section circle\nis split at those vertices into arcs, and the solid builder then merges\neach arc with the chord sharing its ends, keeping whichever edge is\nolder: the chord. A 40 x 40 x 20 box intersected with a radius 10 ball\ncentered on its top face gives a plane face of 32 chords and 2080.963,\nwhere the hemisphere holds 2094.395. The cut reads 29919.037 and the\nfuse 34107.827, each 13.432 off.\n\n## Change\n\n- Where the builder merges edges that share their ends, and one is an\narc while the rest are lines on a ball's face, it keeps the arc. The arc\nlies on the plane and on the ball, so both faces end on the exact\ncircle.\n\nCloses #2180.\n\n## Tests\n\n- `a_ball_with_its_equator_on_a_box_face_meets_it_exactly`: that box and\nball give the hemisphere in 2 faces, the box less it in 7, and the box\nwith the upper hemisphere in 7, each valid, to 1e-6 of the exact volume,\nwith every edge on the equator an arc. Keeping the older edge fails it\non the intersection's edges.\n- Probed beside it: with the ball's equator on the box's bottom face the\nthree are exact too, and with the ball 1 above or 5 below the top face\nthey match `main`'s.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3800 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes volume loss in boolean operations when a plane lies on a ball's\nequator by keeping the equator's arcs instead of their chords as face\nboundaries.\n\nA plane face on a ball's equator was previously bounded by chords\nstanding in for the circle's arcs, giving intersection, cut, and fuse\nvolumes off by ~13.43. The edge merge now prefers the arc when a\nduplicate chord sharing its ends lies on a sphere's face, so both faces\nend on the exact circle.\n\nAdds a test asserting exact volumes for a box intersected with a ball\ncentered on its top face across all three boolean operations.\n\n<sup>Written for commit 2428991986118f1d929598c16b100a397424119f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2225?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2225?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2225&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T10:36:16Z",
+          "tree_id": "3fec61977ffefb575a215b23d546eb34963623f1",
+          "url": "https://github.com/andymai/brepkit/commit/3a2a366419cce88a6fa8c598b854add3dcf18edf"
+        },
+        "date": 1793356715603,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 628514,
+            "range": "± 11133",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 695226,
+            "range": "± 5974",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7839,
+            "range": "± 101",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 388683,
+            "range": "± 4459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17874540,
+            "range": "± 275278",
             "unit": "ns/iter"
           }
         ]
