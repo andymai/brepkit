@@ -1319,3 +1319,54 @@ mod fillet_tests {
         );
     }
 }
+
+/// The solid `shell` bounds, refused unless every edge of the shell bounds
+/// exactly two of its faces: an open shell encloses nothing, and a volume
+/// measured off it is not a solid's.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] naming the shell's free or
+/// non-manifold edges, or an error from a bad topology reference.
+pub fn solid_from_closed_shell(
+    topo: &mut Topology,
+    shell: brepkit_topology::shell::ShellId,
+) -> Result<brepkit_topology::solid::SolidId, WasmError> {
+    let issues = brepkit_check::validate::shell::check_shell_closed(topo, shell)
+        .map_err(brepkit_operations::OperationsError::from)?;
+    if !issues.is_empty() {
+        let found: Vec<&str> = issues.iter().map(|i| i.description.as_str()).collect();
+        return Err(WasmError::InvalidInput {
+            reason: format!("a solid needs a closed shell: {}", found.join("; ")),
+        });
+    }
+    Ok(topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![])))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    /// A box's and a cylinder's own shells make solids, the cylinder's seam
+    /// bounding its wall on both sides; three of the box's faces do not.
+    #[test]
+    fn only_a_closed_shell_makes_a_solid() {
+        let mut topo = Topology::new();
+        for solid in [
+            brepkit_operations::primitives::make_box(&mut topo, 10.0, 20.0, 30.0).unwrap(),
+            brepkit_operations::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap(),
+        ] {
+            let shell = topo.solid(solid).unwrap().outer_shell();
+            assert!(solid_from_closed_shell(&mut topo, shell).is_ok());
+        }
+        let block = brepkit_operations::primitives::make_box(&mut topo, 10.0, 20.0, 30.0).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, block).unwrap();
+        let open =
+            topo.add_shell(brepkit_topology::shell::Shell::new(faces[..3].to_vec()).unwrap());
+        assert!(matches!(
+            solid_from_closed_shell(&mut topo, open),
+            Err(WasmError::InvalidInput { .. })
+        ));
+    }
+}
