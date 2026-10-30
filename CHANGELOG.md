@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.5.11](https://github.com/andymai/brepkit/compare/v4.5.10...v4.5.11) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** revolve a ring into one torus per circle ([#2204](https://github.com/andymai/brepkit/issues/2204)) ([aa5565c](https://github.com/andymai/brepkit/commit/aa5565c901e9d2fccbe3e10cc2ce9d73c005f256))
+
 ## [4.5.10](https://github.com/andymai/brepkit/compare/v4.5.9...v4.5.10) (2026-10-30)
 
 

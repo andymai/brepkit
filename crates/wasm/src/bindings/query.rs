@@ -93,6 +93,22 @@ impl BrepKernel {
         Ok(shells)
     }
 
+    /// Get one solid handle per separate piece of material in a solid.
+    ///
+    /// A boolean that leaves separate pieces (a slot cut through a bar)
+    /// returns them in one solid. Each piece comes back as its own solid
+    /// with its own cavities; a solid in one piece returns its own handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "getSolidPieces")]
+    pub fn get_solid_pieces(&mut self, solid: u32) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let pieces = brepkit_operations::compound_ops::solid_pieces(self.topo_mut(), solid_id)?;
+        Ok(pieces.into_iter().map(solid_id_to_u32).collect())
+    }
+
     /// Get the vertex positions of an edge.
     ///
     /// Returns `[start_x, start_y, start_z, end_x, end_y, end_z]`.
@@ -769,15 +785,17 @@ impl BrepKernel {
         }
     }
 
-    /// Evaluate a surface normal at (u, v) on a face.
+    /// Evaluate a face's outward normal at (u, v): its surface's normal,
+    /// turned round on a reversed face (a bore cut into a solid faces its
+    /// axis).
     ///
     /// Returns `[nx, ny, nz]`.
     #[wasm_bindgen(js_name = "evaluateSurfaceNormal")]
     pub fn evaluate_surface_normal(&self, face: u32, u: f64, v: f64) -> Result<Vec<f64>, JsError> {
         let face_id = self.resolve_face(face)?;
         let face_data = self.topo.face(face_id)?;
-        match face_data.surface() {
-            FaceSurface::Plane { normal, .. } => Ok(vec![normal.x(), normal.y(), normal.z()]),
+        let n = match face_data.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
             FaceSurface::Nurbs(surface) => {
                 let derivs = surface.derivatives(u, v, 1);
                 let du = if derivs.len() > 1 && !derivs[1].is_empty() {
@@ -790,29 +808,15 @@ impl BrepKernel {
                 } else {
                     Vec3::new(0.0, 1.0, 0.0)
                 };
-                let n = du.cross(dv);
-                match n.normalize() {
-                    Ok(normal) => Ok(vec![normal.x(), normal.y(), normal.z()]),
-                    Err(_) => Ok(vec![0.0, 0.0, 1.0]),
-                }
+                du.cross(dv).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
             }
-            FaceSurface::Cylinder(cyl) => {
-                let n = cyl.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Cone(cone) => {
-                let n = cone.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Sphere(sph) => {
-                let n = sph.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Torus(tor) => {
-                let n = tor.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-        }
+            FaceSurface::Cylinder(cyl) => cyl.normal(u, v),
+            FaceSurface::Cone(cone) => cone.normal(u, v),
+            FaceSurface::Sphere(sph) => sph.normal(u, v),
+            FaceSurface::Torus(tor) => tor.normal(u, v),
+        };
+        let n = if face_data.is_reversed() { -n } else { n };
+        Ok(vec![n.x(), n.y(), n.z()])
     }
 
     /// Evaluate a point on a face surface at (u, v).
