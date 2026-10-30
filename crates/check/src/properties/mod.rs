@@ -468,4 +468,66 @@ mod tests {
             }
         }
     }
+
+    /// A band of the ring torus of radii 4 and 1 between two of its circles
+    /// about the axis, at tube angles `v0` and `v1`, each wire closed at its
+    /// own angle about the axis. A band across the inner equator (`v = pi`)
+    /// starts its wires a turn of `v` apart; it still holds the band's area
+    /// `2 pi r (R dv + r d(sin v))` and its volume term, wherever its wires
+    /// start.
+    #[test]
+    fn a_torus_band_between_circles_about_its_axis_holds_its_share() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::{FRAC_PI_2, PI, TAU};
+        let (big, small) = (4.0_f64, 1.0_f64);
+        // The circle about the axis at tube angle `v`, run toward growing `u`
+        // when `forward`, closed at `u = from`.
+        let latitude = |topo: &mut Topology, v: f64, from: f64, forward: bool| {
+            let c = Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, small * v.sin()),
+                Vec3::new(0.0, 0.0, 1.0),
+                small.mul_add(v.cos(), big),
+                Vec3::new(from.cos(), from.sin(), 0.0),
+            )
+            .unwrap();
+            let vertex = topo.add_vertex(Vertex::new(c.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Circle(c)));
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e, forward)], true).unwrap())
+        };
+        let starts = [0.0, FRAC_PI_2, PI, 3.0 * FRAC_PI_2];
+        for (v0, v1) in [(3.0_f64, 3.3_f64), (0.3, 0.5), (-0.5, 2.0)] {
+            let dv = v1 - v0;
+            let area = TAU * small * big.mul_add(dv, small * (v1.sin() - v0.sin()));
+            let volume = TAU * small / 3.0
+                * (big.mul_add(big, small * small) * (v1.sin() - v0.sin())
+                    + big * small * (dv / 2.0 + ((2.0 * v1).sin() - (2.0 * v0).sin()) / 4.0)
+                    + small * big * dv);
+            for (a, b) in starts
+                .iter()
+                .flat_map(|&a| starts.iter().map(move |&b| (a, b)))
+            {
+                let mut topo = Topology::new();
+                let low = latitude(&mut topo, v0, a, true);
+                let high = latitude(&mut topo, v1, b, false);
+                let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), big, small).unwrap();
+                let face = Face::new(low, vec![high], FaceSurface::Torus(torus));
+                let c =
+                    boundary::curved_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                        .unwrap()
+                        .unwrap();
+                assert!(
+                    (c.area - area).abs() < 1e-9 * area
+                        && (c.volume - volume).abs() < 1e-9 * volume.abs(),
+                    "v {v0}..{v1}, starts {a} and {b}: area {} of {area}, volume {} of {volume}",
+                    c.area,
+                    c.volume
+                );
+            }
+        }
+    }
 }
