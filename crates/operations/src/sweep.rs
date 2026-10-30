@@ -60,8 +60,9 @@ fn compute_frames(
 
 /// The path's parameters for `num_segments` even steps across its domain,
 /// with each knot span narrower than a step read at its knots and three
-/// points between: a bend inside such a span lies between even steps. The
-/// end is left off a closed path, whose first frame closes it.
+/// points between: a bend inside such a span lies between even steps.
+/// Samples at one point merge. The end is left off a closed path, whose
+/// first frame closes it.
 fn frame_params(path: &NurbsCurve, num_segments: usize, is_closed: bool) -> Vec<f64> {
     let (u0, u1) = path.domain();
     #[allow(clippy::cast_precision_loss)]
@@ -78,8 +79,11 @@ fn frame_params(path: &NurbsCurve, num_segments: usize, is_closed: bool) -> Vec<
             params.extend((0..=4).map(|j| width.mul_add(f64::from(j) / 4.0, w[0])));
         }
     }
+    // Only samples at one point merge: a span narrow in parameter can still
+    // carry a bend, but a frame at a point already sampled adds nothing.
+    let tol = Tolerance::new().linear;
     params.sort_by(f64::total_cmp);
-    params.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (u1 - u0));
+    params.dedup_by(|a, b| (path.evaluate(*a) - path.evaluate(*b)).length() <= tol);
     if is_closed {
         params.pop();
     }
