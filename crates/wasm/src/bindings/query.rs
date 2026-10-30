@@ -769,15 +769,17 @@ impl BrepKernel {
         }
     }
 
-    /// Evaluate a surface normal at (u, v) on a face.
+    /// Evaluate a face's outward normal at (u, v): its surface's normal,
+    /// turned round on a reversed face (a bore cut into a solid faces its
+    /// axis).
     ///
     /// Returns `[nx, ny, nz]`.
     #[wasm_bindgen(js_name = "evaluateSurfaceNormal")]
     pub fn evaluate_surface_normal(&self, face: u32, u: f64, v: f64) -> Result<Vec<f64>, JsError> {
         let face_id = self.resolve_face(face)?;
         let face_data = self.topo.face(face_id)?;
-        match face_data.surface() {
-            FaceSurface::Plane { normal, .. } => Ok(vec![normal.x(), normal.y(), normal.z()]),
+        let n = match face_data.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
             FaceSurface::Nurbs(surface) => {
                 let derivs = surface.derivatives(u, v, 1);
                 let du = if derivs.len() > 1 && !derivs[1].is_empty() {
@@ -790,29 +792,15 @@ impl BrepKernel {
                 } else {
                     Vec3::new(0.0, 1.0, 0.0)
                 };
-                let n = du.cross(dv);
-                match n.normalize() {
-                    Ok(normal) => Ok(vec![normal.x(), normal.y(), normal.z()]),
-                    Err(_) => Ok(vec![0.0, 0.0, 1.0]),
-                }
+                du.cross(dv).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
             }
-            FaceSurface::Cylinder(cyl) => {
-                let n = cyl.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Cone(cone) => {
-                let n = cone.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Sphere(sph) => {
-                let n = sph.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Torus(tor) => {
-                let n = tor.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-        }
+            FaceSurface::Cylinder(cyl) => cyl.normal(u, v),
+            FaceSurface::Cone(cone) => cone.normal(u, v),
+            FaceSurface::Sphere(sph) => sph.normal(u, v),
+            FaceSurface::Torus(tor) => tor.normal(u, v),
+        };
+        let n = if face_data.is_reversed() { -n } else { n };
+        Ok(vec![n.x(), n.y(), n.z()])
     }
 
     /// Evaluate a point on a face surface at (u, v).
