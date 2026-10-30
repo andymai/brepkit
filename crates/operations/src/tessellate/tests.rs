@@ -3828,3 +3828,67 @@ fn a_faceted_cylinder_keeps_its_rims_sharp() {
         }
     }
 }
+
+/// A 20 square at z = 0 lofted to the same square turned 30 degrees at
+/// z = 10: its four sides are twisted bilinear patches, every parameter line
+/// of them straight, though their middles stand 0.42 off the diagonals of
+/// their corners. Meshed as a solid at deflections 0.1 and 0.01, the mesh is
+/// closed and every triangle's centre lies within the deflection of the
+/// solid's surfaces.
+#[test]
+fn a_loft_with_twisted_sides_meshes_its_twist() {
+    let mut topo = Topology::new();
+    let square = |topo: &mut Topology, turn: f64, z: f64| {
+        let corners: Vec<Point3> = (0..4)
+            .map(|k| {
+                let a =
+                    turn + std::f64::consts::FRAC_PI_2 * f64::from(k) + std::f64::consts::FRAC_PI_4;
+                let r = 10.0 * std::f64::consts::SQRT_2;
+                Point3::new(r * a.cos(), r * a.sin(), z)
+            })
+            .collect();
+        let wire = brepkit_topology::builder::make_polygon_wire(topo, &corners, 1e-7).unwrap();
+        brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap()
+    };
+    let low = square(&mut topo, 0.0, 0.0);
+    let high = square(&mut topo, 30f64.to_radians(), 10.0);
+    let solid = crate::loft::loft(&mut topo, &[low, high]).unwrap();
+    let surfaces: Vec<FaceSurface> = brepkit_topology::explorer::solid_faces(&topo, solid)
+        .unwrap()
+        .iter()
+        .map(|&f| topo.face(f).unwrap().surface().clone())
+        .collect();
+    for deflection in [0.1, 0.01] {
+        let mesh = crate::tessellate::tessellate_solid(&topo, solid, deflection).unwrap();
+        assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+        assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+        let worst = mesh
+            .indices
+            .chunks(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                let centre = Point3::new(
+                    (a.x() + b.x() + c.x()) / 3.0,
+                    (a.y() + b.y() + c.y()) / 3.0,
+                    (a.z() + b.z() + c.z()) / 3.0,
+                );
+                surfaces
+                    .iter()
+                    .filter_map(|s| match s {
+                        FaceSurface::Plane { normal, d } => Some(
+                            (normal.dot(Vec3::new(centre.x(), centre.y(), centre.z())) - d).abs(),
+                        ),
+                        other => other
+                            .project_point(centre)
+                            .and_then(|(u, v)| other.evaluate(u, v))
+                            .map(|q| (q - centre).length()),
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst <= deflection,
+            "at {deflection}: a triangle stands {worst} off"
+        );
+    }
+}

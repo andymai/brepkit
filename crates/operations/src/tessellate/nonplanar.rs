@@ -5148,7 +5148,7 @@ fn interior_grid_resolution(
             let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
             // The CDT inserts every interior sample, so the grid is bounded
             // as a whole, not only per direction.
-            super::nurbs::cap_grid(
+            let along_lines = (
                 super::nurbs::iso_divisions_over(
                     &at,
                     &normal_at,
@@ -5167,8 +5167,15 @@ fn interior_grid_resolution(
                     angular_tol,
                     INTERIOR_MAX_DIVISIONS,
                 ),
-                super::nurbs::GRID_MAX_CELLS,
-            )
+            );
+            let (n_u, n_v) = super::nurbs::untwisted_grid(
+                &at,
+                (u_span, v_span),
+                along_lines,
+                deflection,
+                INTERIOR_MAX_DIVISIONS,
+            );
+            super::nurbs::cap_grid(n_u, n_v, super::nurbs::GRID_MAX_CELLS)
         }
         FaceSurface::Plane { .. } => {
             let r = estimate_surface_radius(surface);

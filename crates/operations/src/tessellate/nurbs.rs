@@ -898,6 +898,59 @@ pub(super) fn iso_divisions_over(
     n
 }
 
+/// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each sampled
+/// cell's middle lies within half the deflection of both its diagonals. A
+/// twisted cell (a bilinear patch between skew lines) has straight sides
+/// and iso-lines, which no chord test sees, yet its middle stands a quarter
+/// of its twist, |P00 + P11 - P01 - P10| / 4, off the diagonal a mesh splits
+/// it along; doubling both directions quarters that.
+pub(super) fn untwisted_grid(
+    at: &dyn Fn(f64, f64) -> Point3,
+    ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
+    (mut n_u, mut n_v): (usize, usize),
+    deflection: f64,
+    max_divisions: usize,
+) -> (usize, usize) {
+    const SAMPLES: usize = 8;
+    let fits = |n_u: usize, n_v: usize| {
+        let (cells_u, cells_v) = (n_u.min(SAMPLES), n_v.min(SAMPLES));
+        (0..cells_u).all(|i| {
+            (0..cells_v).all(|j| {
+                // An evenly spread cell of the grid, not every one.
+                #[allow(clippy::cast_precision_loss)]
+                let (ci, cj) = ((i * n_u / cells_u) as f64, (j * n_v / cells_v) as f64);
+                #[allow(clippy::cast_precision_loss)]
+                let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
+                let (u0, v0) = (du.mul_add(ci, u_lo), dv.mul_add(cj, v_lo));
+                let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
+                let (p00, p10, p01, p11) = (
+                    corner(0.0, 0.0),
+                    corner(1.0, 0.0),
+                    corner(0.0, 1.0),
+                    corner(1.0, 1.0),
+                );
+                let middle = corner(0.5, 0.5);
+                let half = |a: Point3, b: Point3| {
+                    Point3::new(
+                        0.5 * (a.x() + b.x()),
+                        0.5 * (a.y() + b.y()),
+                        0.5 * (a.z() + b.z()),
+                    )
+                };
+                (middle - half(p00, p11))
+                    .length()
+                    .max((middle - half(p10, p01)).length())
+                    <= 0.5 * deflection
+            })
+        })
+    };
+    while (n_u < max_divisions || n_v < max_divisions) && !fits(n_u, n_v) {
+        n_u = (n_u * 2).min(max_divisions);
+        n_v = (n_v * 2).min(max_divisions);
+    }
+    (n_u, n_v)
+}
+
 /// Tessellate a NURBS surface via curvature-adaptive subdivision.
 #[allow(clippy::too_many_lines)]
 pub(super) fn tessellate_nurbs(
