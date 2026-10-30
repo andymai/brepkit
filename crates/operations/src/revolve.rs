@@ -1123,15 +1123,16 @@ fn revolution_wall_surface(
 }
 
 /// Returns `Ok(None)` — fall back to the general revolve — unless the profile
-/// is a single closed circle, the axis lies in the profile plane, and the
-/// circle clears the axis (`major > minor`, so the torus does not
-/// self-intersect; the sphere and spindle cases fall back).
+/// is a closed circle, with any holes closed circles too, the axis lies in the
+/// profile plane, and every circle clears the axis (`major > minor`, so no
+/// torus self-intersects; the sphere and spindle cases fall back).
 ///
-/// A full revolution builds one doubly-periodic `Torus` face like
-/// `primitives::make_torus`. A partial revolution builds one `Torus` band
-/// trimmed to the swept angle — bounded by the profile circle and its rotated
-/// copy, seamed by the arc the profile vertex sweeps — plus two planar disc
-/// caps, instead of chord-splitting the circle into segmented bands.
+/// A full revolution builds one doubly-periodic `Torus` face per circle like
+/// `primitives::make_torus`, each hole's facing into it as a cavity. A
+/// partial revolution builds one `Torus` band per circle trimmed to the swept
+/// angle — bounded by the circle and its rotated copy, seamed by the arc its
+/// vertex sweeps — plus two planar caps holding the holes, instead of
+/// chord-splitting the circles into segmented bands.
 #[allow(clippy::too_many_lines)]
 fn try_circle_revolution_torus(
     topo: &mut Topology,
@@ -1141,189 +1142,222 @@ fn try_circle_revolution_torus(
     angle: f64,
     is_full: bool,
 ) -> Result<Option<SolidId>, crate::OperationsError> {
-    let face_data = topo.face(face)?;
-    if !face_data.inner_wires().is_empty() {
-        return Ok(None);
+    /// One boundary circle of the profile and the torus it sweeps.
+    struct Ring {
+        edge: brepkit_topology::edge::EdgeId,
+        vertex: VertexId,
+        center: Point3,
+        radius: f64,
+        normal: Vec3,
+        torus_center: Point3,
+        surface: brepkit_math::surfaces::ToroidalSurface,
     }
+
+    let face_data = topo.face(face)?;
     let normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => return Ok(None),
     };
-
-    let wire = topo.wire(face_data.outer_wire())?;
-    let oriented = wire.edges();
-    if oriented.len() != 1 {
-        return Ok(None);
-    }
-    let profile_eid = oriented[0].edge();
-    let edge = topo.edge(profile_eid)?;
-    if edge.start() != edge.end() {
-        return Ok(None);
-    }
-    let profile_vid = edge.start();
-    let (center, radius, circ_normal) = match edge.curve() {
-        EdgeCurve::Circle(c) => (c.center(), c.radius(), c.normal()),
-        _ => return Ok(None),
-    };
-
-    let tol = Tolerance::new();
     // The axis must lie in the profile plane (perpendicular to its normal),
     // else the swept surface is not a torus of revolution.
     if normal.dot(axis).abs() > 1e-9 {
         return Ok(None);
     }
+    let wire_ids: Vec<brepkit_topology::wire::WireId> = std::iter::once(face_data.outer_wire())
+        .chain(face_data.inner_wires().iter().copied())
+        .collect();
 
-    // Major radius = perpendicular distance from the circle center to the axis.
-    let to_center = center - axis_origin;
-    let along = to_center.dot(axis);
-    let major_radius = (to_center - axis * along).length();
-    // The circle must clear the axis; otherwise the revolution is a sphere
-    // (center on axis) or a self-intersecting spindle — both fall back.
-    if major_radius <= radius + tol.linear {
-        return Ok(None);
+    let tol = Tolerance::new();
+    let mut rings: Vec<Ring> = Vec::with_capacity(wire_ids.len());
+    for wid in wire_ids {
+        let wire = topo.wire(wid)?;
+        let [oe] = wire.edges() else {
+            return Ok(None);
+        };
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() != edge.end() {
+            return Ok(None);
+        }
+        let (center, radius, circ_normal) = match edge.curve() {
+            EdgeCurve::Circle(c) => (c.center(), c.radius(), c.normal()),
+            _ => return Ok(None),
+        };
+        // Major radius = perpendicular distance from the circle center to the
+        // axis. The circle must clear the axis; otherwise the revolution is a
+        // sphere (center on axis) or a self-intersecting spindle — both fall
+        // back.
+        let to_center = center - axis_origin;
+        let along = to_center.dot(axis);
+        let major_radius = (to_center - axis * along).length();
+        if major_radius <= radius + tol.linear {
+            return Ok(None);
+        }
+        let torus_center = axis_origin + axis * along;
+        let surface = brepkit_math::surfaces::ToroidalSurface::with_axis(
+            torus_center,
+            major_radius,
+            radius,
+            axis,
+        )
+        .map_err(crate::OperationsError::Math)?;
+        rings.push(Ring {
+            edge: oe.edge(),
+            vertex: edge.start(),
+            center,
+            radius,
+            normal: circ_normal,
+            torus_center,
+            surface,
+        });
     }
 
-    let torus_center = axis_origin + axis * along;
-    let surface = brepkit_math::surfaces::ToroidalSurface::with_axis(
-        torus_center,
-        major_radius,
-        radius,
-        axis,
-    )
-    .map_err(crate::OperationsError::Math)?;
-
     if is_full {
-        // One doubly-periodic torus face, like `primitives::make_torus`: a
-        // single seam vertex with two degenerate seam edges forming the
-        // fundamental polygon a → b → a⁻¹ → b⁻¹.
-        let seam = surface.evaluate(0.0, 0.0);
-        let v0 = topo.add_vertex(Vertex::new(seam, tol.linear));
-        let ea = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
-        let eb = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
-        let wid = topo.add_wire(
+        // One doubly-periodic torus face per circle, like
+        // `primitives::make_torus`: a single seam vertex with two degenerate
+        // seam edges forming the fundamental polygon a → b → a⁻¹ → b⁻¹. A
+        // hole's torus faces into the hole and bounds a cavity of its own.
+        let mut shells = Vec::with_capacity(rings.len());
+        for (i, ring) in rings.iter().enumerate() {
+            let seam = ring.surface.evaluate(0.0, 0.0);
+            let v0 = topo.add_vertex(Vertex::new(seam, tol.linear));
+            let ea = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+            let eb = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
+            let wid = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(ea, true),
+                        OrientedEdge::new(eb, true),
+                        OrientedEdge::new(ea, false),
+                        OrientedEdge::new(eb, false),
+                    ],
+                    true,
+                )
+                .map_err(crate::OperationsError::Topology)?,
+            );
+            let surface = FaceSurface::Torus(ring.surface.clone());
+            let face_id = if i == 0 {
+                topo.add_face(Face::new(wid, vec![], surface))
+            } else {
+                topo.add_face(Face::new_reversed(wid, vec![], surface))
+            };
+            shells.push(
+                topo.add_shell(
+                    Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?,
+                ),
+            );
+        }
+        let outer = shells.remove(0);
+        return Ok(Some(topo.add_solid(Solid::new(outer, shells))));
+    }
+
+    // Partial turn: each circle bounds the start; its rotated copy bounds the
+    // end; the seam is the arc its vertex sweeps (an axis-centred `Circle3D`
+    // arc whose CCW start→end span is exactly `angle`).
+    let sweep0 = axis
+        .cross(rings[0].center - rings[0].torus_center)
+        .normalize()
+        .map_err(crate::OperationsError::Math)?;
+    let start_normal = -sweep0;
+    let final_normal = rotate_vec(sweep0, axis, angle);
+    let p_start = topo.vertex(rings[0].vertex)?.point();
+    let p_end = rotate_point(p_start, axis_origin, axis, angle);
+
+    // End caps: planar faces whose outward normals oppose (start) and follow
+    // (end) the sweep direction; the profile's circle bounds each, wound CCW
+    // about the cap normal, and each hole's circle is wound the other way,
+    // whichever way the circle's own normal faces.
+    let mut faces = Vec::with_capacity(rings.len() + 2);
+    let mut start_cap: Vec<OrientedEdge> = Vec::with_capacity(rings.len());
+    let mut end_cap: Vec<OrientedEdge> = Vec::with_capacity(rings.len());
+    for (i, ring) in rings.iter().enumerate() {
+        let hole = i > 0;
+        let p0 = topo.vertex(ring.vertex)?.point();
+        let (seam_r, seam_z) = radial_axial(p0, axis_origin, axis);
+        if seam_r < tol.linear {
+            return Ok(None); // a circle's vertex on the axis — cannot seam
+        }
+        let p1 = rotate_point(p0, axis_origin, axis, angle);
+        let v1 = topo.add_vertex(Vertex::new(p1, tol.linear));
+        let end_center = rotate_point(ring.center, axis_origin, axis, angle);
+        let end_normal = rotate_vec(ring.normal, axis, angle);
+        let end_circle = brepkit_math::curves::Circle3D::new(end_center, end_normal, ring.radius)
+            .map_err(crate::OperationsError::Math)?;
+        let end_eid = topo.add_edge(Edge::new(v1, v1, EdgeCurve::Circle(end_circle)));
+        let seam_circle =
+            brepkit_math::curves::Circle3D::new(axis_origin + axis * seam_z, axis, seam_r)
+                .map_err(crate::OperationsError::Math)?;
+        let seam_eid = topo.add_edge(Edge::new(ring.vertex, v1, EdgeCurve::Circle(seam_circle)));
+
+        let start_fwd = (ring.normal.dot(start_normal) > 0.0) != hole;
+        let end_fwd = (end_normal.dot(final_normal) > 0.0) != hole;
+        start_cap.push(OrientedEdge::new(ring.edge, start_fwd));
+        end_cap.push(OrientedEdge::new(end_eid, end_fwd));
+
+        // Orient the band out of the material at the tube's outer equator,
+        // mid-sweep: away from the axis for the profile's circle, toward it
+        // for a hole's.
+        let radial_c = (ring.center - ring.torus_center)
+            .normalize()
+            .map_err(crate::OperationsError::Math)?;
+        let outer0 = ring.center + radial_c * ring.radius;
+        let probe = rotate_point(outer0, axis_origin, axis, angle / 2.0);
+        let (pu, pv) = ring.surface.project_point(probe);
+        let nat = ring.surface.normal(pu, pv);
+        let out_probe = probe - (axis_origin + axis * axis.dot(probe - axis_origin));
+        let wall_reversed = (nat.dot(out_probe) < 0.0) != hole;
+        // The band runs each circle it shares with a cap the other way round,
+        // a reversed face's edges counting backward.
+        let wall_wid = topo.add_wire(
             Wire::new(
                 vec![
-                    OrientedEdge::new(ea, true),
-                    OrientedEdge::new(eb, true),
-                    OrientedEdge::new(ea, false),
-                    OrientedEdge::new(eb, false),
+                    OrientedEdge::new(ring.edge, start_fwd == wall_reversed),
+                    OrientedEdge::new(seam_eid, true),
+                    OrientedEdge::new(end_eid, end_fwd == wall_reversed),
+                    OrientedEdge::new(seam_eid, false),
                 ],
                 true,
             )
             .map_err(crate::OperationsError::Topology)?,
         );
-        let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Torus(surface)));
-        let shell_id =
-            topo.add_shell(Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?);
-        return Ok(Some(topo.add_solid(Solid::new(shell_id, vec![]))));
+        let surface = FaceSurface::Torus(ring.surface.clone());
+        faces.push(if wall_reversed {
+            topo.add_face(Face::new_reversed(wall_wid, vec![], surface))
+        } else {
+            topo.add_face(Face::new(wall_wid, vec![], surface))
+        });
     }
 
-    // Partial turn: the input circle bounds the start; its rotated copy bounds
-    // the end; the seam is the arc the profile vertex sweeps (an axis-centred
-    // `Circle3D` arc whose CCW start→end span is exactly `angle`).
-    let p0 = topo.vertex(profile_vid)?.point();
-    let (seam_r, seam_z) = radial_axial(p0, axis_origin, axis);
-    if seam_r < tol.linear {
-        return Ok(None); // profile vertex on the axis — cannot seam
-    }
-    let p1 = rotate_point(p0, axis_origin, axis, angle);
-    let v1 = topo.add_vertex(Vertex::new(p1, tol.linear));
-    let end_center = rotate_point(center, axis_origin, axis, angle);
-    let end_normal = rotate_vec(circ_normal, axis, angle);
-    let end_circle = brepkit_math::curves::Circle3D::new(end_center, end_normal, radius)
-        .map_err(crate::OperationsError::Math)?;
-    let end_eid = topo.add_edge(Edge::new(v1, v1, EdgeCurve::Circle(end_circle)));
-    let seam_circle =
-        brepkit_math::curves::Circle3D::new(axis_origin + axis * seam_z, axis, seam_r)
-            .map_err(crate::OperationsError::Math)?;
-    let seam_eid = topo.add_edge(Edge::new(profile_vid, v1, EdgeCurve::Circle(seam_circle)));
-
-    // End caps: planar discs whose outward normals oppose (start) and follow
-    // (end) the sweep direction; each is bounded by its full profile circle,
-    // wound CCW about the cap normal. The band runs each circle the other
-    // way, whichever way the profile circle's own normal faces.
-    let sweep0 = axis
-        .cross(center - torus_center)
-        .normalize()
-        .map_err(crate::OperationsError::Math)?;
-    let start_normal = -sweep0;
-    let start_fwd = circ_normal.dot(start_normal) > 0.0;
-    let final_normal = rotate_vec(sweep0, axis, angle);
-    let end_fwd = end_normal.dot(final_normal) > 0.0;
-
-    let wall_wire = Wire::new(
-        vec![
-            OrientedEdge::new(profile_eid, !start_fwd),
-            OrientedEdge::new(seam_eid, true),
-            OrientedEdge::new(end_eid, !end_fwd),
-            OrientedEdge::new(seam_eid, false),
-        ],
-        true,
-    )
-    .map_err(crate::OperationsError::Topology)?;
-    let wall_wid = topo.add_wire(wall_wire);
-    // Orient the band outward at the tube's outer equator, mid-sweep.
-    let radial_c = (center - torus_center)
-        .normalize()
-        .map_err(crate::OperationsError::Math)?;
-    let outer0 = center + radial_c * radius;
-    let probe = rotate_point(outer0, axis_origin, axis, angle / 2.0);
-    let (pu, pv) = surface.project_point(probe);
-    let nat = surface.normal(pu, pv);
-    let out_probe = probe - (axis_origin + axis * axis.dot(probe - axis_origin));
-    let wall_reversed = nat.dot(out_probe) < 0.0;
-    let mut faces = Vec::with_capacity(3);
-    faces.push(if wall_reversed {
-        topo.add_face(Face::new_reversed(
-            wall_wid,
-            vec![],
-            FaceSurface::Torus(surface),
-        ))
-    } else {
-        topo.add_face(Face::new(wall_wid, vec![], FaceSurface::Torus(surface)))
-    });
-
-    let start_wire = Wire::new(vec![OrientedEdge::new(profile_eid, start_fwd)], true)
-        .map_err(crate::OperationsError::Topology)?;
-    let start_wid = topo.add_wire(start_wire);
-    faces.push(topo.add_face(Face::new(
-        start_wid,
-        vec![],
-        FaceSurface::Plane {
-            normal: start_normal,
-            d: dot_normal_point(start_normal, p0),
-        },
-    )));
-    let end_wire = Wire::new(vec![OrientedEdge::new(end_eid, end_fwd)], true)
-        .map_err(crate::OperationsError::Topology)?;
-    let end_wid = topo.add_wire(end_wire);
-    faces.push(topo.add_face(Face::new(
-        end_wid,
-        vec![],
-        FaceSurface::Plane {
-            normal: final_normal,
-            d: dot_normal_point(final_normal, p1),
-        },
-    )));
+    let mut cap = |edges: Vec<OrientedEdge>, normal: Vec3, at: Point3| {
+        let mut wires = Vec::with_capacity(edges.len());
+        for oe in edges {
+            wires.push(
+                topo.add_wire(Wire::new(vec![oe], true).map_err(crate::OperationsError::Topology)?),
+            );
+        }
+        let outer = wires.remove(0);
+        Ok::<_, crate::OperationsError>(topo.add_face(Face::new(
+            outer,
+            wires,
+            FaceSurface::Plane {
+                normal,
+                d: dot_normal_point(normal, at),
+            },
+        )))
+    };
+    faces.push(cap(start_cap, start_normal, p_start)?);
+    faces.push(cap(end_cap, final_normal, p_end)?);
 
     let shell_id = topo.add_shell(Shell::new(faces).map_err(crate::OperationsError::Topology)?);
     Ok(Some(topo.add_solid(Solid::new(shell_id, vec![]))))
 }
 
-/// Traversal winding of a profile wire in the (radial, axial) chart about
-/// `axis`, or `None` when the chart polygon is degenerate.
-///
-/// The chart's radial basis is the direction of the profile's own
-/// farthest-off-axis sample, matching [`try_analytic_full_revolution`], so the
-/// shoelace sign is comparable between the two paths. Curved edges contribute
-/// interior samples in traversal order, so an arc-dominated profile (a single
-/// closed circle) does not degenerate to its vertex count.
-fn profile_chart_is_ccw(
+/// A wire's vertices in traversal order, each curved edge adding three
+/// samples between its ends, so a boundary of arcs (a half ring, whose four
+/// vertices lie on one line) keeps its shape.
+fn traversal_samples(
     topo: &Topology,
     oriented: &[OrientedEdge],
-    axis_origin: Point3,
-    axis: Vec3,
-) -> Result<Option<bool>, crate::OperationsError> {
+) -> Result<Vec<Point3>, crate::OperationsError> {
     let mut pts: Vec<Point3> = Vec::with_capacity(oriented.len() * 4);
     for oe in oriented {
         let edge = topo.edge(oe.edge())?;
@@ -1352,6 +1386,24 @@ fn profile_chart_is_ccw(
             pts.extend(interior);
         }
     }
+    Ok(pts)
+}
+
+/// Traversal winding of a profile wire in the (radial, axial) chart about
+/// `axis`, or `None` when the chart polygon is degenerate.
+///
+/// The chart's radial basis is the direction of the profile's own
+/// farthest-off-axis sample, matching [`try_analytic_full_revolution`], so the
+/// shoelace sign is comparable between the two paths. Curved edges contribute
+/// interior samples in traversal order, so an arc-dominated profile (a single
+/// closed circle) does not degenerate to its vertex count.
+fn profile_chart_is_ccw(
+    topo: &Topology,
+    oriented: &[OrientedEdge],
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<Option<bool>, crate::OperationsError> {
+    let pts = traversal_samples(topo, oriented)?;
 
     let mut e_r: Option<Vec3> = None;
     let mut best_r = 0.0_f64;
@@ -1502,7 +1554,7 @@ pub fn revolve(
             .collect::<Result<_, _>>()?;
         if let Some(normal) = stored_plane_normal {
             // Planar profile: keep the stored normal, corrected to CCW.
-            if crate::winding::is_cw_winding(&wire_positions, &normal) {
+            if crate::winding::is_cw_winding(&traversal_samples(topo, &oes)?, &normal) {
                 -normal
             } else {
                 normal
@@ -2681,6 +2733,138 @@ mod tests {
             (vol - expected).abs() / expected < 1e-9,
             "pointed cone volume {expected}, got {vol}"
         );
+    }
+
+    /// The ring split along its diameter into two half rings, each two arcs
+    /// and two lines whose four vertices lie on that diameter, revolves to two
+    /// equal halves of `9π · 20 · π/2`, whichever way round each half's
+    /// boundary winds about the face's normal.
+    #[test]
+    fn revolve_half_rings_sweep_equal_halves() {
+        use brepkit_math::curves::Circle3D;
+
+        for side in [1.0, -1.0] {
+            let mut topo = Topology::new();
+            let at = |y: f64| Point3::new(30.0, y, 0.0);
+            let [a, b, c, d] =
+                [5.0, -5.0, -4.0, 4.0].map(|y| topo.add_vertex(Vertex::new(at(y), 1e-7)));
+            let arc = |radius: f64, normal: f64| {
+                EdgeCurve::Circle(
+                    Circle3D::new(at(0.0), Vec3::new(normal, 0.0, 0.0), radius).unwrap(),
+                )
+            };
+            let edges = [
+                topo.add_edge(Edge::new(a, b, arc(5.0, side))),
+                topo.add_edge(Edge::new(b, c, EdgeCurve::Line)),
+                topo.add_edge(Edge::new(c, d, arc(4.0, -side))),
+                topo.add_edge(Edge::new(d, a, EdgeCurve::Line)),
+            ];
+            let wire = topo.add_wire(
+                Wire::new(edges.map(|e| OrientedEdge::new(e, true)).to_vec(), true).unwrap(),
+            );
+            let face = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(1.0, 0.0, 0.0),
+                    d: 30.0,
+                },
+            ));
+            let solid = revolve(
+                &mut topo,
+                face,
+                Point3::new(30.0, 20.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                FRAC_PI_2,
+            )
+            .unwrap();
+            let volume = crate::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+            let exact = 4.5 * PI * 20.0 * FRAC_PI_2;
+            assert!(
+                (volume - exact).abs() < 1e-3 * exact,
+                "half on side {side}: volume {volume}, exact {exact}"
+            );
+        }
+    }
+
+    /// A ring (a disc with a smaller disc taken out) revolved about an axis
+    /// in its plane sweeps two tori: the hole's faces into the hole. A
+    /// quarter turn closes with two annular caps; a whole turn leaves the
+    /// hole's torus a cavity. By Pappus, a ring of radii 5 and 4 twenty from
+    /// the axis holds `9π · 20 · angle`.
+    #[test]
+    fn revolve_ring_sweeps_a_torus_for_its_hole() {
+        use brepkit_math::curves::Circle3D;
+
+        for (angle, faces, shells) in [(FRAC_PI_2, 4, 1), (2.0 * PI, 1, 2)] {
+            let mut topo = Topology::new();
+            let mut ring = |radius: f64| {
+                let circ = Circle3D::new(
+                    Point3::new(30.0, 0.0, 0.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                    radius,
+                )
+                .unwrap();
+                let v = topo.add_vertex(Vertex::new(circ.evaluate(0.0), 1e-7));
+                let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circ)));
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap())
+            };
+            let (outer, hole) = (ring(5.0), ring(4.0));
+            let face = topo.add_face(Face::new(
+                outer,
+                vec![hole],
+                FaceSurface::Plane {
+                    normal: Vec3::new(1.0, 0.0, 0.0),
+                    d: 30.0,
+                },
+            ));
+            let solid = revolve(
+                &mut topo,
+                face,
+                Point3::new(30.0, 20.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                angle,
+            )
+            .unwrap();
+
+            let data = topo.solid(solid).unwrap();
+            assert_eq!(1 + data.inner_shells().len(), shells, "turn {angle}");
+            assert_eq!(
+                topo.shell(data.outer_shell()).unwrap().faces().len(),
+                faces,
+                "turn {angle}"
+            );
+            let all = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+            assert!(all.iter().all(|&f| matches!(
+                topo.face(f).unwrap().surface(),
+                FaceSurface::Torus(_) | FaceSurface::Plane { .. }
+            )));
+            let report = crate::validate::validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "turn {angle}: {report:?}");
+            let volume = crate::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+            let exact = 9.0 * PI * 20.0 * angle;
+            assert!(
+                (volume - exact).abs() < 1e-3 * exact,
+                "turn {angle}: volume {volume}, exact {exact}"
+            );
+            // In the tube's wall, in its hole, and past it, halfway round.
+            let half = angle / 2.0;
+            let at = |reach: f64| {
+                let r = 20.0 + reach;
+                Point3::new(30.0 + r * half.sin(), 20.0 - r * half.cos(), 0.0)
+            };
+            for (p, expect) in [
+                (at(4.5), crate::classify::PointClassification::Inside),
+                (at(0.0), crate::classify::PointClassification::Outside),
+                (at(5.5), crate::classify::PointClassification::Outside),
+            ] {
+                assert_eq!(
+                    crate::classify::classify_point(&topo, solid, p, 0.01, 1e-6).unwrap(),
+                    expect,
+                    "turn {angle}: {p:?}"
+                );
+            }
+        }
     }
 
     #[test]
