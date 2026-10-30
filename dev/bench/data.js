@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793368244864,
+  "lastUpdate": 1793369783347,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62153,6 +62153,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17802345,
             "range": "± 479233",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b74efcbf15c8a92d61104d72b49caf1be73165b8",
+          "message": "fix(operations): sew faces keeping their curves, holes and sense (#2217)\n\n`sew_faces` now keeps each face's edges as the curves they are, its\nholes, and the side it faces, so sewing a solid's faces gives the solid\nback.\n\nToday it rebuilds each face's outer wire from straight lines between its\nvertices, leaves out its inner wires, and drops its reversed flag.\nSewing a cylinder's three faces gives faces bounded by lines alone, and\n#2197's quarter-circle sector measures 12.5, the triangle under its arc,\nwhere it holds 19.635. It also merges any two edges between the same two\nvertices, so a disc bounded by two half circles comes back with one edge\nused twice.\n\n## Change\n\n- Each sewn edge keeps its own curve, running from its own start to its\nown end; a face that meets it the other way along uses it reversed.\n- Two edges merge when they share both vertices and points through every\npiece of each lie on the other. A line is one piece and a circle or\nellipse is cut into eighths of a turn. A NURBS curve is cut into its\nBezier spans, read off each knot span whether or not its knots are\nclamped, and each is halved until its control points lie within half a\npercent of its chord and its weights within a factor of two of each\nother. A bump or a fold between samples gets pieces of its own, and a\nrational curve's samples spread along it even where its weights crowd it\ninto a sliver of its parameter. Each piece is held in a ball (about its\ncontrol points, for a NURBS curve with positive weights), and a point is\nprojected onto the other curve by closing in on every piece whose ball\ncould hold a nearer point, by the fraction of the way along, so knots of\nany scale read alike. However either curve is parameterized, the same\nboundary merges, and the two halves of a circle, or two different\ncircles closed at one vertex, stay apart.\n- An edge whose two ends weld into one vertex, with its curve within the\ntolerance of them, is dropped from its wire rather than kept as a closed\nedge, where its curve would read as a whole turn. An arc whose ends weld\nbut which runs almost the whole way round becomes a closed edge, and a\npiece of a longer NURBS curve becomes one cut to the span it covered,\nhowever near the curve's end that span starts, since a closed edge runs\nits curve's whole domain.\n- Faces that share an input edge share its sewn edge.\n- A closed edge's two ends are one vertex, so the way it runs is read\nfrom its tangent against the edge it merges with.\n- Each face keeps its holes and its reversed flag.\n\nCloses #2197.\n\n## Tests\n\n- `sew_a_cylinders_faces_keeps_its_circles`: a cylinder of radius 10 and\nheight 20, its three faces sewn, keeps the same curve on every edge, is\nvalid, and holds π · 100 · 20.\n- `sew_keeps_a_sectors_arc`: the issue's sector, sewn beside a far\nsquare, keeps its arc and measures 25π/4.\n- `sew_keeps_two_arcs_between_one_pair_of_points`: a disc of radius 5\nbounded by two half circles, sewn beside a far square, measures 25π.\n- `sew_keeps_a_faces_holes`: a 20 x 20 x 10 block with a round hole\nthrough it, its faces sewn, keeps both caps' holes, is valid, and holds\nits volume.\n- `sew_turns_a_closed_rim_running_the_other_way`: the cylinder with its\nbottom cap's rim swapped for the circle about -z, from the wall's start,\nused forward. It sews to three edges, is valid, and holds π · 100 · 20.\n- `sew_shares_a_closed_rim_whose_circle_starts_elsewhere`: the cylinder\nwith its top cap's rim swapped for a circle starting a quarter turn\nround from the wall's. Same checks.\n- `sew_keeps_perpendicular_circles_through_one_point_apart`: unit discs\non z = 0 and y = 0, both closed at (1, 0, 0), whose circles share their\nmiddle point (-1, 0, 0), keep separate edges.\n- `a_span_lies_on_its_copy_however_far_its_knots_run` (a unit segment\nwith knots to 1e9), `a_folded_span_lies_on_its_copy` (a curve doubling\nback 0.001 above itself) and\n`a_bump_in_a_short_knot_span_keeps_curves_apart` (a 0.1 bump within the\nfirst tenth of a curve, against the unit segment). Projecting over the\nnative knot range from one seed, and checking five fixed points, fails\nall three.\n- `a_bump_in_a_vanishing_knot_span_keeps_curves_apart` (the same bump in\na knot span 1e-13 long), `copies_of_a_folded_cubic_lie_on_each_other`\n(the cubic (t (t − 0.2) (t − 0.25), 0.001 t, 0)),\n`a_rational_cubics_excursion_keeps_it_off_a_segment` (weights 1e-12,\n1e-6, 1 and 1, straying about 0.0043 off the unit segment near its\nstart, or 0.0017 with its second control point lower) and\n`sew_drops_an_arc_shorter_than_the_tolerance` (a unit circle's arc 4e-8\nlong). Sampling fixed points in each knot span fails all four.\n- `sew_keeps_an_arc_just_short_of_a_whole_turn`: a disc bounded by a\nunit circle's arc from 0 to 2π − 4e-8 and the chord closing it sews to\none closed circle edge. Dropping every edge whose ends weld fails it.\n- `sew_cuts_a_welded_piece_of_a_longer_curve_to_its_span`: an edge one\nturn along a spiral fit from a quarter turn before it, whose ends lie\n3.8e-8 apart, sews to a closed edge one turn long, whether its knots run\nover 1 or over 1e-13; uncut, or cut with its knots left at 1e-13, it\nruns the whole curve, 2.5π.\n- `nurbs_between_cuts_inside_a_narrow_knot_span`: a polyline whose first\nor last knot span covers 1e-12 of its domain and a unit segment is cut\nhalfway along that span, either way along, to the curve's own points\nthere. Skipping cuts within 1e-12 of an end fails it.\n- `an_unclamped_quadratics_pieces_hold_it`: the quadratic through (0,\n0), (1, 1) and (2, 0) on knots 0 to 5 lies in its pieces' balls and on\nits copy. Cutting it by the clamped decomposition fails it, and without\nthe weight bound the lower rational cubic lies on the segment.\n- `sew_shares_a_segment_however_its_curves_run`: a unit cube whose\nbottom and front meet along one segment carried by two quadratic curves,\nwith control points at x = 0, 0.2, 1 and x = 1, 0.8, 0 (middle points\n0.35 and 0.65), sews to 12 edges.\n- The previous `sew_faces` fails the first four. Merging by vertices\nalone fails the two half circles, and dropping the reversed flag fails\nthe holed block. Merging by middle points fails the last four, and\nreading a closed edge's direction from its vertices fails the reversed\nrim.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3805 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T07:13:12-07:00",
+          "tree_id": "14f2e843cb59f37c0303b8eb056262010a125944",
+          "url": "https://github.com/andymai/brepkit/commit/b74efcbf15c8a92d61104d72b49caf1be73165b8"
+        },
+        "date": 1793369777328,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1098236,
+            "range": "± 45997",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1174480,
+            "range": "± 25644",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13589,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670015,
+            "range": "± 6435",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28688407,
+            "range": "± 26472",
             "unit": "ns/iter"
           }
         ]
