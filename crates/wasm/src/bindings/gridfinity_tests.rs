@@ -570,19 +570,20 @@ fn fillet_box_bbox_unchanged() {
     assert!(!edges.is_empty(), "box should have edges");
     let edge0 = edges[0].as_u64().unwrap();
 
-    // Fillet first edge + get bbox.
+    // Fillet first edge, then get the result's bbox.
     let r2 = k.execute_batch(&format!(
-        r#"[
-        {{"op": "fillet", "args": {{"solid": 0, "radius": 1.0, "edges": [{edge0}]}}}},
-        {{"op": "boundingBox", "args": {{"solid": 1}}}}
-    ]"#
+        r#"[{{"op": "fillet", "args": {{"solid": 0, "radius": 1.0, "edges": [{edge0}]}}}}]"#
     ));
     let p2 = parse_batch(&r2);
 
     // Fillet might fail — only check bbox if it succeeded.
-    if p2[0].get("ok").is_some() {
-        assert_ok(&p2, 1);
-        let bbox_after = ok_bbox(&p2, 1);
+    if let Some(filleted) = p2[0]["ok"].as_u64() {
+        let r3 = k.execute_batch(&format!(
+            r#"[{{"op": "boundingBox", "args": {{"solid": {filleted}}}}}]"#
+        ));
+        let p3 = parse_batch(&r3);
+        assert_ok(&p3, 0);
+        let bbox_after = ok_bbox(&p3, 0);
         let tol = 0.01;
         for i in 0..6 {
             assert!(
