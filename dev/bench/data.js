@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793338360708,
+  "lastUpdate": 1793339061342,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61181,6 +61181,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29582101,
             "range": "± 76517",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f3302b536e7be5a72beec7d207915910bea56496",
+          "message": "feat(operations): split a solid holding separate pieces into one solid per piece (#2203)\n\nA solid that holds separate pieces of material can now be split into one\nsolid per piece, each with its own cavities, through\n`compound_ops::solid_pieces` and the `getSolidPieces` binding.\n\nToday a boolean that leaves separate pieces returns one solid whose\nouter shell holds every piece's faces, as a fuse of disjoint solids\ndoes. Cutting a 10-wide slot through an 80 x 5 x 2.5 bar leaves two\npieces of 437.5 in one solid with one shell. Cutting a box with a\n20-wide hollow box in it out of a 22-wide block leaves the wall around\nthe hollow box and the 10-wide cube where its cavity was, in one shell\nof 18 faces with no inner shell. Nothing in the kernel's API hands the\npieces back apart, so brepjs's `getSolids` reports one solid for each.\n\n## Change\n\n- `solid_pieces` groups the solid's faces into sets joined through\nshared edges, each bounding a region. A region inside an odd number of\nclosed regions, tested with the ray-cast point classifier at its\nvertices, is a cavity of the innermost region around it; every other\nregion is the outside of a piece. A solid whose outer shell is one\nconnected set of faces comes back as is, and an empty solid gives no\npieces. The pieces share the solid's faces. Points are classified at the\nkernel's linear tolerance, so a cavity behind a wall thinner than the\nclassifier's default still reads as inside the piece around it. Only a\nregion whose vertices all lie in another's bounding box, with each NURBS\nface's control points included, is classified against it, so pieces\napart from each other cost a box test rather than a classification.\n- `getSolidPieces(solid)` returns the pieces' handles, or the solid's\nown handle when it is one piece.\n- `boolean::assembly::face_components` now groups its faces through\n`edge_connected_faces`, which takes any list of faces.\n\nbrepjs's adapter lists a solid as itself. Once it asks `getSolidPieces`,\n`getSolids` on these two results returns two solids each, which is what\n#2167 and #2184 report missing.\n\n## Tests\n\n- `a_slot_through_a_bar_leaves_two_pieces`: the slotted bar splits into\ntwo pieces of one shell and 437.5 each.\n- `a_cube_left_in_a_hollow_boxs_cavity_is_its_own_piece`: the hollow box\nitself comes back as is; the cut splits into the cube, one shell of\n1000, and the wall around the hollow box, two shells of 2648. Counting\nevery region as a piece gives three pieces, of 1000, 8000 and 10648.\n- `a_solid_in_one_piece_comes_back_as_is`: a box returns its own handle,\na handle the topology does not hold is refused rather than handed back,\nand the empty solid gives no pieces.\n- `a_cavity_behind_a_thin_wall_stays_with_its_piece`: a box holding an\ninward-facing cavity behind a wall 5e-7 thick, next to a 4-wide box,\nsplits into two pieces: the first holds the cavity and the box less it,\nthe second 64. At the classifier's default tolerance of 1e-6 the cavity\ncomes back as a third piece.\n- `a_hollow_ball_and_a_cylinder_apart_are_two_pieces`: a ball of radius\n10 hollowed to 5, fused with a cylinder standing apart from it, splits\ninto two pieces, each valid, meshing with no open or non-manifold edge,\nholding a curved face and its volume. The centre classifies as outside\nboth, a point in the ball's wall as inside the ball only, and one in the\ncylinder as inside the cylinder only. Counting every region as a piece\nfails it.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3774 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-29T22:41:16-07:00",
+          "tree_id": "8767332a6d3307c12936443324de0f1716ff7fc6",
+          "url": "https://github.com/andymai/brepkit/commit/f3302b536e7be5a72beec7d207915910bea56496"
+        },
+        "date": 1793339052811,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1091630,
+            "range": "± 2166",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1169850,
+            "range": "± 12799",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13134,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670625,
+            "range": "± 2814",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28550907,
+            "range": "± 27571",
             "unit": "ns/iter"
           }
         ]
