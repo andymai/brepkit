@@ -406,4 +406,66 @@ mod tests {
             assert!(c.abs() < 1e-15);
         }
     }
+
+    /// A band of the ring torus of radii 4 and 1 about the z axis between
+    /// its tube's circles at `u0` and `u1`, each wire closed at its own
+    /// angle round the tube. Each wire carries `u` on from where it starts,
+    /// so a band across the surface's `u = 0` starts its wires a turn
+    /// apart; it still holds `(u1 - u0)` of the turn's area `2 pi R r` and of
+    /// its volume term `pi R r^2`, wherever its wires start.
+    #[test]
+    fn a_torus_band_between_tube_circles_holds_its_share() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let (big, small) = (4.0_f64, 1.0_f64);
+        // The tube's circle at `u`, run toward growing `v` when `up`, closed
+        // at `v = from`.
+        let tube_circle = |topo: &mut Topology, u: f64, from: f64, up: bool| {
+            let out = Vec3::new(u.cos(), u.sin(), 0.0);
+            let z = Vec3::new(0.0, 0.0, 1.0);
+            let c = Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, 0.0) + out * big,
+                out.cross(z),
+                small,
+                out * from.cos() + z * from.sin(),
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(c.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(c)));
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e, up)], true).unwrap())
+        };
+        let starts = [0.0, FRAC_PI_2, PI, 3.0 * FRAC_PI_2];
+        for (u0, u1) in [(-0.1, 0.1), (0.3, 0.5), (-0.5, 2.0)] {
+            for (a, b) in starts
+                .iter()
+                .flat_map(|&a| starts.iter().map(move |&b| (a, b)))
+            {
+                let mut topo = Topology::new();
+                let high = tube_circle(&mut topo, u1, a, true);
+                let low = tube_circle(&mut topo, u0, b, false);
+                let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), big, small).unwrap();
+                let face = Face::new(high, vec![low], FaceSurface::Torus(torus));
+                let c =
+                    boundary::curved_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                        .unwrap()
+                        .unwrap();
+                let (area, volume) = (
+                    (u1 - u0) * 2.0 * PI * big * small,
+                    (u1 - u0) * PI * big * small * small,
+                );
+                assert!(
+                    (c.area - area).abs() < 1e-9 * area
+                        && (c.volume - volume).abs() < 1e-9 * volume,
+                    "u {u0}..{u1}, starts {a} and {b}: area {} of {area}, volume {} of {volume}",
+                    c.area,
+                    c.volume
+                );
+            }
+        }
+    }
 }

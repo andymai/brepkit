@@ -219,6 +219,7 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
     let quarter = std::f64::consts::FRAC_PI_2;
     let mut total = [0.0; 8];
     let (mut turns_sum, mut winds, mut patch, mut holes) = (0_i64, false, false, true);
+    let mut round_tube = false;
     for wire in wires {
         let first = wire.first()?;
         let entry = first
@@ -318,6 +319,7 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
             }
             add(&mut total, &acc, 1.0);
             winds = true;
+            round_tube = true;
             continue;
         }
         if turns != 0 {
@@ -349,6 +351,20 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
     }
     if holds_low {
         add(&mut total, &mean_integral(chart, chart.low?, about), -TAU);
+    }
+    // A wire round the tube carries `u` on from wherever it starts, and a
+    // turn of `u` more or less moves its integral by the whole surface's. A
+    // face holds more than none of the surface and less than all of it.
+    if round_tube {
+        let mut whole = mean_integral(chart, chart.v_ref + TAU, about);
+        for x in &mut whole {
+            *x *= TAU;
+        }
+        if whole[0] <= 0.0 {
+            return None;
+        }
+        let turns = (total[0] / whole[0]).floor();
+        add(&mut total, &whole, -turns);
     }
     if total[0] <= 0.0 {
         return None;
