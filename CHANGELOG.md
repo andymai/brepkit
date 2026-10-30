@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.8](https://github.com/andymai/brepkit/compare/v4.6.7...v4.6.8) (2026-10-30)
+
+
+### Bug Fixes
+
+* **check:** integrate a NURBS face's volume exactly along its boundary ([#2227](https://github.com/andymai/brepkit/issues/2227)) ([9055cc3](https://github.com/andymai/brepkit/commit/9055cc33bda5e5492dcd0c0b109105be07e06fd3))
+
 ## [4.6.7](https://github.com/andymai/brepkit/compare/v4.6.6...v4.6.7) (2026-10-30)
 
 
