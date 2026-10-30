@@ -1,0 +1,19 @@
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_a2dc21dbec3f2b::t_4235802fb5c01e 573,575,580-586
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6680f290345f2b14f6420d72d4f86b1e63be926e",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
