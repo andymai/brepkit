@@ -125,30 +125,32 @@ fn try_recognize_plane(surface: &NurbsSurface, tolerance: f64) -> Option<(Vec3, 
         return None;
     }
 
-    // Find a normal from the first 3 non-collinear points, the third lying
-    // farther than `tolerance` off the line through the first two: the cross
-    // product is an area, the base's length times that distance.
+    // Take the normal from three points spread across the net: the first,
+    // the one farthest from it, and the one farthest off the line through
+    // those two. Points crowded together tilt their plane by their own
+    // deviation over their spacing, which can far exceed the tolerance
+    // across the rest of the net. A net within `tolerance` of a point or a
+    // line spans no plane.
     let p0 = all_pts[0];
-    let mut normal: Option<Vec3> = None;
-    'outer: for i in 1..all_pts.len() {
-        let v1 = all_pts[i] - p0;
-        let base = v1.length();
-        if base <= tolerance {
-            continue;
-        }
-        for pt in all_pts.iter().skip(i + 1) {
-            let v2 = *pt - p0;
-            let n = v1.cross(v2);
-            if n.length() > tolerance * base
-                && let Ok(normalized) = n.normalize()
-            {
-                normal = Some(normalized);
-                break 'outer;
-            }
-        }
+    let farthest = |measure: &dyn Fn(Point3) -> f64| {
+        all_pts
+            .iter()
+            .map(|&p| (p, measure(p)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    };
+    let (p1, base) = farthest(&|p| (p - p0).length())?;
+    if base <= tolerance {
+        return None;
     }
-
-    let n = normal?;
+    let along = (p1 - p0) * (1.0 / base);
+    let (p2, height) = farthest(&|p| {
+        let v = p - p0;
+        (v - along * along.dot(v)).length()
+    })?;
+    if height <= tolerance {
+        return None;
+    }
+    let n = (p1 - p0).cross(p2 - p0).normalize().ok()?;
     let d = n.dot(Vec3::new(p0.x(), p0.y(), p0.z()));
 
     // Check all control points lie within tolerance of the plane.
@@ -1087,6 +1089,43 @@ mod tests {
                     "normal {normal:?}"
                 );
                 assert!((d * sign - expected.x()).abs() < 1e-12, "d {d}");
+            }
+            other => panic!("expected Plane, got {other:?}"),
+        }
+    }
+
+    /// A 3 by 3 net over x in {0, 1e-6, 1} and y in {0, 1e-4, 1}, flat but
+    /// for z = 5e-8 at (1e-6, 0), lies within 1e-7 of z = 0. Its first
+    /// points crowd the origin, where the third of them stands 1e-6 off the
+    /// line of the first two and tilts their plane by about 0.05: the
+    /// normal comes from points spread across the net instead.
+    #[test]
+    fn recognize_a_plane_whose_first_points_crowd_together() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let (xs, ys) = ([0.0, 1e-6, 1.0], [0.0, 1e-4, 1.0]);
+        let net: Vec<Vec<Point3>> = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 0) { 5e-8 } else { 0.0 };
+                        Point3::new(xs[i], ys[j], z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let nurbs = NurbsSurface::new(
+            2,
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            net,
+            vec![vec![1.0; 3]; 3],
+        )
+        .unwrap();
+        match recognize_surface(&nurbs, 1e-7) {
+            RecognizedSurface::Plane { normal, d } => {
+                assert!(normal.z().abs() > 1.0 - 1e-12, "normal {normal:?}");
+                assert!(d.abs() < 1e-7, "d {d}");
             }
             other => panic!("expected Plane, got {other:?}"),
         }

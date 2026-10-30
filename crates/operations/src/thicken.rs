@@ -779,6 +779,44 @@ mod tests {
 
     use super::*;
 
+    /// The solid's meshes at a coarse and a fine deflection are closed and
+    /// manifold by their indices, and again with their vertices welded by
+    /// position: every edge between welded vertices bounds two triangles.
+    fn assert_meshes_closed(topo: &Topology, solid: SolidId, label: &str) {
+        for deflection in [0.1, 0.01] {
+            let mesh = crate::tessellate::tessellate_solid(topo, solid, deflection).unwrap();
+            let by_index = (
+                crate::tessellate::boundary_edge_count(&mesh),
+                crate::tessellate::non_manifold_edge_count(&mesh),
+            );
+            let mut welded: HashMap<(i64, i64, i64), usize> = HashMap::new();
+            #[allow(clippy::cast_possible_truncation)]
+            let at: Vec<usize> = mesh
+                .positions
+                .iter()
+                .map(|p| {
+                    let key = [p.x(), p.y(), p.z()].map(|c| (c * 1e6).round() as i64);
+                    let next = welded.len();
+                    *welded.entry((key[0], key[1], key[2])).or_insert(next)
+                })
+                .collect();
+            let mut uses: HashMap<(usize, usize), usize> = HashMap::new();
+            for t in mesh.indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| at[t[k] as usize]);
+                for (p, q) in [(a, b), (b, c), (c, a)] {
+                    *uses.entry((p.min(q), p.max(q))).or_default() += 1;
+                }
+            }
+            let by_position = uses.values().filter(|&&n| n != 2).count();
+            assert_eq!(
+                (by_index, by_position),
+                ((0, 0), 0),
+                "{label} at {deflection}: boundary and non-manifold edges, then welded edges \
+                 off two triangles"
+            );
+        }
+    }
+
     #[test]
     fn thicken_positive() {
         let mut topo = Topology::new();
@@ -833,6 +871,7 @@ mod tests {
             assert_eq!(kinds.len(), 4, "{kinds:?}");
             let report = crate::validate::validate_solid(&topo, wall).unwrap();
             assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("cylinder {thickness}"));
             let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
             let exact = PI * (outer * outer - inner * inner) * 20.0;
             assert!(
@@ -882,6 +921,7 @@ mod tests {
             let wall = thicken(&mut topo, face, thickness).unwrap();
             let report = crate::validate::validate_solid(&topo, wall).unwrap();
             assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("cylinder patch {thickness}"));
             let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
             let exact = PI * (outer * outer - inner * inner) * 5.0;
             assert!(
@@ -984,6 +1024,7 @@ mod tests {
             assert_eq!(faces.len(), 4);
             let report = crate::validate::validate_solid(&topo, wall).unwrap();
             assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("frustum {thickness}"));
             let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
             assert!(
                 (volume - exact).abs() < 1e-4 * exact,
@@ -1047,6 +1088,7 @@ mod tests {
         let wall = thicken(&mut topo, side, -5.0).unwrap();
         let report = crate::validate::validate_solid(&topo, wall).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, wall, "frustum -5");
         let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
         let exact = 2.0 * std::f64::consts::PI * 337.5;
         assert!((volume - exact).abs() < 1e-6 * exact, "{volume} of {exact}");
@@ -1104,6 +1146,7 @@ mod tests {
         );
         let report = crate::validate::validate_solid(&topo, wall).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, wall, "bend 1");
         let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
         let exact = 70.0 * std::f64::consts::PI * std::f64::consts::PI;
         assert!((volume - exact).abs() < 1e-4 * exact, "{volume} of {exact}");
@@ -1124,6 +1167,7 @@ mod tests {
         let wall = thicken(&mut topo, bend, 16.0).unwrap();
         let report = crate::validate::validate_solid(&topo, wall).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, wall, "bend 16");
         let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
         let exact = 3520.0 * PI * PI;
         assert!((volume - exact).abs() < 1e-4 * exact, "{volume} of {exact}");
@@ -1175,6 +1219,7 @@ mod tests {
             assert_eq!(minor(solid.inner_shells()[0]), (inner, true), "{thickness}");
             let report = crate::validate::validate_solid(&topo, ring).unwrap();
             assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, ring, &format!("ring {thickness}"));
             let volume = crate::measure::solid_volume(&topo, ring, 1e-3).unwrap();
             let exact = 2.0 * std::f64::consts::PI.powi(2) * 20.0 * (outer * outer - inner * inner);
             assert!(
@@ -1207,6 +1252,7 @@ mod tests {
         let shell = thicken(&mut topo, top, 1.0).unwrap();
         let report = crate::validate::validate_solid(&topo, shell).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
+        assert_meshes_closed(&topo, shell, "hemisphere 1");
         let volume = crate::measure::solid_volume(&topo, shell, 1e-3).unwrap();
         let exact = 2.0 / 3.0 * std::f64::consts::PI * (1331.0 - 1000.0);
         assert!((volume - exact).abs() < 1e-2 * exact, "{volume} of {exact}");
@@ -1277,6 +1323,7 @@ mod tests {
             let wall = thicken(&mut topo, face, thickness).unwrap();
             let report = crate::validate::validate_solid(&topo, wall).unwrap();
             assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            assert_meshes_closed(&topo, wall, &format!("sphere patch {thickness}"));
             let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
             let exact = (outer * outer * outer - inner * inner * inner) / 3.0
                 * FRAC_PI_2
@@ -1432,5 +1479,49 @@ mod tests {
             b.min.z().abs() < 1e-12 && (b.max.z() - side).abs() < 1e-12,
             "{b:?}"
         );
+    }
+
+    /// A unit square on a quadratic NURBS net over x in {0, 1e-6, 1} and
+    /// y in {0, 1e-4, 1}, flat but for z = 5e-8 at (1e-6, 0): within the
+    /// tolerance of z = 0, though its first control points crowd the origin.
+    /// Thickened by 1 it is extruded into a unit cube.
+    #[test]
+    fn thicken_a_flat_nurbs_face_whose_control_points_crowd_together() {
+        let (xs, ys) = ([0.0, 1e-6, 1.0], [0.0, 1e-4, 1.0]);
+        let net: Vec<Vec<Point3>> = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 0) { 5e-8 } else { 0.0 };
+                        Point3::new(xs[i], ys[j], z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let surface = NurbsSurface::new(
+            2,
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            net,
+            vec![vec![1.0; 3]; 3],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let vs = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let edges = (0..4)
+            .map(|i| {
+                let e = topo.add_edge(Edge::new(vs[i], vs[(i + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let w = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(w, vec![], FaceSurface::Nurbs(surface)));
+        let solid = thicken(&mut topo, face, 1.0).unwrap();
+        let report = crate::validate::validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = crate::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+        assert!((volume - 1.0).abs() < 1e-6, "{volume}");
     }
 }
