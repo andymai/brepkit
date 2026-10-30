@@ -5441,12 +5441,7 @@ pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Poin
         // frame: only the box then holds the search in.
         let outer_chords: &[UvChord] = if outline.closes { &outline.chords } else { &[] };
         let outer_segs: Vec<UvSegment> = outer_chords.iter().map(|c| c.segment).collect();
-        let clear = |u: f64, v: f64| {
-            hole_chords
-                .iter()
-                .chain(outer_chords)
-                .all(|c| c.stray == 0.0 || c.distance(u, v) > 2.0 * c.stray)
-        };
+        let clear = |u: f64, v: f64| stands_clear(hole_chords.iter().chain(outer_chords), u, v);
         let search = |n_u: u32, n_v: u32| -> Option<Point3> {
             let mut best: Option<(f64, Point3)> = None;
             for iu in 0..n_u {
@@ -5493,12 +5488,27 @@ pub fn cylinder_cone_remainder_interior(remainder: &SplitSubFace) -> Option<Poin
 /// A `(u, v)` segment, its lower-`u` end first.
 type UvSegment = (f64, f64, f64, f64);
 
+/// How far, in `(u, v)`, a wall's interior point stands at least off its
+/// boundary: the linear tolerance.
+const CLEARANCE: f64 = 1e-7;
+
 /// One chord of a loop sampled in an unwrapped `(u, v)` frame, with how far
-/// its curve strays from it: the curve's own sample between the chord's
-/// ends, measured to the chord.
+/// its curve strays from it: the farthest of the curve's own samples at a
+/// quarter, half and three quarters of the way between the chord's ends.
+/// Past an inflection the curve crosses its chord near the middle, and the
+/// quarter samples stand near its farthest.
 struct UvChord {
     segment: UvSegment,
     stray: f64,
+}
+
+/// Whether `(u, v)` stands off every chord by twice its stray, and by the
+/// linear tolerance off a straight one: a point on a ruling is not inside the
+/// wall.
+fn stands_clear<'a>(chords: impl IntoIterator<Item = &'a UvChord>, u: f64, v: f64) -> bool {
+    chords
+        .into_iter()
+        .all(|c| c.distance(u, v) > 2.0f64.mul_add(c.stray, CLEARANCE))
 }
 
 impl UvChord {
@@ -5548,9 +5558,9 @@ fn loop_chords(
     let mut first: Option<(f64, f64)> = None;
     let mut prev: Option<(f64, f64)> = None;
     for e in edges {
-        // Twice as many samples as chords: the odd ones measure the stray.
-        let mut uvs = Vec::with_capacity(2 * per_edge + 1);
-        for p in samples_of(e, 2 * per_edge) {
+        // Four samples to a chord: the three between measure its stray.
+        let mut uvs = Vec::with_capacity(4 * per_edge + 1);
+        for p in samples_of(e, 4 * per_edge) {
             let (u, v) = surface.project_point(p)?;
             // Unwrapped against the previous sample, so a seam-crossing step
             // is one continuous segment; the containment test tries every
@@ -5571,11 +5581,14 @@ fn loop_chords(
             uvs.push((u, v));
             prev = Some((u, v));
         }
-        for w in uvs.windows(3).step_by(2) {
-            let (a, m, b) = (w[0], w[1], w[2]);
+        for w in uvs.windows(5).step_by(4) {
+            let (a, b) = (w[0], w[4]);
             out.chords.push(UvChord {
                 segment: ordered(a, b),
-                stray: segment_distance_2d(m, a, b),
+                stray: w[1..4]
+                    .iter()
+                    .map(|&m| segment_distance_2d(m, a, b))
+                    .fold(0.0, f64::max),
             });
         }
     }
@@ -6558,8 +6571,9 @@ pub(super) fn try_split_disk_by_chords(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
-        FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, SplitSubFace, arc_covers_segment,
-        between_loop_and_holes, cylinder_cone_remainder_interior, point_in_hole_loops_uv,
+        FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, SplitSubFace, UvChord,
+        arc_covers_segment, between_loop_and_holes, cylinder_cone_remainder_interior, loop_chords,
+        outline_samples, point_in_hole_loops_uv, segment_distance_2d, stands_clear,
     };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -6605,6 +6619,139 @@ mod tests {
             Vec3::new(0.0, 1.0, 0.0),
         )
         .unwrap()
+    }
+
+    /// A straight chord, a ruling at u = 1, has no stray: a point on it is
+    /// not clear of it, one 1e-6 off is. A curved chord straying 0.01 needs
+    /// a point more than 0.02 off it.
+    #[test]
+    fn a_point_on_a_straight_chord_is_not_clear_of_it() {
+        let ruling = UvChord {
+            segment: (1.0, 0.0, 1.0, 10.0),
+            stray: 0.0,
+        };
+        assert!(!stands_clear([&ruling], 1.0, 5.0));
+        assert!(stands_clear([&ruling], 1.0 + 1e-6, 5.0));
+        let arc = UvChord {
+            segment: (0.0, 0.0, 1.0, 0.0),
+            stray: 0.01,
+        };
+        assert!(!stands_clear([&arc], 0.5, 0.015));
+        assert!(stands_clear([&arc], 0.5, 0.025));
+    }
+
+    /// The rim where the plane z = 2 + x meets the unit cylinder, seamed at
+    /// u = 1.369446786 so that a chord of 16 to the turn centres on the
+    /// inflection at u = 3pi/2, where the rim crosses the chord near its
+    /// middle. Twice each chord's stray covers how far its curve strays from
+    /// it, read at 32 points along each.
+    #[test]
+    fn a_wall_chords_stray_covers_its_curve() {
+        use std::f64::consts::PI;
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let seam = 1.369_446_786_f64;
+        let start = Point3::new(seam.cos(), seam.sin(), 2.0 + seam.cos());
+        let rim = [wall_edge(
+            EdgeCurve::Ellipse(slanted_rim(2.0)),
+            start,
+            start,
+            true,
+        )];
+        let chords = loop_chords(&surface, &rim, 16, outline_samples).unwrap();
+        let fine: Vec<(f64, f64)> = outline_samples(&rim[0], 16 * 32)
+            .into_iter()
+            .map(|p| surface.project_point(p).unwrap())
+            .collect();
+        let mut prev = fine[0].0;
+        let fine: Vec<(f64, f64)> = fine
+            .into_iter()
+            .map(|(u, v)| {
+                prev += (u - prev + PI).rem_euclid(2.0 * PI) - PI;
+                (prev, v)
+            })
+            .collect();
+        for (k, c) in chords.chords.iter().take(16).enumerate() {
+            let (au, av, bu, bv) = c.segment;
+            let off = fine[32 * k..=32 * (k + 1)]
+                .iter()
+                .map(|&p| segment_distance_2d(p, (au, av), (bu, bv)))
+                .fold(0.0, f64::max);
+            assert!(
+                2.0 * c.stray >= off,
+                "chord {k}: stray {} for {off}",
+                c.stray
+            );
+        }
+    }
+
+    /// The unit cylinder's wall from u = 1 to 1.2 and z = 0 to 10, its sides
+    /// straight rulings, with a lens hole 9 tall and 0.16 wide down its
+    /// middle: the search finds a point between the lens and a side, off both
+    /// rulings.
+    #[test]
+    fn a_narrow_patch_point_stands_off_its_rulings() {
+        use brepkit_math::curves::Ellipse3D;
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let at = |a: f64, z: f64| Point3::new(a.cos(), a.sin(), z);
+        let rim = |z: f64| {
+            Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, z),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap()
+        };
+        let mid = 1.1_f64;
+        let lens = Ellipse3D::with_axes(
+            at(mid, 5.0),
+            Vec3::new(mid.cos(), mid.sin(), 0.0),
+            4.5,
+            0.08,
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(-mid.sin(), mid.cos(), 0.0),
+        )
+        .unwrap();
+        let lens_start = lens.evaluate(0.0);
+        let patch = SplitSubFace {
+            surface,
+            outer_wire: vec![
+                wall_edge(
+                    EdgeCurve::Circle(rim(0.0)),
+                    at(1.0, 0.0),
+                    at(1.2, 0.0),
+                    true,
+                ),
+                wall_edge(EdgeCurve::Line, at(1.2, 0.0), at(1.2, 10.0), true),
+                wall_edge(
+                    EdgeCurve::Circle(rim(10.0)),
+                    at(1.2, 10.0),
+                    at(1.0, 10.0),
+                    false,
+                ),
+                wall_edge(EdgeCurve::Line, at(1.0, 10.0), at(1.0, 0.0), true),
+            ],
+            inner_wires: vec![vec![wall_edge(
+                EdgeCurve::Ellipse(lens),
+                lens_start,
+                lens_start,
+                true,
+            )]],
+            reversed: false,
+            parent: dummy_face_id(),
+            rank: crate::ds::Rank::A,
+            precomputed_interior: None,
+        };
+        let p = cylinder_cone_remainder_interior(&patch).expect("a point on the patch");
+        let a = p.y().atan2(p.x());
+        assert!(a > 1.0 + 1e-7 && a < 1.2 - 1e-7, "{p:?} at angle {a}");
+        assert!(p.z() > 0.0 && p.z() < 10.0, "{p:?}");
     }
 
     /// The unit cylinder's wall between the planes z = 2 + x and
