@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793389243224,
+  "lastUpdate": 1793390717448,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62585,6 +62585,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29836377,
             "range": "± 62202",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f36b7c32836030a182f82fb022d5bd781fa09512",
+          "message": "fix(algo): intersect a NURBS face with the part of a cylinder or cone it can reach (#2243)\n\nA NURBS face now meets a cylinder or cone over just the part of it the\nface can reach, so a short crossing near one end of a long cylinder is\nfound however long the cylinder is.\n\nToday the face-face phase converts the cylinder or cone to a NURBS patch\nover its face's whole stored axial range and intersects that with the\nNURBS face. A thread flank, a twisted patch from z = -0.3 to 0.7,\ncrosses a cylinder of radius 7 that starts at z = 0 only over the 0.041\njust above its end. On a cylinder 40 long the crossing is found; on one\n60 or 127 long the intersection returns none, so the flank stays whole\nand the thread's fuse onto its rod falls back to the mesh boolean.\n\n## Change\n\n- The patch spans only the part of the face's axial range that the NURBS\nface's control points reach along the axis, padded as the unbounded case\nalready was. The NURBS face lies in its control points' hull, so every\ncrossing lies in that part. A NURBS face reaching none of the range\nmeets nothing.\n- A cone's `v` runs along its generator, `sin(half_angle)` of it along\nthe axis, so the reach along the axis is divided by `sin(half_angle)`\nbefore it bounds a cone's range. That also corrects a cone stored\nwithout a range, which took its band from the reach in heights.\n\n## Tests\n\n- `a_short_crossing_near_a_long_cylinders_end_is_found`: that flank\nagainst the cylinder stored up to 2, 20 and 127 gives a crossing each\ntime, every sampled point on the cylinder to 1e-6 and above its end.\nOver the whole range, the cylinder stored up to 127 gives none.\n- `a_nurbs_face_meets_a_cone_where_its_generator_reaches_it`: a cone of\nhalf-angle π/6 from its radial plane, stored over its generator from 18\nto 22, meets a flat NURBS rectangle at z = 10, the height its generator\nreaches at 20; the crossing is found on the cone and in the plane to its\nfit's 1e-5. Bounding the cone's range by heights, 9 to 11, finds none.\n- With #2238, #2240 and #2241, the bench-vise screw's thread of 306\nsections now fuses exactly onto its rod 127 long, as do 41 sections onto\nrods 60 and 127 long.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes NURBS face–cylinder and face–cone intersections missing short\ncrossings near one end of a long cylinder or cone.\n\nPreviously, the cylinder or cone was converted to a NURBS patch over its\nwhole stored parameter range, so a crossing rising only a short distance\nabove one end could be missed when the stored range was long. Now the\npatch spans only the part of the range the NURBS face's control points\nreach, and the intersection returns empty when the face reaches none of\nthe range. For cones the reach is measured along the generator rather\nthan the axis, since the cone's `v` runs along the generator.\n\n**Bug Fixes**\n- Slice the cylinder or cone patch to the parameter extent the NURBS\nface's control points reach.\n- Match a cone's reach to its generator, not its height.\n- Cover the no-overlap case with an early empty intersection.\n- Add regression tests for cylinders stored up to 2, 20, and 127 units\nand for a cone reached along its generator.\n\n<sup>Written for commit fd106dff2bf81cb1b10f2b9a395582fe487552fb.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2243?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2243?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2243&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T13:02:01-07:00",
+          "tree_id": "0ef9ba8def956e32a6af6b807693cc3ca57595d3",
+          "url": "https://github.com/andymai/brepkit/commit/f36b7c32836030a182f82fb022d5bd781fa09512"
+        },
+        "date": 1793390708074,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1072562,
+            "range": "± 16331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1154871,
+            "range": "± 1818",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13359,
+            "range": "± 35",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 661697,
+            "range": "± 800",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28249364,
+            "range": "± 84640",
             "unit": "ns/iter"
           }
         ]
