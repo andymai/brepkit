@@ -446,39 +446,57 @@ pub fn sample_full_period_curve(n: usize, evaluate: impl Fn(f64) -> Point3) -> V
     result
 }
 
-/// Create a tiny degenerate polygon face at a point, matching the vertex
-/// count of the first existing profile. Used for loft start/end points.
-pub fn create_apex_face(
+/// A loft through `profiles`, closed at `start` and `end` to a point when
+/// given. Ruled, a lone profile with a point is lofted to it, and with more
+/// profiles each point's piece is fused onto the loft through them, on the
+/// profile it ends. Smooth, the rails run on through the profiles to meet
+/// at each point.
+///
+/// # Errors
+///
+/// Returns an error if there are no profiles, a lone profile has no point,
+/// or a loft or the fuse fails.
+pub fn loft_with_points(
     topo: &mut Topology,
-    point: Point3,
-    existing_profiles: &[brepkit_topology::face::FaceId],
-) -> Result<brepkit_topology::face::FaceId, JsError> {
-    // Determine target vertex count from the first profile.
-    let n = if let Some(&fid) = existing_profiles.first() {
-        let verts = brepkit_operations::boolean::face_polygon(topo, fid)
-            .map_err(|e: brepkit_operations::OperationsError| JsError::new(&e.to_string()))?;
-        verts.len().max(3)
-    } else {
-        3
-    };
-
-    // Create a tiny polygon at the apex point.
-    let epsilon = 1e-6;
-    let mut pts = Vec::with_capacity(n);
-    for i in 0..n {
-        let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
-        pts.push(Point3::new(
-            point.x() + epsilon * angle.cos(),
-            point.y() + epsilon * angle.sin(),
-            point.z(),
-        ));
+    profiles: &[brepkit_topology::face::FaceId],
+    start: Option<Point3>,
+    end: Option<Point3>,
+    ruled: bool,
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    use brepkit_operations::loft::{loft, loft_smooth_with_points, loft_to_point};
+    if !ruled {
+        return loft_smooth_with_points(topo, profiles, start, end);
     }
-
-    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts, TOL)
-        .map_err(|e| JsError::new(&e.to_string()))?;
-    let face_id = brepkit_topology::builder::make_face_from_wire(topo, wire_id)
-        .map_err(|e| JsError::new(&e.to_string()))?;
-    Ok(face_id)
+    let (Some(&first), Some(&last)) = (profiles.first(), profiles.last()) else {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "loft needs at least one profile".into(),
+        });
+    };
+    let mut pieces = Vec::new();
+    if profiles.len() > 1 {
+        pieces.push(loft(topo, profiles)?);
+    }
+    if let Some(p) = start {
+        pieces.push(loft_to_point(topo, first, p)?);
+    }
+    if let Some(p) = end {
+        pieces.push(loft_to_point(topo, last, p)?);
+    }
+    let mut pieces = pieces.into_iter();
+    let Some(mut solid) = pieces.next() else {
+        return Err(brepkit_operations::OperationsError::InvalidInput {
+            reason: "a loft through one profile needs a start or end point".into(),
+        });
+    };
+    for piece in pieces {
+        solid = brepkit_operations::boolean::boolean(
+            topo,
+            brepkit_operations::boolean::BooleanOp::Fuse,
+            solid,
+            piece,
+        )?;
+    }
+    Ok(solid)
 }
 
 // ── Mesh / tessellation helpers ───────────────────────────────────
@@ -1317,6 +1335,152 @@ mod fillet_tests {
                 .contains("none of the requested edges are filletable"),
             "unexpected error: {error}"
         );
+    }
+}
+
+#[cfg(test)]
+mod loft_point_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    fn square(topo: &mut Topology, half: f64, z: f64) -> brepkit_topology::face::FaceId {
+        let p = |x: f64, y: f64| Point3::new(x, y, z);
+        let wire = brepkit_topology::builder::make_polygon_wire(
+            topo,
+            &[
+                p(-half, -half),
+                p(half, -half),
+                p(half, half),
+                p(-half, half),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap()
+    }
+
+    /// A 40 square lofted to a point 30 above it is a pyramid of 5 faces,
+    /// 8 edges and 5 vertices holding 16000, with no cap at its tip.
+    #[test]
+    fn a_square_and_an_end_point_loft_to_a_pyramid() {
+        let mut topo = Topology::new();
+        let base = square(&mut topo, 20.0, 0.0);
+        let solid = loft_with_points(
+            &mut topo,
+            &[base],
+            None,
+            Some(Point3::new(0.0, 0.0, 30.0)),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap(),
+            (5, 8, 5)
+        );
+        let volume = brepkit_operations::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+        assert!((volume - 16000.0).abs() < 1e-6, "{volume}");
+    }
+
+    /// Squares of 40 at z = 0 and 20 at z = 20, lofted on to a point at
+    /// z = 40, make one pyramid of 40 by 40 holding 40³/3: the frustum and
+    /// the tip fuse along the smaller square.
+    #[test]
+    fn profiles_and_an_end_point_fuse_to_one_solid() {
+        let mut topo = Topology::new();
+        let bottom = square(&mut topo, 20.0, 0.0);
+        let top = square(&mut topo, 10.0, 20.0);
+        let solid = loft_with_points(
+            &mut topo,
+            &[bottom, top],
+            None,
+            Some(Point3::new(0.0, 0.0, 40.0)),
+            true,
+        )
+        .unwrap();
+        let report = brepkit_operations::validate::validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = brepkit_operations::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+        assert!((volume - 64000.0 / 3.0).abs() < 1e-6, "{volume}");
+    }
+
+    fn check_smooth(
+        topo: &Topology,
+        solid: brepkit_topology::solid::SolidId,
+        counts: (usize, usize, usize),
+        exact: f64,
+    ) {
+        assert_eq!(
+            brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap(),
+            counts
+        );
+        let report = brepkit_operations::validate::validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        // The signed volume sums an open mesh as readily as a closed one.
+        for deflection in [0.01, 0.001] {
+            let mesh = tessellate::tessellate_solid(topo, solid, deflection).unwrap();
+            assert_eq!(
+                (
+                    tessellate::boundary_edge_count(&mesh),
+                    tessellate::non_manifold_edge_count(&mesh)
+                ),
+                (0, 0),
+                "open or branching mesh at {deflection}"
+            );
+        }
+        let volume = brepkit_operations::measure::oriented_solid_volume(topo, solid, 1e-3).unwrap();
+        assert!((volume - exact).abs() < 1e-3 * exact, "{volume} of {exact}");
+    }
+
+    /// Smooth through squares of 40 at z = 0 and 30 at z = 25 on to a point
+    /// at z = 40 (or the same mirrored, from a point at z = 0), each rail is
+    /// one quadratic: equal chords put the middle square at t = 1/2, so the
+    /// half-width is 20 (1 - t²) at height 60t - 20t². The four sides run
+    /// unbroken from the end square to the point and hold 121600 / 3, where
+    /// a frustum and a pyramid would hold 106000 / 3.
+    #[test]
+    fn smooth_profiles_run_on_smoothly_to_a_point() {
+        for from_start in [false, true] {
+            let mut topo = Topology::new();
+            let (profiles, point) = if from_start {
+                (
+                    [square(&mut topo, 15.0, 15.0), square(&mut topo, 20.0, 40.0)],
+                    Point3::new(0.0, 0.0, 0.0),
+                )
+            } else {
+                (
+                    [square(&mut topo, 20.0, 0.0), square(&mut topo, 15.0, 25.0)],
+                    Point3::new(0.0, 0.0, 40.0),
+                )
+            };
+            let solid = loft_with_points(
+                &mut topo,
+                &profiles,
+                from_start.then_some(point),
+                (!from_start).then_some(point),
+                false,
+            )
+            .unwrap();
+            check_smooth(&topo, solid, (5, 8, 5), 121_600.0 / 3.0);
+        }
+    }
+
+    /// A 40 square at z = 0 lofted smoothly from a point at z = -20 to one
+    /// at z = 20 has rails of half-width 80t (1 - t) at height 40t - 20:
+    /// four sides meeting at both points, holding 512000 / 15 where two
+    /// pyramids would hold 64000 / 3.
+    #[test]
+    fn a_profile_between_two_points_lofts_smoothly() {
+        let mut topo = Topology::new();
+        let middle = square(&mut topo, 20.0, 0.0);
+        let solid = loft_with_points(
+            &mut topo,
+            &[middle],
+            Some(Point3::new(0.0, 0.0, -20.0)),
+            Some(Point3::new(0.0, 0.0, 20.0)),
+            false,
+        )
+        .unwrap();
+        check_smooth(&topo, solid, (4, 4, 2), 512_000.0 / 15.0);
     }
 }
 
