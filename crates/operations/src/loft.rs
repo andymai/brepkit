@@ -347,6 +347,7 @@ fn try_loft_coaxial_circle_stack(
 
 /// Per-edge geometry of a profile's outer wire in traversal order: the curve
 /// and its wire-oriented start/end points (so `start`→`end` follows the wire).
+#[derive(Clone)]
 struct ProfileEdgeGeom {
     curve: EdgeCurve,
     start: Point3,
@@ -422,7 +423,7 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
     }
     let wire = topo.wire(face.outer_wire()).ok()?;
     let oes = wire.edges();
-    if oes.len() < 3 {
+    if oes.is_empty() {
         return None;
     }
     let recog_tol = Tolerance::new().linear * 100.0;
@@ -537,12 +538,258 @@ fn ruled_arc_surface(
     .ok()
 }
 
-/// Loft profiles that share the same boundary edge structure while preserving
-/// curved edges (arcs stay arcs via ruled NURBS side faces) instead of
-/// faceting them. Returns `None` (fall back to the polygon path) unless every
-/// profile is planar, hole-free, winds CCW about the stacking direction, has
-/// the same edge count, the i-th edge has the same curve type in every profile,
-/// at least one edge is curved, and all edges are `Line`/`Circle`.
+/// The ruled surface between two profile edges, a line and a line or an arc,
+/// from `r0` to `r1`. A line runs in equal steps while an arc is cut into
+/// rational quadratic pieces of at most π/16, so each ruling meets the arc
+/// near the angle its step reaches: the pairing a ruled loft makes between a
+/// segment and an arc. `None` if the arc cannot be converted.
+fn ruled_line_surface(r0: &ProfileEdgeGeom, r1: &ProfileEdgeGeom) -> Option<NurbsSurface> {
+    const PIECE: f64 = std::f64::consts::PI / 16.0;
+    let arc_pieces = |e: &ProfileEdgeGeom| match &e.curve {
+        EdgeCurve::Circle(c) => {
+            let (t0, t1) = e.curve.domain_with_endpoints(e.start, e.end);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pieces = ((t1 - t0).abs() / PIECE).ceil().max(1.0) as usize;
+            brepkit_geometry::convert::circle_to_nurbs_with_segments(c, t0, t1, pieces).ok()
+        }
+        _ => None,
+    };
+    let row = |e: &ProfileEdgeGeom, pieces: usize| -> Option<(Vec<Point3>, Vec<f64>)> {
+        if let Some(arc) = arc_pieces(e) {
+            return Some((arc.control_points().to_vec(), arc.weights().to_vec()));
+        }
+        let steps = 2 * pieces;
+        #[allow(clippy::cast_precision_loss)]
+        let points = (0..=steps)
+            .map(|k| e.start + (e.end - e.start) * (k as f64 / steps as f64))
+            .collect();
+        Some((points, vec![1.0; steps + 1]))
+    };
+    let arc = arc_pieces(r0).or_else(|| arc_pieces(r1));
+    let (degree, knots, pieces) = arc.as_ref().map_or_else(
+        || (1, vec![0.0, 0.0, 1.0, 1.0], 0),
+        |a| {
+            (
+                a.degree(),
+                a.knots().to_vec(),
+                (a.control_points().len() - 1) / 2,
+            )
+        },
+    );
+    let ((c0, w0), (c1, w1)) = if pieces == 0 {
+        (
+            (vec![r0.start, r0.end], vec![1.0; 2]),
+            (vec![r1.start, r1.end], vec![1.0; 2]),
+        )
+    } else {
+        (row(r0, pieces)?, row(r1, pieces)?)
+    };
+    NurbsSurface::new(
+        1,
+        degree,
+        vec![0.0, 0.0, 1.0, 1.0],
+        knots,
+        vec![c0, c1],
+        vec![w0, w1],
+    )
+    .ok()
+}
+
+/// The normal shared by every profile's plane, or `None` when a profile is
+/// not planar or the planes are not parallel.
+fn common_plane_normal(
+    topo: &Topology,
+    profiles: &[FaceId],
+) -> Result<Option<Vec3>, crate::OperationsError> {
+    let mut common: Option<Vec3> = None;
+    for &fid in profiles {
+        let FaceSurface::Plane { normal, .. } = topo.face(fid)?.surface() else {
+            return Ok(None);
+        };
+        let n = normal.normalize()?;
+        match common {
+            None => common = Some(n),
+            Some(c) if c.dot(n).abs() >= 1.0 - 1e-9 => {}
+            Some(_) => return Ok(None),
+        }
+    }
+    Ok(common)
+}
+
+/// A profile's centre for matching it to another by angle: a lone circle's
+/// own centre, else the centre of its boundary's length.
+fn profile_centre(p: &[ProfileEdgeGeom]) -> Option<Point3> {
+    if let [only] = p
+        && let EdgeCurve::Circle(c) = &only.curve
+    {
+        return Some(c.center());
+    }
+    let origin = p.first()?.start;
+    let (mut sum, mut total) = (Vec3::new(0.0, 0.0, 0.0), 0.0);
+    for e in p {
+        let (middle, length) = match &e.curve {
+            EdgeCurve::Line => (
+                e.start + (e.end - e.start) * 0.5,
+                (e.end - e.start).length(),
+            ),
+            EdgeCurve::Circle(c) => {
+                let (t0, t1) = e.curve.domain_with_endpoints(e.start, e.end);
+                let half = 0.5 * (t1 - t0);
+                let bisector = c.evaluate(t0 + half) - c.center();
+                (
+                    c.center() + bisector * (half.sin() / half),
+                    2.0 * half * c.radius(),
+                )
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return None,
+        };
+        sum += (middle - origin) * length;
+        total += length;
+    }
+    (total > 0.0).then(|| origin + sum * (1.0 / total))
+}
+
+/// Where the ray from `from` along `dir` meets the profile `p` nearest
+/// `near`: the edge it meets and the point.
+fn ray_meets_profile(
+    p: &[ProfileEdgeGeom],
+    from: Point3,
+    dir: Vec3,
+    near: Point3,
+) -> Option<(usize, Point3)> {
+    const SLACK: f64 = 1e-9;
+    let mut best: Option<(usize, Point3, f64)> = None;
+    for (i, e) in p.iter().enumerate() {
+        let mut hits = Vec::new();
+        match &e.curve {
+            EdgeCurve::Line => {
+                // from + s dir = start + t (end - start), in their plane.
+                let ab = e.end - e.start;
+                let n = dir.cross(ab);
+                let nn = n.length_squared();
+                if nn > 0.0 {
+                    let w = e.start - from;
+                    let (s, t) = (w.cross(ab).dot(n) / nn, w.cross(dir).dot(n) / nn);
+                    if s > 0.0 && (-SLACK..=1.0 + SLACK).contains(&t) {
+                        hits.push(e.start + ab * t.clamp(0.0, 1.0));
+                    }
+                }
+            }
+            EdgeCurve::Circle(c) => {
+                let f = from - c.center();
+                let (a, b, k) = (
+                    dir.length_squared(),
+                    2.0 * f.dot(dir),
+                    f.length_squared() - c.radius() * c.radius(),
+                );
+                let disc = b.mul_add(b, -4.0 * a * k);
+                if a > 0.0 && disc >= 0.0 {
+                    let (t0, t1) = e.curve.domain_with_endpoints(e.start, e.end);
+                    for s in [
+                        (-b - disc.sqrt()) / (2.0 * a),
+                        (-b + disc.sqrt()) / (2.0 * a),
+                    ] {
+                        let q = from + dir * s;
+                        let along = (c.project(q) - t0).rem_euclid(std::f64::consts::TAU);
+                        if s > 0.0 && along <= (t1 - t0) + SLACK {
+                            hits.push(q);
+                        }
+                    }
+                }
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return None,
+        }
+        for q in hits {
+            let d = (q - near).length();
+            if best.is_none_or(|b| d < b.2) {
+                best = Some((i, q, d));
+            }
+        }
+    }
+    best.map(|(i, q, _)| (i, q))
+}
+
+/// Cuts each profile at the others' vertices, matched by angle: a vertex,
+/// carried to another profile by the offset between their centres, casts a
+/// ray from that profile's centre within its plane and cuts its boundary
+/// where the ray meets it, unless a vertex is already there. Carried from
+/// the last profile to the first and back, every profile ends with a vertex
+/// at each angle any of them has. The profiles' centres, or `None` when a
+/// ray misses a profile.
+fn match_profiles_by_angle(
+    profs: &mut [Vec<ProfileEdgeGeom>],
+    normal: Vec3,
+    tol: f64,
+) -> Option<Vec<Point3>> {
+    let centres: Vec<Point3> = profs
+        .iter()
+        .map(|p| profile_centre(p))
+        .collect::<Option<_>>()?;
+    let m = profs.len();
+    let order = (1..m)
+        .rev()
+        .map(|i| (i, i - 1))
+        .chain((0..m - 1).map(|i| (i, i + 1)));
+    for (from, to) in order {
+        let corners: Vec<Point3> = profs[from].iter().map(|e| e.start).collect();
+        for v in corners {
+            let carried = centres[to] + (v - centres[from]);
+            let mut dir = carried - centres[to];
+            dir = dir - normal * dir.dot(normal);
+            if dir.length() <= tol {
+                continue;
+            }
+            let (i, q) = ray_meets_profile(&profs[to], centres[to], dir, carried)?;
+            if profs[to].iter().any(|e| (e.start - q).length() <= tol) {
+                continue;
+            }
+            let e = profs[to][i].clone();
+            if (e.end - q).length() <= tol {
+                continue;
+            }
+            profs[to].splice(
+                i..=i,
+                [
+                    ProfileEdgeGeom {
+                        curve: e.curve.clone(),
+                        start: e.start,
+                        end: q,
+                    },
+                    ProfileEdgeGeom {
+                        curve: e.curve,
+                        start: q,
+                        end: e.end,
+                    },
+                ],
+            );
+        }
+    }
+    Some(centres)
+}
+
+/// Turns each profile after the first to start at the vertex whose angle
+/// about its centre lies nearest the first profile's start.
+fn start_at_matching_angles(profs: &mut [Vec<ProfileEdgeGeom>], centres: &[Point3], normal: Vec3) {
+    let flat = |v: Vec3| v - normal * v.dot(normal);
+    let reference = flat(profs[0][0].start - centres[0]);
+    for (p, &c) in profs.iter_mut().zip(centres).skip(1) {
+        let turn = |e: &ProfileEdgeGeom| {
+            let d = flat(e.start - c);
+            reference.cross(d).dot(normal).atan2(reference.dot(d)).abs()
+        };
+        if let Some(k) = (0..p.len()).min_by(|&a, &b| turn(&p[a]).total_cmp(&turn(&p[b]))) {
+            p.rotate_left(k);
+        }
+    }
+}
+
+/// Loft profiles of lines and arcs while preserving curved edges (arcs stay
+/// arcs via ruled NURBS side faces) instead of faceting them. Profiles of
+/// differing edge counts are first cut at one another's vertices by angle.
+/// Returns `None` (fall back to the polygon path) unless every profile is
+/// planar, hole-free, winds the same way about the stacking direction, ends
+/// with as many edges as the others (at least three), at least one edge is
+/// curved, and all edges are `Line`/`Circle`.
 #[allow(clippy::too_many_lines)]
 fn try_loft_matching_curved_profiles(
     topo: &mut Topology,
@@ -571,26 +818,29 @@ fn try_loft_matching_curved_profiles(
         }
     }
 
-    // 2. Same edge count + matching per-edge curve type across all profiles.
-    let n = profs[0].len();
-    let kind = |c: &EdgeCurve| match c {
-        EdgeCurve::Line => 0u8,
-        EdgeCurve::Circle(_) => 1,
-        EdgeCurve::Ellipse(_) => 2,
-        EdgeCurve::NurbsCurve(_) => 3,
-    };
-    for p in &profs {
-        if p.len() != n || (0..n).any(|i| kind(&p[i].curve) != kind(&profs[0][i].curve)) {
-            return Ok(None);
-        }
+    // 2. Only Line/Circle edges are handled, and only worth it if some edge
+    //    is curved (all-Line profiles give the identical polygon result).
+    let edges = || profs.iter().flatten();
+    if edges().all(|e| matches!(e.curve, EdgeCurve::Line))
+        || edges().any(|e| !matches!(e.curve, EdgeCurve::Line | EdgeCurve::Circle(_)))
+    {
+        return Ok(None);
     }
-    // Only Line/Circle edges are handled, and only worth it if some edge is
-    // curved (an all-Line profile gives the identical polygon result).
-    let all_line = profs[0].iter().all(|e| matches!(e.curve, EdgeCurve::Line));
-    let unsupported = profs[0]
-        .iter()
-        .any(|e| !matches!(e.curve, EdgeCurve::Line | EdgeCurve::Circle(_)));
-    if all_line || unsupported {
+    // Profiles of differing edge counts are cut at one another's vertices,
+    // matched by their angle about each profile's centre.
+    let centres = if profs.iter().any(|p| p.len() != profs[0].len()) {
+        let Some(normal) = common_plane_normal(topo, profiles)? else {
+            return Ok(None);
+        };
+        let Some(centres) = match_profiles_by_angle(&mut profs, normal, tol.linear) else {
+            return Ok(None);
+        };
+        Some((centres, normal))
+    } else {
+        None
+    };
+    let n = profs[0].len();
+    if n < 3 || profs.iter().any(|p| p.len() != n) {
         return Ok(None);
     }
 
@@ -663,6 +913,9 @@ fn try_loft_matching_curved_profiles(
     } else if windings.iter().any(|&w| w < 0.0) {
         return Ok(None);
     }
+    if let Some((centres, normal)) = &centres {
+        start_at_matching_angles(&mut profs, centres, *normal);
+    }
 
     // 3b. Pre-compute every side face's surface BEFORE mutating `topo`. A
     //     Circle-pair whose arcs convert to incompatible NURBS makes the whole
@@ -674,8 +927,13 @@ fn try_loft_matching_curved_profiles(
             let (p0s, p0e) = (profs[s][i].start, profs[s][i].end);
             let p1s = profs[s + 1][i].start;
             let outward = (p0e - p0s).cross(p1s - p0s);
+            let p1e = profs[s + 1][i].end;
             let entry = match (&profs[s][i].curve, &profs[s + 1][i].curve) {
-                (EdgeCurve::Line, EdgeCurve::Line) => {
+                (EdgeCurve::Line, EdgeCurve::Line)
+                    if outward
+                        .normalize()
+                        .is_ok_and(|n| n.dot(p1e - p0s).abs() <= tol.linear) =>
+                {
                     let normal = outward.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
                     (
                         FaceSurface::Plane {
@@ -684,6 +942,25 @@ fn try_loft_matching_curved_profiles(
                         },
                         false,
                     )
+                }
+                (EdgeCurve::Line | EdgeCurve::Circle(_), EdgeCurve::Line)
+                | (EdgeCurve::Line, EdgeCurve::Circle(_)) => {
+                    let (r0, r1) = (&profs[s][i], &profs[s + 1][i]);
+                    let Some(surf) = ruled_line_surface(r0, r1) else {
+                        return Ok(None);
+                    };
+                    let inward = surf
+                        .normal(0.5, 0.5)
+                        .map(|nrm| nrm.dot(outward) < 0.0)
+                        .unwrap_or(false);
+                    if inward {
+                        match ruled_line_surface(r1, r0) {
+                            Some(flipped) => (FaceSurface::Nurbs(flipped), false),
+                            None => (FaceSurface::Nurbs(surf), true),
+                        }
+                    } else {
+                        (FaceSurface::Nurbs(surf), false)
+                    }
                 }
                 (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
                     if let Some(surface) = coaxial_corner_surface(c0, c1, tol) {
@@ -727,7 +1004,6 @@ fn try_loft_matching_curved_profiles(
                             .unwrap_or(false);
                         (surface, inward)
                     } else {
-                        let p1e = profs[s + 1][i].end;
                         let Some(surf) = ruled_arc_surface(c0, p0s, p0e, c1, p1s, p1e) else {
                             return Ok(None);
                         };
@@ -1430,6 +1706,8 @@ mod rounded_l_loft_tests {
     /// semicircle-span conversions used to segment differently on float
     /// jitter at the pi/2-multiple ceil boundary, failing the pairing and
     /// faceting the whole lip (the 22-scenario custom-shape export family).
+    /// This fixture's straight sides also turn between sections, so each of
+    /// their bands is a ruled surface too: 24 curved faces of 26.
     #[test]
     fn rounded_l_multi_section_loft_stays_curve_preserving() {
         let mut topo = Topology::new();
@@ -1443,10 +1721,71 @@ mod rounded_l_loft_tests {
             .filter(|&&f| topo.face(f).unwrap().surface().type_tag() != "plane")
             .count();
         assert_eq!(
-            curved,
-            12,
-            "6 corners x 2 bands must stay curved, got {curved} of {}",
-            faces.len()
+            (curved, faces.len()),
+            (24, 26),
+            "6 corners and 6 turning sides x 2 bands must stay curved"
         );
+    }
+}
+
+#[cfg(test)]
+mod square_to_circle_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A 40 x 40 square at z = 0 lofted to a circle of radius 10 at z = 40,
+    /// either way up. The circle is cut at the square's corners' angles and
+    /// the square at the circle's seam, each side ruled to its arc meeting it
+    /// at even angles, which holds 35125.497. Pairing the square's corners
+    /// with the circle's samples from wherever each starts gave 34 planar
+    /// faces holding 19274.751, or 2599.671 with the circle first.
+    #[test]
+    fn a_square_lofts_to_a_circle_meeting_it_at_matching_angles() {
+        let mut topo = Topology::new();
+        let p = Point3::new;
+        let wire = brepkit_topology::builder::make_polygon_wire(
+            &mut topo,
+            &[
+                p(-20.0, -20.0, 0.0),
+                p(20.0, -20.0, 0.0),
+                p(20.0, 20.0, 0.0),
+                p(-20.0, 20.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let square = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+        let rim = brepkit_topology::builder::make_circle_edge(
+            &mut topo,
+            p(0.0, 0.0, 40.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            10.0,
+            1e-7,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let circle = brepkit_topology::builder::make_face_from_wire(&mut topo, rim).unwrap();
+        for profiles in [[square, circle], [circle, square]] {
+            let solid = loft(&mut topo, &profiles).unwrap();
+            let kinds: Vec<_> = brepkit_topology::explorer::solid_faces(&topo, solid)
+                .unwrap()
+                .iter()
+                .map(|&f| topo.face(f).unwrap().surface().type_tag())
+                .collect();
+            assert_eq!(
+                kinds.iter().filter(|&&k| k == "plane").count(),
+                2,
+                "{kinds:?}"
+            );
+            assert_eq!(kinds.len(), 7, "{kinds:?}");
+            assert!(
+                crate::validate::validate_solid(&topo, solid)
+                    .unwrap()
+                    .is_valid()
+            );
+            let volume = crate::measure::solid_volume(&topo, solid, 1e-4).unwrap();
+            assert!((volume - 35125.497).abs() < 1e-4 * 35125.497, "{volume}");
+        }
     }
 }
