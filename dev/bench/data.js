@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793374352234,
+  "lastUpdate": 1793385770170,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62369,6 +62369,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23293437,
             "range": "± 47178",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "66a88b0014e3f7563435ddbb5b1dea29667355e3",
+          "message": "fix(operations): split a solid through the boolean engine (#2210)\n\n`split` now cuts a solid along a plane through the boolean engine, so\neach half keeps the solid's exact faces and its share of the volume.\n\nToday `split` clips each face's boundary polygon against the plane and\nrebuilds both halves from the clipped polygons and a cap polygon through\nthe crossing points. A cylinder's wall does not survive that: a cylinder\nof radius 20 and height 60 split by a plane tilted 30° through its\ncentre comes back with a positive half of 11258.71, where each half\nshould hold 37699.11.\n\n## Change\n\n- `split` builds a box standing on the plane over the solid's positive\nside, sized from the solid's bounding box with room to spare. The\npositive half is the solid intersected with it, the negative half the\nsolid cut by it.\n- The box is sized from the solid's extent with each NURBS face's\ncontrol points included, since the measured bounding box samples a NURBS\nface and can miss its bulge. It stands on the plane's point nearest the\nextent's centre, found from the plane's offset, so a plane given by a\npoint far along it keeps its place.\n- The boolean's shortcuts for an intersection of solids whose boxes are\napart, and for a fuse or cut of operands with a clear gap, use the same\nextent, through `measure::solid_outer_bounds` and\n`measure::hold_nurbs_faces`. A sampled box could call a NURBS bulge\napart from a solid it reaches.\n- A NURBS face with a weight that is not positive can leave its control\npoints' hull, so it has no such extent: `split` refuses it, and the\nboolean's shortcuts are skipped and leave the case to the engine.\n- A plane that leaves that extent on one side, or a boolean that comes\nback empty, as an error or as an empty solid, reports that the plane\ndoes not split the solid.\n- The polygon clipping and cap building go.\n\nCloses #2172.\n\n## Tests\n\n- `split_cylinder_through_its_centre_on_a_tilt`: that cylinder and plane\ngive two halves of π·400·30 to 1e-3, each keeping a cylinder face,\nvalid, meshing with no open or non-manifold edge, and holding (0, 0, 15)\nor (0, 0, -15), whichever lies on its side, but not the other. With the\nclipped polygons a half holds 11258.71; returning one half twice fails\nthe point checks.\n- `split_cube_by_a_plane_given_far_along_it`: the plane z = 0.5 given by\nthe point (1e17, 0, 0.5) halves the unit cube. Standing the box on that\npoint, it only touches the cube.\n- `split_a_plane_crossing_only_a_spheres_box_misses_it`: x + y + z = 2.1\ncrosses a unit ball's bounding box but misses the ball, and is refused.\nAccepting an empty boolean result, it returns an empty half.\n- `outer_bounds_reach_a_nurbs_lids_peak`: a unit block whose top is the\nlid z = 100 u (1 − u)⁴ v (1 − v) reaches 2.048, where the sampled box\nstops at 1.98. Splitting that block at z = 2 is still refused: the\nboolean does not yet find a section that lies wholly inside a NURBS\nface.\n- `outer_bounds_refuse_a_nurbs_face_with_a_negative_weight`: the block\nwith its top a biquadratic patch, row weights 1, -1.5 and 4, its middle\ncontrol point at z = -2, rises to 3 while its control points stay at or\nbelow 0. Its extent is refused; without the weight check one is\nreturned.\n- `split_refuses_a_far_given_plane_touching_an_edge`: the plane x + y =\n0 given by the point (2⁵⁷, −2⁵⁷, 0) only touches the unit cube and is\nrefused. Subtracting the far point first lost the cube's offsets and cut\nit in two.\n- The existing box and cube splits still sum to the whole, and a plane\nabove the cube is still refused.\n- Before the weight check and the stronger cylinder test, `cargo test\n--workspace --exclude brepkit-render` passed 3774 tests, and the pose\nsweep and truth audit outputs were identical to `main`'s.",
+          "timestamp": "2026-10-30T11:39:21-07:00",
+          "tree_id": "60285b9c517a2a7100b82fa7dbeabb89bc18038b",
+          "url": "https://github.com/andymai/brepkit/commit/66a88b0014e3f7563435ddbb5b1dea29667355e3"
+        },
+        "date": 1793385762741,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1094498,
+            "range": "± 1802",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1176173,
+            "range": "± 4764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13224,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 676672,
+            "range": "± 1629",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28555586,
+            "range": "± 62071",
             "unit": "ns/iter"
           }
         ]
