@@ -464,7 +464,15 @@ fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdg
                     (t1, t0 - t1)
                 };
                 let at = edge.curve().evaluate_with_endpoints(from, s, e);
-                let mut leaves = edge.curve().tangent_with_endpoints(from, s, e) * run.signum();
+                // A NURBS edge's parameter can stand still at an end, where
+                // its tangent fails; the shared tangent would put +x there.
+                let tangent = match edge.curve() {
+                    EdgeCurve::NurbsCurve(nc) => {
+                        nc.tangent(from).unwrap_or(Vec3::new(0.0, 0.0, 0.0))
+                    }
+                    other => other.tangent_with_endpoints(from, s, e),
+                };
+                let mut leaves = tangent * run.signum();
                 if leaves.length() <= 1e-12 * run.abs().max(1.0) {
                     leaves = edge
                         .curve()
@@ -2052,7 +2060,10 @@ mod square_to_circle_tests {
     /// stored either way round, lofts to a circle of radius 3 above the
     /// middle of its boundary as the quarter disc with a circle arc does. A
     /// disc of radius 10 whose rim starts at its frame's angle π lofts to a
-    /// circle of radius 3 above and beside it as the disc starting at 0 does.
+    /// square of half-size 4 above and beside it, cut at the square's corners
+    /// and ruled to its sides, as the disc starting at 0 does: a closed rim's
+    /// parameter starts at its frame's origin, wherever its vertex lies.
+    /// Every loft keeps its arcs.
     #[test]
     fn arcs_read_the_way_they_leave_their_start() {
         use brepkit_math::curves::Circle3D;
@@ -2077,7 +2088,9 @@ mod square_to_circle_tests {
             brepkit_topology::builder::make_face_from_wire(topo, rim).unwrap()
         };
         let loft_volume = |topo: &mut Topology, low: FaceId, high: FaceId, label: &str| {
-            let solid = loft(topo, &[low, high]).unwrap();
+            let solid = try_loft_matching_curved_profiles(topo, &[low, high]).unwrap();
+            assert!(solid.is_some(), "{label}: not lofted along its arcs");
+            let solid = solid.unwrap();
             assert!(lies_on_its_geometry(topo, solid), "{label}");
             assert!(
                 crate::validate::validate_solid(topo, solid)
@@ -2159,11 +2172,123 @@ mod square_to_circle_tests {
         for seam in [0.0, std::f64::consts::PI] {
             let mut topo = Topology::new();
             let low = disc(&mut topo, seam);
-            let high = top(&mut topo, 3.0, 1.0);
+            let high = profile(
+                &mut topo,
+                10.0,
+                &[
+                    ((7.0, -3.0), None),
+                    ((7.0, 5.0), None),
+                    ((-1.0, 5.0), None),
+                    ((-1.0, -3.0), None),
+                ],
+            );
             volumes.push(loft_volume(&mut topo, low, high, &format!("seam {seam}")));
         }
         assert!(
             (volumes[1] - volumes[0]).abs() < 1e-4 * volumes[0],
+            "{volumes:?}"
+        );
+    }
+
+    /// A quarter disc of radius 10 whose arc runs counterclockwise from
+    /// (0, 10) to (-10, 0) as the quarter circle R(t²): with w = 1/√2, the
+    /// rational quartic over (0, 10), (0, 10), (2 P₀ + w P₁) / (2 + w),
+    /// (-10, 10) and (-10, 0) weighted 1, 1, (2 + w) / 3, w and 1, whose
+    /// derivative vanishes where it starts. Stored either way round, it lofts
+    /// along its arcs to a circle of radius 3 above the middle of its
+    /// boundary as the quarter disc with a circle arc does.
+    #[test]
+    fn an_arc_standing_still_where_it_starts_reads_its_way() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        let quarter = |topo: &mut Topology, nurbs: Option<bool>| {
+            let at = |x: f64, y: f64| Point3::new(x, y, 0.0);
+            let [o, a, b] = [at(0.0, 0.0), at(0.0, 10.0), at(-10.0, 0.0)]
+                .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let arc = match nurbs {
+                None => {
+                    let circle =
+                        Circle3D::new(at(0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+                    OrientedEdge::new(
+                        topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))),
+                        true,
+                    )
+                }
+                Some(stored_reversed) => {
+                    let w = std::f64::consts::FRAC_1_SQRT_2;
+                    let (p0, p1, p2) = (at(0.0, 10.0), at(-10.0, 10.0), at(-10.0, 0.0));
+                    let mut points = vec![p0, p0, p0 + (p1 - p0) * (w / (2.0 + w)), p1, p2];
+                    let mut weights = vec![1.0, 1.0, (2.0 + w) / 3.0, w, 1.0];
+                    if stored_reversed {
+                        points.reverse();
+                        weights.reverse();
+                    }
+                    let curve = NurbsCurve::new(
+                        4,
+                        vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                        points,
+                        weights,
+                    )
+                    .unwrap();
+                    let still = if stored_reversed { 1.0 } else { 0.0 };
+                    assert!(curve.derivatives(still, 1)[1].length() < 1e-12);
+                    let halfway = curve.evaluate(0.5) - at(0.0, 0.0);
+                    assert!((halfway.length() - 10.0).abs() < 1e-9);
+                    let (from, to) = if stored_reversed { (b, a) } else { (a, b) };
+                    OrientedEdge::new(
+                        topo.add_edge(Edge::new(from, to, EdgeCurve::NurbsCurve(curve))),
+                        !stored_reversed,
+                    )
+                }
+            };
+            let edges = vec![
+                OrientedEdge::new(topo.add_edge(Edge::new(o, a, EdgeCurve::Line)), true),
+                arc,
+                OrientedEdge::new(topo.add_edge(Edge::new(b, o, EdgeCurve::Line)), true),
+            ];
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+            ))
+        };
+        let mut volumes = Vec::new();
+        for nurbs in [None, Some(false), Some(true)] {
+            let mut topo = Topology::new();
+            let low = quarter(&mut topo, nurbs);
+            let rim = brepkit_topology::builder::make_circle_edge(
+                &mut topo,
+                Point3::new(-4.2, 4.2, 10.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                3.0,
+                1e-7,
+            )
+            .unwrap();
+            let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+            let high = brepkit_topology::builder::make_face_from_wire(&mut topo, rim).unwrap();
+            let solid = try_loft_matching_curved_profiles(&mut topo, &[low, high]).unwrap();
+            assert!(solid.is_some(), "{nurbs:?}: not lofted along its arcs");
+            let solid = solid.unwrap();
+            assert!(lies_on_its_geometry(&topo, solid), "{nurbs:?}");
+            assert!(
+                crate::validate::validate_solid(&topo, solid)
+                    .unwrap()
+                    .is_valid(),
+                "{nurbs:?}"
+            );
+            volumes.push(crate::measure::solid_volume(&topo, solid, 1e-4).unwrap());
+        }
+        assert!(
+            volumes
+                .iter()
+                .all(|v| (v - volumes[0]).abs() < 1e-4 * volumes[0]),
             "{volumes:?}"
         );
     }
