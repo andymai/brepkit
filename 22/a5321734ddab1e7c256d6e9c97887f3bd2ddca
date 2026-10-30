@@ -1,0 +1,97 @@
+crates/operations/src/winding.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 109-112,117-120,122-125,127
+crates/wasm/src/bindings/operations.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 227,1259-1309
+  s_a2dc21dbec3f2b::t_d1879844a7cb19 1310-1323
+crates/operations/src/split.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 5-6,12,30-33,37-38,46-71,73-93,96-98,171-425
+  s_a2dc21dbec3f2b::t_15241466339d9d 426
+crates/check/src/properties/boundary.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 83-122,587-822
+crates/operations/src/measure/bounding_box.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 158-203
+crates/operations/tests/threaded_rod.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 1-128
+crates/operations/src/projection.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 3-7,9,46-72,92-99,101-167,170-191,193-218,220-239,241-260,262-264,267-268,279-341,358-587
+  s_a2dc21dbec3f2b::t_1be5a8039657c1 588
+crates/operations/src/cavities.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 325,328-461,465,485
+crates/math/src/nurbs/intersection/mod.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 28,39
+crates/operations/src/tessellate/mod.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 40
+crates/algo/src/pave_filler/helpers.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 6-7,16-97
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 5516,5525-5529
+crates/operations/src/boolean/mod.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 450-451,2484-2488,2824-2825,2832,2840,2963-3033
+  s_a2dc21dbec3f2b::t_f8b328b4b1de17 3034
+crates/operations/src/boolean/tests.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 9135-9254
+Cargo.toml
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 15,58-68
+crates/algo/src/classifier/ray_cast.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 30-37,795-798,1021,1520-1526,1748-1851,1978-1999,2018,2060-2067,2069-2076,2082-2084,2186-2272,2577-2579,2583-2608,4056-4251
+  s_a2dc21dbec3f2b::t_8bb8277f0ee129 4252
+.release-please-manifest.json
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 2
+crates/check/src/classify/mod.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 103-112
+crates/operations/src/sew.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 9,26-32,36-37,58-70,72,75-77,83-93,95-98,102-121,123,125-163,165-175,183-519,523-525,749-1556
+crates/operations/src/loft.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 214-219,233,712-746,928,1751-1753,1756-1767
+crates/wasm/src/bindings/batch.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 794-796
+crates/check/src/properties/mod.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 96-97,409-581
+crates/operations/src/boolean/assembly.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 773-777,785-791,793
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 288-291,293-313,414,420,425-431,439,445,447-449,451-471,573,575,580-586,676-681,683-684,687-694
+crates/operations/src/measure/mod.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 11
+crates/operations/tests/flat_blends_keep_cavities.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 365-545
+crates/operations/src/measure/volume.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 4600-4667
+crates/algo/src/builder/builder_solid.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 3157-3180,3195-3209,3215
+crates/algo/src/pave_filler/phase_ef.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 236-238,240-243
+CHANGELOG.md
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 3-39
+crates/operations/src/tessellate/mesh_ops.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 434-444,446-455,461-462,473-477,479
+crates/wasm/src/bindings/shapes.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 762-766,770
+crates/math/src/nurbs/projection.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 409
+crates/math/src/nurbs/intersection/ray.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 1-535
+crates/wasm/src/helpers.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 204-206,234-411,740,867-1112,1487-1536
+  s_a2dc21dbec3f2b::t_13e81dd188aae6 1486
+crates/operations/src/chamfer.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 1218-1221
+crates/operations/src/blend_ops.rs
+  s_a2dc21dbec3f2b::t_a8c33a41180f58 35-51,81-82,109-110,139-140,172-173,238-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "22a5321734ddab1e7c256d6e9c97887f3bd2ddca",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
