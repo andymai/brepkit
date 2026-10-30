@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793369783347,
+  "lastUpdate": 1793371512186,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62207,6 +62207,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28688407,
             "range": "± 26472",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bd093bf8867b5f8b6f76cfe20432e090d7aa5f39",
+          "message": "chore(main): release 4.6.7 (#2232)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.6.7](https://github.com/andymai/brepkit/compare/v4.6.6...v4.6.7)\n(2026-10-30)\n\n\n### Bug Fixes\n\n* **algo:** find and classify a NURBS face's bulge between its edges\n([#2220](https://github.com/andymai/brepkit/issues/2220))\n([68ea6a7](https://github.com/andymai/brepkit/commit/68ea6a77bc100fc841630cacdf8bf4f3dccc14c1))\n* **operations:** hide a projected edge wherever a solid lies on its\nline of sight ([#2223](https://github.com/andymai/brepkit/issues/2223))\n([bd7ee10](https://github.com/andymai/brepkit/commit/bd7ee1013629570de0976637d58bc0cfa2e269be))\n* **operations:** sew faces keeping their curves, holes and sense\n([#2217](https://github.com/andymai/brepkit/issues/2217))\n([b74efcb](https://github.com/andymai/brepkit/commit/b74efcbf15c8a92d61104d72b49caf1be73165b8))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-30T14:41:57Z",
+          "tree_id": "1b48823143a94725e67764692d7eac0f5a862940",
+          "url": "https://github.com/andymai/brepkit/commit/bd093bf8867b5f8b6f76cfe20432e090d7aa5f39"
+        },
+        "date": 1793371505221,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1098568,
+            "range": "± 2071",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1171906,
+            "range": "± 2067",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13277,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 677816,
+            "range": "± 4412",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29200556,
+            "range": "± 225480",
             "unit": "ns/iter"
           }
         ]
