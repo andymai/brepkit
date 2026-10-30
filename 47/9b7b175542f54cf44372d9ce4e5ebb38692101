@@ -1,0 +1,23 @@
+crates/topology/src/validation.rs
+  s_a2dc21dbec3f2b::t_a9c4447f4b9f2b 38-39,41-49
+crates/topology/src/builder.rs
+  s_a2dc21dbec3f2b::t_5fd78ca47fb34a 333-335
+  s_a2dc21dbec3f2b::t_630b1000062419 1104-1138
+  s_a2dc21dbec3f2b::t_a9c4447f4b9f2b 300-301,313,347
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "479b7b175542f54cf44372d9ce4e5ebb38692101",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
