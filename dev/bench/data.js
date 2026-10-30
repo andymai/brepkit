@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793345123570,
+  "lastUpdate": 1793345276731,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61505,6 +61505,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29078481,
             "range": "± 478354",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "32f73db336b3ffe48c010729be0148d10a72697c",
+          "message": "fix(operations): fill a Coons patch from its curves whichever way they run (#2216)\n\n`fill_coons_patch` now takes its four boundary curves whichever way each\none runs, so a filled face over a wire's edges fills that wire instead\nof a patch twisted across it.\n\nToday it reads the curves as bottom and top running left to right and\nright and left running bottom to top. brepjs's adapter hands it each\nedge as it runs round the wire, so the top comes right to left and the\nleft top to bottom. The patch's corners then cross and the surface\ntwists into a bow-tie. Its middle point is still the corners' average,\nso `pointOnSurface` reads right, but the face from #2198, over (0, 0,\n0), (10, 0, 0), (10, 10, 5) and (0, 10, 0), measures 62.670 where the\nsurface z = x y / 20 these lines bound holds 107.904, and its mesh\nstrays 1.25 from that surface.\n\n## Change\n\n- The four curves are chained end to end round their loop, each turned\nto start where the one before ends, so a wire's own order and the\nleft-to-right, bottom-to-top reading build the same patch. Curves that\ndo not close into a loop are refused.\n- Each edge runs along its boundary curve: a line for two points,\notherwise a degree-1 curve through the samples, which is the patch's own\nboundary there. The edges were straight lines between the corners, so a\ncurved boundary's edge cut across its chord, off the surface.\n- The control net's rows run along u, as `NurbsSurface` reads them. They\nran along v, which swapped the patch's parameters and, where the two\ndirections had different numbers of samples, left the knot vectors the\nwrong length for the net.\n\nCloses #2198.\n\n## Tests\n\n- `coons_patch_takes_its_curves_either_way_along`: the issue's four\nlines, given in the wire's order, in the left-to-right reading, and with\nthe bottom and right curves turned round, each give z = x y / 20, with u\nrunning along the bottom, and an area of 107.904 to 0.1%. Taking the\ncurves as given fails the wire's order.\n- `coons_patch_edges_follow_their_curves`: a bottom curve sampled from\nan arc rising to 3 gives an edge through (5, 0, 3), its top, and not the\nchord below it.\n- `coons_patch_refuses_curves_that_do_not_close`: four curves leaving a\ngap are refused.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `fill_coons_patch` producing a twisted (bow-tie) surface on wires\nwhose edges run in the wire's own order, because the boundary curves\nwere read in a fixed direction. The patch's boundary curves are now\nchained end to end around their loop, so a wire's edges work whichever\nway they run. Curves that do not close into a loop are refused, judged\nagainst the kernel's linear tolerance, and the fill surface and its\nedges follow the boundary curves sample for sample instead of cutting\nacross chords, so the face from #2198 measures 107.904 as the surface it\nbounds.\n\n- Edges now run along their boundary curve (a degree-1 curve through the\nsamples) rather than a straight line between the corners.\n- The control net's rows now run along u, as `NurbsSurface` reads them;\npreviously they ran along v, leaving wrong-length knot vectors when the\ndirections had different sample counts.\n\nCloses #2198.\n\n<sup>Written for commit 4c6010efa9754fcd154f44b5f9e8e463a0c0d821.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2216?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2216?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2216&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T00:22:10-07:00",
+          "tree_id": "4e0e9400889c0c46a6088684a2a82a8110c31e5a",
+          "url": "https://github.com/andymai/brepkit/commit/32f73db336b3ffe48c010729be0148d10a72697c"
+        },
+        "date": 1793345268086,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 641730,
+            "range": "± 22239",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 698254,
+            "range": "± 20790",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8059,
+            "range": "± 88",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 392981,
+            "range": "± 4855",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17800130,
+            "range": "± 181594",
             "unit": "ns/iter"
           }
         ]
