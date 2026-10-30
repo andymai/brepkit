@@ -1,0 +1,29 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_a2dc21dbec3f2b::t_625cca9d663531 2788-2796,4461-4495,4500-4502
+  s_a2dc21dbec3f2b::t_ea93e784020625 4496-4499
+crates/blend/src/analytic.rs
+  s_a2dc21dbec3f2b::t_f577c50204fdc2 446
+crates/blend/src/fillet_builder.rs
+  s_a2dc21dbec3f2b::t_9d7014097bec7c 3041-3059,3061-3062
+crates/operations/src/blend_ops.rs
+  s_a2dc21dbec3f2b::t_dc74ff6d4a5329 278,280-283,285-304,307-317,319-321
+  s_a2dc21dbec3f2b::t_d4dabbcca3e20a 276-277,279,284,322-323
+  s_a2dc21dbec3f2b::t_8fbdc2fe0b12f8 318
+  s_a2dc21dbec3f2b::t_8b1b07e6c02d52 305-306
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75dedb4e29db11f4fbe6820f0828fd2393e06048",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
