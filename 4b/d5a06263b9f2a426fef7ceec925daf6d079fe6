@@ -1,0 +1,21 @@
+crates/operations/src/revolve.rs
+  s_a2dc21dbec3f2b::t_4c794932c59ba2 1172-1173,1176-1181,2756-2798
+  s_a2dc21dbec3f2b::t_3f0dc320d919c2 352-354,484-487,497-498,500-501,506-511,514-518,707,783-784,787-790
+  s_a2dc21dbec3f2b::t_e12e0decce39f0 2799-2801
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4bd5a06263b9f2a426fef7ceec925daf6d079fe6",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
