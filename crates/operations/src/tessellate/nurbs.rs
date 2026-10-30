@@ -451,7 +451,21 @@ fn cell_refinement_error(
     let diag = (p11 - p00).length().max((p10 - p01).length());
     let normal_sag = max_normal_dev * diag * 0.5;
 
-    sag.max(max_edge_sag).max(normal_sag)
+    // A twisted cell's middle is its corners' average, so `sag` misses its
+    // twist; read the cell against the triangles it splits into instead.
+    let probes = PROBES.map(|(a, b)| {
+        if (a, b) == (0.5, 0.5) {
+            p_mid
+        } else {
+            surface.evaluate(
+                (u_max - u_min).mul_add(a, u_min),
+                (v_max - v_min).mul_add(b, v_min),
+            )
+        }
+    });
+    let twist = split_stray([p00, p10, p01, p11], &probes);
+
+    sag.max(max_edge_sag).max(normal_sag).max(twist)
 }
 
 /// Linear interpolation (midpoint) of two points.
@@ -958,28 +972,35 @@ pub(super) fn cell_twist(
     (du, dv): (f64, f64),
 ) -> f64 {
     let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
-    let (p00, p10, p01, p11) = (
+    let corners = [
         corner(0.0, 0.0),
         corner(1.0, 0.0),
         corner(0.0, 1.0),
         corner(1.0, 1.0),
-    );
+    ];
+    let probes = PROBES.map(|(a, b)| corner(a, b));
+    split_stray(corners, &probes)
+}
+
+/// Where in a cell [`cell_twist`] reads it: its middle and quarter points.
+const PROBES: [(f64, f64); 5] = [
+    (0.5, 0.5),
+    (0.25, 0.25),
+    (0.75, 0.25),
+    (0.25, 0.75),
+    (0.75, 0.75),
+];
+
+/// How far the farthest of `probes` lies from the two triangles a cell with
+/// corners `[p00, p10, p01, p11]` splits into, along either diagonal.
+fn split_stray([p00, p10, p01, p11]: [Point3; 4], probes: &[Point3]) -> f64 {
     let split = |p: Point3, a: Point3, b: Point3, c: Point3, d: Point3| {
         point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
     };
-    [
-        (0.5, 0.5),
-        (0.25, 0.25),
-        (0.75, 0.25),
-        (0.25, 0.75),
-        (0.75, 0.75),
-    ]
-    .iter()
-    .map(|&(a, b)| {
-        let p = corner(a, b);
-        split(p, p00, p10, p11, p01).max(split(p, p10, p11, p01, p00))
-    })
-    .fold(0.0, f64::max)
+    probes
+        .iter()
+        .map(|&p| split(p, p00, p10, p11, p01).max(split(p, p10, p11, p01, p00)))
+        .fold(0.0, f64::max)
 }
 
 /// The distance from `p` to the triangle `a`, `b`, `c`; to its longest side

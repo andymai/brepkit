@@ -4138,3 +4138,50 @@ fn a_twisted_face_with_a_hole_meshes_its_twist_on_its_own() {
         );
     }
 }
+
+/// Twisted bilinear faces bounded by their own domains, the saddle
+/// S(u, v) = (20u, 20v, 10uv) and the same corners lifted 3, meshed as faces
+/// on their own: every triangle's centre lies within the deflection.
+#[test]
+fn a_whole_twisted_face_meshes_its_twist_on_its_own() {
+    use brepkit_topology::builder::make_polygon_wire;
+    for lift in [10.0, 3.0] {
+        let patch = bilinear(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(20.0, 0.0, 0.0),
+            Point3::new(0.0, 20.0, 0.0),
+            Point3::new(20.0, 20.0, lift),
+        );
+        let on = |u: f64, v: f64| patch.evaluate(u, v);
+        let mut topo = Topology::new();
+        let outer = make_polygon_wire(
+            &mut topo,
+            &[on(0.0, 0.0), on(1.0, 0.0), on(1.0, 1.0), on(0.0, 1.0)],
+            1e-7,
+        )
+        .unwrap();
+        let surface = FaceSurface::Nurbs(patch.clone());
+        let face = topo.add_face(Face::new(outer, vec![], surface.clone()));
+        for deflection in [0.1, 0.01] {
+            let mesh = crate::tessellate::tessellate(&topo, face, deflection).unwrap();
+            let worst = mesh
+                .indices
+                .chunks(3)
+                .map(|t| {
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                    let centre = Point3::new(
+                        (a.x() + b.x() + c.x()) / 3.0,
+                        (a.y() + b.y() + c.y()) / 3.0,
+                        (a.z() + b.z() + c.z()) / 3.0,
+                    );
+                    let (u, v) = surface.project_point(centre).unwrap();
+                    (on(u, v) - centre).length()
+                })
+                .fold(0.0_f64, f64::max);
+            assert!(
+                worst <= deflection,
+                "lifted {lift}, at {deflection}: a triangle stands {worst} off"
+            );
+        }
+    }
+}
