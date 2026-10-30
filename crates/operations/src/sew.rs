@@ -136,7 +136,16 @@ pub fn sew_faces(
                     };
                     (m.edge, along)
                 } else {
-                    let edge = topo.add_edge(Edge::new(v_start, v_end, e.span.curve.clone()));
+                    // A closed edge runs its curve's whole domain, so a piece
+                    // of a longer curve whose ends welded is cut to its span.
+                    let curve = match &e.span.curve {
+                        EdgeCurve::NurbsCurve(c) if v_start == v_end && !e.closed => {
+                            nurbs_between(c, e.span.t0, e.span.t1)
+                                .map_or_else(|| e.span.curve.clone(), EdgeCurve::NurbsCurve)
+                        }
+                        c => c.clone(),
+                    };
+                    let edge = topo.add_edge(Edge::new(v_start, v_end, curve));
                     made.push(MadeEdge {
                         span: e.span.clone(),
                         edge,
@@ -356,6 +365,37 @@ impl Span {
         let there = other.nearest(self.at(0.5)).0;
         self.heading(0.5).dot(other.heading(there)) > 0.0
     }
+}
+
+/// `curve` from parameter `t0` to `t1`, run backward when `t1 < t0`, or
+/// `None` if it cannot be cut there.
+fn nurbs_between(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    t0: f64,
+    t1: f64,
+) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let (d0, d1) = curve.domain();
+    let slack = 1e-12 * (d1 - d0).abs().max(1.0);
+    let mut span = curve.clone();
+    if hi < d1 - slack {
+        span = curve_split(&span, hi).ok()?.0;
+    }
+    if lo > d0 + slack {
+        span = curve_split(&span, lo).ok()?.1;
+    }
+    if t1 >= t0 {
+        return Some(span);
+    }
+    let (a, b) = span.domain();
+    brepkit_math::nurbs::curve::NurbsCurve::new(
+        span.degree(),
+        span.knots().iter().rev().map(|&k| a + b - k).collect(),
+        span.control_points().iter().rev().copied().collect(),
+        span.weights().iter().rev().copied().collect(),
+    )
+    .ok()
 }
 
 /// A NURBS edge from `t0` to `t1` cut into its Bezier spans, each halved
@@ -1072,6 +1112,69 @@ mod tests {
         let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
         let edge = topo.edge(wire.edges()[0].edge()).unwrap();
         assert_eq!(edge.start(), edge.end());
+    }
+
+    /// A spiral `r = 1 + 6e-9 θ` from θ = -π/2 to 2π, fit through 81 of its
+    /// points, with an edge on it from θ = 0 to its end, whose ends lie
+    /// 3.8e-8 apart and weld: the edge becomes a closed edge one turn long,
+    /// cut from the curve, not the curve's whole turn and a quarter.
+    #[test]
+    fn sew_cuts_a_welded_piece_of_a_longer_curve_to_its_span() {
+        let mut topo = Topology::new();
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let spiral = |theta: f64| {
+            let r = 6e-9_f64.mul_add(theta, 1.0);
+            Point3::new(r * theta.cos(), r * theta.sin(), 0.0)
+        };
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let points: Vec<Point3> = (0..=80)
+            .map(|k| spiral((5.0 * quarter).mul_add(f64::from(k) / 80.0, -quarter)))
+            .collect();
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+        let [a, b] = [points[16], points[80]].map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let edges = [
+            topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(curve))),
+            topo.add_edge(Edge::new(b, a, EdgeCurve::Line)),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let disc = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: up, d: 0.0 },
+        ));
+        let far = make_loose_quad(
+            &mut topo,
+            Point3::new(100.0, 0.0, 0.0),
+            Point3::new(110.0, 0.0, 0.0),
+            Point3::new(110.0, 10.0, 0.0),
+            Point3::new(100.0, 10.0, 0.0),
+            up,
+            0.0,
+        );
+        let sewn = sew_faces(&mut topo, &[disc, far], 1e-7).unwrap();
+        let face = brepkit_topology::explorer::solid_faces(&topo, sewn).unwrap()[0];
+        let wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
+        assert_eq!(wire.edges().len(), 1);
+        let edge = topo.edge(wire.edges()[0].edge()).unwrap();
+        let p = topo.vertex(edge.start()).unwrap().point();
+        assert_eq!(edge.start(), edge.end());
+        let (t0, t1) = edge.curve().domain_with_endpoints(p, p);
+        let length: f64 = (0..2000)
+            .map(|k| {
+                let at = |k: i32| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 2000.0, t0);
+                    edge.curve().evaluate_with_endpoints(t, p, p)
+                };
+                (at(k + 1) - at(k)).length()
+            })
+            .sum();
+        assert!((length - std::f64::consts::TAU).abs() < 1e-3, "{length}");
     }
 
     /// The cylinder's faces with one cap's rim swapped for `curve`, used
