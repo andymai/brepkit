@@ -1,0 +1,20 @@
+crates/operations/src/fill_face.rs
+  s_a2dc21dbec3f2b::t_9b2bcf60a6daa3 172,377-394
+  s_a2dc21dbec3f2b::t_772e49c8895026 395-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4c6010efa9754fcd154f44b5f9e8e463a0c0d821",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
