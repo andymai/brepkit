@@ -1,0 +1,21 @@
+crates/wasm/src/helpers.rs
+  s_a2dc21dbec3f2b::t_9662b235a23da2 953-954
+  s_a2dc21dbec3f2b::t_08369c61c60b45 948,950-952,958-959
+  s_a2dc21dbec3f2b::t_163fa57fc37da8 258-268,945-947,949,955-957
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a506ac285a06196189c0f0abde61dbcd7e78620",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
