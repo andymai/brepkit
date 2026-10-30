@@ -1051,6 +1051,18 @@ mod loft_point_tests {
         );
         let report = brepkit_operations::validate::validate_solid(topo, solid).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
+        // The signed volume sums an open mesh as readily as a closed one.
+        for deflection in [0.01, 0.001] {
+            let mesh = tessellate::tessellate_solid(topo, solid, deflection).unwrap();
+            assert_eq!(
+                (
+                    tessellate::boundary_edge_count(&mesh),
+                    tessellate::non_manifold_edge_count(&mesh)
+                ),
+                (0, 0),
+                "open or branching mesh at {deflection}"
+            );
+        }
         let volume = brepkit_operations::measure::oriented_solid_volume(topo, solid, 1e-3).unwrap();
         assert!((volume - exact).abs() < 1e-3 * exact, "{volume} of {exact}");
     }

@@ -348,13 +348,13 @@ pub fn loft_to_point(
         } else {
             -1.0
         };
-        let tangent = curve.tangent_with_endpoints(mid_t, a, b) * along;
         // Out of the solid: across the run, away from the profile's inside.
-        let out = tangent.cross(apex - mid);
+        // Read only off a line or circle, whose tangent never vanishes.
+        let out = || (curve.tangent_with_endpoints(mid_t, a, b) * along).cross(apex - mid);
         let surface_and_outward = match &curve {
             EdgeCurve::Line => {
                 let n = (b - a).cross(apex - a).normalize()?;
-                let n = if n.dot(out) < 0.0 { -n } else { n };
+                let n = if n.dot(out()) < 0.0 { -n } else { n };
                 (
                     FaceSurface::Plane {
                         normal: n,
@@ -376,14 +376,14 @@ pub fn loft_to_point(
                     let surface = FaceSurface::Cone(cone);
                     let outward = surface
                         .project_point(mid)
-                        .is_some_and(|(u, v)| surface.normal(u, v).dot(out) > 0.0);
+                        .is_some_and(|(u, v)| surface.normal(u, v).dot(out()) > 0.0);
                     (surface, outward)
                 } else {
-                    ruled_to_point(&curve, a, b, apex, out)?
+                    ruled_to_point(&curve, a, b, apex, along)?
                 }
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {
-                ruled_to_point(&curve, a, b, apex, out)?
+                ruled_to_point(&curve, a, b, apex, along)?
             }
         };
         let mut rail = |topo: &mut Topology, v: VertexId| -> EdgeId {
@@ -451,13 +451,15 @@ fn boundary_winding(
 }
 
 /// The ruled NURBS from `curve` (from `a` to `b`) to the point `apex`, and
-/// whether its own normal points along `out`.
+/// whether its own normal points out of a solid whose boundary, anticlockwise
+/// about the direction to `apex`, runs the curve `along` its parameter (1)
+/// or against it (-1).
 fn ruled_to_point(
     curve: &EdgeCurve,
     a: Point3,
     b: Point3,
     apex: Point3,
-    out: Vec3,
+    along: f64,
 ) -> Result<(FaceSurface, bool), crate::OperationsError> {
     let (t0, t1) = curve.domain_with_endpoints(a, b);
     let near = match curve {
@@ -480,15 +482,12 @@ fn ruled_to_point(
         vec![near.control_points().to_vec(), tip],
         vec![near.weights().to_vec(), near.weights().to_vec()],
     )?;
-    // `out` was taken at the edge's middle. u runs from the edge to the apex
-    // and v along the edge: the conversions above span [0, 1], a NURBS edge
-    // its own (possibly sub-) span of its curve's knots.
-    let middle = match curve {
-        EdgeCurve::NurbsCurve(_) => f64::midpoint(t0, t1),
-        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 0.5,
-    };
-    let outward = surface.normal(0.5, middle).is_ok_and(|n| n.dot(out) > 0.0);
-    Ok((FaceSurface::Nurbs(surface), outward))
+    // The rows share their weights, so the surface is (1 - u) C(v) + u apex,
+    // its normal Su × Sv is (1 - u) (apex - C) × C', and the run's way out,
+    // along C' × (apex - C), opposes it unless the run goes against the
+    // parameter. Read off the parameterization, this holds where C' vanishes
+    // too.
+    Ok((FaceSurface::Nurbs(surface), along < 0.0))
 }
 
 /// Detect "loft across a stack of coaxial circles" and produce an exact
@@ -1925,6 +1924,58 @@ mod to_point_tests {
             check(&topo, solid, (3, 4, 3), 500.0 * std::f64::consts::PI, 1e-3);
             assert_outward(&topo, solid, p(0.0, 2.0, 5.0));
         }
+    }
+
+    /// A 40 square whose left side is a cubic NURBS over control points
+    /// (-20, -20), (-20, 20), (-20, -20), (-20, 20), stored upward and run
+    /// downward: the straight line x = -20 whose derivative vanishes at its
+    /// middle, where it has no tangent. Lofted to (0, 0, 30) it is still an
+    /// outward pyramid of 16000.
+    #[test]
+    fn a_nurbs_edge_standing_still_at_its_middle_lofts_outward() {
+        let p = Point3::new;
+        let mut topo = Topology::new();
+        let [a, b, c, d] = [
+            p(-20.0, -20.0, 0.0),
+            p(20.0, -20.0, 0.0),
+            p(20.0, 20.0, 0.0),
+            p(-20.0, 20.0, 0.0),
+        ]
+        .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+        let stalls = brepkit_math::nurbs::curve::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                p(-20.0, -20.0, 0.0),
+                p(-20.0, 20.0, 0.0),
+                p(-20.0, -20.0, 0.0),
+                p(-20.0, 20.0, 0.0),
+            ],
+            vec![1.0; 4],
+        )
+        .unwrap();
+        assert!(stalls.derivatives(0.5, 1)[1].length() < 1e-12);
+        let runs = [
+            (Edge::new(a, b, EdgeCurve::Line), true),
+            (Edge::new(b, c, EdgeCurve::Line), true),
+            (Edge::new(c, d, EdgeCurve::Line), true),
+            (Edge::new(a, d, EdgeCurve::NurbsCurve(stalls)), false),
+        ]
+        .map(|(e, forward)| OrientedEdge::new(topo.add_edge(e), forward));
+        let wire = topo.add_wire(Wire::new(runs.to_vec(), true).unwrap());
+        let base = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let pyramid = loft_to_point(&mut topo, base, p(0.0, 0.0, 30.0)).unwrap();
+        check(&topo, pyramid, (5, 8, 5), 16000.0, 1e-6);
+        assert_outward(&topo, pyramid, p(0.0, 0.0, 7.5));
+        let signed = crate::measure::oriented_solid_volume(&topo, pyramid, 1e-3).unwrap();
+        assert!((signed - 16000.0).abs() < 1e-6 * 16000.0, "{signed}");
     }
 
     /// A disc of radius 10 whose rim is a circle, or a NURBS circle over
