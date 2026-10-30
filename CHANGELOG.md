@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.5.9](https://github.com/andymai/brepkit/compare/v4.5.8...v4.5.9) (2026-10-29)
+
+
+### Bug Fixes
+
+* **blend:** roll rim fillets in the wedge their faces form ([#2155](https://github.com/andymai/brepkit/issues/2155)) ([c1e35a6](https://github.com/andymai/brepkit/commit/c1e35a6ae6bc8905f38852941e8562f841f5f2d8))
+* **blend:** sweep an open arc's fillet the way the arc runs ([#2156](https://github.com/andymai/brepkit/issues/2156)) ([69c2f99](https://github.com/andymai/brepkit/commit/69c2f9918394624a41b4a869986040411cf2ded6))
+* **math:** intersect a flat NURBS patch with another as its plane's section ([#2149](https://github.com/andymai/brepkit/issues/2149)) ([fa9f4b7](https://github.com/andymai/brepkit/commit/fa9f4b7839e3242dc165bcf8433331e11ddd9542))
+* **math:** trace where a plane touches a NURBS surface along a curve ([#2148](https://github.com/andymai/brepkit/issues/2148)) ([4bfc29b](https://github.com/andymai/brepkit/commit/4bfc29bf721d591492603a0308c2059884017d26))
+
 ## [4.5.8](https://github.com/andymai/brepkit/compare/v4.5.7...v4.5.8) (2026-10-29)
 
 
