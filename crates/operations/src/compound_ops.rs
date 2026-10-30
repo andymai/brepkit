@@ -220,8 +220,9 @@ fn polyhedral_separated(a: &PolyhedralBounds, b: &PolyhedralBounds, margin: f64)
 
 /// Partition indices into groups that may actually touch (union-find).
 ///
-/// Two solids share a group when their AABBs overlap *unless* both are flat-faced
-/// and a separating axis proves a real gap between them. This keeps geometrically
+/// Two solids share a group when their AABBs overlap or come within `margin`,
+/// *unless* both are flat-faced and a separating axis proves a real gap
+/// between them. This keeps geometrically
 /// disjoint pieces whose loose AABBs overlap (honeycomb hex prisms, tightly
 /// packed feet) in separate groups, so `fuse_all` merges them via the cheap
 /// disjoint-shell path instead of an O(n) chain of boolean unions.
@@ -235,7 +236,9 @@ fn partition_touching(
 
     for i in 0..n {
         for j in (i + 1)..n {
-            if !bboxes[i].intersects(bboxes[j]) {
+            // Boxes within the margin touch: a face two solids share can
+            // stand a rounding error apart in each.
+            if !bboxes[i].expanded(margin).intersects(bboxes[j]) {
                 continue;
             }
             // AABBs overlap. Only keep them apart if we can *prove* a gap.
@@ -465,6 +468,80 @@ mod tests {
         // s1 is [0,1], s2 translated by 5 is [5,6]
         assert!(tol.approx_eq(bb.min.x(), 0.0));
         assert!(tol.approx_eq(bb.max.x(), 6.0));
+    }
+
+    /// A sheet-metal bend and the wall it carries share a 50 x 2.5 face, each
+    /// placed with the round-off a rigid transform leaves, so the two boxes
+    /// stand a rounding error apart. Fused all at once they weld that face
+    /// away, as the pair fuse does.
+    #[test]
+    fn fuse_all_welds_a_face_two_solids_share_after_round_off() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::{Point3, Vec3};
+
+        let mut topo = Topology::new();
+        let face = |topo: &mut Topology, pts: &[[f64; 3]]| {
+            let pts: Vec<Point3> = pts.iter().map(|p| Point3::new(p[0], p[1], p[2])).collect();
+            brepkit_topology::builder::make_planar_face(topo, &pts, 1e-7).unwrap()
+        };
+        let profile = face(
+            &mut topo,
+            &[
+                [5.0, 55.0, 0.0],
+                [4.999_999_999_999_999, 5.0, 0.0],
+                [4.999_999_999_999_999, 5.0, 2.5],
+                [5.0, 55.0, 2.5],
+            ],
+        );
+        let bend = crate::revolve::revolve(
+            &mut topo,
+            profile,
+            Point3::new(5.0, 55.0, 5.0),
+            Vec3::new(1.776_356_839_400_250_5e-17, 1.0, 0.0),
+            std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+        let base = face(
+            &mut topo,
+            &[
+                [5.0, 55.732_233_047_033_63, 0.0],
+                [-15.0, 55.732_233_047_033_63, 0.0],
+                [-15.0, 4.267_766_952_966_369, 0.0],
+                [4.999_999_999_999_999, 4.267_766_952_966_369, 0.0],
+            ],
+        );
+        let wall = crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 2.5).unwrap();
+        let (c, s) = (6.123_233_995_736_766e-17, 1.776_356_839_400_250_2e-17);
+        let s2 = 1.776_356_839_400_250_5e-17;
+        crate::transform::transform_solid(
+            &mut topo,
+            wall,
+            &Mat4([
+                [c, s, 1.0, -8.881_784_197_001_252e-16],
+                [s, 1.0, -s2, 0.0],
+                [-1.0, s2, c, 10.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]),
+        )
+        .unwrap();
+
+        let area =
+            |topo: &Topology, solid| crate::measure::solid_surface_area(topo, solid, 0.01).unwrap();
+        let mut pair_topo = topo.clone();
+        let pair =
+            crate::boolean::boolean(&mut pair_topo, crate::boolean::BooleanOp::Fuse, bend, wall)
+                .unwrap();
+        let compound = topo.add_compound(Compound::new(vec![bend, wall]));
+        let all = fuse_all(&mut topo, compound).unwrap();
+        let (pair_area, all_area) = (area(&pair_topo, pair), area(&topo, all));
+        assert!(
+            (pair_area - 3034.4).abs() < 0.1,
+            "pair fuse area {pair_area}"
+        );
+        assert!(
+            (all_area - pair_area).abs() < 1e-6,
+            "fused all {all_area}, pair {pair_area}"
+        );
     }
 
     #[test]
