@@ -170,7 +170,8 @@ mod tests {
 
     /// A plane tilted 30° through a cylinder's centre crosses only its wall
     /// and halves it, the halves mirror images through the centre. Each half
-    /// keeps the cylinder's wall.
+    /// keeps the cylinder's wall, is a valid closed solid, and holds the
+    /// point on the axis on its own side of the plane but not the other's.
     #[test]
     fn split_cylinder_through_its_centre_on_a_tilt() {
         let mut topo = Topology::new();
@@ -186,7 +187,25 @@ mod tests {
         .unwrap();
 
         let half = std::f64::consts::PI * 400.0 * 30.0;
-        for piece in [result.positive, result.negative] {
+        let (above, below) = (Point3::new(0.0, 0.0, 15.0), Point3::new(0.0, 0.0, -15.0));
+        for (piece, inside, outside) in [
+            (result.positive, above, below),
+            (result.negative, below, above),
+        ] {
+            assert!(
+                crate::validate::validate_solid(&topo, piece)
+                    .unwrap()
+                    .is_valid()
+            );
+            let mesh = crate::tessellate::tessellate_solid(&topo, piece, 0.05).unwrap();
+            assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+            assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+            let class = |p| crate::classify::classify_point(&topo, piece, p, 0.0, 1e-7).unwrap();
+            assert_eq!(class(inside), crate::classify::PointClassification::Inside);
+            assert_eq!(
+                class(outside),
+                crate::classify::PointClassification::Outside
+            );
             let volume = crate::measure::solid_volume(&topo, piece, 0.01).unwrap();
             assert!(
                 (volume - half).abs() < 1e-3 * half,
@@ -294,6 +313,56 @@ mod tests {
             .max
             .z();
         assert!(top >= 2.048, "the lid reaches 2.048, its extent {top}");
+    }
+
+    /// A block whose top is a biquadratic patch with row weights 1, -1.5
+    /// and 4 and one control point, its middle, at z = -2. With no pole, it
+    /// still rises to 3 above the unit square, where its control points stay
+    /// at or below 0: they bound nothing, and the bound says so.
+    #[test]
+    fn outer_bounds_refuse_a_nurbs_face_with_a_negative_weight() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::face::FaceSurface;
+
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(0.0, 0.0, -1.0))
+            .unwrap();
+        let top = brepkit_topology::explorer::solid_faces(&topo, block)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && d.abs() < 1e-9)
+            })
+            .unwrap();
+        let rows = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 1) { -2.0 } else { 0.0 };
+                        Point3::new(f64::from(i) / 2.0, f64::from(j) / 2.0, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let patch = NurbsSurface::new(
+            2,
+            2,
+            knots.clone(),
+            knots,
+            rows,
+            [1.0, -1.5, 4.0].map(|w| vec![w; 3]).to_vec(),
+        )
+        .unwrap();
+        let peak = patch.evaluate(1.0 / 3.0, 0.5).z();
+        assert!(peak > 2.99 && patch.aabb().max.z() <= 0.0, "{peak}");
+        topo.face_mut(top)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(patch));
+
+        assert!(crate::measure::solid_outer_bounds(&topo, block).is_err());
     }
 
     #[test]

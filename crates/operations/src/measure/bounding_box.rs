@@ -159,6 +159,12 @@ pub fn face_set_bounding_box(
 /// extent above is sampled and can miss its surface rising between the
 /// samples, while its control points enclose it. For tests that must not
 /// miss an overlap, such as a boolean's disjointness shortcuts.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails, or if a NURBS face has a
+/// weight that is not positive: its surface can then leave its control
+/// points' hull, so they bound nothing.
 pub fn hold_nurbs_faces(
     topo: &Topology,
     faces: &[FaceId],
@@ -166,6 +172,16 @@ pub fn hold_nurbs_faces(
 ) -> Result<Aabb3, crate::OperationsError> {
     for &fid in faces {
         if let FaceSurface::Nurbs(nurbs) = topo.face(fid)?.surface() {
+            if nurbs
+                .weights()
+                .iter()
+                .flatten()
+                .any(|&w| !w.is_finite() || w <= 0.0)
+            {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "a NURBS face with a weight that is not positive has no bound".into(),
+                });
+            }
             bounds = bounds.union(nurbs.aabb());
         }
     }
