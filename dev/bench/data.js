@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793366686423,
+  "lastUpdate": 1793368244864,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62099,6 +62099,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17323783,
             "range": "± 950106",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68ea6a77bc100fc841630cacdf8bf4f3dccc14c1",
+          "message": "fix(algo): find and classify a NURBS face's bulge between its edges (#2220)\n\nBooleans now find and classify a NURBS face where it rises off its\nboundary between its edges, so cutting through that bulge returns the\nbulge instead of nothing.\n\nToday a unit block whose top is the lid z = 100 u (1 − u)⁴ v (1 − v),\nflat along its rim and peaking at 2.048, intersected with a box over z ≥\n1.5 gives an empty solid, and cut by that box comes back unchanged: 6\nfaces holding 1.55552, where the tip above 1.5 holds 0.0306289. Two\nstages miss the bulge. The broad phase boxes a NURBS face from its\nboundary, so it never pairs the lid with the box's bottom face. The\nray-cast classifier reads a NURBS face that is not an extrusion as the\nflat polygon through its boundary, so a point under the bulge reads\noutside.\n\n## Change\n\n- The face-face and edge-face broad phases box a NURBS face by the\ncontrol points of the knot spans under its parameter range, which hold\nthe surface between its edges. A face whose control points already lie\nin its boundary's box keeps that box.\n- The ray-cast classifier crosses any other open NURBS face where the\nray meets its surface. `RaySurface` cuts the surface into Bezier\npatches, subdivides each patch whose control points, seen along the ray,\nsurround it, and solves for the hit on the small ones. A patch stops\nsubdividing once its longest control polygon each way is small, so a\ntall bulge between a patch's corners is still cut down, and a leaf whose\nsolve stalls or does not converge is cut further, the ray grazing it at\nthe deepest level. A hit counts when the face's wires hold it, read in\n`(u, v)` with every edge, straight ones too, sampled along and halved\nwhere its middle strays from its chord there, since a NURBS surface's\n`(u, v)` can bend a straight edge. Where an edge's `u` turns back\nbetween its samples, a search finds the turn and adds it as a sample, so\na line of constant `u` meets each piece at most once. A tangent touch,\nor a second crossing near enough to share a solve, marks the ray as\ngrazing, so the vote turns to other rays. A surface closed on itself,\nshrinking to a point along a side, with a knot vector that is not\nclamped, or with a weight that is not positive keeps the polygon.\n- A boolean result of two faces passes the face-count gate when one of\nthem curves, as a bulge over its disc does.\n\nWith #2210's bounds as well, splitting the block at z = 2 gives the tip\nand the rest, each valid.\n\n## Tests\n\n- `a_box_takes_the_tip_off_a_nurbs_lid`: the intersection is the tip, 2\nfaces, valid, holding 0.0306289 to 1e-3; the cut is 7 faces, valid,\nholding 1 + 5/9 less the tip. Without the broad-phase box, without the\nNURBS crossings, or with the old face-count gate, the intersection comes\nback with another face count.\n- `a_point_under_a_nurbs_lids_bulge_is_inside`: on a unit cube whose top\nis the lid raised by 1, (0.2, 0.5, 2.9) and (0.5, 0.5, 1.5) classify\ninside, and (0.2, 0.5, 3.1) and (0.9, 0.9, 1.02) outside. Through the\nboundary polygon, (0.2, 0.5, 2.9) reads outside.\n- `RaySurface`: a ray up through the lid's peak meets it once at z =\n2.048; a level ray at z = 1.5 crosses the bulge twice, both on 25 u (1 −\nu)⁴ = 1.5; a level ray at the peak's height grazes; a surface with a\nnegative weight, or with the unclamped knots [−2, −1, 0, 1, 2, 3], is\nnot taken; and a level ray at 500 crosses a unit patch whose middle\ncontrol point stands at 4000 twice, at u = (1 ± 1/√2) / 2. Measuring\npatches by their corners' chords, that ray finds nothing. A level ray at\nheight 0.04 through the middle of the saddle `(u, v, (u − 1/2)(v −\n1/2))`, made one leaf by a span reaching to x = 2000, crosses it once at\n(0.7, 0.7); reading the stalled leaf as a miss finds nothing.\n- `a_nurbs_trim_follows_a_straight_edge_bowing_in_uv`: the surface (u +\nv (1 − v), v, v (u + v (1 − v))) trimmed by straight edges to 0.3 ≤ x ≤\n0.7, whose left edge bows to u = 0.05 in `(u, v)`, is crossed by a ray\ndown through (0.4, 0.5, 0.2) and not by one through x = 0.8. Sampling\nstraight edges at their ends only misses the first.\n- `a_nurbs_trim_holds_a_turn_between_its_samples`: on (u + v (17/16 −\nv), v, v (u + v (17/16 − v))) trimmed the same way, the left edge's\nleast `u` falls halfway between two of its samples. A ray down through x\n= 0.3002 at y = 17/32 crosses once, and one through x = 0.2998 does not.\nWith that edge split at y = 0.52, so the turn lies in the last piece of\nthe edge above, a ray through x = 0.30006 crosses once. Without the turn\nsearch both rays inside find nothing, and without the edges' end\ndirections the second does.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3802 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T13:48:08Z",
+          "tree_id": "1fbf3c655558cb2823ae8b8358072ca375544762",
+          "url": "https://github.com/andymai/brepkit/commit/68ea6a77bc100fc841630cacdf8bf4f3dccc14c1"
+        },
+        "date": 1793368237142,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 638219,
+            "range": "± 15167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 684535,
+            "range": "± 41090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8322,
+            "range": "± 204",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 374918,
+            "range": "± 18954",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17802345,
+            "range": "± 479233",
             "unit": "ns/iter"
           }
         ]
