@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.6.2](https://github.com/andymai/brepkit/compare/v4.6.1...v4.6.2) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** fill a Coons patch from its curves whichever way they run ([#2216](https://github.com/andymai/brepkit/issues/2216)) ([32f73db](https://github.com/andymai/brepkit/commit/32f73db336b3ffe48c010729be0148d10a72697c))
+* **wasm:** give each face of a grouped mesh its own vertices so creases shade sharp ([#2215](https://github.com/andymai/brepkit/issues/2215)) ([0fac49c](https://github.com/andymai/brepkit/commit/0fac49cfc2d15b62c43909383a834158553d0894))
+
 ## [4.6.1](https://github.com/andymai/brepkit/compare/v4.6.0...v4.6.1) (2026-10-30)
 
 
