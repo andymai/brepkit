@@ -349,7 +349,9 @@ pub(crate) fn revolution_band_surface(
 
     // A circular-arc profile edge sweeps an exact torus band. (`p0_start` and
     // `p1_start` are the arc's endpoints on this segment's ring.)
-    if let Some((center, radius)) = profile_arc_center_radius(profile_curve, p0_start, p1_start) {
+    if let Some((center, radius)) =
+        profile_arc_center_radius(profile_curve, p0_start, p1_start, axis_origin, axis)
+    {
         let (from, to) = if profile_forward {
             (p0_start, p1_start)
         } else {
@@ -479,7 +481,10 @@ fn revolution_cone_apex(
     axis_origin + axis * z_apex
 }
 
-/// Recognise a profile edge as a circular arc, returning its `(center, radius)`.
+/// Recognise a profile edge as a circular arc whose plane holds the
+/// revolution axis, returning its `(center, radius)`: such an arc sweeps a
+/// torus band, or a sphere band when centred on the axis. An arc in a plane
+/// beside the axis or tilted across it sweeps neither.
 ///
 /// A `Circle` edge reports them directly; a rational-quadratic `NurbsCurve`
 /// (how circles are often constructed) is run through curve recognition. Returns
@@ -489,21 +494,28 @@ fn profile_arc_center_radius(
     curve: &EdgeCurve,
     p_start: Point3,
     p_end: Point3,
+    axis_origin: Point3,
+    axis: Vec3,
 ) -> Option<(Point3, f64)> {
-    match curve {
-        EdgeCurve::Circle(c) => Some((c.center(), c.radius())),
+    let (center, normal, radius) = match curve {
+        EdgeCurve::Circle(c) => (c.center(), c.normal(), c.radius()),
         EdgeCurve::NurbsCurve(nc) => {
             let scale = (p_end - p_start).length().max(1.0);
             let tol = Tolerance::new().linear * 100.0 * scale;
             match brepkit_geometry::convert::recognize_curve(nc, tol) {
-                brepkit_geometry::convert::RecognizedCurve::Circle { center, radius, .. } => {
-                    Some((center, radius))
-                }
-                _ => None,
+                brepkit_geometry::convert::RecognizedCurve::Circle {
+                    center,
+                    normal,
+                    radius,
+                } => (center, normal, radius),
+                _ => return None,
             }
         }
-        EdgeCurve::Line | EdgeCurve::Ellipse(_) => None,
-    }
+        EdgeCurve::Line | EdgeCurve::Ellipse(_) => return None,
+    };
+    let holds_axis = normal.dot(axis).abs() <= 1e-9
+        && normal.dot(axis_origin - center).abs() <= Tolerance::new().linear;
+    holds_axis.then_some((center, radius))
 }
 
 /// The profile arc's midpoint carried to the centre of the band it sweeps on
@@ -692,7 +704,7 @@ fn classify_profile_edge(
     let e_on_axis = r1 < lin;
     // Arc edge → torus band (both ends must clear the axis; a closed circle
     // inside a multi-edge wire has no seam-able span).
-    if let Some((center, radius)) = profile_arc_center_radius(curve, sp, ep) {
+    if let Some((center, radius)) = profile_arc_center_radius(curve, sp, ep, axis_origin, axis) {
         if s_on_axis || e_on_axis || (sp - ep).length() < lin {
             return None;
         }
@@ -768,11 +780,14 @@ fn try_analytic_full_revolution(
     }
     // Planar profile with the axis lying in its plane (else not a clean
     // surface of revolution about this axis).
-    let normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
+    let (normal, offset) = match face_data.surface() {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
         _ => return Ok(None),
     };
-    if normal.dot(axis).abs() > 1e-9 {
+    let across = normal.length();
+    if normal.dot(axis).abs() > 1e-9 * across
+        || (dot_normal_point(normal, axis_origin) - offset).abs() > Tolerance::new().linear * across
+    {
         return Ok(None);
     }
 
@@ -1154,13 +1169,16 @@ fn try_circle_revolution_torus(
     }
 
     let face_data = topo.face(face)?;
-    let normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
+    let (normal, offset) = match face_data.surface() {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
         _ => return Ok(None),
     };
-    // The axis must lie in the profile plane (perpendicular to its normal),
-    // else the swept surface is not a torus of revolution.
-    if normal.dot(axis).abs() > 1e-9 {
+    // The axis must lie in the profile plane, running across its normal and
+    // through it, else the swept surface is not a torus of revolution.
+    let across = normal.length();
+    if normal.dot(axis).abs() > 1e-9 * across
+        || (dot_normal_point(normal, axis_origin) - offset).abs() > Tolerance::new().linear * across
+    {
         return Ok(None);
     }
     let wire_ids: Vec<brepkit_topology::wire::WireId> = std::iter::once(face_data.outer_wire())
@@ -2732,6 +2750,52 @@ mod tests {
         assert!(
             (vol - expected).abs() / expected < 1e-9,
             "pointed cone volume {expected}, got {vol}"
+        );
+    }
+
+    /// A ring whose plane runs beside the axis without holding it sweeps no
+    /// torus: the ring in `y = 8`, centred at `(10, 8, 0)`, revolved about
+    /// the z axis through the origin, keeps every point of its rim on the
+    /// solid's boundary instead of a torus missing them.
+    #[test]
+    fn revolve_ring_beside_its_axis_sweeps_no_torus() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let mut ring = |radius: f64| {
+            let circ = Circle3D::new(
+                Point3::new(10.0, 8.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                radius,
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(circ.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circ)));
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap())
+        };
+        let (outer, hole) = (ring(5.0), ring(4.0));
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 8.0,
+            },
+        ));
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            FRAC_PI_2,
+        )
+        .unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert!(
+            faces
+                .iter()
+                .all(|&f| !matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_))),
+            "a ring beside its axis swept a torus"
         );
     }
 
