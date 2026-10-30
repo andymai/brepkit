@@ -93,6 +93,22 @@ impl BrepKernel {
         Ok(shells)
     }
 
+    /// Get one solid handle per separate piece of material in a solid.
+    ///
+    /// A boolean that leaves separate pieces (a slot cut through a bar)
+    /// returns them in one solid. Each piece comes back as its own solid
+    /// with its own cavities; a solid in one piece returns its own handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "getSolidPieces")]
+    pub fn get_solid_pieces(&mut self, solid: u32) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let pieces = brepkit_operations::compound_ops::solid_pieces(self.topo_mut(), solid_id)?;
+        Ok(pieces.into_iter().map(solid_id_to_u32).collect())
+    }
+
     /// Get the vertex positions of an edge.
     ///
     /// Returns `[start_x, start_y, start_z, end_x, end_y, end_z]`.
