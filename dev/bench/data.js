@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793358434382,
+  "lastUpdate": 1793362362104,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61937,6 +61937,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23380783,
             "range": "± 705302",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f3066b281e9f17f0d56478a8035d699f1b57bb64",
+          "message": "fix(wasm): chamfer through the walking engine first, as fillet does (#2209)\n\n`chamfer` now runs the walking engine's chamfer first, as `fillet` does,\nso chamfering a solid that already has a round takes off what it should\ninstead of growing it.\n\nToday the binding runs the planar chamfer, which rebuilds every face\nfrom its polygon and so cannot carry a curved one. On an L bracket of an\n80 x 50 x 8 base and an 80 x 8 x 42 wall, fused, whose inside edge is\nfilleted at 5 (59309.204), chamfering the two outer corner edges of the\nbase by 3 should take two 3 x 3 triangles 8 tall, 72 in all. It comes\nback as 67921.864 and fails validation. `chamferV2`, the walking\nengine's chamfer, takes exactly 72 from the same solid.\n\n## Change\n\n- `chamfer`, in its binding and in the batch, goes through\n`try_chamfer`, which keeps the walking engine's equal-distance chamfer\nwhen it is a changed, complete, closed, outward-oriented solid and falls\nback to the planar chamfer otherwise, as `try_fillet` does for `fillet`.\nThe planar chamfer's result is held to the same check, and when neither\npasses the call fails rather than return a broken solid.\n- The check that decides it is `try_fillet`'s, moved into\n`blend_result_holds` so both share it. It now asks for a positive meshed\nvolume rather than one above 1e-12, which refused a 2e-5 chamfer on a\nbox of side 1e-4.\n- The walking engine rebuilds only the outer shell. Its result reused\nthe input's unchanged edges and vertices, and its cavity shells as they\nwere, so moving a filleted or chamfered solid moved parts of the input\ntoo, and nothing checked that a blend stayed clear of a cavity. Each\n`blend_ops` wrapper now hands its result to `cavities::detach_walked`,\nwhich copies the result's outer shell and the input's cavities, pcurves\nincluded, into a solid of its own.\n- `detach_walked` refuses a blend that could reach a cavity, judged as\n`keep_cavities` judges the planar chamfer, but over the faces the blend\nmade: those whose edges are no input face's and that lie on no input\nface. An unchanged face is a clone running on the input's own edges, so\na fillet on a turned hollow cylinder's top rim is not refused because\nits untouched bottom cap's box meets the cavity's.\n- `try_chamfer` refuses edges that are not on the solid, where the\nplanar chamfer dropped them and chamfered the rest.\n- `try_chamfer` refuses a cavity's edges too. The walking engine refuses\nthem, and the planar chamfer, which reads only the outer shell,\nchamfered the outer edges asked for and dropped the cavity's.\n- The check reads the volume at a tenth of the blend's size, at least a\nthousandth of the solid's least extent up to 0.01, rather than at least\n0.01, so a small or slender part's curves mesh finely enough for it. The\nleast extent is read across the box that best fits points along the\nsolid's edges (with a ball face's poles and equator points, and a NURBS\nface's control points), so turning the part leaves it alone.\n- The planar chamfer's path for a cylinder's or cone's circular rim\nrefuses a chamfer whose bands reach one of the solid's cavities, as its\nother paths do.\n\nCloses #2162.\n\n## Tests\n\n- `try_chamfer_cuts_a_filleted_bracket`: on that bracket, with and\nwithout the fillet (checked to leave a curved face), the two chamfers\ntake 72 to 1e-3 of it and leave a valid solid. With the planar chamfer\nalone, the filleted bracket goes from 59309.20 to 67921.86.\n- `try_chamfer_keeps_a_cavity_of_its_own`: chamfering a 10 cube with a 3\ncube cavity takes 5 and leaves a cavity that is not the input's; moving\nthe result leaves the input's cavity in place. With the cavity 0.05\nbehind the front face, the chamfer is refused.\n- `walking_blends_keep_their_own_cavity` checks the same through\n`chamfer_v2` and `fillet_v2`. With the cavity shells carried over, both\nthis test and the one above fail.\n- `try_chamfer_keeps_a_small_parts_chamfer`: the 2e-5 chamfer on the\n1e-4 box is kept, at 1e-12 less 2e-17.\n- `a_walking_chamfers_result_is_its_own`: moving a box's walking chamfer\nleaves every vertex of the box where it was, and the box valid. Without\nthe copy, it fails.\n- `a_walking_fillet_far_from_a_cavity_keeps_it_on_a_turned_solid`: a\ncylinder of radius 10 and height 100 with a 3 cube cavity near its\nbottom, turned 45° about y, keeps the cavity through a top-rim fillet,\nits outer shell losing what a plain cylinder's does. Judging made faces\nby their edges alone, or by `on_source_face` alone, refuses it.\n- `try_chamfer_refuses_an_edge_off_the_solid` and\n`try_chamfer_keeps_a_small_cylinders_rim_chamfer` (a 0.002 chamfer on a\ncylinder of radius 0.01) each fail without their change.\n- `try_chamfer_refuses_a_cavitys_edge`: on the hollow block, a chamfer\nof a cavity edge, alone or with an outer edge, is refused; the outer\nedge alone is kept. Without the check, the mixed selection returned the\nouter chamfer, 971.75.\n- `gridfinity_lip_fillet_fuse_volume`, `fillet_then_compound_cut`,\n`batch_fuse_cut_fillet_compound` and `fillet_box_bbox_unchanged` now\nfollow the handles each step returns rather than numbering solids\nthemselves: the copy adds a solid to the arena.\n- `try_chamfer_keeps_a_slender_cylinders_rim_chamfer`: a 0.002 chamfer\nround the top rim of a cylinder of radius 0.01 and height 100 is kept,\nwithin 0.1% of the cylinder's volume. Flooring the deflection by the\ndiagonal refuses it.\n- `try_chamfer_keeps_a_turned_slender_cylinders_rim_chamfer`: the same\ncylinder turned to run along the cube's diagonal, its axis-aligned box\nsome 58 across every way, keeps the same chamfer. Reading the least\nextent from the axis-aligned box refuses it.\n- `a_rim_chamfer_keeps_a_cavity_clear_of_it_and_refuses_one_it_reaches`:\na 1 chamfer round the top rim of a cylinder of radius 5 and height 10\nkeeps a 0.4 cube cavity at its middle, holding 250π − 14π/3 − 0.064 to\n1e-6, and is refused with the cavity just under the rim. Without the\ncheck it chamfers through that cavity.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3781 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T05:09:27-07:00",
+          "tree_id": "4214088f83140e47a55758cfd313884acf85fbdd",
+          "url": "https://github.com/andymai/brepkit/commit/f3066b281e9f17f0d56478a8035d699f1b57bb64"
+        },
+        "date": 1793362353489,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1103141,
+            "range": "± 3837",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1183811,
+            "range": "± 12787",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13288,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670060,
+            "range": "± 2111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28943250,
+            "range": "± 536777",
             "unit": "ns/iter"
           }
         ]
