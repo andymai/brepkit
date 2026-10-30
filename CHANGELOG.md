@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.4](https://github.com/andymai/brepkit/compare/v4.6.3...v4.6.4) (2026-10-30)
+
+
+### Bug Fixes
+
+* **topology:** refuse to face a wire whose edges do not close ([#2222](https://github.com/andymai/brepkit/issues/2222)) ([5bb5af6](https://github.com/andymai/brepkit/commit/5bb5af6239a1d0554f3a3594730955e8df975954))
+
 ## [4.6.3](https://github.com/andymai/brepkit/compare/v4.6.2...v4.6.3) (2026-10-30)
 
 
