@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793342475074,
+  "lastUpdate": 1793342673830,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61343,6 +61343,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28337946,
             "range": "± 74781",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1b97ed0548f45492b9c822f4ca53103e4ed2bf96",
+          "message": "fix(operations): weld a face two solids share after round-off in fuse_all (#2214)\n\n`fuseAll` now welds a face two solids share when rounding leaves their\nbounding boxes a hair apart, as the pair `fuse` already does.\n\nToday `compound_ops::fuse_all` sends solids whose bounding boxes\nintersect to the boolean and merges the rest as separate shells. The box\ntest has no tolerance, so two solids whose shared face a rigid\ntransform's round-off leaves slightly apart are merged as if disjoint,\nand both copies of the face stay. The sheet-metal bend and wall from\n#2168 share a 50 x 2.5 face: `fuse` gives a surface area of 3034.40 and\n`fuseAll` 3284.40, the face counted twice.\n\n## Change\n\n- `partition_touching` takes boxes that come within the kernel's linear\ntolerance as touching, so such a pair goes to the boolean. The\nseparating-axis test that keeps flat-faced pieces apart already used\nthat margin.\n\nCloses #2168.\n\n## Tests\n\n- `fuse_all_welds_a_face_two_solids_share_after_round_off`: the issue's\nbend and wall, built and placed with its exact coordinates, fuse to\n3034.40 pairwise and to the same area through `fuse_all`. Without the\nmargin `fuse_all` gives 3284.40.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`fuse_all` now welds a face two solids share when rounding leaves their\nbounding boxes slightly apart, matching `fuse` behavior.\n\n- `partition_touching` now treats boxes within the kernel's linear\ntolerance as touching, sending such pairs to the boolean instead of\nmerging them as disjoint shells. This fixes duplicate faces remaining\nwhen two solids' shared face stands a rounding error apart (closes\n#2168).\n- Adds a regression test using the issue's bend and wall geometry,\nasserting `fuse_all` produces the same surface area as the pair `fuse`.\n\n<sup>Written for commit 57eaa98b998cde1a59b2f2d6daa40b5f7bb5718f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2214?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2214?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2214&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-29T23:38:06-07:00",
+          "tree_id": "64baed192fc9035287999ec0b747378933e1cc0a",
+          "url": "https://github.com/andymai/brepkit/commit/1b97ed0548f45492b9c822f4ca53103e4ed2bf96"
+        },
+        "date": 1793342665085,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1186706,
+            "range": "± 21714",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1233935,
+            "range": "± 1481",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14470,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 691495,
+            "range": "± 2357",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29996407,
+            "range": "± 128995",
             "unit": "ns/iter"
           }
         ]
