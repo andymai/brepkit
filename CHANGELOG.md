@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.6](https://github.com/andymai/brepkit/compare/v4.6.5...v4.6.6) (2026-10-30)
+
+
+### Bug Fixes
+
+* **wasm:** chamfer through the walking engine first, as fillet does ([#2209](https://github.com/andymai/brepkit/issues/2209)) ([f3066b2](https://github.com/andymai/brepkit/commit/f3066b281e9f17f0d56478a8035d699f1b57bb64))
+
 ## [4.6.5](https://github.com/andymai/brepkit/compare/v4.6.4...v4.6.5) (2026-10-30)
 
 
