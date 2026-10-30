@@ -158,10 +158,12 @@ pub fn tessellate_solid_grouped_with_tolerance(
 ///
 /// A vertex the faces share takes, in each face's copy, that face's normal
 /// there, so a crease between faces shades sharp rather than averaged across
-/// it. A vertex one face alone uses keeps its normal. On a plane or an analytic surface the face's normal is the
-/// surface's; on a NURBS face, the area-weighted normal of the face's own
-/// triangles round the vertex. The groups are those of the welded mesh, in
-/// the same order, but the mesh is no longer welded across faces.
+/// it. A vertex one face alone uses keeps its normal. The face's normal is
+/// its surface's; on a NURBS face where the vertex does not project onto the
+/// surface, or the surface's normal there faces away from the face's own
+/// triangles round it, their area-weighted normal. The groups are those of
+/// the welded mesh, in the same order, but the mesh is no longer welded
+/// across faces.
 ///
 /// # Errors
 ///
@@ -235,7 +237,13 @@ pub fn tessellate_solid_faceted_with_tolerance(
                 let at = mesh.positions[base + k];
                 let normal = match surface {
                     FaceSurface::Plane { normal, .. } => Some(*normal * flip),
-                    FaceSurface::Nurbs(_) => around[k].normalize().ok(),
+                    FaceSurface::Nurbs(nurbs) => {
+                        let averaged = around[k].normalize().ok();
+                        nurbs_normal_at(nurbs, at, deflection)
+                            .map(|n| n * flip)
+                            .filter(|n| averaged.is_none_or(|a| n.dot(a) > 0.0))
+                            .or(averaged)
+                    }
                     analytic => analytic
                         .project_point(at)
                         .map(|(u, v)| analytic.normal(u, v) * flip),
@@ -252,6 +260,20 @@ pub fn tessellate_solid_faceted_with_tolerance(
         faceted_offsets.push(mesh.indices.len() as u32);
     }
     Ok((mesh, faceted_offsets))
+}
+
+/// The surface's normal where `at` projects onto it, if it lies within
+/// `reach` of the surface.
+fn nurbs_normal_at(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    at: Point3,
+    reach: f64,
+) -> Option<Vec3> {
+    let near = brepkit_math::nurbs::projection::project_point_to_surface(surface, at, 1e-7).ok()?;
+    if near.distance > reach {
+        return None;
+    }
+    surface.normal(near.u, near.v).ok()
 }
 
 /// What [`tessellate_solid_core`] returns.

@@ -3718,6 +3718,80 @@ fn a_faceted_box_shades_each_face_flat() {
 
 /// A cylinder's faceted mesh carries radial normals all over its wall, rim
 /// included, and axial ones over its caps.
+/// A flat top running into the parabola z = x² at x = 0 meets it with the
+/// same normal, +z, so the faceted mesh keeps that join smooth: the
+/// parabola's copies of the join's vertices take its surface's normal there,
+/// not the tilt of its first strip of triangles.
+#[test]
+fn a_faceted_tangent_join_stays_smooth() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let p = |x: f64, z: f64| Point3::new(x, 0.0, z);
+    let corners = [
+        p(-1.0, 0.0),
+        p(0.0, 0.0),
+        p(1.0, 1.0),
+        p(1.0, -1.0),
+        p(-1.0, -1.0),
+    ];
+    let v: Vec<_> = corners
+        .iter()
+        .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+        .collect();
+    let parabola = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![p(0.0, 0.0), p(0.5, 0.0), p(1.0, 1.0)],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    let edges: Vec<_> = (0..5)
+        .map(|i| {
+            let curve = if i == 1 {
+                EdgeCurve::NurbsCurve(parabola.clone())
+            } else {
+                EdgeCurve::Line
+            };
+            let edge = topo.add_edge(Edge::new(v[i], v[(i + 1) % 5], curve));
+            OrientedEdge::new(edge, true)
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let profile = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        },
+    ));
+    let solid = crate::extrude::extrude(&mut topo, profile, Vec3::new(0.0, 1.0, 0.0), 1.0).unwrap();
+    let volume = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+    assert!((volume - 7.0 / 3.0).abs() < 1e-3, "{volume}");
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    let (mesh, offsets) = tessellate_solid_faceted_with_tolerance(&topo, solid, 0.01, 0.5).unwrap();
+    let mut checked = 0;
+    for (face, w) in faces.iter().zip(offsets.windows(2)) {
+        if !matches!(topo.face(*face).unwrap().surface(), FaceSurface::Nurbs(_)) {
+            continue;
+        }
+        for &i in &mesh.indices[w[0] as usize..w[1] as usize] {
+            let (at, n) = (mesh.positions[i as usize], mesh.normals[i as usize]);
+            if at.x().abs() < 1e-9 {
+                assert!(n.z() > 1.0 - 1e-6, "normal {n:?} at {at:?}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "no parabola vertex on the join");
+}
+
 #[test]
 fn a_faceted_cylinder_keeps_its_rims_sharp() {
     for squash in [1.0, 2.0] {
