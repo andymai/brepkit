@@ -796,7 +796,8 @@ fn normalize_profile_wire_curves(
 /// face's shadow across it, the outer wire's taken counterclockwise in the
 /// surface's parameters less each hole's. No point inside is read, which
 /// could fall in a hole or off a concave trim, and no normal, which could
-/// stand edge-on.
+/// stand edge-on. The parameters are unwrapped across a closed surface's
+/// seam, and the shadows refined until the flux settles.
 fn cap_face(
     topo: &mut Topology,
     outer: WireId,
@@ -804,14 +805,10 @@ fn cap_face(
     surface: FaceSurface,
     outward: Vec3,
 ) -> Result<FaceId, crate::OperationsError> {
-    let against = if matches!(surface, FaceSurface::Nurbs(_)) {
+    let against = if let FaceSurface::Nurbs(nurbs) = &surface {
         let along = outward.normalize()?;
-        // A wire's shadow across the sweep and its area in the surface's
-        // parameters, both signed the way it runs, and its size: the
-        // shadow taken counterclockwise in the parameters is the flux of
-        // the normal through the region the wire bounds.
-        let read = |wid: WireId| -> Result<(f64, f64, f64), crate::OperationsError> {
-            const PER_EDGE: u32 = 16;
+        // A wire's points, `per_edge` along each edge, in the order it runs.
+        let samples = |wid: WireId, per_edge: u32| -> Result<Vec<Point3>, crate::OperationsError> {
             let mut points = Vec::new();
             for oe in topo.wire(wid)?.edges() {
                 let edge = topo.edge(oe.edge())?;
@@ -821,47 +818,123 @@ fn cap_face(
                 );
                 let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
                 let (from, to) = if oe.is_forward() { (t0, t1) } else { (t1, t0) };
-                points.extend((0..PER_EDGE).map(|k| {
+                points.extend((0..per_edge).map(|k| {
                     edge.curve().evaluate_with_endpoints(
-                        (to - from).mul_add(f64::from(k) / f64::from(PER_EDGE), from),
+                        (to - from).mul_add(f64::from(k) / f64::from(per_edge), from),
                         sp,
                         ep,
                     )
                 }));
             }
-            let uv = points
-                .iter()
-                .map(|&p| surface.project_point(p))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| crate::OperationsError::InvalidInput {
-                    reason: "the face to extrude has a boundary point off its surface".into(),
+            Ok(points)
+        };
+        // The signed area of a wire's shadow across the sweep, the way it runs.
+        let shadow = |points: &[Point3]| -> f64 {
+            let p0 = points[0];
+            (0..points.len())
+                .map(|i| {
+                    (points[i] - p0)
+                        .cross(points[(i + 1) % points.len()] - p0)
+                        .dot(along)
+                })
+                .sum()
+        };
+        // Which way a wire runs round the surface's parameters: its area
+        // there, read along its points with each closed direction unwrapped
+        // so a trim across the seam stays in one piece.
+        let ((u0, u1), (v0, v1)) = (nurbs.domain_u(), nurbs.domain_v());
+        let closes = |a: (f64, f64), b: (f64, f64)| {
+            (nurbs.evaluate(a.0, a.1) - nurbs.evaluate(b.0, b.1)).length() <= tol_close(nurbs)
+        };
+        let u_closed = [v0, f64::midpoint(v0, v1), v1]
+            .iter()
+            .all(|&v| closes((u0, v), (u1, v)));
+        let v_closed = [u0, f64::midpoint(u0, u1), u1]
+            .iter()
+            .all(|&u| closes((u, v0), (u, v1)));
+        let winding = |wid: WireId| -> Result<f64, crate::OperationsError> {
+            let points = samples(wid, 16)?;
+            let mut uv = Vec::with_capacity(points.len());
+            for &p in &points {
+                let (mut u, mut v) = surface.project_point(p).ok_or_else(|| {
+                    crate::OperationsError::InvalidInput {
+                        reason: "the face to extrude has a boundary point off its surface".into(),
+                    }
                 })?;
-            let (p0, (u0, v0)) = (points[0], uv[0]);
-            let (mut shadow, mut domain, mut reach) = (0.0, 0.0, 0.0_f64);
-            for i in 0..points.len() {
-                let j = (i + 1) % points.len();
-                let (a, b) = (points[i] - p0, points[j] - p0);
-                shadow += a.cross(b).dot(along);
-                domain += (uv[i].0 - u0).mul_add(uv[j].1 - v0, -((uv[j].0 - u0) * (uv[i].1 - v0)));
-                reach = reach.max(a.length());
+                if let Some(&(pu, pv)) = uv.last() {
+                    let unwrap = |x: f64, prev: f64, (lo, hi): (f64, f64), closed: bool| {
+                        let period = hi - lo;
+                        if closed {
+                            x - ((x - prev) / period).round() * period
+                        } else {
+                            x
+                        }
+                    };
+                    u = unwrap(u, pu, (u0, u1), u_closed);
+                    v = unwrap(v, pv, (v0, v1), v_closed);
+                }
+                uv.push((u, v));
             }
-            if domain == 0.0 {
+            let (first, last) = (uv[0], uv[uv.len() - 1]);
+            let area: f64 = (0..uv.len())
+                .map(|i| {
+                    let (a, b) = (uv[i], uv[(i + 1) % uv.len()]);
+                    (a.0 - first.0).mul_add(b.1 - first.1, -((b.0 - first.0) * (a.1 - first.1)))
+                })
+                .sum();
+            if area == 0.0
+                || (u_closed && (last.0 - first.0).abs() > 0.5 * (u1 - u0))
+                || (v_closed && (last.1 - first.1).abs() > 0.5 * (v1 - v0))
+            {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "the face to extrude has a wire enclosing no parameters".into(),
+                    reason: "the face to extrude has a wire bounding no region of its surface"
+                        .into(),
                 });
             }
-            Ok((shadow * domain.signum(), domain, reach))
+            Ok(area.signum())
         };
-        let (mut flux, _, reach) = read(outer)?;
-        for &hole in &inner {
-            flux -= read(hole)?.0;
-        }
-        if flux.abs() <= 1e-12 * reach * reach {
+        let turns: Vec<f64> = std::iter::once(outer)
+            .chain(inner.iter().copied())
+            .map(&winding)
+            .collect::<Result<_, _>>()?;
+        // The flux of the normal along the sweep: the outer wire's shadow
+        // taken counterclockwise in the parameters, less each hole's. The
+        // shadows are refined until the flux settles, as a coarse polygon
+        // of a long curved edge can lose more than a thin face holds.
+        let flux = |per_edge: u32| -> Result<(f64, f64), crate::OperationsError> {
+            let mut total = 0.0;
+            let mut reach = 0.0_f64;
+            for (k, wid) in std::iter::once(outer)
+                .chain(inner.iter().copied())
+                .enumerate()
+            {
+                let points = samples(wid, per_edge)?;
+                reach = points
+                    .iter()
+                    .fold(reach, |r, &p| r.max((p - points[0]).length()));
+                let signed = shadow(&points) * turns[k];
+                total += if k == 0 { signed } else { -signed };
+            }
+            Ok((total, reach))
+        };
+        let (mut flux_now, _) = flux(16)?;
+        let mut per_edge = 16;
+        let reach = loop {
+            per_edge *= 2;
+            let (next, next_reach) = flux(per_edge)?;
+            let settled =
+                next.signum() == flux_now.signum() && (next - flux_now).abs() <= 0.25 * next.abs();
+            flux_now = next;
+            if settled || per_edge >= 4096 {
+                break next_reach;
+            }
+        };
+        if flux_now.abs() <= 1e-12 * reach * reach {
             return Err(crate::OperationsError::InvalidInput {
                 reason: "the face to extrude casts no shadow across the extrusion".into(),
             });
         }
-        flux < 0.0
+        flux_now < 0.0
     } else {
         false
     };
@@ -878,6 +951,16 @@ fn cap_face(
 
 /// Rebuild a wire traversing the same edges in reverse order with flipped
 /// senses.
+/// How near a NURBS surface's two ends of a parameter must come to meet:
+/// a millionth of its control net's extent.
+fn tol_close(nurbs: &NurbsSurface) -> f64 {
+    let points: Vec<Point3> = nurbs.control_points().iter().flatten().copied().collect();
+    let extent = points
+        .iter()
+        .fold(0.0_f64, |m, &p| m.max((p - points[0]).length()));
+    1e-6 * extent.max(1e-9)
+}
+
 fn rewound_wire(topo: &mut Topology, wid: WireId) -> Result<WireId, crate::OperationsError> {
     let oes: Vec<OrientedEdge> = topo
         .wire(wid)?
