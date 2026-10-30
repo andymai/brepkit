@@ -431,20 +431,35 @@ pub fn sample_solid_edges_filtered(
     angular_tol: f64,
     filter_smooth: bool,
 ) -> Result<EdgeLines, crate::OperationsError> {
-    let edges = brepkit_topology::explorer::solid_edges(topo, solid)?;
+    let edges = drawn_edge_samples(topo, solid, deflection, angular_tol, filter_smooth)?;
+    let mut result = EdgeLines {
+        positions: Vec::new(),
+        offsets: Vec::with_capacity(edges.len()),
+    };
+    for (_, points) in edges {
+        result.offsets.push(result.positions.len());
+        result.positions.extend(points);
+    }
+    Ok(result)
+}
 
+/// Each edge of `solid` a drawing shows, with its samples: with
+/// `filter_smooth`, an edge between two faces on one surface is left out.
+pub fn drawn_edge_samples(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+    angular_tol: f64,
+    filter_smooth: bool,
+) -> Result<Vec<(brepkit_topology::edge::EdgeId, Vec<Point3>)>, crate::OperationsError> {
+    let edges = brepkit_topology::explorer::solid_edges(topo, solid)?;
     let edge_face_map = if filter_smooth {
         Some(brepkit_topology::explorer::edge_to_face_map(topo, solid)?)
     } else {
         None
     };
-
-    let mut result = EdgeLines {
-        positions: Vec::new(),
-        offsets: Vec::with_capacity(edges.len()),
-    };
-
-    for edge_id in &edges {
+    let mut out = Vec::with_capacity(edges.len());
+    for edge_id in edges {
         if let Some(ref efm) = edge_face_map
             && let Some(faces) = efm.get(&edge_id.index())
             && faces.len() == 2
@@ -455,14 +470,13 @@ pub fn sample_solid_edges_filtered(
                 continue;
             }
         }
-
-        result.offsets.push(result.positions.len());
-        let edge = topo.edge(*edge_id)?;
-        let points = sample_edge(topo, edge, deflection, angular_tol, false)?;
-        result.positions.extend(points);
+        let edge = topo.edge(edge_id)?;
+        out.push((
+            edge_id,
+            sample_edge(topo, edge, deflection, angular_tol, false)?,
+        ));
     }
-
-    Ok(result)
+    Ok(out)
 }
 
 /// Weld remaining boundary vertices by merging coincident positions.

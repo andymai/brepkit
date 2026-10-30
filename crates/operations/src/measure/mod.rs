@@ -8,7 +8,7 @@ pub(crate) mod helpers;
 mod volume;
 
 pub use area::{face_area, solid_surface_area};
-pub(crate) use bounding_box::face_set_bounding_box;
+pub(crate) use bounding_box::{face_set_bounding_box, hold_nurbs_faces, solid_outer_bounds};
 pub use bounding_box::{solid_bounding_box, solid_bounding_box_transformed};
 pub use edge_length::{edge_length, face_perimeter, wire_length};
 pub use volume::{

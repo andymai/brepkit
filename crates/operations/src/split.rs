@@ -2,12 +2,14 @@
 //!
 //! Divides a solid into two new solids along the specified cutting plane.
 
+use brepkit_math::frame::Frame3;
+use brepkit_math::mat::Mat4;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::{FaceSpec, assemble_solid_mixed};
+use crate::boolean::{BooleanOp, boolean};
 use crate::dot_normal_point;
 
 /// Result of splitting a solid: two halves.
@@ -25,19 +27,15 @@ pub struct SplitResult {
 /// half contains geometry on the side the normal points toward; the
 /// `negative` half contains the rest.
 ///
-/// # Algorithm
-///
-/// For each face of the solid:
-/// 1. Classify vertices as above (+), below (-), or on the plane
-/// 2. Faces entirely on one side go to that half
-/// 3. Faces straddling the plane are clipped into two fragments
-/// 4. A cap face (the cross-section) is added to close each half
+/// A box standing on the plane covers the solid's positive side: the
+/// positive half is the solid's intersection with it and the negative half
+/// what cutting it away leaves, each through the boolean engine, so curved
+/// faces keep their exact geometry.
 ///
 /// # Errors
 ///
-/// Returns an error if the plane doesn't intersect the solid, any face
-/// is NURBS, or the result cannot be assembled.
-#[allow(clippy::too_many_lines)]
+/// Returns an error if the plane doesn't intersect the solid or a boolean
+/// fails.
 pub fn split(
     topo: &mut Topology,
     solid: SolidId,
@@ -45,208 +43,59 @@ pub fn split(
     plane_normal: Vec3,
 ) -> Result<SplitResult, crate::OperationsError> {
     let tol = Tolerance::new();
-    let normal = plane_normal.normalize()?;
-    let d = dot_normal_point(normal, plane_point);
-
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<brepkit_topology::face::FaceId> = shell.faces().to_vec();
-
-    let mut positive_specs: Vec<FaceSpec> = Vec::new();
-    let mut negative_specs: Vec<FaceSpec> = Vec::new();
-    let mut cap_points: Vec<Point3> = Vec::new();
-
-    for &fid in &face_ids {
-        let face = topo.face(fid)?;
-        let surface = face.surface().clone();
-        let verts = crate::boolean::face_polygon(topo, fid)?;
-        let dists: Vec<f64> = verts
-            .iter()
-            .map(|v| dot_normal_point(normal, *v) - d)
-            .collect();
-
-        let all_pos = dists.iter().all(|&di| di > -tol.linear);
-        let all_neg = dists.iter().all(|&di| di < tol.linear);
-
-        // Helper to create FaceSpec preserving the surface type.
-        let make_spec = |v: Vec<Point3>, surf: &brepkit_topology::face::FaceSurface| -> FaceSpec {
-            match surf {
-                brepkit_topology::face::FaceSurface::Plane { normal: fn_, d: fd } => {
-                    FaceSpec::Planar {
-                        vertices: v,
-                        normal: *fn_,
-                        d: *fd,
-                        inner_wires: vec![],
-                    }
-                }
-                other => FaceSpec::Surface {
-                    vertices: v,
-                    surface: other.clone(),
-                    reversed: false,
-                    inner_wires: vec![],
-                },
-            }
-        };
-
-        if all_pos && !all_neg {
-            positive_specs.push(make_spec(verts, &surface));
-        } else if all_neg && !all_pos {
-            negative_specs.push(make_spec(verts, &surface));
-        } else if all_pos && all_neg {
-            positive_specs.push(make_spec(verts.clone(), &surface));
-            negative_specs.push(make_spec(verts, &surface));
-        } else {
-            // Mixed: clip the face polygon. Vertex positions are interpolated
-            // along polygon edges (linear approximation of the actual
-            // surface-plane intersection curve). For curved faces, we
-            // preserve the original surface type so that downstream
-            // operations (tessellation, booleans) handle curvature correctly.
-            let (pos_verts, neg_verts, crossings) = clip_polygon(&verts, &dists, tol);
-
-            if pos_verts.len() >= 3 {
-                positive_specs.push(make_spec(pos_verts, &surface));
-            }
-            if neg_verts.len() >= 3 {
-                negative_specs.push(make_spec(neg_verts, &surface));
-            }
-
-            cap_points.extend(crossings);
-        }
-    }
-
-    if positive_specs.is_empty() || negative_specs.is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "cutting plane does not split the solid (entirely on one side)".into(),
-        });
-    }
-
-    let cap = build_cap_polygon(&cap_points, normal, d, tol);
-
-    if let Some((cap_verts, cap_normal, cap_d)) = cap {
-        positive_specs.push(FaceSpec::Planar {
-            vertices: cap_verts.clone(),
-            normal: -cap_normal,
-            d: -cap_d,
-            inner_wires: vec![],
-        });
-        negative_specs.push(FaceSpec::Planar {
-            vertices: cap_verts,
-            normal: cap_normal,
-            d: cap_d,
-            inner_wires: vec![],
-        });
-    }
-
-    let pos_solid = assemble_solid_mixed(topo, &positive_specs, tol)?;
-    let neg_solid = assemble_solid_mixed(topo, &negative_specs, tol)?;
-
-    Ok(SplitResult {
-        positive: pos_solid,
-        negative: neg_solid,
-    })
-}
-
-/// Clip a polygon by a plane, producing positive and negative fragments.
-///
-/// Returns `(positive_verts, negative_verts, crossing_points)`.
-fn clip_polygon(
-    verts: &[Point3],
-    dists: &[f64],
-    tol: Tolerance,
-) -> (Vec<Point3>, Vec<Point3>, Vec<Point3>) {
-    let n = verts.len();
-    let mut pos_verts = Vec::new();
-    let mut neg_verts = Vec::new();
-    let mut crossings = Vec::new();
-
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let di = dists[i];
-        let dj = dists[j];
-
-        if di >= -tol.linear {
-            pos_verts.push(verts[i]);
-        }
-        if di <= tol.linear {
-            neg_verts.push(verts[i]);
-        }
-
-        if (di > tol.linear && dj < -tol.linear) || (di < -tol.linear && dj > tol.linear) {
-            let t = di / (di - dj);
-            let pi = verts[i];
-            let pj = verts[j];
-            let ix = Point3::new(
-                (pj.x() - pi.x()).mul_add(t, pi.x()),
-                (pj.y() - pi.y()).mul_add(t, pi.y()),
-                (pj.z() - pi.z()).mul_add(t, pi.z()),
-            );
-            pos_verts.push(ix);
-            neg_verts.push(ix);
-            crossings.push(ix);
-        }
-    }
-
-    (pos_verts, neg_verts, crossings)
-}
-
-/// Build a cap polygon from crossing points.
-///
-/// Orders the points by angle around the centroid in the cutting plane.
-fn build_cap_polygon(
-    points: &[Point3],
-    normal: Vec3,
-    d: f64,
-    tol: Tolerance,
-) -> Option<(Vec<Point3>, Vec3, f64)> {
-    let mut unique = Vec::new();
-    for p in points {
-        if !unique
-            .iter()
-            .any(|q: &Point3| (*p - *q).length_squared() < tol.linear * tol.linear)
-        {
-            unique.push(*p);
-        }
-    }
-
-    if unique.len() < 3 {
-        return None;
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    let inv_n = 1.0 / unique.len() as f64;
-    let (cx, cy, cz) = unique.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
-        (ax + p.x(), ay + p.y(), az + p.z())
-    });
-    let centroid = Point3::new(cx * inv_n, cy * inv_n, cz * inv_n);
-
-    let candidate = if normal.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_axis = normal.cross(candidate);
-    let u_len = u_axis.length();
-    if u_len < tol.linear {
-        return None;
-    }
-    let u_axis = Vec3::new(u_axis.x() / u_len, u_axis.y() / u_len, u_axis.z() / u_len);
-    let v_axis = normal.cross(u_axis);
-
-    let mut angles: Vec<(f64, usize)> = unique
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let offset = *p - centroid;
-            let u = u_axis.dot(offset);
-            let v = v_axis.dot(offset);
-            (v.atan2(u), i)
+    let bbox = crate::measure::solid_outer_bounds(topo, solid)?;
+    // The frame stands on the plane's point nearest the solid: a point far
+    // along the plane would round the solid's extent away.
+    let normal = Frame3::from_normal(plane_point, plane_normal)?.z;
+    let centre = bbox.center();
+    let anchor = centre
+        - normal * (dot_normal_point(normal, centre) - dot_normal_point(normal, plane_point));
+    let frame = Frame3::from_normal(anchor, normal)?;
+    let corners = [bbox.min, bbox.max];
+    let local: Vec<[f64; 3]> = (0..8)
+        .map(|k: usize| {
+            let p = Point3::new(
+                corners[k & 1].x(),
+                corners[(k >> 1) & 1].y(),
+                corners[(k >> 2) & 1].z(),
+            ) - anchor;
+            [p.dot(frame.x), p.dot(frame.y), p.dot(frame.z)]
         })
         .collect();
-    angles.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let lo = |i: usize| local.iter().map(|c| c[i]).fold(f64::INFINITY, f64::min);
+    let hi = |i: usize| local.iter().map(|c| c[i]).fold(f64::NEG_INFINITY, f64::max);
+    let misses = || crate::OperationsError::InvalidInput {
+        reason: "cutting plane does not split the solid (entirely on one side)".into(),
+    };
+    if hi(2) <= tol.linear || lo(2) >= -tol.linear {
+        return Err(misses());
+    }
+    let margin = 0.25 * (bbox.max - bbox.min).length() + 1.0;
 
-    let ordered: Vec<Point3> = angles.iter().map(|&(_, i)| unique[i]).collect();
-
-    Some((ordered, normal, d))
+    let mut half = |op: BooleanOp| -> Result<SolidId, crate::OperationsError> {
+        let side = crate::primitives::make_box(
+            topo,
+            hi(0) - lo(0) + 2.0 * margin,
+            hi(1) - lo(1) + 2.0 * margin,
+            hi(2) + margin,
+        )?;
+        let corner = anchor + frame.x * (lo(0) - margin) + frame.y * (lo(1) - margin);
+        let place = Mat4([
+            [frame.x.x(), frame.y.x(), frame.z.x(), corner.x()],
+            [frame.x.y(), frame.y.y(), frame.z.y(), corner.y()],
+            [frame.x.z(), frame.y.z(), frame.z.z(), corner.z()],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        crate::transform::transform_solid(topo, side, &place)?;
+        match boolean(topo, op, solid, side) {
+            Ok(half) if topo.is_empty_solid(half) => Err(misses()),
+            Err(crate::OperationsError::EmptyResult { .. }) => Err(misses()),
+            other => other,
+        }
+    };
+    let positive = half(BooleanOp::Intersect)?;
+    let negative = half(BooleanOp::Cut)?;
+    Ok(SplitResult { positive, negative })
 }
 
 #[cfg(test)]
@@ -317,6 +166,262 @@ mod tests {
             tol.approx_eq(total, 8.0),
             "halves should sum to ~8.0, got {total}"
         );
+    }
+
+    /// A plane tilted 30° through a cylinder's centre crosses only its wall
+    /// and halves it, the halves mirror images through the centre. Each half
+    /// keeps the cylinder's wall, is a valid closed solid, and holds the
+    /// point on the axis on its own side of the plane but not the other's.
+    #[test]
+    fn split_cylinder_through_its_centre_on_a_tilt() {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 20.0, 60.0).unwrap();
+        crate::transform::transform_solid(&mut topo, cyl, &Mat4::translation(0.0, 0.0, -30.0))
+            .unwrap();
+        let result = split(
+            &mut topo,
+            cyl,
+            Point3::new(12.125, 0.0, 0.0),
+            Vec3::new(0.0, -0.5, 0.866_025_403_784_438_6),
+        )
+        .unwrap();
+
+        let half = std::f64::consts::PI * 400.0 * 30.0;
+        let (above, below) = (Point3::new(0.0, 0.0, 15.0), Point3::new(0.0, 0.0, -15.0));
+        for (piece, inside, outside) in [
+            (result.positive, above, below),
+            (result.negative, below, above),
+        ] {
+            assert!(
+                crate::validate::validate_solid(&topo, piece)
+                    .unwrap()
+                    .is_valid()
+            );
+            let mesh = crate::tessellate::tessellate_solid(&topo, piece, 0.05).unwrap();
+            assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+            assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+            let class = |p| crate::classify::classify_point(&topo, piece, p, 0.0, 1e-7).unwrap();
+            assert_eq!(class(inside), crate::classify::PointClassification::Inside);
+            assert_eq!(
+                class(outside),
+                crate::classify::PointClassification::Outside
+            );
+            let volume = crate::measure::solid_volume(&topo, piece, 0.01).unwrap();
+            assert!(
+                (volume - half).abs() < 1e-3 * half,
+                "half holds {volume}, exact {half}"
+            );
+            let faces = brepkit_topology::explorer::solid_faces(&topo, piece).unwrap();
+            assert!(faces.iter().any(|&f| matches!(
+                topo.face(f).unwrap().surface(),
+                brepkit_topology::face::FaceSurface::Cylinder(_)
+            )));
+        }
+    }
+
+    #[test]
+    fn split_cube_by_a_plane_given_far_along_it() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let result = split(
+            &mut topo,
+            cube,
+            Point3::new(1e17, 0.0, 0.5),
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        for piece in [result.positive, result.negative] {
+            let volume = crate::measure::solid_volume(&topo, piece, 0.01).unwrap();
+            assert!((volume - 0.5).abs() < 1e-9, "half holds {volume}");
+        }
+    }
+
+    /// The plane x + y = 0, given by a point 2⁵⁷ along it, touches the
+    /// unit cube only along its edge on the z axis.
+    #[test]
+    fn split_refuses_a_far_given_plane_touching_an_edge() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let far = 2f64.powi(57);
+        let result = split(
+            &mut topo,
+            cube,
+            Point3::new(far, -far, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        );
+        assert!(result.is_err(), "the plane only touches the cube");
+    }
+
+    #[test]
+    fn split_a_plane_crossing_only_a_spheres_box_misses_it() {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+        let result = split(
+            &mut topo,
+            ball,
+            Point3::new(0.7, 0.7, 0.7),
+            Vec3::new(1.0, 1.0, 1.0),
+        );
+        assert!(result.is_err(), "the plane x + y + z = 2.1 misses the ball");
+    }
+
+    /// A unit block below z = 0 whose top is the Bezier lid
+    /// `z = 100 u (1 − u)⁴ v (1 − v)` over the unit square, flat along its
+    /// rim, holding 1 + 5/9. The lid peaks at 2.048 at `(0.2, 0.5)`, between
+    /// the samples that put it at 1.98.
+    fn block_under_a_nurbs_lid(topo: &mut Topology) -> SolidId {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::face::FaceSurface;
+
+        let block = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
+        crate::transform::transform_solid(topo, block, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+        let top = brepkit_topology::explorer::solid_faces(topo, block)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && d.abs() < 1e-9)
+            })
+            .unwrap();
+        let rows = (0..6)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 1) { 10.0 } else { 0.0 };
+                        Point3::new(f64::from(i) / 5.0, f64::from(j) / 2.0, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let lid = NurbsSurface::new(
+            5,
+            2,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 3]; 6],
+        )
+        .unwrap();
+        topo.face_mut(top)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(lid));
+        block
+    }
+
+    /// The lid's halves at a plane, `(faces, volume)` on each side it faces,
+    /// with the plane faced the other way swapping them.
+    fn split_the_lid(origin: Point3, normal: Vec3, above: (usize, f64), below: (usize, f64)) {
+        let mut topo = Topology::new();
+        let block = block_under_a_nurbs_lid(&mut topo);
+        for (n, above, below) in [(normal, above, below), (-normal, below, above)] {
+            let halves = split(&mut topo, block, origin, n).unwrap();
+            for (piece, (faces, volume)) in [(halves.positive, above), (halves.negative, below)] {
+                assert_eq!(
+                    brepkit_topology::explorer::solid_faces(&topo, piece)
+                        .unwrap()
+                        .len(),
+                    faces,
+                    "facing {n:?}"
+                );
+                assert!(
+                    crate::validate::validate_solid(&topo, piece)
+                        .unwrap()
+                        .is_valid()
+                );
+                let measured = crate::measure::solid_volume(&topo, piece, 1e-4).unwrap();
+                assert!(
+                    (measured - volume).abs() < 1e-2 * volume,
+                    "facing {n:?}: {measured} vs {volume}"
+                );
+            }
+        }
+    }
+
+    /// The plane z = 2 cuts the lid's peak off: a tip of 2.24432e-4 in the
+    /// bulge and a disc, and the rest of the block.
+    #[test]
+    fn split_takes_a_nurbs_lids_peak_off_above_its_samples() {
+        let mut topo = Topology::new();
+        let block = block_under_a_nurbs_lid(&mut topo);
+        let top = crate::measure::solid_outer_bounds(&topo, block)
+            .unwrap()
+            .max
+            .z();
+        assert!(top >= 2.048, "the lid reaches 2.048, its extent {top}");
+
+        let tip = (2, 2.244_32e-4);
+        let rest = (7, 1.0 + 1.0 / 1.8 - tip.1);
+        split_the_lid(
+            Point3::new(0.0, 0.0, 2.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            tip,
+            rest,
+        );
+    }
+
+    /// The plane z = 4x + 0.5 runs above the block's rim and cuts through
+    /// the lid's bulge only, between every vertex and sampled point: a tip
+    /// of 0.0647068 above it, and the rest of the block below.
+    #[test]
+    fn split_a_nurbs_lid_at_a_tilted_plane_through_its_bulge() {
+        let tip = (2, 0.064_706_8);
+        let rest = (7, 1.0 + 1.0 / 1.8 - tip.1);
+        split_the_lid(
+            Point3::new(0.0, 0.0, 0.5),
+            Vec3::new(4.0, 0.0, -1.0),
+            rest,
+            tip,
+        );
+    }
+
+    /// A block whose top is a biquadratic patch with row weights 1, -1.5
+    /// and 4 and one control point, its middle, at z = -2. With no pole, it
+    /// still rises to 3 above the unit square, where its control points stay
+    /// at or below 0: they bound nothing, and the bound says so.
+    #[test]
+    fn outer_bounds_refuse_a_nurbs_face_with_a_negative_weight() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::face::FaceSurface;
+
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(0.0, 0.0, -1.0))
+            .unwrap();
+        let top = brepkit_topology::explorer::solid_faces(&topo, block)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && d.abs() < 1e-9)
+            })
+            .unwrap();
+        let rows = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 1) { -2.0 } else { 0.0 };
+                        Point3::new(f64::from(i) / 2.0, f64::from(j) / 2.0, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let patch = NurbsSurface::new(
+            2,
+            2,
+            knots.clone(),
+            knots,
+            rows,
+            [1.0, -1.5, 4.0].map(|w| vec![w; 3]).to_vec(),
+        )
+        .unwrap();
+        let peak = patch.evaluate(1.0 / 3.0, 0.5).z();
+        assert!(peak > 2.99 && patch.aabb().max.z() <= 0.0, "{peak}");
+        topo.face_mut(top)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(patch));
+
+        assert!(crate::measure::solid_outer_bounds(&topo, block).is_err());
     }
 
     #[test]

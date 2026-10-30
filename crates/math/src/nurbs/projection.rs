@@ -406,7 +406,7 @@ pub fn project_point_to_surface(
 /// # Errors
 ///
 /// Returns an error if Newton does not converge.
-pub(crate) fn project_point_to_surface_from(
+pub fn project_point_to_surface_from(
     surface: &NurbsSurface,
     point: Point3,
     (u, v): (f64, f64),

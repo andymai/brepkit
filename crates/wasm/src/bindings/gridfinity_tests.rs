@@ -285,18 +285,32 @@ fn fillet_then_compound_cut() {
     if p2[0].get("error").is_some() {
         return; // Fillet failed — skip compound cut.
     }
-    // Batch 3: cylinder tools + compoundCut on the filleted solid (handle 1).
-    let r3 = k.execute_batch(
-        r#"[
-        {"op": "makeCylinder", "args": {"radius": 2.0, "height": 14.0}},
-        {"op": "copyAndTransformSolid", "args": {"solid": 2, "matrix": [1,0,0,5, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}},
-        {"op": "copyAndTransformSolid", "args": {"solid": 2, "matrix": [1,0,0,15, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}},
-        {"op": "copyAndTransformSolid", "args": {"solid": 2, "matrix": [1,0,0,10, 0,1,0,15, 0,0,1,-2, 0,0,0,1]}},
-        {"op": "compoundCut", "args": {"target": 1, "tools": [3, 4, 5]}}
-    ]"#,
-    );
+    let filleted = p2[0]["ok"].as_u64().unwrap();
+    // Batch 3: cylinder tools + compoundCut on the filleted solid.
+    let r3 =
+        k.execute_batch(r#"[{"op": "makeCylinder", "args": {"radius": 2.0, "height": 14.0}}]"#);
     let p3 = parse_batch(&r3);
-    assert_no_crash(&p3, 4, "fillet + compoundCut");
+    assert_ok(&p3, 0);
+    let cyl = p3[0]["ok"].as_u64().unwrap();
+    let r4 = k.execute_batch(&format!(
+        r#"[
+        {{"op": "copyAndTransformSolid", "args": {{"solid": {cyl}, "matrix": [1,0,0,5, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}}}},
+        {{"op": "copyAndTransformSolid", "args": {{"solid": {cyl}, "matrix": [1,0,0,15, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}}}},
+        {{"op": "copyAndTransformSolid", "args": {{"solid": {cyl}, "matrix": [1,0,0,10, 0,1,0,15, 0,0,1,-2, 0,0,0,1]}}}}
+    ]"#
+    ));
+    let p4 = parse_batch(&r4);
+    let tools: Vec<u64> = (0..3)
+        .map(|i| {
+            assert_ok(&p4, i);
+            p4[i]["ok"].as_u64().unwrap()
+        })
+        .collect();
+    let r5 = k.execute_batch(&format!(
+        r#"[{{"op": "compoundCut", "args": {{"target": {filleted}, "tools": {tools:?}}}}}]"#
+    ));
+    let p5 = parse_batch(&r5);
+    assert_no_crash(&p5, 0, "fillet + compoundCut");
 }
 
 /// Sequential 5-cylinder cuts (not compound — one at a time).
@@ -397,48 +411,64 @@ fn fuse_all_mixed_overlap_and_disjoint() {
 fn batch_fuse_cut_fillet_compound() {
     let mut k = BrepKernel::new();
     // Batch 1: create two boxes, fuse them.
-    // Solids: 0=box1, 1=box2, 2=box2-copy (translated), 3=fused
+    // Solids: 0=box1, 1=box2, 2=box2-copy (translated)
     let r1 = k.execute_batch(
         r#"[
         {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 10}},
         {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 5}},
         {"op": "copyAndTransformSolid", "args": {"solid": 1, "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,10, 0,0,0,1]}},
-        {"op": "fuse", "args": {"solidA": 0, "solidB": 2}},
-        {"op": "solidEdges", "args": {"solid": 3}}
+        {"op": "fuse", "args": {"solidA": 0, "solidB": 2}}
     ]"#,
     );
     let p1 = parse_batch(&r1);
     assert_ok(&p1, 3); // fuse succeeded
-    assert_ok(&p1, 4); // solidEdges succeeded
-    let edges = p1[4]["ok"]
+    let fused = p1[3]["ok"].as_u64().unwrap();
+    let r_edges = k.execute_batch(&format!(
+        r#"[{{"op": "solidEdges", "args": {{"solid": {fused}}}}}]"#
+    ));
+    let p_edges = parse_batch(&r_edges);
+    assert_ok(&p_edges, 0);
+    let edges = p_edges[0]["ok"]
         .as_array()
         .expect("solidEdges should return array");
     assert!(!edges.is_empty(), "fused solid should have edges");
     let edge0 = edges[0].as_u64().unwrap();
 
     // Batch 2: fillet first edge.
-    // Solids: 4=filleted
     let r2 = k.execute_batch(&format!(
-        r#"[{{"op": "fillet", "args": {{"solid": 3, "radius": 0.5, "edges": [{edge0}]}}}}]"#
+        r#"[{{"op": "fillet", "args": {{"solid": {fused}, "radius": 0.5, "edges": [{edge0}]}}}}]"#
     ));
     let p2 = parse_batch(&r2);
     if p2[0].get("error").is_some() {
         return; // Fillet failed — skip compound cut.
     }
+    let filleted = p2[0]["ok"].as_u64().unwrap();
 
-    // Batch 3: cylinder tools + compoundCut on filleted solid (handle 4).
-    // Solids: 5=cylinder, 6-8=cyl-copies, 9=compoundCut
-    let r3 = k.execute_batch(
-        r#"[
-        {"op": "makeCylinder", "args": {"radius": 1.0, "height": 20.0}},
-        {"op": "copyAndTransformSolid", "args": {"solid": 5, "matrix": [1,0,0,5, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}},
-        {"op": "copyAndTransformSolid", "args": {"solid": 5, "matrix": [1,0,0,3, 0,1,0,3, 0,0,1,-2, 0,0,0,1]}},
-        {"op": "copyAndTransformSolid", "args": {"solid": 5, "matrix": [1,0,0,7, 0,1,0,7, 0,0,1,-2, 0,0,0,1]}},
-        {"op": "compoundCut", "args": {"target": 4, "tools": [6, 7, 8]}}
-    ]"#,
-    );
+    // Batch 3: cylinder tools + compoundCut on the filleted solid.
+    let r3 =
+        k.execute_batch(r#"[{"op": "makeCylinder", "args": {"radius": 1.0, "height": 20.0}}]"#);
     let p3 = parse_batch(&r3);
-    assert_no_crash(&p3, 4, "full pipeline (fuse+fillet+compoundCut)");
+    assert_ok(&p3, 0);
+    let cyl = p3[0]["ok"].as_u64().unwrap();
+    let r4 = k.execute_batch(&format!(
+        r#"[
+        {{"op": "copyAndTransformSolid", "args": {{"solid": {cyl}, "matrix": [1,0,0,5, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}}}},
+        {{"op": "copyAndTransformSolid", "args": {{"solid": {cyl}, "matrix": [1,0,0,3, 0,1,0,3, 0,0,1,-2, 0,0,0,1]}}}},
+        {{"op": "copyAndTransformSolid", "args": {{"solid": {cyl}, "matrix": [1,0,0,7, 0,1,0,7, 0,0,1,-2, 0,0,0,1]}}}}
+    ]"#
+    ));
+    let p4 = parse_batch(&r4);
+    let tools: Vec<u64> = (0..3)
+        .map(|i| {
+            assert_ok(&p4, i);
+            p4[i]["ok"].as_u64().unwrap()
+        })
+        .collect();
+    let r5 = k.execute_batch(&format!(
+        r#"[{{"op": "compoundCut", "args": {{"target": {filleted}, "tools": {tools:?}}}}}]"#
+    ));
+    let p5 = parse_batch(&r5);
+    assert_no_crash(&p5, 0, "full pipeline (fuse+fillet+compoundCut)");
 }
 
 /// Compound cut with several tools, then measure.
@@ -540,19 +570,20 @@ fn fillet_box_bbox_unchanged() {
     assert!(!edges.is_empty(), "box should have edges");
     let edge0 = edges[0].as_u64().unwrap();
 
-    // Fillet first edge + get bbox.
+    // Fillet first edge, then get the result's bbox.
     let r2 = k.execute_batch(&format!(
-        r#"[
-        {{"op": "fillet", "args": {{"solid": 0, "radius": 1.0, "edges": [{edge0}]}}}},
-        {{"op": "boundingBox", "args": {{"solid": 1}}}}
-    ]"#
+        r#"[{{"op": "fillet", "args": {{"solid": 0, "radius": 1.0, "edges": [{edge0}]}}}}]"#
     ));
     let p2 = parse_batch(&r2);
 
     // Fillet might fail — only check bbox if it succeeded.
-    if p2[0].get("ok").is_some() {
-        assert_ok(&p2, 1);
-        let bbox_after = ok_bbox(&p2, 1);
+    if let Some(filleted) = p2[0]["ok"].as_u64() {
+        let r3 = k.execute_batch(&format!(
+            r#"[{{"op": "boundingBox", "args": {{"solid": {filleted}}}}}]"#
+        ));
+        let p3 = parse_batch(&r3);
+        assert_ok(&p3, 0);
+        let bbox_after = ok_bbox(&p3, 0);
         let tol = 0.01;
         for i in 0..6 {
             assert!(
@@ -613,7 +644,6 @@ fn compound_cut_bbox_accurate() {
 /// makeBox → fillet edge → fuse lip shape → measure volume.
 /// Exercises the NURBS/torus surface path that caused face explosion.
 ///
-/// Solids: 0=box, 1=filleted, 2=lip_box, 3=fused
 #[test]
 fn gridfinity_lip_fillet_fuse_volume() {
     let mut k = BrepKernel::new();
@@ -643,17 +673,25 @@ fn gridfinity_lip_fillet_fuse_volume() {
     let filleted_handle = p2[0]["ok"].as_u64().unwrap();
 
     // Create lip shape, fuse, then measure volume.
-    let r3 = k.execute_batch(&format!(
+    let r3 =
+        k.execute_batch(r#"[{"op": "makeBox", "args": {"width": 44, "height": 44, "depth": 2}}]"#);
+    let p3 = parse_batch(&r3);
+    assert_ok(&p3, 0);
+    let lip = p3[0]["ok"].as_u64().unwrap();
+    let r4 = k.execute_batch(&format!(
         r#"[
-        {{"op": "makeBox", "args": {{"width": 44, "height": 44, "depth": 2}}}},
-        {{"op": "transform", "args": {{"solid": 2, "matrix": [1,0,0,-1, 0,1,0,-1, 0,0,1,7, 0,0,0,1]}}}},
-        {{"op": "fuse", "args": {{"solidA": {filleted_handle}, "solidB": 2}}}},
-        {{"op": "volume", "args": {{"solid": 3}}}}
+        {{"op": "transform", "args": {{"solid": {lip}, "matrix": [1,0,0,-1, 0,1,0,-1, 0,0,1,7, 0,0,0,1]}}}},
+        {{"op": "fuse", "args": {{"solidA": {filleted_handle}, "solidB": {lip}}}}}
     ]"#,
     ));
-    let p3 = parse_batch(&r3);
-    assert_ok(&p3, 2);
-    let vol = ok_f64(&p3, 3);
+    let p4 = parse_batch(&r4);
+    assert_ok(&p4, 1);
+    let fused = p4[1]["ok"].as_u64().unwrap();
+    let r5 = k.execute_batch(&format!(
+        r#"[{{"op": "volume", "args": {{"solid": {fused}}}}}]"#
+    ));
+    let p5 = parse_batch(&r5);
+    let vol = ok_f64(&p5, 0);
     // Box 42×42×7 = 12348, lip 44×44×2 = 3872, adjacent at z=7.
     // Expected ≈ 16220 minus fillet material.
     assert!(
