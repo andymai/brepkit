@@ -1116,6 +1116,88 @@ fn shell_box_open_on_a_top_split_in_two() {
     );
 }
 
+/// The two-prism box open at both split ends, with one piece of its top
+/// stored turned round: its plane faces down and its wire runs clockwise
+/// from above, and it is marked reversed, so it still faces up. Each end is
+/// still one opening with one rim, round walls 0.1 thick.
+#[test]
+fn shell_box_open_at_both_ends_one_piece_stored_turned_round() {
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::face::Face;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    use crate::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+
+    let mut topo = Topology::new();
+    let mut prism = |corners: &[(f64, f64)]| {
+        let pts: Vec<Point3> = corners
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let base = brepkit_topology::builder::make_planar_face(&mut topo, &pts, 1e-7).unwrap();
+        crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap()
+    };
+    let corner = prism(&[(1.0, 0.0), (1.0, 0.4), (0.2, 0.0)]);
+    let rest = prism(&[(0.0, 0.0), (0.2, 0.0), (1.0, 0.4), (1.0, 1.0), (0.0, 1.0)]);
+    let keep_pieces = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let b = boolean_with_options(&mut topo, BooleanOp::Fuse, corner, rest, keep_pieces).unwrap();
+    let mut open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, -1.0)));
+    assert_eq!(open.len(), 4);
+
+    let (wire, normal, d, reversed) = {
+        let face = topo.face(open[0]).unwrap();
+        let FaceSurface::Plane { normal, d } = face.surface() else {
+            unreachable!("the top is planar")
+        };
+        (face.outer_wire(), *normal, *d, face.is_reversed())
+    };
+    let turned: Vec<OrientedEdge> = topo
+        .wire(wire)
+        .unwrap()
+        .edges()
+        .iter()
+        .rev()
+        .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+        .collect();
+    let turned = topo.add_wire(Wire::new(turned, true).unwrap());
+    let mut face = Face::new(
+        turned,
+        vec![],
+        FaceSurface::Plane {
+            normal: -normal,
+            d: -d,
+        },
+    );
+    face.set_reversed(!reversed);
+    *topo.face_mut(open[0]).unwrap() = face;
+
+    let result = shell(&mut topo, b, 0.1, &open).unwrap();
+    let ends = brepkit_topology::explorer::solid_faces(&topo, result)
+        .unwrap()
+        .into_iter()
+        .filter(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, .. }
+                if normal.z().abs() > 0.5)
+        })
+        .count();
+    assert_eq!(ends, 2);
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.8;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
+    );
+}
+
 /// The same two-prism box open at both ends, its top and its bottom each
 /// split in two: each end is one opening with one rim, and the box keeps
 /// four walls 0.1 thick round a cavity open through it.

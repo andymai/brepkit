@@ -773,7 +773,13 @@ fn planar_rims(
         let outward = open[members[0]].1;
         let mut sides: Vec<(Point3, Point3)> = Vec::new();
         for &g in &members {
-            let verts = &face_verts[open[g].0].1;
+            // Each face's strips run round it about the outward normal, so
+            // the strip between two of them comes from each the other way
+            // round, however their wires are stored.
+            let mut verts = face_verts[open[g].0].1.clone();
+            if crate::winding::newell_normal(&verts).dot(open[g].1) < 0.0 {
+                verts.reverse();
+            }
             let n = verts.len();
             for k in 0..n {
                 let (a, b) = (verts[k], verts[(k + 1) % n]);
