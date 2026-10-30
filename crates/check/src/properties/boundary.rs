@@ -651,7 +651,8 @@ pub(super) fn nurbs_face_by_boundary(
     };
     let gauss = gauss_legendre_points(8);
     let mut total = [0.0; 8];
-    for wire in &wires {
+    for (k, wire) in wires.iter().enumerate() {
+        let mut region = [0.0; 8];
         for edge in wire {
             let point = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
             // A point's `(u, v)` by Newton from a neighbour's where that lands
@@ -727,15 +728,13 @@ pub(super) fn nurbs_face_by_boundary(
                 pieces.extend(cuts.windows(2).map(|w| (w[0], w[1], start)));
             }
             for (ta, tb, start) in pieces {
-                let h = 1e-3 * (tb - ta);
                 let mut seed = start;
                 let mut along = |t: f64| -> Option<[f64; 8]> {
                     let c = on(t, Some(seed))?;
                     seed = c;
                     // `dv/dt` from the curve's velocity in the surface's
                     // tangent plane, by the first fundamental form.
-                    let velocity = (point(t + h) - point(t - h)) * (8.0 / (12.0 * h))
-                        - (point(t + 2.0 * h) - point(t - 2.0 * h)) * (1.0 / (12.0 * h));
+                    let velocity = edge_velocity(edge.curve, t, edge.start, edge.end);
                     let d = s.derivatives(c.0, c.1, 1);
                     let (su, sv) = (d[1][0], d[0][1]);
                     let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
@@ -753,15 +752,13 @@ pub(super) fn nurbs_face_by_boundary(
                 let Some(piece) = adaptive(&mut along, ta, tb, gauss, DEPTH, floor) else {
                     return Ok(None);
                 };
-                add(&mut total, &piece, 1.0);
+                add(&mut region, &piece, 1.0);
             }
         }
-    }
-    // Wires running clockwise in `(u, v)` hold the region on their right.
-    if total[0] < 0.0 {
-        for x in &mut total {
-            *x = -*x;
-        }
+        // Each wire counts the region it bounds, whichever way it runs in
+        // `(u, v)`; holes are taken away.
+        let side = region[0].signum() * if k == 0 { 1.0 } else { -1.0 };
+        add(&mut total, &region, side);
     }
     if total[0] <= 1e-12 {
         return Ok(None);
@@ -776,6 +773,17 @@ pub(super) fn nurbs_face_by_boundary(
         centroid_y: total[6],
         centroid_z: total[7],
     }))
+}
+
+/// `d/dt` of `curve` at `t` as `evaluate_with_endpoints` runs it from
+/// `start` to `end`.
+fn edge_velocity(curve: &EdgeCurve, t: f64, start: Point3, end: Point3) -> Vec3 {
+    match curve {
+        EdgeCurve::Line => end - start,
+        EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
+        EdgeCurve::Ellipse(e) => e.tangent(t),
+        EdgeCurve::NurbsCurve(n) => n.derivatives(t, 1)[1],
+    }
 }
 
 /// Whether a NURBS surface neither closes on itself along `u` or `v` nor
