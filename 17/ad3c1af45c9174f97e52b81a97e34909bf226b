@@ -1,0 +1,23 @@
+crates/operations/src/loft.rs
+  s_a2dc21dbec3f2b::t_821400c19e10f6 1795-1805
+crates/math/src/nurbs/projection.rs
+  s_a2dc21dbec3f2b::t_3fac9994d9e223 618-631,645-666
+  s_a2dc21dbec3f2b::t_eb94d8fbc3bfcb 613-617
+  s_a2dc21dbec3f2b::t_b9751d2d58c05b 667-668,1646-1674
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "17ad3c1af45c9174f97e52b81a97e34909bf226b",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
