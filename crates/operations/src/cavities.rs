@@ -370,23 +370,24 @@ pub fn detach_walked(
         edges.sort_unstable();
         Ok(edges)
     };
-    let source_faces = topo
-        .shell(topo.solid(source)?.outer_shell())?
-        .faces()
-        .to_vec();
-    let mut kept = std::collections::HashSet::new();
-    for &face in &source_faces {
-        kept.insert(edges_of(topo, face)?);
-    }
     let outer = topo.solid(result)?.outer_shell();
-    let mut made = Vec::new();
-    for &face in topo.shell(outer)?.faces() {
-        if !kept.contains(&edges_of(topo, face)?) && !on_source_face(topo, face, &source_faces)? {
-            made.push(face);
-        }
-    }
     let cavities = topo.solid(source)?.inner_shells().to_vec();
     if !cavities.is_empty() {
+        let source_faces = topo
+            .shell(topo.solid(source)?.outer_shell())?
+            .faces()
+            .to_vec();
+        let mut kept = std::collections::HashSet::new();
+        for &face in &source_faces {
+            kept.insert(edges_of(topo, face)?);
+        }
+        let mut made = Vec::new();
+        for &face in topo.shell(outer)?.faces() {
+            if !kept.contains(&edges_of(topo, face)?) && !on_source_face(topo, face, &source_faces)?
+            {
+                made.push(face);
+            }
+        }
         // The cavities are read against the outer shell alone: the walked
         // result still holds them, so their vertices lie on its boundary.
         let bare = topo.add_solid(brepkit_topology::solid::Solid::new(outer, Vec::new()));
