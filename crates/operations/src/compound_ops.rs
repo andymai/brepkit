@@ -313,7 +313,8 @@ pub(crate) fn merge_disjoint_solids(
 /// region is the outside of a piece. A solid whose outer shell is one
 /// connected set of faces comes back as is.
 ///
-/// The pieces share the solid's faces rather than copying them.
+/// The pieces share the solid's faces rather than copying them;
+/// an empty solid has none.
 ///
 /// # Errors
 ///
@@ -328,6 +329,9 @@ pub fn solid_pieces(
     use brepkit_topology::solid::Solid;
 
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    if faces.is_empty() {
+        return Ok(Vec::new());
+    }
     if crate::boolean::assembly::face_components(topo, solid).len() < 2 {
         return Ok(vec![solid]);
     }
@@ -353,7 +357,10 @@ pub fn solid_pieces(
     // `around[i]` lists the closed regions that region `i` lies inside. A
     // probe on the other region's boundary (the two touch there) decides
     // nothing, so the first probe off it does.
-    let options = ClassifyOptions::default();
+    let options = ClassifyOptions {
+        tolerance: brepkit_math::tolerance::Tolerance::new().linear,
+        ..ClassifyOptions::default()
+    };
     let mut around: Vec<Vec<usize>> = vec![Vec::new(); regions.len()];
     for (j, &container) in regions.iter().enumerate() {
         if !closed[j] {
@@ -666,5 +673,39 @@ mod tests {
         assert_eq!(solid_pieces(&mut topo, b).unwrap(), vec![b]);
         // A handle the topology does not hold is refused, not handed back.
         assert!(solid_pieces(&mut Topology::new(), b).is_err());
+        // The empty solid an intersection of disjoint solids leaves holds no
+        // piece.
+        let empty = topo.add_empty_solid();
+        assert!(solid_pieces(&mut topo, empty).unwrap().is_empty());
+    }
+
+    /// A box holding a cavity behind a wall 5e-7 thick, next to a second
+    /// box, all in one solid: the cavity is the first box's, by the kernel's
+    /// tolerance rather than a coarser one that reads its corners as on the
+    /// wall.
+    #[test]
+    fn a_cavity_behind_a_thin_wall_stays_with_its_piece() {
+        use brepkit_topology::shell::Shell;
+        use brepkit_topology::solid::Solid;
+
+        let mut topo = Topology::new();
+        let wall = 5e-7;
+        let outer = centred_box(&mut topo, 10.0, [0.0, 0.0, 0.0]);
+        let cavity = centred_box(&mut topo, 2.0f64.mul_add(-wall, 10.0), [0.0, 0.0, 0.0]);
+        let beside = centred_box(&mut topo, 4.0, [20.0, 0.0, 0.0]);
+        let mut faces = Vec::new();
+        for b in [outer, cavity, beside] {
+            faces.extend(brepkit_topology::explorer::solid_faces(&topo, b).unwrap());
+        }
+        let shell = topo.add_shell(Shell::new(faces).unwrap());
+        let all = topo.add_solid(Solid::new(shell, Vec::new()));
+
+        let pieces = solid_pieces(&mut topo, all).unwrap();
+        let mut shells: Vec<usize> = pieces
+            .iter()
+            .map(|&p| 1 + topo.solid(p).unwrap().inner_shells().len())
+            .collect();
+        shells.sort_unstable();
+        assert_eq!(shells, vec![1, 2]);
     }
 }
