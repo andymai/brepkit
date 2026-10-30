@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793346853794,
+  "lastUpdate": 1793349259626,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61613,6 +61613,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28667471,
             "range": "± 70509",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "af556b60f1aae91d0cabe263ca3ebb940de3d232",
+          "message": "fix(operations): leave a rim on each open face when shelling (#2211)\n\nShelling a solid with more than one open face now leaves a rim on each\nopen face's own plane, so a box open on its top and front, or a tube\nopen at both ends, holds the right volume.\n\nToday the planar shell builds one rim face from every free boundary loop\nleft after the walls are assembled. It takes its plane from the first\nopen face and makes the largest loop its outline and all the others\nholes. With two open faces that meet, the loops run across both planes:\na 50 x 40 x 30 box shelled by 3 with its top and front open comes back\nas 9 faces holding 12324, where 60000 less the 44 x 37 x 27 cavity is\n16044. With two opposite open faces, one rim holds the other end's loops\nas holes: a unit cube open at top and bottom, shelled by 0.1, holds 0.24\nwhere the tube holds 0.36.\n\n## Change\n\n- `planar_rims` builds each planar open face's rim on its own plane,\nbefore the walls are assembled. Along each of the face's edges the rim\nholds the strip between the edge and its inner copy; an edge shared with\nanother open face has none, its inner copy lying on it. The strips'\nshared sides cancel, leaving an annulus where every neighbour stays\nclosed and a U where one is open too. Where the remaining strips fall\napart, as on a cube's top when its front and back are open as well, each\npiece becomes a face of its own, holding only the holes inside it.\n- Open faces that share an edge in one plane are one opening, and their\nstrips are taken together, each face's running round it about its\noutward normal however its wire is stored. Where two of the faces meet,\ntheir strips' sides come from each face the other way round, and cancel.\n- An open face that is not planar keeps the rim built from the assembled\nwalls' free edges.\n\nCloses #2173.\n\n## Tests\n\n- `shell_box_open_on_two_adjacent_faces`: that box gives 10 faces, is\nvalid, and holds 16044.\n- `shell_two_open_faces_volume` checked only that the tube's volume lay\nbetween 0.1 and 1. It now expects 10 faces, a valid solid and 0.36.\n- `shell_cube_open_on_three_faces`: a unit cube open on its top, front\nand back, shelled by 0.1, gives 10 faces, is valid, and holds 1 − 0.8 ·\n0.9 = 0.28. Making one top strip a hole in the other gives 9 faces.\n- `shell_box_open_on_a_top_split_in_two`: a unit box built from two\nprisms, split across its top from (0.2, 0) to (1, 0.4), opened on both\npieces of its top and shelled by 0.1, gives one rim and 17 faces, is\nvalid, and holds 1 − 0.8 · 0.8 · 0.9. Building a rim per piece of the\ntop gives 18 faces.\n- `shell_box_open_at_both_split_ends`: that box open on both pieces of\nits top and both of its bottom gives one rim at each end, is valid, and\nholds 1 − 0.8 · 0.8. Falling back to a single rim for split openings\ngives one rim across both ends.\n- `shell_box_open_at_both_ends_one_piece_stored_turned_round`: the same,\nwith one piece of the top stored with its plane facing down, its wire\nrunning clockwise from above, and marked reversed. It still gives one\nrim at each end, is valid, and holds 1 − 0.8 · 0.8. Taking that piece's\nstrips in its stored order gives 13 faces holding 0.24.\n- Each of these results also meshes with no open or non-manifold edge,\nand the ray cast puts points in its walls inside and points in its\ncavity and openings outside.\n- Without the per-face rims, the first two fail.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3774 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T01:31:39-07:00",
+          "tree_id": "86ae53401053d94c78bb1668ed64dd4908760282",
+          "url": "https://github.com/andymai/brepkit/commit/af556b60f1aae91d0cabe263ca3ebb940de3d232"
+        },
+        "date": 1793349252063,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 645028,
+            "range": "± 12321",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 698109,
+            "range": "± 8460",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8141,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 383383,
+            "range": "± 2273",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18078216,
+            "range": "± 563119",
             "unit": "ns/iter"
           }
         ]
