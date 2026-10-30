@@ -237,8 +237,7 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_edge(h))
             .collect::<Result<_, _>>()?;
-        let result =
-            brepkit_operations::chamfer::chamfer(self.topo_mut(), solid_id, &edge_ids, distance)?;
+        let result = crate::helpers::try_chamfer(self.topo_mut(), solid_id, &edge_ids, distance)?;
         Ok(solid_id_to_u32(result))
     }
 
