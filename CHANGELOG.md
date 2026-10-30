@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.1](https://github.com/andymai/brepkit/compare/v4.6.0...v4.6.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **operations:** weld a face two solids share after round-off in fuse_all ([#2214](https://github.com/andymai/brepkit/issues/2214)) ([1b97ed0](https://github.com/andymai/brepkit/commit/1b97ed0548f45492b9c822f4ca53103e4ed2bf96))
+
 ## [4.6.0](https://github.com/andymai/brepkit/compare/v4.5.11...v4.6.0) (2026-10-30)
 
 
