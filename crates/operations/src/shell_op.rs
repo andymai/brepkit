@@ -706,11 +706,10 @@ fn planar_rims(
             (p.z() * scale).round() as i64,
         )
     };
-    // Open faces sharing an edge in one plane are one opening: the strip
-    // along the edge between them has no inner copy on it, and the rim built
-    // from the walls' free edges, all in that plane, is the one to keep.
-    let mut sides: HashMap<[i64; 6], Vec3> = HashMap::new();
-    for (fid, verts) in face_verts {
+    // Each planar open face, by its place in `face_verts`, with its outward
+    // normal.
+    let mut open = Vec::new();
+    for (i, (fid, _)) in face_verts.iter().enumerate() {
         if !open_set.contains(&fid.index()) {
             continue;
         }
@@ -718,52 +717,83 @@ fn planar_rims(
         let FaceSurface::Plane { normal, .. } = face.surface() else {
             return Ok(None);
         };
+        open.push((
+            i,
+            if face.is_reversed() {
+                -*normal
+            } else {
+                *normal
+            },
+        ));
+    }
+    // Open faces sharing an edge in one plane are one opening, whose strips
+    // are taken together: the strip along an edge between two of them comes
+    // from each face the other way round, and the two cancel.
+    let mut group: Vec<usize> = (0..open.len()).collect();
+    let find = |group: &mut Vec<usize>, mut x: usize| {
+        while group[x] != x {
+            group[x] = group[group[x]];
+            x = group[x];
+        }
+        x
+    };
+    let mut first_on: HashMap<[i64; 6], usize> = HashMap::new();
+    for (g, &(i, outward)) in open.iter().enumerate() {
+        let verts = &face_verts[i].1;
         let n = verts.len();
         for k in 0..n {
             let (a, b) = (key(verts[k]), key(verts[(k + 1) % n]));
             let (a, b) = if a < b { (a, b) } else { (b, a) };
             let side = [a.0, a.1, a.2, b.0, b.1, b.2];
-            if let Some(other) = sides.insert(side, *normal)
-                && other.cross(*normal).length() <= 1e-9
-            {
-                return Ok(None);
+            match first_on.get(&side) {
+                Some(&h)
+                    if open[h].1.cross(outward).length() <= 1e-9
+                        && open[h].1.dot(outward) > 0.0 =>
+                {
+                    let (rg, rh) = (find(&mut group, g), find(&mut group, h));
+                    group[rg] = rh;
+                }
+                Some(_) => {}
+                None => {
+                    first_on.insert(side, g);
+                }
             }
         }
     }
+    let mut openings: HashMap<usize, Vec<usize>> = HashMap::new();
+    for g in 0..open.len() {
+        let root = find(&mut group, g);
+        openings.entry(root).or_default().push(g);
+    }
+    let mut openings: Vec<Vec<usize>> = openings.into_values().collect();
+    openings.sort_unstable();
+
     let mut rims = Vec::new();
-    for (fid, verts) in face_verts {
-        if !open_set.contains(&fid.index()) {
-            continue;
-        }
-        let face = topo.face(*fid)?;
-        let FaceSurface::Plane { normal, .. } = face.surface() else {
-            return Ok(None);
-        };
-        let outward = if face.is_reversed() {
-            -*normal
-        } else {
-            *normal
-        };
-        let n = verts.len();
-        let mut sides: Vec<(Point3, Point3)> = Vec::with_capacity(4 * n);
-        for k in 0..n {
-            let (a, b) = (verts[k], verts[(k + 1) % n]);
-            let (ia, ib) = (inner_of(a), inner_of(b));
-            let width = crate::winding::newell_normal(&[a, b, ib, ia]).length();
-            if width <= tol * (b - a).length() {
-                continue;
-            }
-            for (p, q) in [(a, b), (b, ib), (ib, ia), (ia, a)] {
-                if key(p) == key(q) {
+    for members in openings {
+        let outward = open[members[0]].1;
+        let mut sides: Vec<(Point3, Point3)> = Vec::new();
+        for &g in &members {
+            let verts = &face_verts[open[g].0].1;
+            let n = verts.len();
+            for k in 0..n {
+                let (a, b) = (verts[k], verts[(k + 1) % n]);
+                let (ia, ib) = (inner_of(a), inner_of(b));
+                let width = crate::winding::newell_normal(&[a, b, ib, ia]).length();
+                if width <= tol * (b - a).length() {
                     continue;
                 }
-                if let Some(i) = sides
-                    .iter()
-                    .position(|&(s, e)| key(s) == key(q) && key(e) == key(p))
-                {
-                    sides.swap_remove(i);
-                } else {
-                    sides.push((p, q));
+                for (p, q) in [(a, b), (b, ib), (ib, ia), (ia, a)] {
+                    if key(p) == key(q) {
+                        continue;
+                    }
+                    if let Some(i) = sides
+                        .iter()
+                        .position(|&(s, e)| key(s) == key(q) && key(e) == key(p))
+                    {
+                        sides.swap_remove(i);
+                    } else {
+                        sides.push((p, q));
+                    }
                 }
             }
         }
