@@ -1,0 +1,21 @@
+crates/algo/src/builder/face_splitter/mod.rs
+  s_a2dc21dbec3f2b::t_9944826e84b582 8953-8956,8960-8973
+  s_a2dc21dbec3f2b::t_a3a9b0d185a779 8661,8717-8718,8726-8729,8957-8959,8974
+  s_a2dc21dbec3f2b::t_88cbf6208d8e4b 8975-8976
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4a1d376981efcab04d631d1d01c4a9f6943a4e6e",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
