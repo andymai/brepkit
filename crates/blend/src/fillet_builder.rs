@@ -3083,10 +3083,12 @@ fn compute_stripe_for_spine(
     };
 
     let blend_surface = approximate_blend_surface(&walk_result.sections)?;
+    // The band's sides are its own boundary rows: a polyline through the
+    // sections' contact points leaves the band wherever they do not lie on a
+    // line, since the band takes them as control points.
+    let contact1 = band_side(&blend_surface, 0)?;
+    let contact2 = band_side(&blend_surface, blend_surface.control_points().len() - 1)?;
     let blend_face_surface = brepkit_topology::face::FaceSurface::Nurbs(blend_surface);
-
-    let contact1 = sections_to_contact_curve(&walk_result.sections, |s| s.p1)?;
-    let contact2 = sections_to_contact_curve(&walk_result.sections, |s| s.p2)?;
 
     let pcurve1 = build_pcurve_from_contact(ps1, &contact1, face_u_period(&oriented_surf1))?;
     let pcurve2 = build_pcurve_from_contact(ps2, &contact2, face_u_period(&oriented_surf2))?;
@@ -3265,28 +3267,26 @@ fn mirror_law(law: &RadiusLaw) -> RadiusLaw {
     }
 }
 
-/// Build a degree-1 NURBS curve from section contact points.
-fn sections_to_contact_curve(
-    sections: &[crate::section::CircSection],
-    pick: impl Fn(&crate::section::CircSection) -> brepkit_math::vec::Point3,
+/// The side of a blend band at its `row`-th row of control points, along `v`:
+/// the band's own boundary curve there.
+fn band_side(
+    band: &brepkit_math::nurbs::surface::NurbsSurface,
+    row: usize,
 ) -> Result<brepkit_math::nurbs::curve::NurbsCurve, BlendError> {
-    let pts: Vec<brepkit_math::vec::Point3> = sections.iter().map(&pick).collect();
-    if pts.len() < 2 {
-        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
-    }
-    let n = pts.len();
-    let degree = 1.min(n - 1);
-    let mut knots = vec![0.0; degree + 1];
-    if n > 2 {
-        for i in 1..n - 1 {
-            #[allow(clippy::cast_precision_loss)]
-            knots.push(i as f64 / (n - 1) as f64);
-        }
-    }
-    knots.extend(vec![1.0; degree + 1]);
-    let weights = vec![1.0; n];
-    let curve = brepkit_math::nurbs::curve::NurbsCurve::new(degree, knots, pts, weights)?;
-    Ok(curve)
+    let points = band
+        .control_points()
+        .get(row)
+        .ok_or(BlendError::Math(brepkit_math::MathError::EmptyInput))?;
+    let weights = band
+        .weights()
+        .get(row)
+        .ok_or(BlendError::Math(brepkit_math::MathError::EmptyInput))?;
+    Ok(brepkit_math::nurbs::curve::NurbsCurve::new(
+        band.degree_v(),
+        band.knots_v().to_vec(),
+        points.clone(),
+        weights.clone(),
+    )?)
 }
 
 fn face_u_period(surface: &FaceSurface) -> Option<f64> {
