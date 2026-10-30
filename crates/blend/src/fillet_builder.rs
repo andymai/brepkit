@@ -2982,6 +2982,46 @@ fn compute_stripe_for_contour(
     )
 }
 
+/// The direction from the middle of `edge` into `face`, across it in the
+/// face's tangent plane: the left of the edge as the face's wire runs along
+/// it. `None` when no wire of the face runs along the edge or the direction
+/// degenerates.
+fn into_face_from_edge(
+    topo: &Topology,
+    face: FaceId,
+    edge: brepkit_topology::edge::EdgeId,
+) -> Result<Option<Vec3>, BlendError> {
+    let f = topo.face(face)?;
+    let mut forward = None;
+    for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+        if let Some(oe) = topo.wire(wid)?.edges().iter().find(|oe| oe.edge() == edge) {
+            forward = Some(oe.is_forward());
+            break;
+        }
+    }
+    let Some(forward) = forward else {
+        return Ok(None);
+    };
+    let e = topo.edge(edge)?;
+    let (ps, pe) = (
+        topo.vertex(e.start())?.point(),
+        topo.vertex(e.end())?.point(),
+    );
+    let (t0, t1) = e.curve().domain_with_endpoints(ps, pe);
+    let t = f64::midpoint(t0, t1);
+    let middle = e.curve().evaluate_with_endpoints(t, ps, pe);
+    // The curve's derivative runs backward along an edge whose domain runs down.
+    let mut along = e.curve().tangent_with_endpoints(t, ps, pe);
+    if (t1 < t0) == forward {
+        along = -along;
+    }
+    // A wire winds about its surface's normal, and a reversed face flips
+    // both, so the face lies on the left about the surface normal either way.
+    let surface = f.surface();
+    let (u, v) = surface.project_point(middle).unwrap_or((0.0, 0.0));
+    Ok(surface.normal(u, v).cross(along).normalize().ok())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compute_stripe_for_spine(
     topo: &Topology,
@@ -3038,16 +3078,31 @@ fn compute_stripe_for_spine(
     // we negate the normal. For analytic/NURBS surfaces the ParametricSurface
     // impl already returns the geometric normal; the walker uses the sign
     // convention from the face orientation.
-    let oriented_surf1 = if face1_reversed {
-        orient_plane_surface(&surf1)
-    } else {
-        surf1
+    // The walker rolls its ball on the side each normal points to, so a plane
+    // faces the ball: into the material at a convex edge, where the other
+    // face reaches into that side of its plane, and out of it at a concave
+    // one.
+    let p0 = spine.evaluate(topo, 0.0)?;
+    let toward_ball = |surf: brepkit_topology::face::FaceSurface,
+                       reversed: bool,
+                       other: FaceId|
+     -> Result<brepkit_topology::face::FaceSurface, BlendError> {
+        let brepkit_topology::face::FaceSurface::Plane { normal, .. } = &surf else {
+            return Ok(surf);
+        };
+        let outward = if reversed { -*normal } else { *normal };
+        let convex = match into_face_from_edge(topo, other, spine.edges()[0])? {
+            Some(into_other) => into_other.dot(-outward) > 0.0,
+            None => analytic::material_side_witness(topo, other, -outward, p0)? > 1e-9,
+        };
+        Ok(if reversed == convex {
+            surf
+        } else {
+            orient_plane_surface(&surf)
+        })
     };
-    let oriented_surf2 = if face2_reversed {
-        orient_plane_surface(&surf2)
-    } else {
-        surf2
-    };
+    let oriented_surf1 = toward_ball(surf1, face1_reversed, face2)?;
+    let oriented_surf2 = toward_ball(surf2, face2_reversed, face1)?;
     let mut adapter1 = None;
     let mut adapter2 = None;
 
@@ -3071,10 +3126,12 @@ fn compute_stripe_for_spine(
     };
 
     let blend_surface = approximate_blend_surface(&walk_result.sections)?;
+    // The band's sides are its own boundary rows: a polyline through the
+    // sections' contact points leaves the band wherever they do not lie on a
+    // line, since the band takes them as control points.
+    let contact1 = band_side(&blend_surface, 0)?;
+    let contact2 = band_side(&blend_surface, blend_surface.control_points().len() - 1)?;
     let blend_face_surface = brepkit_topology::face::FaceSurface::Nurbs(blend_surface);
-
-    let contact1 = sections_to_contact_curve(&walk_result.sections, |s| s.p1)?;
-    let contact2 = sections_to_contact_curve(&walk_result.sections, |s| s.p2)?;
 
     let pcurve1 = build_pcurve_from_contact(ps1, &contact1, face_u_period(&oriented_surf1))?;
     let pcurve2 = build_pcurve_from_contact(ps2, &contact2, face_u_period(&oriented_surf2))?;
@@ -3253,28 +3310,26 @@ fn mirror_law(law: &RadiusLaw) -> RadiusLaw {
     }
 }
 
-/// Build a degree-1 NURBS curve from section contact points.
-fn sections_to_contact_curve(
-    sections: &[crate::section::CircSection],
-    pick: impl Fn(&crate::section::CircSection) -> brepkit_math::vec::Point3,
+/// The side of a blend band at its `row`-th row of control points, along `v`:
+/// the band's own boundary curve there.
+fn band_side(
+    band: &brepkit_math::nurbs::surface::NurbsSurface,
+    row: usize,
 ) -> Result<brepkit_math::nurbs::curve::NurbsCurve, BlendError> {
-    let pts: Vec<brepkit_math::vec::Point3> = sections.iter().map(&pick).collect();
-    if pts.len() < 2 {
-        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
-    }
-    let n = pts.len();
-    let degree = 1.min(n - 1);
-    let mut knots = vec![0.0; degree + 1];
-    if n > 2 {
-        for i in 1..n - 1 {
-            #[allow(clippy::cast_precision_loss)]
-            knots.push(i as f64 / (n - 1) as f64);
-        }
-    }
-    knots.extend(vec![1.0; degree + 1]);
-    let weights = vec![1.0; n];
-    let curve = brepkit_math::nurbs::curve::NurbsCurve::new(degree, knots, pts, weights)?;
-    Ok(curve)
+    let points = band
+        .control_points()
+        .get(row)
+        .ok_or(BlendError::Math(brepkit_math::MathError::EmptyInput))?;
+    let weights = band
+        .weights()
+        .get(row)
+        .ok_or(BlendError::Math(brepkit_math::MathError::EmptyInput))?;
+    Ok(brepkit_math::nurbs::curve::NurbsCurve::new(
+        band.degree_v(),
+        band.knots_v().to_vec(),
+        points.clone(),
+        weights.clone(),
+    )?)
 }
 
 fn face_u_period(surface: &FaceSurface) -> Option<f64> {
@@ -4011,6 +4066,82 @@ mod tests {
         let builder = FilletBuilder::new(&mut topo, solid);
         let result = builder.build();
         assert!(result.is_err(), "empty edge set should produce an error");
+    }
+
+    /// The plate z = 0 from -20 to 20, with the foot of a boss over
+    /// [-5, 5]² as its hole, and the boss's wall x = 5 up to 10. The plate
+    /// reaches farther behind the wall than in front of it, but the round
+    /// along the foot rolls on the exposed plate in front: its contacts lie
+    /// at x = 5 + r on the plate and z = r on the wall.
+    #[test]
+    fn a_variable_round_at_a_boss_foot_rolls_on_the_exposed_plate() {
+        let mut topo = Topology::new();
+        let mut vertex =
+            |x: f64, y: f64, z: f64| topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7));
+        let plate_corners = [(-20.0, -20.0), (20.0, -20.0), (20.0, 20.0), (-20.0, 20.0)]
+            .map(|(x, y)| vertex(x, y, 0.0));
+        let foot =
+            [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)].map(|(x, y)| vertex(x, y, 0.0));
+        let (top_front, top_back) = (vertex(5.0, 5.0, 10.0), vertex(5.0, -5.0, 10.0));
+        let mut loop_of = |vs: &[VertexId]| {
+            (0..vs.len())
+                .map(|i| {
+                    let e =
+                        topo.add_edge(Edge::new(vs[i], vs[(i + 1) % vs.len()], EdgeCurve::Line));
+                    OrientedEdge::new(e, true)
+                })
+                .collect::<Vec<_>>()
+        };
+        let plate_outer = loop_of(&plate_corners);
+        let foot_loop = loop_of(&foot);
+        let foot_edge = foot_loop[1].edge();
+        let wall_rest = loop_of(&[foot[2], top_front, top_back, foot[1]]);
+        // The hole runs clockwise about +z, so the foot backward; the wall
+        // runs it forward, up the wall on its left.
+        let hole: Vec<_> = foot_loop
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), false))
+            .collect();
+        let wall: Vec<_> = std::iter::once(OrientedEdge::new(foot_edge, true))
+            .chain(wall_rest[..3].iter().copied())
+            .collect();
+        let outer = topo.add_wire(Wire::new(plate_outer, true).unwrap());
+        let hole = topo.add_wire(Wire::new(hole, true).unwrap());
+        let wall = topo.add_wire(Wire::new(wall, true).unwrap());
+        let plate = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let wall = topo.add_face(Face::new(
+            wall,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(1.0, 0.0, 0.0),
+                d: 5.0,
+            },
+        ));
+        let law = RadiusLaw::Linear {
+            start: 1.0,
+            end: 2.0,
+        };
+        for (face1, face2) in [(wall, plate), (plate, wall)] {
+            let spine = Spine::from_single_edge(&topo, foot_edge).unwrap();
+            let result = compute_stripe_for_spine(&topo, face1, face2, spine, &law).unwrap();
+            for contact in [&result.stripe.contact1, &result.stripe.contact2] {
+                let (t0, t1) = contact.domain();
+                for k in 0..=8 {
+                    let p = contact.evaluate((t1 - t0).mul_add(f64::from(k) / 8.0, t0));
+                    let on_plate = p.z().abs() < 1e-6 && (5.9..7.1).contains(&p.x());
+                    let on_wall = (p.x() - 5.0).abs() < 1e-6 && (0.9..2.1).contains(&p.z());
+                    assert!(on_plate || on_wall, "a contact at {p:?}");
+                }
+            }
+        }
     }
 
     #[test]

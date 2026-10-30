@@ -37,3 +37,13 @@ impl FilletRadiusLaw {
         }
     }
 }
+
+impl From<&FilletRadiusLaw> for brepkit_blend::radius_law::RadiusLaw {
+    fn from(law: &FilletRadiusLaw) -> Self {
+        match *law {
+            FilletRadiusLaw::Constant(r) => Self::Constant(r),
+            FilletRadiusLaw::Linear { start, end } => Self::Linear { start, end },
+            FilletRadiusLaw::SCurve { start, end } => Self::SCurve { start, end },
+        }
+    }
+}

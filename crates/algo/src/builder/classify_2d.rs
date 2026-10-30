@@ -13,30 +13,36 @@ use brepkit_math::vec::{Point2, Vec2};
 ///
 /// `loop_pts` must be the vertices of a closed polygon (>=3 points).
 pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
-    sample_interior_point_where(loop_pts, |_| true)
+    sample_interior_point_where(loop_pts, |_| true).unwrap_or_else(|| polygon_centroid(loop_pts))
 }
 
-/// [`sample_interior_point`], taking only a point `inside` also accepts.
+/// The mean of `loop_pts`, the origin for none.
+fn polygon_centroid(loop_pts: &[Point2]) -> Point2 {
+    if loop_pts.is_empty() {
+        return Point2::new(0.0, 0.0);
+    }
+    let n = loop_pts.len() as f64;
+    Point2::new(
+        loop_pts.iter().map(|p| p.x()).sum::<f64>() / n,
+        loop_pts.iter().map(|p| p.y()).sum::<f64>() / n,
+    )
+}
+
+/// [`sample_interior_point`], taking only a point `inside` also accepts, or
+/// `None` when no candidate passes it.
 ///
 /// A polygon sampled from curved edges runs on each arc's chords, so a point
 /// between an arc and its chords passes the polygon's own tests while lying
 /// outside the region; `inside` reads the region on its curves.
-pub fn sample_interior_point_where(loop_pts: &[Point2], inside: impl Fn(Point2) -> bool) -> Point2 {
+pub fn sample_interior_point_where(
+    loop_pts: &[Point2],
+    inside: impl Fn(Point2) -> bool,
+) -> Option<Point2> {
+    let centroid = polygon_centroid(loop_pts);
     // Graceful fallback for degenerate inputs instead of panicking.
-    if loop_pts.is_empty() {
-        return Point2::new(0.0, 0.0);
-    }
     if loop_pts.len() < 3 {
-        let n = loop_pts.len() as f64;
-        let cx = loop_pts.iter().map(|p| p.x()).sum::<f64>() / n;
-        let cy = loop_pts.iter().map(|p| p.y()).sum::<f64>() / n;
-        return Point2::new(cx, cy);
+        return inside(centroid).then_some(centroid);
     }
-
-    let n = loop_pts.len() as f64;
-    let cx = loop_pts.iter().map(|p| p.x()).sum::<f64>() / n;
-    let cy = loop_pts.iter().map(|p| p.y()).sum::<f64>() / n;
-    let centroid = Point2::new(cx, cy);
 
     // If centroid is inside, use it. A centroid that lands on the
     // boundary itself (e.g. the reflex corner of an L-shaped loop) passes
@@ -45,7 +51,7 @@ pub fn sample_interior_point_where(loop_pts: &[Point2], inside: impl Fn(Point2) 
         && distance_to_polygon_boundary(centroid, loop_pts) > boundary_eps(loop_pts)
         && inside(centroid)
     {
-        return centroid;
+        return Some(centroid);
     }
 
     // Edge-midpoint fallback for non-convex loops. For every boundary edge,
@@ -130,11 +136,7 @@ pub fn sample_interior_point_where(loop_pts: &[Point2], inside: impl Fn(Point2) 
             best = Some((cand, t_hit));
         }
     }
-    if let Some((pt, _)) = best {
-        return pt;
-    }
-    // All edge midpoints failed -- return centroid as last resort.
-    centroid
+    best.map(|(pt, _)| pt)
 }
 
 /// Parameter `t >= 0` at which the ray `origin + t*dir` first crosses segment

@@ -18,7 +18,7 @@ use crate::handles::{edge_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to
 use brepkit_geometry::extrema::point_to_nurbs_surface;
 
 use crate::helpers::{
-    classify_to_string, create_apex_face, panic_message, parse_points, try_fillet,
+    classify_to_string, loft_with_points, panic_message, parse_points, try_fillet,
 };
 use crate::kernel::BrepKernel;
 
@@ -140,44 +140,31 @@ impl BrepKernel {
         let opts: serde_json::Value =
             serde_json::from_str(options).unwrap_or(serde_json::Value::Null);
 
-        let mut face_ids: Vec<brepkit_topology::face::FaceId> = faces
+        let face_ids: Vec<brepkit_topology::face::FaceId> = faces
             .iter()
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
-
-        // If startPoint is given, create a tiny degenerate triangle face at that point
-        // and prepend it to the profiles.
-        if let Some(sp) = opts.get("startPoint").and_then(|v| v.as_array())
-            && sp.len() >= 3
-        {
-            let x = sp[0].as_f64().unwrap_or(0.0);
-            let y = sp[1].as_f64().unwrap_or(0.0);
-            let z = sp[2].as_f64().unwrap_or(0.0);
-            let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
-            face_ids.insert(0, apex_face);
-        }
-
-        // If endPoint is given, create a tiny degenerate triangle face and append.
-        if let Some(ep) = opts.get("endPoint").and_then(|v| v.as_array())
-            && ep.len() >= 3
-        {
-            let x = ep[0].as_f64().unwrap_or(0.0);
-            let y = ep[1].as_f64().unwrap_or(0.0);
-            let z = ep[2].as_f64().unwrap_or(0.0);
-            let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
-            face_ids.push(apex_face);
-        }
-
+        let point = |key: &str| -> Option<Point3> {
+            let p = opts.get(key)?.as_array()?;
+            (p.len() >= 3).then(|| {
+                Point3::new(
+                    p[0].as_f64().unwrap_or(0.0),
+                    p[1].as_f64().unwrap_or(0.0),
+                    p[2].as_f64().unwrap_or(0.0),
+                )
+            })
+        };
         let ruled = opts
             .get("ruled")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true);
-
-        let solid_id = if ruled {
-            brepkit_operations::loft::loft(self.topo_mut(), &face_ids)?
-        } else {
-            brepkit_operations::loft::loft_smooth(self.topo_mut(), &face_ids)?
-        };
+        let solid_id = loft_with_points(
+            self.topo_mut(),
+            &face_ids,
+            point("startPoint"),
+            point("endPoint"),
+            ruled,
+        )?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -1006,8 +993,7 @@ impl BrepKernel {
             };
             edge_laws.push((edge_id, law));
         }
-        let result =
-            brepkit_operations::fillet::fillet_variable(self.topo_mut(), solid_id, &edge_laws)?;
+        let result = crate::helpers::try_fillet_variable(self.topo_mut(), solid_id, &edge_laws)?;
         Ok(solid_id_to_u32(result))
     }
 

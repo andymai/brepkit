@@ -332,6 +332,7 @@ mod tests {
             classification,
             rank,
             interior_point: None,
+            interior_unclear: false,
         }
     }
 

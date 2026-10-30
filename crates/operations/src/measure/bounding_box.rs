@@ -155,6 +155,52 @@ pub fn face_set_bounding_box(
     Ok(aabb)
 }
 
+/// `bounds` grown to hold every NURBS face in `faces` whole: a NURBS face's
+/// extent above is sampled and can miss its surface rising between the
+/// samples, while its control points enclose it. For tests that must not
+/// miss an overlap, such as a boolean's disjointness shortcuts.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails, or if a NURBS face has a
+/// weight that is not positive: its surface can then leave its control
+/// points' hull, so they bound nothing.
+pub fn hold_nurbs_faces(
+    topo: &Topology,
+    faces: &[FaceId],
+    mut bounds: Aabb3,
+) -> Result<Aabb3, crate::OperationsError> {
+    for &fid in faces {
+        if let FaceSurface::Nurbs(nurbs) = topo.face(fid)?.surface() {
+            if nurbs
+                .weights()
+                .iter()
+                .flatten()
+                .any(|&w| !w.is_finite() || w <= 0.0)
+            {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "a NURBS face with a weight that is not positive has no bound".into(),
+                });
+            }
+            bounds = bounds.union(nurbs.aabb());
+        }
+    }
+    Ok(bounds)
+}
+
+/// [`solid_bounding_box`] grown to hold the solid's NURBS faces whole.
+///
+/// # Errors
+///
+/// Returns an error if the solid has no vertices or a topology lookup fails.
+pub fn solid_outer_bounds(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<Aabb3, crate::OperationsError> {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    hold_nurbs_faces(topo, &faces, solid_bounding_box(topo, solid)?)
+}
+
 /// Expand an AABB to include a point.
 fn aabb_include(aabb: &mut Aabb3, p: Point3) {
     *aabb = aabb.union(Aabb3 { min: p, max: p });
