@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793385770170,
+  "lastUpdate": 1793385941040,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62423,6 +62423,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28555586,
             "range": "± 62071",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cf81d39d038a8e78cea9c65e270d327286539288",
+          "message": "fix(wasm): refuse to make a solid from a shell that does not close (#2242)\n\n`solidFromShell` now refuses a shell that does not close, instead of\nwrapping it in a solid whose volume means nothing.\n\nToday it wraps any shell in a solid. In #2196, three faces of a 10 x 20\nx 30 box sewn into an open shell make a solid that measures 2000.\n\n## Change\n\n- `solidFromShell` makes the solid only when every edge of the shell\nbounds exactly two of its faces, the closure check `validate_solid`\nalready runs on each of a solid's shells. Otherwise it returns an\ninvalid-input error naming how many edges are free or shared by more\nthan two faces.\n- A face that uses an edge twice, as a cylinder's wall does its seam,\ncounts it twice, so a cylinder's shell still makes a solid.\n\nRefs #2196: measuring a shell's area and meshing it are the brepjs\nadapter's part of the issue, in andymai/brepjs#2571.\n\n## Tests\n\n- `only_a_closed_shell_makes_a_solid`: a box's shell and a cylinder's\nmake solids; three of the box's faces in a shell are refused. Without\nthe check the open shell makes a solid and the test fails.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3828 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n`solidFromShell` now refuses a shell that does not close instead of\nwrapping it in a solid whose volume is meaningless.\n\nPreviously, any shell was turned into a solid, so three faces of a 10 x\n20 x 30 box sewn into an open shell produced a solid measuring 2000. Now\nthe solid is created only when every edge of the shell bounds exactly\ntwo of its faces; otherwise it returns an invalid-input error naming how\nmany edges are free or shared by more than two faces. A face that uses\nan edge twice, as a cylinder's wall does its seam, counts it twice, so a\ncylinder's shell still makes a solid.\n\n- Adds a closure check reusing existing validation so behavior on closed\nshells is unchanged.\n- Adds a test covering a box's shell, a cylinder's shell, and an open\nshell made from three box faces.\n\n<sup>Written for commit e347a78071f68bc75a83ad7140cbbfb7c8f92705.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2242?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2242?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2242&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T11:39:32-07:00",
+          "tree_id": "fd07a5abb9c80566436b75a136ec0bff156f27fd",
+          "url": "https://github.com/andymai/brepkit/commit/cf81d39d038a8e78cea9c65e270d327286539288"
+        },
+        "date": 1793385929551,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 915495,
+            "range": "± 13523",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 949707,
+            "range": "± 3020",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11179,
+            "range": "± 12",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 531809,
+            "range": "± 4858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22980483,
+            "range": "± 87171",
             "unit": "ns/iter"
           }
         ]
