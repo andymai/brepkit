@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.6.0](https://github.com/andymai/brepkit/compare/v4.5.11...v4.6.0) (2026-10-30)
+
+
+### Features
+
+* **operations:** split a solid holding separate pieces into one solid per piece ([#2203](https://github.com/andymai/brepkit/issues/2203)) ([f3302b5](https://github.com/andymai/brepkit/commit/f3302b536e7be5a72beec7d207915910bea56496))
+
+
+### Bug Fixes
+
+* **wasm:** give a reversed face's normal its outward direction ([#2207](https://github.com/andymai/brepkit/issues/2207)) ([5f212ce](https://github.com/andymai/brepkit/commit/5f212ce333a6cd311e0b0d3072963bd0a4194e2d))
+* **wasm:** project a point onto an analytic face in closed form ([#2206](https://github.com/andymai/brepkit/issues/2206)) ([1ddd6a1](https://github.com/andymai/brepkit/commit/1ddd6a113a7c916b56bb672306b9b46cd9a90fe5))
+
 ## [4.5.11](https://github.com/andymai/brepkit/compare/v4.5.10...v4.5.11) (2026-10-30)
 
 
