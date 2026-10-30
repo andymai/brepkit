@@ -35,8 +35,9 @@ use crate::extrude::extrude;
 /// # Errors
 ///
 /// Returns an error if `thickness` is zero, the offset surface collapses,
-/// the face lies on a curved NURBS surface, or an edge of a cone or torus
-/// face is not carried to a line or circle.
+/// the face or its offset reaches a cone's or torus's axis, the face lies on
+/// a curved NURBS surface, or an edge of a cone or torus face is not carried
+/// to a line or circle.
 pub fn thicken(
     topo: &mut Topology,
     face: FaceId,
@@ -376,36 +377,57 @@ fn offset_surface(
     })
 }
 
-/// Refuses a thickness at which a torus face, or its image `distance` along
-/// the normals, reaches the torus's axis: there every ring angle carries to
-/// one point, so the far side pinches or runs through itself.
+/// Refuses a thickness at which a cone or torus face, or its image
+/// `distance` along the normals, reaches the surface's axis. On a torus
+/// every ring angle there carries to one point, so the far side pinches or
+/// runs through itself; on a cone the image crosses to the other nappe,
+/// off the offset cone and the sides that should hold it.
 fn keep_off_the_axis(
     topo: &Topology,
     face: FaceId,
     surface: &FaceSurface,
     distance: f64,
 ) -> Result<(), crate::OperationsError> {
-    let FaceSurface::Torus(t) = surface else {
-        return Ok(());
+    let (near, far) = match surface {
+        FaceSurface::Torus(t) => {
+            // A point at tube angle v lies R + r cos v from the axis and its
+            // image R + (r + distance) cos v, both rising with cos v. The face
+            // comes nearest its inner equator on its boundary unless it holds
+            // that equator; one no edge reaches lies wholly in the face or out
+            // of it, so one point of it tells which.
+            let inner_equator = t.evaluate(0.0, std::f64::consts::PI);
+            let cos_v = if brepkit_check::classify::face_contains(topo, face, inner_equator)? {
+                -1.0
+            } else {
+                least_on_boundary(topo, face, |p| t.project_point(p).1.cos())?
+            };
+            let (big, small) = (t.major_radius(), t.minor_radius());
+            (
+                small.mul_add(cos_v, big),
+                (small + distance).mul_add(cos_v, big),
+            )
+        }
+        FaceSurface::Cone(c) => {
+            // A point v along a generator from the apex lies v cos a from the
+            // axis and its image v cos a + distance sin a, both rising with
+            // v. Only the edges, which the rails and sides run from, can
+            // reach the axis: a face round the apex grows to one round the
+            // offset cone's apex.
+            let v = least_on_boundary(topo, face, |p| c.project_point(p).1)?;
+            let (sin, cos) = c.half_angle().sin_cos();
+            (v * cos, v.mul_add(cos, distance * sin))
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Nurbs(_) => return Ok(()),
     };
-    // A point at tube angle v lies R + r cos v from the axis and its image
-    // R + (r + distance) cos v, both rising with cos v. The face comes
-    // nearest its inner equator on its boundary unless it holds that
-    // equator; one no edge reaches lies wholly in the face or out of it, so
-    // one point of it tells which.
-    let inner_equator = t.evaluate(0.0, std::f64::consts::PI);
-    let cos_v = if brepkit_check::classify::face_contains(topo, face, inner_equator)? {
-        -1.0
-    } else {
-        least_on_boundary(topo, face, |p| t.project_point(p).1.cos())?
-    };
-    let (big, small) = (t.major_radius(), t.minor_radius());
-    let nearest = small
-        .mul_add(cos_v, big)
-        .min((small + distance).mul_add(cos_v, big));
-    if nearest <= Tolerance::new().linear {
+    if near.min(far) <= Tolerance::new().linear {
         return Err(crate::OperationsError::InvalidInput {
-            reason: "thicken: the torus wall reaches its axis at this thickness".into(),
+            reason: format!(
+                "thicken: the {} wall reaches its axis at this thickness",
+                surface.type_tag()
+            ),
         });
     }
     Ok(())
@@ -785,6 +807,48 @@ mod tests {
                 "{thickness}: {volume} of {exact}"
             );
         }
+    }
+
+    /// The frustum's side leans 12/13 of a unit off the axis per unit along
+    /// its normal, so thickened by t < 0 its rim of radius 5 is carried to
+    /// 5 + 12t/13. At -5 that is 5/13, a wall whose 13 by 5 cross-section
+    /// turns about the axis with its centre at 7.5 − 30/13: 2π 337.5. At
+    /// -65/12 the rim reaches the axis and at -6 it crosses to -7/13. A
+    /// cylinder or sphere of radius 10 thinned by 10 is refused as well.
+    #[test]
+    fn thicken_refuses_a_cone_wall_crossing_its_axis() {
+        let curved = |topo: &mut Topology, solid: SolidId| {
+            brepkit_topology::explorer::solid_faces(topo, solid)
+                .unwrap()
+                .into_iter()
+                .find(|&f| !topo.face(f).unwrap().surface().is_planar())
+                .unwrap()
+        };
+        let frustum = |topo: &mut Topology| {
+            let cone = crate::primitives::make_cone(topo, 10.0, 5.0, 12.0).unwrap();
+            curved(topo, cone)
+        };
+        let mut topo = Topology::new();
+        let side = frustum(&mut topo);
+        let wall = thicken(&mut topo, side, -5.0).unwrap();
+        let report = crate::validate::validate_solid(&topo, wall).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+        let exact = 2.0 * std::f64::consts::PI * 337.5;
+        assert!((volume - exact).abs() < 1e-6 * exact, "{volume} of {exact}");
+        for thickness in [-65.0 / 12.0, -6.0] {
+            let mut topo = Topology::new();
+            let side = frustum(&mut topo);
+            assert!(thicken(&mut topo, side, thickness).is_err(), "{thickness}");
+        }
+
+        let mut topo = Topology::new();
+        let cylinder = crate::primitives::make_cylinder(&mut topo, 10.0, 20.0).unwrap();
+        let side = curved(&mut topo, cylinder);
+        assert!(thicken(&mut topo, side, -10.0).is_err());
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let half = curved(&mut topo, ball);
+        assert!(thicken(&mut topo, half, -10.0).is_err());
     }
 
     /// The torus face of a circle of radius 3 revolved a quarter turn at
