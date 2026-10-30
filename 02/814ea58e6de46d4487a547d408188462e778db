@@ -1,0 +1,27 @@
+crates/operations/src/thicken.rs
+  s_a2dc21dbec3f2b::t_d6ae22099b8c66 1,3-7,9-15,17-22,26-27,29-33,37-39,45,52-86,88-109,111,113-114,116-165,167-199,201-290,363-375,377-387,389-392,396-403,405-408,410-529,540-574
+  s_a2dc21dbec3f2b::t_ab920f142b582b 115,293-362
+  s_a2dc21dbec3f2b::t_b63a12fc4b01f8 166,404
+  s_a2dc21dbec3f2b::t_8167b8c0cd5b19 409,614-646
+  s_a2dc21dbec3f2b::t_ae99e8607f3f78 530-539
+  s_a2dc21dbec3f2b::t_dd137c3d81df61 647-784
+  s_a2dc21dbec3f2b::t_b9888f44657e4a 575,785
+crates/operations/src/loft.rs
+  s_a2dc21dbec3f2b::t_d6ae22099b8c66 461
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "02814ea58e6de46d4487a547d408188462e778db",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
