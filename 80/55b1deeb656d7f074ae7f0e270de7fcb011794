@@ -1,0 +1,35 @@
+crates/math/src/nurbs/intersection/ray.rs
+  s_a2dc21dbec3f2b::t_f1f8be4bce925d 1-17,20,31-241,270-284,286-299,301-320,411-412
+  s_a2dc21dbec3f2b::t_ed2e764ba66984 285,321-387,393-410
+  s_a2dc21dbec3f2b::t_a634c9dd05c705 18-19,21-24,242-269,300
+  s_a2dc21dbec3f2b::t_2aa1965cae6ad6 25-30
+  s_a2dc21dbec3f2b::t_2e9d17ba639eb4 388-392
+crates/math/src/nurbs/intersection/mod.rs
+  s_a2dc21dbec3f2b::t_ed2e764ba66984 28,39
+crates/algo/src/classifier/ray_cast.rs
+  s_a2dc21dbec3f2b::t_2e9d17ba639eb4 30-37,795-798,1021,1520-1526,1748-1850,2455-2457,2461-2485
+  s_a2dc21dbec3f2b::t_53151c98fcdf09 3934-3986
+  s_a2dc21dbec3f2b::t_cb1f561c288a76 2486
+crates/operations/src/boolean/assembly.rs
+  s_a2dc21dbec3f2b::t_e45a5600cc15b4 773-777,785-788,793
+  s_a2dc21dbec3f2b::t_463887178572f9 789-791
+crates/operations/src/boolean/tests.rs
+  s_a2dc21dbec3f2b::t_9b73cf18944ecc 9135-9203,9205-9210
+  s_a2dc21dbec3f2b::t_28dd5454f0d89f 9204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8055b1deeb656d7f074ae7f0e270de7fcb011794",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
