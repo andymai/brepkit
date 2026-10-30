@@ -1034,3 +1034,31 @@ fn shell_box_open_on_two_adjacent_faces() {
         "volume {vol}, expected {expected}"
     );
 }
+
+/// A unit cube open on its top, front and back keeps a strip of its top along
+/// each side wall: two rims on the top's plane, ten faces in all, holding the
+/// cube less a cavity open through all three.
+#[test]
+fn shell_cube_open_on_three_faces() {
+    let mut topo = Topology::new();
+    let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let mut open = find_faces_by_normal(&topo, b, Vec3::new(0.0, 0.0, 1.0));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, -1.0, 0.0)));
+    open.extend(find_faces_by_normal(&topo, b, Vec3::new(0.0, 1.0, 0.0)));
+    assert_eq!(open.len(), 3);
+    let result = shell(&mut topo, b, 0.1, &open).unwrap();
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(faces.len(), 10);
+    assert!(
+        crate::validate::validate_solid(&topo, result)
+            .unwrap()
+            .is_valid()
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 1.0 - 0.8 * 0.9;
+    assert!(
+        (vol - expected).abs() < 1e-6 * expected,
+        "volume {vol}, expected {expected}"
+    );
+}

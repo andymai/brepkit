@@ -755,27 +755,50 @@ fn planar_rims(
             }
             loops.push(lp);
         }
-        let Some(outer) = (0..loops.len()).max_by(|&i, &j| {
-            let area = |k: usize| crate::winding::newell_normal(&loops[k]).length();
-            area(i).total_cmp(&area(j))
-        }) else {
+        // With three neighbours open around it, an open face's strips fall
+        // into separate pieces, each a face of its own. A loop winding as the
+        // largest does is a piece's outline; the others are holes, each in
+        // the smallest outline around it.
+        let area = |lp: &[Point3]| crate::winding::newell_normal(lp).dot(outward);
+        let Some(sense) = loops
+            .iter()
+            .map(|lp| area(lp))
+            .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+        else {
             continue;
         };
-        let mut outer_loop = loops.swap_remove(outer);
-        if crate::winding::newell_normal(&outer_loop).dot(outward) < 0.0 {
-            outer_loop.reverse();
+        let (outlines, holes): (Vec<_>, Vec<_>) =
+            loops.into_iter().partition(|lp| area(lp) * sense > 0.0);
+        let mut holes_of: Vec<Vec<Vec<Point3>>> = vec![Vec::new(); outlines.len()];
+        for hole in holes {
+            let Some(k) = (0..outlines.len())
+                .filter(|&k| crate::distance::point_in_polygon_3d(&hole[0], &outlines[k], &outward))
+                .min_by(|&a, &b| {
+                    area(&outlines[a])
+                        .abs()
+                        .total_cmp(&area(&outlines[b]).abs())
+                })
+            else {
+                return Ok(None);
+            };
+            holes_of[k].push(hole);
         }
-        for hole in &mut loops {
-            if crate::winding::newell_normal(hole).dot(outward) > 0.0 {
-                hole.reverse();
+        for (mut outline, mut holes) in outlines.into_iter().zip(holes_of) {
+            if area(&outline) < 0.0 {
+                outline.reverse();
             }
+            for hole in &mut holes {
+                if area(hole) > 0.0 {
+                    hole.reverse();
+                }
+            }
+            rims.push(FaceSpec::Planar {
+                d: dot_normal_point(outward, outline[0]),
+                vertices: outline,
+                normal: outward,
+                inner_wires: holes,
+            });
         }
-        rims.push(FaceSpec::Planar {
-            d: dot_normal_point(outward, outer_loop[0]),
-            vertices: outer_loop,
-            normal: outward,
-            inner_wires: loops,
-        });
     }
     Ok(Some(rims))
 }
