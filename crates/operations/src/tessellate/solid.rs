@@ -448,16 +448,20 @@ pub(super) fn tessellate_solid_core(
         }
     }
 
-    // A NURBS face whose cells twist or bow is meshed on a grid fine enough
-    // for them, but its straight edges keep only their ends, so the
-    // triangles joining such an edge to the grid reach across the face. Each
-    // straight edge of such a face is sampled as finely as its grid. Edge
-    // samples are shared, so the face across the edge takes them too.
+    // A bilinear patch twisted between skew lines is meshed on a grid fine
+    // enough for its twist, but its straight edges keep only their ends, so
+    // the triangles joining such an edge to the grid reach across the face.
+    // Each straight edge of such a face is sampled as finely as its grid.
+    // Edge samples are shared, so the face across the edge takes them too.
+    // Other patches mesh their straight edges on rows of their own.
     for &face_id in &all_faces {
         let face_data = topo.face(face_id)?;
         let FaceSurface::Nurbs(nurbs) = face_data.surface() else {
             continue;
         };
+        if nurbs.degree_u() != 1 || nurbs.degree_v() != 1 {
+            continue;
+        }
         let at = |u: f64, v: f64| nurbs.evaluate(u, v);
         let (n_u, n_v) = super::nurbs::untwisted_grid(
             &at,

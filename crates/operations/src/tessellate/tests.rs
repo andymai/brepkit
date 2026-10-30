@@ -3892,3 +3892,37 @@ fn a_loft_with_twisted_sides_meshes_its_twist() {
         );
     }
 }
+
+/// A flat bilinear trapezoid with corners (0, 0), (1000, 0), (0, 1000) and
+/// (10, 1000) in z = 0, whose parameters run unevenly across it, needs no
+/// refinement for its twist: two triangles hold it exactly. A twisted
+/// patch of the same corners lifted 10 at (10, 1000) does.
+#[test]
+fn a_flat_trapezoid_needs_no_grid_for_its_twist() {
+    let patch = |lift: f64| {
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots,
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1000.0, 0.0)],
+                vec![
+                    Point3::new(1000.0, 0.0, 0.0),
+                    Point3::new(10.0, 1000.0, lift),
+                ],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap()
+    };
+    let grid = |lift: f64| {
+        let surface = patch(lift);
+        let at = |u: f64, v: f64| surface.evaluate(u, v);
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.01, 1024)
+    };
+    assert_eq!(grid(0.0), (1, 1));
+    let (n_u, n_v) = grid(10.0);
+    assert!(n_u > 1 && n_v > 1, "{n_u} x {n_v}");
+}

@@ -899,11 +899,13 @@ pub(super) fn iso_divisions_over(
 }
 
 /// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each sampled
-/// cell's middle lies within half the deflection of both its diagonals. A
-/// twisted cell (a bilinear patch between skew lines) has straight sides
-/// and iso-lines, which no chord test sees, yet its middle stands a quarter
-/// of its twist, |P00 + P11 - P01 - P10| / 4, off the diagonal a mesh splits
-/// it along; doubling both directions quarters that.
+/// cell's middle lies within half the deflection of the triangles it splits
+/// into along either diagonal. A twisted cell (a bilinear patch between skew
+/// lines) has straight sides and iso-lines, which no chord test sees, yet its
+/// middle stands up to a quarter of its twist, |P00 + P11 - P01 - P10| / 4,
+/// off those triangles; doubling both directions quarters that. A flat cell
+/// whose parameters run unevenly across it has its middle in the triangles'
+/// plane, however far from their diagonal, and needs nothing.
 pub(super) fn untwisted_grid(
     at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
@@ -930,17 +932,13 @@ pub(super) fn untwisted_grid(
                     corner(1.0, 1.0),
                 );
                 let middle = corner(0.5, 0.5);
-                let half = |a: Point3, b: Point3| {
-                    Point3::new(
-                        0.5 * (a.x() + b.x()),
-                        0.5 * (a.y() + b.y()),
-                        0.5 * (a.z() + b.z()),
-                    )
+                // The middle's distance to the two triangles the cell splits
+                // into, along either diagonal: a mesh may take either.
+                let split = |a: Point3, b: Point3, c: Point3, d: Point3| {
+                    point_triangle_distance(middle, a, b, c)
+                        .min(point_triangle_distance(middle, a, c, d))
                 };
-                (middle - half(p00, p11))
-                    .length()
-                    .max((middle - half(p10, p01)).length())
-                    <= 0.5 * deflection
+                split(p00, p10, p11, p01).max(split(p10, p11, p01, p00)) <= 0.5 * deflection
             })
         })
     };
@@ -949,6 +947,36 @@ pub(super) fn untwisted_grid(
         n_v = (n_v * 2).min(max_divisions);
     }
     (n_u, n_v)
+}
+
+/// The distance from `p` to the triangle `a`, `b`, `c`; to its longest side
+/// when the triangle has no area.
+fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
+    let segment = |a: Point3, b: Point3| {
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let t = if len2 > 0.0 {
+            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + ab * t)).length()
+    };
+    let edges = segment(a, b).min(segment(b, c)).min(segment(c, a));
+    let normal = (b - a).cross(c - a);
+    let area2 = normal.length();
+    let scale = (b - a).length().max((c - a).length()).max((c - b).length());
+    if area2 <= 1e-12 * scale * scale {
+        return edges;
+    }
+    let n = normal * (1.0 / area2);
+    let off = (p - a).dot(n);
+    let q = p - n * off;
+    // Inside when `q` lies on the same side of every edge as the triangle.
+    let inside = [(a, b), (b, c), (c, a)]
+        .iter()
+        .all(|&(x, y)| (y - x).cross(q - x).dot(n) >= 0.0);
+    if inside { off.abs() } else { edges }
 }
 
 /// Tessellate a NURBS surface via curvature-adaptive subdivision.
