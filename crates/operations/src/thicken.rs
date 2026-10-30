@@ -706,7 +706,11 @@ fn side_surface(
             reason: "thicken: no ruled surface between an edge and its image".into(),
         });
     };
-    let outward = ruled.normal(0.5, 0.5).is_ok_and(|n| n.dot(out) > 0.0);
+    // The ruled surface spans each curve's whole knot span, which can run
+    // past the edge, so its normal is read where the edge's middle lies.
+    let at_mid =
+        brepkit_math::nurbs::projection::project_point_to_surface(&ruled, mid, tol.linear)?;
+    let outward = ruled.normal(at_mid.u, at_mid.v)?.dot(out) > 0.0;
     Ok(SideSurface::Ruled(FaceSurface::Nurbs(ruled), outward))
 }
 
@@ -1045,6 +1049,82 @@ mod tests {
         let volume = crate::measure::solid_volume(&topo, shell, 1e-3).unwrap();
         let exact = 2.0 / 3.0 * std::f64::consts::PI * (1331.0 - 1000.0);
         assert!((volume - exact).abs() < 1e-2 * exact, "{volume} of {exact}");
+    }
+
+    /// A patch of a ball of radius 10 about (3, -4, 5) between polar angles
+    /// π/6 and π/3 and azimuths 0 and π/2, its upper edge a piece of a NURBS
+    /// arc from azimuth -0.05π to 1.9π. The arc's parametric middle, at
+    /// 0.925π, lies far round from the edge, where the side's ruled surface
+    /// faces another way. Thickened by 1 or -1 the patch holds a third of
+    /// r₁³ − r₀³ per unit of its solid angle, π/2 (cos π/6 − cos π/3).
+    #[test]
+    fn thicken_a_patch_whose_edge_is_a_piece_of_a_longer_curve() {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_3, FRAC_PI_6, PI};
+        let centre = Point3::new(3.0, -4.0, 5.0);
+        let at = |phi: f64, theta: f64| {
+            centre
+                + Vec3::new(
+                    10.0 * phi.sin() * theta.cos(),
+                    10.0 * phi.sin() * theta.sin(),
+                    10.0 * phi.cos(),
+                )
+        };
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let latitude =
+            |phi: f64| Circle3D::new(centre + z * (10.0 * phi.cos()), z, 10.0 * phi.sin()).unwrap();
+        let meridian = |normal: Vec3| Circle3D::new(centre, normal, 10.0).unwrap();
+        for (thickness, inner, outer) in [(1.0, 10.0, 11.0), (-1.0, 9.0, 10.0)] {
+            let mut topo = Topology::new();
+            let [v0, v1, v2, v3] = [
+                at(FRAC_PI_3, 0.0),
+                at(FRAC_PI_3, FRAC_PI_2),
+                at(FRAC_PI_6, FRAC_PI_2),
+                at(FRAC_PI_6, 0.0),
+            ]
+            .map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+            let upper = latitude(FRAC_PI_6);
+            let from = upper.project(at(FRAC_PI_6, -0.05 * PI));
+            let longer =
+                brepkit_geometry::convert::circle_to_nurbs(&upper, from, from + 1.95 * PI).unwrap();
+            let runs = [
+                (
+                    Edge::new(v0, v1, EdgeCurve::Circle(latitude(FRAC_PI_3))),
+                    true,
+                ),
+                (
+                    Edge::new(
+                        v1,
+                        v2,
+                        EdgeCurve::Circle(meridian(Vec3::new(1.0, 0.0, 0.0))),
+                    ),
+                    true,
+                ),
+                (Edge::new(v3, v2, EdgeCurve::NurbsCurve(longer)), false),
+                (
+                    Edge::new(
+                        v3,
+                        v0,
+                        EdgeCurve::Circle(meridian(Vec3::new(0.0, 1.0, 0.0))),
+                    ),
+                    true,
+                ),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(topo.add_edge(e), forward));
+            let w = topo.add_wire(Wire::new(runs.to_vec(), true).unwrap());
+            let ball = brepkit_math::surfaces::SphericalSurface::new(centre, 10.0).unwrap();
+            let face = topo.add_face(Face::new(w, vec![], FaceSurface::Sphere(ball)));
+            let wall = thicken(&mut topo, face, thickness).unwrap();
+            let report = crate::validate::validate_solid(&topo, wall).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+            let exact = (outer * outer * outer - inner * inner * inner) / 3.0
+                * FRAC_PI_2
+                * (FRAC_PI_6.cos() - FRAC_PI_3.cos());
+            assert!(
+                (volume - exact).abs() < 1e-4 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+        }
     }
 
     /// A face on a twisted NURBS patch is refused rather than extruded
