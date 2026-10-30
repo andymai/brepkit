@@ -1,0 +1,26 @@
+crates/operations/src/thicken.rs
+  s_a2dc21dbec3f2b::t_4b53912d46fde5 782-785,787-810,816-819
+  s_a2dc21dbec3f2b::t_287252fc43bf8f 811-815
+  s_a2dc21dbec3f2b::t_63236008941310 1483-1526
+  s_a2dc21dbec3f2b::t_b0a705afcaac27 786,874,924,1027,1091,1149,1170,1222,1255,1326
+crates/geometry/src/convert/recognize_surface.rs
+  s_a2dc21dbec3f2b::t_6b7c668263f092 1106-1111
+  s_a2dc21dbec3f2b::t_96e1e815096a7d 128-133,135-143,145-153
+  s_a2dc21dbec3f2b::t_023f74ffad064e 1097-1105,1112-1133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d55f5b1b1cb3220b4565399cb85d4f2721e5dace",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
