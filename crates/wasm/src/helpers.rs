@@ -231,6 +231,49 @@ pub fn try_fillet(
     })
 }
 
+/// Fillet edges each along its radius law, as [`try_fillet`] fillets them at
+/// one radius: the walking engine's band is kept when it is a changed,
+/// closed, outward-oriented solid, and the planar rebuild, which closes each
+/// band's ends with straight chords, is the fallback.
+///
+/// # Errors
+///
+/// Returns an error if neither engine fillets the edges.
+pub fn try_fillet_variable(
+    topo: &mut brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_laws: &[(
+        brepkit_topology::edge::EdgeId,
+        brepkit_operations::fillet::FilletRadiusLaw,
+    )],
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    let widest = edge_laws
+        .iter()
+        .flat_map(|(_, law)| [0.0, 0.5, 1.0].map(|t| law.evaluate(t)))
+        .fold(0.0_f64, f64::max);
+    let orientation_deflection = (widest * 0.1).clamp(0.01, 0.1);
+    let laws = edge_laws
+        .iter()
+        .map(|(edge, law)| (*edge, law.into()))
+        .collect();
+    if let Ok(r) = brepkit_operations::blend_ops::fillet_v2_variable(topo, solid_id, laws)
+        && r.solid != solid_id
+        && !r.is_partial
+        && r.failed.is_empty()
+        && r.succeeded.len() == edge_laws.len()
+        && blend_result_holds(topo, r.solid, orientation_deflection)
+    {
+        return Ok(r.solid);
+    }
+    let s = brepkit_operations::fillet::fillet_variable(topo, solid_id, edge_laws)?;
+    if s != solid_id && blend_result_holds(topo, s, orientation_deflection) {
+        return Ok(s);
+    }
+    Err(brepkit_operations::OperationsError::InvalidInput {
+        reason: "no fillet engine produced a changed, closed, outward-oriented result".to_owned(),
+    })
+}
+
 /// Chamfer edges at an equal `distance` on both faces, as [`try_fillet`]
 /// fillets them: the walking engine's chamfer is kept when it is a changed,
 /// closed, outward-oriented solid, and the planar chamfer, which rebuilds
@@ -640,7 +683,7 @@ mod fillet_tests {
     use brepkit_topology::edge::EdgeId;
     use brepkit_topology::solid::SolidId;
 
-    use super::{try_chamfer, try_fillet};
+    use super::{try_chamfer, try_fillet, try_fillet_variable};
 
     fn solid_edge_ids(topo: &Topology, solid_id: SolidId) -> Vec<EdgeId> {
         let solid = topo.solid(solid_id).expect("solid");
@@ -873,6 +916,71 @@ mod fillet_tests {
             })
             .unwrap();
         (hollow, edge)
+    }
+
+    /// A box's top front edge, 40 long, filleted along a radius running 2
+    /// to 5, and along a constant 2 given as a law: each is a round inside
+    /// the box, its band ending in arcs on the end faces, and the solid
+    /// loses `(1 − π/4) ∫ r²` along the edge.
+    #[test]
+    fn try_fillet_variable_rounds_an_edge() {
+        use brepkit_operations::fillet::FilletRadiusLaw;
+        use std::f64::consts::FRAC_PI_4;
+
+        for (law, removed) in [
+            (
+                FilletRadiusLaw::Linear {
+                    start: 2.0,
+                    end: 5.0,
+                },
+                (1.0 - FRAC_PI_4) * 40.0 * (4.0 + 10.0 + 25.0) / 3.0,
+            ),
+            (
+                FilletRadiusLaw::Constant(2.0),
+                (1.0 - FRAC_PI_4) * 4.0 * 40.0,
+            ),
+        ] {
+            let mut topo = Topology::new();
+            let block =
+                brepkit_operations::primitives::make_box(&mut topo, 40.0, 30.0, 20.0).unwrap();
+            let edge = solid_edge_ids(&topo, block)
+                .into_iter()
+                .find(|&e| {
+                    let edge = topo.edge(e).unwrap();
+                    [edge.start(), edge.end()].iter().all(|&v| {
+                        let p = topo.vertex(v).unwrap().point();
+                        p.y().abs() < 1e-9 && (p.z() - 20.0).abs() < 1e-9
+                    })
+                })
+                .unwrap();
+            let rounded = try_fillet_variable(&mut topo, block, &[(edge, law.clone())]).unwrap();
+            assert!(
+                brepkit_operations::validate::validate_solid(&topo, rounded)
+                    .unwrap()
+                    .is_valid()
+            );
+            let arcs = solid_edge_ids(&topo, rounded)
+                .into_iter()
+                .filter(|&e| {
+                    matches!(
+                        topo.edge(e).unwrap().curve(),
+                        brepkit_topology::edge::EdgeCurve::Circle(_)
+                    )
+                })
+                .count();
+            assert_eq!(arcs, 2, "{law:?}");
+            let bounds = brepkit_operations::measure::solid_bounding_box(&topo, rounded).unwrap();
+            assert!(
+                bounds.min.y() > -1e-9 && bounds.max.z() < 20.0 + 1e-9,
+                "{bounds:?}"
+            );
+            let volume = brepkit_operations::measure::solid_volume(&topo, rounded, 0.01).unwrap();
+            let expected = 24000.0 - removed;
+            assert!(
+                (volume - expected).abs() < 1e-2 * removed,
+                "{law:?}: volume {volume}, expected {expected}"
+            );
+        }
     }
 
     /// A chamfer of a hollow block keeps a cavity of its own: moving the

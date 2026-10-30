@@ -899,26 +899,7 @@ pub fn fillet_variable(
     if solid_has_free_edges(topo, solid_id)? {
         let v2_laws: Vec<(EdgeId, brepkit_blend::radius_law::RadiusLaw)> = edge_laws
             .iter()
-            .map(|(eid, law)| {
-                let mapped = match law {
-                    FilletRadiusLaw::Constant(r) => {
-                        brepkit_blend::radius_law::RadiusLaw::Constant(*r)
-                    }
-                    FilletRadiusLaw::Linear { start, end } => {
-                        brepkit_blend::radius_law::RadiusLaw::Linear {
-                            start: *start,
-                            end: *end,
-                        }
-                    }
-                    FilletRadiusLaw::SCurve { start, end } => {
-                        brepkit_blend::radius_law::RadiusLaw::SCurve {
-                            start: *start,
-                            end: *end,
-                        }
-                    }
-                };
-                (*eid, mapped)
-            })
+            .map(|(eid, law)| (*eid, law.into()))
             .collect();
         match crate::blend_ops::fillet_v2_variable(topo, solid, v2_laws) {
             Ok(v2) => {
