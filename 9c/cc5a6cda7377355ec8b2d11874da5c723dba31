@@ -1,0 +1,22 @@
+crates/operations/tests/threaded_rod.rs
+  s_a2dc21dbec3f2b::t_ca7b24251b5f31 59-62,64,69,81,92,96-111
+  s_a2dc21dbec3f2b::t_b9efaf651b5962 112
+crates/algo/src/pave_filler/phase_ff.rs
+  s_a2dc21dbec3f2b::t_e043a5a9026e86 4700-4753
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ccc5a6cda7377355ec8b2d11874da5c723dba31",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
