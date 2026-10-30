@@ -2488,3 +2488,95 @@ fn a_single_edge_follows_a_bend_inside_narrow_knot_spans() {
         );
     }
 }
+
+/// A disc of radius 0.1 at the origin facing +z, and the quadratic NURBS
+/// from the origin through (5, 5, 0) to (10, 0, 0).
+fn disc_and_bow(topo: &mut Topology) -> (brepkit_topology::face::FaceId, NurbsCurve) {
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    let rim = brepkit_topology::builder::make_circle_edge(
+        topo,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        0.1,
+        1e-7,
+    )
+    .unwrap();
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+    let disc = brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap();
+    let bow = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(5.0, 5.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+        ],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    (disc, bow)
+}
+
+/// An edge on the open quadratic whose ends meet at the origin runs
+/// nowhere along it: alone it is refused, rather than read as the whole
+/// curve; leading a chain into a line 8 up z, it adds nothing, and the
+/// chain sweeps the disc into the tube along the line alone.
+#[test]
+fn an_edge_running_nowhere_on_an_open_curve_adds_no_path() {
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+    let mut topo = Topology::new();
+    let (disc, bow) = disc_and_bow(&mut topo);
+    let [a, b, c] = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(0.0, 0.0, 8.0),
+    ]
+    .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+    let nowhere = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(bow)));
+    let up = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+    assert!(sweep_along_edges(&mut topo, disc, &[nowhere]).is_err());
+    let tube = sweep_along_edges(&mut topo, disc, &[nowhere, up]).unwrap();
+    let volume = crate::measure::solid_volume(&topo, tube, 1e-4).unwrap();
+    let exact = std::f64::consts::PI * 0.01 * 8.0;
+    assert!((volume - exact).abs() < 1e-3 * exact, "{volume} of {exact}");
+}
+
+/// A quadratic NURBS with two knots 1e-14 apart, and a line on from its
+/// end: the knots' span gives eight samples at one point, which once made
+/// the path's fit singular. The chain sweeps the disc into a valid solid.
+#[test]
+fn a_chain_through_crowded_knots_sweeps() {
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+    let mut topo = Topology::new();
+    let (disc, _) = disc_and_bow(&mut topo);
+    let crowded = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.25, 0.25 + 1e-14, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 3.0, 0.0),
+            Point3::new(4.0, 4.0, 0.0),
+            Point3::new(6.0, 3.0, 0.0),
+            Point3::new(8.0, 0.0, 0.0),
+        ],
+        vec![1.0; 5],
+    )
+    .unwrap();
+    let end = crowded.evaluate(1.0);
+    let [a, b, c] = [
+        Point3::new(0.0, 0.0, 0.0),
+        end,
+        end + Vec3::new(0.0, 0.0, 5.0),
+    ]
+    .map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+    let first = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(crowded)));
+    let up = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+    let solid = sweep_along_edges(&mut topo, disc, &[first, up]).unwrap();
+    assert!(
+        crate::validate::validate_solid(&topo, solid)
+            .unwrap()
+            .is_valid()
+    );
+}

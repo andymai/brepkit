@@ -2567,6 +2567,11 @@ fn curve_between(
     };
     let mut span = rescale(curve, curve.knots().iter().map(|&k| unit(k)).collect())?;
     let (lo, hi) = (unit(t0.min(t1)), unit(t0.max(t1)));
+    if hi - lo <= AT_END {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "a span too narrow to cut from its curve".into(),
+        });
+    }
     if hi < 1.0 - AT_END {
         span = curve_split(&span, hi)?.0;
     }
@@ -2617,19 +2622,31 @@ pub fn sweep_along_edges(
         return Ok(solid);
     }
 
+    let tol = Tolerance::new();
+    // An edge whose ends meet reads as its curve's whole closed domain; on an
+    // open curve it runs nowhere, and its curve is no part of the path.
+    let runs_nowhere = |curve: &NurbsCurve, start: Point3, end: Point3| {
+        let (d0, d1) = curve.domain();
+        (start - end).length() <= tol.linear
+            && (curve.evaluate(d0) - curve.evaluate(d1)).length() > tol.linear
+    };
+
     // One curved edge is its own path, run from its start to its end.
     if let [eid] = edges {
         let edge = topo.edge(*eid)?;
         if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
             let start = topo.vertex(edge.start())?.point();
             let end = topo.vertex(edge.end())?.point();
+            if runs_nowhere(curve, start, end) {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "sweep_along_edges: the edge has no length along its curve".into(),
+                });
+            }
             let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
             let path = curve_between(curve, t0, t1)?;
             return sweep(topo, profile, &path);
         }
     }
-
-    let tol = Tolerance::new();
 
     // Collect ordered points from the edge chain, sampling curved edges.
     let mut points: Vec<Point3> = Vec::new();
@@ -2644,6 +2661,8 @@ pub fn sweep_along_edges(
         }
 
         match edge_data.curve() {
+            EdgeCurve::NurbsCurve(curve)
+                if runs_nowhere(curve, start, topo.vertex(edge_data.end())?.point()) => {}
             EdgeCurve::NurbsCurve(curve) => {
                 // Eight samples through each knot span the edge runs over,
                 // however narrow, in the order the edge runs.
@@ -2712,6 +2731,9 @@ pub fn sweep_along_edges(
         });
     }
 
+    // Samples at one point (a knot within rounding of another, or of an
+    // edge's end) would give the fit's chord parameters a zero step.
+    points.dedup_by(|a, b| (*a - *b).length() <= tol.linear);
     // Densify long, sparsely-sampled spans so the global interpolating fit
     // does not overshoot at adjacent high-curvature corners.
     let points = densify_path_points(&points);
