@@ -2307,3 +2307,60 @@ fn miter_offset_elbow_dissect() {
         }
     }
 }
+
+/// A three-turn helix of radius 20 and pitch 8, interpolated through 16
+/// points a turn, as one spine edge or as two halves of it: sweeping a
+/// circle of radius 2 along the chain follows the curve. One edge gives the
+/// solid sweeping along the curve itself does; two are refit through eight
+/// points a knot span, whose path takes more rings, within 1%. Reading four
+/// points from each curved edge drew the path through five and gave 1489.1.
+#[test]
+fn sweep_along_curved_edges_follows_them() {
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let (pitch, height, radius) = (8.0_f64, 24.0_f64, 20.0_f64);
+    let n = 48;
+    let points: Vec<Point3> = (0..=n)
+        .map(|i| {
+            let t = f64::from(i) / f64::from(n);
+            let a = std::f64::consts::TAU * height / pitch * t;
+            Point3::new(radius * a.cos(), radius * a.sin(), height * t)
+        })
+        .collect();
+    let helix = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+    let mut topo = Topology::new();
+    let disc = |topo: &mut Topology| {
+        let rim = brepkit_topology::builder::make_circle_edge(
+            topo,
+            Point3::new(20.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0,
+            1e-7,
+        )
+        .unwrap();
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap()
+    };
+    let profile = disc(&mut topo);
+    let along_curve = sweep(&mut topo, profile, &helix).unwrap();
+    let truth = crate::measure::solid_volume(&topo, along_curve, 1e-3).unwrap();
+
+    let (d0, d1) = helix.domain();
+    let middle = f64::midpoint(d0, d1);
+    let [a, m, b] = [d0, middle, d1].map(|t| topo.add_vertex(Vertex::new(helix.evaluate(t), 1e-7)));
+    let whole = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(helix.clone())));
+    let first = topo.add_edge(Edge::new(a, m, EdgeCurve::NurbsCurve(helix.clone())));
+    let second = topo.add_edge(Edge::new(m, b, EdgeCurve::NurbsCurve(helix.clone())));
+    for (chain, within) in [(vec![whole], 1e-9), (vec![first, second], 1e-2)] {
+        let profile = disc(&mut topo);
+        let swept = sweep_along_edges(&mut topo, profile, &chain).unwrap();
+        let volume = crate::measure::solid_volume(&topo, swept, 1e-3).unwrap();
+        assert!(
+            (volume - truth).abs() < within * truth,
+            "{} edges: {volume} where the curve gives {truth}",
+            chain.len()
+        );
+    }
+}

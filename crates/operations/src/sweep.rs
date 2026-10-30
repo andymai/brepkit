@@ -2481,6 +2481,33 @@ pub fn sweep_guided(
 
 mod spine;
 
+/// `curve` from parameter `t0` to `t1`, traced backward when `t1 < t0`.
+fn curve_between(
+    curve: &NurbsCurve,
+    t0: f64,
+    t1: f64,
+) -> Result<NurbsCurve, crate::OperationsError> {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let (d0, d1) = curve.domain();
+    let eps = 1e-12 * (d1 - d0).abs().max(1.0);
+    let mut span = curve.clone();
+    if hi < d1 - eps {
+        span = curve_split(&span, hi)?.0;
+    }
+    if lo > d0 + eps {
+        span = curve_split(&span, lo)?.1;
+    }
+    if t1 >= t0 {
+        return Ok(span);
+    }
+    let (a, b) = span.domain();
+    let knots = span.knots().iter().rev().map(|&k| a + b - k).collect();
+    let points = span.control_points().iter().rev().copied().collect();
+    let weights = span.weights().iter().rev().copied().collect();
+    Ok(NurbsCurve::new(span.degree(), knots, points, weights)?)
+}
+
 /// Sweep a face profile along a path defined by a chain of edges.
 ///
 /// A closed planar G1 chain of lines and tangent circular arcs (a rounded
@@ -2508,6 +2535,18 @@ pub fn sweep_along_edges(
         return Ok(solid);
     }
 
+    // One curved edge is its own path, run from its start to its end.
+    if let [eid] = edges {
+        let edge = topo.edge(*eid)?;
+        if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
+            let start = topo.vertex(edge.start())?.point();
+            let end = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let path = curve_between(curve, t0, t1)?;
+            return sweep(topo, profile, &path);
+        }
+    }
+
     let tol = Tolerance::new();
 
     // Collect ordered points from the edge chain, sampling curved edges.
@@ -2524,12 +2563,20 @@ pub fn sweep_along_edges(
 
         match edge_data.curve() {
             EdgeCurve::NurbsCurve(curve) => {
-                let (u0, u1) = curve.domain();
-                let n_samples = 4;
+                // Eight samples through each knot span the edge runs over.
+                let end = topo.vertex(edge_data.end())?.point();
+                let (t0, t1) = edge_data.curve().domain_with_endpoints(start, end);
+                let spans = curve
+                    .knots()
+                    .windows(2)
+                    .filter(|k| k[1] > k[0] && k[0] < t0.max(t1) && k[1] > t0.min(t1))
+                    .count()
+                    .max(1);
+                let n_samples = 8 * spans;
                 for i in 1..n_samples {
                     #[allow(clippy::cast_precision_loss)]
                     let frac = i as f64 / n_samples as f64;
-                    points.push(curve.evaluate(u0 + frac * (u1 - u0)));
+                    points.push(curve.evaluate((t1 - t0).mul_add(frac, t0)));
                 }
             }
             EdgeCurve::Circle(circle) => {
