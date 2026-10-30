@@ -480,7 +480,14 @@ fn ruled_to_point(
         vec![near.control_points().to_vec(), tip],
         vec![near.weights().to_vec(), near.weights().to_vec()],
     )?;
-    let outward = surface.normal(0.5, 0.25).is_ok_and(|n| n.dot(out) > 0.0);
+    // `out` was taken at the edge's middle. u runs from the edge to the apex
+    // and v along the edge: the conversions above span [0, 1], a NURBS edge
+    // its own (possibly sub-) span of its curve's knots.
+    let middle = match curve {
+        EdgeCurve::NurbsCurve(_) => f64::midpoint(t0, t1),
+        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 0.5,
+    };
+    let outward = surface.normal(0.5, middle).is_ok_and(|n| n.dot(out) > 0.0);
     Ok((FaceSurface::Nurbs(surface), outward))
 }
 
@@ -1849,6 +1856,51 @@ mod to_point_tests {
             let solid = loft_to_point(&mut topo, base, p(0.0, 3.0, 30.0)).unwrap();
             check(&topo, solid, (3, 4, 3), 500.0 * std::f64::consts::PI, 1e-3);
             assert_outward(&topo, solid, p(0.0, 2.0, 5.0));
+        }
+    }
+
+    /// A disc of radius 10 whose rim is a circle, or a NURBS circle over
+    /// the knots [0, 10] or [10, 20], lofts to the point (-20, 0, 30) as an
+    /// outward oblique cone of π 100 30 / 3.
+    #[test]
+    fn an_oblique_cone_faces_out_whatever_its_rims_parameters() {
+        let p = Point3::new;
+        let circle = brepkit_math::curves::Circle3D::new_with_ref(
+            p(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            10.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let unit = brepkit_geometry::convert::circle_to_nurbs(&circle, 0.0, std::f64::consts::TAU)
+            .unwrap();
+        let over = |from: f64| {
+            EdgeCurve::NurbsCurve(
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    unit.degree(),
+                    unit.knots().iter().map(|k| from + 10.0 * k).collect(),
+                    unit.control_points().to_vec(),
+                    unit.weights().to_vec(),
+                )
+                .unwrap(),
+            )
+        };
+        for curve in [EdgeCurve::Circle(circle), over(0.0), over(10.0)] {
+            let mut topo = Topology::new();
+            let v = topo.add_vertex(Vertex::new(p(10.0, 0.0, 0.0), 1e-7));
+            let rim = topo.add_edge(Edge::new(v, v, curve));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+            let base = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+            ));
+            let cone = loft_to_point(&mut topo, base, p(-20.0, 0.0, 30.0)).unwrap();
+            check(&topo, cone, (2, 2, 2), 1000.0 * std::f64::consts::PI, 1e-3);
+            assert_outward(&topo, cone, p(-3.0, 0.0, 5.0));
         }
     }
 
