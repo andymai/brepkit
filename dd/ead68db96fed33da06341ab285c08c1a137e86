@@ -1,0 +1,85 @@
+crates/topology/src/validation.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 38-39,41-49
+crates/wasm/src/bindings/tessellate.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 85-89,101,150,328-339
+  s_a2dc21dbec3f2b::t_dddbc94b159665 340-342
+crates/operations/src/shell_op/tests.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 14-40,144-157,159,161-162,1044-1319
+crates/operations/src/blend_ops.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 35-38,45,48
+  s_a2dc21dbec3f2b::t_2db03f94e76296 9
+crates/operations/tests/flat_blends_keep_cavities.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 419-545
+crates/check/src/classify/boundary.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 487,1005,1202,1210
+CHANGELOG.md
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 3-67
+crates/math/src/surfaces.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 1039-1062
+crates/operations/src/compound_ops.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 223-225,239-241,310-420,473-546,690-893
+crates/operations/src/chamfer.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 1218-1221
+crates/operations/src/boolean/tests.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 867-955,1531-1591,2433-2435,2445-2452,2455,2463,2466-2467,2472,9135-9178
+Cargo.toml
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 15,58-68
+crates/operations/src/fill_face.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 6,19,22-25,29-30,43-47,49-53,74-77,79,81-82,84,96,100,104,129-151,164-199,287-395
+  s_a2dc21dbec3f2b::t_9bb633c65697d2 396
+crates/math/src/surfaces/tests.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 154-166
+crates/operations/src/revolve.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 352-354,484-487,497-498,500-501,506-511,514-518,707,783-784,787-790,1141-1143,1145-1150,1160-1168,1170-1173,1176-1181,1184-1186,1189-1229,1232-1268,1271-1328,1331-1334,1340-1345,1348-1366,1372-1375,1378,1407-1424,1575,2756-2932
+  s_a2dc21dbec3f2b::t_ae7775c63c3b7b 2933
+crates/algo/src/builder/builder_solid.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 3157-3180,3195-3209,3215
+crates/operations/src/tessellate/mod.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 45-46
+crates/operations/src/cavities.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 325,328-461,465,485
+crates/operations/src/boolean/assembly.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 851-860
+crates/math/src/analytic_intersection.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 1425-1469,1472-1483,1485,1487-1508,1510-1533,1535-1560,1562-1565,1568-1615,1617-1671,1673,1675-1677,1681-1700,2381-2398,2663-2681,2696-2865,6320-6483,7551-7553,7594-7599
+crates/wasm/src/bindings/query.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 96-111,531-532,548-553,788-790,797-798,811,813-819,1233-1273,1275-1276,1280
+crates/wasm/src/bindings/query/tests.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 594-791
+crates/operations/src/tessellate/tests.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 3692-3830
+crates/topology/src/builder.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 300-301,313,333-335,347,1104-1136
+  s_a2dc21dbec3f2b::t_35268b7a6b9824 1137-1138
+crates/operations/src/boolean/mod.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 2682-2684,2705-2712,2715-2716,2721-2741,3923-3926
+crates/wasm/src/helpers.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 204,292-312,332-390,1098-1188
+  s_a2dc21dbec3f2b::t_9b32ea4fa5d43b 254
+  s_a2dc21dbec3f2b::t_1f4b2966fa6ae5 1189
+crates/operations/src/shell_op.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 511-517,687-863
+  s_a2dc21dbec3f2b::t_04baa70c6ccf93 864-865
+.release-please-manifest.json
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 2
+crates/wasm/src/bindings/gridfinity_tests.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 288-291,293-313,414,420,425-431,439,445,447-449,451-471,573,575,580-586,676-681,683-684,687-694
+crates/operations/src/tessellate/solid.rs
+  s_a2dc21dbec3f2b::t_e825088d0c79fe 156-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ddead68db96fed33da06341ab285c08c1a137e86",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
