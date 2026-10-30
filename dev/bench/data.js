@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793390717448,
+  "lastUpdate": 1793392349765,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62639,6 +62639,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28249364,
             "range": "± 84640",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "842ca589cc8bec55d92b6cc27098e03f27433f7b",
+          "message": "fix(operations): face an extruded NURBS face's caps out of the solid (#2239)\n\nExtruding a NURBS face now gives both its caps the outward facing, so\nthe solid holds its volume whichever way the face is swept.\n\nToday a plane cap is built facing away from the solid, but a NURBS cap\nkeeps its surface, which faces where its normal points. The cap at the\nface faces into the solid whenever the sweep runs along the normal, and\nthe cap at its end whenever the sweep runs against it. The solid still\nvalidates. A flat 2 by 1 patch at z = 0.5 swept 1.5 up measures 3.667\nfor 3. Thickening a flat NURBS face by a negative amount goes through\nthe same path.\n\n## Change\n\n- `extrude` builds each cap through `cap_face`, given the side the cap\nmust face: away from the sweep at the face, along it at the end. A NURBS\ncap whose normal runs against that side is reversed, with its outer and\ninner wires rewound so its edges still pair with the sides'. Plane caps\nare unchanged.\n- Which way the cap's normal runs is read from its wires, with no point\ninside the face and no pointwise normal. The flux of the normal along\nthe sweep is the signed area of the face's shadow across it: each wire's\nshadow, taken counterclockwise in the surface's parameters, the outer\nwire's less each hole's. A point inside could fall in a hole or off a\nconcave trim, and a normal could stand edge-on to the sweep.\n- Each wire's winding in the parameters is read from coarse samples,\nwith every closed direction unwrapped along the wire so a trim across\nthe surface's seam stays in one piece; a wire that wraps the surface is\nrefused. The shadows, which need only points on the edges, are refined\nby doubling the samples until the flux settles. A cap casting no shadow\nis refused.\n\n## Tests\n\n- `a_planar_nurbs_face_extrudes_either_way_with_caps_facing_out`: that\npatch, its surface facing up or down with its wire wound to match, swept\n1.5 up or down. Each solid is valid and holds 3 to 1e-9, and a point\n0.01 off each NURBS cap along its outward normal lies outside it.\nUnchanged, the upward sweep of the patch facing up holds 3.667.\n-\n`a_curved_nurbs_face_edge_on_at_its_centroid_extrudes_with_caps_facing_out`:\nthe cubic patch (6u(1 − u), −1 + 6u² − 4u³, v) swept 1.5 along +x or −x.\nIts vertex centroid (0, 0, 0.5) lies nearest the patch at its u = 0\nedge, where the face stands edge-on to x. Each solid is valid with both\ncaps facing out. Read at the centroid alone, no cap's facing can be\nread.\n- `a_nurbs_face_edge_on_at_its_quarters_extrudes_with_caps_facing_out`:\nthe patch (u, F(u), v), F' a multiple of [u (u − 1/4) (u − 1/2) (u −\n3/4) (u − 1)]², swept 1 along x. It stands edge-on at its vertices'\ncentroid and at every quarter of its edges, yet sweeps into a valid\nsolid with its caps facing out.\n- `a_holed_nurbs_face_extrudes_with_caps_facing_out`: the patch (u, v,\nu³/3 + uv² − u) trimmed to the annulus 1.1 ≤ r ≤ 1.2, its rims exact\nrational sextic quarters, swept 1 along +x. Its normal leans −x all over\nthe face but +x at the hole's centre, its vertices' centroid; each cap\nfaces out. The outer wire's shadow alone, which counts the hole, faces\nboth caps in.\n- `a_thin_ring_extrudes_with_caps_facing_out_however_its_rims_are_cut`:\na flat ring between a circle of radius 1 stored as one edge and a hole\nof radius 0.99 in four quarter arcs. Sixteen points on each edge read\nthe rim's shadow 2.5% short and the hole's 0.16%, flipping the flux;\nrefined, both caps face out.\n- `a_patch_across_its_surfaces_seam_extrudes_with_caps_facing_out`: a\nunit cylinder's NURBS wall, its seam at angle 0, trimmed to −45° to 45°\nacross it and swept along +x. Read from parameters that jump a turn at\nthe seam, its caps faced in; unwrapped, they face out.\n- `extrude_nurbs_face_positive_volume` now asserts the exact 2 for the\nbilinear patch z = 0.5 y over the unit square swept 2 up, where it\naccepted anything between 0.3 and 1.5. That range had pinned the wrong\nreading of about 2/3 as plausible.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nExtruding a NURBS face now gives both caps the outward-facing\norientation, so the solid holds its volume whichever way the face is\nswept.\n\n- A NURBS cap whose normal runs against its outward side is reversed,\nits outer and inner wires rewound so its edges still pair with the\nsides'. Plane caps are unchanged.\n- The cap's facing is read from the flux of its normal along the sweep:\nthe signed shadow its wires cast across the sweep, taken\ncounterclockwise in the surface's parameters, the outer wire's less each\nhole's. Parameters are unwrapped across a closed surface's seam, and the\nshadow is refined until it settles. This covers centroids that fall in\nholes, faces edge-on at every sampled point, and trims across a seam; a\ncap casting no shadow fails the extrusion.\n- Adds tests for a planar patch swept either way, a curved patch edge-on\nat its centroid, a holed patch whose hole's centre leans along the\nsweep, a patch edge-on at its quarters, a thin ring whose shadow a\ncoarse sample undershoots, and a patch spanning its surface's seam.\nTightens the volume assertion in `extrude_nurbs_face_positive_volume` to\nthe exact expected value.\n\n<sup>Written for commit 3c605f8463c5c4da0552a2458f5f594897f562f8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2239?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2239?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2239&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T13:29:16-07:00",
+          "tree_id": "84ad13f80d699245d81da2bc58105db77d0f8aba",
+          "url": "https://github.com/andymai/brepkit/commit/842ca589cc8bec55d92b6cc27098e03f27433f7b"
+        },
+        "date": 1793392343560,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1064037,
+            "range": "± 15669",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1139365,
+            "range": "± 16714",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12959,
+            "range": "± 156",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 678189,
+            "range": "± 5220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28633873,
+            "range": "± 646397",
             "unit": "ns/iter"
           }
         ]
