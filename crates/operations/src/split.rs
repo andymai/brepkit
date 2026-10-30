@@ -269,7 +269,7 @@ mod tests {
     /// over the unit square, flat along its rim. The lid peaks at 2.048 at
     /// `(0.2, 0.5)`, between the samples that put it at 1.98, and the plane
     /// z = 2 cuts its peak off: a tip of 2.24432e-4 in the bulge and a disc,
-    /// and the rest of the block's 1 + 5/9.
+    /// and the rest of the block's 1 + 5/9, on the sides the plane faces.
     #[test]
     fn split_takes_a_nurbs_lids_peak_off_above_its_samples() {
         use brepkit_math::nurbs::surface::NurbsSurface;
@@ -316,34 +316,36 @@ mod tests {
             .z();
         assert!(top >= 2.048, "the lid reaches 2.048, its extent {top}");
 
-        let halves = split(
-            &mut topo,
-            block,
-            Point3::new(0.0, 0.0, 2.0),
-            Vec3::new(0.0, 0.0, 1.0),
-        )
-        .unwrap();
-        let tip = 2.244_32e-4;
-        for (piece, faces, volume) in [
-            (halves.positive, 2, tip),
-            (halves.negative, 7, 1.0 + 1.0 / 1.8 - tip),
-        ] {
-            assert_eq!(
-                brepkit_topology::explorer::solid_faces(&topo, piece)
-                    .unwrap()
-                    .len(),
-                faces
-            );
-            assert!(
-                crate::validate::validate_solid(&topo, piece)
-                    .unwrap()
-                    .is_valid()
-            );
-            let measured = crate::measure::solid_volume(&topo, piece, 1e-4).unwrap();
-            assert!(
-                (measured - volume).abs() < 1e-2 * volume,
-                "{measured} vs {volume}"
-            );
+        let tip = (2, 2.244_32e-4);
+        let rest = (7, 1.0 + 1.0 / 1.8 - tip.1);
+        // The plane faced down, its halves swap sides.
+        for (up, above, below) in [(1.0, tip, rest), (-1.0, rest, tip)] {
+            let halves = split(
+                &mut topo,
+                block,
+                Point3::new(0.0, 0.0, 2.0),
+                Vec3::new(0.0, 0.0, up),
+            )
+            .unwrap();
+            for (piece, (faces, volume)) in [(halves.positive, above), (halves.negative, below)] {
+                assert_eq!(
+                    brepkit_topology::explorer::solid_faces(&topo, piece)
+                        .unwrap()
+                        .len(),
+                    faces,
+                    "facing {up}"
+                );
+                assert!(
+                    crate::validate::validate_solid(&topo, piece)
+                        .unwrap()
+                        .is_valid()
+                );
+                let measured = crate::measure::solid_volume(&topo, piece, 1e-4).unwrap();
+                assert!(
+                    (measured - volume).abs() < 1e-2 * volume,
+                    "facing {up}: {measured} vs {volume}"
+                );
+            }
         }
     }
 
