@@ -790,6 +790,34 @@ fn normalize_profile_wire_curves(
 
 /// Rebuild a wire traversing the same edges in reverse order with flipped
 /// senses.
+/// An extrusion's cap on `surface`, facing `outward`. A plane cap is built
+/// facing it; a NURBS cap keeps its surface, which faces where its normal
+/// at the cap's middle `centre` points, so where that runs against
+/// `outward` the cap is reversed, its wires rewound with it so its edges
+/// still pair with the sides'.
+fn cap_face(
+    topo: &mut Topology,
+    outer: WireId,
+    inner: Vec<WireId>,
+    surface: FaceSurface,
+    centre: Point3,
+    outward: Vec3,
+) -> Result<FaceId, crate::OperationsError> {
+    let against = matches!(surface, FaceSurface::Nurbs(_))
+        && surface
+            .project_point(centre)
+            .is_some_and(|(u, v)| surface.normal(u, v).dot(outward) < 0.0);
+    if !against {
+        return Ok(topo.add_face(Face::new(outer, inner, surface)));
+    }
+    let outer = rewound_wire(topo, outer)?;
+    let inner = inner
+        .into_iter()
+        .map(|w| rewound_wire(topo, w))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(topo.add_face(Face::new_reversed(outer, inner, surface)))
+}
+
 fn rewound_wire(topo: &mut Topology, wid: WireId) -> Result<WireId, crate::OperationsError> {
     let oes: Vec<OrientedEdge> = topo
         .wire(wid)?
@@ -1001,11 +1029,15 @@ pub fn extrude(
         FaceSurface::Nurbs(nurbs) => FaceSurface::Nurbs(nurbs.clone()),
         other => other.clone(),
     };
-    let bottom_face = topo.add_face(Face::new(
+    let centroid = crate::winding::polygon_centroid(&input_positions);
+    let bottom_face = cap_face(
+        topo,
         bottom_wire_id,
         bottom_inner_wire_ids,
         bottom_surface,
-    ));
+        centroid,
+        -offset,
+    )?;
     all_faces.push(bottom_face);
 
     for i in 0..n {
@@ -1177,7 +1209,14 @@ pub fn extrude(
         FaceSurface::Sphere(sph) => FaceSurface::Sphere(sph.translated(offset)),
         FaceSurface::Torus(tor) => FaceSurface::Torus(tor.translated(offset)),
     };
-    let top_face = topo.add_face(Face::new(top_wire_id, top_inner_wire_ids, top_surface));
+    let top_face = cap_face(
+        topo,
+        top_wire_id,
+        top_inner_wire_ids,
+        top_surface,
+        centroid + offset,
+        offset,
+    )?;
     all_faces.push(top_face);
 
     // Assemble shell and solid.

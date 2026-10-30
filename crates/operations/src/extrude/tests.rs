@@ -304,22 +304,10 @@ fn extrude_nurbs_face_positive_volume() {
 
     let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
 
-    // NURBS face is a bilinear patch: corners at z=0 (y=0) and z=0.5 (y=1).
-    // The extrusion offset is (0,0,2), so top surface is at z=2 and z=2.5.
-    // The solid is a "wedge" — thicker at one end.
-    //
-    // For a bilinear patch f(u,v) with z = 0.5v, the XY footprint is a
-    // unit square. The enclosed volume between bottom and top surfaces:
-    // V = ∫∫ height dA where height = 2.0 (constant, offset along Z).
-    // But the solid shape is bounded by the slanted bottom/top NURBS faces.
-    //
-    // Actual result from tessellation: ~0.667 (≈ 2/3).
-    // This is plausible: the bilinear bottom face "scoops out" volume.
+    // The bilinear patch z = 0.5 y over the unit square, swept 2 along z:
+    // every vertical line through the square crosses 2 of the solid.
     let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
-    assert!(
-        vol > 0.3 && vol < 1.5,
-        "extruded NURBS solid should have positive volume in (0.3, 1.5), got {vol}"
-    );
+    assert!((vol - 2.0).abs() < 1e-9, "the sweep holds 2, got {vol}");
 
     assert_euler_genus0(&topo, solid);
 }
@@ -1526,5 +1514,73 @@ fn split_closed_edge_runs_the_turn_from_the_vertex() {
             (*corner - expected).length() < 1e-9,
             "corner {k} at {corner:?}, expected {expected:?}"
         );
+    }
+}
+
+/// A 2 x 1 bilinear patch at z = 0.5, its surface facing up or down and its
+/// wire wound to match, extruded 1.5 up or down: each is valid, holds 3, and
+/// each cap faces away from the solid along its outward normal.
+#[test]
+fn a_planar_nurbs_face_extrudes_either_way_with_caps_facing_out() {
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::builder::make_polygon_wire;
+    use brepkit_topology::face::Face;
+
+    for up in [true, false] {
+        for direction in [Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, -1.0)] {
+            let mut topo = Topology::new();
+            let at = |x: f64, y: f64| Point3::new(x, y, 0.5);
+            // Rows run along x and columns along y, so the surface faces +z;
+            // swapping the axes turns it to -z.
+            let (rows, corners) = if up {
+                (
+                    vec![
+                        vec![at(0.0, 0.0), at(0.0, 1.0)],
+                        vec![at(2.0, 0.0), at(2.0, 1.0)],
+                    ],
+                    [at(0.0, 0.0), at(2.0, 0.0), at(2.0, 1.0), at(0.0, 1.0)],
+                )
+            } else {
+                (
+                    vec![
+                        vec![at(0.0, 0.0), at(2.0, 0.0)],
+                        vec![at(0.0, 1.0), at(2.0, 1.0)],
+                    ],
+                    [at(0.0, 0.0), at(0.0, 1.0), at(2.0, 1.0), at(2.0, 0.0)],
+                )
+            };
+            let knots = vec![0.0, 0.0, 1.0, 1.0];
+            let patch =
+                NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
+            let wire = make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(patch)));
+            let solid = extrude(&mut topo, face, direction, 1.5).unwrap();
+
+            assert!(
+                crate::validate::validate_solid(&topo, solid)
+                    .unwrap()
+                    .is_valid()
+            );
+            let volume = crate::measure::solid_volume(&topo, solid, 1e-3).unwrap();
+            assert!(
+                (volume - 3.0).abs() < 1e-9,
+                "up {up}, direction {direction:?}: {volume}"
+            );
+            for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+                let f = topo.face(fid).unwrap();
+                let FaceSurface::Nurbs(s) = f.surface() else {
+                    continue;
+                };
+                let n = s.normal(0.5, 0.5).unwrap();
+                let outward = if f.is_reversed() { -n } else { n };
+                let off = s.evaluate(0.5, 0.5) + outward * 0.01;
+                assert_eq!(
+                    crate::classify::classify_point(&topo, solid, off, 1e-3, 1e-7).unwrap(),
+                    crate::classify::PointClassification::Outside,
+                    "up {up}, direction {direction:?}: a cap faces in"
+                );
+            }
+        }
     }
 }
