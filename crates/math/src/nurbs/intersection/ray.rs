@@ -123,15 +123,23 @@ impl Patch {
         (a, b)
     }
 
-    /// How far the control points reach along `u` and along `v`.
+    /// The longest control polygon along `u` and along `v`: each bounds the
+    /// length of the patch's curves that way, however far a bulge between
+    /// its ends rises.
     fn spans(&self) -> (f64, f64) {
         let mut along_u = 0.0_f64;
         for j in 0..self.cols {
-            along_u = along_u.max((self.point(self.rows - 1, j) - self.point(0, j)).length());
+            let length: f64 = (1..self.rows)
+                .map(|i| (self.point(i, j) - self.point(i - 1, j)).length())
+                .sum();
+            along_u = along_u.max(length);
         }
         let mut along_v = 0.0_f64;
         for i in 0..self.rows {
-            along_v = along_v.max((self.point(i, self.cols - 1) - self.point(i, 0)).length());
+            let length: f64 = (1..self.cols)
+                .map(|j| (self.point(i, j) - self.point(i, j - 1)).length())
+                .sum();
+            along_v = along_v.max(length);
         }
         (along_u, along_v)
     }
@@ -391,6 +399,40 @@ mod tests {
             1e-9,
         );
         assert!(level.grazed, "{level:?}");
+    }
+
+    /// A unit biquadratic patch with only its middle control point raised,
+    /// to 4000: a level ray at 500 along u through v = 0.5 crosses its
+    /// spike twice, where 4000 u (1 - u) = 500 at v = 0.5, so at
+    /// u = (1 ± 1/√2) / 2.
+    #[test]
+    fn a_level_ray_crosses_a_tall_spike() {
+        let rows = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 1) { 4000.0 } else { 0.0 };
+                        Point3::new(f64::from(i) / 2.0, f64::from(j) / 2.0, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let spike =
+            NurbsSurface::new(2, 2, knots.clone(), knots, rows, vec![vec![1.0; 3]; 3]).unwrap();
+        let ray = RaySurface::new(&spike).unwrap();
+        let across = ray.hits(
+            Point3::new(-1.0, 0.5, 500.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            1e-9,
+        );
+        assert!(!across.grazed);
+        let mut xs: Vec<f64> = across.hits.iter().map(|h| h.point.x()).collect();
+        xs.sort_by(f64::total_cmp);
+        let root = std::f64::consts::FRAC_1_SQRT_2;
+        assert_eq!(xs.len(), 2, "{xs:?}");
+        assert!((xs[0] - (1.0 - root) / 2.0).abs() < 1e-9, "{xs:?}");
+        assert!((xs[1] - f64::midpoint(1.0, root)).abs() < 1e-9, "{xs:?}");
     }
 
     #[test]

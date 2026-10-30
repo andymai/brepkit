@@ -1838,7 +1838,8 @@ fn nurbs_geom(
         u_len,
         v_len,
     };
-    let Some(uv) = UvTrim::new(topo, face, &|p| trim.project(surface, p), &|_| u_len)? else {
+    let Some(uv) = UvTrim::new_bending(topo, face, &|p| trim.project(surface, p), &|_| u_len)?
+    else {
         return Ok(None);
     };
     trim.trim = uv;
@@ -1975,6 +1976,28 @@ impl UvTrim {
         project: &dyn Fn(Point3) -> (f64, f64),
         radius: &dyn Fn(f64) -> f64,
     ) -> Result<Option<Self>, AlgoError> {
+        Self::new_on(topo, face, project, radius, false)
+    }
+
+    /// [`UvTrim::new`] on a surface whose `(u, v)` bends a straight edge
+    /// (a NURBS surface): every edge, straight or not, is sampled along,
+    /// and a piece whose middle strays from its chord in `(u, v)` is halved.
+    fn new_bending(
+        topo: &Topology,
+        face: &brepkit_topology::face::Face,
+        project: &dyn Fn(Point3) -> (f64, f64),
+        radius: &dyn Fn(f64) -> f64,
+    ) -> Result<Option<Self>, AlgoError> {
+        Self::new_on(topo, face, project, radius, true)
+    }
+
+    fn new_on(
+        topo: &Topology,
+        face: &brepkit_topology::face::Face,
+        project: &dyn Fn(Point3) -> (f64, f64),
+        radius: &dyn Fn(f64) -> f64,
+        bends: bool,
+    ) -> Result<Option<Self>, AlgoError> {
         use brepkit_topology::edge::EdgeCurve;
         const PIECES: u32 = 16;
         const MAX_SAMPLES: usize = 4096;
@@ -1992,7 +2015,7 @@ impl UvTrim {
                 }
                 let (t0, t1) = curve.domain_with_endpoints(start, end);
                 let at = |t: f64| project(curve.evaluate_with_endpoints(t, start, end));
-                let pieces = if is_line { 1 } else { PIECES };
+                let pieces = if is_line && !bends { 1 } else { PIECES };
                 let mut samples: Vec<(f64, f64, f64)> = (0..=pieces)
                     .map(|i| {
                         let t = (t1 - t0).mul_add(f64::from(i) / f64::from(pieces), t0);
@@ -2034,14 +2057,23 @@ impl UvTrim {
                 }
                 let mut i = 0;
                 while i + 1 < samples.len() {
-                    let (ta, ua, _) = samples[i];
-                    let (tb, ub, _) = samples[i + 1];
-                    let split = wrap_pi(ub - ua).abs() > max_turn
-                        && (tb - ta).abs() > 1e-9 * (t1 - t0).abs()
-                        && samples.len() < MAX_SAMPLES;
-                    if split {
-                        let tm = f64::midpoint(ta, tb);
+                    let (ta, ua, va) = samples[i];
+                    let (tb, ub, vb) = samples[i + 1];
+                    let room =
+                        (tb - ta).abs() > 1e-9 * (t1 - t0).abs() && samples.len() < MAX_SAMPLES;
+                    let tm = f64::midpoint(ta, tb);
+                    let mut middle = None;
+                    let mut split = room && wrap_pi(ub - ua).abs() > max_turn;
+                    if room && !split && bends {
                         let (um, vm) = at(tm);
+                        let r = radius(vm);
+                        let (cu, cv) = (wrap_pi(ub - ua) * r, vb - va);
+                        let (du, dv) = (wrap_pi(um - ua) * r - 0.5 * cu, vm - 0.5 * (va + vb));
+                        split = du.hypot(dv) > 0.05 * cu.hypot(cv) + 1e-12 * r.abs().max(1.0);
+                        middle = Some((um, vm));
+                    }
+                    if split {
+                        let (um, vm) = middle.unwrap_or_else(|| at(tm));
                         samples.insert(i + 1, (tm, um, vm));
                     } else {
                         i += 1;
@@ -3930,6 +3962,68 @@ mod tests {
     use brepkit_topology::solid::Solid;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The surface `(u + v (1 - v), v, v (u + v (1 - v)))` over the unit
+    /// square, trimmed to `0.3 <= x <= 0.7` by straight edges. Its left edge,
+    /// `x = 0.3`, bows in `(u, v)` to `u = 0.05` at its middle, so the point
+    /// `(0.4, 0.5, 0.2)`, at `u = 0.15`, lies on the face: a ray down
+    /// through it crosses once, and one down through `x = 0.8`, past the
+    /// trim, not at all.
+    #[test]
+    fn a_nurbs_trim_follows_a_straight_edge_bowing_in_uv() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let third = 1.0 / 3.0;
+        let p = Point3::new;
+        let rows = vec![
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(third, third, 0.0),
+                p(third, 2.0 * third, third),
+                p(0.0, 1.0, 0.0),
+            ],
+            vec![
+                p(1.0, 0.0, 0.0),
+                p(4.0 * third, third, third),
+                p(4.0 * third, 2.0 * third, 1.0),
+                p(1.0, 1.0, 1.0),
+            ],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 4]; 2],
+        )
+        .unwrap();
+        assert!((surface.evaluate(0.15, 0.5) - p(0.4, 0.5, 0.2)).length() < 1e-12);
+        let corners = [
+            (0.3, 0.0, 0.0),
+            (0.7, 0.0, 0.0),
+            (0.7, 1.0, 0.7),
+            (0.3, 1.0, 0.3),
+        ]
+        .map(|(x, y, z)| topo.add_vertex(Vertex::new(p(x, y, z), 1e-7)));
+        let edges: Vec<_> = (0..4)
+            .map(|i| {
+                let edge = Edge::new(corners[i], corners[(i + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face_id = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())));
+        let face = topo.face(face_id).unwrap();
+        let geom = nurbs_geom(&topo, face, &surface).unwrap().unwrap();
+        let down = Vec3::new(0.0, 0.0, -1.0);
+        let tol = Tolerance::new();
+        assert_eq!(
+            ray_geom_crossings(p(0.4, 0.5, 5.0), down, &geom, tol),
+            (1, false)
+        );
+        assert_eq!(ray_geom_crossings(p(0.8, 0.5, 5.0), down, &geom, tol).0, 0);
+    }
 
     /// The unit cube with its top the lid `z = 1 + 100 u (1 - u)^4 v (1 - v)`
     /// over the unit square, flat along its rim: the solid rises to 3.048 at
