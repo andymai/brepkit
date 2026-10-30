@@ -4725,6 +4725,14 @@ fn trim_open_curve_to_plane_face_lines(
     // chord is not one of the face. Crossings of straight edges stay as the
     // polygon scan found them.
     if exact_region.is_some() {
+        // A chord crossing not on a straight edge witnesses an arc crossing
+        // near it; two arc crossings between neighbouring samples flip no
+        // inside state, and the witness is all that shows them.
+        let witnesses: Vec<f64> = crossings
+            .iter()
+            .copied()
+            .filter(|&t| !straight.iter().any(|&seg| on_segment(eval_at(t), seg)))
+            .collect();
         crossings.retain(|&t| straight.iter().any(|&seg| on_segment(eval_at(t), seg)));
         let states: Vec<(f64, bool)> = (0..=n_samples)
             .filter_map(|i| inside_exact(eval_at(sample_t(i))).map(|s| (sample_t(i), s)))
@@ -4749,6 +4757,14 @@ fn trim_open_curve_to_plane_face_lines(
             if !crossings.iter().any(|&c| (c - t_star).abs() < 1e-9) {
                 crossings.push(t_star);
             }
+        }
+        let step = (raw.t_range.1 - raw.t_range.0).abs()
+            / f64::from(u32::try_from(n_samples).unwrap_or(u32::MAX));
+        if witnesses
+            .iter()
+            .any(|&w| !crossings.iter().any(|&c| (c - w).abs() <= step))
+        {
+            return None;
         }
     } else if straight_crossings_only
         && !crossings
@@ -9043,6 +9059,90 @@ fn clip_line_to_polygon_general(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// The line x = -100 + 200 t, lying on a NURBS face standing in the plane
+    /// y = 0, crosses the unit disc about (1.5, 0, 0) at t = 0.5025 and 0.5125,
+    /// both between the trim's neighbouring samples. The trim keeps the span
+    /// across the disc or leaves the section to the generic trim; it never
+    /// drops the section.
+    #[test]
+    fn a_section_crossing_an_arc_twice_between_samples_is_kept() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::builder::{make_circle_edge, make_face_from_wire, make_polygon_wire};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let mut topo = Topology::new();
+        let rim = make_circle_edge(
+            &mut topo,
+            Point3::new(1.5, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            1e-7,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let disc = make_face_from_wire(&mut topo, rim).unwrap();
+        let corners = [
+            Point3::new(-100.0, 0.0, -1.0),
+            Point3::new(100.0, 0.0, -1.0),
+            Point3::new(100.0, 0.0, 1.0),
+            Point3::new(-100.0, 0.0, 1.0),
+        ];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let wall = NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots.clone(),
+            vec![vec![corners[0], corners[3]], vec![corners[1], corners[2]]],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let wire = make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+        let wall_face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(wall)));
+        let (a, b) = (Point3::new(-100.0, 0.0, 0.0), Point3::new(100.0, 0.0, 0.0));
+        let line = NurbsCurve::new(1, knots, vec![a, b], vec![1.0; 2]).unwrap();
+        let raw = RawCurve {
+            curve: EdgeCurve::NurbsCurve(line),
+            bbox: Aabb3::from_points([a, b]),
+            t_range: (0.0, 1.0),
+            p_start: a,
+            p_end: b,
+        };
+        let disc_surface = topo.face(disc).unwrap().surface().clone();
+        let wall_surface = topo.face(wall_face).unwrap().surface().clone();
+        let ext_disc = FaceExtent::new(&topo, disc, &disc_surface, None, tol).unwrap();
+        let wall_range = face_v_range(&topo, wall_face, &wall_surface);
+        let ext_wall = FaceExtent::new(&topo, wall_face, &wall_surface, wall_range, tol).unwrap();
+        let trimmed = trim_open_curve_to_plane_face_lines(
+            &topo,
+            disc,
+            &disc_surface,
+            wall_face,
+            &wall_surface,
+            &raw,
+            &ext_disc,
+            &ext_wall,
+            tol,
+            &JunctionRegistry::default(),
+        );
+        if let Some(pieces) = trimmed {
+            assert!(
+                !pieces.is_empty(),
+                "the section across the disc was dropped"
+            );
+            for piece in &pieces {
+                assert!(
+                    piece.p_start.x() > 0.5 - 1e-6 && piece.p_end.x() < 2.5 + 1e-6,
+                    "{:?}..{:?}",
+                    piece.p_start,
+                    piece.p_end
+                );
+            }
+        }
+    }
 
     fn boxes(
         a: ([f64; 3], [f64; 3]),
