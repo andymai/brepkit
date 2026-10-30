@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793333170170,
+  "lastUpdate": 1793333589584,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -60857,6 +60857,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28051226,
             "range": "± 38876",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "848285a4780f22dd6648ab779638da5d1165d616",
+          "message": "fix(math): meet a ball off a torus's axis in the loops its closed form gives (#2160)\n\nA ball whose centre lies off a ring torus's axis now meets the torus in\ncurves computed from a closed form, so booleans between the two split\nboth faces where they cross.\n\nToday `exact_sphere_torus` answers only when the ball's centre is on the\ntorus's axis or the ball just touches the torus, and every other ball\nfalls to the general marcher. For a torus of major radius 4 and minor\nradius 1.5 and a ball of radius 1 centred at `(4, 0, 0.6)`, the marcher\nreturns no curve with the torus first and 436 curves with the ball\nfirst. A boolean pairs the faces torus first, so it never splits the\nball: intersecting the two returns the whole ball, with no mesh\nfallback, although the ball pokes out of the tube once its centre is\nmore than 0.5 above the core circle.\n\n## Change\n\n- `sphere_torus_section`: at each tube angle `v`, a torus point lies on\nthe ball when `cos(u − phi) = rhs(v)`, where `phi` is the direction of\nthe ball's centre round the axis and `rhs(v)` comes from the ball's\ncentre and radius. The two branches `u = phi ± acos(rhs(v))` give every\npoint.\n- The plane-torus section has branches of the same form, so both now go\nthrough `TorusSection`, which holds `rhs(v)` as `(n0 + n1·cos v + n2·sin\nv) / (d0 + d1·cos v)`. `rhs` reaches ±1 where a sum of `cos v` and `sin\nv` vanishes, so the up to four tube angles where the section's runs\nstart and end come in closed form, and no loop or gap can fall between\nscan samples. Each stretch between them is judged by the distance\nbetween the two surfaces at its middle: one they clear or cut by no more\nthan rounding is a touch, a node inside a run and nothing between runs.\nPlane sections keep their sampling; ball sections take 256 scan steps\nand 128 to 1024 points per branch.\n- For a ball, `acos` of a ratio near 1 loses digits that a small ball on\na large torus needs, so each point steps onto the ball across the\nsection. Halfway between each pair of points, the fitted curve must lie\nwithin a quarter of the linear tolerance of both surfaces; where it\nstrays, the section's own point there joins the fit, for up to six\nrounds. A curve that still strays defers to the marcher.\n- A ball's section that comes out empty, although the ball's radius lies\nbetween its centre's least and greatest distance to the torus, has lost\nits loops to rounding (a ball 1e-5 across on a torus of radii 4000 and\n1500), so it defers to the marcher instead of reading as apart. A\nplane's rounding allowance uses its normalized offset, so scaling its\nequation keeps its section.\n- `try_algebraic_intersection` uses these curves for a ball off the axis\nof a ring torus when `exact_sphere_torus` has no answer, each point\ncarrying its parameters on both surfaces in the order they were passed.\n- A ball centred on the core circle with the tube's own radius makes\n`rhs(v)` equal 1 at every `v`, so the two branches coincide.\n`exact_sphere_torus` returns the meridian circle through the ball's\ncentre for it when the circle strays from the tube, by the centre's\ndistance from the core circle plus the radii's difference, no more than\nrounding and the linear tolerance. A ball a hair larger than the tube\nmeets it in two loops close together, which the section finds.\n\n## Tests\n\n- `a_ball_off_a_torus_axis_meets_it_in_its_closed_form_loops`: four\nballs off the axis, one poking out of the tube's top, one wider than the\ntube on its core circle, one at an arbitrary point, and one just past\nthe tube's outside whose loop is narrower than a scan step, each passed\neither way round. Each gives its loops, every point within 1e-9 of both\nsurfaces with parameters that give it back, and every curve within 1e-7\nof both. Without the change the marcher's curves fail it.\n- `balls_meet_tori_in_loops_a_scan_would_miss`: a ball of radius 0.001\non the outside of a torus of radii 4000 and 1500, one of radius 2.500002\ncentred 1e-6 from the axis of the `(4, 1.5)` torus, one of radius\n1.0000005 on the core circle of a `(1000, 1)` torus, and one of radius 4\ncentred 1.500001 from the axis of the `(4, 1.5)` torus, each either way\nround. They give 1, 2, 2 and 2 curves, every point within 1e-9 of both\nsurfaces and every curve within 1e-7. Without stepping the points onto\nthe ball, the first curve strays 4.08e-6; with the earlier meridian\ntolerance, the third gives one circle; without refining the fits, the\nfourth defers and the marcher returns a different number of curves;\nwithout the crossings of -1, the second misses a loop.\n- `scaled_and_ill_conditioned_sections_are_kept_or_deferred`: the plane\nx = 4 written with a normal of 1e14 cuts the `(4, 1.5)` torus in the\nsame one loop as with a unit normal; a ball of radius 1e-5 centred at\n`(5500.000001, 0, 0)` on the `(4000, 1500)` torus defers, as does a ball\nof radius 1.000001 on the core circle of a `(1e8, 1)` torus, which\n`exact_sphere_torus` no longer takes for its meridian circle. Each fails\nwithout its change.\n- `a_ball_filling_a_torus_tube_meets_it_in_one_meridian_circle`: the\nball of the tube's radius on the core circle gives one curve on that\ncircle, either way round. It fails without the meridian circle.\n- `a_ball_off_a_rings_axis_touches_it_at_one_point` expected\n`exact_sphere_torus` to leave the meridian case to the marcher; it now\nexpects the circle.\n- `intersect_torus_with_a_ball_poking_out_of_its_tube`: the ball at `(4,\n0, 1)` intersected with the torus keeps sphere and torus faces, a point\nof the ball above the tube lies outside the result and one below inside,\nand the cut and the intersection make up the torus's volume to 1e-3.\nBoth results are valid, with no free or non-manifold edge in the B-rep\nor in its mesh. Without the change the intersection is the whole ball.\n- `compound_cut_cuts_the_exact_piece_and_defers_the_other` needs a tool\npiece whose cut falls back to the mesh boolean. Its ball crossing the\ntorus's tube now cuts exactly, so it uses a rod crossing the ring off\nthe tube's centre, whose cut still falls back.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3774 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T04:09:49Z",
+          "tree_id": "9eaf400c3e6e801f5042020b6f7499d3bfa51ab1",
+          "url": "https://github.com/andymai/brepkit/commit/848285a4780f22dd6648ab779638da5d1165d616"
+        },
+        "date": 1793333583785,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1100268,
+            "range": "± 8295",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1175601,
+            "range": "± 52422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13173,
+            "range": "± 120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 672085,
+            "range": "± 1385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29188099,
+            "range": "± 190475",
             "unit": "ns/iter"
           }
         ]
