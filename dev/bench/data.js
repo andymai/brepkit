@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793392349765,
+  "lastUpdate": 1793393118329,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62693,6 +62693,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28633873,
             "range": "± 646397",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ed9b6780735711d0ad3a350c690d9e5da30c48f",
+          "message": "fix(wasm): fillet along a radius law through the walking engine first (#2236)\n\nA fillet whose radius follows a law along its edge now comes back as a\nround: the binding runs the walking engine first, which rolls its ball\ninside a convex edge, and the mesher follows the band's curve.\n\nToday `filletVariable` runs the planar rebuild. It builds the band's\nsurface as a round but closes the band with four straight edges, so each\nend face keeps a chord where its arc should be. A box 40 x 30 x 20 whose\ntop front edge is filleted at a radius running 2 to 5 measures 23740,\nthe volume of a flat bevel, where the round holds 23888.407. Its band's\nend edges stand 0.586 and 1.464 off the band's own surface.\n\nThe walking engine builds the band with arcs at its ends, but had two\nfaults of its own:\n\n- It rolled its ball on the side each plane's normal points to, which is\nout of the material and right only at a concave edge. A varying radius\nnever takes the analytic path that handles convex edges, so the same\nfillet landed outside the box, reaching y = −5 and z = 25.\n- The solid mesher gave its band no interior points: the band runs\nstraight along the edge, so its interior grid is one cell across.\nDelaunay over its boundary alone joined the two contact curves across\nthe round, and the mesh strayed 1.18 from the band at a deflection of\n0.01.\n\n`try_fillet_variable` shares the acceptance check `try_fillet` and\n`try_chamfer` use, at the same deflection floor.\n\n## Change\n\n- `filletVariable` and the batch's `filletVariable` go through\n`try_fillet_variable`, which keeps the walking engine's band when it is\na changed, closed, outward-oriented solid, and falls back to the planar\nrebuild under the same check, as `try_fillet` does for one radius.\n- The walking engine faces each plane toward the ball: into the material\nat a convex edge. The side the other face lies on is read from the left\nof that face's wire along the edge, about its surface normal; the\nanalytic path's farthest-vertex witness\n(`analytic::material_side_witness`, now public) is kept for an edge no\nwire of that face runs along. A plate reaching farther behind a boss\nwall than in front of it read the foot as convex by that witness.\n- The band's contact edges are its own boundary rows, so they lie on it.\nThe band takes the sections' contact points as cubic control points, and\na polyline through the same points left the band wherever they did not\nlie on a line: 0.00375 off it on a box edge whose radius steps smoothly\nfrom 2 to 5.\n- `try_fillet_variable` refuses an edge of another solid or of a cavity,\nas `try_chamfer` does through the same check: a planar rebuild skips\nsuch an edge and still returns a new solid, which read as done.\n- A NURBS face whose iso-lines run straight one way without being one\nvector, such as a band whose radius changes along its edge, is\ntriangulated with its straight direction shrunk to one chord cell of its\ncurved one, as an exact extrusion already is. Delaunay then ladders its\ntwo contact curves across the round. The band above meshes in 179\nvertices, within 0.0084 of its surface at a deflection of 0.01, and the\nwhole solid in 4 ms.\n- `FilletRadiusLaw` converts into the walking engine's `RadiusLaw`,\nwhich the planar rebuild's own retry now uses too.\n\nCloses #2164.\n\n## Tests\n\n- `try_fillet_variable_rounds_an_edge`: on that box, the 2-to-5 law\nstraight or along a smooth step, and a constant 2 given as a law, each\ngive a valid solid inside the box, with an arc at each end of the band\nand its edges on it to 1e-6, losing (1 − π/4) ∫ r² to 1% of it. Skipping\nthe walking engine, facing the planes out, or meshing the band at its\nown speeds each fails it.\n- `a_variable_fillet_rounds_a_convex_edge_inside_it` checks the walking\nengine directly: the 2-to-5 fillet stays inside the box and measures its\nround to the same 1%.\n- `a_variable_round_at_a_boss_foot_rolls_on_the_exposed_plate`: a plate\nz = 0 from −20 to 20 holding the foot of a boss over [−5, 5]², rounded\nalong the foot of the wall x = 5, rolls on the exposed plate in front:\nits contacts lie at x = 5 + r on the plate and z = r on the wall.\n- `try_fillet_variable_refuses_edges_it_cannot_round`: an edge of\nanother box, alone or with one of its own, and an edge of its cavity are\nrefused.\n- `squashed_walls_mesh_within_their_deflection` still holds a squashed\nfrustum's wall, a NURBS cone, within each deflection.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes variable-radius fillets so they truly round the edge:\n`filletVariable` now runs the walking engine first and falls back to the\nplanar rebuild, which closed each band end with a straight chord and\nleft a flat bevel. A 40 × 30 × 20 box filleted 2-to-5 along its top\nfront edge now measures the round volume, with arcs at both ends of the\nband, instead of the bevel's 23740; the old band's end edges stood 0.586\nand 1.464 off its own surface.\n\n- The walking engine faces each plane into the material at convex edges,\ntaking the other face's interior from the left of its wire along the\nedge about the surface normal, so the round does not roll inside a boss\nwhen a plate reaches farther behind its wall; the farthest-vertex\nwitness remains only for edges no wire runs along.\n- A NURBS band whose iso-lines run straight in one direction is\ntriangulated with that direction shrunk to one chord cell, letting\nDelaunay ladder the two contact curves across the round instead of\njoining them across it.\n- The walking engine's band is kept only when it is a changed, closed,\noutward-oriented solid, the same acceptance `try_fillet` uses, with the\nplanar rebuild as the fallback.\n- Each band contact edge is now the band's own boundary row instead of a\npolyline through the contact points, so an edge filleted along a smooth\n2-to-5 step stays on the band to 6e-10.\n- A variable fillet now refuses an edge of another solid or of a cavity,\nwhich a planar rebuild would silently skip.\n- `FilletRadiusLaw` converts into the walking engine's `RadiusLaw`,\nwhich the planar rebuild retry uses too.\n\nCloses #2164.\n\n<sup>Written for commit e3b598cd11deaf8982dcea39d85be71e995b94ca.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2236?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2236?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2236&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T13:42:20-07:00",
+          "tree_id": "8821c0f2206a5a2a0d605f122967ddb35c0e4193",
+          "url": "https://github.com/andymai/brepkit/commit/7ed9b6780735711d0ad3a350c690d9e5da30c48f"
+        },
+        "date": 1793393108767,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 662772,
+            "range": "± 5683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 709977,
+            "range": "± 34002",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8417,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 395949,
+            "range": "± 4693",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18313116,
+            "range": "± 447903",
             "unit": "ns/iter"
           }
         ]
