@@ -898,14 +898,14 @@ pub(super) fn iso_divisions_over(
     n
 }
 
-/// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each sampled
-/// cell's middle lies within half the deflection of the triangles it splits
-/// into along either diagonal. A twisted cell (a bilinear patch between skew
-/// lines) has straight sides and iso-lines, which no chord test sees, yet its
-/// middle stands up to a quarter of its twist, |P00 + P11 - P01 - P10| / 4,
-/// off those triangles; doubling both directions quarters that. A flat cell
-/// whose parameters run unevenly across it has its middle in the triangles'
-/// plane, however far from their diagonal, and needs nothing.
+/// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each checked
+/// cell strays within half the deflection of the triangles it splits into
+/// along either diagonal ([`cell_twist`]). A twisted cell (a bilinear patch
+/// between skew lines) has straight sides and iso-lines, which no chord test
+/// sees, yet its middle stands up to a quarter of its twist,
+/// |P00 + P11 - P01 - P10| / 4, off those triangles; doubling both directions
+/// quarters that. A flat cell whose parameters run unevenly across it lies in
+/// its triangles' plane, however far from their diagonal, and needs nothing.
 pub(super) fn untwisted_grid(
     at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
@@ -913,9 +913,11 @@ pub(super) fn untwisted_grid(
     deflection: f64,
     max_divisions: usize,
 ) -> (usize, usize) {
-    const SAMPLES: usize = 8;
-    // Evenly spread cells of the grid, not every one, its first and last
-    // included: a taper's worst cell sits at its narrow end.
+    // Every cell of a grid up to 64 a side; past that, 64 a side spread over
+    // it, the first and last included. A cell's error follows the patch's
+    // own shape, so its worst cell lies near one of those: at a taper's
+    // narrow end, or mid-patch where a saddle flattens.
+    const SAMPLES: usize = 64;
     let spread = |n: usize| {
         let cells = n.min(SAMPLES);
         (0..cells).map(move |k| {
@@ -944,9 +946,12 @@ pub(super) fn untwisted_grid(
     (n_u, n_v)
 }
 
-/// How far the middle of the cell from `(u0, v0)` across `(du, dv)` lies
-/// from the two triangles the cell splits into, along either diagonal: a
-/// mesh may take either.
+/// How far the cell from `(u0, v0)` across `(du, dv)` strays from the two
+/// triangles it splits into, along either diagonal (a mesh may take either):
+/// the farthest of its middle and its quarter points. A twisted cell strays
+/// most at its middle; a tapered one, whose split leaves a sliver standing
+/// steep, can stray farther toward its narrow end. A flat cell lies in its
+/// triangles and strays nowhere.
 pub(super) fn cell_twist(
     at: &dyn Fn(f64, f64) -> Point3,
     (u0, v0): (f64, f64),
@@ -959,16 +964,27 @@ pub(super) fn cell_twist(
         corner(0.0, 1.0),
         corner(1.0, 1.0),
     );
-    let middle = corner(0.5, 0.5);
-    let split = |a: Point3, b: Point3, c: Point3, d: Point3| {
-        point_triangle_distance(middle, a, b, c).min(point_triangle_distance(middle, a, c, d))
+    let split = |p: Point3, a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
     };
-    split(p00, p10, p11, p01).max(split(p10, p11, p01, p00))
+    [
+        (0.5, 0.5),
+        (0.25, 0.25),
+        (0.75, 0.25),
+        (0.25, 0.75),
+        (0.75, 0.75),
+    ]
+    .iter()
+    .map(|&(a, b)| {
+        let p = corner(a, b);
+        split(p, p00, p10, p11, p01).max(split(p, p10, p11, p01, p00))
+    })
+    .fold(0.0, f64::max)
 }
 
 /// The distance from `p` to the triangle `a`, `b`, `c`; to its longest side
 /// when the triangle has no area.
-fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
+pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
     let segment = |a: Point3, b: Point3| {
         let ab = b - a;
         let len2 = ab.dot(ab);

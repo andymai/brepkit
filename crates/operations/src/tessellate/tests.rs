@@ -3942,6 +3942,100 @@ fn a_flat_trapezoid_needs_no_grid_for_its_twist() {
     assert!(worst <= 0.005, "{n_u} x {n_v}: a cell stands {worst} off");
 }
 
+/// How far the bilinear cell from `corner` across `size` strays from its two
+/// triangles along either diagonal, read at 8 by 8 points inside it.
+fn cell_strays(at: &dyn Fn(f64, f64) -> Point3, (u0, v0): (f64, f64), (du, dv): (f64, f64)) -> f64 {
+    use super::nurbs::point_triangle_distance;
+    let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
+    let (p00, p10, p01, p11) = (
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(0.0, 1.0),
+        corner(1.0, 1.0),
+    );
+    let split = |p: Point3, a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
+    };
+    (1..9)
+        .flat_map(|i| (1..9).map(move |j| (f64::from(i) / 9.0, f64::from(j) / 9.0)))
+        .map(|(a, b)| {
+            let p = corner(a, b);
+            split(p, p00, p10, p11, p01).max(split(p, p10, p11, p01, p00))
+        })
+        .fold(0.0, f64::max)
+}
+
+/// A bilinear patch with corners `p00`, `p10`, `p01`, `p11` over the unit
+/// square.
+fn bilinear(p00: Point3, p10: Point3, p01: Point3, p11: Point3) -> NurbsSurface {
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    NurbsSurface::new(
+        1,
+        1,
+        knots.clone(),
+        knots,
+        vec![vec![p00, p01], vec![p10, p11]],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap()
+}
+
+/// The saddle S(u, v) = (20u, 20v, 10000(u - 0.5)(v - 0.5)) is steep at its
+/// edges and flattens mid-patch, where its cells stray most. The grid taken
+/// for it at deflection 0.01 holds its middle cells within the deflection.
+#[test]
+fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
+    let saddle = bilinear(
+        Point3::new(0.0, 0.0, 2500.0),
+        Point3::new(20.0, 0.0, -2500.0),
+        Point3::new(0.0, 20.0, -2500.0),
+        Point3::new(20.0, 20.0, 2500.0),
+    );
+    let at = |u: f64, v: f64| saddle.evaluate(u, v);
+    let (n_u, n_v) =
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.01, 1024);
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+    let worst = (n_u / 2 - 2..n_u / 2 + 2)
+        .flat_map(|i| (n_v / 2 - 2..n_v / 2 + 2).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            #[allow(clippy::cast_precision_loss)]
+            let corner = (du * i as f64, dv * j as f64);
+            cell_strays(&at, corner, (du, dv))
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(worst <= 0.01, "{n_u} x {n_v}: a middle cell strays {worst}");
+}
+
+/// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
+/// 0.2. Its middle strays 0.05 from the two triangles of either split, but
+/// toward its narrow end, where one triangle is a sliver standing steep,
+/// the patch strays 0.14. The grid taken for it at deflection 0.11 holds
+/// every cell within the deflection.
+#[test]
+fn a_tapered_patch_strays_most_toward_its_narrow_end() {
+    let taper = bilinear(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(20.0, 0.0, 0.0),
+        Point3::new(0.0, 20.0, 0.0),
+        Point3::new(0.2, 20.0, 0.2),
+    );
+    let at = |u: f64, v: f64| taper.evaluate(u, v);
+    let (n_u, n_v) =
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.11, 1024);
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+    let worst = (0..n_u)
+        .flat_map(|i| (0..n_v).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            #[allow(clippy::cast_precision_loss)]
+            let corner = (du * i as f64, dv * j as f64);
+            cell_strays(&at, corner, (du, dv))
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(worst <= 0.11, "{n_u} x {n_v}: a cell strays {worst}");
+}
+
 /// The saddle S(u, v) = (20u, 20v, 10uv) trimmed to its corner u, v in 0
 /// to 0.1 twists 0.1 there, which two triangles hold to 0.025: its straight
 /// edges keep their ends at deflection 0.1. The whole saddle twists 10, and
