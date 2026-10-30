@@ -1219,8 +1219,20 @@ impl BrepKernel {
                 let dist = (proj - target).length();
                 Ok(vec![best_u, best_v, proj.x(), proj.y(), proj.z(), dist])
             }
+            // A cone's own projection keeps the point's height; the nearest
+            // point lies along the generator across it.
+            FaceSurface::Cone(cone) => {
+                let foot = brepkit_geometry::extrema::point_to_cone(target, cone);
+                Ok(vec![
+                    foot.u,
+                    foot.v,
+                    foot.point.x(),
+                    foot.point.y(),
+                    foot.point.z(),
+                    foot.distance,
+                ])
+            }
             surface @ (FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)) => {
                 // An analytic surface projects in closed form, in its own

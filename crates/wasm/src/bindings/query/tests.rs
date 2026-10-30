@@ -640,3 +640,30 @@ fn a_point_projects_onto_a_cylinders_wall_exactly() {
         );
     }
 }
+
+/// A point off a 45° cone's wall lands at its nearest point, down the
+/// generator across from it, not at the wall's point at its own height.
+#[test]
+fn a_point_projects_onto_a_cones_wall_at_its_nearest_point() {
+    let mut k = crate::kernel::BrepKernel::new();
+    let cone = brepkit_operations::primitives::make_cone(k.topo_mut(), 3.0, 0.0, 3.0).unwrap();
+    let wall = brepkit_topology::explorer::solid_faces(k.topo(), cone)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(
+                k.topo().face(f).unwrap().surface(),
+                brepkit_topology::face::FaceSurface::Cone(_)
+            )
+        })
+        .unwrap();
+    let r = k
+        .project_point_on_surface(face_id_to_u32(wall), 3.0, 0.0, 2.0)
+        .unwrap();
+    let got = Point3::new(r[2], r[3], r[4]);
+    assert!(
+        (got - Point3::new(2.0, 0.0, 1.0)).length() < 1e-9,
+        "{got:?}"
+    );
+    assert!((r[5] - 2.0_f64.sqrt()).abs() < 1e-9, "distance {}", r[5]);
+}
