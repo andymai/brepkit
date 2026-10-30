@@ -7093,7 +7093,11 @@ fn analytic_nurbs_intersection(
             c.to_nurbs(v0, v1)
         }
         FaceSurface::Cone(c) => {
-            let (v0, v1) = band(axial_range(c.apex(), c.axis()));
+            // A cone's `v` runs along its generator, `sin(half_angle)` of it
+            // along the axis.
+            let (h0, h1) = axial_range(c.apex(), c.axis());
+            let along = c.half_angle().sin();
+            let (v0, v1) = band((h0 / along, h1 / along));
             if v0 >= v1 {
                 return Ok(Vec::new());
             }
@@ -9022,6 +9026,53 @@ fn clip_line_to_polygon_general(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// A cone about z with half-angle π/6 from its radial plane, stored over
+    /// its generator from 18 to 22, meets the flat NURBS rectangle x = 16 to
+    /// 19, y = -1 to 1 at z = 10, the height 20 along its generator reaches.
+    /// The crossing is found, on the cone and in the plane z = 10 to its
+    /// fit's 1e-5.
+    #[test]
+    fn a_nurbs_face_meets_a_cone_where_its_generator_reaches_it() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::surfaces::ConicalSurface;
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_6,
+        )
+        .unwrap();
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let at = |x: f64, y: f64| Point3::new(x, y, 10.0);
+        let plate = NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots,
+            vec![
+                vec![at(16.0, -1.0), at(16.0, 1.0)],
+                vec![at(19.0, -1.0), at(19.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let wall = FaceSurface::Cone(cone);
+        let curves = analytic_nurbs_intersection(&wall, Some((18.0, 22.0)), &plate).unwrap();
+        assert!(!curves.is_empty(), "no crossing");
+        let radius = 20.0 * std::f64::consts::FRAC_PI_6.cos();
+        for raw in &curves {
+            let (t0, t1) = raw.t_range;
+            for k in 0..=8 {
+                let t = (t1 - t0).mul_add(f64::from(k) / 8.0, t0);
+                let p = raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+                // A marched section, fitted through its points.
+                assert!(
+                    (p.x().hypot(p.y()) - radius).abs() < 1e-5 && (p.z() - 10.0).abs() < 1e-5,
+                    "{p:?}"
+                );
+            }
+        }
+    }
 
     /// A thread's flank between two tooth sections, a twisted bilinear patch
     /// from z = -0.3 to 0.7, crosses a cylinder of radius 7 stored from z = 0
