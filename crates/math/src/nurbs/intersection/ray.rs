@@ -254,8 +254,15 @@ impl RaySurface {
             }
             let (along_u, along_v) = patch.spans();
             if along_u.max(along_v) <= leaf || depth >= MAX_DEPTH {
-                self.solve(&patch, origin, frame.z, reach, &mut out);
-                continue;
+                // A leaf the solve cannot settle is cut further, and at the
+                // deepest level the ray is taken to graze it.
+                if self.solve(&patch, origin, frame.z, reach, &mut out) {
+                    continue;
+                }
+                if depth >= MAX_DEPTH {
+                    out.grazed = true;
+                    continue;
+                }
             }
             let (a, b) = patch.split(along_u >= along_v);
             stack.push((a, depth + 1));
@@ -293,23 +300,30 @@ impl RaySurface {
     }
 
     /// Newton on `S(u, v) = origin + t dir` from the middle of `leaf`,
-    /// recording the hit when it lands in the leaf.
-    fn solve(&self, leaf: &Patch, origin: Point3, dir: Vec3, reach: f64, out: &mut RayHits) {
+    /// recording the hit when it lands in the leaf. Whether it converged,
+    /// in the leaf or out of it: a stall (the ray along the tangent plane
+    /// at a step) or no convergence leaves the leaf unsettled.
+    fn solve(
+        &self,
+        leaf: &Patch,
+        origin: Point3,
+        dir: Vec3,
+        reach: f64,
+        out: &mut RayHits,
+    ) -> bool {
         let (mut u, mut v) = (
             f64::midpoint(leaf.u.0, leaf.u.1),
             f64::midpoint(leaf.v.0, leaf.v.1),
         );
         let (du, dv) = (self.surface.domain_u(), self.surface.domain_v());
         let mut t = dir.dot(self.surface.evaluate(u, v) - origin);
-        let mut miss = f64::INFINITY;
         for _ in 0..32 {
             let d = self.surface.derivatives(u, v, 1);
             let (s, su, sv) = (d[0][0], d[1][0], d[0][1]);
             let f = s - Vec3::new(origin.x(), origin.y(), origin.z()) - dir * t;
-            miss = f.length();
             let normal = su.cross(sv);
             let det = -normal.dot(dir);
-            if miss <= 1e-12 * self.scale {
+            if f.length() <= 1e-12 * self.scale {
                 let slack_u = 1e-9 * (du.1 - du.0);
                 let slack_v = 1e-9 * (dv.1 - dv.0);
                 if u < leaf.u.0 - slack_u
@@ -318,14 +332,14 @@ impl RaySurface {
                     || v > leaf.v.1 + slack_v
                     || t < -reach
                 {
-                    return;
+                    return true;
                 }
                 out.grazed |= self.second_crossing_near(u, v, dir);
                 let point = origin + dir * t;
                 if !out.hits.iter().any(|h| (h.point - point).length() <= reach) {
                     out.hits.push(RayHit { u, v, t, point });
                 }
-                return;
+                return true;
             }
             if det.abs() <= 1e-300 {
                 break;
@@ -340,7 +354,7 @@ impl RaySurface {
             v = (v + x_v).clamp(dv.0, dv.1);
             t += x_t;
         }
-        out.grazed |= miss <= reach;
+        false
     }
 }
 
@@ -448,6 +462,35 @@ mod tests {
         assert_eq!(xs.len(), 2, "{xs:?}");
         assert!((xs[0] - (1.0 - root) / 2.0).abs() < 1e-9, "{xs:?}");
         assert!((xs[1] - f64::midpoint(1.0, root)).abs() < 1e-9, "{xs:?}");
+    }
+
+    /// The saddle `(u, v, (u - 1/2)(v - 1/2))` over the unit square, beside
+    /// a span reaching to `x = 2000` that makes the whole saddle one leaf.
+    /// A level ray from its middle at height 0.04 along `(1, 1, 0)` crosses
+    /// it at `(0.7, 0.7)`, though at the leaf's middle the ray runs along
+    /// the tangent plane and a solve from there stalls.
+    #[test]
+    fn a_ray_level_with_a_saddles_middle_crosses_it() {
+        let p = Point3::new;
+        let rows = vec![
+            vec![p(0.0, 0.0, 0.25), p(0.0, 1.0, -0.25)],
+            vec![p(1.0, 0.0, -0.25), p(1.0, 1.0, 0.25)],
+            vec![p(2000.0, 0.0, 0.0), p(2000.0, 1.0, 0.0)],
+        ];
+        let s = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 2.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let ray = RaySurface::new(&s).unwrap();
+        let dir = Vec3::new(1.0, 1.0, 0.0).normalize().unwrap();
+        let found = ray.hits(p(0.5, 0.5, 0.04), dir, 1e-9);
+        assert_eq!(found.hits.len(), 1, "{:?}", found.grazed);
+        assert!((found.hits[0].point - p(0.7, 0.7, 0.04)).length() < 1e-9);
     }
 
     /// A surface whose `u` knots run `[-2, -1, 0, 1, 2, 3]`, unclamped, is
