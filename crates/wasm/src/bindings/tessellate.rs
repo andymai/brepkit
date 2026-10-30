@@ -82,9 +82,11 @@ impl BrepKernel {
     /// `faceOffsets` is an array where `faceOffsets[i]` is the start index into
     /// `indices` for face `i`, and the last element is `indices.length`.
     ///
-    /// Uses the watertight shared-edge-pool tessellation: adjacent faces share
-    /// identical boundary vertices, so the exported mesh has no T-junctions
-    /// regardless of how the solid was constructed (booleans included).
+    /// Uses the watertight shared-edge-pool tessellation: adjacent faces meet
+    /// at identical boundary positions, so the exported mesh has no
+    /// T-junctions regardless of how the solid was constructed (booleans
+    /// included). Each face holds its own copies of its boundary vertices,
+    /// carrying its own normal there, so a crease between faces shades sharp.
     #[wasm_bindgen(js_name = "tessellateSolidGrouped")]
     pub fn tessellate_solid_grouped(
         &self,
@@ -96,7 +98,7 @@ impl BrepKernel {
         let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
 
-        let (mesh, face_offsets) = tessellate::tessellate_solid_grouped_with_tolerance(
+        let (mesh, face_offsets) = tessellate::tessellate_solid_faceted_with_tolerance(
             &self.topo,
             solid_id,
             deflection,
@@ -145,7 +147,7 @@ impl BrepKernel {
         let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
 
-        let (mesh, face_offsets) = tessellate::tessellate_solid_grouped_with_tolerance(
+        let (mesh, face_offsets) = tessellate::tessellate_solid_faceted_with_tolerance(
             &self.topo,
             solid_id,
             deflection,
@@ -320,6 +322,21 @@ mod tests {
                 idx < vertex_count,
                 "index {idx} out of bounds (vertex_count={vertex_count})"
             );
+        }
+    }
+
+    /// A box's grouped mesh gives each face its own corners, each carrying
+    /// that face's normal along an axis, so the box shades flat.
+    #[test]
+    fn tessellate_solid_grouped_binary_shades_a_box_flat() {
+        let (k, solid) = kernel_with_box();
+        let mesh = k
+            .tessellate_solid_grouped_binary(solid, 0.1, Some(0.5))
+            .unwrap();
+        assert_eq!(mesh.positions().len(), 24 * 3);
+        for n in mesh.normals().chunks_exact(3) {
+            let largest = n.iter().fold(0.0_f32, |m, c| m.max(c.abs()));
+            assert!((largest - 1.0).abs() < 1e-6, "normal {n:?}");
         }
     }
 

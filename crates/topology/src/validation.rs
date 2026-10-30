@@ -35,7 +35,18 @@ pub fn validate_wire_closed(wire: &Wire, topo: &Topology) -> Result<(), Topology
     if !wire.is_closed() {
         return Err(TopologyError::WireNotClosed);
     }
+    validate_wire_chain_closes(wire, topo)
+}
 
+/// Validates that a wire's edges run end to end round a loop, as
+/// [`validate_wire_closed`] does, whatever its closed flag says.
+///
+/// # Errors
+///
+/// Returns [`TopologyError::WireNotClosed`] if an edge's end does not meet
+/// the next edge's start, or the last edge's end the first's start.
+/// Returns [`TopologyError::EdgeNotFound`] if any edge id is invalid.
+pub fn validate_wire_chain_closes(wire: &Wire, topo: &Topology) -> Result<(), TopologyError> {
     let connects =
         |a: crate::vertex::VertexId, b: crate::vertex::VertexId| -> Result<bool, TopologyError> {
             if a == b {

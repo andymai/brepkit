@@ -9208,3 +9208,47 @@ fn a_box_takes_the_tip_off_a_nurbs_lid() {
         );
     }
 }
+
+/// A ball of radius 10 whose equator lies in a 40 x 40 x 20 box's top face
+/// leaves that face bounded by the equator's arcs, not their chords: the
+/// intersection is the lower hemisphere, the cut the box less it, and the
+/// fuse the box with the upper hemisphere, each exact.
+#[test]
+fn a_ball_with_its_equator_on_a_box_face_meets_it_exactly() {
+    use brepkit_math::mat::Mat4;
+
+    let hemisphere = 2.0 / 3.0 * std::f64::consts::PI * 1000.0;
+    for (op, faces, volume) in [
+        (BooleanOp::Intersect, 2, hemisphere),
+        (BooleanOp::Cut, 7, 32_000.0 - hemisphere),
+        (BooleanOp::Fuse, 7, 32_000.0 + hemisphere),
+    ] {
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 40.0, 40.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-20.0, -20.0, 0.0))
+            .unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, ball, &Mat4::translation(0.0, 0.0, 20.0))
+            .unwrap();
+        let result = boolean(&mut topo, op, block, ball).unwrap();
+        let found = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert_eq!(found.len(), faces, "{op:?}");
+        for edge in brepkit_topology::explorer::solid_edges(&topo, result).unwrap() {
+            let edge = topo.edge(edge).unwrap();
+            let z = topo.vertex(edge.start()).unwrap().point().z();
+            if (z - 20.0).abs() < 1e-9 && edge.start() != edge.end() {
+                let ends = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
+                if (ends[0].x().hypot(ends[0].y()) - 10.0).abs() < 1e-9 {
+                    assert!(matches!(edge.curve(), EdgeCurve::Circle(_)), "{op:?}");
+                }
+            }
+        }
+        assert!(
+            crate::validate::validate_solid(&topo, result)
+                .unwrap()
+                .is_valid(),
+            "{op:?}"
+        );
+        assert_volume_near(&topo, result, volume, 1e-6);
+    }
+}
