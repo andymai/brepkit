@@ -327,10 +327,10 @@ pub fn solid_pieces(
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
 
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     if crate::boolean::assembly::face_components(topo, solid).len() < 2 {
         return Ok(vec![solid]);
     }
-    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     let groups = crate::boolean::assembly::edge_connected_faces(topo, &faces);
 
     let mut regions = Vec::with_capacity(groups.len());
@@ -340,7 +340,6 @@ pub fn solid_pieces(
     }
 
     let mut probes = Vec::with_capacity(regions.len());
-    let mut boxes = Vec::with_capacity(regions.len());
     let mut closed = Vec::with_capacity(regions.len());
     for &region in &regions {
         let mut points = Vec::new();
@@ -348,7 +347,6 @@ pub fn solid_pieces(
             points.push(topo.vertex(vid)?.point());
         }
         probes.push(points);
-        boxes.push(crate::measure::solid_bounding_box(topo, region)?);
         closed.push(!crate::boolean::has_free_edges(topo, region)?);
     }
 
@@ -367,9 +365,6 @@ pub fn solid_pieces(
                 continue;
             }
             for &p in points {
-                if !boxes[j].contains_point(p) {
-                    break;
-                }
                 match classifier.classify(p, &options)? {
                     PointClassification::Inside => {
                         around[i].push(j);
@@ -669,5 +664,7 @@ mod tests {
         let mut topo = Topology::new();
         let b = crate::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
         assert_eq!(solid_pieces(&mut topo, b).unwrap(), vec![b]);
+        // A handle the topology does not hold is refused, not handed back.
+        assert!(solid_pieces(&mut Topology::new(), b).is_err());
     }
 }
