@@ -6,7 +6,7 @@ use brepkit_blend::fillet_builder::FilletBuilder;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
-use brepkit_topology::solid::SolidId;
+use brepkit_topology::solid::{Solid, SolidId};
 
 use crate::OperationsError;
 
@@ -30,6 +30,26 @@ pub fn all_blended(result: BlendResult) -> Result<SolidId, OperationsError> {
             ),
         }),
     }
+}
+
+/// `result` with the cavities of `solid` as its own. The walking builders
+/// rebuild only the outer shell and carry the cavity shells over as they
+/// are, so a blend reaching a cavity is refused, and each kept cavity is
+/// copied: a shell shared with the input would move with it under an
+/// in-place transform of either.
+fn own_cavities(
+    topo: &mut Topology,
+    solid: SolidId,
+    mut result: BlendResult,
+    what: &str,
+) -> Result<BlendResult, OperationsError> {
+    if result.solid == solid || topo.solid(solid)?.inner_shells().is_empty() {
+        return Ok(result);
+    }
+    let outer = topo.solid(result.solid)?.outer_shell();
+    let bare = topo.add_solid(Solid::new(outer, Vec::new()));
+    result.solid = crate::cavities::keep_cavities(topo, solid, bare, what)?;
+    Ok(result)
 }
 
 /// Fillet edges with constant radius — the production engine.
@@ -61,7 +81,8 @@ pub fn fillet_v2(
     }
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, radius);
-    Ok(builder.build()?)
+    let built = builder.build()?;
+    own_cavities(topo, solid, built, "fillet")
 }
 
 /// Chamfer edges with two distances (v2 engine).
@@ -88,7 +109,8 @@ pub fn chamfer_v2(
     }
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric(edges, d1, d2);
-    Ok(builder.build()?)
+    let built = builder.build()?;
+    own_cavities(topo, solid, built, "chamfer")
 }
 
 /// Chamfer edges with two distances (v2 engine), `d1` on each edge's
@@ -117,7 +139,8 @@ pub fn chamfer_v2_on(
     }
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric_on(edges, d1, d2);
-    Ok(builder.build()?)
+    let built = builder.build()?;
+    own_cavities(topo, solid, built, "chamfer")
 }
 
 /// Chamfer edges with distance and angle (v2 engine).
@@ -149,7 +172,8 @@ pub fn chamfer_distance_angle(
     }
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_distance_angle(edges, distance, angle);
-    Ok(builder.build()?)
+    let built = builder.build()?;
+    own_cavities(topo, solid, built, "chamfer")
 }
 
 /// Fillet edges with per-edge radius laws (v2 walking engine).
@@ -214,7 +238,8 @@ pub fn fillet_v2_variable(
     for (chain, law) in chains {
         builder.add_edges_with_law(&chain, law);
     }
-    Ok(builder.build()?)
+    let built = builder.build()?;
+    own_cavities(topo, solid, built, "fillet")
 }
 
 /// Whether `cand` shares an endpoint with some chain edge and meets it
