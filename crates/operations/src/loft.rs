@@ -1345,28 +1345,21 @@ fn try_loft_matching_curved_profiles(
         for i in 0..n {
             let (p0s, p0e) = (profs[s][i].start, profs[s][i].end);
             let p1s = profs[s + 1][i].start;
-            let outward = (p0e - p0s).cross(p1s - p0s);
             let p1e = profs[s + 1][i].end;
             let entry = match (&profs[s][i].curve, &profs[s + 1][i].curve) {
                 (EdgeCurve::Line, EdgeCurve::Line) => (ruled_quad(p0s, p0e, p1s, p1e)?, false),
                 (EdgeCurve::Circle(_), EdgeCurve::Line)
                 | (EdgeCurve::Line, EdgeCurve::Circle(_)) => {
-                    let (r0, r1) = (&profs[s][i], &profs[s + 1][i]);
-                    let Some(surf) = ruled_line_surface(r0, r1) else {
+                    // A ruled wall built from the next section's edge back to
+                    // this one's has u running from the next to this and v
+                    // along both edges the way the profiles run, so its normal
+                    // Su × Sv is along × (next - this) at every point, however
+                    // the wall twists: out of profiles running
+                    // counterclockwise about the stacking direction.
+                    let Some(surf) = ruled_line_surface(&profs[s + 1][i], &profs[s][i]) else {
                         return Ok(None);
                     };
-                    let inward = surf
-                        .normal(0.5, 0.5)
-                        .map(|nrm| nrm.dot(outward) < 0.0)
-                        .unwrap_or(false);
-                    if inward {
-                        match ruled_line_surface(r1, r0) {
-                            Some(flipped) => (FaceSurface::Nurbs(flipped), false),
-                            None => (FaceSurface::Nurbs(surf), true),
-                        }
-                    } else {
-                        (FaceSurface::Nurbs(surf), false)
-                    }
+                    (FaceSurface::Nurbs(surf), false)
                 }
                 (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
                     if ends_meet_radially(c0, (p0s, p0e), c1, (p1s, p1e), tol)
@@ -1412,26 +1405,13 @@ fn try_loft_matching_curved_profiles(
                             .unwrap_or(false);
                         (surface, inward)
                     } else {
-                        let Some(surf) = ruled_arc_surface(c0, p0s, p0e, c1, p1s, p1e) else {
+                        // Built from the next section's arc back to this
+                        // one's, as a wall from a side to an arc is: it faces
+                        // out by its parameters alone.
+                        let Some(surf) = ruled_arc_surface(c1, p1s, p1e, c0, p0s, p0e) else {
                             return Ok(None);
                         };
-                        let inward = surf
-                            .normal(0.5, 0.5)
-                            .map(|nrm| nrm.dot(outward) < 0.0)
-                            .unwrap_or(false);
-                        if inward {
-                            // Swapping the rails negates ∂S/∂u and flips the
-                            // normal outward, so the face needs no reversal
-                            // flag (and downstream consumers never see a
-                            // reversed-wound loft wall). Fall back to the
-                            // reversal flag if the swapped build fails.
-                            match ruled_arc_surface(c1, p1s, p1e, c0, p0s, p0e) {
-                                Some(flipped) => (FaceSurface::Nurbs(flipped), false),
-                                None => (FaceSurface::Nurbs(surf), true),
-                            }
-                        } else {
-                            (FaceSurface::Nurbs(surf), false)
-                        }
+                        (FaceSurface::Nurbs(surf), false)
                     }
                 }
                 _ => return Ok(None),
@@ -2273,8 +2253,26 @@ mod square_to_circle_tests {
                     .unwrap()
                     .is_valid()
             );
+            assert_meshes_closed(&topo, solid);
             let volume = crate::measure::solid_volume(&topo, solid, 1e-4).unwrap();
             assert!((volume - 35125.497).abs() < 1e-4 * 35125.497, "{volume}");
+        }
+    }
+
+    /// The solid's meshes at deflections 0.01 and 0.001 have no edge but two
+    /// triangles run opposite ways along: none open, none shared by more, and
+    /// none two faces run the same way, as a face turned inside out would.
+    fn assert_meshes_closed(topo: &Topology, solid: SolidId) {
+        for deflection in [0.01, 0.001] {
+            let mesh = crate::tessellate::tessellate_solid(topo, solid, deflection).unwrap();
+            assert_eq!(
+                (
+                    crate::tessellate::boundary_edge_count(&mesh),
+                    crate::tessellate::non_manifold_edge_count(&mesh)
+                ),
+                (0, 0),
+                "open or branching mesh at {deflection}"
+            );
         }
     }
     /// Every vertex of `solid` lies on each of its edges' curves, and each
@@ -3002,6 +3000,58 @@ mod square_to_circle_tests {
             up,
             1e-7
         ));
+    }
+
+    /// Quadrilaterals (1, 0), (2, 2), (-1, 0), (-2, -2) at z = 0 and
+    /// (20, 0), (2, 2), (-20, 0), (-2, -2) at z = 40, run counterclockwise,
+    /// the upper one's first side an arc about (0, -98) and its third an arc
+    /// about (0, 98), the lower one's first side straight or an arc about
+    /// (-38.5, 21). Each wall to an arc twists, so the normal at its middle
+    /// can face out across the first corner's chord while the wall faces in.
+    /// Every wall faces out: the meshes close with each triangle facing the
+    /// way its neighbours do, and the loft holds what the walls' rulings
+    /// bound slice by slice, 1809.487 or 1809.375.
+    #[test]
+    fn a_twisted_wall_to_an_arc_faces_out() {
+        for (low_arc, exact) in [(false, 1809.487), (true, 1809.375)] {
+            let mut topo = Topology::new();
+            let low = profile(
+                &mut topo,
+                0.0,
+                &[
+                    ((2.0, 2.0), low_arc.then_some((-38.5, 21.0))),
+                    ((-1.0, 0.0), None),
+                    ((-2.0, -2.0), None),
+                    ((1.0, 0.0), None),
+                ],
+            );
+            let high = profile(
+                &mut topo,
+                40.0,
+                &[
+                    ((2.0, 2.0), Some((0.0, -98.0))),
+                    ((-20.0, 0.0), None),
+                    ((-2.0, -2.0), Some((0.0, 98.0))),
+                    ((20.0, 0.0), None),
+                ],
+            );
+            let solid = try_loft_matching_curved_profiles(&mut topo, &[low, high]).unwrap();
+            assert!(solid.is_some(), "{low_arc}: not lofted along its arcs");
+            let solid = solid.unwrap();
+            assert!(lies_on_its_geometry(&topo, solid), "{low_arc}");
+            assert!(
+                crate::validate::validate_solid(&topo, solid)
+                    .unwrap()
+                    .is_valid(),
+                "{low_arc}"
+            );
+            assert_meshes_closed(&topo, solid);
+            let volume = crate::measure::solid_volume(&topo, solid, 1e-4).unwrap();
+            assert!(
+                (volume - exact).abs() < 1e-5 * exact,
+                "{low_arc}: {volume} of {exact}"
+            );
+        }
     }
 
     /// A 20 square at z = 0 notched by a half circle of radius 2 about the
