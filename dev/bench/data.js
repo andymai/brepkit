@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793393530246,
+  "lastUpdate": 1793393728325,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62855,6 +62855,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27513418,
             "range": "± 81463",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f7a38f81cd5c94d7a91c60399d47d4555368b436",
+          "message": "fix(operations): loft profiles of different edge counts by matching their angles (#2230)\n\nA ruled loft between profiles with different edge counts, such as a\nsquare and a circle, now pairs them by angle about their centres and\nkeeps the circle's arcs curved, so the solid holds its volume.\n\nToday `loft` resamples both profiles to one polygon from wherever each\nstarts, so the sides twist, and each quad between the samples is stored\nas a plane. A 40 x 40 square at z = 0 lofted to a circle of radius 10 at\nz = 40 gives 34 planar faces holding 19274.751, and 2599.671 with the\ncircle first, where pairing each side with its quarter circle holds\n35125.497 (the issue's reference gives 35125.498).\n\n## Change\n\n- Profiles of lines and arcs whose edge counts differ are cut at one\nanother's vertices by angle. Each profile's centre is a lone circle's\nown centre, or else the centre of its boundary's length. A vertex is\ncarried to the next profile by the offset between centres, and a ray\nfrom that profile's centre through it cuts the boundary where it lands,\nlast profile to first and back. Each profile then starts at the vertex\nwhose angle lies nearest the first profile's start. A lone circle's seam\nis first moved onto the ray through the first corner of a profile with\ncorners, a cut made anyway, so the loft no longer depends on where the\ncircle's seam lies.\n- A profile is paired by angle only when every edge turns one way about\nits centre along its whole length: a line passing the centre on its\nleft, an arc whose angular rate keeps its sign at its ends and at its\nturning points. A profile a ray from its centre meets more than once (a\nnotched square, a notch cut by a backward arc), or one an arc of grazes\nradially, keeps the polygon loft.\n- A line paired with an arc is ruled by an exact NURBS surface: the arc\nin rational quadratic pieces of at most π/16, the line in as many equal\nsteps, so each ruling meets the arc near the angle its step reaches.\n- Each ruled wall to an arc, from a line or another arc, is built from\nthe next section's edge back to this one's, so its normal points out of\na profile running counterclockwise about the stacking direction however\nthe wall twists. No normal is sampled.\n- A profile's circle edge is read the way its edge runs: a circle is\nturned over when the edge's tangent where its traversal begins runs\nagainst the circle's own tangent there. A NURBS edge's tangent is read\nfrom the curve itself, so where its derivative vanishes at its start the\ndirection comes from a short step along it.\n- Where a ray meets a circle whose plane tilts from the first profile's,\nit meets the circle's sphere; the cut is taken on the circle.\n- Corner arcs on one axis are joined by a cylinder or cone only when\ntheir ends sit at matching angles about that axis, start with start and\nend with end; arcs the matching cut elsewhere are ruled. The cone opens\ntoward the wider arc whichever way the arcs' normal points.\n\nRefs #2169: its point case is #2234.\n\n## Tests\n\n- `a_square_lofts_to_a_circle_meeting_it_at_matching_angles`: the square\nand circle above, either way up, loft to 6 faces (2 planes and 4 ruled\nsides), valid, holding 35125.497 to 1e-4 at deflection 1e-4, its meshes\nclosed and consistently wound at deflections 0.01 and 0.001. Without the\nangle matching it is the 34 planar faces.\n- `a_square_lofts_to_a_circle_the_same_wherever_its_seam_lies`: with the\ncircle's seam at 0, π/8, π/3 and 1, the loft keeps its arcs and holds\n35125.497 to 1e-6. Cut at the seam as well, it held 35125.49, 35114.18,\n35109.88 and 35109.40.\n- `a_square_lofts_to_a_slightly_tilted_circle_with_its_cuts_on_it`: the\nsquare lofted to the circle tilted 1e-5 about x keeps 6 faces, valid,\neach vertex on its edges' curves. With the cuts taken where the rays\nmeet the circle's sphere, up to 7e-5 off the circle, it falls back to 34\nplanar faces.\n- `coaxial_corner_arcs_cut_at_other_angles_are_ruled`: rounded squares\nof half-size 10 and corner radius 2 at z = 0, one side cut in two, and\nof half-size 12 and corner radius 4 at z = 10 loft to a valid solid\nwhose cylinder and cone faces hold their edges. Joining coaxial arcs by\na cone whatever their ends fails it.\n- `a_concave_notch_widening_up_a_loft_is_a_cone`: profiles with\nclockwise half-circle notches of radius 2 at z = 0 and 4 at z = 10 loft\nalong their arcs to one cone face that holds its rims, valid, holding\n4000 − 140π/3 to 1e-6. Choosing the cone's axis by the change of radius\nalone, it misses its rims.\n- `a_notched_square_is_not_paired_by_angle` and\n`a_square_notched_by_an_arc_is_not_paired_by_angle`: a square notched at\nits top, or by a 240° clockwise arc of radius 4, lofted to a circle\nkeeps the polygon loft, valid, its circle faceted. Pairing them by angle\ngives curved bands across angles.\n- `an_arc_turning_back_between_its_ends_turns_two_ways`: seen from the\norigin, an arc of radius 6 about (10, 0) from −80° to 80° turns one way;\nfrom 100° to 260° it turns back in its middle, and one of radius 10 over\nthat span grazes radially. Reading only the arcs' ends passes the\nsecond.\n- `a_twisted_wall_to_an_arc_faces_out`: profiles (1, 0), (2, 2), (−1,\n0), (−2, −2) at z = 0 and (20, 0), (2, 2), (−20, 0), (−2, −2) at z = 40,\ntheir upper first and third sides arcs about (0, −98) and (0, 98), the\nlower first side straight or an arc, loft to valid solids that mesh\nclosed at 0.01 and 0.001 and hold 1809.487 and 1809.375 to 1e-5, each\nfigure computed independently two ways. Facing the walls by a sampled\nnormal, they held 1201.79 and 1505.75.\n- `a_reversed_arc_edge_lofts_as_the_arc_it_bounds`: a quarter disc of\nradius 10 with its arc stored either way round lofts to a copy 10 above\nit as the prism holding 250π, and to a circle of radius 3 as the same\nvalid solid either way.\n- `arcs_read_the_way_they_leave_their_start`: a quarter disc whose arc\nis a rational quadratic weighted 1, 10/√2 and 100, stored either way\nround, lofts along its arcs to the circle above it as the circle-arc\nquarter disc does, holding 516.45; read a quarter of the way along its\nparameter, 70° round, the forward one held 198.46. A disc whose rim\nstarts at angle π lofts to a square beside it as the one starting at 0\ndoes, which that reading broke.\n- `an_arc_standing_still_where_it_starts_reads_its_way`: the quarter\ncircle as R(t²), a rational quartic with zero derivative at its start,\nstored either way round, lofts along its arcs holding 516.45. Through\nthe tangent's stand-in it read as its complement and fell back to a\n34-face polygon solid holding 200.70.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes `loft` so profiles of different edge counts, like a square and a\ncircle, pair their edges by angle about their centers instead of\nresampling both to one polygon from wherever each starts. Sides no\nlonger twist, arcs stay curved, and the volume is preserved: a 40 × 40\nsquare lofted to a circle of radius 10 at z = 40 holds 35125.497 (the\nissue's reference gives 35125.498) instead of 19274.751, or 2599.671\nwith the circle first, and the result is the same wherever the circle's\nseam lies.\n\n- Ruled walls between a side and an arc, or between arcs on different\naxes, are now built from the next section's edge back to this one's, so\ntheir normals face out by their parameters alone: a twisted wall no\nlonger takes its facing from a chord that can lie the wrong side.\n- A profile's circle edges are turned over when the edge runs the other\nway, its way read from its tangent at the edge's traversal start, with a\nfinite-difference fallback for a NURBS parameter standing still there,\nso a reversed arc reads as the arc it bounds rather than its complement.\n- Angle matching only applies where it holds: cuts on a tilted circle\nare taken on the circle itself; corner arcs cut at non-matching angles\nare ruled, not cylinders or cones; a profile a ray from its center meets\nmore than once, like a notched square, keeps the polygon loft; an edge\nthat turns back along its length is not paired by angle; and a band\nbetween coaxial arcs opens its cone toward the wider arc.\n\nRefs #2169: lofting a profile to an apex point still adds a tiny cap at\nthe apex, which needs its own change.\n\n**Tests**\n- The square-to-circle loft meets its reference volume either way up,\nindependent of the circle's seam, keeps 6 faces, and its meshes close at\ndeflections 0.01 and 0.001.\n- Quarter discs with arcs stored forward or reversed, as circle edges or\nNURBS arcs (including one standing still at its start), loft to\nidentical valid solids; a twisted wall to an arc faces out and holds its\nrulings' volume.\n- A slightly tilted circle, coaxial corner arcs cut at other angles, a\nnotched square, and a concave notch widening upward verify the pairing\nlimits.\n\n<sup>Written for commit 42727a522c7cad5856116a8f38cbb923438e025f.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2230?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2230?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2230&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T13:50:45-07:00",
+          "tree_id": "77979694bda6d73cc526902379f57025bcbe2684",
+          "url": "https://github.com/andymai/brepkit/commit/f7a38f81cd5c94d7a91c60399d47d4555368b436"
+        },
+        "date": 1793393721999,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1111340,
+            "range": "± 8875",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1187000,
+            "range": "± 4638",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13127,
+            "range": "± 29",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 677758,
+            "range": "± 1516",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28894554,
+            "range": "± 889995",
             "unit": "ns/iter"
           }
         ]
