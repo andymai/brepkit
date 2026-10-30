@@ -909,6 +909,50 @@ fn fuse_l_with_a_rib_whose_sides_are_split_into_collinear_edges() {
     }
 }
 
+/// A prism in the same L whose two sides from its inside corner are split
+/// into 130 edges each: its 256 longest edges all lie in the L, and only its
+/// short far side runs out of it. The shortcut must not call it contained.
+#[test]
+fn fuse_l_with_a_prism_whose_longest_edges_all_lie_inside() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
+
+    let mut topo = Topology::new();
+    let base = crate::primitives::make_box(&mut topo, 60.0, 40.0, 5.0).unwrap();
+    let wall = crate::primitives::make_box(&mut topo, 5.0, 40.0, 60.0).unwrap();
+    for b in [base, wall] {
+        crate::transform::transform_solid(&mut topo, b, &Mat4::translation(0.0, -20.0, 0.0))
+            .unwrap();
+    }
+    let l = boolean(&mut topo, BooleanOp::Fuse, base, wall).unwrap();
+    let pieces = 130;
+    let along = |from: (f64, f64), to: (f64, f64)| {
+        (0..pieces).map(move |k| {
+            let f = f64::from(k) / f64::from(pieces);
+            (
+                f.mul_add(to.0 - from.0, from.0),
+                f.mul_add(to.1 - from.1, from.1),
+            )
+        })
+    };
+    let points: Vec<Point3> = along((2.0, 2.0), (7.0, 4.0))
+        .chain(std::iter::once((7.0, 4.0)))
+        .chain(along((4.0, 7.0), (2.0, 2.0)))
+        .map(|(x, z)| Point3::new(x, -5.0, z))
+        .collect();
+    let wire = make_polygon_wire(&mut topo, &points, 1e-7).unwrap();
+    let face = make_face_from_wire(&mut topo, wire).unwrap();
+    let prism = crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 1.0, 0.0), 10.0).unwrap();
+    let both = boolean(&mut topo, BooleanOp::Fuse, l, prism).unwrap();
+    // The prism adds the corner past the L's inner corner, a right triangle
+    // of legs 1, ten deep.
+    let volume = crate::measure::solid_volume(&topo, both, 0.01).unwrap();
+    assert!(
+        (volume - 23005.0).abs() < 1e-6 * 23005.0,
+        "the fuse holds {volume:.3}"
+    );
+}
+
 #[test]
 fn fuse_flush_face_cubes() {
     let mut topo = Topology::new();
