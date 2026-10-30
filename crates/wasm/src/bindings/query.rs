@@ -512,6 +512,8 @@ impl BrepKernel {
     /// Returns `[t_start, t_end]`.
     /// For line edges: `[0.0, length]`.
     /// For NURBS edges: knot domain.
+    /// For circle and ellipse edges: the arc's span on its curve, from the
+    /// edge's start vertex to its end, a whole turn for a closed edge.
     #[wasm_bindgen(js_name = "getEdgeCurveParameters")]
     pub fn get_edge_curve_parameters(&self, edge: u32) -> Result<Vec<f64>, JsError> {
         let edge_id = self.resolve_edge(edge)?;
@@ -527,7 +529,12 @@ impl BrepKernel {
                 let (u_start, u_end) = curve.domain();
                 Ok(vec![u_start, u_end])
             }
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Ok(vec![0.0, std::f64::consts::TAU]),
+            curve @ (EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) => {
+                let start = self.topo.vertex(edge_data.start())?.point();
+                let end = self.topo.vertex(edge_data.end())?.point();
+                let (t_start, t_end) = curve.domain_with_endpoints(start, end);
+                Ok(vec![t_start, t_end])
+            }
         }
     }
 
