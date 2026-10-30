@@ -592,6 +592,46 @@ fn make_planar_face_from_wire_rejects_noncoplanar() {
     );
 }
 
+// ── get_edge_curve_parameters ────────────────────────────────
+
+/// A half circle from (10, 0, 0) over (15, 5, 0) to (20, 0, 0) runs half a
+/// turn: its parameters reach its start, its top and its end, not round its
+/// whole circle.
+#[test]
+fn an_arcs_parameters_span_the_arc() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::vec::Vec3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+
+    let mut k = crate::kernel::BrepKernel::new();
+    let circle =
+        Circle3D::new(Point3::new(15.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0), 5.0).unwrap();
+    let topo = k.topo_mut();
+    let a = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, 0.0), 1e-7));
+    let b = topo.add_vertex(Vertex::new(Point3::new(20.0, 0.0, 0.0), 1e-7));
+    let arc =
+        crate::handles::edge_id_to_u32(topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))));
+
+    let span = k.get_edge_curve_parameters(arc).unwrap();
+    assert!(
+        (span[1] - span[0] - std::f64::consts::PI).abs() < 1e-12,
+        "{span:?}"
+    );
+    for (t, expected) in [
+        (span[0], Point3::new(10.0, 0.0, 0.0)),
+        (f64::midpoint(span[0], span[1]), Point3::new(15.0, 5.0, 0.0)),
+        (span[1], Point3::new(20.0, 0.0, 0.0)),
+    ] {
+        let p = k.evaluate_edge_curve(arc, t).unwrap();
+        let got = Point3::new(p[0], p[1], p[2]);
+        assert!(
+            (got - expected).length() < 1e-9,
+            "at {t}: {got:?}, expected {expected:?}"
+        );
+    }
+}
+
 // ── evaluate_surface_normal ──────────────────────────────────
 
 /// A tube cut from a cylinder of radius 20 by one of radius 17: its outer
