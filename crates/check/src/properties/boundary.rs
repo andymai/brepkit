@@ -293,18 +293,25 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                 let (ub, vb) = at(tb);
                 let u_b = u_a + wrap_pi(ub - u_a);
                 let v_b = v_a + v_wrap(vb - v_a);
-                let (half, mid) = (0.5 * (tb - ta), 0.5 * (ta + tb));
-                let mut nodes = [(0.0, 0.0, 0.0, 0.0); 8];
-                for (node, gp) in nodes.iter_mut().zip(gauss) {
-                    let t = half.mul_add(gp.x, mid);
-                    let (un, vn) = at(t);
-                    *node = (
-                        t,
-                        u_a + wrap_pi(un - u_a),
-                        v_a + v_wrap(vn - v_a),
-                        half * gp.w,
-                    );
-                }
+                let mid = f64::midpoint(ta, tb);
+                // The rule's nodes over `[a, b]`, `u` and `v` carried on from
+                // the piece's start.
+                let nodes_over = |a: f64, b: f64| {
+                    let (half, centre) = (0.5 * (b - a), f64::midpoint(a, b));
+                    let mut nodes = [(0.0, 0.0, 0.0, 0.0); 8];
+                    for (node, gp) in nodes.iter_mut().zip(gauss) {
+                        let t = half.mul_add(gp.x, centre);
+                        let (un, vn) = at(t);
+                        *node = (
+                            t,
+                            u_a + wrap_pi(un - u_a),
+                            v_a + v_wrap(vn - v_a),
+                            half * gp.w,
+                        );
+                    }
+                    nodes
+                };
+                let nodes = nodes_over(ta, tb);
                 let swings = !singular(ua, va)
                     && (nodes.iter().any(|n| (n.1 - u_a).abs() > quarter)
                         || (!singular(ub, vb) && (u_b - u_a).abs() > quarter));
@@ -316,24 +323,61 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                     pending.push((ta, mid));
                     continue;
                 }
-                // A five-point stencil wide enough that rounding in far-off
-                // coordinates stays small against it.
-                let h = 1e-3 * (tb - ta);
-                for (t, un, vn, w) in nodes {
-                    let [(u1, v1), (u2, v2), (u3, v3), (u4, v4)] =
-                        [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(at);
-                    let du = 8.0f64.mul_add(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
-                    let dv = 8.0f64.mul_add(v_wrap(v1 - v2), -v_wrap(v3 - v4)) / (12.0 * h);
-                    // A latitude (a rim circle about the axis) adds nothing.
-                    if dv.abs() > 1e-12 * (1.0 + vn.abs()) {
-                        add(
-                            &mut acc,
-                            &antiderivative(chart.surface, un, vn, about),
-                            w * dv,
-                        );
+                // The integrals over `[a, b]` by the rule, the area's last.
+                let sums = |a: f64, b: f64, nodes: [(f64, f64, f64, f64); 8]| {
+                    // A five-point stencil wide enough that rounding in
+                    // far-off coordinates stays small against it.
+                    let h = 1e-3 * (b - a);
+                    let mut sums = [0.0; 9];
+                    for (t, un, vn, w) in nodes {
+                        let [(u1, v1), (u2, v2), (u3, v3), (u4, v4)] =
+                            [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(at);
+                        let du = 8.0f64.mul_add(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
+                        let dv = 8.0f64.mul_add(v_wrap(v1 - v2), -v_wrap(v3 - v4)) / (12.0 * h);
+                        // A latitude (a rim circle about the axis) adds nothing.
+                        if dv.abs() > 1e-12 * (1.0 + vn.abs()) {
+                            let g = antiderivative(chart.surface, un, vn, about);
+                            for (s, x) in sums.iter_mut().zip(g) {
+                                *s += w * dv * x;
+                            }
+                        }
+                        sums[8] += w * (un * dv - vn * du);
                     }
-                    twice_area += w * (un * dv - vn * du);
+                    sums
+                };
+                let mut piece = sums(ta, tb, nodes);
+                // A NURBS edge's parameter can run unevenly along it (a
+                // rational arc whose weights grow along it), so its piece is
+                // kept only where its halves agree with it, and halved
+                // otherwise: none at a thousandth of the edge.
+                if matches!(edge.curve, EdgeCurve::NurbsCurve(_)) {
+                    let (left, right) = (
+                        sums(ta, mid, nodes_over(ta, mid)),
+                        sums(mid, tb, nodes_over(mid, tb)),
+                    );
+                    let halves: [f64; 9] = std::array::from_fn(|k| left[k] + right[k]);
+                    let size = halves.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+                    let gap = piece
+                        .iter()
+                        .zip(&halves)
+                        .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
+                    // The gap measures the whole piece's error; the halves
+                    // kept are far closer. Their derivative stencil's
+                    // rounding bounds how well a short piece can agree.
+                    if gap > 1e-9 * size {
+                        if (tb - ta).abs() <= floor {
+                            return None;
+                        }
+                        pending.push((mid, tb));
+                        pending.push((ta, mid));
+                        continue;
+                    }
+                    piece = halves;
                 }
+                for (a, x) in acc.iter_mut().zip(&piece) {
+                    *a += x;
+                }
+                twice_area += piece[8];
                 u = u_b;
                 v = v_b;
             }

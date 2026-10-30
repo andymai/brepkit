@@ -469,6 +469,80 @@ mod tests {
         }
     }
 
+    /// The band of the ring torus of radii 4 and 1 between its tube's
+    /// circles at `u = 0.3` and `0.5`, each circle drawn as rational quadratic
+    /// arcs: four quarter turns whose weights 1, 100/sqrt 2 and 10000 bunch
+    /// each arc's parameter at its start, or three third turns of one knot
+    /// span each. It holds 0.2 of the turn's area `2 pi R r` and of its
+    /// volume term `pi R r^2`.
+    #[test]
+    fn a_torus_band_between_rational_tube_circles_holds_its_share() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
+        let (big, small) = (4.0_f64, 1.0_f64);
+        // The tube's circle at `u` in `arcs` arcs, each from `v` to the next
+        // with its middle weight `w1` and its last `w2`, run toward growing
+        // `v` when `up`.
+        let tube_circle = |topo: &mut Topology, u: f64, arcs: u32, w1: f64, w2: f64, up: bool| {
+            let out = Vec3::new(u.cos(), u.sin(), 0.0);
+            let z = Vec3::new(0.0, 0.0, 1.0);
+            let centre = Point3::new(0.0, 0.0, 0.0) + out * big;
+            let at = |v: f64| centre + (out * v.cos() + z * v.sin()) * small;
+            let step = TAU / f64::from(arcs);
+            let vertices: Vec<_> = (0..arcs)
+                .map(|k| topo.add_vertex(Vertex::new(at(step * f64::from(k)), 1e-7)))
+                .collect();
+            let mut edges: Vec<OrientedEdge> = (0..arcs)
+                .map(|k| {
+                    let (a, b) = (step * f64::from(k), step * f64::from(k + 1));
+                    let corner = centre
+                        + (out * f64::midpoint(a, b).cos() + z * f64::midpoint(a, b).sin())
+                            * (small / (0.5 * step).cos());
+                    let curve = NurbsCurve::new(
+                        2,
+                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        vec![at(a), corner, at(b)],
+                        vec![1.0, w1, w2],
+                    )
+                    .unwrap();
+                    let (start, end) = (vertices[k as usize], vertices[((k + 1) % arcs) as usize]);
+                    let e = topo.add_edge(Edge::new(start, end, EdgeCurve::NurbsCurve(curve)));
+                    OrientedEdge::new(e, up)
+                })
+                .collect();
+            if !up {
+                edges.reverse();
+            }
+            topo.add_wire(Wire::new(edges, true).unwrap())
+        };
+        let (u0, u1) = (0.3, 0.5);
+        for (arcs, w1, w2) in [(4, 100.0 * FRAC_1_SQRT_2, 10_000.0), (3, 0.5, 1.0)] {
+            let mut topo = Topology::new();
+            let high = tube_circle(&mut topo, u1, arcs, w1, w2, true);
+            let low = tube_circle(&mut topo, u0, arcs, w1, w2, false);
+            let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), big, small).unwrap();
+            let face = Face::new(high, vec![low], FaceSurface::Torus(torus));
+            let c = boundary::curved_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .unwrap();
+            let (area, volume) = (
+                (u1 - u0) * 2.0 * PI * big * small,
+                (u1 - u0) * PI * big * small * small,
+            );
+            assert!(
+                (c.area - area).abs() < 1e-9 * area && (c.volume - volume).abs() < 1e-9 * volume,
+                "{arcs} arcs: area {} of {area}, volume {} of {volume}",
+                c.area,
+                c.volume
+            );
+        }
+    }
+
     /// A band of the ring torus of radii 4 and 1 between two of its circles
     /// about the axis, at tube angles `v0` and `v1`, each wire closed at its
     /// own angle about the axis. A band across the inner equator (`v = pi`)
