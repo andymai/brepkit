@@ -447,8 +447,8 @@ fn boolean_inner(
     // The boxes are conservative outer bounds, so box non-overlap implies
     // solid non-overlap. Symmetric in A and B by construction.
     if op == BooleanOp::Intersect {
-        let bb_a = crate::measure::solid_bounding_box(topo, a).ok();
-        let bb_b = crate::measure::solid_bounding_box(topo, b).ok();
+        let bb_a = crate::measure::solid_outer_bounds(topo, a).ok();
+        let bb_b = crate::measure::solid_outer_bounds(topo, b).ok();
         if let Some((a_box, b_box)) = bb_a.zip(bb_b)
             && aabbs_separated(&a_box, &b_box, tol.linear)
         {
@@ -2481,7 +2481,11 @@ fn solids_provably_disjoint(topo: &Topology, a: SolidId, b: SolidId, margin: f64
     let boxes = |comps: &[Vec<FaceId>]| -> Option<Vec<brepkit_math::aabb::Aabb3>> {
         comps
             .iter()
-            .map(|faces| crate::measure::face_set_bounding_box(topo, faces).ok())
+            .map(|faces| {
+                crate::measure::face_set_bounding_box(topo, faces)
+                    .and_then(|b| crate::measure::hold_nurbs_faces(topo, faces, b))
+                    .ok()
+            })
             .collect()
     };
     let (Some(boxes_a), Some(boxes_b)) = (boxes(&comps_a), boxes(&comps_b)) else {

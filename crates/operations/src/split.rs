@@ -2,16 +2,15 @@
 //!
 //! Divides a solid into two new solids along the specified cutting plane.
 
-use brepkit_math::aabb::Aabb3;
 use brepkit_math::frame::Frame3;
 use brepkit_math::mat::Mat4;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 use crate::boolean::{BooleanOp, boolean};
+use crate::dot_normal_point;
 
 /// Result of splitting a solid: two halves.
 #[derive(Debug)]
@@ -44,12 +43,13 @@ pub fn split(
     plane_normal: Vec3,
 ) -> Result<SplitResult, crate::OperationsError> {
     let tol = Tolerance::new();
-    let bbox = extent(topo, solid)?;
+    let bbox = crate::measure::solid_outer_bounds(topo, solid)?;
     // The frame stands on the plane's point nearest the solid: a point far
     // along the plane would round the solid's extent away.
     let normal = Frame3::from_normal(plane_point, plane_normal)?.z;
     let centre = bbox.center();
-    let anchor = centre - normal * (centre - plane_point).dot(normal);
+    let anchor = centre
+        - normal * (dot_normal_point(normal, centre) - dot_normal_point(normal, plane_point));
     let frame = Frame3::from_normal(anchor, normal)?;
     let corners = [bbox.min, bbox.max];
     let local: Vec<[f64; 3]> = (0..8)
@@ -96,18 +96,6 @@ pub fn split(
     let positive = half(BooleanOp::Intersect)?;
     let negative = half(BooleanOp::Cut)?;
     Ok(SplitResult { positive, negative })
-}
-
-/// A box holding the whole solid. A NURBS face's measured extent comes from
-/// samples, which can miss its bulge; its control points enclose it.
-fn extent(topo: &Topology, solid: SolidId) -> Result<Aabb3, crate::OperationsError> {
-    let mut bbox = crate::measure::solid_bounding_box(topo, solid)?;
-    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
-        if let FaceSurface::Nurbs(nurbs) = topo.face(face)?.surface() {
-            bbox = bbox.union(nurbs.aabb());
-        }
-    }
-    Ok(bbox)
 }
 
 #[cfg(test)]
@@ -229,6 +217,22 @@ mod tests {
         }
     }
 
+    /// The plane x + y = 0, given by a point 2⁵⁷ along it, touches the
+    /// unit cube only along its edge on the z axis.
+    #[test]
+    fn split_refuses_a_far_given_plane_touching_an_edge() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let far = 2f64.powi(57);
+        let result = split(
+            &mut topo,
+            cube,
+            Point3::new(far, -far, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+        );
+        assert!(result.is_err(), "the plane only touches the cube");
+    }
+
     #[test]
     fn split_a_plane_crossing_only_a_spheres_box_misses_it() {
         let mut topo = Topology::new();
@@ -246,8 +250,9 @@ mod tests {
     /// over the unit square, flat along its rim. The lid peaks at 2.048 at
     /// `(0.2, 0.5)`, between the samples that put it at 1.98.
     #[test]
-    fn extent_reaches_a_nurbs_lids_peak() {
+    fn outer_bounds_reach_a_nurbs_lids_peak() {
         use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::face::FaceSurface;
 
         let mut topo = Topology::new();
         let block = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
@@ -284,7 +289,10 @@ mod tests {
             .unwrap()
             .set_surface(FaceSurface::Nurbs(lid));
 
-        let top = extent(&topo, block).unwrap().max.z();
+        let top = crate::measure::solid_outer_bounds(&topo, block)
+            .unwrap()
+            .max
+            .z();
         assert!(top >= 2.048, "the lid reaches 2.048, its extent {top}");
     }
 
