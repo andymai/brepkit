@@ -259,6 +259,19 @@ fn thicken_curved(
         faces.push(add_face(topo, vec![run], surface, outward)?);
     }
 
+    // A closed face, every edge of it a seam, has no sides, so its two
+    // copies bound the wall apart: one outside, one round a cavity. Growing
+    // along a sphere's or torus's own normal moves it outward.
+    if let &[near, far] = faces.as_slice() {
+        let (outer, cavity) = if along > 0.0 {
+            (far, near)
+        } else {
+            (near, far)
+        };
+        let outer = topo.add_shell(Shell::new(vec![outer])?);
+        let cavity = topo.add_shell(Shell::new(vec![cavity])?);
+        return Ok(topo.add_solid(Solid::new(outer, vec![cavity])));
+    }
     let shell = topo.add_shell(Shell::new(faces)?);
     Ok(topo.add_solid(Solid::new(shell, vec![])))
 }
@@ -715,6 +728,42 @@ mod tests {
         let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
         let exact = 70.0 * std::f64::consts::PI * std::f64::consts::PI;
         assert!((volume - exact).abs() < 1e-4 * exact, "{volume} of {exact}");
+    }
+
+    /// A whole torus of radii 20 and 3 is one face, every edge a seam, so
+    /// thickened by 1 it is a ring whose tube, of radius 4, holds a cavity
+    /// of radius 3 in a shell of its own: 2π² 20 (4² − 3²). Thickened by -1
+    /// the torus itself is outermost, round a cavity of radius 2.
+    #[test]
+    fn thicken_a_whole_torus_into_a_hollow_ring() {
+        for (thickness, outer, inner) in [(1.0, 4.0, 3.0), (-1.0, 3.0, 2.0)] {
+            let mut topo = Topology::new();
+            let torus = crate::primitives::make_torus(&mut topo, 20.0, 3.0, 16).unwrap();
+            let face = brepkit_topology::explorer::solid_faces(&topo, torus).unwrap()[0];
+            let ring = thicken(&mut topo, face, thickness).unwrap();
+            let solid = topo.solid(ring).unwrap();
+            assert_eq!(solid.inner_shells().len(), 1, "{thickness}");
+            let minor = |shell| {
+                let faces = topo.shell(shell).unwrap().faces();
+                assert_eq!(faces.len(), 1, "{thickness}");
+                let face = topo.face(faces[0]).unwrap();
+                let radius = match face.surface() {
+                    FaceSurface::Torus(t) => t.minor_radius(),
+                    _ => f64::NAN,
+                };
+                (radius, face.is_reversed())
+            };
+            assert_eq!(minor(solid.outer_shell()), (outer, false), "{thickness}");
+            assert_eq!(minor(solid.inner_shells()[0]), (inner, true), "{thickness}");
+            let report = crate::validate::validate_solid(&topo, ring).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            let volume = crate::measure::solid_volume(&topo, ring, 1e-3).unwrap();
+            let exact = 2.0 * std::f64::consts::PI.powi(2) * 20.0 * (outer * outer - inner * inner);
+            assert!(
+                (volume - exact).abs() < 1e-6 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
+        }
     }
 
     /// A ball's upper half, thickened by 1, is a hemispherical shell of
