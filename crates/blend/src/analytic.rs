@@ -443,7 +443,7 @@ fn midpoint_3d(a: Point3, b: Point3) -> Point3 {
 /// `n_other`, measured from the spine point `p`. The extreme-magnitude vertex
 /// is the witness: positive means the face reaches into the material side of
 /// the other plane (convex edge), negative means the void side (concave).
-fn material_side_witness(
+pub fn material_side_witness(
     topo: &Topology,
     face: FaceId,
     n_other: Vec3,

@@ -2785,6 +2785,15 @@ fn cdt_in_surface_frame(
             deflection,
             angular_tol,
         )
+        .or_else(|| {
+            ruled_metric(
+                face_data.surface(),
+                (u_min, du),
+                (v_min, dv),
+                deflection,
+                angular_tol,
+            )
+        })
         .or_else(|| nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv)))
         .unwrap_or((1.0, 1.0)),
     };
@@ -4446,6 +4455,48 @@ fn extrusion_metric(
         .max(1);
         let cell = speed_u * du / divisions as f64;
         Some((speed_u, cell / dv))
+    }
+}
+
+/// The triangulation metric of a NURBS face whose iso-lines run straight one
+/// way without being one vector (a fillet band whose radius changes along
+/// its edge): as for an extrusion, the straight direction shrunk to one chord
+/// cell of the curved one. At their own speeds Delaunay joins the face's two
+/// long sides across the curve whenever those run along the straight way.
+fn ruled_metric(
+    surface: &FaceSurface,
+    (u_min, du): (f64, f64),
+    (v_min, dv): (f64, f64),
+    deflection: f64,
+    angular_tol: f64,
+) -> Option<(f64, f64)> {
+    let (speed_u, speed_v) = nurbs_speeds(surface, (u_min, du), (v_min, dv))?;
+    let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
+    let normal_at = |u: f64, v: f64| {
+        let (u, v) = wrap_to_domain(surface, u, v);
+        surface.normal(u, v)
+    };
+    let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
+    let divisions = |along_u: bool| {
+        let spans = if along_u {
+            (u_span, v_span)
+        } else {
+            (v_span, u_span)
+        };
+        super::nurbs::iso_divisions_over(
+            &at,
+            &normal_at,
+            along_u,
+            spans,
+            deflection,
+            angular_tol,
+            1024,
+        )
+    };
+    match (divisions(true), divisions(false)) {
+        (n_u, n_v) if n_u > 1 && n_v <= 1 => Some((speed_u, speed_u * du / n_u as f64 / dv)),
+        (n_u, n_v) if n_u <= 1 && n_v > 1 => Some((speed_v * dv / n_v as f64 / du, speed_v)),
+        _ => None,
     }
 }
 

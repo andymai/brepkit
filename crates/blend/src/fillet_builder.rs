@@ -3038,16 +3038,28 @@ fn compute_stripe_for_spine(
     // we negate the normal. For analytic/NURBS surfaces the ParametricSurface
     // impl already returns the geometric normal; the walker uses the sign
     // convention from the face orientation.
-    let oriented_surf1 = if face1_reversed {
-        orient_plane_surface(&surf1)
-    } else {
-        surf1
+    // The walker rolls its ball on the side each normal points to, so a plane
+    // faces the ball: into the material at a convex edge, where the other
+    // face reaches into that side of its plane, and out of it at a concave
+    // one.
+    let p0 = spine.evaluate(topo, 0.0)?;
+    let toward_ball = |surf: brepkit_topology::face::FaceSurface,
+                       reversed: bool,
+                       other: FaceId|
+     -> Result<brepkit_topology::face::FaceSurface, BlendError> {
+        let brepkit_topology::face::FaceSurface::Plane { normal, .. } = &surf else {
+            return Ok(surf);
+        };
+        let outward = if reversed { -*normal } else { *normal };
+        let convex = analytic::material_side_witness(topo, other, -outward, p0)? > 1e-9;
+        Ok(if reversed == convex {
+            surf
+        } else {
+            orient_plane_surface(&surf)
+        })
     };
-    let oriented_surf2 = if face2_reversed {
-        orient_plane_surface(&surf2)
-    } else {
-        surf2
-    };
+    let oriented_surf1 = toward_ball(surf1, face1_reversed, face2)?;
+    let oriented_surf2 = toward_ball(surf2, face2_reversed, face1)?;
     let mut adapter1 = None;
     let mut adapter2 = None;
 
