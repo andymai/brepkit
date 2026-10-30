@@ -362,3 +362,184 @@ fn a_kept_cavity_keeps_its_pcurves() {
     let copied_face = topo.shell(kept).unwrap().faces()[0];
     assert_eq!(topo.pcurves().pcurves_for_face(copied_face).len(), 1);
 }
+
+/// The walking engine's chamfer and fillet keep a cavity of their own and
+/// refuse to open one.
+#[test]
+fn walking_blends_keep_their_own_cavity() {
+    use brepkit_operations::blend_ops::{chamfer_v2, fillet_v2};
+
+    for chamfer in [true, false] {
+        let mut topo = Topology::new();
+        let (hollow, edge) = hollow_block(&mut topo, CLEAR);
+        let blend = if chamfer {
+            chamfer_v2(&mut topo, hollow, &[edge], 1.0, 1.0)
+        } else {
+            fillet_v2(&mut topo, hollow, &[edge], 1.0)
+        };
+        let result = brepkit_operations::blend_ops::all_blended(blend.unwrap()).unwrap();
+        let volume = kept(&topo, result);
+        let removed = if chamfer {
+            0.5
+        } else {
+            1.0 - std::f64::consts::FRAC_PI_4
+        };
+        assert!(
+            (volume - (1000.0 - 27.0 - 10.0 * removed)).abs() < 1e-2,
+            "chamfer {chamfer}: {volume}"
+        );
+        let cavity = topo.solid(hollow).unwrap().inner_shells()[0];
+        assert_ne!(topo.solid(result).unwrap().inner_shells(), &[cavity]);
+        transform_solid(&mut topo, result, &Mat4::translation(0.0, 0.0, 100.0)).unwrap();
+        for &face in topo.shell(cavity).unwrap().faces() {
+            for v in brepkit_topology::explorer::face_vertices(&topo, face).unwrap() {
+                let z = topo.vertex(v).unwrap().point().z();
+                assert!(
+                    (3.5 - 1e-9..=6.5 + 1e-9).contains(&z),
+                    "input cavity at z {z}"
+                );
+            }
+        }
+
+        let mut topo = Topology::new();
+        let (near, edge) = hollow_block(&mut topo, NEAR);
+        let refused = if chamfer {
+            chamfer_v2(&mut topo, near, &[edge], 1.0, 1.0)
+        } else {
+            fillet_v2(&mut topo, near, &[edge], 1.0)
+        };
+        assert!(
+            refused
+                .and_then(brepkit_operations::blend_ops::all_blended)
+                .is_err(),
+            "chamfer {chamfer}"
+        );
+    }
+}
+
+/// A cylinder of radius 10 and height 100 holding a 3 cube cavity near its
+/// bottom, turned 45° about y: a fillet round its top rim keeps the cavity.
+/// The untouched bottom cap's box meets the cavity's, but the cap is no
+/// face the fillet made. The outer shell loses what a plain cylinder's
+/// does.
+#[test]
+fn a_walking_fillet_far_from_a_cavity_keeps_it_on_a_turned_solid() {
+    use brepkit_operations::blend_ops::{all_blended, fillet_v2};
+    use brepkit_operations::primitives::make_cylinder;
+    use brepkit_topology::solid::Solid;
+
+    let build = |topo: &mut Topology, hollow: bool| {
+        let mut solid = make_cylinder(topo, 10.0, 100.0).unwrap();
+        if hollow {
+            let cube = make_box(topo, 3.0, 3.0, 3.0).unwrap();
+            transform_solid(topo, cube, &Mat4::translation(-1.5, -1.5, 3.5)).unwrap();
+            solid = boolean(topo, BooleanOp::Cut, solid, cube).unwrap();
+        }
+        transform_solid(topo, solid, &Mat4::rotation_y(std::f64::consts::FRAC_PI_4)).unwrap();
+        let rim = solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                    if c.center().x() > 50.0)
+            })
+            .unwrap();
+        all_blended(fillet_v2(topo, solid, &[rim], 1.0).unwrap()).unwrap()
+    };
+    let shell_volume = |topo: &mut Topology, shell| {
+        let alone = topo.add_solid(Solid::new(shell, Vec::new()));
+        solid_volume(topo, alone, 0.001).unwrap()
+    };
+    let mut topo = Topology::new();
+    let hollow = build(&mut topo, true);
+    let cavities = topo.solid(hollow).unwrap().inner_shells().to_vec();
+    assert_eq!(cavities.len(), 1);
+    let outer = topo.solid(hollow).unwrap().outer_shell();
+    let hollow_outer = shell_volume(&mut topo, outer);
+    let cavity = shell_volume(&mut topo, cavities[0]);
+    let mut plain_topo = Topology::new();
+    let plain = build(&mut plain_topo, false);
+    let plain = solid_volume(&plain_topo, plain, 0.001).unwrap();
+    assert!(
+        (hollow_outer - plain).abs() < 1e-6 * plain,
+        "{hollow_outer} vs {plain}"
+    );
+    assert!((cavity - 27.0).abs() < 1e-9, "{cavity}");
+}
+
+/// A walking chamfer's result shares nothing with its input: moving it
+/// leaves every vertex of the input box where it was.
+#[test]
+fn a_walking_chamfers_result_is_its_own() {
+    use brepkit_operations::blend_ops::{all_blended, chamfer_v2};
+
+    let mut topo = Topology::new();
+    let block = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let edge = solid_edges(&topo, block)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            [edge.start(), edge.end()].iter().all(|&v| {
+                let p = topo.vertex(v).unwrap().point();
+                p.y().abs() < 1e-9 && (p.z() - 10.0).abs() < 1e-9
+            })
+        })
+        .unwrap();
+    let corners = |topo: &Topology| -> Vec<Point3> {
+        brepkit_topology::explorer::solid_vertices(topo, block)
+            .unwrap()
+            .iter()
+            .map(|&v| topo.vertex(v).unwrap().point())
+            .collect()
+    };
+    let before = corners(&topo);
+    let cut = all_blended(chamfer_v2(&mut topo, block, &[edge], 1.0, 1.0).unwrap()).unwrap();
+    transform_solid(&mut topo, cut, &Mat4::translation(0.0, 0.0, 100.0)).unwrap();
+    assert_eq!(corners(&topo), before);
+    let report = validate_solid(&topo, block).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}
+
+/// A cylinder of radius 5 and height 10 less a 0.4 cube cavity whose least
+/// corner is `corner`, and its top rim.
+fn hollow_cylinder(topo: &mut Topology, corner: (f64, f64, f64)) -> (SolidId, EdgeId) {
+    let cyl = brepkit_operations::primitives::make_cylinder(topo, 5.0, 10.0).unwrap();
+    let cube = make_box(topo, 0.4, 0.4, 0.4).unwrap();
+    transform_solid(topo, cube, &Mat4::translation(corner.0, corner.1, corner.2)).unwrap();
+    let hollow = boolean(topo, BooleanOp::Cut, cyl, cube).unwrap();
+    assert_eq!(topo.solid(hollow).unwrap().inner_shells().len(), 1);
+    let rim = solid_edges(topo, hollow)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(c)
+                if c.center().z() > 9.0 && (c.radius() - 5.0).abs() < 1e-9)
+        })
+        .unwrap();
+    (hollow, rim)
+}
+
+/// A 1 chamfer round a cylinder's top rim takes off the ring where
+/// `r + z > 14`: it keeps a cavity at the cylinder's middle, and is refused
+/// where a cavity just under the rim reaches into that ring.
+#[test]
+fn a_rim_chamfer_keeps_a_cavity_clear_of_it_and_refuses_one_it_reaches() {
+    let mut topo = Topology::new();
+    let (hollow, rim) = hollow_cylinder(&mut topo, (-0.2, -0.2, 4.8));
+    let result = chamfer(&mut topo, hollow, &[rim], 1.0).unwrap();
+    let volume = kept(&topo, result);
+    // The ring is a unit right triangle swept about the axis, its centroid
+    // at radius 14/3: 14π/3 by Pappus.
+    let expected = std::f64::consts::PI * (250.0 - 14.0 / 3.0) - 0.064;
+    assert!(
+        (volume - expected).abs() < 1e-6 * expected,
+        "{volume} vs {expected}"
+    );
+
+    let mut topo = Topology::new();
+    let (near, rim) = hollow_cylinder(&mut topo, (4.2, -0.2, 9.2));
+    assert!(chamfer(&mut topo, near, &[rim], 1.0).is_err());
+}

@@ -27,6 +27,14 @@ enum FaceGeom {
         along: Vec3,
         trim: Option<ExtrusionTrim>,
     },
+    /// Any other open NURBS face, crossed where the ray meets its surface,
+    /// found through the surface's Bezier patches, and on the face when its
+    /// wires hold the hit. A flat polygon through its boundary stands where
+    /// a bulging face does not.
+    Nurbs {
+        surface: brepkit_math::nurbs::intersection::RaySurface,
+        trim: NurbsTrim,
+    },
     /// A planar (or planar-approximated) face: boundary polygon, hole
     /// polygons, and the supporting plane.
     Planar {
@@ -784,6 +792,10 @@ fn geom_box(geom: &FaceGeom, tol: Tolerance) -> Option<brepkit_math::aabb::Aabb3
             finite_box([b.min, b.max])?
         }
         FaceGeom::Extrusion { .. } => return None,
+        FaceGeom::Nurbs { surface, .. } => {
+            let b = surface.surface().aabb();
+            finite_box([b.min, b.max])?
+        }
     };
     let coords = [
         raw.min.x(),
@@ -1006,6 +1018,7 @@ fn votes_from_geoms(
                         FaceGeom::Sphere { loops, .. } => format!("sphere[{} loops]", loops.len()),
                         FaceGeom::SphereTrim { .. } => "sphere trim".to_string(),
                         FaceGeom::Extrusion { .. } => "extrusion".to_string(),
+                        FaceGeom::Nurbs { .. } => "nurbs".to_string(),
                     };
                     log::debug!(
                         "RAYHIT {label} dir=({:.3},{:.3},{:.3}) geom#{gi} {tag} c={c} susp={s}",
@@ -1504,6 +1517,13 @@ fn collect_geoms_of(
             continue;
         }
 
+        if let brepkit_topology::face::FaceSurface::Nurbs(n) = face.surface()
+            && let Some(geom) = nurbs_geom(topo, face, n)?
+        {
+            result.push(geom);
+            continue;
+        }
+
         if let brepkit_topology::face::FaceSurface::Torus(t) = face.surface()
             && let Some(geom) = torus_trim_geom(topo, face, t)?
         {
@@ -1725,6 +1745,110 @@ fn extrusion_geom(
     )
 }
 
+/// A NURBS face's wires in its surface's `(u, v)`, read by a [`UvTrim`]: `u`
+/// scaled to `[0, 1]`, so its angular reading of `u` never wraps, at a
+/// radius of the surface's length along `u`, and `v` scaled to its length
+/// along `v`.
+struct NurbsTrim {
+    trim: UvTrim,
+    u_domain: (f64, f64),
+    v_domain: (f64, f64),
+    u_len: f64,
+    v_len: f64,
+}
+
+impl NurbsTrim {
+    fn scaled(&self, u: f64, v: f64) -> (f64, f64) {
+        let (u0, u1) = self.u_domain;
+        let (v0, v1) = self.v_domain;
+        ((u - u0) / (u1 - u0), (v - v0) / (v1 - v0) * self.v_len)
+    }
+
+    fn project(
+        &self,
+        surface: &brepkit_math::nurbs::surface::NurbsSurface,
+        p: Point3,
+    ) -> (f64, f64) {
+        let (u, v) = brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12)
+            .map_or((self.u_domain.0, self.v_domain.0), |q| (q.u, q.v));
+        self.scaled(u, v)
+    }
+}
+
+/// A [`FaceGeom::Nurbs`] for a face on a NURBS surface whose weights are all
+/// positive and that neither closes on itself nor shrinks to a point along
+/// a side: on such a surface each point of the face has one `(u, v)`.
+fn nurbs_geom(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> Result<Option<FaceGeom>, AlgoError> {
+    const SAMPLES: u32 = 8;
+    let Some(ray_surface) = brepkit_math::nurbs::intersection::RaySurface::new(surface) else {
+        return Ok(None);
+    };
+    let (u0, u1) = surface.domain_u();
+    let (v0, v1) = surface.domain_v();
+    if !(u1 > u0 && v1 > v0) {
+        return Ok(None);
+    }
+    let lerp = |a: f64, b: f64, k: u32| (b - a).mul_add(f64::from(k) / f64::from(SAMPLES), a);
+    let iso_u = |u: f64| -> Vec<Point3> {
+        (0..=SAMPLES)
+            .map(|k| surface.evaluate(u, lerp(v0, v1, k)))
+            .collect()
+    };
+    let iso_v = |v: f64| -> Vec<Point3> {
+        (0..=SAMPLES)
+            .map(|k| surface.evaluate(lerp(u0, u1, k), v))
+            .collect()
+    };
+    let length = |pts: &[Point3]| pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>();
+    let (lo_u, hi_u, lo_v, hi_v) = (iso_u(u0), iso_u(u1), iso_v(v0), iso_v(v1));
+    let size = [&lo_u, &hi_u, &lo_v, &hi_v]
+        .iter()
+        .map(|side| length(side))
+        .fold(0.0_f64, f64::max);
+    let near = 1e-9 * size.max(1.0);
+    let same =
+        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
+    let collapsed = |side: &[Point3]| length(side) <= near;
+    if size <= near
+        || same(&lo_u, &hi_u)
+        || same(&lo_v, &hi_v)
+        || [&lo_u, &hi_u, &lo_v, &hi_v]
+            .iter()
+            .any(|side| collapsed(side))
+    {
+        return Ok(None);
+    }
+    let u_len = (0..=SAMPLES)
+        .map(|k| length(&iso_v(lerp(v0, v1, k))))
+        .fold(0.0_f64, f64::max);
+    let v_len = (0..=SAMPLES)
+        .map(|k| length(&iso_u(lerp(u0, u1, k))))
+        .fold(0.0_f64, f64::max);
+    if u_len <= near || v_len <= near {
+        return Ok(None);
+    }
+    let mut trim = NurbsTrim {
+        trim: UvTrim { edges: Vec::new() },
+        u_domain: (u0, u1),
+        v_domain: (v0, v1),
+        u_len,
+        v_len,
+    };
+    let Some(uv) = UvTrim::new_bending(topo, face, &|p| trim.project(surface, p), &|_| u_len)?
+    else {
+        return Ok(None);
+    };
+    trim.trim = uv;
+    Ok(Some(FaceGeom::Nurbs {
+        surface: ray_surface,
+        trim,
+    }))
+}
+
 /// A trimmed extrusion face's wires in `(u, s)`: `u` the profile's parameter
 /// scaled to `[0, 1]`, so the [`UvTrim`]'s angular reading of it never wraps,
 /// or to a full turn for a closed profile, whose `u` wraps at its seam as a
@@ -1852,6 +1976,28 @@ impl UvTrim {
         project: &dyn Fn(Point3) -> (f64, f64),
         radius: &dyn Fn(f64) -> f64,
     ) -> Result<Option<Self>, AlgoError> {
+        Self::new_on(topo, face, project, radius, false)
+    }
+
+    /// [`UvTrim::new`] on a surface whose `(u, v)` bends a straight edge
+    /// (a NURBS surface): every edge, straight or not, is sampled along,
+    /// and a piece whose middle strays from its chord in `(u, v)` is halved.
+    fn new_bending(
+        topo: &Topology,
+        face: &brepkit_topology::face::Face,
+        project: &dyn Fn(Point3) -> (f64, f64),
+        radius: &dyn Fn(f64) -> f64,
+    ) -> Result<Option<Self>, AlgoError> {
+        Self::new_on(topo, face, project, radius, true)
+    }
+
+    fn new_on(
+        topo: &Topology,
+        face: &brepkit_topology::face::Face,
+        project: &dyn Fn(Point3) -> (f64, f64),
+        radius: &dyn Fn(f64) -> f64,
+        bends: bool,
+    ) -> Result<Option<Self>, AlgoError> {
         use brepkit_topology::edge::EdgeCurve;
         const PIECES: u32 = 16;
         const MAX_SAMPLES: usize = 4096;
@@ -1869,7 +2015,7 @@ impl UvTrim {
                 }
                 let (t0, t1) = curve.domain_with_endpoints(start, end);
                 let at = |t: f64| project(curve.evaluate_with_endpoints(t, start, end));
-                let pieces = if is_line { 1 } else { PIECES };
+                let pieces = if is_line && !bends { 1 } else { PIECES };
                 let mut samples: Vec<(f64, f64, f64)> = (0..=pieces)
                     .map(|i| {
                         let t = (t1 - t0).mul_add(f64::from(i) / f64::from(pieces), t0);
@@ -1911,18 +2057,30 @@ impl UvTrim {
                 }
                 let mut i = 0;
                 while i + 1 < samples.len() {
-                    let (ta, ua, _) = samples[i];
-                    let (tb, ub, _) = samples[i + 1];
-                    let split = wrap_pi(ub - ua).abs() > max_turn
-                        && (tb - ta).abs() > 1e-9 * (t1 - t0).abs()
-                        && samples.len() < MAX_SAMPLES;
-                    if split {
-                        let tm = f64::midpoint(ta, tb);
+                    let (ta, ua, va) = samples[i];
+                    let (tb, ub, vb) = samples[i + 1];
+                    let room =
+                        (tb - ta).abs() > 1e-9 * (t1 - t0).abs() && samples.len() < MAX_SAMPLES;
+                    let tm = f64::midpoint(ta, tb);
+                    let mut middle = None;
+                    let mut split = room && wrap_pi(ub - ua).abs() > max_turn;
+                    if room && !split && bends {
                         let (um, vm) = at(tm);
+                        let r = radius(vm);
+                        let (cu, cv) = (wrap_pi(ub - ua) * r, vb - va);
+                        let (du, dv) = (wrap_pi(um - ua) * r - 0.5 * cu, vm - 0.5 * (va + vb));
+                        split = du.hypot(dv) > 0.05 * cu.hypot(cv) + 1e-12 * r.abs().max(1.0);
+                        middle = Some((um, vm));
+                    }
+                    if split {
+                        let (um, vm) = middle.unwrap_or_else(|| at(tm));
                         samples.insert(i + 1, (tm, um, vm));
                     } else {
                         i += 1;
                     }
+                }
+                if bends {
+                    insert_u_turns(&mut samples, &at);
                 }
                 edges.push(UvEdge {
                     curve,
@@ -2023,6 +2181,93 @@ impl UvTrim {
         }
         (crossings % 2 == 1, suspicious)
     }
+}
+
+/// Adds to an edge's `samples` (in its curve's order, `at` mapping its
+/// parameter to `(u, v)`) each point where its `u` turns back between them,
+/// so `u` runs one way along every piece and a line of constant `u` meets a
+/// piece at most once. A turn shows as two pieces, or a piece and the
+/// curve's direction at an end, running opposite ways in `u`, and is found
+/// by a golden-section search over the pieces between.
+fn insert_u_turns(samples: &mut Vec<(f64, f64, f64)>, at: &dyn Fn(f64) -> (f64, f64)) {
+    const FLAT: f64 = 1e-9;
+    let n = samples.len();
+    if n < 2 {
+        return;
+    }
+    let (t0, t1) = (samples[0].0, samples[n - 1].0);
+    let span = (t1 - t0).abs();
+    if span <= 0.0 {
+        return;
+    }
+    // Each run `(t_from, t_to, rise)`: the ends' own directions, from a
+    // step a ten-thousandth of their piece long, and every piece between.
+    let step = |a: (f64, f64, f64), b: (f64, f64, f64)| {
+        let h = 1e-4 * (b.0 - a.0);
+        (a.0, a.0 + h, wrap_pi(at(a.0 + h).0 - a.1))
+    };
+    let first = step(samples[0], samples[1]);
+    let last = {
+        let (a, b) = (samples[n - 1], samples[n - 2]);
+        let (_, t, d) = step(a, b);
+        (t, a.0, -d)
+    };
+    let runs = std::iter::once(first)
+        .chain(
+            samples
+                .windows(2)
+                .map(|w| (w[0].0, w[1].0, wrap_pi(w[1].1 - w[0].1))),
+        )
+        .chain(std::iter::once(last));
+    let mut turns = Vec::new();
+    let mut prev: Option<(f64, f64)> = None;
+    for (ta, tb, du) in runs {
+        if du.abs() <= FLAT {
+            continue;
+        }
+        if let Some((from, rise)) = prev
+            && (rise > 0.0) != (du > 0.0)
+        {
+            turns.push(u_turn(at, from, tb, rise > 0.0));
+        }
+        prev = Some((ta, du));
+    }
+    let toward = t1 - t0;
+    for turn in turns {
+        let k = samples.partition_point(|s| (s.0 - turn.0) * toward < 0.0);
+        let apart = |j: usize| (samples[j].0 - turn.0).abs() > 1e-9 * span;
+        if k > 0 && k < samples.len() && apart(k - 1) && apart(k) {
+            samples.insert(k, turn);
+        }
+    }
+}
+
+/// The `(t, u, v)` where `u`, read by `at`, peaks (`peak`) or dips for `t`
+/// between `ta` and `tb`, by golden-section search.
+fn u_turn(at: &dyn Fn(f64) -> (f64, f64), ta: f64, tb: f64, peak: bool) -> (f64, f64, f64) {
+    let u_ref = at(ta).0;
+    let key = |t: f64| {
+        let d = wrap_pi(at(t).0 - u_ref);
+        if peak { -d } else { d }
+    };
+    let g = 0.5 * (5.0_f64.sqrt() - 1.0);
+    let (mut a, mut b) = (ta, tb);
+    let (mut c, mut d) = (g.mul_add(a - b, b), g.mul_add(b - a, a));
+    let (mut kc, mut kd) = (key(c), key(d));
+    for _ in 0..60 {
+        if kc < kd {
+            (b, d, kd) = (d, c, kc);
+            c = g.mul_add(a - b, b);
+            kc = key(c);
+        } else {
+            (a, c, kc) = (c, d, kd);
+            d = g.mul_add(b - a, a);
+            kd = key(d);
+        }
+    }
+    let t = f64::midpoint(a, b);
+    let (u, v) = at(t);
+    (t, u, v)
 }
 
 /// A cylinder or cone face's wires in its `(u, v)`, to read whether a point
@@ -2329,7 +2574,36 @@ fn ray_geom_crossings(
             along,
             trim,
         } => ray_extrusion_crossings(origin, ray_dir, profile, *along, trim.as_ref(), tol),
+        FaceGeom::Nurbs { surface, trim } => {
+            ray_nurbs_crossings(origin, ray_dir, surface, trim, tol)
+        }
     }
+}
+
+/// Count ray crossings with a NURBS face: each place the ray meets its
+/// surface ahead of `origin` that its wires hold.
+fn ray_nurbs_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::nurbs::intersection::RaySurface,
+    trim: &NurbsTrim,
+    tol: Tolerance,
+) -> (i32, bool) {
+    let near = 10.0 * tol.linear;
+    let found = surface.hits(origin, ray_dir, near);
+    let mut crossings = 0;
+    let mut suspicious = found.grazed;
+    for hit in found.hits {
+        let (u, v) = trim.scaled(hit.u, hit.v);
+        let (on_face, by_wire) = trim.trim.contains(u, v, 1.0, trim.u_len, near, &|p| {
+            trim.project(surface.surface(), p)
+        });
+        suspicious |= hit.t.abs() <= near || by_wire;
+        if hit.t > near && on_face {
+            crossings += 1;
+        }
+    }
+    (crossings, suspicious)
 }
 
 /// Count ray crossings with an extrusion `profile(v) + s along`, `s` in
@@ -3778,6 +4052,203 @@ mod tests {
     use brepkit_topology::solid::Solid;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The surface `(u + v (1 - v), v, v (u + v (1 - v)))` over the unit
+    /// square, trimmed to `0.3 <= x <= 0.7` by straight edges. Its left edge,
+    /// `x = 0.3`, bows in `(u, v)` to `u = 0.05` at its middle, so the point
+    /// `(0.4, 0.5, 0.2)`, at `u = 0.15`, lies on the face: a ray down
+    /// through it crosses once, and one down through `x = 0.8`, past the
+    /// trim, not at all.
+    #[test]
+    fn a_nurbs_trim_follows_a_straight_edge_bowing_in_uv() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let third = 1.0 / 3.0;
+        let p = Point3::new;
+        let rows = vec![
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(third, third, 0.0),
+                p(third, 2.0 * third, third),
+                p(0.0, 1.0, 0.0),
+            ],
+            vec![
+                p(1.0, 0.0, 0.0),
+                p(4.0 * third, third, third),
+                p(4.0 * third, 2.0 * third, 1.0),
+                p(1.0, 1.0, 1.0),
+            ],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 4]; 2],
+        )
+        .unwrap();
+        assert!((surface.evaluate(0.15, 0.5) - p(0.4, 0.5, 0.2)).length() < 1e-12);
+        let corners = [
+            (0.3, 0.0, 0.0),
+            (0.7, 0.0, 0.0),
+            (0.7, 1.0, 0.7),
+            (0.3, 1.0, 0.3),
+        ]
+        .map(|(x, y, z)| topo.add_vertex(Vertex::new(p(x, y, z), 1e-7)));
+        let edges: Vec<_> = (0..4)
+            .map(|i| {
+                let edge = Edge::new(corners[i], corners[(i + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face_id = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())));
+        let face = topo.face(face_id).unwrap();
+        let geom = nurbs_geom(&topo, face, &surface).unwrap().unwrap();
+        let down = Vec3::new(0.0, 0.0, -1.0);
+        let tol = Tolerance::new();
+        assert_eq!(
+            ray_geom_crossings(p(0.4, 0.5, 5.0), down, &geom, tol),
+            (1, false)
+        );
+        assert_eq!(ray_geom_crossings(p(0.8, 0.5, 5.0), down, &geom, tol).0, 0);
+    }
+
+    /// The surface `(u + v (17/16 - v), v, v (u + v (17/16 - v)))` trimmed
+    /// to `0.3 <= x <= 0.7`. Its left edge bows in `(u, v)` to its least `u`
+    /// at `v = 17/32`, halfway between two of the edge's samples, and a ray
+    /// down through `x = 0.3002` there, a hair inside the trim, crosses the
+    /// face once. Split at `v = 0.52`, the edge above holds the turn in its
+    /// last piece, a ray through `x = 0.30006` there crosses once.
+    #[test]
+    fn a_nurbs_trim_holds_a_turn_between_its_samples() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let p = Point3::new;
+        let e = |k: f64| k / 48.0;
+        let rows = vec![
+            vec![
+                p(0.0, 0.0, 0.0),
+                p(e(17.0), e(16.0), 0.0),
+                p(e(18.0), e(32.0), e(17.0)),
+                p(e(3.0), 1.0, e(3.0)),
+            ],
+            vec![
+                p(1.0, 0.0, 0.0),
+                p(e(65.0), e(16.0), e(16.0)),
+                p(e(66.0), e(32.0), e(49.0)),
+                p(e(51.0), 1.0, e(51.0)),
+            ],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 4]; 2],
+        )
+        .unwrap();
+        let x = |u: f64, v: f64| v.mul_add(17.0 / 16.0 - v, u);
+        for (u, v) in [(0.2, 0.3), (0.9, 0.7)] {
+            let s = surface.evaluate(u, v);
+            assert!((s - p(x(u, v), v, v * x(u, v))).length() < 1e-12);
+        }
+        // The left edge whole, and split at `v = 0.52`: there the turn lies
+        // in the last piece of the edge above, which runs one way overall.
+        let mut face_of = |corners: &[(f64, f64, f64)]| {
+            let n = corners.len();
+            let vs: Vec<_> = corners
+                .iter()
+                .map(|&(x, y, z)| topo.add_vertex(Vertex::new(p(x, y, z), 1e-7)))
+                .collect();
+            let edges: Vec<_> = (0..n)
+                .map(|i| {
+                    let edge = Edge::new(vs[i], vs[(i + 1) % n], EdgeCurve::Line);
+                    OrientedEdge::new(topo.add_edge(edge), true)
+                })
+                .collect();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())))
+        };
+        let quad = [
+            (0.3, 0.0, 0.0),
+            (0.7, 0.0, 0.0),
+            (0.7, 1.0, 0.7),
+            (0.3, 1.0, 0.3),
+        ];
+        let whole = face_of(&quad);
+        let split = face_of(&[quad[0], quad[1], quad[2], quad[3], (0.3, 0.52, 0.156)]);
+        let down = Vec3::new(0.0, 0.0, -1.0);
+        let tol = Tolerance::new();
+        let v = 17.0 / 32.0;
+        for (face_id, inside) in [(whole, 0.3002), (split, 0.30006)] {
+            let face = topo.face(face_id).unwrap();
+            let geom = nurbs_geom(&topo, face, &surface).unwrap().unwrap();
+            assert_eq!(
+                ray_geom_crossings(p(inside, v, 5.0), down, &geom, tol),
+                (1, false)
+            );
+            assert_eq!(
+                ray_geom_crossings(p(0.2998, v, 5.0), down, &geom, tol),
+                (0, false)
+            );
+        }
+    }
+
+    /// The unit cube with its top the lid `z = 1 + 100 u (1 - u)^4 v (1 - v)`
+    /// over the unit square, flat along its rim: the solid rises to 3.048 at
+    /// `(0.2, 0.5)`, between the lid's boundary edges, all at `z = 1`.
+    #[test]
+    fn a_point_under_a_nurbs_lids_bulge_is_inside() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let mut topo = Topology::new();
+        let cube = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
+        let shell = topo.solid(cube).unwrap().outer_shell();
+        let top = topo
+            .shell(shell)
+            .unwrap()
+            .faces()
+            .iter()
+            .copied()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && (d - 1.0).abs() < 1e-9)
+            })
+            .unwrap();
+        let rows = (0..6)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 1) { 11.0 } else { 1.0 };
+                        Point3::new(f64::from(i) / 5.0, f64::from(j) / 2.0, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let lid = NurbsSurface::new(
+            5,
+            2,
+            [vec![0.0; 6], vec![1.0; 6]].concat(),
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 3]; 6],
+        )
+        .unwrap();
+        topo.face_mut(top)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(lid));
+        for (p, class) in [
+            (Point3::new(0.2, 0.5, 2.9), FaceClass::Inside),
+            (Point3::new(0.5, 0.5, 1.5), FaceClass::Inside),
+            (Point3::new(0.2, 0.5, 3.1), FaceClass::Outside),
+            (Point3::new(0.9, 0.9, 1.02), FaceClass::Outside),
+            (Point3::new(0.5, 0.5, 0.5), FaceClass::Inside),
+        ] {
+            assert_eq!(classify_ray_cast(&topo, cube, p).unwrap(), class, "{p:?}");
+        }
+    }
 
     /// The extrusion `(x, v, v^2)` of a parabola along x over `[0, 1]`,
     /// bounded by its two end rulings, its far profile, and `near` from

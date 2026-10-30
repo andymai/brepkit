@@ -9132,3 +9132,123 @@ fn a_box_grazing_a_ball_leaves_it_whole() {
         );
     }
 }
+
+/// A unit block whose top is the lid `z = 100 u (1 - u)^4 v (1 - v)` over
+/// the unit square, flat along its rim and peaking at 2.048, and a box over
+/// everything above `z = 1.5`. The plane meets the lid only in a loop inside
+/// its face, under the bulge.
+fn lid_block_and_box_above(topo: &mut Topology) -> (SolidId, SolidId) {
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::nurbs::surface::NurbsSurface;
+
+    let block = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(topo, block, &Mat4::translation(0.0, 0.0, -1.0)).unwrap();
+    let top = brepkit_topology::explorer::solid_faces(topo, block)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                if normal.z() > 0.5 && d.abs() < 1e-9)
+        })
+        .unwrap();
+    let rows = (0..6)
+        .map(|i| {
+            (0..3)
+                .map(|j| {
+                    let z = if (i, j) == (1, 1) { 10.0 } else { 0.0 };
+                    Point3::new(f64::from(i) / 5.0, f64::from(j) / 2.0, z)
+                })
+                .collect()
+        })
+        .collect();
+    let lid = NurbsSurface::new(
+        5,
+        2,
+        [vec![0.0; 6], vec![1.0; 6]].concat(),
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        rows,
+        vec![vec![1.0; 3]; 6],
+    )
+    .unwrap();
+    topo.face_mut(top)
+        .unwrap()
+        .set_surface(FaceSurface::Nurbs(lid));
+    let above = crate::primitives::make_box(topo, 10.0, 10.0, 10.0).unwrap();
+    crate::transform::transform_solid(topo, above, &Mat4::translation(-5.0, -5.0, 1.5)).unwrap();
+    (block, above)
+}
+
+/// The box takes the lid's tip off whole: the tip is the bulge above 1.5 and
+/// the disc the plane cuts under it, 0.0306289; the rest keeps the block's
+/// five flat faces, the lid with a hole and the disc, and the remaining
+/// 1 + 1/18 - 0.0306289.
+#[test]
+fn a_box_takes_the_tip_off_a_nurbs_lid() {
+    let tip = 0.030_628_9;
+    let whole = 1.0 + 100.0 / 30.0 / 6.0;
+    for (op, faces, volume) in [
+        (BooleanOp::Intersect, 2, tip),
+        (BooleanOp::Cut, 7, whole - tip),
+    ] {
+        let mut topo = Topology::new();
+        let (block, above) = lid_block_and_box_above(&mut topo);
+        let result = boolean(&mut topo, op, block, above).unwrap();
+        let found = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert_eq!(found.len(), faces, "{op:?}");
+        assert!(
+            crate::validate::validate_solid(&topo, result)
+                .unwrap()
+                .is_valid(),
+            "{op:?}"
+        );
+        let measured = crate::measure::solid_volume(&topo, result, 1e-4).unwrap();
+        assert!(
+            (measured - volume).abs() < 1e-3 * volume,
+            "{op:?}: {measured} vs {volume}"
+        );
+    }
+}
+
+/// A ball of radius 10 whose equator lies in a 40 x 40 x 20 box's top face
+/// leaves that face bounded by the equator's arcs, not their chords: the
+/// intersection is the lower hemisphere, the cut the box less it, and the
+/// fuse the box with the upper hemisphere, each exact.
+#[test]
+fn a_ball_with_its_equator_on_a_box_face_meets_it_exactly() {
+    use brepkit_math::mat::Mat4;
+
+    let hemisphere = 2.0 / 3.0 * std::f64::consts::PI * 1000.0;
+    for (op, faces, volume) in [
+        (BooleanOp::Intersect, 2, hemisphere),
+        (BooleanOp::Cut, 7, 32_000.0 - hemisphere),
+        (BooleanOp::Fuse, 7, 32_000.0 + hemisphere),
+    ] {
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 40.0, 40.0, 20.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-20.0, -20.0, 0.0))
+            .unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, ball, &Mat4::translation(0.0, 0.0, 20.0))
+            .unwrap();
+        let result = boolean(&mut topo, op, block, ball).unwrap();
+        let found = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert_eq!(found.len(), faces, "{op:?}");
+        for edge in brepkit_topology::explorer::solid_edges(&topo, result).unwrap() {
+            let edge = topo.edge(edge).unwrap();
+            let z = topo.vertex(edge.start()).unwrap().point().z();
+            if (z - 20.0).abs() < 1e-9 && edge.start() != edge.end() {
+                let ends = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
+                if (ends[0].x().hypot(ends[0].y()) - 10.0).abs() < 1e-9 {
+                    assert!(matches!(edge.curve(), EdgeCurve::Circle(_)), "{op:?}");
+                }
+            }
+        }
+        assert!(
+            crate::validate::validate_solid(&topo, result)
+                .unwrap()
+                .is_valid(),
+            "{op:?}"
+        );
+        assert_volume_near(&topo, result, volume, 1e-6);
+    }
+}

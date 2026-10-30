@@ -1,5 +1,42 @@
 # Changelog
 
+## [4.6.8](https://github.com/andymai/brepkit/compare/v4.6.7...v4.6.8) (2026-10-30)
+
+
+### Bug Fixes
+
+* **check:** integrate a NURBS face's volume exactly along its boundary ([#2227](https://github.com/andymai/brepkit/issues/2227)) ([9055cc3](https://github.com/andymai/brepkit/commit/9055cc33bda5e5492dcd0c0b109105be07e06fd3))
+
+## [4.6.7](https://github.com/andymai/brepkit/compare/v4.6.6...v4.6.7) (2026-10-30)
+
+
+### Bug Fixes
+
+* **algo:** find and classify a NURBS face's bulge between its edges ([#2220](https://github.com/andymai/brepkit/issues/2220)) ([68ea6a7](https://github.com/andymai/brepkit/commit/68ea6a77bc100fc841630cacdf8bf4f3dccc14c1))
+* **operations:** hide a projected edge wherever a solid lies on its line of sight ([#2223](https://github.com/andymai/brepkit/issues/2223)) ([bd7ee10](https://github.com/andymai/brepkit/commit/bd7ee1013629570de0976637d58bc0cfa2e269be))
+* **operations:** sew faces keeping their curves, holes and sense ([#2217](https://github.com/andymai/brepkit/issues/2217)) ([b74efcb](https://github.com/andymai/brepkit/commit/b74efcbf15c8a92d61104d72b49caf1be73165b8))
+
+## [4.6.6](https://github.com/andymai/brepkit/compare/v4.6.5...v4.6.6) (2026-10-30)
+
+
+### Bug Fixes
+
+* **wasm:** chamfer through the walking engine first, as fillet does ([#2209](https://github.com/andymai/brepkit/issues/2209)) ([f3066b2](https://github.com/andymai/brepkit/commit/f3066b281e9f17f0d56478a8035d699f1b57bb64))
+
+## [4.6.5](https://github.com/andymai/brepkit/compare/v4.6.4...v4.6.5) (2026-10-30)
+
+
+### Bug Fixes
+
+* **algo:** bound a plane on a ball's equator by arcs, not chords ([#2225](https://github.com/andymai/brepkit/issues/2225)) ([3a2a366](https://github.com/andymai/brepkit/commit/3a2a366419cce88a6fa8c598b854add3dcf18edf))
+
+## [4.6.4](https://github.com/andymai/brepkit/compare/v4.6.3...v4.6.4) (2026-10-30)
+
+
+### Bug Fixes
+
+* **topology:** refuse to face a wire whose edges do not close ([#2222](https://github.com/andymai/brepkit/issues/2222)) ([5bb5af6](https://github.com/andymai/brepkit/commit/5bb5af6239a1d0554f3a3594730955e8df975954))
+
 ## [4.6.3](https://github.com/andymai/brepkit/compare/v4.6.2...v4.6.3) (2026-10-30)
 
 
