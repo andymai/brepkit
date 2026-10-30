@@ -153,6 +153,107 @@ pub fn tessellate_solid_grouped_with_tolerance(
     Ok((mesh, face_offsets))
 }
 
+/// [`tessellate_solid_grouped_with_tolerance`] for display, each face holding
+/// its own copies of its vertices.
+///
+/// A vertex the faces share takes, in each face's copy, that face's normal
+/// there, so a crease between faces shades sharp rather than averaged across
+/// it. A vertex one face alone uses keeps its normal. On a plane or an analytic surface the face's normal is the
+/// surface's; on a NURBS face, the area-weighted normal of the face's own
+/// triangles round the vertex. The groups are those of the welded mesh, in
+/// the same order, but the mesh is no longer welded across faces.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup or face tessellation fails.
+pub fn tessellate_solid_faceted_with_tolerance(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+    angular_tol: f64,
+) -> Result<(TriangleMesh, Vec<u32>), crate::OperationsError> {
+    let (welded, offsets) =
+        tessellate_solid_grouped_with_tolerance(topo, solid, deflection, angular_tol)?;
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let n = welded.positions.len();
+    let mut users = vec![0_u32; n];
+    let mut seen_in = vec![usize::MAX; n];
+    for (group, w) in offsets.windows(2).enumerate() {
+        for &v in &welded.indices[w[0] as usize..w[1] as usize] {
+            let v = v as usize;
+            if seen_in[v] != group {
+                seen_in[v] = group;
+                users[v] += 1;
+            }
+        }
+    }
+
+    let mut mesh = TriangleMesh {
+        positions: Vec::with_capacity(n),
+        normals: Vec::with_capacity(n),
+        indices: Vec::with_capacity(welded.indices.len()),
+    };
+    let mut faceted_offsets = Vec::with_capacity(offsets.len());
+    faceted_offsets.push(0_u32);
+    let mut copy_of = vec![u32::MAX; n];
+    for (group, w) in offsets.windows(2).enumerate() {
+        let tris = &welded.indices[w[0] as usize..w[1] as usize];
+        let base = mesh.positions.len();
+        let mut copied = Vec::new();
+        for &v in tris {
+            let v = v as usize;
+            if copy_of[v] == u32::MAX {
+                #[allow(clippy::cast_possible_truncation)]
+                let slot = mesh.positions.len() as u32;
+                copy_of[v] = slot;
+                copied.push(v);
+                mesh.positions.push(welded.positions[v]);
+                mesh.normals.push(welded.normals[v]);
+            }
+            mesh.indices.push(copy_of[v]);
+        }
+        if copied.iter().any(|&v| users[v] > 1)
+            && let Some(&face_id) = faces.get(group)
+        {
+            let face = topo.face(face_id)?;
+            let flip = if face.is_reversed() { -1.0 } else { 1.0 };
+            let surface = face.surface();
+            let mut around = vec![Vec3::new(0.0, 0.0, 0.0); copied.len()];
+            if matches!(surface, FaceSurface::Nurbs(_)) {
+                for tri in mesh.indices[mesh.indices.len() - tris.len()..].chunks_exact(3) {
+                    let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| mesh.positions[i as usize]);
+                    let area_normal = (b - a).cross(c - a);
+                    for &i in tri {
+                        around[i as usize - base] += area_normal;
+                    }
+                }
+            }
+            for (k, &v) in copied.iter().enumerate() {
+                if users[v] < 2 {
+                    continue;
+                }
+                let at = mesh.positions[base + k];
+                let normal = match surface {
+                    FaceSurface::Plane { normal, .. } => Some(*normal * flip),
+                    FaceSurface::Nurbs(_) => around[k].normalize().ok(),
+                    analytic => analytic
+                        .project_point(at)
+                        .map(|(u, v)| analytic.normal(u, v) * flip),
+                };
+                if let Some(normal) = normal {
+                    mesh.normals[base + k] = normal;
+                }
+            }
+        }
+        for v in copied {
+            copy_of[v] = u32::MAX;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        faceted_offsets.push(mesh.indices.len() as u32);
+    }
+    Ok((mesh, faceted_offsets))
+}
+
 /// What [`tessellate_solid_core`] returns.
 pub(super) struct CoreMesh {
     /// The solid's mesh.

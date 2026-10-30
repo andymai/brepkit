@@ -3689,3 +3689,68 @@ fn only_a_face_left_genuinely_empty_is_reported_unmeshed() {
     }
     assert_eq!(core.unmeshed, vec![sliver]);
 }
+
+/// A box's faceted mesh gives each face its own four corners, each carrying
+/// that face's outward normal, where the welded mesh shares eight corners
+/// whose normals average three faces.
+#[test]
+fn a_faceted_box_shades_each_face_flat() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let (welded, _) = tessellate_solid_grouped_with_tolerance(&topo, solid, 0.1, 0.5).unwrap();
+    assert_eq!(welded.positions.len(), 8);
+    let (mesh, offsets) = tessellate_solid_faceted_with_tolerance(&topo, solid, 0.1, 0.5).unwrap();
+    assert_eq!(mesh.positions.len(), 24);
+    assert_eq!(mesh.indices.len(), welded.indices.len());
+    for w in offsets.windows(2) {
+        let tris = &mesh.indices[w[0] as usize..w[1] as usize];
+        let [a, b, c] = [tris[0], tris[1], tris[2]].map(|i| mesh.positions[i as usize]);
+        let facing = (b - a).cross(c - a).normalize().unwrap();
+        for &i in tris {
+            let n = mesh.normals[i as usize];
+            assert!(
+                n.dot(facing) > 1.0 - 1e-12,
+                "{n:?} on a face facing {facing:?}"
+            );
+        }
+    }
+}
+
+/// A cylinder's faceted mesh carries radial normals all over its wall, rim
+/// included, and axial ones over its caps.
+#[test]
+fn a_faceted_cylinder_keeps_its_rims_sharp() {
+    for squash in [1.0, 2.0] {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            solid,
+            &brepkit_math::mat::Mat4::scale(squash, 1.0, 1.0),
+        )
+        .unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let (mesh, offsets) =
+            tessellate_solid_faceted_with_tolerance(&topo, solid, 0.05, 0.5).unwrap();
+        for (face, w) in faces.iter().zip(offsets.windows(2)) {
+            let planar = topo.face(*face).unwrap().surface().is_planar();
+            for &i in &mesh.indices[w[0] as usize..w[1] as usize] {
+                let (p, n) = (mesh.positions[i as usize], mesh.normals[i as usize]);
+                if planar {
+                    assert!(
+                        n.z().abs() > 1.0 - 1e-9,
+                        "squash {squash}: cap normal {n:?}"
+                    );
+                } else {
+                    let out = Vec3::new(p.x() / squash, p.y() * squash, 0.0)
+                        .normalize()
+                        .unwrap();
+                    assert!(
+                        n.dot(out) > 0.99 && n.z().abs() < 1e-2,
+                        "squash {squash}: wall normal {n:?} at {p:?}"
+                    );
+                }
+            }
+        }
+    }
+}
