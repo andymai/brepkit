@@ -328,10 +328,11 @@ pub fn sample_full_period_curve(n: usize, evaluate: impl Fn(f64) -> Point3) -> V
     result
 }
 
-/// A loft through `profiles` ruled (or smooth), closed at `start` and `end`
-/// to a point when given: a lone profile with a point is lofted to it, and
-/// with more profiles each point's piece is fused onto the loft through
-/// them, on the profile it ends.
+/// A loft through `profiles`, closed at `start` and `end` to a point when
+/// given. Ruled, a lone profile with a point is lofted to it, and with more
+/// profiles each point's piece is fused onto the loft through them, on the
+/// profile it ends. Smooth, the rails run on through the profiles to meet
+/// at each point.
 ///
 /// # Errors
 ///
@@ -344,7 +345,10 @@ pub fn loft_with_points(
     end: Option<Point3>,
     ruled: bool,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    use brepkit_operations::loft::{loft, loft_smooth, loft_to_point};
+    use brepkit_operations::loft::{loft, loft_smooth_with_points, loft_to_point};
+    if !ruled {
+        return loft_smooth_with_points(topo, profiles, start, end);
+    }
     let (Some(&first), Some(&last)) = (profiles.first(), profiles.last()) else {
         return Err(brepkit_operations::OperationsError::InvalidInput {
             reason: "loft needs at least one profile".into(),
@@ -352,11 +356,7 @@ pub fn loft_with_points(
     };
     let mut pieces = Vec::new();
     if profiles.len() > 1 {
-        pieces.push(if ruled {
-            loft(topo, profiles)?
-        } else {
-            loft_smooth(topo, profiles)?
-        });
+        pieces.push(loft(topo, profiles)?);
     }
     if let Some(p) = start {
         pieces.push(loft_to_point(topo, first, p)?);
@@ -1037,5 +1037,73 @@ mod loft_point_tests {
         assert!(report.is_valid(), "{:?}", report.issues);
         let volume = brepkit_operations::measure::solid_volume(&topo, solid, 1e-3).unwrap();
         assert!((volume - 64000.0 / 3.0).abs() < 1e-6, "{volume}");
+    }
+
+    fn check_smooth(
+        topo: &Topology,
+        solid: brepkit_topology::solid::SolidId,
+        counts: (usize, usize, usize),
+        exact: f64,
+    ) {
+        assert_eq!(
+            brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap(),
+            counts
+        );
+        let report = brepkit_operations::validate::validate_solid(topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = brepkit_operations::measure::oriented_solid_volume(topo, solid, 1e-3).unwrap();
+        assert!((volume - exact).abs() < 1e-3 * exact, "{volume} of {exact}");
+    }
+
+    /// Smooth through squares of 40 at z = 0 and 30 at z = 25 on to a point
+    /// at z = 40 (or the same mirrored, from a point at z = 0), each rail is
+    /// one quadratic: equal chords put the middle square at t = 1/2, so the
+    /// half-width is 20 (1 - t²) at height 60t - 20t². The four sides run
+    /// unbroken from the end square to the point and hold 121600 / 3, where
+    /// a frustum and a pyramid would hold 106000 / 3.
+    #[test]
+    fn smooth_profiles_run_on_smoothly_to_a_point() {
+        for from_start in [false, true] {
+            let mut topo = Topology::new();
+            let (profiles, point) = if from_start {
+                (
+                    [square(&mut topo, 15.0, 15.0), square(&mut topo, 20.0, 40.0)],
+                    Point3::new(0.0, 0.0, 0.0),
+                )
+            } else {
+                (
+                    [square(&mut topo, 20.0, 0.0), square(&mut topo, 15.0, 25.0)],
+                    Point3::new(0.0, 0.0, 40.0),
+                )
+            };
+            let solid = loft_with_points(
+                &mut topo,
+                &profiles,
+                from_start.then_some(point),
+                (!from_start).then_some(point),
+                false,
+            )
+            .unwrap();
+            check_smooth(&topo, solid, (5, 8, 5), 121_600.0 / 3.0);
+        }
+    }
+
+    /// A 40 square at z = 0 lofted smoothly from a point at z = -20 to one
+    /// at z = 20 has rails of half-width 80t (1 - t) at height 40t - 20:
+    /// four sides meeting at both points, holding 512000 / 15 where two
+    /// pyramids would hold 64000 / 3.
+    #[test]
+    fn a_profile_between_two_points_lofts_smoothly() {
+        let mut topo = Topology::new();
+        let middle = square(&mut topo, 20.0, 0.0);
+        let solid = loft_with_points(
+            &mut topo,
+            &[middle],
+            Some(Point3::new(0.0, 0.0, -20.0)),
+            Some(Point3::new(0.0, 0.0, 20.0)),
+            false,
+        )
+        .unwrap();
+        check_smooth(&topo, solid, (4, 4, 2), 512_000.0 / 15.0);
     }
 }

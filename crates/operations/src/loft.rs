@@ -1300,13 +1300,10 @@ fn face_recognized_circle(topo: &Topology, face_id: FaceId) -> Option<(Point3, V
 /// - Profiles resample to fewer than 3 vertices
 /// - A section boundary is non-planar with more than 4 edges (unsupported cap)
 /// - Surface interpolation fails
-#[allow(clippy::too_many_lines)]
 pub fn loft_smooth(
     topo: &mut Topology,
     profiles: &[FaceId],
 ) -> Result<SolidId, crate::OperationsError> {
-    let tol = Tolerance::new();
-
     if profiles.len() < 2 {
         return Err(crate::OperationsError::InvalidInput {
             reason: "loft requires at least 2 profiles".into(),
@@ -1317,6 +1314,53 @@ pub fn loft_smooth(
     if profiles.len() == 2 {
         return loft(topo, profiles);
     }
+
+    smooth_rails_loft(topo, profiles, None, None)
+}
+
+/// Like [`loft_smooth`], with the rails starting at `start` and ending at
+/// `end` when given.
+///
+/// A point is one more section the rails interpolate, collapsed to a single
+/// vertex where the side faces meet instead of a cap. A lone profile with
+/// one point has only two sections, and lofts to it as [`loft_to_point`]
+/// does.
+///
+/// # Errors
+///
+/// Returns an error if there are fewer than 2 sections (profiles and
+/// points together), or as [`loft_smooth`] or [`loft_to_point`] does.
+pub fn loft_smooth_with_points(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+    start: Option<Point3>,
+    end: Option<Point3>,
+) -> Result<SolidId, crate::OperationsError> {
+    if start.is_none() && end.is_none() {
+        return loft_smooth(topo, profiles);
+    }
+    if let ([profile], Some(point), None) | ([profile], None, Some(point)) = (profiles, start, end)
+    {
+        return loft_to_point(topo, *profile, point);
+    }
+    if profiles.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "loft requires at least 1 profile with a point".into(),
+        });
+    }
+    smooth_rails_loft(topo, profiles, start, end)
+}
+
+/// The smooth loft through `profiles`, closed by caps or, at an end with a
+/// point, by the rails meeting there.
+#[allow(clippy::too_many_lines)]
+fn smooth_rails_loft(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+    start: Option<Point3>,
+    end: Option<Point3>,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
 
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
@@ -1336,24 +1380,47 @@ pub fn loft_smooth(
         }
     }
 
-    // Ensure profile vertex winding is CCW relative to the stacking direction.
-    let _ = ensure_ccw_profiles(&mut profile_verts);
+    // Ensure profile vertex winding is CCW relative to the stacking
+    // direction, which runs from the first section to the last.
+    let first_at = start.unwrap_or_else(|| crate::winding::polygon_centroid(&profile_verts[0]));
+    let last_at = end.unwrap_or_else(|| {
+        crate::winding::polygon_centroid(&profile_verts[profile_verts.len() - 1])
+    });
+    if crate::winding::is_cw_winding(&profile_verts[0], &(last_at - first_at)) {
+        for verts in &mut profile_verts {
+            verts.reverse();
+        }
+    }
 
-    let num_profiles = profile_verts.len();
+    // A point is a section whose n points all coincide, held by one vertex.
+    let sections: Vec<Vec<Point3>> = start
+        .into_iter()
+        .map(|p| vec![p; n])
+        .chain(profile_verts)
+        .chain(end.into_iter().map(|p| vec![p; n]))
+        .collect();
+    let num_sections = sections.len();
+    let last = num_sections - 1;
+    let collapsed = |s: usize| (s == 0 && start.is_some()) || (s == last && end.is_some());
 
-    let ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>> = profile_verts
+    let ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>> = sections
         .iter()
-        .map(|verts| {
-            verts
-                .iter()
-                .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
-                .collect()
+        .enumerate()
+        .map(|(s, verts)| {
+            if collapsed(s) {
+                vec![topo.add_vertex(Vertex::new(verts[0], tol.linear)); n]
+            } else {
+                verts
+                    .iter()
+                    .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
+                    .collect()
+            }
         })
         .collect();
 
-    let ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = ring_verts
-        .iter()
-        .map(|ring| {
+    let ring_edges = |topo: &mut Topology, s: usize| -> Option<Vec<EdgeId>> {
+        (!collapsed(s)).then(|| {
+            let ring = &ring_verts[s];
             (0..n)
                 .map(|i| {
                     let next = (i + 1) % n;
@@ -1361,33 +1428,35 @@ pub fn loft_smooth(
                 })
                 .collect()
         })
-        .collect();
+    };
+    let first_ring = ring_edges(topo, 0);
+    let last_ring = ring_edges(topo, last);
 
     let mut all_faces = Vec::new();
 
     // Start cap: reversed first profile.
-    {
-        let cap_normal = cap_normal_from_verts(&profile_verts[0], true)?;
+    if let Some(ring) = &first_ring {
+        let cap_normal = cap_normal_from_verts(&sections[0], true)?;
         all_faces.push(crate::cap::build_cap_face(
             topo,
-            &ring_edges[0],
+            ring,
             vec![],
-            &profile_verts[0],
+            &sections[0],
             cap_normal,
             true,
         )?);
     }
 
-    // One rail per vertex index through that vertex of every profile, all
+    // One rail per vertex index through that vertex of every section, all
     // sharing the mean chord-length parameters and so one knot vector. Each
     // side face is the ruled surface between two neighbouring rails, so its
-    // boundary IS the rails and the ring edges, which both neighbours share.
+    // boundary IS the rails and the ring edges, which both neighbours share;
+    // at a point the rails meet and the face has no ring edge there.
     // u runs along the ring edge and v up the rails: for profiles wound CCW
     // about the stacking direction the normal Su × Sv points outward.
-    let last = num_profiles - 1;
-    let degree = (num_profiles - 1).min(3);
+    let degree = (num_sections - 1).min(3);
     let rail_points: Vec<Vec<Point3>> = (0..n)
-        .map(|i| profile_verts.iter().map(|verts| verts[i]).collect())
+        .map(|i| sections.iter().map(|verts| verts[i]).collect())
         .collect();
     let params = mean_chord_params(&rail_points);
     let rails = rail_points
@@ -1419,16 +1488,16 @@ pub fn loft_smooth(
         )
         .map_err(crate::OperationsError::Math)?;
 
-        let side_wire = Wire::new(
-            vec![
-                OrientedEdge::new(ring_edges[0][i], true),
-                OrientedEdge::new(rail_edges[next_i], true),
-                OrientedEdge::new(ring_edges[last][i], false),
-                OrientedEdge::new(rail_edges[i], false),
-            ],
-            true,
-        )
-        .map_err(crate::OperationsError::Topology)?;
+        let mut side = Vec::with_capacity(4);
+        if let Some(ring) = &first_ring {
+            side.push(OrientedEdge::new(ring[i], true));
+        }
+        side.push(OrientedEdge::new(rail_edges[next_i], true));
+        if let Some(ring) = &last_ring {
+            side.push(OrientedEdge::new(ring[i], false));
+        }
+        side.push(OrientedEdge::new(rail_edges[i], false));
+        let side_wire = Wire::new(side, true).map_err(crate::OperationsError::Topology)?;
 
         let side_wire_id = topo.add_wire(side_wire);
         let side_face = topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
@@ -1436,14 +1505,13 @@ pub fn loft_smooth(
     }
 
     // End cap: last profile with forward orientation.
-    {
-        let last = num_profiles - 1;
-        let cap_normal = cap_normal_from_verts(&profile_verts[last], false)?;
+    if let Some(ring) = &last_ring {
+        let cap_normal = cap_normal_from_verts(&sections[last], false)?;
         all_faces.push(crate::cap::build_cap_face(
             topo,
-            &ring_edges[last],
+            ring,
             vec![],
-            &profile_verts[last],
+            &sections[last],
             cap_normal,
             false,
         )?);
