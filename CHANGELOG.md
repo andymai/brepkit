@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.5.10](https://github.com/andymai/brepkit/compare/v4.5.9...v4.5.10) (2026-10-30)
+
+
+### Bug Fixes
+
+* **math:** meet a ball off a torus's axis in the loops its closed form gives ([#2160](https://github.com/andymai/brepkit/issues/2160)) ([848285a](https://github.com/andymai/brepkit/commit/848285a4780f22dd6648ab779638da5d1165d616))
+* **operations:** probe every edge of a tool before calling it contained ([#2202](https://github.com/andymai/brepkit/issues/2202)) ([e20f559](https://github.com/andymai/brepkit/commit/e20f5596a25a4e29e5ee6a832949b0610062102c))
+* **wasm:** give an arc's curve parameters its own span ([#2205](https://github.com/andymai/brepkit/issues/2205)) ([3bbc5d9](https://github.com/andymai/brepkit/commit/3bbc5d9152f8609a3faf605def0ff3ae97add3d8))
+
 ## [4.5.9](https://github.com/andymai/brepkit/compare/v4.5.8...v4.5.9) (2026-10-29)
 
 
