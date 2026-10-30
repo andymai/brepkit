@@ -1215,7 +1215,10 @@ fn chamfer_circular_rims(
         rebuilt.push(topo.add_shell(Shell::new(faces)?));
     }
     let outer = rebuilt.remove(0);
-    Ok(Some(topo.add_solid(Solid::new(outer, rebuilt))))
+    let result = topo.add_solid(Solid::new(outer, rebuilt));
+    let made: Vec<FaceId> = bands.iter().map(|&(_, band)| band).collect();
+    crate::cavities::clear_of_own_cavities(topo, result, &made, "chamfer")?;
+    Ok(Some(result))
 }
 
 #[cfg(test)]
