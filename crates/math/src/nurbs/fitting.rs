@@ -204,8 +204,15 @@ pub(crate) fn build_approximation_knots(params: &[f64], p: usize, m: usize, n: u
 
 /// Solve the interpolation linear system for control points.
 ///
-/// Sets up `N[i][j] = B_{j,p}(t_i)` and solves `N * P = Q`.
-#[allow(clippy::cast_precision_loss, clippy::needless_range_loop)]
+/// Sets up `N[i][j] = B_{j,p}(t_i)` and solves `N * P = Q`. Row `i` holds
+/// only the `p + 1` basis functions alive at `t_i`, so the matrix keeps to a
+/// band `kl` below its diagonal and `ku` above it, `p` each for parameters
+/// that sit inside their own spans. It is stored and eliminated in that band
+/// with partial pivoting, whose row swaps widen the upper band to `kl + ku`:
+/// `n (2 kl + ku + 1)` numbers rather than `n^2`, so a path sampled at tens
+/// of thousands of points still fits, and the same pivots and arithmetic as
+/// eliminating the whole matrix.
+#[allow(clippy::needless_range_loop)]
 fn solve_interpolation(
     points: &[Point3],
     params: &[f64],
@@ -213,22 +220,75 @@ fn solve_interpolation(
     degree: usize,
 ) -> Result<Vec<Point3>, MathError> {
     let n = points.len();
-
-    let mut matrix = vec![vec![0.0; n]; n];
+    let mut entries = Vec::with_capacity(n);
+    let (mut kl, mut ku) = (0, 0);
     for (i, &t) in params.iter().enumerate() {
         let span = find_span(t, degree, knots, n);
-        let basis = basis_funs(span, t, degree, knots);
-        for (k, &b) in basis.iter().enumerate() {
-            let col = span - degree + k;
+        let first = span - degree;
+        kl = kl.max(i.saturating_sub(first));
+        ku = ku.max((first + degree).min(n - 1).saturating_sub(i));
+        entries.push((first, basis_funs(span, t, degree, knots)));
+    }
+    // Row `i` keeps column `j` at `j + kl - i`.
+    let width = 2 * kl + ku + 1;
+    let mut band = vec![vec![0.0; width]; n];
+    for (i, (first, basis)) in entries.into_iter().enumerate() {
+        for (k, b) in basis.into_iter().enumerate() {
+            let col = first + k;
             if col < n {
-                matrix[i][col] = b;
+                band[i][col + kl - i] = b;
             }
         }
     }
-
     let mut rhs: Vec<[f64; 3]> = points.iter().map(|p| [p.x(), p.y(), p.z()]).collect();
-    gauss_solve(&mut matrix, &mut rhs)?;
 
+    for k in 0..n {
+        let below = (k + kl).min(n - 1);
+        let mut pivot_row = k;
+        for i in (k + 1)..=below {
+            if band[i][k + kl - i].abs() > band[pivot_row][k + kl - pivot_row].abs() {
+                pivot_row = i;
+            }
+        }
+        if band[pivot_row][k + kl - pivot_row].abs() < 1e-15 {
+            return Err(MathError::SingularMatrix);
+        }
+        let right = (k + kl + ku).min(n - 1);
+        if pivot_row != k {
+            for j in k..=right {
+                let (a, b) = (j + kl - k, j + kl - pivot_row);
+                let held = band[k][a];
+                band[k][a] = band[pivot_row][b];
+                band[pivot_row][b] = held;
+            }
+            rhs.swap(k, pivot_row);
+        }
+        let pivot = band[k][kl];
+        for i in (k + 1)..=below {
+            let factor = band[i][k + kl - i] / pivot;
+            if factor == 0.0 {
+                continue;
+            }
+            for j in (k + 1)..=right {
+                band[i][j + kl - i] -= factor * band[k][j + kl - k];
+            }
+            band[i][k + kl - i] = 0.0;
+            for c in 0..3 {
+                rhs[i][c] -= factor * rhs[k][c];
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        let mut sum = rhs[i];
+        for j in (i + 1)..=(i + kl + ku).min(n - 1) {
+            for c in 0..3 {
+                sum[c] -= band[i][j + kl - i] * rhs[j][c];
+            }
+        }
+        for c in 0..3 {
+            rhs[i][c] = sum[c] / band[i][kl];
+        }
+    }
     Ok(rhs.iter().map(|&[x, y, z]| Point3::new(x, y, z)).collect())
 }
 
@@ -871,6 +931,44 @@ mod tests {
                 Point3::new(t.cos(), t.sin(), 0.05 * t)
             })
             .collect();
+        let curve = interpolate(&pts, 3).unwrap();
+        for (p, t) in pts.iter().zip(chord_length_params(&pts)) {
+            assert!((curve.evaluate(t) - *p).length() < 1e-9, "missed {p:?}");
+        }
+    }
+
+    /// Forty thousand points, a dense system of 12.8 GB, are solved in the
+    /// band their rows hold.
+    #[test]
+    fn interpolate_forty_thousand_points_in_their_band() {
+        let pts: Vec<Point3> = (0..40_000)
+            .map(|i| {
+                let t = i as f64 * 0.001;
+                Point3::new(t.cos(), t.sin(), 0.05 * t)
+            })
+            .collect();
+        let curve = interpolate(&pts, 3).unwrap();
+        for (p, t) in pts.iter().zip(chord_length_params(&pts)).step_by(97) {
+            assert!((curve.evaluate(t) - *p).length() < 1e-9, "missed {p:?}");
+        }
+    }
+
+    /// Points bunched at both ends of a unit segment, nanometres apart at
+    /// one end: the band's partial pivoting solves them as the whole matrix
+    /// did.
+    #[test]
+    fn interpolate_points_bunched_at_both_ends() {
+        let pts: Vec<Point3> = [
+            0.0,
+            1.023_546_145_149_216_7e-9,
+            5.140_308_521_034_802_6e-9,
+            0.999_964_022_234_990_8,
+            0.999_977_479_169_274_9,
+            1.0,
+        ]
+        .iter()
+        .map(|&x| Point3::new(x, 0.0, 0.0))
+        .collect();
         let curve = interpolate(&pts, 3).unwrap();
         for (p, t) in pts.iter().zip(chord_length_params(&pts)) {
             assert!((curve.evaluate(t) - *p).length() < 1e-9, "missed {p:?}");
