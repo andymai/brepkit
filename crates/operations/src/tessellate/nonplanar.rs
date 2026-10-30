@@ -2770,6 +2770,15 @@ fn cdt_in_surface_frame(
     // than span the face, so its slant (v, a length already) keeps its scale.
     let reaches_apex = matches!(face_data.surface(), FaceSurface::Cone(_))
         && v_min.abs().min(v_max.abs()) < 1e-9 * (v_max - v_min).abs().max(1.0);
+    // A NURBS face's iso-line divisions size both its metric and its interior
+    // grid: probed once.
+    let divisions = nurbs_iso_divisions(
+        face_data.surface(),
+        (u_min, du),
+        (v_min, dv),
+        deflection,
+        angular_tol,
+    );
     let (cdt_u_scale, cdt_v_scale) = match stripe_radius.or(holed_wall_radius) {
         Some(radius) if reaches_apex => (radius, 1.0),
         Some(radius) if du > 1e-15 && dv > 1e-15 => {
@@ -2785,7 +2794,10 @@ fn cdt_in_surface_frame(
             deflection,
             angular_tol,
         )
-        .or_else(|| nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv)))
+        .or_else(|| {
+            let speeds = nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv));
+            ruled_metric(speeds, divisions, du, dv).or(speeds)
+        })
         .unwrap_or((1.0, 1.0)),
     };
     let to_cdt = |point: Point2| Point2::new(point.x() * cdt_u_scale, point.y() * cdt_v_scale);
@@ -2904,6 +2916,7 @@ fn cdt_in_surface_frame(
             deflection,
             angular_tol,
             circle_floor,
+            divisions,
         );
 
         let boundary_uv_ref = &boundary_uv;
@@ -4449,6 +4462,61 @@ fn extrusion_metric(
     }
 }
 
+/// The triangulation metric of a NURBS face whose iso-lines run straight one
+/// way without being one vector (a fillet band whose radius changes along
+/// its edge): as for an extrusion, the straight direction shrunk to one chord
+/// cell of the curved one. At their own speeds Delaunay joins the face's two
+/// long sides across the curve whenever those run along the straight way.
+fn ruled_metric(
+    speeds: Option<(f64, f64)>,
+    divisions: Option<(usize, usize)>,
+    du: f64,
+    dv: f64,
+) -> Option<(f64, f64)> {
+    let (speed_u, speed_v) = speeds?;
+    match divisions? {
+        (n_u, n_v) if n_u > 1 && n_v <= 1 => Some((speed_u, speed_u * du / n_u as f64 / dv)),
+        (n_u, n_v) if n_u <= 1 && n_v > 1 => Some((speed_v * dv / n_v as f64 / du, speed_v)),
+        _ => None,
+    }
+}
+
+/// The chord divisions of a NURBS face's iso-lines across its box, along `u`
+/// and along `v`. `None` for any other surface.
+fn nurbs_iso_divisions(
+    surface: &FaceSurface,
+    (u_min, du): (f64, f64),
+    (v_min, dv): (f64, f64),
+    deflection: f64,
+    angular_tol: f64,
+) -> Option<(usize, usize)> {
+    const MAX_DIVISIONS: usize = 1024;
+    if !matches!(surface, FaceSurface::Nurbs(_)) {
+        return None;
+    }
+    let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
+    let normal_at = |u: f64, v: f64| {
+        let (u, v) = wrap_to_domain(surface, u, v);
+        surface.normal(u, v)
+    };
+    let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
+    let along = |along_u: bool, spans| {
+        super::nurbs::iso_divisions_over(
+            &at,
+            &normal_at,
+            along_u,
+            spans,
+            deflection,
+            angular_tol,
+            MAX_DIVISIONS,
+        )
+    };
+    Some((
+        along(true, (u_span, v_span)),
+        along(false, (v_span, u_span)),
+    ))
+}
+
 fn nurbs_speeds(
     surface: &FaceSurface,
     (u_min, du): (f64, f64),
@@ -5085,6 +5153,7 @@ fn interior_grid_resolution(
     deflection: f64,
     angular_tol: f64,
     circle_floor: bool,
+    nurbs_divisions: Option<(usize, usize)>,
 ) -> (usize, usize) {
     // This is the non-standard-boundary CDT fallback (boolean-result faces).
     // Watertightness comes from the explicit boundary samples, not from these
@@ -5137,38 +5206,16 @@ fn interior_grid_resolution(
             (n_u, 2)
         }
         // A NURBS face's parameters are knot values, not angles: size the
-        // grid by the chords of its own iso-lines across the face's box.
+        // grid by the chords of its own iso-lines across the face's box. The
+        // CDT inserts every interior sample, so the grid is bounded as a
+        // whole, not only per direction.
         FaceSurface::Nurbs(_) => {
-            const INTERIOR_MAX_DIVISIONS: usize = 1024;
-            let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
-            let normal_at = |u: f64, v: f64| {
-                let (u, v) = wrap_to_domain(surface, u, v);
-                surface.normal(u, v)
-            };
-            let (u_span, v_span) = ((u_min, u_min + du), (v_min, v_min + dv));
-            // The CDT inserts every interior sample, so the grid is bounded
-            // as a whole, not only per direction.
-            super::nurbs::cap_grid(
-                super::nurbs::iso_divisions_over(
-                    &at,
-                    &normal_at,
-                    true,
-                    (u_span, v_span),
-                    deflection,
-                    angular_tol,
-                    INTERIOR_MAX_DIVISIONS,
-                ),
-                super::nurbs::iso_divisions_over(
-                    &at,
-                    &normal_at,
-                    false,
-                    (v_span, u_span),
-                    deflection,
-                    angular_tol,
-                    INTERIOR_MAX_DIVISIONS,
-                ),
-                super::nurbs::GRID_MAX_CELLS,
-            )
+            let (n_u, n_v) = nurbs_divisions
+                .or_else(|| {
+                    nurbs_iso_divisions(surface, (u_min, du), (v_min, dv), deflection, angular_tol)
+                })
+                .unwrap_or((1, 1));
+            super::nurbs::cap_grid(n_u, n_v, super::nurbs::GRID_MAX_CELLS)
         }
         FaceSurface::Plane { .. } => {
             let r = estimate_surface_radius(surface);

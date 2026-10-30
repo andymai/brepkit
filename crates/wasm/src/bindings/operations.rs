@@ -993,8 +993,7 @@ impl BrepKernel {
             };
             edge_laws.push((edge_id, law));
         }
-        let result =
-            brepkit_operations::fillet::fillet_variable(self.topo_mut(), solid_id, &edge_laws)?;
+        let result = crate::helpers::try_fillet_variable(self.topo_mut(), solid_id, &edge_laws)?;
         Ok(solid_id_to_u32(result))
     }
 
