@@ -1,0 +1,20 @@
+crates/check/src/properties/boundary.rs
+  s_a2dc21dbec3f2b::t_6f7baad70760db 368-371,373-378
+  s_a2dc21dbec3f2b::t_422b09f433c540 349-356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "482042a891c452ccdea1272a4c46f63a8b19abd2",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
