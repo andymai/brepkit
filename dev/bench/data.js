@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793393728325,
+  "lastUpdate": 1793395721761,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62909,6 +62909,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28894554,
             "range": "± 889995",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2785e1f7183de262850b1f92858d66bb1b03a1c1",
+          "message": "chore(main): release 4.6.9 (#2244)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n## [4.6.9](https://github.com/andymai/brepkit/compare/v4.6.8...v4.6.9)\n(2026-10-30)\n\n\n### Bug Fixes\n\n* **algo:** intersect a NURBS face with the part of a cylinder or cone\nit can reach ([#2243](https://github.com/andymai/brepkit/issues/2243))\n([f36b7c3](https://github.com/andymai/brepkit/commit/f36b7c32836030a182f82fb022d5bd781fa09512))\n* **algo:** read a plane sub-face's interior point on its curves\n([#2237](https://github.com/andymai/brepkit/issues/2237))\n([98a64a1](https://github.com/andymai/brepkit/commit/98a64a10289d1f8f038d3f8720b2a8eaa2ccf02f))\n* **check:** integrate a ring torus face's volume exactly along its\nboundary ([#2228](https://github.com/andymai/brepkit/issues/2228))\n([934a5e7](https://github.com/andymai/brepkit/commit/934a5e7477ea4300aba83912b7d1904114f3ae5d))\n* **operations:** face an extruded NURBS face's caps out of the solid\n([#2239](https://github.com/andymai/brepkit/issues/2239))\n([842ca58](https://github.com/andymai/brepkit/commit/842ca589cc8bec55d92b6cc27098e03f27433f7b))\n* **operations:** loft a profile to a point as a pyramid or cone\n([#2234](https://github.com/andymai/brepkit/issues/2234))\n([159d849](https://github.com/andymai/brepkit/commit/159d849a9c04ccccd842575fb1e61690fa848fbc))\n* **operations:** loft profiles of different edge counts by matching\ntheir angles ([#2230](https://github.com/andymai/brepkit/issues/2230))\n([f7a38f8](https://github.com/andymai/brepkit/commit/f7a38f81cd5c94d7a91c60399d47d4555368b436))\n* **operations:** loft twisted sides as ruled patches, wound toward the\nnext section ([#2238](https://github.com/andymai/brepkit/issues/2238))\n([df9cfcb](https://github.com/andymai/brepkit/commit/df9cfcb4ceb715d1697e28f46e44b1d001da95d0))\n* **operations:** split a solid through the boolean engine\n([#2210](https://github.com/andymai/brepkit/issues/2210))\n([66a88b0](https://github.com/andymai/brepkit/commit/66a88b0014e3f7563435ddbb5b1dea29667355e3))\n* **operations:** sweep along a chain of curved edges by their own\ncurves ([#2231](https://github.com/andymai/brepkit/issues/2231))\n([04393d9](https://github.com/andymai/brepkit/commit/04393d952f8b48d62f3b03eb7db256135eabeebd))\n* **operations:** thicken a curved face into a wall of even thickness\n([#2233](https://github.com/andymai/brepkit/issues/2233))\n([e3ff9f2](https://github.com/andymai/brepkit/commit/e3ff9f23b9459e613de056249ef2421879722968))\n* **wasm:** fillet along a radius law through the walking engine first\n([#2236](https://github.com/andymai/brepkit/issues/2236))\n([7ed9b67](https://github.com/andymai/brepkit/commit/7ed9b6780735711d0ad3a350c690d9e5da30c48f))\n* **wasm:** refuse to make a solid from a shell that does not close\n([#2242](https://github.com/andymai/brepkit/issues/2242))\n([cf81d39](https://github.com/andymai/brepkit/commit/cf81d39d038a8e78cea9c65e270d327286539288))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-30T21:25:30Z",
+          "tree_id": "4874471a4cfbd3049fc8979add8b03f7ab014993",
+          "url": "https://github.com/andymai/brepkit/commit/2785e1f7183de262850b1f92858d66bb1b03a1c1"
+        },
+        "date": 1793395711597,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1100759,
+            "range": "± 2216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1184211,
+            "range": "± 46188",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13591,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 672068,
+            "range": "± 1450",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28925891,
+            "range": "± 115445",
             "unit": "ns/iter"
           }
         ]
