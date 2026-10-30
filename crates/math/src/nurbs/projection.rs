@@ -610,6 +610,25 @@ fn surface_newton_refine(
         // Convergence check 3: parameter step negligible.
         let step = (deriv_u * step_u + deriv_v * step_v).length();
         if step < tolerance {
+            // Where a partial vanishes along a whole iso-line (the curves
+            // across it stand still there), the distance has a critical
+            // point that is not its least: no Newton step leaves it, though
+            // a short step off the line comes nearer, and Newton carries on
+            // from there.
+            if dist > tolerance
+                && let Some((u_near, v_near)) = nearer_beside(
+                    surface,
+                    point,
+                    (u, v),
+                    dist,
+                    [u_min, u_max, v_min, v_max],
+                    (closed_u, closed_v),
+                )
+            {
+                u = u_near;
+                v = v_near;
+                continue;
+            }
             let pt = surface.evaluate(u_new, v_new);
             return Ok((u_new, v_new, pt));
         }
@@ -621,6 +640,30 @@ fn surface_newton_refine(
     Err(MathError::ConvergenceFailure {
         iterations: MAX_ITERATIONS,
     })
+}
+
+/// The nearest to `point` of the four parameters a thousandth of the domain
+/// along u or v from `(u, v)`, if it is nearer than `dist`.
+fn nearer_beside(
+    surface: &NurbsSurface,
+    point: Point3,
+    (u, v): (f64, f64),
+    dist: f64,
+    [u_min, u_max, v_min, v_max]: [f64; 4],
+    (closed_u, closed_v): (bool, bool),
+) -> Option<(f64, f64)> {
+    let (h_u, h_v) = (1e-3 * (u_max - u_min), 1e-3 * (v_max - v_min));
+    [
+        (advance_param(u, h_u, u_min, u_max, closed_u).0, v),
+        (advance_param(u, -h_u, u_min, u_max, closed_u).0, v),
+        (u, advance_param(v, h_v, v_min, v_max, closed_v).0),
+        (u, advance_param(v, -h_v, v_min, v_max, closed_v).0),
+    ]
+    .into_iter()
+    .map(|(a, b)| ((a, b), (surface.evaluate(a, b) - point).length()))
+    .filter(|&(_, d)| d < dist)
+    .min_by(|x, y| x.1.total_cmp(&y.1))
+    .map(|(uv, _)| uv)
 }
 
 /// Along a closed direction the step wraps across the seam instead of
@@ -1599,5 +1642,34 @@ mod tests {
         let found =
             project_point_to_surface(&patch, Point3::new(0.1, 0.0, 0.0), 1e-6).expect("projection");
         assert!(found.distance < 1e-6, "{found:?}");
+    }
+
+    /// A patch swept 10 up from the cubic over (-20, -20), (-20, 20),
+    /// (-20, -20), (-20, 20): the line x = -20, y = 20 (2v - 1)³, whose
+    /// partial along v vanishes on the whole row v = 1/2. A point on the
+    /// patch 0.147 beside that row, nearest the coarse grid's point on it,
+    /// still projects onto itself, at v = (1 + ∛(-0.147 / 20)) / 2.
+    #[test]
+    fn a_point_beside_a_row_where_the_surface_stands_still_projects_onto_it() {
+        let row = |z: f64| {
+            [-20.0, 20.0, -20.0, 20.0]
+                .map(|y| Point3::new(-20.0, y, z))
+                .to_vec()
+        };
+        let patch = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![row(0.0), row(10.0)],
+            vec![vec![1.0; 4]; 2],
+        )
+        .expect("patch");
+        assert!(patch.derivatives(0.5, 0.5, 1)[0][1].length() < 1e-12);
+        let on = Point3::new(-20.0, -0.147, 5.0);
+        let found = project_point_to_surface(&patch, on, 1e-9).expect("projection");
+        assert!(found.distance < 1e-9, "{found:?}");
+        let v = 0.5 * (1.0 + (-0.147_f64 / 20.0).cbrt());
+        assert!((found.v - v).abs() < 1e-6, "{found:?} for v {v}");
     }
 }

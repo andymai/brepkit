@@ -1792,6 +1792,17 @@ mod to_point_tests {
         );
         let report = crate::validate::validate_solid(topo, solid).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
+        for deflection in [0.01, 0.001] {
+            let mesh = crate::tessellate::tessellate_solid(topo, solid, deflection).unwrap();
+            assert_eq!(
+                (
+                    crate::tessellate::boundary_edge_count(&mesh),
+                    crate::tessellate::non_manifold_edge_count(&mesh)
+                ),
+                (0, 0),
+                "open or branching mesh at {deflection}"
+            );
+        }
         let volume = crate::measure::solid_volume(topo, solid, 1e-3).unwrap();
         assert!(
             (volume - exact).abs() < within * exact,
