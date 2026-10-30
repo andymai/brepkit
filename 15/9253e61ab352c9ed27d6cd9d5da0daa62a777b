@@ -1,7 +1,7 @@
 crates/math/src/nurbs/intersection/ray.rs
   s_a2dc21dbec3f2b::t_40bbe56a15d555 257-265,303-313,335,342,357,467-493
   s_a2dc21dbec3f2b::t_72efbc1a5f7484 326
-  s_a2dc21dbec3f2b::t_d172b1bc16ab50 494-495
+  s_a2dc21dbec3f2b::t_20b72611bb5e7d 494-495
 ---
 {
   "schema_version": "authorship/3.0.0",
