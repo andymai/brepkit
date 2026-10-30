@@ -1,0 +1,25 @@
+crates/math/src/nurbs/projection.rs
+  s_a2dc21dbec3f2b::t_8cb48f29262156 613-632,646-675,1653-1733
+crates/operations/src/loft.rs
+  s_a2dc21dbec3f2b::t_248852d0b0741a 257-481,1776-1822,1841-1851,1853-1862,1864,1866-1875,1879-1881,1889-1891,1896-1897,1900,1902,1908,1911-1912,1915,1917,1949-1958,1966-1967,1970,1972,3041-3391
+crates/wasm/src/bindings/operations.rs
+  s_a2dc21dbec3f2b::t_6eccf47375a085 21,143,147-156,161-167
+crates/wasm/src/helpers.rs
+  s_a2dc21dbec3f2b::t_b0e87a5340c1ae 449-459,461-473,475-477,479-499,1341-1486
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d0ae0ce032c5a6952119efc2c13a77a037a3939c",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
