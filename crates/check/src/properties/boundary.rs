@@ -323,61 +323,66 @@ pub(super) fn integrate_by_boundary<S: ParametricSurface>(
                     pending.push((ta, mid));
                     continue;
                 }
-                // The integrals over `[a, b]` by the rule, the area's last.
+                // The integrals over `[a, b]` by the rule, the area's last,
+                // and the most the stencil's rounding can move any of them.
                 let sums = |a: f64, b: f64, nodes: [(f64, f64, f64, f64); 8]| {
                     // A five-point stencil wide enough that rounding in
                     // far-off coordinates stays small against it.
                     let h = 1e-3 * (b - a);
                     let mut sums = [0.0; 9];
+                    let mut rounding = 0.0_f64;
                     for (t, un, vn, w) in nodes {
                         let [(u1, v1), (u2, v2), (u3, v3), (u4, v4)] =
                             [t + h, t - h, t + 2.0 * h, t - 2.0 * h].map(at);
                         let du = 8.0f64.mul_add(wrap_pi(u1 - u2), -wrap_pi(u3 - u4)) / (12.0 * h);
                         let dv = 8.0f64.mul_add(v_wrap(v1 - v2), -v_wrap(v3 - v4)) / (12.0 * h);
+                        // Each difference rounds by an ulp of its coordinate.
+                        let (nu, nv) = (
+                            1.5 * f64::EPSILON * (1.0 + un.abs()) / h.abs(),
+                            1.5 * f64::EPSILON * (1.0 + vn.abs()) / h.abs(),
+                        );
                         // A latitude (a rim circle about the axis) adds nothing.
                         if dv.abs() > 1e-12 * (1.0 + vn.abs()) {
                             let g = antiderivative(chart.surface, un, vn, about);
                             for (s, x) in sums.iter_mut().zip(g) {
                                 *s += w * dv * x;
+                                rounding = rounding.max((w * nv * x).abs());
                             }
                         }
                         sums[8] += w * (un * dv - vn * du);
+                        rounding = rounding.max((w * (un.abs() * nv + vn.abs() * nu)).abs());
                     }
-                    sums
+                    (sums, 8.0 * rounding)
                 };
-                let mut piece = sums(ta, tb, nodes);
-                // A rational edge's parameter can run unevenly along it (an
-                // arc whose weights grow along it), so its piece is kept only
-                // where its halves agree with it, and halved otherwise. Equal
-                // weights make a polynomial, which one rule per knot span
-                // holds; the check would only chase rounding in their spans.
-                let uneven = matches!(edge.curve, EdgeCurve::NurbsCurve(n)
-                    if n.weights().windows(2).any(|w| (w[0] - w[1]).abs() > 1e-12 * w[0].abs().max(w[1].abs())));
-                if uneven {
-                    let (left, right) = (
+                let (mut piece, _) = sums(ta, tb, nodes);
+                // A NURBS edge's parameter can run unevenly along the surface
+                // (a rational arc whose weights grow along it, or a polynomial
+                // whose speed swings), so its piece is kept only where its
+                // halves agree with it, and halved otherwise.
+                if matches!(edge.curve, EdgeCurve::NurbsCurve(_)) {
+                    let ((left, left_rounding), (right, right_rounding)) = (
                         sums(ta, mid, nodes_over(ta, mid)),
                         sums(mid, tb, nodes_over(mid, tb)),
                     );
                     let halves: [f64; 9] = std::array::from_fn(|k| left[k] + right[k]);
+                    let rounding = left_rounding + right_rounding;
                     let size = halves.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
                     let gap = piece
                         .iter()
                         .zip(&halves)
                         .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
                     // The gap measures the whole piece's error; the halves
-                    // kept are far closer. At a thousandth of the edge the
-                    // derivative stencil's rounding, not the rule, sets the
-                    // gap, so a piece is given up only if its halves still
-                    // differ from it by more than a millionth.
-                    if gap > 1e-9 * size {
-                        if (tb - ta).abs() > floor {
-                            pending.push((mid, tb));
-                            pending.push((ta, mid));
-                            continue;
-                        }
-                        if gap > 1e-6 * size {
+                    // kept are far closer. A gap within the stencil's
+                    // rounding is no error of the rule (a knot span 6e-11
+                    // wide, or a stretch where the edge barely moves), and
+                    // halving only multiplies that rounding.
+                    if gap > 1e-9 * size && gap > 100.0 * rounding {
+                        if (tb - ta).abs() <= floor {
                             return None;
                         }
+                        pending.push((mid, tb));
+                        pending.push((ta, mid));
+                        continue;
                     }
                     piece = halves;
                 }

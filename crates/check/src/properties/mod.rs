@@ -543,6 +543,84 @@ mod tests {
         }
     }
 
+    /// A quarter of a cone of half-angle pi/4 between generator lengths 1 and
+    /// 3, its generators drawn as lines or as polynomial NURBS lines of degree
+    /// 12 run as `t^12` (every control point at the start but the last).
+    /// Those lie on the cone exactly, but the area and volume terms, linear
+    /// in the generator length, reach degree 23 along them, past one Gauss
+    /// rule's reach; read either way the quarter holds the same area and
+    /// volume term.
+    #[test]
+    fn a_cone_quarter_reads_its_generators_however_they_run() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_math::traits::ParametricSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+        let read = |polynomial: bool| {
+            let mut topo = Topology::new();
+            let z = Vec3::new(0.0, 0.0, 1.0);
+            let cone = ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), z, FRAC_PI_4).unwrap();
+            let at = |u: f64, v: f64| ParametricSurface::evaluate(&cone, u, v);
+            let corners = [
+                at(0.0, 1.0),
+                at(FRAC_PI_2, 1.0),
+                at(FRAC_PI_2, 3.0),
+                at(0.0, 3.0),
+            ];
+            let [a, b, c, d] = corners.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let rim = |v: f64, up: f64| {
+                let (sin, cos) = FRAC_PI_4.sin_cos();
+                EdgeCurve::Circle(
+                    brepkit_math::curves::Circle3D::new(
+                        Point3::new(0.0, 0.0, v * sin),
+                        z * up,
+                        v * cos,
+                    )
+                    .unwrap(),
+                )
+            };
+            let generator = |from: Point3, to: Point3| {
+                if polynomial {
+                    let mut points = vec![from; 12];
+                    points.push(to);
+                    let mut knots = vec![0.0; 13];
+                    knots.extend([1.0; 13]);
+                    EdgeCurve::NurbsCurve(
+                        NurbsCurve::new(12, knots, points, vec![1.0; 13]).unwrap(),
+                    )
+                } else {
+                    EdgeCurve::Line
+                }
+            };
+            let edges = [
+                Edge::new(a, b, rim(1.0, 1.0)),
+                Edge::new(b, c, generator(corners[1], corners[2])),
+                Edge::new(c, d, rim(3.0, -1.0)),
+                Edge::new(d, a, generator(corners[3], corners[0])),
+            ]
+            .map(|e| OrientedEdge::new(topo.add_edge(e), true));
+            let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+            let face = Face::new(wire, vec![], FaceSurface::Cone(cone));
+            boundary::curved_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.5, -1.0, -2.0))
+                .unwrap()
+                .unwrap()
+        };
+        let (lines, polynomials) = (read(false), read(true));
+        assert!(
+            (polynomials.area - lines.area).abs() < 1e-9 * lines.area
+                && (polynomials.volume - lines.volume).abs() < 1e-9 * lines.volume.abs(),
+            "area {} of {}, volume {} of {}",
+            polynomials.area,
+            lines.area,
+            polynomials.volume,
+            lines.volume
+        );
+    }
+
     /// A band of the ring torus of radii 4 and 1 between two of its circles
     /// about the axis, at tube angles `v0` and `v1`, each wire closed at its
     /// own angle about the axis. A band across the inner equator (`v = pi`)
