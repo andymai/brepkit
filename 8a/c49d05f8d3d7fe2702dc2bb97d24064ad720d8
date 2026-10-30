@@ -1,0 +1,32 @@
+crates/operations/src/tessellate/nonplanar.rs
+  s_a2dc21dbec3f2b::t_cde80ab3c76c9e 3468-3479,3488-3492
+  s_a2dc21dbec3f2b::t_8a461bd905c4a7 4500
+crates/operations/src/tessellate/nurbs.rs
+  s_a2dc21dbec3f2b::t_cde80ab3c76c9e 921-927
+  s_a2dc21dbec3f2b::t_9310b9c8942a21 917-920,928,930-933,935-936,947-966
+  s_a2dc21dbec3f2b::t_17aa1398cdc377 967-968
+crates/operations/src/tessellate/solid.rs
+  s_a2dc21dbec3f2b::t_cde80ab3c76c9e 454-456,460-462,464-471,473
+crates/operations/src/tessellate/tests.rs
+  s_a2dc21dbec3f2b::t_e0aac00216359e 3945-3966,3968-3982
+  s_a2dc21dbec3f2b::t_b67e8a3649772a 3928-3944,3983-4045
+  s_a2dc21dbec3f2b::t_51f1a0f73a2e99 3967
+crates/operations/src/tessellate/edge_sampling.rs
+  s_a2dc21dbec3f2b::t_8a461bd905c4a7 248-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ac49d05f8d3d7fe2702dc2bb97d24064ad720d8",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
