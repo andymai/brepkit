@@ -2,11 +2,13 @@
 //!
 //! Divides a solid into two new solids along the specified cutting plane.
 
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::frame::Frame3;
 use brepkit_math::mat::Mat4;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 use crate::boolean::{BooleanOp, boolean};
@@ -42,8 +44,13 @@ pub fn split(
     plane_normal: Vec3,
 ) -> Result<SplitResult, crate::OperationsError> {
     let tol = Tolerance::new();
-    let frame = Frame3::from_normal(plane_point, plane_normal)?;
-    let bbox = crate::measure::solid_bounding_box(topo, solid)?;
+    let bbox = extent(topo, solid)?;
+    // The frame stands on the plane's point nearest the solid: a point far
+    // along the plane would round the solid's extent away.
+    let normal = Frame3::from_normal(plane_point, plane_normal)?.z;
+    let centre = bbox.center();
+    let anchor = centre - normal * (centre - plane_point).dot(normal);
+    let frame = Frame3::from_normal(anchor, normal)?;
     let corners = [bbox.min, bbox.max];
     let local: Vec<[f64; 3]> = (0..8)
         .map(|k: usize| {
@@ -51,7 +58,7 @@ pub fn split(
                 corners[k & 1].x(),
                 corners[(k >> 1) & 1].y(),
                 corners[(k >> 2) & 1].z(),
-            ) - plane_point;
+            ) - anchor;
             [p.dot(frame.x), p.dot(frame.y), p.dot(frame.z)]
         })
         .collect();
@@ -72,7 +79,7 @@ pub fn split(
             hi(1) - lo(1) + 2.0 * margin,
             hi(2) + margin,
         )?;
-        let corner = plane_point + frame.x * (lo(0) - margin) + frame.y * (lo(1) - margin);
+        let corner = anchor + frame.x * (lo(0) - margin) + frame.y * (lo(1) - margin);
         let place = Mat4([
             [frame.x.x(), frame.y.x(), frame.z.x(), corner.x()],
             [frame.x.y(), frame.y.y(), frame.z.y(), corner.y()],
@@ -80,14 +87,27 @@ pub fn split(
             [0.0, 0.0, 0.0, 1.0],
         ]);
         crate::transform::transform_solid(topo, side, &place)?;
-        boolean(topo, op, solid, side).map_err(|e| match e {
-            crate::OperationsError::EmptyResult { .. } => misses(),
+        match boolean(topo, op, solid, side) {
+            Ok(half) if topo.is_empty_solid(half) => Err(misses()),
+            Err(crate::OperationsError::EmptyResult { .. }) => Err(misses()),
             other => other,
-        })
+        }
     };
     let positive = half(BooleanOp::Intersect)?;
     let negative = half(BooleanOp::Cut)?;
     Ok(SplitResult { positive, negative })
+}
+
+/// A box holding the whole solid. A NURBS face's measured extent comes from
+/// samples, which can miss its bulge; its control points enclose it.
+fn extent(topo: &Topology, solid: SolidId) -> Result<Aabb3, crate::OperationsError> {
+    let mut bbox = crate::measure::solid_bounding_box(topo, solid)?;
+    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        if let FaceSurface::Nurbs(nurbs) = topo.face(face)?.surface() {
+            bbox = bbox.union(nurbs.aabb());
+        }
+    }
+    Ok(bbox)
 }
 
 #[cfg(test)]
@@ -190,6 +210,82 @@ mod tests {
                 brepkit_topology::face::FaceSurface::Cylinder(_)
             )));
         }
+    }
+
+    #[test]
+    fn split_cube_by_a_plane_given_far_along_it() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let result = split(
+            &mut topo,
+            cube,
+            Point3::new(1e17, 0.0, 0.5),
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        for piece in [result.positive, result.negative] {
+            let volume = crate::measure::solid_volume(&topo, piece, 0.01).unwrap();
+            assert!((volume - 0.5).abs() < 1e-9, "half holds {volume}");
+        }
+    }
+
+    #[test]
+    fn split_a_plane_crossing_only_a_spheres_box_misses_it() {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+        let result = split(
+            &mut topo,
+            ball,
+            Point3::new(0.7, 0.7, 0.7),
+            Vec3::new(1.0, 1.0, 1.0),
+        );
+        assert!(result.is_err(), "the plane x + y + z = 2.1 misses the ball");
+    }
+
+    /// A block whose top is the Bezier lid `z = 100 u (1 − u)⁴ v (1 − v)`
+    /// over the unit square, flat along its rim. The lid peaks at 2.048 at
+    /// `(0.2, 0.5)`, between the samples that put it at 1.98.
+    #[test]
+    fn extent_reaches_a_nurbs_lids_peak() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+
+        let mut topo = Topology::new();
+        let block = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(0.0, 0.0, -1.0))
+            .unwrap();
+        let top = brepkit_topology::explorer::solid_faces(&topo, block)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && d.abs() < 1e-9)
+            })
+            .unwrap();
+        let rows = (0..6)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let z = if (i, j) == (1, 1) { 10.0 } else { 0.0 };
+                        Point3::new(f64::from(i) / 5.0, f64::from(j) / 2.0, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        let lid = NurbsSurface::new(
+            5,
+            2,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 3]; 6],
+        )
+        .unwrap();
+        topo.face_mut(top)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(lid));
+
+        let top = extent(&topo, block).unwrap().max.z();
+        assert!(top >= 2.048, "the lid reaches 2.048, its extent {top}");
     }
 
     #[test]
