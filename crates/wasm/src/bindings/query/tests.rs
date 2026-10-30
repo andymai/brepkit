@@ -591,3 +591,45 @@ fn make_planar_face_from_wire_rejects_noncoplanar() {
         "error must mention 'not planar', got {msg}"
     );
 }
+
+// ── evaluate_surface_normal ──────────────────────────────────
+
+/// A tube cut from a cylinder of radius 20 by one of radius 17: its outer
+/// wall's normal points away from the axis and its bore's toward it, out
+/// of the material each time.
+#[test]
+fn a_bores_normal_points_out_of_the_material() {
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_topology::face::FaceSurface;
+
+    let mut k = crate::kernel::BrepKernel::new();
+    let topo = k.topo_mut();
+    let outer = brepkit_operations::primitives::make_cylinder(topo, 20.0, 60.0).unwrap();
+    let inner = brepkit_operations::primitives::make_cylinder(topo, 17.0, 60.0).unwrap();
+    let tube = boolean(topo, BooleanOp::Cut, outer, inner).unwrap();
+    for (radius, outward) in [(20.0, 1.0), (17.0, -1.0)] {
+        let wall = brepkit_topology::explorer::solid_faces(k.topo(), tube)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(k.topo().face(f).unwrap().surface(),
+                    FaceSurface::Cylinder(c) if (c.radius() - radius).abs() < 1e-9)
+            })
+            .unwrap();
+        let at = Point3::new(0.0, radius, 30.0);
+        let (u, v) = k
+            .topo()
+            .face(wall)
+            .unwrap()
+            .surface()
+            .project_point(at)
+            .unwrap();
+        let n = k
+            .evaluate_surface_normal(face_id_to_u32(wall), u, v)
+            .unwrap();
+        assert!(
+            n[0].abs() < 1e-9 && (n[1] - outward).abs() < 1e-9 && n[2].abs() < 1e-9,
+            "radius {radius}: normal {n:?}"
+        );
+    }
+}
