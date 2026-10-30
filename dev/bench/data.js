@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793344084653,
+  "lastUpdate": 1793345123570,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61451,6 +61451,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23073151,
             "range": "± 69187",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0fac49cfc2d15b62c43909383a834158553d0894",
+          "message": "fix(wasm): give each face of a grouped mesh its own vertices so creases shade sharp (#2215)\n\n`tessellateSolidGrouped` and `tessellateSolidGroupedBinary` now give\neach face its own copies of its vertices, each with that face's normal,\nso a crease between faces shades sharp.\n\nToday both return the welded mesh, where adjacent faces share their\nboundary vertices and each shared vertex's normal averages its faces. A\n10 cube meshes to 8 vertices whose normals point along the cube's\ndiagonals, (−0.577, −0.577, −0.577) at the first, so a renderer smooths\nevery edge. brepjs meshes solids through `tessellateSolidGroupedBinary`.\n\n## Change\n\n- `tessellate::tessellate_solid_faceted_with_tolerance` takes the welded\ngrouped mesh and copies each face's vertices into its own group. A\nvertex that several faces share takes, in each face's copy, the normal\nof that face's surface there. On a NURBS face the vertex is projected\nonto the surface; where it lies off the surface, or the surface's normal\nfaces away from the face's own triangles round it, it takes their\narea-weighted normal instead. A vertex that one face alone uses keeps\nits normal. Faces still meet at identical positions, so the mesh has no\nT-junctions.\n- Both grouped bindings return it.\n`tessellate_solid_grouped_with_tolerance` keeps the welded mesh, which\nthe renderer, the volume measures and the watertightness checks use.\n\nCloses #2175.\n\n## Tests\n\n- `a_faceted_box_shades_each_face_flat`: the cube's faceted mesh has 24\nvertices where the welded one has 8, and every vertex's normal is its\nface's.\n- `a_faceted_cylinder_keeps_its_rims_sharp`: on a cylinder, and on one\nsquashed 2 to 1 so its wall is a NURBS surface, every wall vertex, rims\nincluded, carries the outward normal of the wall there and every cap\nvertex an axial one.\n- `tessellate_solid_grouped_binary_shades_a_box_flat`: the binding's\nmesh of a unit box has 24 vertices, each with a normal along an axis.\n- `a_faceted_tangent_join_stays_smooth`: a profile whose flat top runs\ninto the parabola z = x² at x = 0, extruded 1 along y, holds 7/3, and\nthe parabola's copies of the join's vertices carry +z, as the flat top's\ndo.\n- Keeping the welded normals fails the box, the cylinder and the\nbinding's box; keeping them on NURBS faces fails the squashed wall and\nthe tangent join. The triangles' own area-weighted normal tilts the\njoin's by 8.1°, which fails the tangent join.\n- With this change, `cargo test --workspace --exclude brepkit-render`\npasses 3785 tests, and the pose sweep and truth audit outputs are\nidentical to `main`'s.",
+          "timestamp": "2026-10-30T00:22:07-07:00",
+          "tree_id": "0c2fde06e1746c5730f9a61ce141a73923cc212a",
+          "url": "https://github.com/andymai/brepkit/commit/0fac49cfc2d15b62c43909383a834158553d0894"
+        },
+        "date": 1793345114000,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1105811,
+            "range": "± 25163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1187752,
+            "range": "± 2788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13234,
+            "range": "± 114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 678733,
+            "range": "± 1132",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29078481,
+            "range": "± 478354",
             "unit": "ns/iter"
           }
         ]
