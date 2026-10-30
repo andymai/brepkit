@@ -614,13 +614,14 @@ fn surface_newton_refine(
             // across it stand still there), the distance has a critical
             // point that is not its least: no Newton step leaves it, though
             // a short step off the line comes nearer, and Newton carries on
-            // from there.
+            // from there. Elsewhere a negligible step is the answer, a
+            // clamped one included.
             if dist > tolerance
+                && du_len.min(dv_len) <= 1e-9 * du_len.max(dv_len)
                 && let Some((u_near, v_near)) = nearer_beside(
                     surface,
                     point,
                     (u, v),
-                    dist,
                     [u_min, u_max, v_min, v_max],
                     (closed_u, closed_v),
                 )
@@ -642,28 +643,34 @@ fn surface_newton_refine(
     })
 }
 
-/// The nearest to `point` of the four parameters a thousandth of the domain
-/// along u or v from `(u, v)`, if it is nearer than `dist`.
+/// The nearest to `point` of the parameters a thousandth of the domain along
+/// u or v from `(u, v)`, if it is nearer than `(u, v)` itself. A step the
+/// domain's end clamps to nothing is no candidate, and every distance is
+/// read by one evaluator, so rounding alone never counts as coming nearer.
 fn nearer_beside(
     surface: &NurbsSurface,
     point: Point3,
     (u, v): (f64, f64),
-    dist: f64,
     [u_min, u_max, v_min, v_max]: [f64; 4],
     (closed_u, closed_v): (bool, bool),
 ) -> Option<(f64, f64)> {
+    let here = (surface.evaluate(u, v) - point).length();
     let (h_u, h_v) = (1e-3 * (u_max - u_min), 1e-3 * (v_max - v_min));
-    [
-        (advance_param(u, h_u, u_min, u_max, closed_u).0, v),
-        (advance_param(u, -h_u, u_min, u_max, closed_u).0, v),
-        (u, advance_param(v, h_v, v_min, v_max, closed_v).0),
-        (u, advance_param(v, -h_v, v_min, v_max, closed_v).0),
-    ]
-    .into_iter()
-    .map(|(a, b)| ((a, b), (surface.evaluate(a, b) - point).length()))
-    .filter(|&(_, d)| d < dist)
-    .min_by(|x, y| x.1.total_cmp(&y.1))
-    .map(|(uv, _)| uv)
+    let along_u = |h: f64| {
+        let (next, step) = advance_param(u, h, u_min, u_max, closed_u);
+        ((next, v), step)
+    };
+    let along_v = |h: f64| {
+        let (next, step) = advance_param(v, h, v_min, v_max, closed_v);
+        ((u, next), step)
+    };
+    [along_u(h_u), along_u(-h_u), along_v(h_v), along_v(-h_v)]
+        .into_iter()
+        .filter(|&(_, step)| step != 0.0)
+        .map(|((a, b), _)| ((a, b), (surface.evaluate(a, b) - point).length()))
+        .filter(|&(_, d)| d < here)
+        .min_by(|x, y| x.1.total_cmp(&y.1))
+        .map(|(uv, _)| uv)
 }
 
 /// Along a closed direction the step wraps across the seam instead of
@@ -1671,5 +1678,57 @@ mod tests {
         assert!(found.distance < 1e-9, "{found:?}");
         let v = 0.5 * (1.0 + (-0.147_f64 / 20.0).cbrt());
         assert!((found.v - v).abs() < 1e-6, "{found:?} for v {v}");
+    }
+
+    /// A rational patch, quadratic by cubic over the unit grid (i, j) with
+    /// z = (i j mod 3) / 2 and weights 1 + ((i + 2 j) mod 3) / 2. A point
+    /// straight out from its u = 0 edge projects onto that edge: Newton's
+    /// step there clamps to nothing, which settles it rather than reading as
+    /// a still iso-line to step off, round and round until its iterations
+    /// run out.
+    #[test]
+    fn a_point_beyond_a_rational_patchs_edge_projects_onto_the_edge() {
+        let net = (0..3_u32)
+            .map(|i| {
+                (0..4_u32)
+                    .map(|j| Point3::new(f64::from(i), f64::from(j), f64::from(i * j % 3) * 0.5))
+                    .collect()
+            })
+            .collect();
+        let weights = (0..3_u32)
+            .map(|i| {
+                (0..4_u32)
+                    .map(|j| 1.0 + f64::from((i + 2 * j) % 3) * 0.5)
+                    .collect()
+            })
+            .collect();
+        let patch = NurbsSurface::new(
+            2,
+            3,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            net,
+            weights,
+        )
+        .expect("patch");
+        for v in [0.14, 0.5, 0.86] {
+            for beyond in [0.3, 1.0] {
+                let ders = patch.derivatives(0.0, v, 1);
+                let out = ders[1][0] * -beyond;
+                let q = Point3::new(
+                    ders[0][0].x() + out.x(),
+                    ders[0][0].y() + out.y(),
+                    ders[0][0].z() + out.z(),
+                );
+                let found = project_point_to_surface_from(&patch, q, (0.5, 0.5), 1e-9);
+                assert!(found.is_ok(), "v {v}, beyond {beyond}: {found:?}");
+                let found = found.expect("projection");
+                assert!(found.u.abs() < 1e-12, "v {v}, beyond {beyond}: {found:?}");
+                assert!(
+                    found.distance <= out.length() + 1e-9,
+                    "v {v}, beyond {beyond}: {found:?}"
+                );
+            }
+        }
     }
 }
