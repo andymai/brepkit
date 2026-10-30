@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793339061342,
+  "lastUpdate": 1793340777732,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -61235,6 +61235,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28550907,
             "range": "± 27571",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1ddd6a113a7c916b56bb672306b9b46cd9a90fe5",
+          "message": "fix(wasm): project a point onto an analytic face in closed form (#2206)\n\n`projectPointOnSurface` now projects onto a cylinder, cone, sphere or\ntorus face exactly, spindle tori included, so a point lands at its true\nfoot on the surface and the normal there faces the right way.\n\nToday the binding finds an analytic face's nearest point by a 16 x 16\ngrid search over `u` in `[0, 2π]` and `v` in `[−π, π]`, with no\nrefinement. A point on a cylinder's wall comes back at the nearest grid\nnode: `(10, 0, 5)` on a cylinder of radius 10 and height 10 lands at\n`(10, 0, π)`, about 1.86 away, and `u` snaps to steps of π/8, so\n`evaluateSurfaceNormal` at the returned parameters turns in the same\n22.5° steps.\n\n## Change\n\n- For a cylinder or sphere face, the binding takes\n`FaceSurface::project_point`, which projects in closed form in the\nsurface's own parameters, and evaluates the surface there.\n- For a torus face it takes the new\n`ToroidalSurface::project_point_nearest`. A spindle torus's tube runs\nacross its axis, so a point can lie on the tube circle half a turn\nround, which the closed-form projection does not look at. The classifier\nalready handled this in a private helper, which the new method replaces.\n- For a cone face it takes `extrema::point_to_cone`: the cone's own\nprojection keeps the point's height, and the nearest point lies down the\ngenerator across from it.\n- Planes and NURBS faces keep their paths.\n\nCloses #2181.\n\n## Tests\n\n- `a_point_projects_onto_a_cylinders_wall_exactly`: on that cylinder,\npoints at 0°, 60° and 100° round its axis and up its height project onto\nthemselves, a point 2 out from the wall lands at its foot 2 away, and\nthe normal at each returned `(u, v)` points straight out from the axis.\nWith the grid search, the first lands at `(10, 0, π)`.\n- `a_point_projects_onto_a_cones_wall_at_its_nearest_point`: on a 45°\ncone of base radius 3 and height 3, `(3, 0, 2)` lands at `(2, 0, 1)`, √2\naway. With the cone's own projection it lands at `(1, 0, 2)`.\n- `a_point_on_a_spindle_torus_projects_onto_itself`: on a torus of ring\nradius 1 and tube radius 2, `(1, 0, 0)` and two other points on it\nproject onto themselves. With the closed-form projection, `(1, 0, 0)`\nlands at `(3, 0, 0)`.\n- `spindle_torus_projects_onto_its_far_tube` checks the same point\nagainst the math method directly.\n- `cargo test -p brepkit-wasm --lib` passes 243 tests, and `cargo test\n-p brepkit-check --lib` passes 59.",
+          "timestamp": "2026-10-30T06:10:14Z",
+          "tree_id": "1c795815d662c9a5b847a2e50d4f6c71ad824411",
+          "url": "https://github.com/andymai/brepkit/commit/1ddd6a113a7c916b56bb672306b9b46cd9a90fe5"
+        },
+        "date": 1793340768667,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 883206,
+            "range": "± 802",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 949257,
+            "range": "± 8419",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10942,
+            "range": "± 82",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 529217,
+            "range": "± 1422",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22960852,
+            "range": "± 19404",
             "unit": "ns/iter"
           }
         ]
