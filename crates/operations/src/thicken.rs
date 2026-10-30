@@ -113,6 +113,7 @@ fn thicken_curved(
     let depth = thickness.abs();
     let grow = |p: Point3| -> Vec3 { surface_normal(&surface, p) * along };
     let offset = offset_surface(&surface, along * depth)?;
+    keep_off_the_axis(topo, base, &surface, along * depth)?;
     let carry = |p: Point3| p + grow(p) * depth;
     let affine = affine_carry(&surface, along * depth);
 
@@ -373,6 +374,105 @@ fn offset_surface(
             });
         }
     })
+}
+
+/// Refuses a thickness at which a torus face, or its image `distance` along
+/// the normals, reaches the torus's axis: there every ring angle carries to
+/// one point, so the far side pinches or runs through itself.
+fn keep_off_the_axis(
+    topo: &Topology,
+    face: FaceId,
+    surface: &FaceSurface,
+    distance: f64,
+) -> Result<(), crate::OperationsError> {
+    let FaceSurface::Torus(t) = surface else {
+        return Ok(());
+    };
+    // A point at tube angle v lies R + r cos v from the axis and its image
+    // R + (r + distance) cos v, both rising with cos v. The face comes
+    // nearest its inner equator on its boundary unless it holds that
+    // equator; one no edge reaches lies wholly in the face or out of it, so
+    // one point of it tells which.
+    let inner_equator = t.evaluate(0.0, std::f64::consts::PI);
+    let cos_v = if brepkit_check::classify::face_contains(topo, face, inner_equator)? {
+        -1.0
+    } else {
+        least_on_boundary(topo, face, |p| t.project_point(p).1.cos())?
+    };
+    let (big, small) = (t.major_radius(), t.minor_radius());
+    let nearest = small
+        .mul_add(cos_v, big)
+        .min((small + distance).mul_add(cos_v, big));
+    if nearest <= Tolerance::new().linear {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "thicken: the torus wall reaches its axis at this thickness".into(),
+        });
+    }
+    Ok(())
+}
+
+/// The least of `f` along the edges of `face`, sampled along each and
+/// refined about each least sample: a rim's least can sit between samples.
+fn least_on_boundary(
+    topo: &Topology,
+    face: FaceId,
+    f: impl Fn(Point3) -> f64,
+) -> Result<f64, crate::OperationsError> {
+    const SAMPLES: usize = 32;
+    let face_data = topo.face(face)?;
+    let mut least = f64::INFINITY;
+    for wid in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            #[allow(clippy::cast_precision_loss)]
+            let param = |k: usize| t0 + (t1 - t0) * (k as f64 / SAMPLES as f64);
+            let at = |t: f64| f(curve.evaluate_with_endpoints(t, a, b));
+            let values: Vec<f64> = (0..=SAMPLES).map(|k| at(param(k))).collect();
+            for (k, &value) in values.iter().enumerate() {
+                least = least.min(value);
+                let (before, after) = (k.saturating_sub(1), (k + 1).min(SAMPLES));
+                let (lo, hi) = (
+                    values[before].min(values[after]),
+                    values[before].max(values[after]),
+                );
+                if value <= lo && value < hi {
+                    least = least.min(golden_min(&at, param(before), param(after)));
+                }
+            }
+        }
+    }
+    Ok(least)
+}
+
+/// The least of `f` on `[a, b]`, where it has a single dip.
+fn golden_min(f: &impl Fn(f64) -> f64, mut a: f64, mut b: f64) -> f64 {
+    let r = (5.0_f64.sqrt() - 1.0) / 2.0;
+    let (mut c, mut d) = (b - r * (b - a), a + r * (b - a));
+    let (mut fc, mut fd) = (f(c), f(d));
+    for _ in 0..64 {
+        if fc < fd {
+            b = d;
+            d = c;
+            fd = fc;
+            c = b - r * (b - a);
+            fc = f(c);
+        } else {
+            a = c;
+            c = d;
+            fc = fd;
+            d = a + r * (b - a);
+            fd = f(d);
+        }
+    }
+    fc.min(fd)
 }
 
 /// The unit normal of `surface` at `p`, a point on it.
@@ -687,35 +787,36 @@ mod tests {
         }
     }
 
-    /// A circle of radius 3 revolved a quarter turn at radius 20 is a bend
-    /// whose torus face, thickened by 1, is a quarter of a tube wall of
-    /// radii 3 and 4: 7π swept 10π along, 70π². Its end circles carry to
-    /// concentric circles, so the wall's ends are annuli.
-    #[test]
-    fn thicken_a_bends_torus_face_into_a_wall() {
-        use brepkit_math::curves::Circle3D;
-        use brepkit_topology::edge::{Edge, EdgeCurve};
-        use brepkit_topology::vertex::Vertex;
-        use brepkit_topology::wire::{OrientedEdge, Wire};
-        let mut topo = Topology::new();
+    /// The torus face of a circle of radius 3 revolved a quarter turn at
+    /// radius 20: a bend covering the whole tube round.
+    fn quarter_bend(topo: &mut Topology) -> FaceId {
         let c = Circle3D::new(Point3::new(0.0, 0.0, 30.0), Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
         let v = topo.add_vertex(Vertex::new(c.evaluate(0.0), 1e-7));
         let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(c)));
         let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
-        let disc = brepkit_topology::builder::make_face_from_wire(&mut topo, w).unwrap();
+        let disc = brepkit_topology::builder::make_face_from_wire(topo, w).unwrap();
         let bend = crate::revolve::revolve(
-            &mut topo,
+            topo,
             disc,
             Point3::new(20.0, 0.0, 30.0),
             Vec3::new(0.0, 1.0, 0.0),
             std::f64::consts::FRAC_PI_2,
         )
         .unwrap();
-        let torus = brepkit_topology::explorer::solid_faces(&topo, bend)
+        brepkit_topology::explorer::solid_faces(topo, bend)
             .unwrap()
             .into_iter()
             .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
-            .unwrap();
+            .unwrap()
+    }
+
+    /// The bend's torus face, thickened by 1, is a quarter of a tube wall
+    /// of radii 3 and 4: 7π swept 10π along, 70π². Its end circles carry to
+    /// concentric circles, so the wall's ends are annuli.
+    #[test]
+    fn thicken_a_bends_torus_face_into_a_wall() {
+        let mut topo = Topology::new();
+        let torus = quarter_bend(&mut topo);
         let wall = thicken(&mut topo, torus, 1.0).unwrap();
         assert_eq!(
             brepkit_topology::explorer::solid_faces(&topo, wall)
@@ -728,6 +829,45 @@ mod tests {
         let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
         let exact = 70.0 * std::f64::consts::PI * std::f64::consts::PI;
         assert!((volume - exact).abs() < 1e-4 * exact, "{volume} of {exact}");
+    }
+
+    /// Thickened by t, a torus face of radii 20 and 3 covering the whole
+    /// tube round grows to minor radius 3 + t, whose inner equator lies
+    /// 17 − t from the axis. At 16 the bend is a quarter wall of radii 3
+    /// and 19, 3520π²; at 17 its far side pinches on the axis and at 18 runs
+    /// through itself. A whole torus's seams are lines of no length at one
+    /// point of its outer equator, so only the face itself reaches its inner
+    /// equator; it is refused at 18 too.
+    #[test]
+    fn thicken_refuses_a_torus_wall_reaching_its_axis() {
+        use std::f64::consts::PI;
+        let mut topo = Topology::new();
+        let bend = quarter_bend(&mut topo);
+        let wall = thicken(&mut topo, bend, 16.0).unwrap();
+        let report = crate::validate::validate_solid(&topo, wall).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+        let exact = 3520.0 * PI * PI;
+        assert!((volume - exact).abs() < 1e-4 * exact, "{volume} of {exact}");
+        for thickness in [17.0, 18.0] {
+            let mut topo = Topology::new();
+            let bend = quarter_bend(&mut topo);
+            assert!(thicken(&mut topo, bend, thickness).is_err(), "{thickness}");
+        }
+
+        let whole = |topo: &mut Topology| {
+            let torus = crate::primitives::make_torus(topo, 20.0, 3.0, 16).unwrap();
+            brepkit_topology::explorer::solid_faces(topo, torus).unwrap()[0]
+        };
+        let mut topo = Topology::new();
+        let face = whole(&mut topo);
+        let ring = thicken(&mut topo, face, 16.0).unwrap();
+        let volume = crate::measure::solid_volume(&topo, ring, 1e-3).unwrap();
+        let exact = 2.0 * PI * PI * 20.0 * (19.0 * 19.0 - 9.0);
+        assert!((volume - exact).abs() < 1e-6 * exact, "{volume} of {exact}");
+        let mut topo = Topology::new();
+        let face = whole(&mut topo);
+        assert!(thicken(&mut topo, face, 18.0).is_err());
     }
 
     /// A whole torus of radii 20 and 3 is one face, every edge a seam, so
