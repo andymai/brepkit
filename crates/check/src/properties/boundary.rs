@@ -80,6 +80,46 @@ fn add(acc: &mut [f64; 8], g: &[f64; 8], w: f64) {
     }
 }
 
+/// `∫ f` over `[a, b]` by `rule`, each interval halved until its two halves
+/// agree with it to 1e-12 of their size or to `floor`, or `None` past
+/// `depth` halvings or where `f` is.
+fn adaptive(
+    f: &mut dyn FnMut(f64) -> Option<[f64; 8]>,
+    a: f64,
+    b: f64,
+    rule: &[brepkit_math::quadrature::GaussPoint],
+    depth: u32,
+    floor: f64,
+) -> Option<[f64; 8]> {
+    let mut over = |a: f64, b: f64| -> Option<[f64; 8]> {
+        let (half, mid) = (0.5 * (b - a), 0.5 * (a + b));
+        let mut acc = [0.0; 8];
+        for gp in rule {
+            add(&mut acc, &f(half.mul_add(gp.x, mid))?, half * gp.w);
+        }
+        Some(acc)
+    };
+    let m = f64::midpoint(a, b);
+    let whole = over(a, b)?;
+    let (left, right) = (over(a, m)?, over(m, b)?);
+    let mut halves = left;
+    add(&mut halves, &right, 1.0);
+    let size = halves.iter().fold(0.0_f64, |m, x| m.max(x.abs()));
+    let gap = whole
+        .iter()
+        .zip(&halves)
+        .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
+    if gap <= (1e-12 * size).max(floor) {
+        return Some(halves);
+    }
+    if depth == 0 {
+        return None;
+    }
+    let mut sum = adaptive(f, a, m, rule, depth - 1, floor)?;
+    add(&mut sum, &adaptive(f, m, b, rule, depth - 1, floor)?, 1.0);
+    Some(sum)
+}
+
 /// `∫₀ᵗᵘʳⁿ g(s, v) ds` by the trapezoid rule, exact for the low-order
 /// trigonometric integrands of a surface of revolution.
 fn turn_integral<S: ParametricSurface>(surface: &S, v: f64, about: Vec3) -> [f64; 8] {
@@ -561,6 +601,7 @@ pub(super) fn nurbs_face_by_boundary(
     use brepkit_math::nurbs::projection::{
         project_point_to_surface, project_point_to_surface_from,
     };
+    const DEPTH: u32 = 24;
     let FaceSurface::Nurbs(s) = face.surface() else {
         return Ok(None);
     };
@@ -582,28 +623,33 @@ pub(super) fn nurbs_face_by_boundary(
         k
     };
     let (u_knots, v_knots) = (interior(s.knots_u(), u0, u1), interior(s.knots_v(), v0, v1));
-    let gauss_u = gauss_legendre_points(10);
-    let antiderivative = |u: f64, v: f64| {
-        let mut acc = [0.0; 8];
-        let mut from = u0;
-        for to in u_knots.iter().copied().filter(|&k| k < u).chain([u]) {
-            let (half, mid) = (0.5 * (to - from), 0.5 * (to + from));
-            for gp in gauss_u {
-                add(
-                    &mut acc,
-                    &integrand(s, half.mul_add(gp.x, mid), v, about),
-                    half * gp.w,
-                );
-            }
-            from = to;
-        }
-        acc
-    };
-    let gauss = gauss_legendre_points(8);
     let size = (s.evaluate(u1, v1) - s.evaluate(u0, v0))
         .length()
         .max((s.evaluate(u1, v0) - s.evaluate(u0, v1)).length());
     let reach = 1e-6 * size.max(1.0);
+    // Where an integrand vanishes (along an edge at the start of `u`) its
+    // halves agree only to rounding.
+    let floor = 1e-14 * size.powi(3);
+    // Each integral is halved until it settles: a rational surface can
+    // crowd its area into a sliver of its parameter.
+    let gauss_u = gauss_legendre_points(10);
+    let antiderivative = |u: f64, v: f64| -> Option<[f64; 8]> {
+        let mut acc = [0.0; 8];
+        let mut from = u0;
+        for to in u_knots.iter().copied().filter(|&k| k < u).chain([u]) {
+            if to > from {
+                let mut g = |s_u: f64| Some(integrand(s, s_u, v, about));
+                add(
+                    &mut acc,
+                    &adaptive(&mut g, from, to, gauss_u, DEPTH, floor)?,
+                    1.0,
+                );
+            }
+            from = to;
+        }
+        Some(acc)
+    };
+    let gauss = gauss_legendre_points(8);
     let mut total = [0.0; 8];
     for wire in &wires {
         for edge in wire {
@@ -638,6 +684,16 @@ pub(super) fn nurbs_face_by_boundary(
                     seed = Some(q);
                 }
                 let mut cuts = vec![ta, tb];
+                // A sample on a knot line is a cut itself; the bisection
+                // below only takes a knot strictly between two samples.
+                let (u_span, v_span) = (u1 - u0, v1 - v0);
+                for &(t, q) in &samples {
+                    let on_knot = u_knots.iter().any(|&k| (q.0 - k).abs() <= 1e-12 * u_span)
+                        || v_knots.iter().any(|&k| (q.1 - k).abs() <= 1e-12 * v_span);
+                    if on_knot {
+                        cuts.push(t);
+                    }
+                }
                 for w in samples.windows(2) {
                     let ((t_a, a), (t_b, b)) = (w[0], w[1]);
                     for (knots, pick) in [(&u_knots, 0_usize), (&v_knots, 1_usize)] {
@@ -671,14 +727,10 @@ pub(super) fn nurbs_face_by_boundary(
                 pieces.extend(cuts.windows(2).map(|w| (w[0], w[1], start)));
             }
             for (ta, tb, start) in pieces {
-                let (half, mid) = (0.5 * (tb - ta), 0.5 * (ta + tb));
                 let h = 1e-3 * (tb - ta);
                 let mut seed = start;
-                for gp in gauss {
-                    let t = half.mul_add(gp.x, mid);
-                    let Some(c) = on(t, Some(seed)) else {
-                        return Ok(None);
-                    };
+                let mut along = |t: f64| -> Option<[f64; 8]> {
+                    let c = on(t, Some(seed))?;
                     seed = c;
                     // `dv/dt` from the curve's velocity in the surface's
                     // tangent plane, by the first fundamental form.
@@ -689,11 +741,19 @@ pub(super) fn nurbs_face_by_boundary(
                     let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
                     let det = e.mul_add(g, -f * f);
                     if det <= 1e-24 * (e * g).max(1e-300) {
-                        return Ok(None);
+                        return None;
                     }
                     let dv = e.mul_add(sv.dot(velocity), -f * su.dot(velocity)) / det;
-                    add(&mut total, &antiderivative(c.0, c.1), half * gp.w * dv);
-                }
+                    let mut term = antiderivative(c.0, c.1)?;
+                    for x in &mut term {
+                        *x *= dv;
+                    }
+                    Some(term)
+                };
+                let Some(piece) = adaptive(&mut along, ta, tb, gauss, DEPTH, floor) else {
+                    return Ok(None);
+                };
+                add(&mut total, &piece, 1.0);
             }
         }
     }

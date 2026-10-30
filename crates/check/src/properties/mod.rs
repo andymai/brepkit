@@ -406,4 +406,74 @@ mod tests {
             assert!(c.abs() < 1e-15);
         }
     }
+
+    /// The unit cube with its top face's surface swapped for `top`, a
+    /// NURBS surface over the same unit square at z = 1.
+    fn cube_topped_by(top: brepkit_math::nurbs::surface::NurbsSurface) -> (Topology, SolidId) {
+        use brepkit_topology::face::FaceSurface;
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let shell = topo.solid(cube).unwrap().outer_shell();
+        let lid = topo
+            .shell(shell)
+            .unwrap()
+            .faces()
+            .iter()
+            .copied()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, d }
+                    if normal.z() > 0.5 && (d - 1.0).abs() < 1e-9)
+            })
+            .unwrap();
+        topo.face_mut(lid)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(top));
+        (topo, cube)
+    }
+
+    /// A top `(100u / (1 + 99u), v, 1)`, a unit square run at a hundredth of
+    /// its pace at one side, still holds the cube's 1: the integrals are
+    /// halved until they settle, where a fixed rule gave 0.9445.
+    #[test]
+    fn a_cube_under_a_crowded_rational_top_holds_its_volume() {
+        let p = Point3::new;
+        let top = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 1.0), p(0.0, 1.0, 1.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![100.0, 100.0]],
+        )
+        .unwrap();
+        let (topo, cube) = cube_topped_by(top);
+        let volume = exact_solid_volume(&topo, cube).unwrap().unwrap();
+        assert!((volume.abs() - 1.0).abs() < 1e-9, "{volume}");
+    }
+
+    /// A flat top whose `v` runs twice as fast past its knot at 0.25: the
+    /// cube's side edges, read at eighths, land on that knot line at their
+    /// middles, and the cube still holds 1.
+    #[test]
+    fn a_cube_under_a_top_with_a_sampled_knot_holds_its_volume() {
+        let p = Point3::new;
+        let top = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.25, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 1.0), p(0.0, 0.5, 1.0), p(0.0, 1.0, 1.0)],
+                vec![p(1.0, 0.0, 1.0), p(1.0, 0.5, 1.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 3]; 2],
+        )
+        .unwrap();
+        let (topo, cube) = cube_topped_by(top);
+        let volume = exact_solid_volume(&topo, cube).unwrap().unwrap();
+        assert!((volume.abs() - 1.0).abs() < 1e-12, "{volume}");
+    }
 }
