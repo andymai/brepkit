@@ -211,12 +211,14 @@ fn thicken_curved(
         let far = far_edge[&r.edge];
         let far_curve = topo.edge(far)?.curve().clone();
         let (fa, fb) = (carry(a), carry(b));
-        // Out of the face: the run's tangent across the growth.
+        // Out of the face: the run's tangent across the growth. The tangent
+        // follows the curve's parameter, which a span stored against its
+        // curve runs down.
         let (t0, t1) = curve.domain_with_endpoints(a, b);
         let mid_t = f64::midpoint(t0, t1);
         let mid = curve.evaluate_with_endpoints(mid_t, a, b);
-        let tangent =
-            curve.tangent_with_endpoints(mid_t, a, b) * if r.forward { 1.0 } else { -1.0 };
+        let tangent = curve.tangent_with_endpoints(mid_t, a, b)
+            * if r.forward == (t1 >= t0) { 1.0 } else { -1.0 };
         let out = tangent.cross(grow(mid));
         let (from, to) = if r.forward { (vs, ve) } else { (ve, vs) };
         let side = side_surface(&curve, a, b, &far_curve, fa, fb, mid, out, tol)?;
@@ -778,6 +780,53 @@ mod tests {
             );
             let b = crate::measure::solid_bounding_box(&topo, wall).unwrap();
             assert!((b.max.x() - outer).abs() < 1e-6 && (b.min.y() + outer).abs() < 1e-6);
+        }
+    }
+
+    /// A quarter of a cylinder of radius 10 and height 20 about an axis
+    /// through (3, -4, 5), its straight edge at angle 0 a NURBS line stored
+    /// from top to bottom over control points running up. The side
+    /// on that edge lies off the origin, where facing into the wall would
+    /// change the volume: thickened by 1 or -1 it holds a quarter of
+    /// π (11² − 10²) 20 or π (10² − 9²) 20.
+    #[test]
+    fn thicken_a_patch_whose_edge_runs_against_its_curve() {
+        use std::f64::consts::PI;
+        let p = |x: f64, y: f64, z: f64| Point3::new(x + 3.0, y - 4.0, z + 5.0);
+        for (thickness, inner, outer) in [(1.0, 10.0, 11.0), (-1.0, 9.0, 10.0)] {
+            let mut topo = Topology::new();
+            let (a, b, c, d) = (
+                p(10.0, 0.0, 0.0),
+                p(0.0, 10.0, 0.0),
+                p(0.0, 10.0, 20.0),
+                p(10.0, 0.0, 20.0),
+            );
+            let [va, vb, vc, vd] = [a, b, c, d].map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+            let z = Vec3::new(0.0, 0.0, 1.0);
+            let bottom = Circle3D::new(p(0.0, 0.0, 0.0), z, 10.0).unwrap();
+            let top = Circle3D::new(p(0.0, 0.0, 20.0), z, 10.0).unwrap();
+            let up =
+                NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, d], vec![1.0; 2]).unwrap();
+            let runs = [
+                (Edge::new(va, vb, EdgeCurve::Circle(bottom)), true),
+                (Edge::new(vb, vc, EdgeCurve::Line), true),
+                (Edge::new(vd, vc, EdgeCurve::Circle(top)), false),
+                (Edge::new(vd, va, EdgeCurve::NurbsCurve(up)), true),
+            ]
+            .map(|(e, forward)| OrientedEdge::new(topo.add_edge(e), forward));
+            let w = topo.add_wire(Wire::new(runs.to_vec(), true).unwrap());
+            let cylinder =
+                brepkit_math::surfaces::CylindricalSurface::new(p(0.0, 0.0, 0.0), z, 10.0).unwrap();
+            let face = topo.add_face(Face::new(w, vec![], FaceSurface::Cylinder(cylinder)));
+            let wall = thicken(&mut topo, face, thickness).unwrap();
+            let report = crate::validate::validate_solid(&topo, wall).unwrap();
+            assert!(report.is_valid(), "{thickness}: {:?}", report.issues);
+            let volume = crate::measure::solid_volume(&topo, wall, 1e-3).unwrap();
+            let exact = PI * (outer * outer - inner * inner) * 5.0;
+            assert!(
+                (volume - exact).abs() < 1e-9 * exact,
+                "{thickness}: {volume} of {exact}"
+            );
         }
     }
 
