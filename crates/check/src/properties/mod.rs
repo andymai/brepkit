@@ -898,6 +898,103 @@ mod tests {
         }
     }
 
+    /// A quarter of a cylinder of radius 2 and height 3 as a rational patch,
+    /// bounded by its two arcs as circle edges, the top one stored running
+    /// against its side, and two lines.
+    fn quarter_cylinder(top_center: Point3) -> (Topology, brepkit_topology::face::Face) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let p = Point3::new;
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(2.0, 0.0, 0.0), p(2.0, 0.0, 3.0)],
+                vec![p(2.0, 2.0, 0.0), p(2.0, 2.0, 3.0)],
+                vec![p(0.0, 2.0, 0.0), p(0.0, 2.0, 3.0)],
+            ],
+            vec![vec![1.0; 2], vec![w; 2], vec![1.0; 2]],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let v: Vec<_> = [
+            p(2.0, 0.0, 0.0),
+            p(0.0, 2.0, 0.0),
+            p(0.0, 2.0, 3.0),
+            p(2.0, 0.0, 3.0),
+        ]
+        .iter()
+        .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+        .collect();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let bottom = Circle3D::new(p(0.0, 0.0, 0.0), z, 2.0).unwrap();
+        let top = Circle3D::new(top_center, z, 2.0).unwrap();
+        let edges = vec![
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Circle(bottom))),
+                true,
+            ),
+            OrientedEdge::new(topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line)), true),
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(v[3], v[2], EdgeCurve::Circle(top))),
+                false,
+            ),
+            OrientedEdge::new(topo.add_edge(Edge::new(v[3], v[0], EdgeCurve::Line)), true),
+        ];
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        (topo, Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
+    }
+
+    /// The rational quarter cylinder bounded by its own arcs reads over its
+    /// domain as along its boundary, to 1e-10, its area 3 pi / 2 x 2.
+    #[test]
+    fn a_rational_patch_bounded_by_its_own_arcs_reads_over_its_domain() {
+        let (topo, face) = quarter_cylinder(Point3::new(0.0, 0.0, 3.0));
+        let about = Vec3::new(0.3, -0.2, 0.5);
+        let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
+            .unwrap()
+            .expect("read over its domain");
+        let along = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+        assert!(
+            (whole.area - 3.0 * std::f64::consts::PI).abs() < 1e-9,
+            "area {}",
+            whole.area
+        );
+        for (x, y) in [
+            (whole.area, along.area),
+            (whole.volume, along.volume),
+            (whole.volume_moment_x, along.volume_moment_x),
+            (whole.volume_moment_y, along.volume_moment_y),
+            (whole.volume_moment_z, along.volume_moment_z),
+            (whole.centroid_x, along.centroid_x),
+            (whole.centroid_y, along.centroid_y),
+            (whole.centroid_z, along.centroid_z),
+        ] {
+            assert!((x - y).abs() < 1e-10, "{x} for {y}");
+        }
+    }
+
+    /// The same patch with its top arc swapped for one about (2, 2, 3),
+    /// through the same corners but bowing the other way: not its side, so
+    /// the face is left to its boundary.
+    #[test]
+    fn a_rational_patch_under_an_arc_that_is_not_its_side_is_left_to_the_boundary() {
+        let (topo, face) = quarter_cylinder(Point3::new(2.0, 2.0, 3.0));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
     /// A patch cubic along `v` over two spans, its sides along `v` curved
     /// and bounded by NURBS edges that are those sides' own curves, the one
     /// at `u = 1` stored running against it: read over its domain, it holds
