@@ -739,6 +739,16 @@ pub(crate) fn sweep_placed(
         false
     };
 
+    // An open, smooth path with a planar profile sweeps each profile edge on
+    // its own curve, on rotation-minimizing frames.
+    if !is_closed
+        && detect_kinks(path).is_empty()
+        && let Some(solid) =
+            exact::sweep_exact(topo, profile, path, &SweepOptions::default(), placement)?
+    {
+        return Ok(solid);
+    }
+
     let input_wire = topo.wire(input_wire_id)?;
     let original_oriented: Vec<_> = input_wire.edges().to_vec();
 
@@ -1438,7 +1448,8 @@ pub fn sweep_with_options(
     // curve. A kink has no single section in smooth mode, and a non-planar
     // profile no plane cap, so those keep the ring-by-ring sweep below.
     if detect_kinks(path).is_empty()
-        && let Some(solid) = exact::sweep_exact(topo, profile, path, options)?
+        && let Some(solid) =
+            exact::sweep_exact(topo, profile, path, options, ProfilePlacement::AsPositioned)?
     {
         return Ok(solid);
     }

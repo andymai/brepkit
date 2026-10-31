@@ -396,3 +396,56 @@ fn a_path_with_a_knot_span_too_narrow_to_fit_sweeps_ring_by_ring() {
     let report = validate_solid(&topo, solid).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
 }
+
+/// A circle of radius 2 swept three turns round a helix of radius 20 and
+/// pitch 8, perpendicular to it by `helical_sweep` and as it stands,
+/// upright across the helix's start, by `sweep`. On rotation-minimizing frames each
+/// section keeps the angle its normal makes with the path, so the coil holds
+/// the circle's area times the path's length times that angle's cosine.
+#[test]
+fn a_circle_swept_round_a_helix_holds_its_area_times_its_length() {
+    let mut topo = Topology::new();
+    let helix = make_helix_curve(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        20.0,
+        8.0,
+        3.0,
+        8,
+    )
+    .unwrap();
+    let (h0, h1) = helix.domain();
+    let start = helix.evaluate(h0);
+    let tangent = helix.tangent(h0).unwrap();
+    let length = helix.arc_length(200_000);
+    let area = PI * 4.0;
+
+    let profile = disc(&mut topo, Mat4::identity(), Vec3::new(0.0, 0.0, 1.0), 2.0);
+    let coil = brepkit_operations::helix::helical_sweep(
+        &mut topo,
+        profile,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        20.0,
+        8.0,
+        3.0,
+        8,
+    )
+    .unwrap();
+    assert_exact(&topo, coil, area * length, "perpendicular");
+    assert_eq!(solid_faces(&topo, coil).unwrap().len(), 6, "perpendicular");
+
+    // Standing upright across the helix's start, its normal the start
+    // tangent's horizontal part.
+    let normal = Vec3::new(tangent.x(), tangent.y(), 0.0)
+        .normalize()
+        .unwrap();
+    let e = make_circle_edge(&mut topo, start, normal, 2.0, TOL).unwrap();
+    let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+    let d = normal.dot(Vec3::new(start.x(), start.y(), start.z()));
+    let profile = topo.add_face(Face::new(w, vec![], FaceSurface::Plane { normal, d }));
+    let coil = brepkit_operations::sweep::sweep(&mut topo, profile, &helix).unwrap();
+    let want = area * length * normal.dot(tangent).abs();
+    assert_exact(&topo, coil, want, "as it stands");
+    let _ = h1;
+}
