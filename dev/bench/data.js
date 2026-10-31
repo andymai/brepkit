@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793395721761,
+  "lastUpdate": 1793404972248,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -62963,6 +62963,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28925891,
             "range": "± 115445",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "89247d9ee50e7a64341718d100c1c72371c5efa8",
+          "message": "fix(algo): lay a cylinder wall's closed rims out in one turn of u (#2240)\n\nA cylinder wall bounded by two closed rims and cut by sections that end\non a rim now splits exactly, so booleans where a plane touches a rod's\nrim, or a rod's axis lies on the other solid's boundary, stay exact\ninstead of falling back to the mesh boolean.\n\nToday the face splitter lays such a wall out in two turns of u at once.\nEach closed rim is started at the seam's principal u, so the bottom rim\nruns forward from it and the reversed top rim backward from it, while\neach section takes its own principal window. The wire trace then closes\nthe wall's loop at the seam without one rim, and the wall comes out\nunsplit or wrongly split. The rod under the plane z = 25 + x/5 from\n#2188, 6 tall, falls back, and so do the first three rows of #2166: two\nrods of radius 5 with axes 5 apart fused give 64 faces holding 1260.304\n(4 faces and 1263.704 exact), a rod fused onto a box side 77 faces\nholding 45552.932 (45571.680 exact), and a rod cut from a box side\nthrough its top 23 faces holding 23902.455 (23901.825 exact).\n\n## Change\n\n- A cylinder wall whose closed rims are circles is laid out in one turn\nof u: the boundary is walked from its first closed rim, each edge moved\nby whole periods to start where the one before it ends.\n- A seam ruling split at a section's end keeps its copy's u, and each\nsection end is placed in that turn from the curve's samples, so an end\non the seam takes the copy the section reaches it from.\n- The wall is traced as a strip, without gluing its seam, when every\nedge lies in that turn, so a section closing at the seam's end vertex is\nnot continued from the far copy. A loop that runs along the boundary and\nback along sections counts as a region.\n- Rim pieces split at the antipode only for the trace are joined again,\nso the wall shares its rims with the caps.\n- An unbroken cylinder wire is sampled for its interior point without\nunwrapping, which folded a half-turn piece onto its complement.\n- A rejoined wall's interior point is read once its holes are attached.\nA wall with a lens hole, one closed curved edge, is searched clear of\nits holes in 3D, as the image builder searches such a wall with no point\ncached: that edge gives no hole polygon in UV, and the walked halves sit\na turn from its UVs.\n- That search keeps its point inside the wall's outline where the\noutline closes in the unwrapped (u, v) frame; it bounded candidates only\nby the outline's (u, v) box, which a wall trimmed by an oblique section\noverhangs. Each chord of the outline and the holes carries how far its\ncurve strays from it, read at a quarter, half and three quarters of the\nway along (past an inflection the curve crosses its chord near the\nmiddle), and a point must clear every chord, a straight ruling included,\nby twice that and the boolean's linear tolerance. A strip too thin for\nthe chords is searched against finer ones; with no point clear, the\nsearch returns none and the caller declines the analytic split. The\nimage builder's own search of a lens-hole wall is the same function.\n\nCloses #2188. Refs #2166: rows 1 to 3 are exact; rows 4 to 7 have other\nroots.\n\n## Tests\n\n- `rod_under_an_oblique_plane_reaching_its_top_cap`: a rod of radius 5\nat z = 20, 5.9, 6.0 or 6.1 tall, intersected with the half-space under z\n= 25 + x/5, is 4, 3 and 3 plane and cylinder faces, valid, holding the\nvolume under the lower of the plane and the cap to 1e-6, and meshes\nwatertight. Without the one-turn layout, 5.9 falls back.\n- `rod_axis_on_a_face.rs`: the three rows of #2166, each upright, turned\nand mirrored, with the rod spun to every eighth of a turn about its\naxis: no mesh fallback, valid, plane and cylinder faces only, and the\nclosed-form volume to 1e-6.\n- A rod of radius 5 and height 5.9 at z = 20, drilled along x through\n(-5, 0, 22.95) with radius 0.5, then intersected with the half-space\nunder z = 25 + x/5 less a pin of radius 0.25 down the bore: the wall's\ncached point was (-5, 0, 23.377), inside the opening, and at 4a1d3769 it\nwas (0.184, -4.997, 21.18), on the wall a quarter turn from the opening.\nThat boolean comes back as 1322 faces holding 383.800, where 384.796 is\nexact, here and on `main` alike: here the wall keeps the pin's traces\ninside the opening as holes. No test pins the cached point.\n- `a_remainder_point_stays_under_an_oblique_outline`: a unit cylinder's\nwall from its bottom rim up to the plane z = 2 + 1.5x, with a lens hole\nof radius 0.2 about (1, 0, 1). The point returned lies on the wall under\nthe plane; bounded by the box alone it was (-1, 0, 2.8), above it.\n- `a_remainder_point_stays_on_a_thin_oblique_band`: the unit cylinder's\nwall between z = 2 + x and z = 2.01 + x, with a lens of radius 0.002\nabout (0, 1, 2.005). A chord of 16 to an edge sags 0.02, twice the\nband's width; the search finds (-0.204, -0.979, 1.804), on the band.\nWithout the chords' stray checked it took (0.609, -0.793, 2.608), below\nthe band.\n- `a_point_on_a_straight_chord_is_not_clear_of_it`: a point on a\nruling's chord, which has no stray, is not clear of it; one 1e-6 off is.\n- `a_wall_chords_stray_covers_its_curve`: the rim of the plane z = 2 + x\non the unit cylinder, seamed at u = 1.369446786 so that a chord of 16 to\nthe turn centres on the inflection at u = 3π/2. Twice each chord's stray\ncovers how far its curve strays, read at 32 points along it; read at the\nmidpoint alone, a chord showed 0.00007 where its curve strays 0.00039.\n- `a_narrow_patch_point_stands_off_its_rulings`: the unit cylinder's\nwall from u = 1 to 1.2 and z = 0 to 10, with a lens hole 9 tall and 0.16\nwide down its middle: the search finds a point off both rulings.\n- `a_remainder_point_on_a_thin_band_honours_the_tolerance`: the unit\ncylinder's wall between rims at z = 0 and 1e-7, with a lens of radius\n1e-8 about (0, 1, 5e-8). At a tolerance of 1e-11 the search finds a\npoint on the band; at 1e-7 none stands that far off both rims, and it\nfinds none.\n- `brepkit-algo`'s 343 unit tests and 17 cylinder-wall test files of\n`brepkit-operations`, 55 tests, pass. The pose sweep output is identical\nto `main`'s, and the truth audit's differs in one line, its residuals\n5e-14 and 1e-13 for 4e-14 and 6e-14.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes boolean operations so that a cylinder wall bounded by two closed\nrims and cut by sections that end on a rim splits exactly: a plane\ntouching a rod's rim, or a rod's axis lying on another solid's boundary,\nkeeps the exact result instead of falling back to the mesh boolean. The\nface splitter laid such a wall out in two turns of u, leaving it unsplit\nor wrongly split; it is now laid out and traced in one turn.\n\n**Change**\n- Walks a cylinder wall's boundary from its first closed rim, moving\neach edge by whole periods to start where the one before it ends.\n- Places each section end from curve samples, so an end on the seam\ntakes the copy the section reaches it from.\n- Traces the wall as a strip without gluing its seam when every edge\nlies in that turn, so a section closing at the seam's end vertex is not\ncontinued from the far copy.\n- Rejoins rim pieces split at the antipode only for the trace, so the\nwall shares its rims with the caps.\n- Samples an unbroken cylinder wire's interior point without unwrapping,\nwhich folded a half-turn piece onto its complement.\n- Reads a plane sub-face's interior point on its curves rather than its\nsampled polygon's chords.\n\nCloses #2188. Rows 1–3 of #2166 are exact; rows 4–7 have other roots.\nThe merge with main brings in #2237's plane sampler, replacing this\nbranch's earlier version of it.\n\n**Tests**\n- `rod_under_an_oblique_plane_reaching_its_top_cap` pins a rod cut by an\noblique plane reaching its top cap with exact, valid, watertight results\nat heights 5.9, 6.0 and 6.1.\n- `rod_axis_on_a_face.rs` sweeps the three #2166 rows over poses and rod\nspins, requiring no mesh fallback, validity, plane and cylinder faces\nonly, and the closed-form volume.\n\n<sup>Written for commit 9308834fcc1f3406ecd6e0e24b4ddc8f2e014adc.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2240?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2240?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2240&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T16:59:44-07:00",
+          "tree_id": "614a91ecc01f92f53335ae3b6310aa58e789ddc5",
+          "url": "https://github.com/andymai/brepkit/commit/89247d9ee50e7a64341718d100c1c72371c5efa8"
+        },
+        "date": 1793404962365,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1109911,
+            "range": "± 5858",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1187675,
+            "range": "± 6309",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13144,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 675416,
+            "range": "± 593",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28893634,
+            "range": "± 31802",
             "unit": "ns/iter"
           }
         ]
