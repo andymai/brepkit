@@ -4748,26 +4748,23 @@ fn trim_open_curve_to_plane_face_lines(
                     Some(s) if s == side => lo = mid,
                     Some(_) => hi = mid,
                     None => {
-                        // Unclassified off the boundary when every trial ray
-                        // grazes a piece: no root, and nothing to trim by.
-                        let on_edge = exact_region.as_ref().is_some_and(|region| {
-                            brepkit_math::region2d::on_boundary(
-                                region,
-                                frame.project(eval_at(mid)),
-                                tol.linear * 10.0,
-                            )
+                        // The piece the section meets here, read alone, so no
+                        // probe crosses another: across it, the bracket's
+                        // crossing; touching it from one side, a tangency,
+                        // which leaves the state as it was, and past which
+                        // the bisection goes on toward the state the region
+                        // holds on the section's side of the piece. Off every
+                        // piece (each trial ray grazing one), or where pieces
+                        // meet, there is nothing to read it by.
+                        let region = exact_region.as_ref()?;
+                        let band = tol.linear * 10.0;
+                        let q = frame.project(eval_at(mid));
+                        let mut touched = region.iter().filter(|piece| {
+                            brepkit_math::region2d::distance_to_piece(piece, q) <= band
                         });
-                        if !on_edge {
+                        let (Some(piece), None) = (touched.next(), touched.next()) else {
                             return None;
-                        }
-                        // On the boundary, the bracket's crossing only where
-                        // the state changes across it: a tangency touches a
-                        // piece and leaves the state as it was, and the
-                        // crossing lies past it. The state is read either side
-                        // from a hundred tolerances along the section out,
-                        // doubling within the bracket until it clears the band
-                        // the inside test reads as boundary; along a tangency
-                        // the section leaves that band only slowly.
+                        };
                         let (t_lo, t_hi) = (
                             raw.t_range.0.min(raw.t_range.1),
                             raw.t_range.0.max(raw.t_range.1),
@@ -4778,35 +4775,26 @@ fn trim_open_curve_to_plane_face_lines(
                         if !speed.is_finite() || speed <= 0.0 {
                             return None;
                         }
-                        let mut nudge = tol.linear * 100.0 / speed;
-                        let states = loop {
-                            if mid - nudge < t_lo || mid + nudge > t_hi {
-                                return None;
-                            }
-                            let states = (
-                                inside_exact(eval_at(mid - nudge)),
-                                inside_exact(eval_at(mid + nudge)),
-                            );
-                            if let (Some(_), Some(_)) = states {
-                                break states;
-                            }
-                            if nudge >= hi - lo {
-                                return None;
-                            }
-                            nudge *= 2.0;
-                        };
-                        match states {
-                            (Some(b), Some(a)) if b == side && a == other => {
-                                (lo, hi) = (mid, mid);
-                                break;
-                            }
-                            (Some(b), Some(a)) if b == side && a == side && mid + nudge < hi => {
-                                lo = mid + nudge;
-                            }
-                            (Some(b), Some(a)) if b == other && a == other && mid - nudge > lo => {
-                                hi = mid - nudge;
-                            }
-                            _ => return None,
+                        let step = tol.linear * 100.0;
+                        let nudge = step / speed;
+                        if mid - nudge < t_lo || mid + nudge > t_hi {
+                            return None;
+                        }
+                        let side_at = |t: f64| piece_side(piece, frame.project(eval_at(t))).0;
+                        let (before, after) = (side_at(mid - nudge), side_at(mid + nudge));
+                        if before * after < 0.0 {
+                            (lo, hi) = (mid, mid);
+                            break;
+                        }
+                        if before * after <= 0.0 {
+                            return None;
+                        }
+                        let normal = piece_side(piece, q).1;
+                        let off = q + normal * (step * before.signum());
+                        match brepkit_math::region2d::point_in_region(region, off, band) {
+                            Some(s) if s == side => lo = mid,
+                            Some(_) => hi = mid,
+                            None => return None,
                         }
                     }
                 }
@@ -9143,6 +9131,34 @@ fn clip_line_to_polygon_general(
     Some((lo.max(0.0), hi.min(1.0)))
 }
 
+/// Which side of `piece`'s curve `p` lies, by sign, and the curve's unit
+/// normal there toward the positive side: a segment's left, an arc's outside.
+fn piece_side(
+    piece: &brepkit_math::region2d::Boundary2,
+    p: brepkit_math::vec::Point2,
+) -> (f64, brepkit_math::vec::Vec2) {
+    use brepkit_math::region2d::Boundary2;
+    use brepkit_math::vec::Vec2;
+    let unit = |n: Vec2| {
+        let len = n.length();
+        if len > 0.0 { n * (1.0 / len) } else { n }
+    };
+    match *piece {
+        Boundary2::Segment(a, b) => {
+            let d = b - a;
+            let normal = unit(Vec2::new(-d.y(), d.x()));
+            ((p - a).dot(normal), normal)
+        }
+        Boundary2::Arc {
+            center, u, v, a, b, ..
+        } => {
+            let q = p - center;
+            let (x, y) = (q.dot(u) / a, q.dot(v) / b);
+            (x.mul_add(x, y * y) - 1.0, unit(u * (x / a) + v * (y / b)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -9327,6 +9343,58 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// That line across the disc of radius 1.5625 + 6e-6 about the origin with
+    /// a hole of radius 4e-6 about (1.5625, 4e-6), which the line touches at
+    /// x = 1.5625, 6e-6 short of the disc's edge. Bisecting lands on the
+    /// touch, and a point 1e-5 along the line past it is off the disc: read
+    /// against the region, the touch would pass for the line's exit. The
+    /// trim keeps the line to the disc's edge.
+    #[test]
+    fn a_section_touching_a_hole_by_the_edge_keeps_its_span_to_the_edge() {
+        use brepkit_topology::builder::{make_circle_edge, make_circle_edge_with_ref};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let radius = 1.5625 + 6e-6;
+        let mut topo = Topology::new();
+        let rim = make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            radius,
+            1e-9,
+        )
+        .unwrap();
+        let start = 7.0_f64.to_radians();
+        let hole = make_circle_edge_with_ref(
+            &mut topo,
+            Point3::new(1.5625, 4e-6, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            4e-6,
+            Vec3::new(start.cos(), start.sin(), 0.0),
+            1e-9,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(hole, true)], true).unwrap());
+        let disc = topo.add_face(Face::new(
+            rim,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let pieces = trim_line_across(&mut topo, disc).expect("a trimmed section");
+        let end = pieces
+            .iter()
+            .map(|p| p.p_start.x().max(p.p_end.x()))
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (end - radius).abs() < 1e-6,
+            "ends at {end}, the edge at {radius}"
+        );
     }
 
     /// That line across the disc of radius 2 about the origin with a hole of
