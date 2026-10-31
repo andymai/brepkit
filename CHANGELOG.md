@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.13](https://github.com/andymai/brepkit/compare/v4.6.12...v4.6.13) (2026-10-31)
+
+
+### Bug Fixes
+
+* **algo:** send a section loop that crosses a face's hole to the general splitter ([#2253](https://github.com/andymai/brepkit/issues/2253)) ([cdfa846](https://github.com/andymai/brepkit/commit/cdfa846415ee293ee626f45f792d2f0f909c9ec4)), closes [#2187](https://github.com/andymai/brepkit/issues/2187)
+
 ## [4.6.12](https://github.com/andymai/brepkit/compare/v4.6.11...v4.6.12) (2026-10-31)
 
 
