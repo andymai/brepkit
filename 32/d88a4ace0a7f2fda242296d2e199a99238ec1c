@@ -1,0 +1,19 @@
+crates/operations/tests/notched_prisms_in_a_cylinder.rs
+  s_489facd0569909::t_5a7f6674409158 4-5,8,123-139,142-145,181-193,199-206,211-218,223-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "32d88a4ace0a7f2fda242296d2e199a99238ec1c",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
