@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793420542828,
+  "lastUpdate": 1793468271504,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63341,6 +63341,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28996838,
             "range": "± 57051",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cdfa846415ee293ee626f45f792d2f0f909c9ec4",
+          "message": "fix(algo): send a section loop that crosses a face's hole to the general splitter (#2253)\n\nFusing a plate that carries a round boss with a slab that runs through\nthe boss down to the plate now stays exact. Today it falls back to a\nfaceted mesh: the boss loses its cylinder and the volume comes out\n14531.857, where 14534.941 is expected (#2187).\n\nThe slab's sides meet the plate's top face in a rectangle that crosses\nthe circle where the boss stands, and that circle is a hole in the face.\nThe plane splitter's internal-loops path cuts a section loop out of the\nface whole, as a region inside it, but the strip of this rectangle over\nthe boss's foot belongs to the boss, not to the face.\n\n## Change\n\n- After its merges, `split_face_with_internal_loops` now returns `None`\nfor a plane face when a loop chained from open sections still runs into\na hole or holds part of one. The caller then hands those sections to the\ngeneral splitter, which trims them against the hole.\n- A loop of one closed section curve stays on the internal-loops path,\nsince the general splitter leaves closed curves on a plane to it.\n- Whether a loop runs into a hole or holds part of one is read on each\nwire's own segments and arcs where it has no NURBS edge, else on a\n64-chord outline less its sag. Each wire's chords are cut where they\ncross the other wire, and every piece between cuts, which lies wholly on\none side, is read at its quarter points, so a crossing between any fixed\nsamples is found. Each wire's outline is built once, and a pair whose\nboxes are apart is rejected first.\n\n## Tests\n\n- `slab_across_a_boss_foot.rs`: the plate, a boss of radius 5 and height\n15, and a slab 3 wide, upright, turned and mirrored, with the round boss\nspun 0, 45, 90, 180 and 270 degrees about its axis and with a square\nboss, the slab standing on the plate or sunk 0.5 into it. Each fuse has\nno mesh fallback, is valid, has no NURBS face, keeps the round boss's\ncylinder, and holds the closed-form volume to 1e-6.\n- `a_thin_loop_across_a_holes_rim_crosses_it`: a strip 0.1 tall across\nthe top of a hole of radius 5 runs inside it from x = 1.42 to 4.83. Read\non 16 fixed samples an edge, it does not cross the hole.\n- `a_strip_grazing_into_a_hole_by_less_than_its_chords_sag_crosses_it`:\na strip 0.005 into the same hole, less than the 0.006 its 64 chords sag.\nRead on the chords, it does not cross.\n- `a_hole_inside_or_clear_of_a_loop_does_not_cross_it`: a hole inside\nthe loop and a strip 0.5 clear of it do not cross; a loop inside the\nhole does.\n- On `main` the integration test fails at its mesh-fallback check, on\nthe first case it builds. The algo crate's 352 tests pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\nFixes #2187",
+          "timestamp": "2026-10-31T17:34:35Z",
+          "tree_id": "8597319195e04cfa3c000e70b4c55849a62b353e",
+          "url": "https://github.com/andymai/brepkit/commit/cdfa846415ee293ee626f45f792d2f0f909c9ec4"
+        },
+        "date": 1793468265615,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1102956,
+            "range": "± 1917",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1182343,
+            "range": "± 2793",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13036,
+            "range": "± 31",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674948,
+            "range": "± 1838",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28909001,
+            "range": "± 129274",
             "unit": "ns/iter"
           }
         ]
