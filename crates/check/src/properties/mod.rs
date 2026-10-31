@@ -1001,25 +1001,39 @@ mod tests {
         );
     }
 
-    /// The patch under a top edge on its side's control points and knots
-    /// weighted 1e-310, 1 and 1e-310: by its first weight its middle one
-    /// overflows, and the curve pulls into its middle control point, 0.83
-    /// off the side. Not its side, so the face is left to its boundary.
+    /// The patch under a top edge on its side's control points and knots:
+    /// weighted 1, 0.5 and 1, a conic 0.11 inside the arc at its middle;
+    /// weighted 1e-310, 1 and 1e-310, which by its first weight overflows in
+    /// the middle and pulls into its middle control point, 0.83 off the
+    /// side. Neither is its side, so the face is left to its boundary, and
+    /// the side's own weights doubled are.
     #[test]
-    fn a_rational_patch_under_an_edge_whose_weights_overflow_is_left_to_the_boundary() {
+    fn a_rational_patch_under_an_edge_off_its_sides_weights_is_left_to_the_boundary() {
         let p = Point3::new;
-        let pulled = brepkit_math::nurbs::curve::NurbsCurve::new(
-            2,
-            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-            vec![p(2.0, 0.0, 3.0), p(2.0, 2.0, 3.0), p(0.0, 2.0, 3.0)],
-            vec![1e-310, 1.0, 1e-310],
-        )
-        .unwrap();
-        let (topo, face) = quarter_cylinder(brepkit_topology::edge::EdgeCurve::NurbsCurve(pulled));
-        assert!(
+        let edge = |weights: Vec<f64>| {
+            let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![p(2.0, 0.0, 3.0), p(2.0, 2.0, 3.0), p(0.0, 2.0, 3.0)],
+                weights,
+            )
+            .unwrap();
+            quarter_cylinder(brepkit_topology::edge::EdgeCurve::NurbsCurve(curve))
+        };
+        let read = |(topo, face): (Topology, brepkit_topology::face::Face)| {
             boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
                 .unwrap()
-                .is_none()
+                .is_some()
+        };
+        assert!(!read(edge(vec![1.0, 0.5, 1.0])), "a different conic");
+        assert!(
+            !read(edge(vec![1e-310, 1.0, 1e-310])),
+            "overflowing weights"
+        );
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        assert!(
+            read(edge(vec![2.0, 2.0 * w, 2.0])),
+            "the side's own weights"
         );
     }
 
