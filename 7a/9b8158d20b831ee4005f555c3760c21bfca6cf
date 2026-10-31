@@ -1,0 +1,19 @@
+crates/check/src/properties/mod.rs
+  s_489facd0569909::t_1c4c56c4c3a829 1004-1009,1011,1013-1023,1026-1036
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7a9b8158d20b831ee4005f555c3760c21bfca6cf",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
