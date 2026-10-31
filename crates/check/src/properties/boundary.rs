@@ -1076,23 +1076,29 @@ pub(super) fn nurbs_face_over_domain(
         .length()
         .max((corners[1] - corners[3]).length());
     let floor = 1e-14 * size.powi(3);
-    // On a polynomial surface the volume's integrand is a polynomial of a
-    // few times the degree in each parameter, so a rule a little above the
-    // degree takes each panel exactly. A rational one's is no polynomial, and
-    // the widest rule settles its panels in the fewest halvings.
-    let order = if s.is_rational() {
-        8
-    } else {
-        (2 + s.degree_u().max(s.degree_v())).min(8)
-    };
-    let gauss = gauss_legendre_points(order);
+    // Along a direction its weights hold constant, the volume's integrand is
+    // a polynomial of a few times the surface's degree, which a rule a little
+    // above the degree takes exactly. Along one they vary it is no
+    // polynomial, and a wide rule settles each panel in one step: across a
+    // quarter arc eight points leave 4e-10 of it, sixteen far less.
+    let ws = s.weights();
+    let even_along_u = (0..nv).all(|j| ws.iter().all(|row| row[j].to_bits() == ws[0][j].to_bits()));
+    let even_along_v = ws
+        .iter()
+        .all(|row| row.iter().all(|w| w.to_bits() == row[0].to_bits()));
+    let polynomial_order = (2 + s.degree_u().max(s.degree_v())).min(8);
+    let order = |even: bool| if even { polynomial_order } else { 16 };
+    let (gauss_u, gauss_v) = (
+        gauss_legendre_points(order(even_along_u)),
+        gauss_legendre_points(order(even_along_v)),
+    );
     let mut across = |v: f64| -> Option<[f64; 8]> {
         let mut acc = [0.0; 8];
         for w in u_cuts.windows(2) {
             let mut g = |u: f64| Some(nurbs_integrand(s, u, v, about));
             add(
                 &mut acc,
-                &adaptive(&mut g, w[0], w[1], gauss, halvings(w[0], w[1]), floor)?,
+                &adaptive(&mut g, w[0], w[1], gauss_u, halvings(w[0], w[1]), floor)?,
                 1.0,
             );
         }
@@ -1100,8 +1106,14 @@ pub(super) fn nurbs_face_over_domain(
     };
     let mut total = [0.0; 8];
     for w in v_cuts.windows(2) {
-        let Some(panel) = adaptive(&mut across, w[0], w[1], gauss, halvings(w[0], w[1]), floor)
-        else {
+        let Some(panel) = adaptive(
+            &mut across,
+            w[0],
+            w[1],
+            gauss_v,
+            halvings(w[0], w[1]),
+            floor,
+        ) else {
             return Ok(None);
         };
         add(&mut total, &panel, 1.0);
