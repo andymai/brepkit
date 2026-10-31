@@ -176,9 +176,34 @@ pub fn sew_faces(
     }
 
     // Faces sewn from separate operations need not face one way: a loft's
-    // wall sewn in as a hole's faces away from the hole. They take the first
-    // face's sense across their shared edges, and all turn outward if they
-    // close the other way round.
+    // wall sewn in as a hole's faces away from the hole. A plane whose outer
+    // wire winds clockwise about its normal first takes the normal its wire
+    // gives it, so its edges and its normal agree. Then the faces take the
+    // first face's sense across their shared edges, and all turn outward if
+    // they close the other way round.
+    for &fid in &new_face_ids {
+        let face = topo.face(fid)?;
+        let FaceSurface::Plane { normal, d } = *face.surface() else {
+            continue;
+        };
+        let Ok(frame) =
+            brepkit_math::frame::Frame3::from_normal(Point3::new(0.0, 0.0, 0.0), normal)
+        else {
+            continue;
+        };
+        let winding = crate::measure::helpers::planar_wire_signed_area2(
+            topo,
+            face.outer_wire(),
+            frame.x,
+            frame.y,
+        )?;
+        if winding.is_some_and(|(area2, _)| area2 < 0.0) {
+            topo.face_mut(fid)?.set_surface(FaceSurface::Plane {
+                normal: -normal,
+                d: -d,
+            });
+        }
+    }
     if let Some(&seed) = new_face_ids.first() {
         brepkit_topology::orientation::propagate_orientation(topo, &new_face_ids, &[seed])?;
     }
@@ -766,6 +791,10 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
         assert_eq!(sh.faces().len(), 6, "sewn cube should have 6 faces");
+        // Some of these quads wind against their normals; sewn, every face
+        // faces out of the cube.
+        let signed = crate::measure::oriented_solid_volume(&topo, solid, 0.01).unwrap();
+        assert!((signed - 1.0).abs() < 1e-9, "signed volume {signed}");
 
         // Count unique edges — a cube has 12.
         let mut edge_set = std::collections::HashSet::new();

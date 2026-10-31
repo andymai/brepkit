@@ -925,6 +925,40 @@ fn loft_nonplanar_surface_planar_boundary_makes_flat_caps() {
     );
 }
 
+/// The sphere-surfaced sections' loft has flat caps that leave the spheres,
+/// and a loft of squares 1e-6 apart lies wholly within the tolerance the
+/// loft's own size would give: read on the end profiles' surfaces or their
+/// boundaries at the construction tolerance, each comes apart into its four
+/// sides.
+#[test]
+fn a_lofts_sides_are_its_faces_less_its_caps() {
+    let mut topo = Topology::new();
+    let bottom = make_sphere_cap_patch(&mut topo, 4.0, 3.0, 5.0);
+    let top = make_sphere_cap_patch(&mut topo, 14.0, 3.0, 5.0);
+    let solid = loft(&mut topo, &[bottom, top]).unwrap();
+    let sides = loft_sides(&mut topo, solid, &[bottom, top]).unwrap();
+    assert_eq!(
+        topo.shell(sides).unwrap().faces().len(),
+        4,
+        "the diamond prism"
+    );
+
+    let mut topo = Topology::new();
+    let square = |topo: &mut Topology, z: f64| {
+        let pts =
+            [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)].map(|(x, y)| Point3::new(x, y, z));
+        brepkit_topology::builder::make_planar_face(topo, &pts, 1e-7).unwrap()
+    };
+    let (low, high) = (square(&mut topo, 0.0), square(&mut topo, 1e-6));
+    let solid = loft(&mut topo, &[low, high]).unwrap();
+    let sides = loft_sides(&mut topo, solid, &[low, high]).unwrap();
+    assert_eq!(
+        topo.shell(sides).unwrap().faces().len(),
+        4,
+        "the thin square"
+    );
+}
+
 #[test]
 fn loft_nonplanar_boundary_over_4_edges_is_unsupported() {
     // A genuinely non-planar section boundary with >4 edges has no supported cap
