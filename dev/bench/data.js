@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793470024563,
+  "lastUpdate": 1793471152756,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63503,6 +63503,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28498243,
             "range": "± 77708",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8d30c175a5d3940cd39f8c63452ec5d6dca56843",
+          "message": "fix(algo): sample a notched section loop on a curved face inside itself (#2254)\n\nIntersecting a cylinder with a prism over an L, V or W outline now stays\nexact. Today it falls back to the mesh boolean: the L comes out\n537.1534, where the exact volume is 537.3683 (#2190).\n\nWhere a section loop bounds a piece of a curved face,\n`split_face_with_internal_loops` classifies the piece at the 3D centroid\nof the loop's samples. A loop with a reflex corner can have that\ncentroid in its notch, outside the loop, so the piece is classified at a\npoint it does not contain.\n\n## Change\n\n- Plane faces already take a point inside the loop's own polygon. Curved\nfaces now do the same in the surface's (u, v), unwrapped across its\nperiodic directions, whenever the centroid falls outside the loop.\n- A loop whose centroid lies inside it, or one that winds around a\nperiodic direction and so bounds no polygon in (u, v), keeps the\ncentroid.\n- The point is wrapped back into a periodic NURBS surface's domain\nbefore it is evaluated: unwrapped from a sample past the seam, it can\nfall below the domain's start, where the surface extrapolates its end\nspan instead of wrapping.\n\n## Tests\n\n- `notched_prisms_in_a_cylinder.rs`: prisms 22 deep over an L, a V and a\nW, intersected with a cylinder of radius 21, each in six poses (turned\n0, 37, 80, 170 and -123 degrees about the axis, and mirrored). Each\nresult has no mesh fallback, is valid, is made of the prism's planes and\nthe cylinder's wall only, keeps the wall, and holds the exact volume to\n1e-6.\n- `a_notched_loop_across_a_periodic_seam_samples_on_its_surface`: an\nL-shaped loop across the seam of a periodic NURBS cylinder of radius 2.\nIts interior point lies inside the L at -0.444 of the u domain;\nevaluated unwrapped, it landed at -0.218, outside the L.\n- On `main` each of the new prism tests fails at its mesh-fallback\ncheck.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\nFixes #2190",
+          "timestamp": "2026-10-31T18:22:57Z",
+          "tree_id": "5b8f0ec6cfa0ac8a9f8eee56265742238b043357",
+          "url": "https://github.com/andymai/brepkit/commit/8d30c175a5d3940cd39f8c63452ec5d6dca56843"
+        },
+        "date": 1793471142772,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 894564,
+            "range": "± 8172",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 961240,
+            "range": "± 2677",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10957,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 537288,
+            "range": "± 1052",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23110214,
+            "range": "± 89290",
             "unit": "ns/iter"
           }
         ]
