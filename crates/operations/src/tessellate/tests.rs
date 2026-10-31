@@ -4164,6 +4164,44 @@ fn a_twisted_grid_steps_on_to_a_count_its_chords_hold() {
     assert!(worst <= 0.5 * deflection, "{grid:?} strays {worst}");
 }
 
+/// S(u, v) = (u, v, 0.7uv + 0.217 h(u) h(v)), h(t) = max(0, 1 - |t - 0.125|
+/// / 0.003): a twisted patch with a peak 0.217 high and 0.006 wide at
+/// (0.125, 0.125). From a 1 by 1 grid at deflection 0.2, a 4 by 4 grid finds
+/// the peak at a cell's middle, and one 7 by 7 would leave it between its
+/// probes, 0.215 off their triangles. The grid taken holds the peak within
+/// half the deflection.
+#[test]
+fn a_twisted_grid_keeps_a_narrow_peak_it_has_found() {
+    use super::nurbs::point_triangle_distance;
+    let h = |t: f64| (1.0 - (t - 0.125).abs() / 0.003).max(0.0);
+    let at = |u: f64, v: f64| Point3::new(u, v, 0.7 * u * v + 0.217 * h(u) * h(v));
+    let deflection = 0.2;
+    let grid = super::nurbs::untwisted_grid(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        deflection,
+        1024,
+        None,
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / grid.0 as f64, 1.0 / grid.1 as f64);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (i, j) = ((0.125 / du) as usize, (0.125 / dv) as usize);
+    #[allow(clippy::cast_precision_loss)]
+    let corner = |a: usize, b: usize| at(du * (i + a) as f64, dv * (j + b) as f64);
+    let (p00, p10, p01, p11) = (corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1));
+    let peak = at(0.125, 0.125);
+    let split = |a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(peak, a, b, c).min(point_triangle_distance(peak, a, c, d))
+    };
+    let stray = split(p00, p10, p11, p01).max(split(p10, p11, p01, p00));
+    assert!(
+        stray <= 0.5 * deflection,
+        "{grid:?}: the peak stands {stray} off"
+    );
+}
+
 /// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
 /// 0.2. Its middle strays 0.05 from the two triangles of either split, but
 /// toward its narrow end, where one triangle is a sliver standing steep,

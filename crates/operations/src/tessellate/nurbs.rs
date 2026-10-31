@@ -932,7 +932,7 @@ pub(super) fn iso_chords_hold(
 
 /// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each checked
 /// cell strays within half the deflection of the triangles it splits into
-/// along either diagonal ([`cell_twist`]). A twisted cell (a bilinear patch
+/// along either diagonal ([`probe_strays`]). A twisted cell (a bilinear patch
 /// between skew lines) has straight sides and iso-lines, which no chord test
 /// sees, yet its middle stands up to a quarter of its twist,
 /// |P00 + P11 - P01 - P10| / 4, off those triangles. A flat cell whose
@@ -966,7 +966,10 @@ pub(super) fn untwisted_grid(
     // Every cell is read: a patch's worst cell can sit anywhere, at a
     // taper's narrow end or wherever a saddle flattens, and a spread of cells
     // can step over it.
-    let worst = |n_u: usize, n_v: usize| {
+    let half = 0.5 * deflection;
+    // The worst cell's stray over the grid, and where its probes strayed
+    // past half the deflection.
+    let worst = |n_u: usize, n_v: usize, past: &mut Vec<(f64, (f64, f64))>| {
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
         let mut worst = 0.0_f64;
@@ -974,12 +977,45 @@ pub(super) fn untwisted_grid(
             for j in 0..n_v {
                 #[allow(clippy::cast_precision_loss)]
                 let corner = (du.mul_add(i as f64, u_lo), dv.mul_add(j as f64, v_lo));
-                worst = worst.max(cell_twist(at, corner, (du, dv)));
+                for (stray, uv) in probe_strays(at, corner, (du, dv)) {
+                    worst = worst.max(stray);
+                    if stray > half {
+                        past.push((stray, uv));
+                    }
+                }
             }
         }
         worst
     };
-    let half = 0.5 * deflection;
+    // How far the grid's cell holding `(u, v)` strays from its triangles there.
+    let stray_at = |(n_u, n_v): (usize, usize), (u, v): (f64, f64)| {
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let cell = |x: f64, lo: f64, d: f64, n: usize| {
+            (((x - lo) / d).floor().max(0.0) as usize).min(n - 1)
+        };
+        let (i, j) = (cell(u, u_lo, du, n_u), cell(v, v_lo, dv, n_v));
+        #[allow(clippy::cast_precision_loss)]
+        let corner = |a: usize, b: usize| {
+            at(
+                du.mul_add((i + a) as f64, u_lo),
+                dv.mul_add((j + b) as f64, v_lo),
+            )
+        };
+        split_stray(
+            [corner(0, 0), corner(1, 0), corner(0, 1), corner(1, 1)],
+            &[at(u, v)],
+        )
+    };
+    // Where a cell once strayed past half the deflection, the worst first: a
+    // grid whose lines move off a narrow peak a probe found can leave it
+    // between its own probes.
+    let mut witnesses: Vec<(f64, (f64, f64))> = Vec::new();
     let mut refined = false;
     loop {
         // The twist never takes cells past the grid's budget: a grid capped
@@ -997,10 +1033,17 @@ pub(super) fn untwisted_grid(
             }
             break;
         }
-        let stray = worst(n_u, n_v);
+        let mut past = Vec::new();
+        let stray = witnesses
+            .iter()
+            .map(|&(_, uv)| stray_at((n_u, n_v), uv))
+            .fold(worst(n_u, n_v, &mut past), f64::max);
         if stray <= half {
             break;
         }
+        witnesses.append(&mut past);
+        witnesses.sort_by(|a, b| b.0.total_cmp(&a.0));
+        witnesses.truncate(MAX_WITNESSES);
         let grow = (1.1 * (stray / half).sqrt()).min(2.0);
         #[allow(
             clippy::cast_precision_loss,
@@ -1029,10 +1072,16 @@ pub(super) fn untwisted_grid(
             }
             m
         };
-        let next = (
+        let mut next = (
             nested(step(n_u), start_u, true),
             nested(step(n_v), start_v, false),
         );
+        // A step that loses a witness gives way to doubling, which keeps each
+        // cell's middle as a vertex and its quarter points as the new cells'
+        // middles.
+        if witnesses.iter().any(|&(_, uv)| stray_at(next, uv) > half) {
+            next = ((n_u * 2).min(max_divisions), (n_v * 2).min(max_divisions));
+        }
         if next.0 * next.1 > GRID_MAX_CELLS {
             log::warn!(
                 "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
@@ -1051,6 +1100,7 @@ pub(super) fn untwisted_grid(
 /// most at its middle; a tapered one, whose split leaves a sliver standing
 /// steep, can stray farther toward its narrow end. A flat cell lies in its
 /// triangles and strays nowhere.
+#[cfg(test)]
 pub(super) fn cell_twist(
     at: &dyn Fn(f64, f64) -> Point3,
     (u0, v0): (f64, f64),
@@ -1067,7 +1117,31 @@ pub(super) fn cell_twist(
     split_stray(corners, &probes)
 }
 
-/// Where in a cell [`cell_twist`] reads it: its middle and quarter points.
+/// Each of [`PROBES`] of the cell from `(u0, v0)` across `(du, dv)`, with how
+/// far it strays from the cell's triangles and where it lies.
+fn probe_strays(
+    at: &dyn Fn(f64, f64) -> Point3,
+    (u0, v0): (f64, f64),
+    (du, dv): (f64, f64),
+) -> [(f64, (f64, f64)); 5] {
+    let uv = |a: f64, b: f64| (du.mul_add(a, u0), dv.mul_add(b, v0));
+    let corner = |a: f64, b: f64| {
+        let (u, v) = uv(a, b);
+        at(u, v)
+    };
+    let corners = [
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(0.0, 1.0),
+        corner(1.0, 1.0),
+    ];
+    PROBES.map(|(a, b)| (split_stray(corners, &[corner(a, b)]), uv(a, b)))
+}
+
+/// The most witnesses [`untwisted_grid`] keeps.
+const MAX_WITNESSES: usize = 4096;
+
+/// Where in a cell [`probe_strays`] reads it: its middle and quarter points.
 const PROBES: [(f64, f64); 5] = [
     (0.5, 0.5),
     (0.25, 0.25),
