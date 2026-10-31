@@ -13,7 +13,7 @@ use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::helix::make_helix_curve;
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::sweep::{SweepOptions, sweep_guided, sweep_with_options};
+use brepkit_operations::sweep::{SweepContactMode, SweepOptions, sweep_guided, sweep_with_options};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -130,12 +130,13 @@ fn assert_exact(topo: &Topology, solid: SolidId, want: f64, case: &str) {
 }
 
 /// A circle of radius 10 scaled to half its size along 40 sweeps a frustum
-/// of radii 10 and 5 in four faces, however many segments it is given.
+/// of radii 10 and 5 in four sides and two caps, however many segments it
+/// is given.
 #[test]
 fn a_circle_scaled_along_a_line_sweeps_a_frustum() {
     let want = PI * 40.0 / 3.0 * (100.0 + 50.0 + 25.0);
     for (name, pose) in poses() {
-        for segments in [0, 64] {
+        for segments in [0, 64, 10_000] {
             let case = format!("{name}, {segments} segments");
             let mut topo = Topology::new();
             let profile = disc(&mut topo, pose, Vec3::new(0.0, 0.0, 1.0), 10.0);
@@ -261,5 +262,107 @@ fn a_circle_round_a_quarter_circle_sweeps_a_quarter_torus() {
             .map_err(|e| format!("{name}: {e}"))
             .unwrap();
         assert_exact(&topo, solid, want, name);
+    }
+}
+
+/// A circle of radius 1 normal to x, carried without turning along a
+/// quadratic from the origin to (10, 0, 5) whose tangent turns from x to 45
+/// degrees off it: each section is the circle moved, and the body holds its
+/// area times the path's run along x.
+#[test]
+fn a_circle_carried_without_turning_holds_its_area_times_its_run() {
+    let want = PI * 10.0;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let profile = disc(&mut topo, pose, Vec3::new(1.0, 0.0, 0.0), 1.0);
+        let path = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                pose.mul_point(Point3::new(0.0, 0.0, 0.0)),
+                pose.mul_point(Point3::new(5.0, 0.0, 0.0)),
+                pose.mul_point(Point3::new(10.0, 0.0, 5.0)),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let options = SweepOptions {
+            contact_mode: SweepContactMode::Fixed,
+            ..Default::default()
+        };
+        let solid = sweep_with_options(&mut topo, profile, &path, &options)
+            .map_err(|e| format!("{name}: {e}"))
+            .unwrap();
+        assert_exact(&topo, solid, want, name);
+    }
+}
+
+/// A square whose fourth side is a degree-1 NURBS through a point raised 1
+/// out of the square's plane over the knot span from 0.02 to 0.04, which no
+/// sixteenth of the side's parameter falls in: the profile is not planar,
+/// so no plane caps it, and every plane face of the sweep holds its edges.
+#[test]
+fn a_profile_leaving_its_plane_between_samples_takes_no_plane_cap() {
+    let mut topo = Topology::new();
+    let p = Point3::new;
+    let corners = [
+        p(-5.0, -5.0, 0.0),
+        p(5.0, -5.0, 0.0),
+        p(5.0, 5.0, 0.0),
+        p(-5.0, 5.0, 0.0),
+    ];
+    let verts: Vec<_> = corners
+        .iter()
+        .map(|&c| topo.add_vertex(Vertex::new(c, TOL)))
+        .collect();
+    let bump = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 0.02, 0.04, 1.0, 1.0],
+        vec![corners[3], p(-5.0, 4.6, 1.0), p(-5.0, 4.2, 0.0), corners[0]],
+        vec![1.0; 4],
+    )
+    .unwrap();
+    let mut edges = Vec::new();
+    for i in 0..3 {
+        let e = topo.add_edge(Edge::new(verts[i], verts[i + 1], EdgeCurve::Line));
+        edges.push(OrientedEdge::new(e, true));
+    }
+    let e = topo.add_edge(Edge::new(verts[3], verts[0], EdgeCurve::NurbsCurve(bump)));
+    edges.push(OrientedEdge::new(e, true));
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let profile = topo.add_face(Face::new(
+        wire,
+        vec![],
+        plane(Mat4::identity(), Vec3::new(0.0, 0.0, 1.0), p(0.0, 0.0, 0.0)),
+    ));
+    let options = SweepOptions {
+        scale_law: Some(Box::new(|t: f64| 0.5f64.mul_add(-t, 1.0))),
+        ..Default::default()
+    };
+    let Ok(solid) =
+        sweep_with_options(&mut topo, profile, &spine(Mat4::identity(), 40.0), &options)
+    else {
+        return;
+    };
+    for f in solid_faces(&topo, solid).unwrap() {
+        let face = topo.face(f).unwrap();
+        let FaceSurface::Plane { normal, d } = *face.surface() else {
+            continue;
+        };
+        for oe in topo.wire(face.outer_wire()).unwrap().edges() {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let a = topo.vertex(edge.start()).unwrap().point();
+            let b = topo.vertex(edge.end()).unwrap().point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            for k in 0..=200 {
+                let t = (t1 - t0).mul_add(f64::from(k) / 200.0, t0);
+                let q = edge.curve().evaluate_with_endpoints(t, a, b);
+                let off = normal.dot(Vec3::new(q.x(), q.y(), q.z())) - d;
+                assert!(
+                    off.abs() < 1e-6,
+                    "an edge of face {f:?} stands {off} off its plane"
+                );
+            }
+        }
     }
 }

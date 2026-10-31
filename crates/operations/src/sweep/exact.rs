@@ -94,7 +94,19 @@ pub(super) fn sweep_exact(
             let curve = e.curve().clone();
             let is_line = matches!(curve, EdgeCurve::Line);
             let span = match crate::revolve::edge_span_nurbs(&curve, oe.is_forward(), (from, to))? {
-                Some(span) => with_ends(&span, from, to)?,
+                Some(span) => {
+                    // An unclamped curve's end control points are not its
+                    // ends, and moving them would change the curve.
+                    let cps = span.control_points();
+                    let (t0, t1) = span.domain();
+                    let reach = 10.0 * tol.linear;
+                    if (span.evaluate(t0) - cps[0]).length() > reach
+                        || (span.evaluate(t1) - cps[cps.len() - 1]).length() > reach
+                    {
+                        return Ok(None);
+                    }
+                    with_ends(&span, from, to)?
+                }
                 None => NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![from, to], vec![1.0; 2])?,
             };
             edges.push(LoopEdge {
@@ -126,8 +138,12 @@ pub(super) fn sweep_exact(
     let all_samples: Vec<Point3> = samples.iter().flatten().copied().collect();
     let anchor = samples[0][0];
     let extent = diagonal(&all_samples);
-    let off_plane = all_samples
+    // Every control point, which bound each edge, not samples between them:
+    // a span can leave the plane between any samples.
+    let off_plane = loops
         .iter()
+        .flat_map(|lp| lp.edges.iter())
+        .flat_map(|le| le.span.control_points().iter())
         .map(|&p| (p - anchor).dot(input_normal).abs())
         .fold(0.0, f64::max);
     if off_plane > 10.0f64.mul_add(tol.linear, 1e-9 * extent) {
@@ -172,12 +188,14 @@ pub(super) fn sweep_exact(
                 frames_at(path, &params, up_hint)?
             }
             SweepContactMode::Fixed => {
+                // The profile keeps its orientation: the whole frame stays as
+                // it starts, and the sections are translations of it.
                 let up = orthogonalize(input_normal, path_tangent_0);
                 let right = path_tangent_0.cross(up);
                 ts.iter()
                     .map(|&t| Frame {
                         origin: path.evaluate(at(t)),
-                        tangent: path.tangent(at(t)).unwrap_or(path_tangent_0),
+                        tangent: path_tangent_0,
                         up,
                         right,
                     })
@@ -249,7 +267,7 @@ pub(super) fn sweep_exact(
         breaks.extend(interior(aux));
     }
     let min_segments = if options.segments > 0 {
-        options.segments
+        options.segments.min(MAX_SEGMENTS)
     } else {
         (path.control_points().len() * 2).max(4)
     };
@@ -593,31 +611,14 @@ fn fit_trajectories(
             (FIT_REL_TOL * diagonal(&moved).max(profile_extent)).max(tol.linear)
         });
 
-        let mut rails = Vec::with_capacity(points.len());
-        let mut worst = 0.0_f64;
-        let mut all_straight = true;
         let (first, last) = (maps[0], maps[maps.len() - 1]);
-        for &p in points {
+        let straight = points.iter().all(|&p| {
             let (a, b) = (first.mul_point(p), last.mul_point(p));
-            let on_line = |t: f64, q: Point3| (a + (b - a) * t - q).length() <= fit;
-            all_straight = all_straight
-                && all
-                    .iter()
-                    .zip(&maps)
-                    .all(|(&t, m)| on_line(t, m.mul_point(p)));
-            let mut fitted = Vec::with_capacity(pieces.len());
-            for (piece, slot) in pieces.iter().zip(&slots) {
-                let track: Vec<Point3> = slot.iter().map(|&i| maps[i].mul_point(p)).collect();
-                let rail = crate::loft::interpolate_at(&track, 3, piece)?;
-                for &i in &slot[..slot.len() - 1] {
-                    let q = maps[i + 1].mul_point(p);
-                    worst = worst.max((rail.evaluate(all[i + 1]) - q).length());
-                }
-                fitted.push(rail);
-            }
-            rails.push(join(&fitted)?);
-        }
-        if all_straight {
+            all.iter()
+                .zip(&maps)
+                .all(|(&t, m)| (a + (b - a) * t - m.mul_point(p)).length() <= fit)
+        });
+        if straight {
             let lines = points
                 .iter()
                 .map(|&p| {
@@ -630,6 +631,22 @@ fn fit_trajectories(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             return Ok((lines, first, last));
+        }
+
+        let mut rails = Vec::with_capacity(points.len());
+        let mut worst = 0.0_f64;
+        for &p in points {
+            let mut fitted = Vec::with_capacity(pieces.len());
+            for (piece, slot) in pieces.iter().zip(&slots) {
+                let track: Vec<Point3> = slot.iter().map(|&i| maps[i].mul_point(p)).collect();
+                let rail = crate::loft::interpolate_at(&track, 3, piece)?;
+                for &i in &slot[..slot.len() - 1] {
+                    let q = maps[i + 1].mul_point(p);
+                    worst = worst.max((rail.evaluate(all[i + 1]) - q).length());
+                }
+                fitted.push(rail);
+            }
+            rails.push(join(&fitted)?);
         }
         let segments: usize = pieces.iter().map(|piece| piece.len() - 1).sum();
         if worst <= fit || segments >= MAX_SEGMENTS {

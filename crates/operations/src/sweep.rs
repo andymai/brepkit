@@ -179,9 +179,17 @@ fn profile_basis(input_normal: Vec3) -> (Vec3, Vec3, Vec3) {
 
 /// Project `v` to be perpendicular to `tangent`, then normalize.
 ///
-/// Falls back to a world-axis-based vector if the projection is degenerate.
+/// Falls back to a world-axis-based vector if the projection is degenerate:
+/// `v` along `tangent` leaves only rounding, which would normalize to a
+/// direction off the perpendicular plane.
 fn orthogonalize(v: Vec3, tangent: Vec3) -> Vec3 {
     let projected = v - tangent * tangent.dot(v);
+    let degenerate = projected.length() <= 1e-9 * v.length();
+    let projected = if degenerate {
+        Vec3::new(0.0, 0.0, 0.0)
+    } else {
+        projected
+    };
     projected.normalize().unwrap_or_else(|_| {
         // Fallback: pick a world axis that isn't parallel to the tangent.
         let candidate = if tangent.x().abs() < 0.9 {
