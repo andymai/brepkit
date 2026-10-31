@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793475040252,
+  "lastUpdate": 1793481660218,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63719,6 +63719,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23167168,
             "range": "± 32541",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e4f9079a914f2b1ac54152d9d1c1f3740ab519b1",
+          "message": "perf(check): read a whole rational patch bounded by its own arcs over its domain (#2261)\n\nA whole rational NURBS patch bounded by its own arcs is now integrated\nover its `(u, v)` domain, as a polynomial one already is. A circle of\nradius 2 swept by `sweep_with_options` three turns round a helix of\nradius 20 measures its exact volume in 0.52 s instead of 7.07 s in a\nrelease build, and the two results agree to 4e-10.\n\nToday `nurbs_face_over_domain` refuses a rational surface, a rational\nNURBS edge, and any circle or ellipse edge. Since #2255 a side swept\nfrom a circular profile is rational and ends on circle arcs, so every\nsuch face goes to Green's theorem along its boundary, which projects\neach boundary sample onto the surface.\n\n## Change\n\n- A rational patch is read over its domain when its weights are finite\nand positive and none is more than 64 times another. Weights far apart\ncrowd the surface into a corner of its domain, where the panels' rules\ncan miss it. The bound refuses the patch weighted 1e16 over half of it\nin `a_nurbs_face_not_shown_whole_is_left_to_its_boundary`; with the\nbound lifted, that test fails.\n- A NURBS edge shows its side only if it also carries the side's weights\nup to a common factor, forward or reversed, every ratio finite. A circle\nor ellipse edge shows its side as its NURBS form over its own span\n(`circle_to_nurbs`, `ellipse_to_nurbs`), compared the same way.\n- Along a direction where a patch's weights hold constant, its panels\nkeep the rule a little above the degree, which takes the polynomial\nintegrand exactly. Along one where they vary, a 16-point rule settles\neach panel in one step. With 8 points, a quarter arc left 4e-10 of a\npanel, and each `u` integral halved two or three times under every `v`\nsample.\n- The integrand reads the point and both partials from one `derivatives`\ncall instead of three evaluations. A sample that is not a finite number\ndeclines the patch, since `adaptive`'s maxima pass over a NaN.\n- `NurbsCurve::derivatives` and `NurbsSurface::derivatives` decide\nwhether to carry the rational terms from the span's own weights instead\nof reading every weight. A swept side of 3 by 793 control points read\n2,379 weights per point.\n\n## Tests\n\n- `a_rational_patch_bounded_by_its_own_arcs_reads_over_its_domain`: a\nquarter cylinder of radius 2 and height 3 as a rational patch, bounded\nby its two arcs as circle edges (the top one stored running against its\nside) and two lines. Read over its domain, its area is 3π, and its area,\nvolume and moments match the boundary integral to 1e-10. On `main` the\nface is refused.\n-\n`a_rational_patch_weighted_along_both_directions_reads_over_its_domain`:\na quadratic patch over two spans each way, its weights 1 to 64 and\nvarying along both, bounded by its four sides as their own NURBS curves,\nthe one at `u` = 1 (weights 1, 6, 9, 1) stored running against it. Read\nover its domain, its area matches a brute tensor Gauss sum (16 points on\n16 panels per span each way) to 1e-9, and all eight integrals match the\nboundary integral's to 1e-9. With the reversed edge's weights compared\nunreversed, the face was refused.\n-\n`a_rational_patch_under_an_arc_that_is_not_its_side_is_left_to_the_boundary`:\nthe same patch with its top arc swapped for one through the same corners\nthat bows the other way is left to the boundary.\n-\n`a_rational_patch_under_an_edge_off_its_sides_weights_is_left_to_the_boundary`:\na top edge on the side's control points and knots is left to the\nboundary when weighted 1, 0.5 and 1 (a conic 0.11 inside the arc at its\nmiddle), or 1e-310, 1 and 1e-310 (whose middle ratio overflows, pulling\nthe curve 0.83 off the arc), and read over the domain under the side's\nown weights doubled. Without the weight comparison, or without the\nfiniteness check, the face under the matching bad edge was read over the\ndomain.\n- `a_nurbs_patch_that_samples_to_no_number_is_left_to_its_boundary`: a\npatch with a NaN middle weight, and a bilinear patch over `u` from 0 to\n1e-3 weighted 1e308, are left to the boundary. Each read as all NaN\nbefore; the weight check alone left the second one so.\n- The check crate's 79 tests and the math crate's 649 pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-10-31T21:17:45Z",
+          "tree_id": "5ad0ae4299e4cd27f4af4588862e851df71ad27a",
+          "url": "https://github.com/andymai/brepkit/commit/e4f9079a914f2b1ac54152d9d1c1f3740ab519b1"
+        },
+        "date": 1793481650403,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1100455,
+            "range": "± 5331",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1182915,
+            "range": "± 4248",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13131,
+            "range": "± 435",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674339,
+            "range": "± 1197",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29122435,
+            "range": "± 105158",
             "unit": "ns/iter"
           }
         ]
