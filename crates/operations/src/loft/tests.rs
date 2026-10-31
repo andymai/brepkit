@@ -926,9 +926,10 @@ fn loft_nonplanar_surface_planar_boundary_makes_flat_caps() {
 }
 
 /// The sphere-surfaced sections' loft has flat caps that leave the spheres,
-/// and a loft of squares 1e-6 apart lies wholly within the tolerance the
-/// loft's own size would give: read on the end profiles' surfaces or their
-/// boundaries at the construction tolerance, each comes apart into its four
+/// a loft of squares 1e-6 apart lies wholly within the tolerance the loft's
+/// own size would give, and circular rims on spheres loft with caps on their
+/// chords: read by their corners on the end profiles' surfaces or
+/// boundaries at the construction tolerance, each comes apart into its
 /// sides.
 #[test]
 fn a_lofts_sides_are_its_faces_less_its_caps() {
@@ -956,6 +957,37 @@ fn a_lofts_sides_are_its_faces_less_its_caps() {
         topo.shell(sides).unwrap().faces().len(),
         4,
         "the thin square"
+    );
+
+    // Rims of radius 3 on spheres of radius 5: the loft's caps lie on chords
+    // of the rims, off both the spheres and the circles, their corners on
+    // the rims.
+    let mut topo = Topology::new();
+    let rim = |topo: &mut Topology, z: f64| {
+        let e = brepkit_topology::builder::make_circle_edge(
+            topo,
+            Point3::new(0.0, 0.0, z),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            1e-7,
+        )
+        .unwrap();
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let ball =
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, z - 4.0), 5.0)
+                .unwrap();
+        topo.add_face(Face::new(w, vec![], FaceSurface::Sphere(ball)))
+    };
+    let (low, high) = (rim(&mut topo, 4.0), rim(&mut topo, 14.0));
+    let solid = loft(&mut topo, &[low, high]).unwrap();
+    let all = brepkit_topology::explorer::solid_faces(&topo, solid)
+        .unwrap()
+        .len();
+    let sides = loft_sides(&mut topo, solid, &[low, high]).unwrap();
+    assert_eq!(
+        topo.shell(sides).unwrap().faces().len(),
+        all - 2,
+        "the rims' caps"
     );
 }
 

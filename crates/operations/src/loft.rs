@@ -2075,10 +2075,11 @@ pub(crate) fn mean_chord_params(rows: &[Vec<Point3>]) -> Vec<f64> {
 
 /// The faces of a loft that are not its caps, as an open shell.
 ///
-/// A cap is a face every edge of which lies, to the construction tolerance,
-/// on one of `ends` (the profiles the loft starts or ends on): on its
-/// surface, or on its boundary where the cap is filled flat across a curved
-/// profile. Every other face of a loft reaches the next section.
+/// A cap is a face every corner of which lies, to the construction
+/// tolerance, on one of `ends` (the profiles the loft starts or ends on): on
+/// its surface, or on its boundary, where a cap filled flat across a curved
+/// profile or on chords of its rim still has its corners. Every other face of
+/// a loft has a corner on the next section.
 ///
 /// # Errors
 ///
@@ -2090,26 +2091,17 @@ pub fn loft_sides(
     ends: &[FaceId],
 ) -> Result<brepkit_topology::shell::ShellId, crate::OperationsError> {
     let tol = Tolerance::new().linear;
-    let edge_samples = |topo: &Topology,
-                        face: FaceId|
-     -> Result<Vec<Point3>, crate::OperationsError> {
+    let corners = |topo: &Topology, face: FaceId| -> Result<Vec<Point3>, crate::OperationsError> {
         let face = topo.face(face)?;
-        let mut samples = Vec::new();
+        let mut corners = Vec::new();
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             for oe in topo.wire(wid)?.edges() {
                 let edge = topo.edge(oe.edge())?;
-                let (a, b) = (
-                    topo.vertex(edge.start())?.point(),
-                    topo.vertex(edge.end())?.point(),
-                );
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                for k in 0..=4 {
-                    let t = (t1 - t0).mul_add(f64::from(k) / 4.0, t0);
-                    samples.push(edge.curve().evaluate_with_endpoints(t, a, b));
-                }
+                corners.push(topo.vertex(edge.start())?.point());
+                corners.push(topo.vertex(edge.end())?.point());
             }
         }
-        Ok(samples)
+        Ok(corners)
     };
     // Each end profile's surface and boundary edges.
     let mut profiles = Vec::with_capacity(ends.len());
@@ -2166,7 +2158,7 @@ pub fn loft_sides(
     };
     let mut sides = Vec::new();
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
-        let samples = edge_samples(topo, fid)?;
+        let samples = corners(topo, fid)?;
         let cap = profiles.iter().any(|(surface, edges)| {
             samples.iter().all(|&p| on_surface(surface, p))
                 || samples.iter().all(|&p| on_boundary(edges, p))
