@@ -323,7 +323,14 @@ impl RaySurface {
             let f = s - Vec3::new(origin.x(), origin.y(), origin.z()) - dir * t;
             let normal = su.cross(sv);
             let det = -normal.dot(dir);
-            if f.length() <= 1e-12 * self.scale {
+            // Where the surface runs fast in its parameters a unit in the
+            // last place of `u` or `v` moves the point farther than the
+            // bound on the patch's size, and Newton stalls short of it.
+            let resolved = 4.0
+                * f64::EPSILON
+                * su.length()
+                    .mul_add(u.abs().max(1.0), sv.length() * v.abs().max(1.0));
+            if f.length() <= (1e-12 * self.scale).max(resolved) {
                 let slack_u = 1e-9 * (du.1 - du.0);
                 let slack_v = 1e-9 * (dv.1 - dv.0);
                 if u < leaf.u.0 - slack_u

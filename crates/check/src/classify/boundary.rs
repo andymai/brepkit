@@ -1305,12 +1305,20 @@ mod tests {
     }
 
     /// A whole patch through (k, u, z_k) for k = 0..=8 along a cubic `v`,
-    /// flat but for (4, u, 1), whose interior knots sit 1e-4 apart after
-    /// 0.5: its bump rises to z = 2/3 at x = 4 inside v from 0.5001 to
-    /// 0.5005, where no even grid of the domain samples it. A ray up
+    /// flat but for (4, u, 1), whose interior knots sit `width` apart after
+    /// 0.5: its bump rises to z = 2/3 at x = 4 inside v from 0.5 + width to
+    /// 0.5 + 5 width, where no even grid of the domain samples it. At
+    /// 1e-8 a unit in the last place of `v` moves the point farther than
+    /// 1e-12 of the patch's size, which Newton cannot then reach. A ray up
     /// through the bump crosses the face once, and one above it not at all.
     #[test]
     fn a_ray_crosses_a_bump_inside_narrow_knot_spans() {
+        for width in [1e-4, 1e-6, 1e-8] {
+            crosses_a_bump(width);
+        }
+    }
+
+    fn crosses_a_bump(width: f64) {
         use brepkit_math::nurbs::curve::NurbsCurve;
         use brepkit_math::nurbs::surface::NurbsSurface;
         use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -1318,7 +1326,6 @@ mod tests {
         use brepkit_topology::vertex::Vertex;
         use brepkit_topology::wire::{OrientedEdge, Wire};
 
-        let width = 1e-4_f64;
         let mut knots_v = vec![0.0; 4];
         knots_v.extend((1..=5).map(|k| width.mul_add(f64::from(k), 0.5)));
         knots_v.extend([1.0; 4]);
@@ -1362,13 +1369,8 @@ mod tests {
         let cell = FaceRayCache::default();
         let below = Point3::new(4.0, 0.5, 0.3);
         let above = Point3::new(4.0, 0.5, 1.0);
-        assert_eq!(
-            count_face_ray_crossings(&topo, face, below, up, &cell).unwrap(),
-            1
-        );
-        assert_eq!(
-            count_face_ray_crossings(&topo, face, above, up, &cell).unwrap(),
-            0
-        );
+        let crossings = |from| count_face_ray_crossings(&topo, face, from, up, &cell).unwrap();
+        assert_eq!(crossings(below), 1, "width {width}: below");
+        assert_eq!(crossings(above), 0, "width {width}: above");
     }
 }
