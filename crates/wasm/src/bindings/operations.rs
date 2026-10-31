@@ -134,6 +134,9 @@ impl BrepKernel {
     /// - `startPoint: [x, y, z]` — apex point before first profile
     /// - `endPoint: [x, y, z]` — apex point after last profile
     /// - `ruled: bool` — true for ruled (linear) surfaces (default), false for smooth
+    /// - `solid: bool` — true (default) returns a solid handle; false returns
+    ///   a shell handle holding the loft's faces without the caps on its end
+    ///   profiles
     #[wasm_bindgen(js_name = "loftWithOptions")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn loft_with_options(&mut self, faces: Vec<u32>, options: &str) -> Result<u32, JsError> {
@@ -158,14 +161,26 @@ impl BrepKernel {
             .get("ruled")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true);
-        let solid_id = loft_with_points(
-            self.topo_mut(),
-            &face_ids,
-            point("startPoint"),
-            point("endPoint"),
-            ruled,
-        )?;
-        Ok(solid_id_to_u32(solid_id))
+        let closed = opts
+            .get("solid")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let (start, end) = (point("startPoint"), point("endPoint"));
+        let solid_id = loft_with_points(self.topo_mut(), &face_ids, start, end, ruled)?;
+        if closed {
+            return Ok(solid_id_to_u32(solid_id));
+        }
+        // A profile the loft carries on to a point is no end of the result.
+        let ends: Vec<_> = [
+            face_ids.first().filter(|_| start.is_none()),
+            face_ids.last().filter(|_| end.is_none()),
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect();
+        let shell = brepkit_operations::loft::loft_sides(self.topo_mut(), solid_id, &ends)?;
+        Ok(crate::handles::shell_id_to_u32(shell))
     }
 
     // ── Shell ─────────────────────────────────────────────────────
@@ -1900,6 +1915,75 @@ mod tests {
         assert!(
             out.get("ok").and_then(serde_json::Value::as_u64).is_some(),
             "expected an ok solid handle, got {out}"
+        );
+    }
+
+    /// A profile of a square of side 10 holed by a circle of radius 2,
+    /// lofted 10 up as brepjs lofts it: each loop on its own with
+    /// `"solid": false`, then sewn to the two holed caps. The square's loft
+    /// is its four sides, the circle's its one wall, and the sewn solid holds
+    /// (100 - 4 pi) 10.
+    #[test]
+    fn an_open_loft_of_each_loop_sews_to_holed_caps() {
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::builder::{make_circle_edge_with_ref, make_polygon_wire};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut k = BrepKernel::new();
+        let square = |k: &mut BrepKernel, z: f64| {
+            let corners = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)]
+                .map(|(x, y)| Point3::new(x, y, z));
+            make_polygon_wire(k.topo_mut(), &corners, 1e-7).unwrap()
+        };
+        let circle = |k: &mut BrepKernel, z: f64, normal: f64| {
+            // Seams at +x, where the caps' holes and the lofts' rims meet.
+            let e = make_circle_edge_with_ref(
+                k.topo_mut(),
+                Point3::new(0.0, 0.0, z),
+                Vec3::new(0.0, 0.0, normal),
+                2.0,
+                Vec3::new(1.0, 0.0, 0.0),
+                1e-7,
+            )
+            .unwrap();
+            k.topo_mut()
+                .add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap())
+        };
+        let plane = |z: f64| FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z,
+        };
+        let face = |k: &mut BrepKernel, wire, holes: Vec<_>, z: f64| {
+            let id = k.topo_mut().add_face(Face::new(wire, holes, plane(z)));
+            crate::handles::face_id_to_u32(id)
+        };
+        let loops = [
+            (square(&mut k, 0.0), square(&mut k, 10.0)),
+            (circle(&mut k, 0.0, 1.0), circle(&mut k, 10.0, 1.0)),
+        ];
+        let mut sides = Vec::new();
+        for (count, (lower, upper)) in [4, 1].into_iter().zip(loops) {
+            let lower = face(&mut k, lower, vec![], 0.0);
+            let upper = face(&mut k, upper, vec![], 10.0);
+            let shell = k
+                .loft_with_options(vec![lower, upper], r#"{"ruled":true,"solid":false}"#)
+                .unwrap();
+            let shell = k.resolve_shell(shell).unwrap();
+            let faces = k.topo.shell(shell).unwrap().faces().to_vec();
+            assert_eq!(faces.len(), count, "the loft's sides alone");
+            sides.extend(faces.into_iter().map(crate::handles::face_id_to_u32));
+        }
+        for z in [0.0, 10.0] {
+            let (outer, hole) = (square(&mut k, z), circle(&mut k, z, -1.0));
+            sides.push(face(&mut k, outer, vec![hole], z));
+        }
+        let solid = k.sew_faces(sides, 1e-6).unwrap();
+        let volume = k.volume(solid, 0.001).unwrap();
+        let want = 4.0f64.mul_add(-std::f64::consts::PI, 100.0) * 10.0;
+        assert!(
+            (volume - want).abs() < 1e-6 * want,
+            "volume {volume}, want {want}"
         );
     }
 

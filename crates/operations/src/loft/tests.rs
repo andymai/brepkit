@@ -925,6 +925,72 @@ fn loft_nonplanar_surface_planar_boundary_makes_flat_caps() {
     );
 }
 
+/// The sphere-surfaced sections' loft has flat caps that leave the spheres,
+/// a loft of squares 1e-6 apart lies wholly within the tolerance the loft's
+/// own size would give, and circular rims on spheres loft with caps on their
+/// chords: read by their corners on the end profiles' surfaces or
+/// boundaries at the construction tolerance, each comes apart into its
+/// sides.
+#[test]
+fn a_lofts_sides_are_its_faces_less_its_caps() {
+    let mut topo = Topology::new();
+    let bottom = make_sphere_cap_patch(&mut topo, 4.0, 3.0, 5.0);
+    let top = make_sphere_cap_patch(&mut topo, 14.0, 3.0, 5.0);
+    let solid = loft(&mut topo, &[bottom, top]).unwrap();
+    let sides = loft_sides(&mut topo, solid, &[bottom, top]).unwrap();
+    assert_eq!(
+        topo.shell(sides).unwrap().faces().len(),
+        4,
+        "the diamond prism"
+    );
+
+    let mut topo = Topology::new();
+    let square = |topo: &mut Topology, z: f64| {
+        let pts =
+            [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)].map(|(x, y)| Point3::new(x, y, z));
+        brepkit_topology::builder::make_planar_face(topo, &pts, 1e-7).unwrap()
+    };
+    let (low, high) = (square(&mut topo, 0.0), square(&mut topo, 1e-6));
+    let solid = loft(&mut topo, &[low, high]).unwrap();
+    let sides = loft_sides(&mut topo, solid, &[low, high]).unwrap();
+    assert_eq!(
+        topo.shell(sides).unwrap().faces().len(),
+        4,
+        "the thin square"
+    );
+
+    // Rims of radius 3 on spheres of radius 5: the loft's caps lie on chords
+    // of the rims, off both the spheres and the circles, their corners on
+    // the rims.
+    let mut topo = Topology::new();
+    let rim = |topo: &mut Topology, z: f64| {
+        let e = brepkit_topology::builder::make_circle_edge(
+            topo,
+            Point3::new(0.0, 0.0, z),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            1e-7,
+        )
+        .unwrap();
+        let w = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let ball =
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, z - 4.0), 5.0)
+                .unwrap();
+        topo.add_face(Face::new(w, vec![], FaceSurface::Sphere(ball)))
+    };
+    let (low, high) = (rim(&mut topo, 4.0), rim(&mut topo, 14.0));
+    let solid = loft(&mut topo, &[low, high]).unwrap();
+    let all = brepkit_topology::explorer::solid_faces(&topo, solid)
+        .unwrap()
+        .len();
+    let sides = loft_sides(&mut topo, solid, &[low, high]).unwrap();
+    assert_eq!(
+        topo.shell(sides).unwrap().faces().len(),
+        all - 2,
+        "the rims' caps"
+    );
+}
+
 #[test]
 fn loft_nonplanar_boundary_over_4_edges_is_unsupported() {
     // A genuinely non-planar section boundary with >4 edges has no supported cap

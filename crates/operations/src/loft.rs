@@ -2073,6 +2073,103 @@ pub(crate) fn mean_chord_params(rows: &[Vec<Point3>]) -> Vec<f64> {
     sum.iter().map(|s| s / f64::from(counted)).collect()
 }
 
+/// The faces of a loft that are not its caps, as an open shell.
+///
+/// A cap is a face every corner of which lies, to the construction
+/// tolerance, on one of `ends` (the profiles the loft starts or ends on): on
+/// its surface, or on its boundary, where a cap filled flat across a curved
+/// profile or on chords of its rim still has its corners. Every other face of
+/// a loft has a corner on the next section.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails or the loft has no face but
+/// its caps.
+pub fn loft_sides(
+    topo: &mut Topology,
+    solid: SolidId,
+    ends: &[FaceId],
+) -> Result<brepkit_topology::shell::ShellId, crate::OperationsError> {
+    let tol = Tolerance::new().linear;
+    let corners = |topo: &Topology, face: FaceId| -> Result<Vec<Point3>, crate::OperationsError> {
+        let face = topo.face(face)?;
+        let mut corners = Vec::new();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                corners.push(topo.vertex(edge.start())?.point());
+                corners.push(topo.vertex(edge.end())?.point());
+            }
+        }
+        Ok(corners)
+    };
+    // Each end profile's surface and boundary edges.
+    let mut profiles = Vec::with_capacity(ends.len());
+    for &end in ends {
+        let face = topo.face(end)?;
+        let surface = face.surface().clone();
+        let mut edges = Vec::new();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                edges.push((edge.curve().clone(), a, b));
+            }
+        }
+        profiles.push((surface, edges));
+    }
+    let on_surface = |surface: &FaceSurface, p: Point3| match surface {
+        FaceSurface::Plane { normal, d } => (dot_normal_point(*normal, p) - d).abs() <= tol,
+        other => other
+            .project_point(p)
+            .and_then(|(u, v)| other.evaluate(u, v))
+            .is_some_and(|q| (q - p).length() <= tol),
+    };
+    let on_boundary = |edges: &[(EdgeCurve, Point3, Point3)], p: Point3| {
+        edges.iter().any(|(curve, a, b)| {
+            let distance = match curve {
+                EdgeCurve::Line => {
+                    let (ab, ap) = (*b - *a, p - *a);
+                    let w = (ap.dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+                    (ap - ab * w).length()
+                }
+                other => {
+                    let (t0, t1) = other.domain_with_endpoints(*a, *b);
+                    let (lo, hi) = (t0.min(t1), t0.max(t1));
+                    match other {
+                        EdgeCurve::Circle(c) => {
+                            brepkit_geometry::extrema::point_to_curve(p, c, lo, hi).distance
+                        }
+                        EdgeCurve::Ellipse(e) => {
+                            brepkit_geometry::extrema::point_to_curve(p, e, lo, hi).distance
+                        }
+                        EdgeCurve::NurbsCurve(n) => {
+                            brepkit_geometry::extrema::point_to_curve(p, n, lo, hi).distance
+                        }
+                        EdgeCurve::Line => f64::INFINITY,
+                    }
+                }
+            };
+            distance <= tol
+        })
+    };
+    let mut sides = Vec::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let samples = corners(topo, fid)?;
+        let cap = profiles.iter().any(|(surface, edges)| {
+            samples.iter().all(|&p| on_surface(surface, p))
+                || samples.iter().all(|&p| on_boundary(edges, p))
+        });
+        if !cap {
+            sides.push(fid);
+        }
+    }
+    Ok(topo.add_shell(Shell::new(sides)?))
+}
+
 #[cfg(test)]
 mod tests;
 
