@@ -225,6 +225,20 @@ impl RaySurface {
         // How near another hit must lie to each hit to be it: a hit settled
         // on its parameters' spacing is known no closer than that.
         let mut radii: Vec<f64> = Vec::new();
+        out = self.collect_hits(origin, dir, reach, (out, &mut radii));
+        coalesce(&mut out.hits, &radii);
+        out
+    }
+
+    /// Every hit [`Self::hits`] finds, before those of one crossing are
+    /// joined, each with its radius in `radii`.
+    fn collect_hits(
+        &self,
+        origin: Point3,
+        dir: Vec3,
+        reach: f64,
+        (mut out, radii): (RayHits, &mut Vec<f64>),
+    ) -> RayHits {
         let Ok(frame) = Frame3::from_normal(origin, dir) else {
             out.grazed = true;
             return out;
@@ -259,7 +273,7 @@ impl RaySurface {
             if along_u.max(along_v) <= leaf || depth >= MAX_DEPTH {
                 // A leaf the solve cannot settle is cut further, and at the
                 // deepest level the ray is taken to graze it.
-                if self.solve(&patch, origin, frame.z, reach, (&mut out, &mut radii)) {
+                if self.solve(&patch, origin, frame.z, reach, (&mut out, radii)) {
                     continue;
                 }
                 if depth >= MAX_DEPTH {
@@ -368,10 +382,9 @@ impl RaySurface {
     }
 
     /// Record the hit at `(u, v)`, `t` along the ray, when it lies in `leaf`
-    /// and ahead of `origin` by no less than `-reach`, unless one already
-    /// lies within `merge` of it or within its own radius in `radii`, which
-    /// keeps one radius per hit: the same crossing merges whichever is found
-    /// first. Always settles the leaf.
+    /// and ahead of `origin` by no less than `-reach`, with `merge` in
+    /// `radii`: the distance within which another hit is the same one.
+    /// Always settles the leaf.
     #[allow(clippy::too_many_arguments)]
     fn record(
         &self,
@@ -396,17 +409,53 @@ impl RaySurface {
         }
         out.grazed |= self.second_crossing_near(u, v, dir);
         let point = origin + dir * t;
-        let known = out
-            .hits
-            .iter()
-            .zip(radii.iter())
-            .any(|(h, &radius)| (h.point - point).length() <= radius.max(merge));
-        if !known {
-            out.hits.push(RayHit { u, v, t, point });
-            radii.push(merge);
-        }
+        out.hits.push(RayHit { u, v, t, point });
+        radii.push(merge);
         true
     }
+}
+
+/// The root of `i`'s set in a union-find forest, halving the path to it.
+fn find_root(root: &mut [usize], mut i: usize) -> usize {
+    while root[i] != i {
+        root[i] = root[root[i]];
+        i = root[i];
+    }
+    i
+}
+
+/// Join the hits of one crossing: two lie on one when they lie within the
+/// wider of their radii, and so does any chain of such pairs. A chain does
+/// not hang on the order the hits were found in, so neither does the count.
+/// Each crossing keeps its most precise hit, the nearest along the ray among
+/// those as precise, and the hits are left in order along the ray.
+fn coalesce(hits: &mut Vec<RayHit>, radii: &[f64]) {
+    let n = hits.len();
+    let mut root: Vec<usize> = (0..n).collect();
+    for i in 0..n {
+        for j in i + 1..n {
+            if (hits[i].point - hits[j].point).length() <= radii[i].max(radii[j]) {
+                let (a, b) = (find_root(&mut root, i), find_root(&mut root, j));
+                root[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let mut best: Vec<Option<usize>> = vec![None; n];
+    for i in 0..n {
+        let r = find_root(&mut root, i);
+        let better = best[r].is_none_or(|k| {
+            radii[i]
+                .total_cmp(&radii[k])
+                .then(hits[i].t.total_cmp(&hits[k].t))
+                .is_lt()
+        });
+        if better {
+            best[r] = Some(i);
+        }
+    }
+    let mut kept: Vec<RayHit> = best.into_iter().flatten().map(|i| hits[i]).collect();
+    kept.sort_by(|a, b| a.t.total_cmp(&b.t));
+    *hits = kept;
 }
 
 #[cfg(test)]
@@ -623,10 +672,11 @@ mod tests {
         }
     }
 
-    /// Two hits 1e-4 apart, one settled on a spacing of 1e-3 and one found
-    /// to 1e-6, are one hit whichever is found first.
+    /// Three hits along a ray at 1, 1.0001 and 1.0002, the middle one
+    /// settled on a spacing of 1e-3 and the others found to 1e-6, are one
+    /// crossing in every order they are found in.
     #[test]
-    fn hits_merge_on_the_wider_radius_in_either_order() {
+    fn hits_merge_on_the_wider_radius_in_any_order() {
         let p = Point3::new;
         let knots = vec![0.0, 0.0, 1.0, 1.0];
         let flat = NurbsSurface::new(
@@ -644,13 +694,25 @@ mod tests {
         let ray = RaySurface::new(&flat).unwrap();
         let leaf = ray.patches[0].clone();
         let (origin, dir) = (p(0.5, 0.5, 1.0), Vec3::new(0.0, 0.0, -1.0));
-        let wide = ((0.5, 0.5, 1.0), 1e-3);
-        let near = ((0.5, 0.5, 1.0 + 1e-4), 1e-6);
-        for order in [[wide, near], [near, wide]] {
+        let found = [
+            ((0.5, 0.5, 1.0), 1e-6),
+            ((0.5, 0.5, 1.0001), 1e-3),
+            ((0.5, 0.5, 1.0002), 1e-6),
+        ];
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
             let (mut out, mut radii) = (RayHits::default(), Vec::new());
-            for (hit, merge) in order {
+            for k in order {
+                let (hit, merge) = found[k];
                 assert!(ray.record(&leaf, hit, origin, dir, 1e-6, merge, (&mut out, &mut radii)));
             }
+            coalesce(&mut out.hits, &radii);
             assert_eq!(out.hits.len(), 1, "{order:?}: {:?}", out.hits);
         }
     }
