@@ -4789,8 +4789,21 @@ fn trim_open_curve_to_plane_face_lines(
                         if before * after <= 0.0 {
                             return None;
                         }
+                        // The probe off the piece reads the whole region, so it
+                        // stops halfway to any other piece, or it would read
+                        // that one's side; too close to clear the touched
+                        // piece's band, there is nothing to read.
+                        let room = region
+                            .iter()
+                            .filter(|other| !std::ptr::eq(*other, piece))
+                            .map(|other| brepkit_math::region2d::distance_to_piece(other, q))
+                            .fold(f64::INFINITY, f64::min);
+                        let reach = step.min((room - band) / 2.0);
+                        if reach <= 2.0 * band {
+                            return None;
+                        }
                         let normal = piece_side(piece, q).1;
-                        let off = q + normal * (step * before.signum());
+                        let off = q + normal * (reach * before.signum());
                         match brepkit_math::region2d::point_in_region(region, off, band) {
                             Some(s) if s == side => lo = mid,
                             Some(_) => hi = mid,
@@ -9343,6 +9356,64 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// That line across the half disc of radius 2 about (0, -5e-6), its flat
+    /// side 5e-6 under the line, with a hole of radius 0.25 about
+    /// (1.5625, 0.25) the line touches at x = 1.5625. Off the hole's touch,
+    /// toward the line, the flat side lies 5e-6 away, within a probe's reach
+    /// of the region. The trim keeps the line to the disc's edge.
+    #[test]
+    fn a_section_touching_a_hole_by_another_side_keeps_its_span() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::builder::make_circle_edge_with_ref;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let low = -5e-6;
+        let (a, b) = (Point3::new(-2.0, low, 0.0), Point3::new(2.0, low, 0.0));
+        let (va, vb) = (
+            topo.add_vertex(Vertex::new(a, 1e-9)),
+            topo.add_vertex(Vertex::new(b, 1e-9)),
+        );
+        let flat = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        let dome =
+            Circle3D::new(Point3::new(0.0, low, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let dome = topo.add_edge(Edge::new(vb, va, EdgeCurve::Circle(dome)));
+        let outer = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(flat, true), OrientedEdge::new(dome, true)],
+                true,
+            )
+            .unwrap(),
+        );
+        let start = 7.0_f64.to_radians();
+        let hole = make_circle_edge_with_ref(
+            &mut topo,
+            Point3::new(1.5625, 0.25, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            0.25,
+            Vec3::new(start.cos(), start.sin(), 0.0),
+            1e-9,
+        )
+        .unwrap();
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(hole, true)], true).unwrap());
+        let half = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let pieces = trim_line_across(&mut topo, half).expect("a trimmed section");
+        let end = pieces
+            .iter()
+            .map(|p| p.p_start.x().max(p.p_end.x()))
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!((end - 2.0).abs() < 1e-6, "ends at {end}");
     }
 
     /// That line across the disc of radius 1.5625 + 6e-6 about the origin with
