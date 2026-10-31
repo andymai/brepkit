@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793469829225,
+  "lastUpdate": 1793470024563,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63449,6 +63449,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29371974,
             "range": "± 49118",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c3d510021d973e5b7d7e21268d3ddc926913df3",
+          "message": "perf(check): read a whole NURBS patch over its domain when its sides are its own curves (#2256)\n\nA whole NURBS patch bounded by NURBS edges that are its own boundary\ncurves is now integrated over its `(u, v)` domain, as one bounded by\nstraight edges already is. The full-turn twisted square of #2255\nmeasures its volume in 9.2 s instead of 19.2 s in a debug build, at the\nsame 4000.0000387.\n\nToday `nurbs_face_over_domain` (#2251) takes a face only when every edge\nof its wire is a line lying along the patch's side. A swept side's edges\nalong the path are its trajectories, NURBS curves equal to its outer\nrows of control points, so such a face goes to Green's theorem along its\nboundary, which projects every boundary sample onto the surface.\n\n## Change\n\n- A NURBS edge now shows its side when it is the same curve: the side's\ndegree, its knots up to scale and direction (exactly forward; reversed,\neach span to four units in the last place of that span), and its control\npoints, forward or reversed, each within a billionth of the patch's\nshortest side of the side's.\n- A rational edge, or a NURBS edge that differs from its side, keeps the\nboundary integral.\n\n## Tests\n\n- `a_whole_nurbs_patch_bounded_by_its_own_curves_reads_over_its_domain`:\na patch cubic along `v` over two spans, its two curved sides bounded by\nNURBS edges that are those sides' curves, one stored running against it.\nRead over its domain, it holds the area, volume and moments the boundary\nintegral gives, to 1e-10. With the NURBS edges refused, the face is left\nto its boundary and the test fails.\n- `a_nurbs_face_not_shown_whole_is_left_to_its_boundary` had a straight\nside under a degree-1 NURBS edge that is exactly that side, which is now\nread over its domain. Its place goes to a NURBS edge that bulges out to\nx = 1.1 over a straight side, still left to the boundary.\n- `a_nurbs_edge_on_knots_a_hair_off_its_sides_is_left_to_the_boundary`:\na quadratic side with knots 0, 2e-13, 2e-13, 1 under an edge on the same\ncontrol points with knots 0, 1e-13, 2e-13, 1, a different curve, is left\nto the boundary. Compared to 1e-12, the knots passed.\n-\n`a_reversed_nurbs_edge_a_hair_off_inside_a_narrow_span_is_left_to_the_boundary`:\nthe side with knots 0, 2^-43, 2^-43, 1 under a reversed edge whose\nmirrored inner knot sits 2^-52 off is left to the boundary. Matched to\ntwo units in the last place of the domain, the knots passed.\n- The check crate's 74 tests pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.",
+          "timestamp": "2026-10-31T18:01:20Z",
+          "tree_id": "b1637748ec2b0688d569258bcf93865e4fcf5c6f",
+          "url": "https://github.com/andymai/brepkit/commit/9c3d510021d973e5b7d7e21268d3ddc926913df3"
+        },
+        "date": 1793470017067,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1074519,
+            "range": "± 4284",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1158651,
+            "range": "± 1773",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12989,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 663591,
+            "range": "± 1374",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28498243,
+            "range": "± 77708",
             "unit": "ns/iter"
           }
         ]
