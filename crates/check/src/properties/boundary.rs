@@ -1052,10 +1052,15 @@ pub(super) fn nurbs_face_over_domain(
         .length()
         .max((corners[1] - corners[3]).length());
     let floor = 1e-14 * size.powi(3);
-    // The volume's integrand is a polynomial of a few times the surface's
-    // degree in each parameter; each panel is halved until it settles, so
-    // a rule a little above the degree serves.
-    let order = (2 + s.degree_u().max(s.degree_v())).min(8);
+    // On a polynomial surface the volume's integrand is a polynomial of a
+    // few times the degree in each parameter, so a rule a little above the
+    // degree takes each panel exactly. A rational one's is no polynomial, and
+    // the widest rule settles its panels in the fewest halvings.
+    let order = if s.is_rational() {
+        8
+    } else {
+        (2 + s.degree_u().max(s.degree_v())).min(8)
+    };
     let gauss = gauss_legendre_points(order);
     let mut across = |v: f64| -> Option<[f64; 8]> {
         let mut acc = [0.0; 8];
