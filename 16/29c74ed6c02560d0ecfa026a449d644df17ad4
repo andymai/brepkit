@@ -1,0 +1,22 @@
+crates/check/src/classify/boundary.rs
+  s_489facd0569909::t_ca6a8825944bd0 1308-1312,1316-1321,1372-1373
+  s_489facd0569909::t_e0c6a71c5a0194 1374
+crates/math/src/nurbs/intersection/ray.rs
+  s_489facd0569909::t_1991cfb84cfaf0 326-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1629c74ed6c02560d0ecfa026a449d644df17ad4",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
