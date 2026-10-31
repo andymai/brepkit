@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.10](https://github.com/andymai/brepkit/compare/v4.6.9...v4.6.10) (2026-10-30)
+
+
+### Bug Fixes
+
+* **algo:** lay a cylinder wall's closed rims out in one turn of u ([#2240](https://github.com/andymai/brepkit/issues/2240)) ([89247d9](https://github.com/andymai/brepkit/commit/89247d9ee50e7a64341718d100c1c72371c5efa8))
+
 ## [4.6.9](https://github.com/andymai/brepkit/compare/v4.6.8...v4.6.9) (2026-10-30)
 
 
