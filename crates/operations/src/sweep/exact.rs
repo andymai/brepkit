@@ -557,7 +557,7 @@ type SectionMaps<'a> = dyn Fn(&[f64]) -> Result<Vec<Mat4>, crate::OperationsErro
 /// set of path parameters and checked halfway between them. The path is cut
 /// at `breaks`, where the path or guide may bend in its parameter, and each
 /// piece is fitted on its own and joined to the next at their shared point.
-/// The pieces' samples double until every trajectory holds within the fit
+/// The pieces' samples grow until every trajectory holds within the fit
 /// tolerance or the path reaches [`MAX_SEGMENTS`]. Trajectories that all run
 /// straight at an even pace come back as lines. Also the section maps at the
 /// path's two ends.
@@ -674,7 +674,18 @@ fn fit_trajectories(
             );
             return Ok((rails, first, last));
         }
-        total *= 2;
+        // A cubic's error falls with the fourth power of its step: grow the
+        // samples by what that asks, with a tenth to spare, rather than
+        // doubling past a fit that was only just missed.
+        let grow = (1.1 * (worst / fit).powf(0.25)).clamp(1.2, 2.0);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        {
+            total = ((total as f64 * grow).ceil() as usize).max(total + 1);
+        }
     }
 }
 
