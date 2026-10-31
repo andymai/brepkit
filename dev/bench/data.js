@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793407087445,
+  "lastUpdate": 1793409210390,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63071,6 +63071,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23495388,
             "range": "± 82497",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "438ca323ac4e3c89f80c14ea832fc6ce2aea5c12",
+          "message": "fix(operations): mesh a twisted NURBS face to its twist (#2245)\n\nA twisted NURBS face, such as a side a loft builds between skew lines\nsince #2238, now meshes to its deflection instead of as a few flat\ntriangles.\n\nToday a NURBS face's interior grid is sized by the chords of its\niso-lines, and its straight edges keep only their two ends. A twisted\nbilinear patch has straight iso-lines and straight sides, so neither\ntest sees its twist: a 20 square lofted to a copy turned 30 degrees and\n10 above meshes as 36 triangles at any deflection, their centres up to\n0.42 off its sides. The mesh happens to hold the right volume there, by\nsymmetry, though its triangles leave the surface.\n\n## Change\n\n- The interior grid also refines, doubling both directions, until each\nchecked cell lies within half the deflection of the two triangles it\nsplits into, along either diagonal. A twisted cell's middle stands up to\na quarter of its twist, |P00 + P11 − P01 − P10| / 4, off those\ntriangles, and doubling both directions quarters that. A flat cell whose\nparameters run unevenly across it has its middle in the triangles'\nplane, however far from their diagonal, and needs nothing. Every cell is\nchecked, stopping at the first that fails, and only while a finer grid\nis within the cell budget: a patch's worst cell can sit anywhere, at a\ntaper's narrow end or wherever a saddle flattens. A cell is read at its\nmiddle and its four quarter points: on a tapered cell, whose split\nleaves a sliver standing steep, the patch can stray farther toward the\nnarrow end than at the middle. The twist never takes the grid past its\ncell budget, so it never costs the divisions the chord test asked for; a\ngrid that stops there after failing the check logs a warning that it may\nstand off its surface by more than the deflection.\n- A bilinear patch that needs such a grid has its straight edges sampled\nas finely, so the triangles along its boundary stay local rather than\nreaching from a corner across the face. The grid is taken over the\nface's own parameter box, and each edge is cut into as many pieces as\nthe grid's cells it crosses. The solid mesher and a face meshed on its\nown take the same samples. Edge samples are shared, so the face across\neach edge takes the same points. Other NURBS patches mesh their straight\nedges on rows of their own and keep their samples.\n- A NURBS face bounded by its own domain and meshed on its own goes\nthrough the adaptive quadtree, whose split test read a cell's middle\nagainst its corners' average and its edges against their chords. A\nbilinear cell's middle is that average and its iso-lines are straight,\nso the test now also reads the cell against the triangles it splits\ninto, at its middle and quarter points.\n\n## Tests\n\n- `a_loft_with_twisted_sides_meshes_its_twist`: that loft meshed as a\nsolid at deflections 0.1 and 0.01 is closed, and every triangle's centre\nlies within the deflection of the solid's surfaces. Without the cell\ntest a triangle stands 0.10 off at 0.1; without the finer edges, 0.13.\n- `a_flat_trapezoid_needs_no_grid_for_its_twist`: the flat bilinear\ntrapezoid with corners (0, 0), (1000, 0), (0, 1000) and (10, 1000) needs\nno refinement at deflection 0.01; the same corners lifted 10 at (10,\n1000) do. Measured against the diagonals' midpoints, the flat one took a\n256 by 256 grid. Every cell of the lifted one's grid, those at its\nnarrow end included, holds its twist within half the deflection;\nchecking cells spread from the first only, it came back 64 by 64 with\nits narrow corner cell 0.022 off.\n- `a_saddle_flattening_mid_patch_is_meshed_at_its_middle`: the saddle\nS(u, v) = (20u, 20v, 10000(u − c)(v − c)) flattens at (c, c), for c =\n0.5 and 0.49609375. At deflection 0.05 the cells about (c, c), read at 8\nby 8 points each, lie within the deflection. Checking 64 cells a side\nspread over the grid, the second came back 128 by 128 with a cell by (c,\nc) 0.051 off.\n- `a_tapered_patch_strays_most_toward_its_narrow_end`: S(u, v) = (20u(1\n− 0.99v), 20v, 0.2uv) strays 0.05 at its middle and 0.14 toward its\nnarrow end. At deflection 0.11 every cell of its grid, read at 8 by 8\npoints, lies within it; read at its middle alone, a cell stood past it.\n- `a_twisted_face_with_a_hole_meshes_its_twist_on_its_own`: the saddle\nS(u, v) = (20u, 20v, 10uv) with a square hole between u, v = 0.45 and\n0.55, meshed as a face on its own at 0.1 and 0.01: every triangle's\ncentre lies within the deflection of the saddle. With two points to each\nstraight edge, a triangle stands 0.120 off at 0.1.\n- `a_whole_twisted_face_meshes_its_twist_on_its_own`: the saddle S(u, v)\n= (20u, 20v, 10uv) and the same corners lifted 3, each bounded by its\nown domain and meshed as a face on its own at 0.1 and 0.01: every\ntriangle's centre lies within the deflection. Before the quadtree read\nthe triangles, the patch lifted 3 meshed as 32 triangles at 0.01, one\n0.021 off.\n- `a_twisted_faces_edges_are_sized_by_its_own_piece`: the saddle trimmed\nto its corner u, v in 0 to 0.1 twists 0.1, which two triangles hold to\n0.025, so its straight edges keep their ends at deflection 0.1; the\nwhole saddle's are sampled finer.\n-\n`the_folded_freeform_panel_meshes_within_four_deflections_of_its_faces`:\nat deflection 0.0125 the panel's long wall asks 1024 by 64 of its chord\ntest, the whole cell budget, and keeps it. Doubling it for its twist and\ncapping it back to 256 by 256 left a triangle 0.051 off its surface,\npast the test's 0.05.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes twisted NURBS faces meshing as a few flat triangles instead of\nmatching their deflection.\n\nA NURBS face's grid was sized by the chords of its iso-lines, which are\nstraight on a twisted bilinear patch, so a lofted side between skew\nlines meshed as a handful of triangles standing far off the surface. The\ninterior grid now refines until each sampled cell's middle lies within\nhalf the deflection of the two triangles it splits into along either\ndiagonal, checking the cells at each grid's ends as well as its middle.\nStraight edges of such faces are sampled as finely as the grid, sized by\nthe face's own parameter box and each edge's span across it, so boundary\ntriangles stay local; both the solid mesher and a face meshed on its own\ntake these samples, which are shared with the adjacent face.\n\n## Tests\n\n- Added `a_loft_with_twisted_sides_meshes_its_twist`, which verifies a\n30-degree-twisted loft meshes closed with every triangle's centre within\nthe deflection of the solid's surfaces.\n- Added `a_flat_trapezoid_needs_no_grid_for_its_twist`, which confirms a\nflat bilinear patch with uneven parameter spacing needs no refinement\nwhile a twisted one does.\n- Added `a_twisted_faces_edges_are_sized_by_its_own_piece` and\n`a_twisted_face_with_a_hole_meshes_its_twist_on_its_own`, covering\ntrimmed pieces and holed faces meshed on their own.\n\n<sup>Written for commit 4109bc766e039eced68bfdce8a8b0098fd320a76.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2245?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2245?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2245&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T18:10:14-07:00",
+          "tree_id": "6bee44cb101a2c49502949b2c8b34320cf101e12",
+          "url": "https://github.com/andymai/brepkit/commit/438ca323ac4e3c89f80c14ea832fc6ce2aea5c12"
+        },
+        "date": 1793409200695,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1098578,
+            "range": "± 40378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1173539,
+            "range": "± 6900",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13947,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 668093,
+            "range": "± 5733",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28818537,
+            "range": "± 44354",
             "unit": "ns/iter"
           }
         ]
