@@ -2373,7 +2373,7 @@ fn split_periodic_face_around_seam_holes(
         rank,
         precomputed_interior: None,
     };
-    let remainder_interior = cylinder_cone_remainder_interior(&probe)?;
+    let remainder_interior = cylinder_cone_remainder_interior(&probe, tol)?;
     sub_faces.insert(
         0,
         SplitSubFace {
@@ -5566,6 +5566,8 @@ fn distribute_cap_circles(
                 sf.reversed,
                 face_id,
                 &sub_wire_pts,
+                // A plane face: the wall search this clears is never run.
+                brepkit_math::tolerance::Tolerance::new().linear,
             );
             result.extend(carved);
         }
@@ -6289,6 +6291,7 @@ fn split_face_2d_impl(
             reversed,
             face_id,
             &wire_pts,
+            tol.linear,
         );
     }
 
@@ -8658,6 +8661,7 @@ fn split_face_2d_impl(
         };
     let hole_margin = tol.linear * 10.0;
     let mut sub_faces = Vec::new();
+    let mut halves: Vec<(usize, Vec<OrientedPCurveEdge>)> = Vec::new();
     for (outer_wire, _area) in outers {
         if !hole_polys_for_discard.is_empty() {
             let poly = sample_wire_loop_uv_via_frame(&outer_wire, frame);
@@ -8713,7 +8717,8 @@ fn split_face_2d_impl(
             precomputed_interior: None,
         };
         // A whole rim spans a period in one edge, which the periodic
-        // sampler folds away: take the interior point from the halves.
+        // sampler folds away: the interior point is read from the halves,
+        // once the holes are attached.
         let rejoined = rejoin_untouched_rims(
             sub_face.outer_wire.clone(),
             &closed_rims,
@@ -8721,8 +8726,10 @@ fn split_face_2d_impl(
             tol.linear,
         );
         if rejoined.len() != sub_face.outer_wire.len() {
-            sub_face.precomputed_interior = interior_point_3d(&sub_face, None, tol.linear);
-            sub_face.outer_wire = rejoined;
+            halves.push((
+                sub_faces.len(),
+                std::mem::replace(&mut sub_face.outer_wire, rejoined),
+            ));
         }
         sub_faces.push(sub_face);
     }
@@ -8944,6 +8951,30 @@ fn split_face_2d_impl(
     // contract is exercised by the happy path (`dovetail_tongue_groove_cut_inmem`).
     if holes_integrated && !passthrough_inner_wires.is_empty() {
         attach_whole_holes(&mut sub_faces, &passthrough_inner_wires);
+    }
+
+    // The interior point is read once the holes are in: one read before can
+    // sit in a hole. A wall with a lens hole is searched clear of its holes in
+    // 3D, as `fill_images_faces` searches one: the lens's one closed edge
+    // gives no hole polygon in UV.
+    for (i, wire) in halves {
+        let sub_face = &mut sub_faces[i];
+        let whole = std::mem::replace(&mut sub_face.outer_wire, wire);
+        let lens = sub_face.inner_wires.iter().any(|hole| {
+            matches!(
+                hole.as_slice(),
+                [e] if matches!(
+                    e.curve_3d,
+                    EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+                )
+            )
+        });
+        sub_face.precomputed_interior = if lens {
+            cylinder_cone_remainder_interior(sub_face, tol.linear)
+        } else {
+            interior_point_3d(sub_face, None, tol.linear)
+        };
+        sub_face.outer_wire = whole;
     }
 
     sub_faces

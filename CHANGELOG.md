@@ -1,5 +1,23 @@
 # Changelog
 
+## [4.6.9](https://github.com/andymai/brepkit/compare/v4.6.8...v4.6.9) (2026-10-30)
+
+
+### Bug Fixes
+
+* **algo:** intersect a NURBS face with the part of a cylinder or cone it can reach ([#2243](https://github.com/andymai/brepkit/issues/2243)) ([f36b7c3](https://github.com/andymai/brepkit/commit/f36b7c32836030a182f82fb022d5bd781fa09512))
+* **algo:** read a plane sub-face's interior point on its curves ([#2237](https://github.com/andymai/brepkit/issues/2237)) ([98a64a1](https://github.com/andymai/brepkit/commit/98a64a10289d1f8f038d3f8720b2a8eaa2ccf02f))
+* **check:** integrate a ring torus face's volume exactly along its boundary ([#2228](https://github.com/andymai/brepkit/issues/2228)) ([934a5e7](https://github.com/andymai/brepkit/commit/934a5e7477ea4300aba83912b7d1904114f3ae5d))
+* **operations:** face an extruded NURBS face's caps out of the solid ([#2239](https://github.com/andymai/brepkit/issues/2239)) ([842ca58](https://github.com/andymai/brepkit/commit/842ca589cc8bec55d92b6cc27098e03f27433f7b))
+* **operations:** loft a profile to a point as a pyramid or cone ([#2234](https://github.com/andymai/brepkit/issues/2234)) ([159d849](https://github.com/andymai/brepkit/commit/159d849a9c04ccccd842575fb1e61690fa848fbc))
+* **operations:** loft profiles of different edge counts by matching their angles ([#2230](https://github.com/andymai/brepkit/issues/2230)) ([f7a38f8](https://github.com/andymai/brepkit/commit/f7a38f81cd5c94d7a91c60399d47d4555368b436))
+* **operations:** loft twisted sides as ruled patches, wound toward the next section ([#2238](https://github.com/andymai/brepkit/issues/2238)) ([df9cfcb](https://github.com/andymai/brepkit/commit/df9cfcb4ceb715d1697e28f46e44b1d001da95d0))
+* **operations:** split a solid through the boolean engine ([#2210](https://github.com/andymai/brepkit/issues/2210)) ([66a88b0](https://github.com/andymai/brepkit/commit/66a88b0014e3f7563435ddbb5b1dea29667355e3))
+* **operations:** sweep along a chain of curved edges by their own curves ([#2231](https://github.com/andymai/brepkit/issues/2231)) ([04393d9](https://github.com/andymai/brepkit/commit/04393d952f8b48d62f3b03eb7db256135eabeebd))
+* **operations:** thicken a curved face into a wall of even thickness ([#2233](https://github.com/andymai/brepkit/issues/2233)) ([e3ff9f2](https://github.com/andymai/brepkit/commit/e3ff9f23b9459e613de056249ef2421879722968))
+* **wasm:** fillet along a radius law through the walking engine first ([#2236](https://github.com/andymai/brepkit/issues/2236)) ([7ed9b67](https://github.com/andymai/brepkit/commit/7ed9b6780735711d0ad3a350c690d9e5da30c48f))
+* **wasm:** refuse to make a solid from a shell that does not close ([#2242](https://github.com/andymai/brepkit/issues/2242)) ([cf81d39](https://github.com/andymai/brepkit/commit/cf81d39d038a8e78cea9c65e270d327286539288))
+
 ## [4.6.8](https://github.com/andymai/brepkit/compare/v4.6.7...v4.6.8) (2026-10-30)
 
 
