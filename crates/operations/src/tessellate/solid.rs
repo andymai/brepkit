@@ -448,6 +448,32 @@ pub(super) fn tessellate_solid_core(
         }
     }
 
+    // A bilinear patch twisted between skew lines is meshed on a grid fine
+    // enough for its twist, but its straight edges keep only their ends, so
+    // the triangles joining such an edge to the grid reach across the face.
+    // Each straight edge of such a face is sampled as finely as its grid
+    // across the face's own parameter box. Edge samples are shared, so the
+    // face across the edge takes them too.
+    // Other patches mesh their straight edges on rows of their own.
+    for &face_id in &all_faces {
+        let face_data = topo.face(face_id)?;
+        for (idx, points) in super::edge_sampling::twisted_straight_edge_samples(
+            topo,
+            face_data,
+            deflection,
+            angular_tol,
+            circle_floor,
+        )? {
+            if edge_points
+                .get(&idx)
+                .is_some_and(|pts| pts.len() >= points.len())
+            {
+                continue;
+            }
+            edge_points.insert(idx, points);
+        }
+    }
+
     // A hole passing a planar face's arc nearer than the arc's chords sag
     // would cross them in the face's mesh: the arc is sampled finer, until
     // its chords sag at most half the hole's clearance. The arc's samples

@@ -451,7 +451,21 @@ fn cell_refinement_error(
     let diag = (p11 - p00).length().max((p10 - p01).length());
     let normal_sag = max_normal_dev * diag * 0.5;
 
-    sag.max(max_edge_sag).max(normal_sag)
+    // A twisted cell's middle is its corners' average, so `sag` misses its
+    // twist; read the cell against the triangles it splits into instead.
+    let probes = PROBES.map(|(a, b)| {
+        if (a, b) == (0.5, 0.5) {
+            p_mid
+        } else {
+            surface.evaluate(
+                (u_max - u_min).mul_add(a, u_min),
+                (v_max - v_min).mul_add(b, v_min),
+            )
+        }
+    });
+    let twist = split_stray([p00, p10, p01, p11], &probes);
+
+    sag.max(max_edge_sag).max(normal_sag).max(twist)
 }
 
 /// Linear interpolation (midpoint) of two points.
@@ -896,6 +910,131 @@ pub(super) fn iso_divisions_over(
         n *= 2;
     }
     n
+}
+
+/// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each checked
+/// cell strays within half the deflection of the triangles it splits into
+/// along either diagonal ([`cell_twist`]). A twisted cell (a bilinear patch
+/// between skew lines) has straight sides and iso-lines, which no chord test
+/// sees, yet its middle stands up to a quarter of its twist,
+/// |P00 + P11 - P01 - P10| / 4, off those triangles; doubling both directions
+/// quarters that. A flat cell whose parameters run unevenly across it lies in
+/// its triangles' plane, however far from their diagonal, and needs nothing.
+pub(super) fn untwisted_grid(
+    at: &dyn Fn(f64, f64) -> Point3,
+    ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
+    (mut n_u, mut n_v): (usize, usize),
+    deflection: f64,
+    max_divisions: usize,
+) -> (usize, usize) {
+    // Every cell is checked: a patch's worst cell can sit anywhere, at a
+    // taper's narrow end or wherever a saddle flattens, and a spread of cells
+    // can step over it. The check stops at the first cell that fails.
+    let fits = |n_u: usize, n_v: usize| {
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
+        (0..n_u).all(|i| {
+            (0..n_v).all(|j| {
+                #[allow(clippy::cast_precision_loss)]
+                let corner = (du.mul_add(i as f64, u_lo), dv.mul_add(j as f64, v_lo));
+                cell_twist(at, corner, (du, dv)) <= 0.5 * deflection
+            })
+        })
+    };
+    let mut refined = false;
+    loop {
+        let next = ((n_u * 2).min(max_divisions), (n_v * 2).min(max_divisions));
+        // The twist never takes cells past the grid's budget: a grid capped
+        // down to it gives up the divisions the chord test asked for. Short of
+        // a grid it could move to, it checks nothing.
+        if next == (n_u, n_v) || next.0 * next.1 > GRID_MAX_CELLS {
+            if refined {
+                log::warn!(
+                    "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
+                );
+            }
+            break;
+        }
+        if fits(n_u, n_v) {
+            break;
+        }
+        (n_u, n_v) = next;
+        refined = true;
+    }
+    (n_u, n_v)
+}
+
+/// How far the cell from `(u0, v0)` across `(du, dv)` strays from the two
+/// triangles it splits into, along either diagonal (a mesh may take either):
+/// the farthest of its middle and its quarter points. A twisted cell strays
+/// most at its middle; a tapered one, whose split leaves a sliver standing
+/// steep, can stray farther toward its narrow end. A flat cell lies in its
+/// triangles and strays nowhere.
+pub(super) fn cell_twist(
+    at: &dyn Fn(f64, f64) -> Point3,
+    (u0, v0): (f64, f64),
+    (du, dv): (f64, f64),
+) -> f64 {
+    let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
+    let corners = [
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(0.0, 1.0),
+        corner(1.0, 1.0),
+    ];
+    let probes = PROBES.map(|(a, b)| corner(a, b));
+    split_stray(corners, &probes)
+}
+
+/// Where in a cell [`cell_twist`] reads it: its middle and quarter points.
+const PROBES: [(f64, f64); 5] = [
+    (0.5, 0.5),
+    (0.25, 0.25),
+    (0.75, 0.25),
+    (0.25, 0.75),
+    (0.75, 0.75),
+];
+
+/// How far the farthest of `probes` lies from the two triangles a cell with
+/// corners `[p00, p10, p01, p11]` splits into, along either diagonal.
+fn split_stray([p00, p10, p01, p11]: [Point3; 4], probes: &[Point3]) -> f64 {
+    let split = |p: Point3, a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
+    };
+    probes
+        .iter()
+        .map(|&p| split(p, p00, p10, p11, p01).max(split(p, p10, p11, p01, p00)))
+        .fold(0.0, f64::max)
+}
+
+/// The distance from `p` to the triangle `a`, `b`, `c`; to its longest side
+/// when the triangle has no area.
+pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
+    let segment = |a: Point3, b: Point3| {
+        let ab = b - a;
+        let len2 = ab.dot(ab);
+        let t = if len2 > 0.0 {
+            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (p - (a + ab * t)).length()
+    };
+    let edges = segment(a, b).min(segment(b, c)).min(segment(c, a));
+    let normal = (b - a).cross(c - a);
+    let area2 = normal.length();
+    let scale = (b - a).length().max((c - a).length()).max((c - b).length());
+    if area2 <= 1e-12 * scale * scale {
+        return edges;
+    }
+    let n = normal * (1.0 / area2);
+    let off = (p - a).dot(n);
+    let q = p - n * off;
+    // Inside when `q` lies on the same side of every edge as the triangle.
+    let inside = [(a, b), (b, c), (c, a)]
+        .iter()
+        .all(|&(x, y)| (y - x).cross(q - x).dot(n) >= 0.0);
+    if inside { off.abs() } else { edges }
 }
 
 /// Tessellate a NURBS surface via curvature-adaptive subdivision.

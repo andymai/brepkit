@@ -3828,3 +3828,370 @@ fn a_faceted_cylinder_keeps_its_rims_sharp() {
         }
     }
 }
+
+/// A 20 square at z = 0 lofted to the same square turned 30 degrees at
+/// z = 10: its four sides are twisted bilinear patches, every parameter line
+/// of them straight, though their middles stand 0.42 off the diagonals of
+/// their corners. Meshed as a solid at deflections 0.1 and 0.01, the mesh is
+/// closed and every triangle's centre lies within the deflection of the
+/// solid's surfaces.
+#[test]
+fn a_loft_with_twisted_sides_meshes_its_twist() {
+    let mut topo = Topology::new();
+    let square = |topo: &mut Topology, turn: f64, z: f64| {
+        let corners: Vec<Point3> = (0..4)
+            .map(|k| {
+                let a =
+                    turn + std::f64::consts::FRAC_PI_2 * f64::from(k) + std::f64::consts::FRAC_PI_4;
+                let r = 10.0 * std::f64::consts::SQRT_2;
+                Point3::new(r * a.cos(), r * a.sin(), z)
+            })
+            .collect();
+        let wire = brepkit_topology::builder::make_polygon_wire(topo, &corners, 1e-7).unwrap();
+        brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap()
+    };
+    let low = square(&mut topo, 0.0, 0.0);
+    let high = square(&mut topo, 30f64.to_radians(), 10.0);
+    let solid = crate::loft::loft(&mut topo, &[low, high]).unwrap();
+    let surfaces: Vec<FaceSurface> = brepkit_topology::explorer::solid_faces(&topo, solid)
+        .unwrap()
+        .iter()
+        .map(|&f| topo.face(f).unwrap().surface().clone())
+        .collect();
+    for deflection in [0.1, 0.01] {
+        let mesh = crate::tessellate::tessellate_solid(&topo, solid, deflection).unwrap();
+        assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0);
+        assert_eq!(crate::tessellate::non_manifold_edge_count(&mesh), 0);
+        let worst = mesh
+            .indices
+            .chunks(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                let centre = Point3::new(
+                    (a.x() + b.x() + c.x()) / 3.0,
+                    (a.y() + b.y() + c.y()) / 3.0,
+                    (a.z() + b.z() + c.z()) / 3.0,
+                );
+                surfaces
+                    .iter()
+                    .filter_map(|s| match s {
+                        FaceSurface::Plane { normal, d } => Some(
+                            (normal.dot(Vec3::new(centre.x(), centre.y(), centre.z())) - d).abs(),
+                        ),
+                        other => other
+                            .project_point(centre)
+                            .and_then(|(u, v)| other.evaluate(u, v))
+                            .map(|q| (q - centre).length()),
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst <= deflection,
+            "at {deflection}: a triangle stands {worst} off"
+        );
+    }
+}
+
+/// A flat bilinear trapezoid with corners (0, 0), (1000, 0), (0, 1000) and
+/// (10, 1000) in z = 0, whose parameters run unevenly across it, needs no
+/// refinement for its twist: two triangles hold it exactly. A twisted
+/// patch of the same corners lifted 10 at (10, 1000) does.
+#[test]
+fn a_flat_trapezoid_needs_no_grid_for_its_twist() {
+    let patch = |lift: f64| {
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots,
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1000.0, 0.0)],
+                vec![
+                    Point3::new(1000.0, 0.0, 0.0),
+                    Point3::new(10.0, 1000.0, lift),
+                ],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap()
+    };
+    let grid = |lift: f64| {
+        let surface = patch(lift);
+        let at = |u: f64, v: f64| surface.evaluate(u, v);
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.01, 1024)
+    };
+    assert_eq!(grid(0.0), (1, 1));
+    let (n_u, n_v) = grid(10.0);
+    assert!(n_u > 1 && n_v > 1, "{n_u} x {n_v}");
+    // Every cell of that grid, those at the narrow end included, holds its
+    // twist within half the deflection.
+    let surface = patch(10.0);
+    let at = |u: f64, v: f64| surface.evaluate(u, v);
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+    let worst = (0..n_u)
+        .flat_map(|i| (0..n_v).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            #[allow(clippy::cast_precision_loss)]
+            let corner = (du * i as f64, dv * j as f64);
+            super::nurbs::cell_twist(&at, corner, (du, dv))
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(worst <= 0.005, "{n_u} x {n_v}: a cell stands {worst} off");
+}
+
+/// How far the bilinear cell from `corner` across `size` strays from its two
+/// triangles along either diagonal, read at 8 by 8 points inside it.
+fn cell_strays(at: &dyn Fn(f64, f64) -> Point3, (u0, v0): (f64, f64), (du, dv): (f64, f64)) -> f64 {
+    use super::nurbs::point_triangle_distance;
+    let corner = |a: f64, b: f64| at(du.mul_add(a, u0), dv.mul_add(b, v0));
+    let (p00, p10, p01, p11) = (
+        corner(0.0, 0.0),
+        corner(1.0, 0.0),
+        corner(0.0, 1.0),
+        corner(1.0, 1.0),
+    );
+    let split = |p: Point3, a: Point3, b: Point3, c: Point3, d: Point3| {
+        point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
+    };
+    (1..9)
+        .flat_map(|i| (1..9).map(move |j| (f64::from(i) / 9.0, f64::from(j) / 9.0)))
+        .map(|(a, b)| {
+            let p = corner(a, b);
+            split(p, p00, p10, p11, p01).max(split(p, p10, p11, p01, p00))
+        })
+        .fold(0.0, f64::max)
+}
+
+/// A bilinear patch with corners `p00`, `p10`, `p01`, `p11` over the unit
+/// square.
+fn bilinear(p00: Point3, p10: Point3, p01: Point3, p11: Point3) -> NurbsSurface {
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    NurbsSurface::new(
+        1,
+        1,
+        knots.clone(),
+        knots,
+        vec![vec![p00, p01], vec![p10, p11]],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap()
+}
+
+/// The saddle S(u, v) = (20u, 20v, 10000(u - c)(v - c)) is steep at its
+/// edges and flattens at (c, c), where its cells stray most: at c = 0.5, and
+/// at c = 0.49609375, whose flattest cell of a 128-wide grid a spread of 64
+/// cells steps over. The grid taken for each at deflection 0.05 holds the
+/// cells about (c, c) within the deflection.
+#[test]
+fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
+    for c in [0.5_f64, 0.496_093_75] {
+        let z = |u: f64, v: f64| 10000.0 * (u - c) * (v - c);
+        let saddle = bilinear(
+            Point3::new(0.0, 0.0, z(0.0, 0.0)),
+            Point3::new(20.0, 0.0, z(1.0, 0.0)),
+            Point3::new(0.0, 20.0, z(0.0, 1.0)),
+            Point3::new(20.0, 20.0, z(1.0, 1.0)),
+        );
+        let at = |u: f64, v: f64| saddle.evaluate(u, v);
+        let (n_u, n_v) =
+            super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.05, 1024);
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (ci, cj) = ((c / du) as usize, (c / dv) as usize);
+        let worst = (ci - 2..ci + 3)
+            .flat_map(|i| (cj - 2..cj + 3).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                #[allow(clippy::cast_precision_loss)]
+                let corner = (du * i as f64, dv * j as f64);
+                cell_strays(&at, corner, (du, dv))
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst <= 0.05,
+            "c = {c}, {n_u} x {n_v}: a cell strays {worst}"
+        );
+    }
+}
+
+/// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
+/// 0.2. Its middle strays 0.05 from the two triangles of either split, but
+/// toward its narrow end, where one triangle is a sliver standing steep,
+/// the patch strays 0.14. The grid taken for it at deflection 0.11 holds
+/// every cell within the deflection.
+#[test]
+fn a_tapered_patch_strays_most_toward_its_narrow_end() {
+    let taper = bilinear(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(20.0, 0.0, 0.0),
+        Point3::new(0.0, 20.0, 0.0),
+        Point3::new(0.2, 20.0, 0.2),
+    );
+    let at = |u: f64, v: f64| taper.evaluate(u, v);
+    let (n_u, n_v) =
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.11, 1024);
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+    let worst = (0..n_u)
+        .flat_map(|i| (0..n_v).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            #[allow(clippy::cast_precision_loss)]
+            let corner = (du * i as f64, dv * j as f64);
+            cell_strays(&at, corner, (du, dv))
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(worst <= 0.11, "{n_u} x {n_v}: a cell strays {worst}");
+}
+
+/// The saddle S(u, v) = (20u, 20v, 10uv) trimmed to its corner u, v in 0
+/// to 0.1 twists 0.1 there, which two triangles hold to 0.025: its straight
+/// edges keep their ends at deflection 0.1. The whole saddle twists 10, and
+/// its edges are sampled finer.
+#[test]
+fn a_twisted_faces_edges_are_sized_by_its_own_piece() {
+    use brepkit_topology::builder::make_polygon_wire;
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    let saddle = NurbsSurface::new(
+        1,
+        1,
+        knots.clone(),
+        knots,
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 20.0, 0.0)],
+            vec![Point3::new(20.0, 0.0, 0.0), Point3::new(20.0, 20.0, 10.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    let on = |u: f64, v: f64| saddle.evaluate(u, v);
+    let mut topo = Topology::new();
+    let piece = |topo: &mut Topology, side: f64| {
+        let wire = make_polygon_wire(
+            topo,
+            &[on(0.0, 0.0), on(side, 0.0), on(side, side), on(0.0, side)],
+            1e-7,
+        )
+        .unwrap();
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(saddle.clone()));
+        super::edge_sampling::twisted_straight_edge_samples(topo, &face, 0.1, 0.0, false).unwrap()
+    };
+    assert!(piece(&mut topo, 0.1).is_empty());
+    let whole = piece(&mut topo, 1.0);
+    assert_eq!(whole.len(), 4);
+    assert!(whole.iter().all(|(_, points)| points.len() > 2));
+}
+
+/// The saddle S(u, v) = (20u, 20v, 10uv) with a square hole between u, v =
+/// 0.45 and 0.55, meshed as a face on its own: every triangle's centre lies
+/// within the deflection of the saddle, those along its straight sides and
+/// the hole's included.
+#[test]
+fn a_twisted_face_with_a_hole_meshes_its_twist_on_its_own() {
+    use brepkit_topology::builder::make_polygon_wire;
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    let saddle = NurbsSurface::new(
+        1,
+        1,
+        knots.clone(),
+        knots,
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 20.0, 0.0)],
+            vec![Point3::new(20.0, 0.0, 0.0), Point3::new(20.0, 20.0, 10.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    let on = |u: f64, v: f64| saddle.evaluate(u, v);
+    let mut topo = Topology::new();
+    let outer = make_polygon_wire(
+        &mut topo,
+        &[on(0.0, 0.0), on(1.0, 0.0), on(1.0, 1.0), on(0.0, 1.0)],
+        1e-7,
+    )
+    .unwrap();
+    let hole = make_polygon_wire(
+        &mut topo,
+        &[
+            on(0.45, 0.45),
+            on(0.45, 0.55),
+            on(0.55, 0.55),
+            on(0.55, 0.45),
+        ],
+        1e-7,
+    )
+    .unwrap();
+    let surface = FaceSurface::Nurbs(saddle.clone());
+    let face = topo.add_face(Face::new(outer, vec![hole], surface.clone()));
+    for deflection in [0.1, 0.01] {
+        let mesh = crate::tessellate::tessellate(&topo, face, deflection).unwrap();
+        assert!(!mesh.indices.is_empty(), "at {deflection}: no triangles");
+        let worst = mesh
+            .indices
+            .chunks(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                let centre = Point3::new(
+                    (a.x() + b.x() + c.x()) / 3.0,
+                    (a.y() + b.y() + c.y()) / 3.0,
+                    (a.z() + b.z() + c.z()) / 3.0,
+                );
+                let (u, v) = surface.project_point(centre).unwrap();
+                (on(u, v) - centre).length()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            worst <= deflection,
+            "at {deflection}: a triangle stands {worst} off"
+        );
+    }
+}
+
+/// Twisted bilinear faces bounded by their own domains, the saddle
+/// S(u, v) = (20u, 20v, 10uv) and the same corners lifted 3, meshed as faces
+/// on their own: every triangle's centre lies within the deflection.
+#[test]
+fn a_whole_twisted_face_meshes_its_twist_on_its_own() {
+    use brepkit_topology::builder::make_polygon_wire;
+    for lift in [10.0, 3.0] {
+        let patch = bilinear(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(20.0, 0.0, 0.0),
+            Point3::new(0.0, 20.0, 0.0),
+            Point3::new(20.0, 20.0, lift),
+        );
+        let on = |u: f64, v: f64| patch.evaluate(u, v);
+        let mut topo = Topology::new();
+        let outer = make_polygon_wire(
+            &mut topo,
+            &[on(0.0, 0.0), on(1.0, 0.0), on(1.0, 1.0), on(0.0, 1.0)],
+            1e-7,
+        )
+        .unwrap();
+        let surface = FaceSurface::Nurbs(patch.clone());
+        let face = topo.add_face(Face::new(outer, vec![], surface.clone()));
+        for deflection in [0.1, 0.01] {
+            let mesh = crate::tessellate::tessellate(&topo, face, deflection).unwrap();
+            let worst = mesh
+                .indices
+                .chunks(3)
+                .map(|t| {
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                    let centre = Point3::new(
+                        (a.x() + b.x() + c.x()) / 3.0,
+                        (a.y() + b.y() + c.y()) / 3.0,
+                        (a.z() + b.z() + c.z()) / 3.0,
+                    );
+                    let (u, v) = surface.project_point(centre).unwrap();
+                    (on(u, v) - centre).length()
+                })
+                .fold(0.0_f64, f64::max);
+            assert!(
+                worst <= deflection,
+                "lifted {lift}, at {deflection}: a triangle stands {worst} off"
+            );
+        }
+    }
+}
