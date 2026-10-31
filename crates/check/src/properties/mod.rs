@@ -1039,7 +1039,8 @@ mod tests {
 
     /// A quadratic patch over two spans each way, its weights 1 to 64 and
     /// varying along both, bounded by its four sides as their own NURBS
-    /// curves: read over its domain, it holds the area of a brute tensor
+    /// curves, the one at u = 1 (weights 1, 6, 9, 1) stored running against
+    /// it: read over its domain, it holds the area of a brute tensor
     /// Gauss sum, 16 points on 16 panels per span each way, and what
     /// Green's theorem along its boundary gives, to 1e-9.
     #[test]
@@ -1095,6 +1096,16 @@ mod tests {
             |j: usize| (0..4).map(|i| ws[i][j]).collect::<Vec<_>>(),
             |i: usize| ws[i].clone(),
         );
+        let mirrored: Vec<f64> = knots.iter().rev().map(|k| 1.0 - k).collect();
+        let reversed = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                2,
+                mirrored,
+                col(3).into_iter().rev().collect(),
+                col_w(3).into_iter().rev().collect(),
+            )
+            .unwrap(),
+        );
         let mut topo = Topology::new();
         let corner = |topo: &mut Topology, q: Point3| topo.add_vertex(Vertex::new(q, 1e-7));
         let c = [
@@ -1108,7 +1119,7 @@ mod tests {
         };
         let edges = vec![
             edge(c[0], c[1], side(row(0), row_w(0)), true),
-            edge(c[1], c[2], side(col(3), col_w(3)), true),
+            edge(c[2], c[1], reversed, false),
             edge(c[3], c[2], side(row(3), row_w(3)), false),
             edge(c[0], c[3], side(col(0), col_w(0)), false),
         ];
