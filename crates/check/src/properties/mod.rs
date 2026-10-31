@@ -898,6 +898,209 @@ mod tests {
         }
     }
 
+    /// A patch cubic along `v` over two spans, its sides along `v` curved
+    /// and bounded by NURBS edges that are those sides' own curves, the one
+    /// at `u = 1` stored running against it: read over its domain, it holds
+    /// what Green's theorem along its boundary gives, to 1e-10.
+    #[test]
+    fn a_whole_nurbs_patch_bounded_by_its_own_curves_reads_over_its_domain() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let p = Point3::new;
+        let knots_v = vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0];
+        let low = vec![
+            p(0.0, 0.0, 0.0),
+            p(0.1, 0.3, 0.2),
+            p(-0.1, 0.6, 0.1),
+            p(0.2, 0.8, -0.1),
+            p(0.0, 1.0, 0.0),
+        ];
+        let high = vec![
+            p(1.0, 0.0, 0.3),
+            p(1.2, 0.2, 0.5),
+            p(0.9, 0.5, 0.9),
+            p(1.1, 0.9, 0.6),
+            p(1.0, 1.0, 1.0),
+        ];
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            knots_v.clone(),
+            vec![low.clone(), high.clone()],
+            vec![vec![1.0; 5]; 2],
+        )
+        .unwrap();
+        let along = |points: Vec<Point3>, knots: Vec<f64>| {
+            NurbsCurve::new(3, knots, points, vec![1.0; 5]).unwrap()
+        };
+        let mut topo = Topology::new();
+        let v = |topo: &mut Topology, q: Point3| topo.add_vertex(Vertex::new(q, 1e-7));
+        let (c0, c1, c2, c3) = (
+            v(&mut topo, low[0]),
+            v(&mut topo, high[0]),
+            v(&mut topo, high[4]),
+            v(&mut topo, low[4]),
+        );
+        let mirrored: Vec<f64> = knots_v.iter().rev().map(|k| 1.0 - k).collect();
+        let reversed_high = along(high.iter().rev().copied().collect(), mirrored);
+        let edges = vec![
+            OrientedEdge::new(topo.add_edge(Edge::new(c0, c1, EdgeCurve::Line)), true),
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(c2, c1, EdgeCurve::NurbsCurve(reversed_high))),
+                false,
+            ),
+            OrientedEdge::new(topo.add_edge(Edge::new(c2, c3, EdgeCurve::Line)), true),
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(
+                    c0,
+                    c3,
+                    EdgeCurve::NurbsCurve(along(low, knots_v)),
+                )),
+                false,
+            ),
+        ];
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface));
+        let about = Vec3::new(0.3, -0.2, 0.5);
+        let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
+            .unwrap()
+            .expect("read over its domain");
+        let by_boundary = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+        let read = |c: &face_integrator::FaceContribution| {
+            [
+                c.area,
+                c.volume,
+                c.volume_moment_x,
+                c.volume_moment_y,
+                c.volume_moment_z,
+                c.centroid_x,
+                c.centroid_y,
+                c.centroid_z,
+            ]
+        };
+        for (x, y) in read(&whole).iter().zip(read(&by_boundary)) {
+            assert!(
+                (x - y).abs() < 1e-10,
+                "{:?} for {:?}",
+                read(&whole),
+                read(&by_boundary)
+            );
+        }
+    }
+
+    /// A quadratic patch whose right side has knots 0, 2e-13, 2e-13, 1,
+    /// under a NURBS edge on the same control points with knots 0, 1e-13,
+    /// 2e-13, 1: a different curve, so the face is left to its boundary.
+    #[test]
+    fn a_nurbs_edge_on_knots_a_hair_off_its_sides_is_left_to_the_boundary() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::face::{Face, FaceSurface};
+        let p = Point3::new;
+        let right = [
+            p(1.0, 0.0, 1.0),
+            p(0.5, 0.25, 1.0),
+            p(0.5, 0.5, 1.0),
+            p(1.0, 0.75, 1.0),
+            p(1.0, 1.0, 1.0),
+        ];
+        let left: Vec<Point3> = (0..5).map(|j| p(0.0, f64::from(j) / 4.0, 1.0)).collect();
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 2e-13, 2e-13, 1.0, 1.0, 1.0],
+            vec![left, right.to_vec()],
+            vec![vec![1.0; 5]; 2],
+        )
+        .unwrap();
+        let edge = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1e-13, 2e-13, 1.0, 1.0, 1.0],
+            right.to_vec(),
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let wire = wire_through(&mut topo, &corners, |k| {
+            (k == 1).then(|| EdgeCurve::NurbsCurve(edge.clone()))
+        });
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The same quadratic side with knots 0, 2^-43, 2^-43, 1 under an edge
+    /// stored running against it whose mirrored inner knot sits 2^-52 off
+    /// its place: inside a span 2^-43 wide that is a different curve, though
+    /// on the domain's scale it is rounding, so the face is left to its
+    /// boundary.
+    #[test]
+    fn a_reversed_nurbs_edge_a_hair_off_inside_a_narrow_span_is_left_to_the_boundary() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::face::{Face, FaceSurface};
+        let p = Point3::new;
+        let right = [
+            p(1.0, 0.0, 1.0),
+            p(0.5, 0.25, 1.0),
+            p(0.5, 0.5, 1.0),
+            p(1.0, 0.75, 1.0),
+            p(1.0, 1.0, 1.0),
+        ];
+        let left: Vec<Point3> = (0..5).map(|j| p(0.0, f64::from(j) / 4.0, 1.0)).collect();
+        let narrow = 2.0_f64.powi(-43);
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, narrow, narrow, 1.0, 1.0, 1.0],
+            vec![left, right.to_vec()],
+            vec![vec![1.0; 5]; 2],
+        )
+        .unwrap();
+        // The side reversed: knots 0, 1 - 2^-43, 1 - 2^-43, 1, the first of
+        // the pair moved by 2^-52.
+        let mirrored = 1.0 - narrow;
+        let edge = NurbsCurve::new(
+            2,
+            vec![
+                0.0,
+                0.0,
+                0.0,
+                mirrored,
+                mirrored + 2.0_f64.powi(-52),
+                1.0,
+                1.0,
+                1.0,
+            ],
+            right.iter().rev().copied().collect(),
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let wire = wire_through(&mut topo, &corners, |k| {
+            (k == 1).then(|| EdgeCurve::NurbsCurve(edge.clone()))
+        });
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
     /// The flat patch cut down to the square from 0.25 to 0.75, or holed by
     /// it, is not its whole surface and is left to its boundary; the whole
     /// patch is read over its domain, a unit square and a third for its
@@ -963,8 +1166,9 @@ mod tests {
     /// Faces the domain's integral cannot vouch for are left to their
     /// boundaries: a patch 1e6 by 10 trimmed half a unit in from its long
     /// sides; a degree-1 side that dips to y = -0.2 at its knot 0.125 under
-    /// a straight edge along y = 0; a side that is a curve; a rational patch
-    /// weighted 1e16 over half of it; a degree-1 patch whose knot 0.5 is
+    /// a straight edge along y = 0; a straight side under a NURBS edge that
+    /// bulges out to x = 1.1; a rational patch weighted 1e16 over half of
+    /// it; a degree-1 patch whose knot 0.5 is
     /// doubled, splitting it apart over x = 0.3 to 0.7; and patches carrying
     /// half the square on a span one unit in the last place wide, or 2^-43
     /// wide by the domain's end.
@@ -1002,16 +1206,20 @@ mod tests {
             vec![],
             FaceSurface::Nurbs(dipped),
         ));
-        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
-            1,
-            vec![0.0, 0.0, 1.0, 1.0],
-            vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
-            vec![1.0, 1.0],
+        let bulge = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(1.0, 0.0, 1.0),
+                Point3::new(1.2, 0.5, 1.0),
+                Point3::new(1.0, 1.0, 1.0),
+            ],
+            vec![1.0; 3],
         )
         .unwrap();
         faces.push(Face::new(
             wire_through(&mut topo, &unit, |k| {
-                (k == 1).then(|| EdgeCurve::NurbsCurve(line.clone()))
+                (k == 1).then(|| EdgeCurve::NurbsCurve(bulge.clone()))
             }),
             vec![],
             FaceSurface::Nurbs(flat_top()),

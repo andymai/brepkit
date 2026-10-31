@@ -812,9 +812,10 @@ fn whole_torus_less_holes(
 /// theorem along its boundary comes to the same through a projection of
 /// every boundary point, which a face cut from nothing need not pay for: a
 /// sweep tiles its tube with hundreds of such patches. Taken only where the
-/// face is shown to be the whole surface: no holes, and its wire straight
-/// edges from one corner of the domain to the next, each side of the
-/// surface shown straight by its control points lying on its edge. The
+/// face is shown to be the whole surface: no holes, and its wire an edge
+/// from each corner of the domain to the next, each side of the surface
+/// shown to be its edge, a straight edge by the side's control points lying
+/// on it and a NURBS edge by being the side's own curve. The
 /// surface is polynomial with clamped knots, so its sides are the outer rows
 /// of its control points, which bound them, and its integrands are smooth
 /// in each panel. `None` for any other face.
@@ -890,10 +891,62 @@ pub(super) fn nurbs_face_over_domain(
         (ap - ab * w).length() <= reach
     };
     let corner_of = |p: Point3| corners.iter().position(|&c| (c - p).length() <= reach);
+    // A curved edge is its side when it is the same curve: the side's degree
+    // and knots, up to scale and direction, on the side's control points.
+    let is_side = |c: &brepkit_math::nurbs::curve::NurbsCurve, k: usize| {
+        let (degree, knots) = if k.is_multiple_of(2) {
+            (s.degree_u(), s.knots_u())
+        } else {
+            (s.degree_v(), s.knots_v())
+        };
+        let row = side(k);
+        let unit = |ks: &[f64]| -> Vec<f64> {
+            let (lo, hi) = (ks[0], ks[ks.len() - 1]);
+            ks.iter().map(|&x| (x - lo) / (hi - lo)).collect()
+        };
+        if c.is_rational()
+            || c.degree() != degree
+            || c.control_points().len() != row.len()
+            || c.knots().len() != knots.len()
+        {
+            return false;
+        }
+        let (mine, theirs) = (unit(c.knots()), unit(knots));
+        let close = |p: &Point3, q: &Point3| (*p - *q).length() <= reach;
+        // Knots match to rounding only: knots a hair apart can bound a
+        // different curve on the same control points.
+        let forward = c
+            .control_points()
+            .iter()
+            .zip(&row)
+            .all(|(p, q)| close(p, q))
+            && mine
+                .iter()
+                .zip(&theirs)
+                .all(|(a, b)| a.to_bits() == b.to_bits());
+        let backward = c
+            .control_points()
+            .iter()
+            .rev()
+            .zip(&row)
+            .all(|(p, q)| close(p, q))
+            && {
+                // Read reversed, each span against the side's at its own
+                // scale: mirroring rounds on the domain's scale, which can
+                // hide a knot moved inside a narrow span.
+                let back: Vec<f64> = mine.windows(2).rev().map(|w| w[1] - w[0]).collect();
+                theirs
+                    .windows(2)
+                    .map(|w| w[1] - w[0])
+                    .zip(&back)
+                    .all(|(a, &b)| (a - b).abs() <= 4.0 * f64::EPSILON * a.abs().max(b.abs()))
+            };
+        forward || backward
+    };
     let mut covered = [false; 4];
     for oe in topo.wire(face.outer_wire())?.edges() {
         let edge = topo.edge(oe.edge())?;
-        if !matches!(edge.curve(), EdgeCurve::Line) {
+        if !matches!(edge.curve(), EdgeCurve::Line | EdgeCurve::NurbsCurve(_)) {
             return Ok(None);
         }
         let (a, b) = (
@@ -910,7 +963,11 @@ pub(super) fn nurbs_face_over_domain(
         } else {
             return Ok(None);
         };
-        if !side(k).iter().all(|&p| on_segment(p, a, b)) {
+        let shown = match edge.curve() {
+            EdgeCurve::NurbsCurve(c) => is_side(c, k),
+            _ => side(k).iter().all(|&p| on_segment(p, a, b)),
+        };
+        if !shown {
             return Ok(None);
         }
         covered[k] = true;
