@@ -994,6 +994,52 @@ mod tests {
         }
     }
 
+    /// A quadratic patch whose right side has knots 0, 2e-13, 2e-13, 1,
+    /// under a NURBS edge on the same control points with knots 0, 1e-13,
+    /// 2e-13, 1: a different curve, so the face is left to its boundary.
+    #[test]
+    fn a_nurbs_edge_on_knots_a_hair_off_its_sides_is_left_to_the_boundary() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::face::{Face, FaceSurface};
+        let p = Point3::new;
+        let right = [
+            p(1.0, 0.0, 1.0),
+            p(0.5, 0.25, 1.0),
+            p(0.5, 0.5, 1.0),
+            p(1.0, 0.75, 1.0),
+            p(1.0, 1.0, 1.0),
+        ];
+        let left: Vec<Point3> = (0..5).map(|j| p(0.0, f64::from(j) / 4.0, 1.0)).collect();
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 2e-13, 2e-13, 1.0, 1.0, 1.0],
+            vec![left, right.to_vec()],
+            vec![vec![1.0; 5]; 2],
+        )
+        .unwrap();
+        let edge = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1e-13, 2e-13, 1.0, 1.0, 1.0],
+            right.to_vec(),
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let wire = wire_through(&mut topo, &corners, |k| {
+            (k == 1).then(|| EdgeCurve::NurbsCurve(edge.clone()))
+        });
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
     /// The flat patch cut down to the square from 0.25 to 0.75, or holed by
     /// it, is not its whole surface and is left to its boundary; the whole
     /// patch is read over its domain, a unit square and a third for its

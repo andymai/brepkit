@@ -913,6 +913,8 @@ pub(super) fn nurbs_face_over_domain(
         }
         let (mine, theirs) = (unit(c.knots()), unit(knots));
         let close = |p: &Point3, q: &Point3| (*p - *q).length() <= reach;
+        // Knots match to rounding only: knots a hair apart can bound a
+        // different curve on the same control points.
         let forward = c
             .control_points()
             .iter()
@@ -921,7 +923,7 @@ pub(super) fn nurbs_face_over_domain(
             && mine
                 .iter()
                 .zip(&theirs)
-                .all(|(a, b)| (a - b).abs() <= 1e-12);
+                .all(|(a, b)| a.to_bits() == b.to_bits());
         let backward = c
             .control_points()
             .iter()
@@ -932,7 +934,7 @@ pub(super) fn nurbs_face_over_domain(
                 .iter()
                 .rev()
                 .zip(&theirs)
-                .all(|(a, b)| (1.0 - a - b).abs() <= 1e-12);
+                .all(|(a, b)| (1.0 - a - b).abs() <= 2.0 * f64::EPSILON);
         forward || backward
     };
     let mut covered = [false; 4];
