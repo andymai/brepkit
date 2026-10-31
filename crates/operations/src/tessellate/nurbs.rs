@@ -838,11 +838,33 @@ pub(super) fn iso_divisions_over(
     at: &dyn Fn(f64, f64) -> Point3,
     normal_at: &dyn Fn(f64, f64) -> Vec3,
     along_u: bool,
-    ((lo, hi), (o_lo, o_hi)): ((f64, f64), (f64, f64)),
+    ranges: ((f64, f64), (f64, f64)),
     deflection: f64,
     angular_tol: f64,
     max_divisions: usize,
 ) -> usize {
+    let mut n = 1;
+    while n < max_divisions
+        && !iso_chords_hold(at, normal_at, along_u, ranges, deflection, angular_tol, n)
+    {
+        n *= 2;
+    }
+    n
+}
+
+/// Whether `n` even divisions of one parameter direction keep every
+/// iso-line chord of a few sampled rows within half the deflection and the
+/// angular tolerance, as [`iso_divisions_over`] asks of the count it takes.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn iso_chords_hold(
+    at: &dyn Fn(f64, f64) -> Point3,
+    normal_at: &dyn Fn(f64, f64) -> Vec3,
+    along_u: bool,
+    ((lo, hi), (o_lo, o_hi)): ((f64, f64), (f64, f64)),
+    deflection: f64,
+    angular_tol: f64,
+    n: usize,
+) -> bool {
     const ROWS: usize = 8;
     let point = |t: f64, o: f64| if along_u { at(t, o) } else { at(o, t) };
     let normal = |t: f64, o: f64| {
@@ -905,11 +927,7 @@ pub(super) fn iso_divisions_over(
             })
         })
     };
-    let mut n = 1;
-    while n < max_divisions && !fits(n) {
-        n *= 2;
-    }
-    n
+    fits(n)
 }
 
 /// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each checked
@@ -927,13 +945,22 @@ pub(super) fn iso_divisions_over(
 /// tube's quarter whose iso-lines each hold half the deflection strays up
 /// to their sum: doubling both directions for a cell a tenth over would
 /// quadruple its mesh.
+///
+/// `chords` tells whether a count of divisions along `u` (`true`) or `v`
+/// keeps the iso-line chords the starting grid was sized by. A count that
+/// is no multiple of the starting one moves the grid's lines off those the
+/// sizing read, and a chord can then take in two creases it held apart: a
+/// step `chords` refuses is rounded up to the next multiple of the starting
+/// count, whose chords each lie within one it read.
 pub(super) fn untwisted_grid(
     at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
     (mut n_u, mut n_v): (usize, usize),
     deflection: f64,
     max_divisions: usize,
+    chords: Option<&dyn Fn(bool, usize) -> bool>,
 ) -> (usize, usize) {
+    let (start_u, start_v) = (n_u.max(1), n_v.max(1));
     // Every cell is read: a patch's worst cell can sit anywhere, at a
     // taper's narrow end or wherever a saddle flattens, and a spread of cells
     // can step over it.
@@ -983,7 +1010,17 @@ pub(super) fn untwisted_grid(
                 .max(n + 1)
                 .min(max_divisions)
         };
-        let next = (step(n_u), step(n_v));
+        let nested = |n: usize, start: usize, along_u: bool| {
+            if chords.is_none_or(|holds| holds(along_u, n)) {
+                n
+            } else {
+                n.div_ceil(start).saturating_mul(start).min(max_divisions)
+            }
+        };
+        let next = (
+            nested(step(n_u), start_u, true),
+            nested(step(n_v), start_v, false),
+        );
         if next.0 * next.1 > GRID_MAX_CELLS {
             log::warn!(
                 "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
