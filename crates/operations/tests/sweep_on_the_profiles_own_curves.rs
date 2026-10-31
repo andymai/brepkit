@@ -414,7 +414,7 @@ fn a_circle_swept_round_a_helix_holds_its_area_times_its_length() {
         8,
     )
     .unwrap();
-    let (h0, h1) = helix.domain();
+    let (h0, _) = helix.domain();
     let start = helix.evaluate(h0);
     let tangent = helix.tangent(h0).unwrap();
     let length = helix.arc_length(200_000);
@@ -447,5 +447,4 @@ fn a_circle_swept_round_a_helix_holds_its_area_times_its_length() {
     let coil = brepkit_operations::sweep::sweep(&mut topo, profile, &helix).unwrap();
     let want = area * length * normal.dot(tangent).abs();
     assert_exact(&topo, coil, want, "as it stands");
-    let _ = h1;
 }
