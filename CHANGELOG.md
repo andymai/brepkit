@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.6.14](https://github.com/andymai/brepkit/compare/v4.6.13...v4.6.14) (2026-10-31)
+
+
+### Bug Fixes
+
+* **algo:** sample a notched section loop on a curved face inside itself ([#2254](https://github.com/andymai/brepkit/issues/2254)) ([8d30c17](https://github.com/andymai/brepkit/commit/8d30c175a5d3940cd39f8c63452ec5d6dca56843)), closes [#2190](https://github.com/andymai/brepkit/issues/2190)
+* **operations:** sweep each profile edge on its own curve in sweep_with_options ([#2255](https://github.com/andymai/brepkit/issues/2255)) ([7ba7a35](https://github.com/andymai/brepkit/commit/7ba7a351c66c31f4ff1a0518711ad288cf7636b2)), closes [#2247](https://github.com/andymai/brepkit/issues/2247) [#2248](https://github.com/andymai/brepkit/issues/2248)
+
+
+### Performance
+
+* **check:** read a whole NURBS patch over its domain when its sides are its own curves ([#2256](https://github.com/andymai/brepkit/issues/2256)) ([9c3d510](https://github.com/andymai/brepkit/commit/9c3d510021d973e5b7d7e21268d3ddc926913df3))
+
 ## [4.6.13](https://github.com/andymai/brepkit/compare/v4.6.12...v4.6.13) (2026-10-31)
 
 
