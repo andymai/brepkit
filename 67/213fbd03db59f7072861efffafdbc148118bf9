@@ -1,0 +1,24 @@
+crates/check/src/properties/boundary.rs
+  s_489facd0569909::t_f79c1ed93e9dee 818-828,855-858,894-902,919-921,933,939-944,955-959,964-969,1000,1003-1005,1008-1009,1011
+  s_489facd0569909::t_d965d87a2458a5 859-861,945-948,1007
+  s_489facd0569909::t_26c968a6c53f35 1006
+  s_489facd0569909::t_554fa8885231d1 862,864,949-950,1010
+crates/check/src/properties/mod.rs
+  s_489facd0569909::t_d965d87a2458a5 901-997
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "67213fbd03db59f7072861efffafdbc148118bf9",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
