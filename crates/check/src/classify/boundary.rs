@@ -944,7 +944,9 @@ fn count_3d_polygon_crossings(
 /// For analytic curved faces, uses ray-surface intersection + UV containment.
 /// For sphere faces, uses 3D polygon containment (avoids UV pole singularity).
 /// For NURBS faces, uses line-surface intersection, patch by patch. `cache`
-/// keeps what a sphere or NURBS face builds from one ray to the next.
+/// keeps what a sphere or NURBS face builds from one ray to the next, and
+/// `unsure` is set when the ray grazes a NURBS face, so that its count of
+/// crossings there may be wrong.
 ///
 /// # Errors
 ///
@@ -956,6 +958,7 @@ pub fn count_face_ray_crossings(
     origin: Point3,
     direction: Vec3,
     cache: &FaceRayCache,
+    unsure: &mut bool,
 ) -> Result<u32, CheckError> {
     let face = topo.face(face_id)?;
     match face.surface() {
@@ -1010,9 +1013,15 @@ pub fn count_face_ray_crossings(
                 apex,
             )
         }
-        FaceSurface::Nurbs(surface) => {
-            ray_crossings_nurbs(topo, face_id, origin, direction, surface, &cache.nurbs)
-        }
+        FaceSurface::Nurbs(surface) => ray_crossings_nurbs(
+            topo,
+            face_id,
+            origin,
+            direction,
+            surface,
+            &cache.nurbs,
+            unsure,
+        ),
     }
 }
 
@@ -1099,15 +1108,17 @@ fn ray_crossings_nurbs(
     direction: Vec3,
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     patches: &std::cell::OnceCell<Option<brepkit_math::nurbs::intersection::RaySurface>>,
+    unsure: &mut bool,
 ) -> Result<u32, CheckError> {
     let patches =
         patches.get_or_init(|| brepkit_math::nurbs::intersection::RaySurface::new(surface));
     let hits = match patches {
         Some(patches) => {
+            let found = patches.hits(origin, direction, NURBS_HIT_REACH);
+            *unsure |= found.grazed;
             // `hits` reads `t` along the unit direction.
             let scale = direction.length();
-            patches
-                .hits(origin, direction, NURBS_HIT_REACH)
+            found
                 .hits
                 .iter()
                 .map(|h| (h.t / scale, h.u, h.v))
@@ -1319,6 +1330,51 @@ mod tests {
     }
 
     fn crosses_a_bump(width: f64) {
+        let (topo, face) = bump_face(width);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let cell = FaceRayCache::default();
+        let below = Point3::new(4.0, 0.5, 0.3);
+        let above = Point3::new(4.0, 0.5, 1.0);
+        let crossings = |from| {
+            let mut unsure = false;
+            let n = count_face_ray_crossings(&topo, face, from, up, &cell, &mut unsure).unwrap();
+            assert!(!unsure, "width {width}: unsure from {from:?}");
+            n
+        };
+        assert_eq!(crossings(below), 1, "width {width}: below");
+        assert_eq!(crossings(above), 0, "width {width}: above");
+    }
+
+    /// Along `u` the bump is straight: a ray along its ridge, at the top of
+    /// the bump, runs in the face, and its count there is not to be trusted.
+    #[test]
+    fn a_ray_along_a_nurbs_face_is_unsure_of_its_crossings() {
+        let width = 1e-4_f64;
+        let (topo, face) = bump_face(width);
+        let surface = match topo.face(face).unwrap().surface() {
+            FaceSurface::Nurbs(surface) => Some(surface),
+            _ => None,
+        }
+        .unwrap();
+        let top = surface.evaluate(0.5, width.mul_add(3.0, 0.5));
+        let along = Vec3::new(0.0, 1.0, 0.0);
+        let mut unsure = false;
+        let from = Point3::new(top.x(), -0.5, top.z());
+        count_face_ray_crossings(
+            &topo,
+            face,
+            from,
+            along,
+            &FaceRayCache::default(),
+            &mut unsure,
+        )
+        .unwrap();
+        assert!(unsure, "a ray along the ridge at {top:?}");
+    }
+
+    /// The face of [`crosses_a_bump`], its bump inside knot spans `width`
+    /// apart.
+    fn bump_face(width: f64) -> (Topology, FaceId) {
         use brepkit_math::nurbs::curve::NurbsCurve;
         use brepkit_math::nurbs::surface::NurbsSurface;
         use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -1364,13 +1420,6 @@ mod tests {
         .collect();
         let wire = topo.add_wire(Wire::new(edges, true).unwrap());
         let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
-
-        let up = Vec3::new(0.0, 0.0, 1.0);
-        let cell = FaceRayCache::default();
-        let below = Point3::new(4.0, 0.5, 0.3);
-        let above = Point3::new(4.0, 0.5, 1.0);
-        let crossings = |from| count_face_ray_crossings(&topo, face, from, up, &cell).unwrap();
-        assert_eq!(crossings(below), 1, "width {width}: below");
-        assert_eq!(crossings(above), 0, "width {width}: above");
+        (topo, face)
     }
 }

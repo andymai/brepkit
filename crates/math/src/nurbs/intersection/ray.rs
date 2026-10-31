@@ -325,11 +325,9 @@ impl RaySurface {
             let det = -normal.dot(dir);
             // Where the surface runs fast in its parameters a unit in the
             // last place of `u` or `v` moves the point farther than the
-            // bound on the patch's size, and Newton stalls short of it.
-            let resolved = 4.0
-                * f64::EPSILON
-                * su.length()
-                    .mul_add(u.abs().max(1.0), sv.length() * v.abs().max(1.0));
+            // bound on the patch's size, and Newton stalls short of it. The
+            // unit is the parameter's own: knots near zero are finely spaced.
+            let resolved = 4.0 * f64::EPSILON * su.length().mul_add(u.abs(), sv.length() * v.abs());
             if f.length() <= (1e-12 * self.scale).max(resolved) {
                 let slack_u = 1e-9 * (du.1 - du.0);
                 let slack_v = 1e-9 * (dv.1 - dv.0);
@@ -538,5 +536,33 @@ mod tests {
         )
         .unwrap();
         assert!(RaySurface::new(&s).is_none());
+    }
+
+    /// A flat unit patch over [0, 1e-12] in each parameter, crossed slant
+    /// through its middle, where every leaf of its subdivision has a
+    /// corner: one hit, as over the unit square, however small its knots.
+    #[test]
+    fn a_patch_on_a_tiny_knot_domain_is_crossed_once() {
+        let p = Point3::new;
+        let corners = vec![
+            vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+            vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
+        ];
+        let dir = Vec3::new(0.3, 0.2, -1.0);
+        let origin = p(0.5, 0.5, 0.0) - dir;
+        for scale in [1.0, 1e-12] {
+            let knots = vec![0.0, 0.0, scale, scale];
+            let s = NurbsSurface::new(
+                1,
+                1,
+                knots.clone(),
+                knots,
+                corners.clone(),
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap();
+            let found = RaySurface::new(&s).unwrap().hits(origin, dir, 1e-6);
+            assert_eq!(found.hits.len(), 1, "knots to {scale}: {:?}", found.hits);
+        }
     }
 }
