@@ -952,7 +952,7 @@ mod tests {
     }
 
     /// The rational quarter cylinder bounded by its own arcs reads over its
-    /// domain as along its boundary, to 1e-10, its area 3 pi / 2 x 2.
+    /// domain as along its boundary, to 1e-10, its area 3 pi.
     #[test]
     fn a_rational_patch_bounded_by_its_own_arcs_reads_over_its_domain() {
         let (topo, face) = quarter_cylinder(Point3::new(0.0, 0.0, 3.0));

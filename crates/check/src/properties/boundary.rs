@@ -831,6 +831,12 @@ fn whole_torus_less_holes(
     }))
 }
 
+/// The most one weight of a patch read over its domain may be against
+/// another. Weights far apart crowd the surface into a corner of its domain,
+/// where the panels' rules miss it: a patch weighted 1e16 over half of it
+/// read as half its area.
+const MAX_WEIGHT_RATIO: f64 = 64.0;
+
 /// A face that is its whole open NURBS surface, its integrals over the
 /// surface's `(u, v)` domain directly, in panels between its knots. Green's
 /// theorem along its boundary comes to the same through a projection of
@@ -844,12 +850,6 @@ fn whole_torus_less_holes(
 /// [`MAX_WEIGHT_RATIO`] times another, so its sides are the outer rows of
 /// its control points, which bound them, and its integrands are smooth in
 /// each panel. `None` for any other face.
-/// The most one weight of a patch read over its domain may be against
-/// another. Weights far apart crowd the surface into a corner of its domain,
-/// where the panels' rules miss it: a patch weighted 1e16 over half of it
-/// read as half its area.
-const MAX_WEIGHT_RATIO: f64 = 64.0;
-
 pub(super) fn nurbs_face_over_domain(
     topo: &Topology,
     face: &Face,
@@ -1081,7 +1081,6 @@ pub(super) fn nurbs_face_over_domain(
     // above the degree takes exactly. Along one they vary it is no
     // polynomial, and a wide rule settles each panel in one step: across a
     // quarter arc eight points leave 4e-10 of it, sixteen far less.
-    let ws = s.weights();
     let even_along_u = (0..nv).all(|j| ws.iter().all(|row| row[j].to_bits() == ws[0][j].to_bits()));
     let even_along_v = ws
         .iter()
