@@ -953,9 +953,14 @@ pub(super) fn untwisted_grid(
             })
         })
     };
-    while (n_u < max_divisions || n_v < max_divisions) && !fits(n_u, n_v) {
-        n_u = (n_u * 2).min(max_divisions);
-        n_v = (n_v * 2).min(max_divisions);
+    while !fits(n_u, n_v) {
+        let next = ((n_u * 2).min(max_divisions), (n_v * 2).min(max_divisions));
+        // The twist never takes cells past the grid's budget: a grid capped
+        // down to it gives up the divisions the chord test asked for.
+        if next == (n_u, n_v) || next.0 * next.1 > GRID_MAX_CELLS {
+            break;
+        }
+        (n_u, n_v) = next;
     }
     (n_u, n_v)
 }

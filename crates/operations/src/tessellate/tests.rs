@@ -3982,7 +3982,7 @@ fn bilinear(p00: Point3, p10: Point3, p01: Point3, p11: Point3) -> NurbsSurface 
 
 /// The saddle S(u, v) = (20u, 20v, 10000(u - 0.5)(v - 0.5)) is steep at its
 /// edges and flattens mid-patch, where its cells stray most. The grid taken
-/// for it at deflection 0.01 holds its middle cells within the deflection.
+/// for it at deflection 0.04 holds its middle cells within the deflection.
 #[test]
 fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
     let saddle = bilinear(
@@ -3993,7 +3993,7 @@ fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
     );
     let at = |u: f64, v: f64| saddle.evaluate(u, v);
     let (n_u, n_v) =
-        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.01, 1024);
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.04, 1024);
     #[allow(clippy::cast_precision_loss)]
     let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
     let worst = (n_u / 2 - 2..n_u / 2 + 2)
@@ -4004,7 +4004,7 @@ fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
             cell_strays(&at, corner, (du, dv))
         })
         .fold(0.0_f64, f64::max);
-    assert!(worst <= 0.01, "{n_u} x {n_v}: a middle cell strays {worst}");
+    assert!(worst <= 0.04, "{n_u} x {n_v}: a middle cell strays {worst}");
 }
 
 /// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
