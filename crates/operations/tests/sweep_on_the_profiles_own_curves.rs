@@ -366,3 +366,33 @@ fn a_profile_leaving_its_plane_between_samples_takes_no_plane_cap() {
         }
     }
 }
+
+/// A path whose knots 0.5 and 0.5 + 1e-12 bound a span narrower than the
+/// fit can sample on its own: the sweep leaves it to the ring-by-ring
+/// sweep, which reads such a span inside, and comes out valid.
+#[test]
+fn a_path_with_a_knot_span_too_narrow_to_fit_sweeps_ring_by_ring() {
+    let mut topo = Topology::new();
+    let profile = disc(&mut topo, Mat4::identity(), Vec3::new(0.0, 0.0, 1.0), 1.0);
+    let path = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5 + 1e-12, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 10.0),
+            Point3::new(5.0, 0.0, 15.0),
+            Point3::new(10.0, 0.0, 15.0),
+            Point3::new(20.0, 0.0, 15.0),
+        ],
+        vec![1.0; 5],
+    )
+    .unwrap();
+    let options = SweepOptions {
+        scale_law: Some(Box::new(|t: f64| 0.5f64.mul_add(-t, 1.0))),
+        ..Default::default()
+    };
+    let solid = sweep_with_options(&mut topo, profile, &path, &options).unwrap();
+    assert!(solid_faces(&topo, solid).unwrap().len() > 6, "ring by ring");
+    let report = validate_solid(&topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+}

@@ -38,6 +38,10 @@ const FIT_REL_TOL: f64 = 1e-7;
 /// The most path segments a trajectory is fitted over.
 const MAX_SEGMENTS: usize = 1024;
 
+/// The narrowest knot span of the path or guide, on its `[0, 1]`
+/// parameter, the fit samples on its own.
+const MIN_SPAN: f64 = 1e-9;
+
 /// Samples along each edge for the profile's plane and winding.
 const EDGE_SAMPLES: usize = 16;
 
@@ -259,12 +263,25 @@ pub(super) fn sweep_exact(
             .knots()
             .iter()
             .map(|&k| (k - k0) / (k1 - k0))
-            .filter(|&t| t > 1e-9 && t < 1.0 - 1e-9)
+            .filter(|&t| t > 0.0 && t < 1.0)
             .collect()
     };
     let mut breaks = interior(path);
     if let Some(aux) = options.aux_spine.as_ref() {
         breaks.extend(interior(aux));
+    }
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|a, b| a.to_bits() == b.to_bits());
+    // A knot span too narrow for the fit's samples to resolve can hold a
+    // bend between them; the ring-by-ring sweep reads such a span inside.
+    let narrow = std::iter::once(0.0)
+        .chain(breaks.iter().copied())
+        .chain(std::iter::once(1.0))
+        .collect::<Vec<f64>>()
+        .windows(2)
+        .any(|w| w[1] - w[0] < MIN_SPAN);
+    if narrow {
+        return Ok(None);
     }
     let min_segments = if options.segments > 0 {
         options.segments.min(MAX_SEGMENTS)
@@ -557,7 +574,7 @@ fn fit_trajectories(
         .chain(std::iter::once(1.0))
         .collect();
     cuts.sort_by(f64::total_cmp);
-    cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    cuts.dedup_by(|a, b| a.to_bits() == b.to_bits());
     let spans: Vec<(f64, f64)> = cuts.windows(2).map(|w| (w[0], w[1])).collect();
     // A cubic per piece needs four samples.
     #[allow(clippy::cast_precision_loss)]
