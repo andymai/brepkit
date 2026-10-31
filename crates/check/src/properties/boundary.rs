@@ -883,7 +883,10 @@ pub(super) fn nurbs_face_over_domain(
         .fold((f64::INFINITY, 0.0_f64), |(lo, hi), &w| {
             (lo.min(w), hi.max(w))
         });
-    let weighted = w_lo > 0.0 && w_hi <= MAX_WEIGHT_RATIO * w_lo;
+    // A fold by `min` and `max` passes over a NaN, so each weight is read.
+    let weighted = s.weights().iter().flatten().all(|w| w.is_finite())
+        && w_lo > 0.0
+        && w_hi <= MAX_WEIGHT_RATIO * w_lo;
     if !face.inner_wires().is_empty()
         || !weighted
         || !clamped(s.knots_u(), s.degree_u())
@@ -1096,7 +1099,11 @@ pub(super) fn nurbs_face_over_domain(
     let mut across = |v: f64| -> Option<[f64; 8]> {
         let mut acc = [0.0; 8];
         for w in u_cuts.windows(2) {
-            let mut g = |u: f64| Some(nurbs_integrand(s, u, v, about));
+            // A sample that is no number would pass `adaptive`'s maxima.
+            let mut g = |u: f64| {
+                let sample = nurbs_integrand(s, u, v, about);
+                sample.iter().all(|x| x.is_finite()).then_some(sample)
+            };
             add(
                 &mut acc,
                 &adaptive(&mut g, w[0], w[1], gauss_u, halvings(w[0], w[1]), floor)?,

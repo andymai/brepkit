@@ -1288,6 +1288,40 @@ mod tests {
         .unwrap()
     }
 
+    /// Patches whose weights or samples are not numbers are left to their
+    /// boundaries: a NaN middle weight, which a fold by `min` and `max`
+    /// passes over, and a bilinear patch over u from 0 to 1e-3 weighted
+    /// 1e308, whose homogeneous partials overflow.
+    #[test]
+    fn a_nurbs_patch_that_samples_to_no_number_is_left_to_its_boundary() {
+        let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let columns = [((0.0, 0.0), (0.0, 1.0)), ((1.0, 0.0), (1.0, 1.0))];
+        let middle = [
+            ((0.0, 0.0), (0.0, 1.0)),
+            ((0.5, 0.0), (0.5, 1.0)),
+            ((1.0, 0.0), (1.0, 1.0)),
+        ];
+        for surface in [
+            patch_at_one(
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                &middle,
+                &[1.0, f64::NAN, 1.0],
+            ),
+            patch_at_one(vec![0.0, 0.0, 1e-3, 1e-3], &columns, &[1e308, 1e308]),
+        ] {
+            let mut topo = Topology::new();
+            let face = brepkit_topology::face::Face::new(
+                wire_through(&mut topo, &unit, |_| None),
+                vec![],
+                brepkit_topology::face::FaceSurface::Nurbs(surface),
+            );
+            let read =
+                boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                    .unwrap();
+            assert!(read.is_none(), "read over its domain as {read:?}");
+        }
+    }
+
     /// Faces the domain's integral cannot vouch for are left to their
     /// boundaries: a patch 1e6 by 10 trimmed half a unit in from its long
     /// sides; a degree-1 side that dips to y = -0.2 at its knot 0.125 under
