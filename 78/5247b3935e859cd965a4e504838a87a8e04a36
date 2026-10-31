@@ -1,0 +1,19 @@
+crates/math/src/nurbs/intersection/ray.rs
+  s_489facd0569909::t_437e2c3269e6e3 431-432,435,438-442,455,457-459,466,470,474-476,703-704,747-767
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "785247b3935e859cd965a4e504838a87a8e04a36",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
