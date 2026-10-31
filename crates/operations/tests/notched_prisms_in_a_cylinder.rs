@@ -1,9 +1,11 @@
 //! Prisms over notched outlines (an L, a V, a W) intersected with a cylinder
 //! whose wall crosses all their side faces: the section loop on the wall
 //! takes the outline's shape, its centroid in a notch, and the piece of wall
-//! it bounds is kept.
+//! it bounds is kept: the result keeps the outline's material, and its notch
+//! and the prism's part past the wall read outside it.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean, mesh_fallback_count};
@@ -118,10 +120,29 @@ const POSES: &[Pose] = &[
     Pose::Mirrored,
 ];
 
+/// Points of one outline, as (x, y, z) before the pose: one in its
+/// material, one in its notch, and one inside the outline but past the
+/// cylinder's wall, 21.5 down the prism.
+struct Probes {
+    kept: (f64, f64, f64),
+    notch: (f64, f64, f64),
+    clipped: (f64, f64, f64),
+}
+
+/// A probe point moved with the pose.
+fn posed(pose: Pose, (x, y, z): (f64, f64, f64)) -> Point3 {
+    match pose {
+        Pose::Turned(angle) => Mat4::rotation_z(angle.to_radians()).mul_point(Point3::new(x, y, z)),
+        Pose::Mirrored => Point3::new(-x, y, z),
+    }
+}
+
 /// A cylinder of radius 21 standing on z = -30, intersected with the prism
 /// over `outline` in every pose: exact (no mesh fallback), valid, made of the
-/// prism's planes and the cylinder's wall only, and holding the exact volume.
-fn assert_intersect_is_exact(outline: &[(f64, f64)]) {
+/// prism's planes and the cylinder's wall only, holding the exact volume,
+/// and keeping the outline's material while its notch and the part past the
+/// wall read outside.
+fn assert_intersect_is_exact(outline: &[(f64, f64)], probes: &Probes) {
     let expected = exact_volume(outline);
     for &pose in POSES {
         let mut topo = Topology::new();
@@ -157,20 +178,54 @@ fn assert_intersect_is_exact(outline: &[(f64, f64)]) {
             ((volume - expected) / expected).abs() < 1e-6,
             "{pose:?}: volume {volume}, exact {expected}"
         );
+        let classify =
+            |p| classify_point(&topo, result, posed(pose, p), &ClassifyOptions::default()).unwrap();
+        for (p, want, what) in [
+            (probes.kept, PointClassification::Inside, "material"),
+            (probes.notch, PointClassification::Outside, "notch"),
+            (
+                probes.clipped,
+                PointClassification::Outside,
+                "past the wall",
+            ),
+        ] {
+            assert_eq!(classify(p), want, "{pose:?}: {what} at {p:?}");
+        }
     }
 }
 
 #[test]
 fn an_l_prism_intersects_a_cylinder_exactly() {
-    assert_intersect_is_exact(L);
+    assert_intersect_is_exact(
+        L,
+        &Probes {
+            kept: (1.0, -10.0, 4.0),
+            notch: (4.0, -10.0, 4.0),
+            clipped: (1.0, -21.5, 1.0),
+        },
+    );
 }
 
 #[test]
 fn a_v_prism_intersects_a_cylinder_exactly() {
-    assert_intersect_is_exact(V);
+    assert_intersect_is_exact(
+        V,
+        &Probes {
+            kept: (1.5, -10.0, 6.0),
+            notch: (4.0, -10.0, 6.0),
+            clipped: (4.0, -21.5, 1.0),
+        },
+    );
 }
 
 #[test]
 fn a_w_prism_intersects_a_cylinder_exactly() {
-    assert_intersect_is_exact(W);
+    assert_intersect_is_exact(
+        W,
+        &Probes {
+            kept: (2.0, -10.0, 1.0),
+            notch: (2.4, -10.0, 5.0),
+            clipped: (2.0, -21.5, 1.0),
+        },
+    );
 }
