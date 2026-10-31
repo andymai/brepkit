@@ -4799,7 +4799,18 @@ fn curved_loop_interior(
     if !point_in_polygon_2d(inner, &uv) {
         return None;
     }
-    surface.evaluate(inner.x(), inner.y())
+    // Unwrapping can carry the point a period past the surface's domain,
+    // where a NURBS surface extrapolates its end spans instead of wrapping.
+    let (u_lo, v_lo) = match surface {
+        FaceSurface::Nurbs(n) => (n.domain_u().0, n.domain_v().0),
+        _ => (0.0, 0.0),
+    };
+    let wrap =
+        |x: f64, lo: f64, period: Option<f64>| period.map_or(x, |p| lo + (x - lo).rem_euclid(p));
+    surface.evaluate(
+        wrap(inner.x(), u_lo, u_period),
+        wrap(inner.y(), v_lo, v_period),
+    )
 }
 
 /// The parameter period of each periodic direction of a curved surface.
@@ -6639,8 +6650,9 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
         FaceId, OrientedPCurveEdge, PlaneFrame, SectionEdge, SplitSubFace, UvChord,
-        arc_covers_segment, between_loop_and_holes, cylinder_cone_remainder_interior, loop_chords,
-        outline_samples, point_in_hole_loops_uv, segment_distance_2d, stands_clear,
+        arc_covers_segment, between_loop_and_holes, curved_loop_interior,
+        cylinder_cone_remainder_interior, loop_chords, outline_samples, point_in_hole_loops_uv,
+        segment_distance_2d, stands_clear,
     };
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -8071,5 +8083,66 @@ mod tests {
             }
         }
         assert!(nested >= 24, "too few nested pairs: {nested}");
+    }
+
+    /// An L-shaped loop on a periodic NURBS cylinder of radius 2 whose
+    /// notch holds its centroid and whose (u, v) polygon, unwrapped from a
+    /// sample just past the seam, runs below the domain's start. The point
+    /// inside it lies in the L: evaluated unwrapped, past the domain, the
+    /// end span's extrapolation put it at u = -0.218 of a turn, outside.
+    #[test]
+    fn a_notched_loop_across_a_periodic_seam_samples_on_its_surface() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let nurbs = cyl.to_nurbs(0.0, 10.0).unwrap();
+        assert!(nurbs.is_periodic_u());
+        let (u0, u1) = nurbs.domain_u();
+        let (v0, v1) = nurbs.domain_v();
+        let (du, dv) = (u1 - u0, v1 - v0);
+        // The L in (u, v), its first corner just past the seam so that the
+        // walk from it unwraps the rest below `u0`.
+        let corners = [
+            (0.02, 0.1),
+            (-0.45, 0.1),
+            (-0.45, 0.6),
+            (-0.35, 0.6),
+            (-0.35, 0.15),
+            (0.02, 0.15),
+        ];
+        let surface = FaceSurface::Nurbs(nurbs.clone());
+        let at = |(fu, fv): (f64, f64)| nurbs.evaluate(u0 + (fu * du).rem_euclid(du), v0 + fv * dv);
+        let mut ring = Vec::new();
+        for (i, &a) in corners.iter().enumerate() {
+            let b = corners[(i + 1) % corners.len()];
+            for k in 0..8 {
+                let f = f64::from(k) / 8.0;
+                ring.push(at((a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f)));
+            }
+        }
+        let n = f64::from(u32::try_from(ring.len()).unwrap());
+        let sum = ring.iter().fold(Vec3::new(0.0, 0.0, 0.0), |acc, p| {
+            acc + Vec3::new(p.x(), p.y(), p.z())
+        });
+        let centroid = Point3::new(sum.x() / n, sum.y() / n, sum.z() / n);
+        let inner = curved_loop_interior(&surface, &ring, centroid).expect("a point inside");
+        let radial = (inner.x() * inner.x() + inner.y() * inner.y()).sqrt();
+        assert!(
+            (radial - 2.0).abs() < 1e-9,
+            "the point lies {radial} from the axis, off the cylinder"
+        );
+        // Back in the L's own (u, v), as fractions of the domain about the
+        // seam.
+        let (u, v) = surface.project_point(inner).unwrap();
+        let fu = ((u - u0) / du + 0.5).rem_euclid(1.0) - 0.5;
+        let fv = (v - v0) / dv;
+        let mut inside = false;
+        for (i, &(ax, ay)) in corners.iter().enumerate() {
+            let (bx, by) = corners[(i + 1) % corners.len()];
+            if (ay > fv) != (by > fv) && fu < (bx - ax) * (fv - ay) / (by - ay) + ax {
+                inside = !inside;
+            }
+        }
+        assert!(inside, "the point at ({fu}, {fv}) lies outside the L");
     }
 }
