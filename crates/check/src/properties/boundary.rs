@@ -961,10 +961,12 @@ pub(super) fn nurbs_face_over_domain(
             return false;
         }
         let ratios = |w: Vec<f64>| -> Vec<f64> { w.iter().map(|x| x / w[0]).collect() };
+        // A ratio that overflows would pass against any weight: the bound
+        // scales with it.
         let same = |a: &[f64], b: &[f64]| {
-            a.iter()
-                .zip(b)
-                .all(|(x, y)| (x - y).abs() <= 1e-12 * x.abs().max(y.abs()))
+            a.iter().zip(b).all(|(x, y)| {
+                x.is_finite() && y.is_finite() && (x - y).abs() <= 1e-12 * x.abs().max(y.abs())
+            })
         };
         let side_w = ratios(side_weights(k));
         let weighs_forward = same(&ratios(c.weights().to_vec()), &side_w);

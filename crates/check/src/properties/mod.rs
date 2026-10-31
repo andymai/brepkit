@@ -899,9 +899,11 @@ mod tests {
     }
 
     /// A quarter of a cylinder of radius 2 and height 3 as a rational patch,
-    /// bounded by its two arcs as circle edges, the top one stored running
-    /// against its side, and two lines.
-    fn quarter_cylinder(top_center: Point3) -> (Topology, brepkit_topology::face::Face) {
+    /// bounded by its bottom arc as a circle edge, `top` from (2, 0, 3) to
+    /// (0, 2, 3) stored running against its side, and two lines.
+    fn quarter_cylinder(
+        top: brepkit_topology::edge::EdgeCurve,
+    ) -> (Topology, brepkit_topology::face::Face) {
         use brepkit_math::curves::Circle3D;
         use brepkit_topology::edge::{Edge, EdgeCurve};
         use brepkit_topology::face::{Face, FaceSurface};
@@ -934,28 +936,32 @@ mod tests {
         .collect();
         let z = Vec3::new(0.0, 0.0, 1.0);
         let bottom = Circle3D::new(p(0.0, 0.0, 0.0), z, 2.0).unwrap();
-        let top = Circle3D::new(top_center, z, 2.0).unwrap();
         let edges = vec![
             OrientedEdge::new(
                 topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Circle(bottom))),
                 true,
             ),
             OrientedEdge::new(topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line)), true),
-            OrientedEdge::new(
-                topo.add_edge(Edge::new(v[3], v[2], EdgeCurve::Circle(top))),
-                false,
-            ),
+            OrientedEdge::new(topo.add_edge(Edge::new(v[3], v[2], top)), false),
             OrientedEdge::new(topo.add_edge(Edge::new(v[3], v[0], EdgeCurve::Line)), true),
         ];
         let wire = topo.add_wire(Wire::new(edges, true).unwrap());
         (topo, Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
     }
 
+    /// A circle edge of radius 2 about `center` in a plane z = constant.
+    fn arc_about(center: Point3) -> brepkit_topology::edge::EdgeCurve {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        brepkit_topology::edge::EdgeCurve::Circle(
+            brepkit_math::curves::Circle3D::new(center, z, 2.0).unwrap(),
+        )
+    }
+
     /// The rational quarter cylinder bounded by its own arcs reads over its
     /// domain as along its boundary, to 1e-10, its area 3 pi.
     #[test]
     fn a_rational_patch_bounded_by_its_own_arcs_reads_over_its_domain() {
-        let (topo, face) = quarter_cylinder(Point3::new(0.0, 0.0, 3.0));
+        let (topo, face) = quarter_cylinder(arc_about(Point3::new(0.0, 0.0, 3.0)));
         let about = Vec3::new(0.3, -0.2, 0.5);
         let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
             .unwrap()
@@ -987,7 +993,29 @@ mod tests {
     /// the face is left to its boundary.
     #[test]
     fn a_rational_patch_under_an_arc_that_is_not_its_side_is_left_to_the_boundary() {
-        let (topo, face) = quarter_cylinder(Point3::new(2.0, 2.0, 3.0));
+        let (topo, face) = quarter_cylinder(arc_about(Point3::new(2.0, 2.0, 3.0)));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The patch under a top edge on its side's control points and knots
+    /// weighted 1e-310, 1 and 1e-310: by its first weight its middle one
+    /// overflows, and the curve pulls into its middle control point, 0.83
+    /// off the side. Not its side, so the face is left to its boundary.
+    #[test]
+    fn a_rational_patch_under_an_edge_whose_weights_overflow_is_left_to_the_boundary() {
+        let p = Point3::new;
+        let pulled = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![p(2.0, 0.0, 3.0), p(2.0, 2.0, 3.0), p(0.0, 2.0, 3.0)],
+            vec![1e-310, 1.0, 1e-310],
+        )
+        .unwrap();
+        let (topo, face) = quarter_cylinder(brepkit_topology::edge::EdgeCurve::NurbsCurve(pulled));
         assert!(
             boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
                 .unwrap()
