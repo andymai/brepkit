@@ -1,0 +1,22 @@
+crates/check/src/properties/boundary.rs
+  s_a2dc21dbec3f2b::t_ec736f0e738238 814-820,831-845,848-854,856-859,861-866,868-881,887-889,897,904,907,912-915,921,925-927
+crates/check/src/properties/mod.rs
+  s_a2dc21dbec3f2b::t_48e3eeb63aef6d 944,946-947,949-1072
+  s_a2dc21dbec3f2b::t_9de20ea5373aee 940-943,945,948
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "87d97ae860fe31de5934f2759a1193319b82aa20",
+  "prompts": {},
+  "sessions": {
+    "s_a2dc21dbec3f2b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3041864d-11cb-40e5-b12f-602f4f774ad4",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
