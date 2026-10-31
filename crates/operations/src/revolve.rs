@@ -243,7 +243,31 @@ fn profile_band_curve(
         rotate_point(from, axis_origin, axis, -turn),
         rotate_point(to, axis_origin, axis, -turn),
     );
-    let (start, end) = if forward { (a, b) } else { (b, a) };
+    let Some(along) = edge_span_nurbs(curve, forward, (a, b))? else {
+        return Ok(None);
+    };
+    let points = along
+        .control_points()
+        .iter()
+        .map(|&p| rotate_point(p, axis_origin, axis, turn))
+        .collect();
+    Ok(Some(NurbsCurve::new(
+        along.degree(),
+        along.knots().to_vec(),
+        points,
+        along.weights().to_vec(),
+    )?))
+}
+
+/// An edge's own curve as a NURBS running from `from` to `to`, its ends in
+/// the order the edge is used (`forward` against its stored direction).
+/// `None` for a line, whose chord is itself.
+pub(crate) fn edge_span_nurbs(
+    curve: &EdgeCurve,
+    forward: bool,
+    (from, to): (Point3, Point3),
+) -> Result<Option<NurbsCurve>, crate::OperationsError> {
+    let (start, end) = if forward { (from, to) } else { (to, from) };
     let (t0, t1) = curve.domain_with_endpoints(start, end);
     let natural = match curve {
         EdgeCurve::Line => return Ok(None),
@@ -259,22 +283,11 @@ fn profile_band_curve(
     } else {
         natural
     };
-    let along = if forward {
+    Ok(Some(if forward {
         natural
     } else {
         reversed_nurbs(&natural)?
-    };
-    let points = along
-        .control_points()
-        .iter()
-        .map(|&p| rotate_point(p, axis_origin, axis, turn))
-        .collect();
-    Ok(Some(NurbsCurve::new(
-        along.degree(),
-        along.knots().to_vec(),
-        points,
-        along.weights().to_vec(),
-    )?))
+    }))
 }
 
 /// Decompose a point into `(radial_distance, axial_coordinate)` relative to the
