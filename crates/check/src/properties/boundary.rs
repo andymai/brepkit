@@ -837,10 +837,19 @@ pub(super) fn nurbs_face_over_domain(
                 .iter()
                 .all(|&k| k.to_bits() == knots[knots.len() - 1].to_bits())
     };
+    // A knot repeated more often than the degree breaks the surface apart:
+    // its sides' control points no longer show it continuous.
+    let continuous = |knots: &[f64], degree: usize| {
+        knots[degree + 1..knots.len() - degree - 1]
+            .chunk_by(|a, b| a.to_bits() == b.to_bits())
+            .all(|run| run.len() <= degree)
+    };
     if !face.inner_wires().is_empty()
         || s.is_rational()
         || !clamped(s.knots_u(), s.degree_u())
         || !clamped(s.knots_v(), s.degree_v())
+        || !continuous(s.knots_u(), s.degree_u())
+        || !continuous(s.knots_v(), s.degree_v())
         || !open_and_poleless(s)
     {
         return Ok(None);
@@ -922,6 +931,23 @@ pub(super) fn nurbs_face_over_domain(
         c
     };
     let (u_cuts, v_cuts) = (cuts(s.knots_u(), u0, u1), cuts(s.knots_v(), v0, v1));
+    // How often a panel may be halved before its halves come within a
+    // thousand units in the last place of its parameters, where the rule's
+    // points round onto each other and a halving reads the same panel twice.
+    // A panel too narrow to halve four times is not read here.
+    let halvings = |a: f64, b: f64| {
+        let ulp = f64::EPSILON * a.abs().max(b.abs()).max(f64::MIN_POSITIVE);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let depth = ((b - a) / (1024.0 * ulp)).log2().floor().max(0.0) as u32;
+        depth.min(DEPTH)
+    };
+    if u_cuts
+        .windows(2)
+        .chain(v_cuts.windows(2))
+        .any(|w| halvings(w[0], w[1]) < 4)
+    {
+        return Ok(None);
+    }
     let size = (corners[2] - corners[0])
         .length()
         .max((corners[1] - corners[3]).length());
@@ -937,7 +963,7 @@ pub(super) fn nurbs_face_over_domain(
             let mut g = |u: f64| Some(integrand(s, u, v, about));
             add(
                 &mut acc,
-                &adaptive(&mut g, w[0], w[1], gauss, DEPTH, floor)?,
+                &adaptive(&mut g, w[0], w[1], gauss, halvings(w[0], w[1]), floor)?,
                 1.0,
             );
         }
@@ -945,7 +971,8 @@ pub(super) fn nurbs_face_over_domain(
     };
     let mut total = [0.0; 8];
     for w in v_cuts.windows(2) {
-        let Some(panel) = adaptive(&mut across, w[0], w[1], gauss, DEPTH, floor) else {
+        let Some(panel) = adaptive(&mut across, w[0], w[1], gauss, halvings(w[0], w[1]), floor)
+        else {
             return Ok(None);
         };
         add(&mut total, &panel, 1.0);
