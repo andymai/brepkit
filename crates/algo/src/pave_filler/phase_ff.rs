@@ -4748,12 +4748,29 @@ fn trim_open_curve_to_plane_face_lines(
                     Some(s) if s == side => lo = mid,
                     Some(_) => hi = mid,
                     None => {
+                        // Unclassified off the boundary when every trial ray
+                        // grazes a piece: no root, and nothing to trim by.
+                        let on_edge = exact_region.as_ref().is_some_and(|region| {
+                            brepkit_math::region2d::on_boundary(
+                                region,
+                                frame.project(eval_at(mid)),
+                                tol.linear * 10.0,
+                            )
+                        });
+                        if !on_edge {
+                            return None;
+                        }
                         (lo, hi) = (mid, mid);
                         break;
                     }
                 }
             }
             let t_star = f64::midpoint(lo, hi);
+            // A straight edge's crossing stays the polygon scan's own: the
+            // bisection stops short of the edge, a second root beside it.
+            if straight.iter().any(|&seg| on_segment(eval_at(t_star), seg)) {
+                continue;
+            }
             if !crossings.iter().any(|&c| (c - t_star).abs() < 1e-9) {
                 crossings.push(t_star);
             }
@@ -9263,6 +9280,63 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// That line across the rectangle x = -0.5 to 2.5, y = -2 to 2 with a
+    /// hole of radius 0.25 about (1, 1), off the line: the hole gives the face
+    /// a curved boundary, and the line crosses only its straight edges. The
+    /// trim keeps the one span from -0.5 to 2.5, with no sliver beside an
+    /// edge, or leaves the section to the generic trim.
+    #[test]
+    fn a_section_crossing_only_straight_edges_keeps_one_span() {
+        use brepkit_topology::builder::{make_circle_edge, make_polygon_wire};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let outer = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(-0.5, -2.0, 0.0),
+                Point3::new(2.5, -2.0, 0.0),
+                Point3::new(2.5, 2.0, 0.0),
+                Point3::new(-0.5, 2.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let rim = make_circle_edge(
+            &mut topo,
+            Point3::new(1.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            0.25,
+            1e-7,
+        )
+        .unwrap();
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let plate = topo.add_face(Face::new(
+            outer,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        if let Some(pieces) = trim_line_across(&mut topo, plate) {
+            let spans: Vec<(f64, f64)> = pieces
+                .iter()
+                .map(|p| {
+                    (
+                        p.p_start.x().min(p.p_end.x()),
+                        p.p_start.x().max(p.p_end.x()),
+                    )
+                })
+                .collect();
+            assert_eq!(spans.len(), 1, "{spans:?}");
+            assert!(
+                (spans[0].0 + 0.5).abs() < 1e-6 && (spans[0].1 - 2.5).abs() < 1e-6,
+                "{spans:?}"
+            );
         }
     }
 
