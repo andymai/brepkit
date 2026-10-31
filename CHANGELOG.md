@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.12](https://github.com/andymai/brepkit/compare/v4.6.11...v4.6.12) (2026-10-31)
+
+
+### Performance
+
+* **check:** integrate a whole NURBS patch over its own domain ([#2251](https://github.com/andymai/brepkit/issues/2251)) ([1990088](https://github.com/andymai/brepkit/commit/1990088fca1493099b378e7f0226e81accacb66f))
+
 ## [4.6.11](https://github.com/andymai/brepkit/compare/v4.6.10...v4.6.11) (2026-10-31)
 
 
