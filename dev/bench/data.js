@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793409210390,
+  "lastUpdate": 1793410614886,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63125,6 +63125,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28818537,
             "range": "± 44354",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1d28a0a736f74f386061b6e1f929ca641a714ca8",
+          "message": "fix(algo): cross a plane face's curved edges on the curves when trimming a NURBS section (#2241)\n\nA section of a NURBS face across a plane face bounded by arcs is now\ntrimmed where it actually crosses those arcs, so a screw thread that\nstarts at its rod's end face fuses onto the rod exactly instead of\nfalling back to the mesh boolean.\n\nToday such a section is trimmed at its crossings with the plane face's\nsampled polygon, which runs on chords of each arc. A section meeting an\narc inside its chords' sag crosses no chord: the whole section reads as\none span, its midpoint outside the face, and it is dropped. A thread\nridge whose last tooth's flank crosses the rod's end face at radius\n6.91, inside the rim of radius 7, left that face unsplit and the fuse\nfell back.\n\n## Change\n\n- When the plane face's boundary is exact (lines and conic arcs), the\nsection's crossings of its curved edges are found where the exact inside\ntest flips along the section, bisected to the edge. Crossings of\nstraight edges stay as the polygon scan finds them, and a crossing of a\nchord that is not the face's own boundary is dropped.\n- Two crossings of an arc between neighbouring samples flip no inside\nstate. A crossing of a chord off the straight edges witnesses an arc\ncrossing near it, and each witness takes its own exact crossing, the\nnearest within a sample; a witness left without one hands the section to\nthe generic trim.\n- A root of that scan on a straight edge is left to the polygon scan:\nthe bisection stops short of the edge, and a second root beside the\npolygon's crossing left a sliver span. A midpoint the exact test cannot\nclassify, every trial ray grazing a piece, is a root only on the\nboundary; off it, the section is left to the generic trim. No test\nreaches an unclassified midpoint. A point on the boundary is read\nagainst the one piece it lies on, so no probe crossing another piece\nmisleads it: a crossing where the section passes from one side of that\npiece to the other, a tangency where it stays on one side, past which\nthe bisection goes on toward the state the region holds just off the\npiece on the section's side. That probe stops halfway to any other\npiece; where pieces meet, or the probe has no room to clear the touched\npiece's band, the section is left to the generic trim.\n- A face with a NURBS boundary edge keeps the polygon scan, and still\nhands the section to the generic trim when a crossing misses every\nstraight edge.\n\n## Tests\n\n- `a_thread_ridge_through_its_rods_end_fuses_exactly`: the ridge of\n`threaded_rod.rs` starting at a rod of radius 7, its first sections\nreaching 1.7 below the rod's end face, with 9 and with 41 sections. Each\nfuse has no mesh fallback, is valid, meshes with no open or non-manifold\nedge, and holds the rod and ridge's volumes less their intersection's to\n1e-6. Trimming at the polygon's crossings, the 9-section fuse falls\nback.\n- `a_thread_ridge_fuses_onto_its_rod_exactly` runs through the same\ncheck, on a rod past both ends of the ridge.\n- `a_section_crossing_an_arc_twice_between_samples_is_kept`: the line x\n= -100 + 200 t on a NURBS wall in the plane y = 0 crosses the unit disc\nabout (1.5, 0, 0) at t = 0.5025 and 0.5125, between neighbouring\nsamples. The trim keeps the span across the disc or hands the section to\nthe generic trim; it never drops it.\n- `a_section_crossing_a_small_hole_between_samples_keeps_its_spans`: the\nsame line across the rectangle x = -0.5 to 2.5, y = -2 to 2 with a hole\nof radius 0.25 about (1, 0), whose crossings at x = 0.75 and 1.25 each\nlie within a sample of a straight edge's. The trim keeps the spans -0.5\nto 0.75 and 1.25 to 2.5, or hands the section to the generic trim.\n- `a_section_crossing_only_straight_edges_keeps_one_span`: that line\nacross the same rectangle with the hole moved off it to (1, 1), so the\nface's boundary is curved but the line crosses only straight edges. The\ntrim keeps the one span from -0.5 to 2.5; with the scan's roots kept\nbeside the straight edges, it kept two slivers 2.4e-7 long as well.\n- `a_section_touching_a_hole_keeps_its_span_past_it`: that line across\nthe disc of radius 2 about the origin with a hole of radius 0.25 about\n(1.5625, 0.25), which the line touches at x = 1.5625. Bisecting the\nsamples about x = 0 and 3.125 lands on the touch first. The trim keeps\nthe line from -2 to 2; taking the touch for the crossing, it kept the\nline only to 1.5625.\n- `a_section_touching_a_hole_by_the_edge_keeps_its_span_to_the_edge`:\nthat line across the disc of radius 1.5625 + 6e-6 with a hole of radius\n4e-6 about (1.5625, 4e-6), which the line touches 6e-6 short of the\ndisc's edge. A point 1e-5 along the line past the touch is off the disc.\nThe trim keeps the line to the edge; reading the touch against the whole\nregion, it ended the line at 1.5625.\n- `a_section_touching_a_hole_by_another_side_keeps_its_span`: that line\nacross a half disc of radius 2 whose flat side lies 5e-6 under it, with\nthe hole of radius 0.25 about (1.5625, 0.25) the line touches. Off the\ntouch toward the line, the flat side lies within a probe's reach. The\ntrim keeps the line to the disc's edge; with the probe reaching past the\nflat side, it ended the line at 1.5618.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nTrims a NURBS section across a plane face at its crossings of the face's\ncurved edges, instead of the sampled polygon's chords, so a screw thread\nwhose tooth crosses a rod's end face inside its rim fuses onto the rod\nexactly instead of falling back to the mesh boolean. A crossing of an\narc lying inside its chord's sag no longer reads as no crossing at all,\nand both crossings of an arc between samples are now answered each by\ntheir own curved crossing, with the section handed to the generic trim\nwhile a crossing stays unfound.\n\n- Cylinder walls bounded by closed rims are laid out and traced in one\nturn of `u`, so a wall split by a section keeps both of its rim copies\nin the trace.\n- Loft sides between non-coplanar line edges become bilinear patches\ninstead of the plane through three corners, and profile winding follows\nthe first section that stands off the first profile's plane rather than\nthe last.\n- A plane sub-face's interior point is checked on its own curves rather\nthan its sampled polygon, taking main's version that declines a piece\nwith no clear point.\n\n<sup>Written for commit 166719d1f9eda708bb5be459c4ee6a8983b85251.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2241?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2241?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2241&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T18:33:40-07:00",
+          "tree_id": "dc514f4fdef2fe3fb8d51d4b10d5934d96024cd7",
+          "url": "https://github.com/andymai/brepkit/commit/1d28a0a736f74f386061b6e1f929ca641a714ca8"
+        },
+        "date": 1793410607039,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1148678,
+            "range": "± 15292",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1235513,
+            "range": "± 88261",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14080,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 689322,
+            "range": "± 2312",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29736605,
+            "range": "± 53057",
             "unit": "ns/iter"
           }
         ]
