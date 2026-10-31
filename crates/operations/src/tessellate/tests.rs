@@ -4017,6 +4017,48 @@ fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
     }
 }
 
+/// The saddle S(u, v) = (u, v, 5.78uv) has straight iso-lines, so only its
+/// twist refines its grid: at deflection 0.01 it needs some 17 divisions
+/// each way. The grid taken for it holds every cell within half the
+/// deflection in fewer cells than doubling both directions to the first
+/// grid that holds, 32 by 32.
+#[test]
+fn a_twisted_patch_grows_its_grid_by_what_its_worst_cell_needs() {
+    let saddle = bilinear(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, 1.0, 5.78),
+    );
+    let at = |u: f64, v: f64| saddle.evaluate(u, v);
+    let deflection = 0.01;
+    let worst = |(n_u, n_v): (usize, usize)| {
+        #[allow(clippy::cast_precision_loss)]
+        let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
+        (0..n_u)
+            .flat_map(|i| (0..n_v).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                #[allow(clippy::cast_precision_loss)]
+                let corner = (du * i as f64, dv * j as f64);
+                super::nurbs::cell_twist(&at, corner, (du, dv))
+            })
+            .fold(0.0_f64, f64::max)
+    };
+    let doubled = (0..=10)
+        .map(|k| (1_usize << k, 1_usize << k))
+        .find(|&grid| worst(grid) <= 0.5 * deflection)
+        .unwrap();
+    assert_eq!(doubled, (32, 32));
+    let grid =
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), deflection, 1024);
+    assert!(
+        worst(grid) <= 0.5 * deflection,
+        "{grid:?} strays {}",
+        worst(grid)
+    );
+    assert!(grid.0 * grid.1 < 32 * 32, "grew to {grid:?}");
+}
+
 /// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
 /// 0.2. Its middle strays 0.05 from the two triangles of either split, but
 /// toward its narrow end, where one triangle is a sliver standing steep,

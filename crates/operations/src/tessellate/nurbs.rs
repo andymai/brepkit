@@ -917,9 +917,16 @@ pub(super) fn iso_divisions_over(
 /// along either diagonal ([`cell_twist`]). A twisted cell (a bilinear patch
 /// between skew lines) has straight sides and iso-lines, which no chord test
 /// sees, yet its middle stands up to a quarter of its twist,
-/// |P00 + P11 - P01 - P10| / 4, off those triangles; doubling both directions
-/// quarters that. A flat cell whose parameters run unevenly across it lies in
-/// its triangles' plane, however far from their diagonal, and needs nothing.
+/// |P00 + P11 - P01 - P10| / 4, off those triangles. A flat cell whose
+/// parameters run unevenly across it lies in its triangles' plane, however
+/// far from their diagonal, and needs nothing.
+///
+/// A cell's stray, from its twist or from its curvature both ways, falls
+/// with the square of its size, so both directions grow by the root of what
+/// the worst cell still needs, with a tenth to spare and at most double. A
+/// tube's quarter whose iso-lines each hold half the deflection strays up
+/// to their sum: doubling both directions for a cell a tenth over would
+/// quadruple its mesh.
 pub(super) fn untwisted_grid(
     at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
@@ -927,27 +934,33 @@ pub(super) fn untwisted_grid(
     deflection: f64,
     max_divisions: usize,
 ) -> (usize, usize) {
-    // Every cell is checked: a patch's worst cell can sit anywhere, at a
+    // Every cell is read: a patch's worst cell can sit anywhere, at a
     // taper's narrow end or wherever a saddle flattens, and a spread of cells
-    // can step over it. The check stops at the first cell that fails.
-    let fits = |n_u: usize, n_v: usize| {
+    // can step over it.
+    let worst = |n_u: usize, n_v: usize| {
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
-        (0..n_u).all(|i| {
-            (0..n_v).all(|j| {
+        let mut worst = 0.0_f64;
+        for i in 0..n_u {
+            for j in 0..n_v {
                 #[allow(clippy::cast_precision_loss)]
                 let corner = (du.mul_add(i as f64, u_lo), dv.mul_add(j as f64, v_lo));
-                cell_twist(at, corner, (du, dv)) <= 0.5 * deflection
-            })
-        })
+                worst = worst.max(cell_twist(at, corner, (du, dv)));
+            }
+        }
+        worst
     };
+    let half = 0.5 * deflection;
     let mut refined = false;
     loop {
-        let next = ((n_u * 2).min(max_divisions), (n_v * 2).min(max_divisions));
         // The twist never takes cells past the grid's budget: a grid capped
         // down to it gives up the divisions the chord test asked for. Short of
         // a grid it could move to, it checks nothing.
-        if next == (n_u, n_v) || next.0 * next.1 > GRID_MAX_CELLS {
+        let fits_a_step = |n_u: usize, n_v: usize| {
+            let next = ((n_u + 1).min(max_divisions), (n_v + 1).min(max_divisions));
+            next != (n_u, n_v) && next.0 * next.1 <= GRID_MAX_CELLS
+        };
+        if !fits_a_step(n_u, n_v) {
             if refined {
                 log::warn!(
                     "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
@@ -955,7 +968,26 @@ pub(super) fn untwisted_grid(
             }
             break;
         }
-        if fits(n_u, n_v) {
+        let stray = worst(n_u, n_v);
+        if stray <= half {
+            break;
+        }
+        let grow = (1.1 * (stray / half).sqrt()).min(2.0);
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let step = |n: usize| {
+            (((n as f64) * grow).ceil() as usize)
+                .max(n + 1)
+                .min(max_divisions)
+        };
+        let next = (step(n_u), step(n_v));
+        if next.0 * next.1 > GRID_MAX_CELLS {
+            log::warn!(
+                "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
+            );
             break;
         }
         (n_u, n_v) = next;
