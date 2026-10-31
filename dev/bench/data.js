@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793412855315,
+  "lastUpdate": 1793418550498,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63233,6 +63233,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17295812,
             "range": "± 324509",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1990088fca1493099b378e7f0226e81accacb66f",
+          "message": "perf(check): integrate a whole NURBS patch over its own domain (#2251)\n\nMeasuring the volume of a solid tiled with whole NURBS patches no longer\nprojects every boundary sample onto the surface, so\n`sweep_along_curved_edges_follows_them` runs in 7 s in a debug build\ninstead of 633 s.\n\nToday a NURBS face's area, volume and moments come from Green's theorem\nalong its boundary: every boundary sample is projected onto the surface,\nand each edge is integrated in pieces between knot lines. A circle swept\nalong a three-turn helix tiles its tube with 1764 bilinear patches, and\ntheir volume took 45 s; swept along the helix's two halves, the tube has\n13252 patches, and their volume took 543 s. The sweeps themselves take\nmilliseconds.\n\n## Change\n\n- A face on a polynomial NURBS surface with clamped knots, none inside\nrepeated more often than its degree, open and with no side shrunk to a\npoint, is integrated over its `(u, v)` domain directly when it has no\nholes and its wire is straight edges, each from one corner of the domain\nto the next. Each side is shown to be its edge by the side's control\npoints, which bound it, lying on the edge's segment, to a billionth of\nthe patch's shortest side.\n- The domain is cut into panels at every distinct knot. The rule takes\ntwo points more than the surface's degree, up to eight, and each panel\nis halved until it settles, but never past where its halves come within\na thousand units in the last place of its parameters; a panel too narrow\nto halve four times is left to the boundary integral.\n- A face with a curved edge, on a rational surface, or not shown whole\nkeeps the boundary integral.\n\n## Tests\n\n- `a_whole_nurbs_patch_reads_over_its_domain_as_along_its_boundary`: the\ntwisted patch with corners (0, 0, 0), (1, 0, 0), (0, 1, 0) and (1, 1, 1)\nholds the same area, volume and moments over its domain as along its\nboundary, to 1e-10.\n- `only_a_whole_nurbs_patch_is_read_over_its_domain`: the flat patch cut\ndown to a middle square, or holed by it, is left to its boundary; the\nwhole patch reads over its domain as a unit square, with a third for its\nvolume term.\n- `a_nurbs_face_not_shown_whole_is_left_to_its_boundary`: a patch 1e6 by\n10 trimmed half a unit in from its long sides, a degree-1 side that dips\nto y = -0.2 at its knot 0.125 under a straight edge, a side that is a\ncurve, a rational patch weighted 1e16 over half of it, a degree-1 patch\nsplit apart by a doubled knot, and patches carrying half the square on a\nspan one unit in the last place wide or 2^-43 wide are each left to the\nboundary integral. Read over their domains by this path's earlier\nchecks, the trimmed patch gave an area of 1e7 for 9e6, the dipping side\n1.025 for 1, the weighted patch 0.5 for 1, the doubled knot 0.6 for 1,\nand the one-unit span 0.5 for 1.\n- `a_whole_nurbs_patch_keeps_a_narrow_span_by_its_end`: the flat unit\npatch whose last `u` span, 2^-20 wide, carries half the square reads as\na unit square, with a third for its volume term.\n- The helix sweep's 1764 patches give the same volume over their domains\nas along their boundaries to 1e-11, 4613.081493669865 for\n4613.081493669855. The 13252-patch volume takes 5.4 s.\n- `brepkit-operations`' 1067 unit tests pass in 94 s, the sweep test\namong them in 7 s, and so do `brepkit-io`'s and `brepkit-check`'s.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nIntegrates a NURBS face that is its whole surface directly over its `(u,\nv)` domain instead of along its boundary via Green's theorem, so a solid\nis measured without projecting every boundary sample onto the surface.\nThe helix sweep test now runs in 7 s in a debug build, down from 633 s.\n\n- The fast path needs a polynomial surface with clamped knots, no knot\nrepeated more often than the degree, no holes, and straight wire edges\nfrom corner to corner, each side proven to be its edge by its control\npoints.\n- Tolerance scales to the shortest side, and every distinct knot cuts a\npanel, so a sliver span at the domain's end is not dropped. A span too\nnarrow to halve four times without its parameter points rounding onto\neach other is left to the boundary, and panels are never halved past\nthat.\n- New tests check domain and boundary results agree to 1e-10 and that\ntrimmed, holed, dipped, curved-side, heavily weighted rational, split,\nand too-narrow-span patches stay on the boundary path.\n\n<sup>Written for commit b00ba0ccf6971a4100ae6785cfd5fde280a7dd38.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2251?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2251?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2251&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-30T20:45:53-07:00",
+          "tree_id": "aac50137c61ba7469b23e1f97748d8cba38c74fd",
+          "url": "https://github.com/andymai/brepkit/commit/1990088fca1493099b378e7f0226e81accacb66f"
+        },
+        "date": 1793418540861,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1116501,
+            "range": "± 2565",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1192160,
+            "range": "± 2081",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13338,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 684230,
+            "range": "± 927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 29021572,
+            "range": "± 67592",
             "unit": "ns/iter"
           }
         ]
