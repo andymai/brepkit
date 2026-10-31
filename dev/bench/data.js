@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793471152756,
+  "lastUpdate": 1793471509815,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63557,6 +63557,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23110214,
             "range": "± 89290",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7ba7a351c66c31f4ff1a0518711ad288cf7636b2",
+          "message": "fix(operations): sweep each profile edge on its own curve in sweep_with_options (#2255)\n\n`sweep_with_options`, and with it `guidedSweep`, now sweeps each profile\nedge on its own curve, so a circle scaled along a line sweeps an exact\nfrustum and a square turned by a guide keeps its area at every height.\n\nToday it cuts a curved profile into chords and joins a fixed count of\nrings with flat or ruled quads. On `main`, a circle of radius 10 scaled\nto half along 40 measures 7239.547, where the frustum holds 7330.383\n(#2247), and a square of side 10 turned 45 degrees about a straight\nspine of 40 measures 3974.378 for 4000 (#2248, which reports 2666.667\nfor a full turn). A holed square scaled the same way comes out invalid,\nits hole's walls including faces with two vertices, and a circle of\nradius 1 carried round a quarter circle of radius 10 measures 47.798 for\n49.348.\n\n## Change\n\n- Each section is the profile carried along the path by a similarity:\nthe frame's rotation, the scale law's factor and a translation. Closed\nprofile edges are cut into exact pieces, as revolve cuts them\n(`split_closed_wire_exact`).\n- Each edge sweeps one side face whose rows are the edge's own control\npoints and weights, each point running along its interpolated\ntrajectory. An affine map keeps a rational curve rational on its control\npoints' images, so every section of the surface is the moved edge\nwherever the trajectories hold their points.\n- The trajectories are cut at the path's and the guide's knots, fitted\nper piece, and joined there. Their samples double until every one holds\nwithin 1e-7 of the sweep's extent, checked halfway between samples, or\nthe path reaches 1024 segments. Cut at the guide's knots, the fit error\nfalls about 16 times per doubling; across them it fell 4 times. A\ncaller's segment count is held to 1024, and trajectories that all run\nstraight at an even pace are found before any cubic is fitted and become\nlines.\n- A line edge between two straight trajectories sweeps a plane when its\ncorners lie in one. The caps are the end sections' planes, holes kept.\n- The profile's plane is read on every control point of its edges, which\nbound them, so a span that leaves the plane between samples is caught.\n- A `Fixed` sweep keeps its whole frame, so its sections are\ntranslations of the profile. That frame's up comes from `orthogonalize`,\nwhich normalized the rounding left when the profile's normal runs along\nthe tangent into a direction off the perpendicular plane; a projection\nbelow 1e-9 of its vector now takes the fallback axis.\n- A path with a kink, which has no single section there in smooth mode,\na path or guide with a knot span narrower than 1e-9 of its parameter, a\nprofile whose boundary is not planar, and a profile edge whose curve is\nnot clamped keep the ring-by-ring sweep.\n- The edge-to-NURBS reading revolve uses moves to\n`revolve::edge_span_nurbs`, shared by both.\n\n## Tests\n\n- `sweep_on_the_profiles_own_curves.rs`, each case upright and turned\noff the axes:\n  - the scaled circle, with 0, 64 and 10000 segments, sweeps 6 faces;\n  - the holed square sweeps 10, its 4 sides and 2 caps planes;\n- the square turned 45, 90 and 360 degrees by a helix guide sweeps 6\nfaces, its end's corners at the start's turned through the guide's own\nturn;\n  - the quarter torus;\n- a circle carried without turning along a quadratic from the origin to\n(10, 0, 5) holds its area times its run along its normal, 10π. Turned,\nit measured 22.31 with `orthogonalize` unchanged.\n- Each is valid, meshes closed, and holds its closed-form volume to 1e-6\nby `measure::solid_volume` and by the check crate's\n`exact_solid_volume`. On `main` the first four tests fail.\n- `a_profile_leaving_its_plane_between_samples_takes_no_plane_cap`: a\nsquare whose fourth side is a degree-1 NURBS raised 1 out of its plane\nover the knot span from 0.02 to 0.04. Every plane face of its sweep\nholds its edges; with the plane read on 16 samples an edge, a cap's edge\nstood off it.\n- `a_path_with_a_knot_span_too_narrow_to_fit_sweeps_ring_by_ring`: a\nquadratic path with a span 1e-12 wide sweeps ring by ring, valid.\n- The full turn measures 4000.0000387. Its sweep takes 6 ms in a debug\nbuild; its volume takes 19 s there, down to 9 s with #2256.\n- The sweep, revolve, pipe and helix tests in `brepkit-operations` (133)\nand the wasm sweep tests (4) pass.\n- The pose sweep and truth audit outputs are identical to `main`'s.\n\nFixes #2247\nFixes #2248",
+          "timestamp": "2026-10-31T18:28:37Z",
+          "tree_id": "a2778a9aaff12c6880ddb056e29d2f1c9c9642eb",
+          "url": "https://github.com/andymai/brepkit/commit/7ba7a351c66c31f4ff1a0518711ad288cf7636b2"
+        },
+        "date": 1793471502287,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1108532,
+            "range": "± 1862",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1180895,
+            "range": "± 1385",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13073,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 670958,
+            "range": "± 2345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28994731,
+            "range": "± 39645",
             "unit": "ns/iter"
           }
         ]
