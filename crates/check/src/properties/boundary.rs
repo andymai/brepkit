@@ -930,11 +930,17 @@ pub(super) fn nurbs_face_over_domain(
             .rev()
             .zip(&row)
             .all(|(p, q)| close(p, q))
-            && mine
-                .iter()
-                .rev()
-                .zip(&theirs)
-                .all(|(a, b)| (1.0 - a - b).abs() <= 2.0 * f64::EPSILON);
+            && {
+                // Read reversed, each span against the side's at its own
+                // scale: mirroring rounds on the domain's scale, which can
+                // hide a knot moved inside a narrow span.
+                let back: Vec<f64> = mine.windows(2).rev().map(|w| w[1] - w[0]).collect();
+                theirs
+                    .windows(2)
+                    .map(|w| w[1] - w[0])
+                    .zip(&back)
+                    .all(|(a, &b)| (a - b).abs() <= 4.0 * f64::EPSILON * a.abs().max(b.abs()))
+            };
         forward || backward
     };
     let mut covered = [false; 4];
