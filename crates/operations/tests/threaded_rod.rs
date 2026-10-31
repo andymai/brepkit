@@ -56,18 +56,17 @@ fn a_thread_ridges_faces_hold_their_corners() {
     assert!(validate::validate_solid(&topo, ridge).unwrap().is_valid());
 }
 
-/// Two turns of the ridge fused onto a rod of radius 7 that runs past both
-/// ends: no mesh fallback, a valid solid that meshes closed, and the rod and
-/// the ridge's volumes less their overlap, each measured exactly.
-#[test]
-fn a_thread_ridge_fuses_onto_its_rod_exactly() {
+/// `sections` of the ridge fused onto a rod of radius 7, 20 long from
+/// `bottom`: no mesh fallback, a valid solid that meshes closed, and the rod
+/// and the ridge's volumes less their overlap, each measured exactly.
+fn fuses_exactly(sections: usize, bottom: f64) {
     let mut topo = Topology::new();
-    let ridge = thread_ridge(&mut topo, 40);
+    let ridge = thread_ridge(&mut topo, sections);
     let rod = primitives::make_cylinder(&mut topo, 7.0, 20.0).unwrap();
     brepkit_operations::transform::transform_solid(
         &mut topo,
         rod,
-        &brepkit_math::mat::Mat4::translation(0.0, 0.0, -5.0),
+        &brepkit_math::mat::Mat4::translation(0.0, 0.0, bottom),
     )
     .unwrap();
     let volume = |topo: &Topology, s| measure::solid_volume(topo, s, 1e-3).unwrap();
@@ -79,7 +78,7 @@ fn a_thread_ridge_fuses_onto_its_rod_exactly() {
     assert_eq!(
         boolean::mesh_fallback_count(),
         before,
-        "a boolean fell back"
+        "{sections} sections from {bottom}: a boolean fell back"
     );
 
     assert!(validate::validate_solid(&topo, fused).unwrap().is_valid());
@@ -90,8 +89,25 @@ fn a_thread_ridge_fuses_onto_its_rod_exactly() {
     let measured = volume(&topo, fused);
     assert!(
         (measured - expected).abs() < 1e-6 * expected,
-        "fuse holds {measured}, {expected} expected"
+        "{sections} sections from {bottom}: fuse holds {measured}, {expected} expected"
     );
+}
+
+/// Two turns of the ridge fused onto a rod that runs past both its ends.
+#[test]
+fn a_thread_ridge_fuses_onto_its_rod_exactly() {
+    fuses_exactly(40, -5.0);
+}
+
+/// The ridge starting at the rod's end face, its first sections reaching
+/// 1.7 below it. With eight steps the last tooth's lower flank crosses the
+/// end face inside its rim, at radius 6.91, and the rim on the flank; with
+/// forty the ridge climbs clear of the face.
+#[test]
+fn a_thread_ridge_through_its_rods_end_fuses_exactly() {
+    for sections in [8, 40] {
+        fuses_exactly(sections, 0.0);
+    }
 }
 
 /// Two turns of the ridge put its last section straight above its first,
