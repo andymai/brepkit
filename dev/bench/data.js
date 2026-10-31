@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793471509815,
+  "lastUpdate": 1793472928544,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63611,6 +63611,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28994731,
             "range": "± 39645",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ddba3b45541d2b882caac83608065373ea572c69",
+          "message": "test(operations): probe what a notched prism's intersect with a cylinder keeps (#2260)\n\nThe notched-prism intersect tests from #2254 now also check which\nmaterial the result keeps, not only its faces and volume.\n\nIn each of the six poses, every outline's result reads a point in the\noutline's material as inside, and a point in its notch and one past the\ncylinder's wall as outside, each point moved with the pose:\n\n| Outline | Material | Notch | Past the wall |\n| --- | --- | --- | --- |\n| L | (1, -10, 4) | (4, -10, 4) | (1, -21.5, 1) |\n| V | (1.5, -10, 6) | (4, -10, 6) | (4, -21.5, 1) |\n| W | (2, -10, 1) | (2.4, -10, 5) | (2, -21.5, 1) |\n\nThe prisms run 22 deep from y = 0 and the cylinder has radius 21, so\neach last point lies inside its outline but outside the wall. The three\ntests pass.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nExtends the notched-prism intersect tests to verify which material the\nresult keeps, not just its faces and volume.\n\nFor each of the six poses, the tests now classify a point in the\noutline's material as inside, and points in the notch and past the\ncylinder's wall as outside, with all probe points moved by the pose.\n\n<sup>Written for commit 32d88a4ace0a7f2fda242296d2e199a99238ec1c.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2260?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2260?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2260&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-10-31T18:52:14Z",
+          "tree_id": "31deea0087e9e858633f454c01acc71c24a83176",
+          "url": "https://github.com/andymai/brepkit/commit/ddba3b45541d2b882caac83608065373ea572c69"
+        },
+        "date": 1793472919350,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1100493,
+            "range": "± 2966",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1177432,
+            "range": "± 3212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14189,
+            "range": "± 89",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 674021,
+            "range": "± 1746",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28718326,
+            "range": "± 58935",
             "unit": "ns/iter"
           }
         ]
