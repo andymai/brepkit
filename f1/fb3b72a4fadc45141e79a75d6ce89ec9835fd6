@@ -1,0 +1,22 @@
+crates/check/src/classify/mod.rs
+  s_489facd0569909::t_67ad85e8322d5b 290-291,296,310-313,318,337
+crates/check/src/classify/boundary.rs
+  s_489facd0569909::t_a8e89b2acd4198 1306-1326,1329-1338,1342-1361,1363-1364,1373
+  s_489facd0569909::t_67ad85e8322d5b 25-27,946-947,958,996,1014,1079-1087,1089-1094,1101,1103-1118,1327-1328,1339-1341,1362,1365-1372
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f1fb3b72a4fadc45141e79a75d6ce89ec9835fd6",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
