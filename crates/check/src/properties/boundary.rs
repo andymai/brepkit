@@ -45,6 +45,30 @@ pub(super) fn integrand<S: ParametricSurface>(
     ]
 }
 
+/// [`integrand`] on a NURBS surface from one evaluation of its point and
+/// first partials, where the surface's own partials evaluate it once each.
+fn nurbs_integrand(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    u: f64,
+    v: f64,
+    about: Vec3,
+) -> [f64; 8] {
+    let d = surface.derivatives(u, v, 1);
+    let (p, n) = (d[0][0], d[1][0].cross(d[0][1]));
+    let n_len = n.length();
+    let pv = p - about;
+    [
+        n_len,
+        pv.dot(n) / 3.0,
+        0.5 * p.x() * p.x() * n.x(),
+        0.5 * p.y() * p.y() * n.y(),
+        0.5 * p.z() * p.z() * n.z(),
+        p.x() * n_len,
+        p.y() * n_len,
+        p.z() * n_len,
+    ]
+}
+
 /// One edge of a wire in its traversal: its curve, end points, and the
 /// curve parameter it runs over from where the wire enters it.
 pub(super) struct BoundaryEdge<'a> {
@@ -1065,7 +1089,7 @@ pub(super) fn nurbs_face_over_domain(
     let mut across = |v: f64| -> Option<[f64; 8]> {
         let mut acc = [0.0; 8];
         for w in u_cuts.windows(2) {
-            let mut g = |u: f64| Some(integrand(s, u, v, about));
+            let mut g = |u: f64| Some(nurbs_integrand(s, u, v, about));
             add(
                 &mut acc,
                 &adaptive(&mut g, w[0], w[1], gauss, halvings(w[0], w[1]), floor)?,
