@@ -1037,6 +1037,131 @@ mod tests {
         );
     }
 
+    /// A quadratic patch over two spans each way, its weights 1 to 64 and
+    /// varying along both, bounded by its four sides as their own NURBS
+    /// curves: read over its domain, it holds the area of a brute tensor
+    /// Gauss sum, 16 points on 16 panels per span each way, and what
+    /// Green's theorem along its boundary gives, to 1e-9.
+    #[test]
+    fn a_rational_patch_weighted_along_both_directions_reads_over_its_domain() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let knots = vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0];
+        let rise = |k: usize| {
+            #[allow(clippy::cast_precision_loss)]
+            let k = k as f64;
+            k * (3.0 - k) / 2.25
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let cps: Vec<Vec<Point3>> = (0..4)
+            .map(|i| {
+                (0..4)
+                    .map(|j| {
+                        Point3::new(
+                            i as f64 / 3.0,
+                            j as f64 / 3.0,
+                            0.4 * rise(i).mul_add(rise(j), 2.5),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let ws = vec![
+            vec![1.0, 8.0, 2.0, 1.0],
+            vec![4.0, 60.0, 16.0, 3.0],
+            vec![2.0, 30.0, 64.0, 5.0],
+            vec![1.0, 6.0, 9.0, 1.0],
+        ];
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            2,
+            knots.clone(),
+            knots.clone(),
+            cps.clone(),
+            ws.clone(),
+        )
+        .unwrap();
+        let side = |points: Vec<Point3>, weights: Vec<f64>| {
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots.clone(), points, weights).unwrap())
+        };
+        let (row, col) = (
+            |j: usize| (0..4).map(|i| cps[i][j]).collect::<Vec<_>>(),
+            |i: usize| cps[i].clone(),
+        );
+        let (row_w, col_w) = (
+            |j: usize| (0..4).map(|i| ws[i][j]).collect::<Vec<_>>(),
+            |i: usize| ws[i].clone(),
+        );
+        let mut topo = Topology::new();
+        let corner = |topo: &mut Topology, q: Point3| topo.add_vertex(Vertex::new(q, 1e-7));
+        let c = [
+            corner(&mut topo, cps[0][0]),
+            corner(&mut topo, cps[3][0]),
+            corner(&mut topo, cps[3][3]),
+            corner(&mut topo, cps[0][3]),
+        ];
+        let mut edge = |a, b, curve, forward| {
+            OrientedEdge::new(topo.add_edge(Edge::new(a, b, curve)), forward)
+        };
+        let edges = vec![
+            edge(c[0], c[1], side(row(0), row_w(0)), true),
+            edge(c[1], c[2], side(col(3), col_w(3)), true),
+            edge(c[3], c[2], side(row(3), row_w(3)), false),
+            edge(c[0], c[3], side(col(0), col_w(0)), false),
+        ];
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone()));
+        let about = Vec3::new(0.3, -0.2, 0.5);
+        let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
+            .unwrap()
+            .expect("read over its domain");
+        let by_boundary = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+
+        let rule = brepkit_math::quadrature::gauss_legendre_points(16);
+        let panels: Vec<(f64, f64)> = (0..32)
+            .map(|k| (f64::from(k) / 32.0, f64::from(k + 1) / 32.0))
+            .collect();
+        let mut brute = 0.0;
+        for &(u0, u1) in &panels {
+            for gu in rule {
+                let u = (0.5 * (u1 - u0)).mul_add(gu.x, 0.5 * (u0 + u1));
+                for &(v0, v1) in &panels {
+                    for gv in rule {
+                        let v = (0.5 * (v1 - v0)).mul_add(gv.x, 0.5 * (v0 + v1));
+                        let d = surface.derivatives(u, v, 1);
+                        let w = 0.25 * (u1 - u0) * (v1 - v0) * gu.w * gv.w;
+                        brute += w * d[1][0].cross(d[0][1]).length();
+                    }
+                }
+            }
+        }
+        assert!(
+            ((whole.area - brute) / brute).abs() < 1e-9,
+            "area {} for {brute}",
+            whole.area
+        );
+        let read = |c: &face_integrator::FaceContribution| {
+            [
+                c.area,
+                c.volume,
+                c.volume_moment_x,
+                c.volume_moment_y,
+                c.volume_moment_z,
+                c.centroid_x,
+                c.centroid_y,
+                c.centroid_z,
+            ]
+        };
+        for (x, y) in read(&whole).into_iter().zip(read(&by_boundary)) {
+            assert!((x - y).abs() <= 1e-9 * x.abs().max(1.0), "{x} for {y}");
+        }
+    }
+
     /// A patch cubic along `v` over two spans, its sides along `v` curved
     /// and bounded by NURBS edges that are those sides' own curves, the one
     /// at `u = 1` stored running against it: read over its domain, it holds
