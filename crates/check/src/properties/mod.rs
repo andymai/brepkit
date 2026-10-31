@@ -94,7 +94,12 @@ pub fn exact_solid_volume(topo: &Topology, solid: SolidId) -> Result<Option<f64>
             | FaceSurface::Cone(_)
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_) => boundary::curved_face_by_boundary(topo, face, sign, about)?,
-            FaceSurface::Nurbs(_) => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
+            FaceSurface::Nurbs(_) => {
+                match boundary::nurbs_face_over_domain(topo, face, sign, about)? {
+                    Some(whole) => Some(whole),
+                    None => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
+                }
+            }
         };
         let Some(contribution) = contribution else {
             return Ok(None);
@@ -822,6 +827,288 @@ mod tests {
                 c.volume
             );
         }
+    }
+
+    /// The twisted patch with corners (0, 0, 0), (1, 0, 0), (0, 1, 0) and
+    /// (1, 1, 1), bounded by its four sides: read over its domain it holds
+    /// what it holds along its boundary, area, volume and moments alike.
+    #[test]
+    fn a_whole_nurbs_patch_reads_over_its_domain_as_along_its_boundary() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let p = Point3::new;
+        let twisted = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let corners: Vec<_> = [
+            p(0.0, 0.0, 0.0),
+            p(1.0, 0.0, 0.0),
+            p(1.0, 1.0, 1.0),
+            p(0.0, 1.0, 0.0),
+        ]
+        .iter()
+        .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+        .collect();
+        let edges = (0..4)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(twisted));
+        let about = Vec3::new(0.3, -0.2, 0.5);
+        let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+        let along = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+        let read = |c: &face_integrator::FaceContribution| {
+            [
+                c.area,
+                c.volume,
+                c.volume_moment_x,
+                c.volume_moment_y,
+                c.volume_moment_z,
+                c.centroid_x,
+                c.centroid_y,
+                c.centroid_z,
+            ]
+        };
+        for (x, y) in read(&whole).iter().zip(read(&along)) {
+            assert!(
+                (x - y).abs() < 1e-10,
+                "{:?} for {:?}",
+                read(&whole),
+                read(&along)
+            );
+        }
+    }
+
+    /// The flat patch cut down to the square from 0.25 to 0.75, or holed by
+    /// it, is not its whole surface and is left to its boundary; the whole
+    /// patch is read over its domain, a unit square and a third for its
+    /// volume term.
+    #[test]
+    fn only_a_whole_nurbs_patch_is_read_over_its_domain() {
+        use brepkit_topology::face::{Face, FaceSurface};
+        let origin = Vec3::new(0.0, 0.0, 0.0);
+        let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let middle = [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)];
+        let mut topo = Topology::new();
+        let inner = wire_through(&mut topo, &middle, |_| None);
+        let cut = Face::new(inner, vec![], FaceSurface::Nurbs(flat_top()));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &cut, 1.0, origin)
+                .unwrap()
+                .is_none()
+        );
+        let outer = wire_through(&mut topo, &unit, |_| None);
+        let hole = wire_through(&mut topo, &middle, |_| None);
+        let holed = Face::new(outer, vec![hole], FaceSurface::Nurbs(flat_top()));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &holed, 1.0, origin)
+                .unwrap()
+                .is_none()
+        );
+        let outer = wire_through(&mut topo, &unit, |_| None);
+        let whole = Face::new(outer, vec![], FaceSurface::Nurbs(flat_top()));
+        let c = boundary::nurbs_face_over_domain(&topo, &whole, 1.0, origin)
+            .unwrap()
+            .unwrap();
+        assert!(
+            (c.area - 1.0).abs() < 1e-12 && (c.volume - 1.0 / 3.0).abs() < 1e-12,
+            "area {}, volume {}",
+            c.area,
+            c.volume
+        );
+    }
+
+    /// The `(x, y)` of a control point at `v = 0` and of its partner at
+    /// `v = 1`.
+    type Column = ((f64, f64), (f64, f64));
+
+    /// A patch at z = 1 of degree 1 along `v`, through `columns` of control
+    /// points along `u`, weighted by `weights`.
+    fn patch_at_one(
+        knots_u: Vec<f64>,
+        columns: &[Column],
+        weights: &[f64],
+    ) -> brepkit_math::nurbs::surface::NurbsSurface {
+        let p = |(x, y): (f64, f64)| Point3::new(x, y, 1.0);
+        brepkit_math::nurbs::surface::NurbsSurface::new(
+            knots_u.len() - columns.len() - 1,
+            1,
+            knots_u,
+            vec![0.0, 0.0, 1.0, 1.0],
+            columns.iter().map(|&(a, b)| vec![p(a), p(b)]).collect(),
+            weights.iter().map(|&w| vec![w; 2]).collect(),
+        )
+        .unwrap()
+    }
+
+    /// Faces the domain's integral cannot vouch for are left to their
+    /// boundaries: a patch 1e6 by 10 trimmed half a unit in from its long
+    /// sides; a degree-1 side that dips to y = -0.2 at its knot 0.125 under
+    /// a straight edge along y = 0; a side that is a curve; a rational patch
+    /// weighted 1e16 over half of it; a degree-1 patch whose knot 0.5 is
+    /// doubled, splitting it apart over x = 0.3 to 0.7; and patches carrying
+    /// half the square on a span one unit in the last place wide, or 2^-43
+    /// wide by the domain's end.
+    #[test]
+    fn a_nurbs_face_not_shown_whole_is_left_to_its_boundary() {
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::face::{Face, FaceSurface};
+        let origin = Vec3::new(0.0, 0.0, 0.0);
+        let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let mut topo = Topology::new();
+        let mut faces = Vec::new();
+        let wide = patch_at_one(
+            vec![0.0, 0.0, 1.0, 1.0],
+            &[((0.0, 0.0), (0.0, 10.0)), ((1e6, 0.0), (1e6, 10.0))],
+            &[1.0, 1.0],
+        );
+        let trimmed = [(0.0, 0.5), (1e6, 0.5), (1e6, 9.5), (0.0, 9.5)];
+        faces.push(Face::new(
+            wire_through(&mut topo, &trimmed, |_| None),
+            vec![],
+            FaceSurface::Nurbs(wide),
+        ));
+        let dipped = patch_at_one(
+            vec![0.0, 0.0, 0.125, 0.25, 1.0, 1.0],
+            &[
+                ((0.0, 0.0), (0.0, 1.0)),
+                ((0.125, -0.2), (0.125, 1.0)),
+                ((0.25, 0.0), (0.25, 1.0)),
+                ((1.0, 0.0), (1.0, 1.0)),
+            ],
+            &[1.0; 4],
+        );
+        faces.push(Face::new(
+            wire_through(&mut topo, &unit, |_| None),
+            vec![],
+            FaceSurface::Nurbs(dipped),
+        ));
+        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        faces.push(Face::new(
+            wire_through(&mut topo, &unit, |k| {
+                (k == 1).then(|| EdgeCurve::NurbsCurve(line.clone()))
+            }),
+            vec![],
+            FaceSurface::Nurbs(flat_top()),
+        ));
+        let heavy = patch_at_one(
+            vec![0.0, 0.0, 0.5, 1.0, 1.0],
+            &[
+                ((0.0, 0.0), (0.0, 1.0)),
+                ((0.5, 0.0), (0.5, 1.0)),
+                ((1.0, 0.0), (1.0, 1.0)),
+            ],
+            &[1.0, 1e16, 1e16],
+        );
+        faces.push(Face::new(
+            wire_through(&mut topo, &unit, |_| None),
+            vec![],
+            FaceSurface::Nurbs(heavy),
+        ));
+        let quarters = [
+            ((0.0, 0.0), (0.0, 1.0)),
+            ((0.25, 0.0), (0.25, 1.0)),
+            ((0.75, 0.0), (0.75, 1.0)),
+            ((1.0, 0.0), (1.0, 1.0)),
+        ];
+        let split = patch_at_one(
+            vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0],
+            &[
+                ((0.0, 0.0), (0.0, 1.0)),
+                ((0.3, 0.0), (0.3, 1.0)),
+                ((0.7, 0.0), (0.7, 1.0)),
+                ((1.0, 0.0), (1.0, 1.0)),
+            ],
+            &[1.0; 4],
+        );
+        let a = 0.5 + 2.0_f64.powi(-53);
+        let one_ulp = patch_at_one(
+            vec![0.0, 0.0, a, a + 2.0_f64.powi(-53), 1.0, 1.0],
+            &quarters,
+            &[1.0; 4],
+        );
+        let sliver = patch_at_one(
+            vec![0.0, 0.0, 1.0 - 2.0_f64.powi(-43), 1.0, 1.0],
+            &[
+                ((0.0, 0.0), (0.0, 1.0)),
+                ((0.5, 0.0), (0.5, 1.0)),
+                ((1.0, 0.0), (1.0, 1.0)),
+            ],
+            &[1.0; 3],
+        );
+        for surface in [split, one_ulp, sliver] {
+            faces.push(Face::new(
+                wire_through(&mut topo, &unit, |_| None),
+                vec![],
+                FaceSurface::Nurbs(surface),
+            ));
+        }
+        for (k, face) in faces.iter().enumerate() {
+            assert!(
+                boundary::nurbs_face_over_domain(&topo, face, 1.0, origin)
+                    .unwrap()
+                    .is_none(),
+                "face {k} read over its domain"
+            );
+        }
+    }
+
+    /// The flat unit patch whose `u` knots run 0, 1 - 2^-20, 1, its last span
+    /// that narrow strip of `u` carrying half the square: read over its
+    /// domain, a unit square and a third for its volume term.
+    #[test]
+    fn a_whole_nurbs_patch_keeps_a_narrow_span_by_its_end() {
+        use brepkit_topology::face::{Face, FaceSurface};
+        let narrow = patch_at_one(
+            vec![0.0, 0.0, 1.0 - 2.0_f64.powi(-20), 1.0, 1.0],
+            &[
+                ((0.0, 0.0), (0.0, 1.0)),
+                ((0.5, 0.0), (0.5, 1.0)),
+                ((1.0, 0.0), (1.0, 1.0)),
+            ],
+            &[1.0; 3],
+        );
+        let mut topo = Topology::new();
+        let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let face = Face::new(
+            wire_through(&mut topo, &unit, |_| None),
+            vec![],
+            FaceSurface::Nurbs(narrow),
+        );
+        let c = boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .unwrap();
+        assert!(
+            (c.area - 1.0).abs() < 1e-9 && (c.volume - 1.0 / 3.0).abs() < 1e-9,
+            "area {}, volume {}",
+            c.area,
+            c.volume
+        );
     }
 
     /// The flat patch with its side at u = 1 the rational line
