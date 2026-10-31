@@ -175,9 +175,42 @@ pub fn sew_faces(
         new_face_ids.push(topo.add_face(face));
     }
 
-    let shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
+    // Faces sewn from separate operations need not face one way: a loft's
+    // wall sewn in as a hole's faces away from the hole. They take the first
+    // face's sense across their shared edges, and all turn outward if they
+    // close the other way round.
+    if let Some(&seed) = new_face_ids.first() {
+        brepkit_topology::orientation::propagate_orientation(topo, &new_face_ids, &[seed])?;
+    }
+    let closes = closes(topo, &new_face_ids)?;
+    let shell = Shell::new(new_face_ids.clone()).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
-    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
+    let solid = topo.add_solid(Solid::new(shell_id, vec![]));
+    if closes {
+        let b = crate::measure::solid_bounding_box(topo, solid)?;
+        let deflection = 0.01 * (b.max - b.min).length().max(tol);
+        if crate::measure::oriented_solid_volume(topo, solid, deflection)? < 0.0 {
+            for &fid in &new_face_ids {
+                let reversed = topo.face(fid)?.is_reversed();
+                topo.face_mut(fid)?.set_reversed(!reversed);
+            }
+        }
+    }
+    Ok(solid)
+}
+
+/// Whether every edge of `faces` bounds exactly two of them.
+fn closes(topo: &Topology, faces: &[FaceId]) -> Result<bool, crate::OperationsError> {
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                *uses.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(!uses.is_empty() && uses.values().all(|&n| n == 2))
 }
 
 /// An edge sewing has made: its curve, and the vertex it starts at.
@@ -537,6 +570,25 @@ mod tests {
     use brepkit_topology::wire::{OrientedEdge, Wire};
 
     use super::*;
+
+    /// A box's six faces, one sewn turned inside out and then all of them,
+    /// come back facing out of the box: its volume read with its sign is
+    /// the box's 24.
+    #[test]
+    fn sewn_faces_face_out_of_what_they_close() {
+        for flipped in [vec![0], (0..6).collect()] {
+            let mut topo = Topology::new();
+            let b = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+            let faces = brepkit_topology::explorer::solid_faces(&topo, b).unwrap();
+            for &i in &flipped {
+                let r = topo.face(faces[i]).unwrap().is_reversed();
+                topo.face_mut(faces[i]).unwrap().set_reversed(!r);
+            }
+            let solid = sew_faces(&mut topo, &faces, 1e-6).unwrap();
+            let v = crate::measure::oriented_solid_volume(&topo, solid, 0.01).unwrap();
+            assert!((v - 24.0).abs() < 1e-9, "{flipped:?} flipped: volume {v}");
+        }
+    }
 
     /// Helper: create a standalone quad face with independent vertices/edges.
     fn make_loose_quad(

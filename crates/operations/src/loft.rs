@@ -2073,6 +2073,73 @@ pub(crate) fn mean_chord_params(rows: &[Vec<Point3>]) -> Vec<f64> {
     sum.iter().map(|s| s / f64::from(counted)).collect()
 }
 
+/// The faces of a loft that are not its caps, as an open shell.
+///
+/// A cap is a face whose whole boundary lies on the surface of one of
+/// `ends`, the profiles the loft starts or ends on; every other face of a
+/// loft reaches the next section.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup fails or the loft has no face but
+/// its caps.
+pub fn loft_sides(
+    topo: &mut Topology,
+    solid: SolidId,
+    ends: &[FaceId],
+) -> Result<brepkit_topology::shell::ShellId, crate::OperationsError> {
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let surfaces: Vec<FaceSurface> = ends
+        .iter()
+        .map(|&f| topo.face(f).map(|face| face.surface().clone()))
+        .collect::<Result<_, _>>()?;
+    let mut samples_of = Vec::with_capacity(faces.len());
+    let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &fid in &faces {
+        let face = topo.face(fid)?;
+        let mut samples = Vec::new();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                for k in 0..=4 {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 4.0, t0);
+                    samples.push(edge.curve().evaluate_with_endpoints(t, a, b));
+                }
+            }
+        }
+        for p in &samples {
+            lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
+            hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
+        }
+        samples_of.push(samples);
+    }
+    let tol = 1e-7 * (hi - lo).length().max(1.0);
+    let on = |surface: &FaceSurface, p: Point3| match surface {
+        FaceSurface::Plane { normal, d } => (dot_normal_point(*normal, p) - d).abs() <= tol,
+        other => other
+            .project_point(p)
+            .and_then(|(u, v)| other.evaluate(u, v))
+            .is_some_and(|q| (q - p).length() <= tol),
+    };
+    let sides: Vec<FaceId> = faces
+        .iter()
+        .zip(&samples_of)
+        .filter(|(_, samples)| {
+            !surfaces
+                .iter()
+                .any(|surface| samples.iter().all(|&p| on(surface, p)))
+        })
+        .map(|(&f, _)| f)
+        .collect();
+    Ok(topo.add_shell(Shell::new(sides)?))
+}
+
 #[cfg(test)]
 mod tests;
 
