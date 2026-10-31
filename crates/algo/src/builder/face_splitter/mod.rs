@@ -2373,7 +2373,7 @@ fn split_periodic_face_around_seam_holes(
         rank,
         precomputed_interior: None,
     };
-    let remainder_interior = cylinder_cone_remainder_interior(&probe)?;
+    let remainder_interior = cylinder_cone_remainder_interior(&probe, tol)?;
     sub_faces.insert(
         0,
         SplitSubFace {
@@ -5293,10 +5293,13 @@ const CAP_INTERIORITY_MARGIN: f64 = 1.05;
 
 /// A loop with the two halves of one of `rims` back to back (the rim split
 /// only at its seam's antipode, touched by no section) with that rim whole
-/// in their place, starting where the first half starts.
+/// in their place, starting where the first half starts. Two pieces of a
+/// rim meeting at one of `trace_splits`, a point the rim was split at only
+/// for the trace, are joined into one arc the same way.
 fn rejoin_untouched_rims(
     wire: Vec<OrientedPCurveEdge>,
     rims: &[OrientedPCurveEdge],
+    trace_splits: &[Point3],
     tol: f64,
 ) -> Vec<OrientedPCurveEdge> {
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -5317,40 +5320,139 @@ fn rejoin_untouched_rims(
             continue;
         }
         let Some(rim) = rims.iter().find(|r| {
-            same_circle(&r.curve_3d, &first.curve_3d)
-                && same_circle(&r.curve_3d, &second.curve_3d)
-                && near(r.start_3d, first.start_3d)
+            same_circle(&r.curve_3d, &first.curve_3d) && same_circle(&r.curve_3d, &second.curve_3d)
         }) else {
             continue;
         };
-        if !near(first.end_3d, second.start_3d) || !near(second.end_3d, first.start_3d) {
+        if !near(first.end_3d, second.start_3d) {
+            continue;
+        }
+        let whole = near(rim.start_3d, first.start_3d) && near(second.end_3d, first.start_3d);
+        if !whole && !trace_splits.iter().any(|&p| near(p, first.end_3d)) {
             continue;
         }
         let Ok(line) = Line2D::new(first.start_uv, second.end_uv - first.start_uv) else {
             continue;
         };
-        let whole = OrientedPCurveEdge {
+        let joined = OrientedPCurveEdge {
             curve_3d: rim.curve_3d.clone(),
             pcurve: Curve2D::Line(line),
             start_uv: first.start_uv,
             end_uv: second.end_uv,
             start_3d: first.start_3d,
-            end_3d: first.start_3d,
+            end_3d: if whole { first.start_3d } else { second.end_3d },
             forward: first.forward,
             source_edge_idx: None,
-            pave_block_id: rim.pave_block_id,
+            pave_block_id: if whole { rim.pave_block_id } else { None },
         };
         let mut out: Vec<OrientedPCurveEdge> = Vec::with_capacity(n - 1);
         for k in 0..n {
             if k == i {
-                out.push(whole.clone());
+                out.push(joined.clone());
             } else if k != (i + 1) % n {
                 out.push(wire[k].clone());
             }
         }
-        return rejoin_untouched_rims(out, rims, tol);
+        return rejoin_untouched_rims(out, rims, trace_splits, tol);
     }
     wire
+}
+
+/// Lay a periodic face's outer boundary out as one walk in `u` from its
+/// first closed rim: every edge moves by whole periods to start where the
+/// edge before it ends, so the seam's two copies land a period apart with
+/// the rims running between them. A closed rim's UVs run its curve's own
+/// sense whatever its traversal, so one traversed against its curve leaves
+/// the walk a turn back from its start. False, with nothing moved, when
+/// there is no closed rim to walk from or a closed rim is not a circle (the
+/// split of a closed ellipse rim takes its pieces' u from projection, not
+/// from the rim's own span).
+fn walk_boundary_from_closed_rim(edges: &mut [OrientedPCurveEdge]) -> bool {
+    use std::f64::consts::TAU;
+    let closed = |e: &OrientedPCurveEdge| (e.start_3d - e.end_3d).length() < 1e-10;
+    if edges
+        .iter()
+        .any(|e| closed(e) && !matches!(e.curve_3d, EdgeCurve::Circle(_)))
+    {
+        return false;
+    }
+    let Some(first) = edges.iter().position(closed) else {
+        return false;
+    };
+    let n = edges.len();
+    let mut cur = edges[first].start_uv.x();
+    for k in 0..n {
+        let e = &mut edges[(first + k) % n];
+        let shift = ((cur - e.start_uv.x()) / TAU).round() * TAU;
+        if shift != 0.0 {
+            e.start_uv = Point2::new(e.start_uv.x() + shift, e.start_uv.y());
+            e.end_uv = Point2::new(e.end_uv.x() + shift, e.end_uv.y());
+        }
+        cur = if closed(e) && !e.forward {
+            2.0f64.mul_add(e.start_uv.x(), -e.end_uv.x())
+        } else {
+            e.end_uv.x()
+        };
+    }
+    true
+}
+
+/// Move a section edge's ends by whole periods into the one-turn window
+/// `[lo, lo + period]` its face's boundary spans. An open section's interior
+/// lies inside the window, so its curve's samples, unwrapped from the
+/// middle, say which copy each end takes, an end on the seam included; its
+/// own end UVs can come from separate projections and need not be one span.
+/// A closed section winds once from the seam and moves as a whole.
+fn place_section_in_turn(e: &mut OrientedPCurveEdge, surface: &FaceSurface, lo: f64, period: f64) {
+    const SAMPLES: u32 = 8;
+    let nearest = |u: f64, target: f64| u - ((u - target) / period).round() * period;
+    let shift_to = |e: &mut OrientedPCurveEdge, start_u: f64, end_u: f64| {
+        e.start_uv = Point2::new(start_u, e.start_uv.y());
+        e.end_uv = Point2::new(end_u, e.end_uv.y());
+    };
+    if (e.start_3d - e.end_3d).length() < 1e-10 {
+        let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
+        let shift = -((mid - lo) / period).floor() * period;
+        shift_to(e, e.start_uv.x() + shift, e.end_uv.x() + shift);
+        return;
+    }
+    let (s3, e3) = if e.forward {
+        (e.start_3d, e.end_3d)
+    } else {
+        (e.end_3d, e.start_3d)
+    };
+    let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+    let Some(mut path) = (0..=SAMPLES)
+        .map(|k| {
+            let t = (t1 - t0).mul_add(f64::from(k) / f64::from(SAMPLES), t0);
+            surface
+                .project_point(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
+                .map(|(u, _)| u)
+        })
+        .collect::<Option<Vec<f64>>>()
+    else {
+        return;
+    };
+    let mid = path.len() / 2;
+    path[mid] = lo + (path[mid] - lo).rem_euclid(period);
+    for k in (0..mid).rev() {
+        path[k] = nearest(path[k], path[k + 1]);
+    }
+    for k in mid + 1..path.len() {
+        path[k] = nearest(path[k], path[k - 1]);
+    }
+    // A marched curve's domain can run from either end.
+    let first = e.curve_3d.evaluate_with_endpoints(t0, s3, e3);
+    let (at_start, at_end) = if (first - e.start_3d).length() <= (first - e.end_3d).length() {
+        (path[0], path[path.len() - 1])
+    } else {
+        (path[path.len() - 1], path[0])
+    };
+    shift_to(
+        e,
+        nearest(e.start_uv.x(), at_start),
+        nearest(e.end_uv.x(), at_end),
+    );
 }
 
 /// Wire points in TRAVERSAL order, honouring each oriented edge's direction.
@@ -5464,6 +5566,8 @@ fn distribute_cap_circles(
                 sf.reversed,
                 face_id,
                 &sub_wire_pts,
+                // A plane face: the wall search this clears is never run.
+                brepkit_math::tolerance::Tolerance::new().linear,
             );
             result.extend(carved);
         }
@@ -6187,6 +6291,7 @@ fn split_face_2d_impl(
             reversed,
             face_id,
             &wire_pts,
+            tol.linear,
         );
     }
 
@@ -6225,6 +6330,7 @@ fn split_face_2d_impl(
     // For periodic faces, align closed boundary edge UV with seam edge UV.
     // The same 3D vertex projects to u=0 (from circle unwrapping) and u=seam
     // (from Line edge projection). Shift the circle UV so it starts at seam_u.
+    let mut walked_from_closed_rim = false;
     if u_periodic {
         let seam_u_opt = boundary_edges.iter().find_map(|e| {
             if matches!(e.curve_3d, EdgeCurve::Line) {
@@ -6252,6 +6358,9 @@ fn split_face_2d_impl(
                     }
                 }
             }
+            if matches!(surface, FaceSurface::Cylinder(_)) {
+                walked_from_closed_rim = walk_boundary_from_closed_rim(&mut boundary_edges);
+            }
         }
     }
 
@@ -6263,6 +6372,9 @@ fn split_face_2d_impl(
     // with the seam Line edge. Splitting the circle at the UV-antipodal
     // point creates half-arcs whose endpoints match the seam edge vertices,
     // enabling the wire builder to form proper rectangular bands.
+    // A cylinder's rim points split here for the trace alone, which no
+    // neighbouring face shares: the pieces meeting at one rejoin afterwards.
+    let mut trace_splits: Vec<Point3> = Vec::new();
     if u_periodic && !sections.is_empty() {
         // Find the seam Line edge's vertex UV to determine seam_u.
         let seam_u = {
@@ -6293,6 +6405,9 @@ fn split_face_2d_impl(
                         .iter()
                         .any(|&p| (p - anti_pt).length() < 100.0 * tol.linear);
                     split_pts_3d.push(anti_pt);
+                    if !taken && matches!(surface, FaceSurface::Cylinder(_)) {
+                        trace_splits.push(anti_pt);
+                    }
                     if taken && matches!(surface, FaceSurface::Cone(_)) {
                         for quarter in [0.5, 1.5] {
                             if let Some(p) =
@@ -6339,18 +6454,19 @@ fn split_face_2d_impl(
     // The closed rims as they arrive, before the split at the seam's
     // antipode above: a rim no section touches is put back whole in the loop
     // that runs both its halves, so it stays the edge its cap shares.
-    let closed_rims: Vec<OrientedPCurveEdge> = if matches!(surface, FaceSurface::Cone(_)) {
-        boundary_edges
-            .iter()
-            .filter(|e| {
-                matches!(e.curve_3d, EdgeCurve::Circle(_))
-                    && (e.start_3d - e.end_3d).length() < 1e-10
-            })
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let closed_rims: Vec<OrientedPCurveEdge> =
+        if matches!(surface, FaceSurface::Cone(_) | FaceSurface::Cylinder(_)) {
+            boundary_edges
+                .iter()
+                .filter(|e| {
+                    matches!(e.curve_3d, EdgeCurve::Circle(_))
+                        && (e.start_3d - e.end_3d).length() < 1e-10
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
 
     let boundary_edges = split_boundary_edges_at_3d_points(
         boundary_edges,
@@ -7016,9 +7132,13 @@ fn split_face_2d_impl(
     // seam lines out in one continuous u window, which need not be the
     // principal one; a section projected to its principal u would then sit
     // a period away from the rims it ends on. Move each section by whole
-    // periods so its midpoint falls inside the window.
+    // periods so its midpoint falls inside the window. A cylinder's boundary
+    // walked from a closed rim spans exactly one turn, and its sections go
+    // in end by end (`place_section_in_turn`): their own end UVs need not be
+    // one continuous span.
+    let mut one_turn: Option<(f64, f64)> = None;
     if u_periodic
-        && matches!(surface, FaceSurface::Cone(_))
+        && matches!(surface, FaceSurface::Cone(_) | FaceSurface::Cylinder(_))
         && all_edges.len() > n_boundary_edges
         && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
     {
@@ -7028,7 +7148,14 @@ fn split_face_2d_impl(
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
                 (lo.min(u), hi.max(u))
             });
-        if hi - lo > 0.5 * u_period {
+        if matches!(surface, FaceSurface::Cylinder(_)) {
+            if walked_from_closed_rim && (hi - lo - u_period).abs() < 1e-6 {
+                for e in &mut all_edges[n_boundary_edges..] {
+                    place_section_in_turn(e, &surface, lo, u_period);
+                }
+                one_turn = Some((lo, u_period));
+            }
+        } else if hi - lo > 0.5 * u_period {
             for e in &mut all_edges[n_boundary_edges..] {
                 let mid = f64::midpoint(e.start_uv.x(), e.end_uv.x());
                 let shift = -((mid - lo) / u_period).floor() * u_period;
@@ -7686,8 +7813,18 @@ fn split_face_2d_impl(
         all_edges
     };
 
+    // Laid out in one turn, the face is a strip cut open along its seam and
+    // is traced as one: glued at the seam, a vertex there offers the edges
+    // leaving both of its copies, and the walk can cross to the far copy (an
+    // ellipse closing at the seam's end, where it touches the rim).
+    let strip = one_turn.is_some_and(|(lo, period)| {
+        all_edges.iter().all(|e| {
+            let (a, b) = (e.start_uv.x(), e.end_uv.x());
+            a.min(b) >= lo - 1e-6 && a.max(b) <= lo + period + 1e-6
+        })
+    });
     // Build wire loops via angular-sorting traversal.
-    let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
+    let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic && !strip, v_periodic);
     if trace_split {
         let mut rows: Vec<String> = all_edges
             .iter()
@@ -8307,9 +8444,11 @@ fn split_face_2d_impl(
                 .iter()
                 .any(|e| !matches!(e.curve_3d, EdgeCurve::Line));
             // A loop running along part of the face's boundary and back
-            // along a section (a conic tongue off a cone's rim) bounds a
-            // region of the face too; only a loop of sections alone is a hole.
-            let on_boundary = matches!(surface, FaceSurface::Cone(_))
+            // along a section (a conic tongue off a cone's rim, the lens
+            // between a cylinder's rim and an oblique plane's ellipse traced
+            // on its strip) bounds a region of the face too; only a loop of
+            // sections alone is a hole.
+            let on_boundary = (matches!(surface, FaceSurface::Cone(_)) || strip)
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_none())
                 && wire_loop.iter().any(|e| e.source_edge_idx.is_some());
             // On a partial band, a loop of sections alone (a strut poking
@@ -8522,6 +8661,7 @@ fn split_face_2d_impl(
         };
     let hole_margin = tol.linear * 10.0;
     let mut sub_faces = Vec::new();
+    let mut halves: Vec<(usize, Vec<OrientedPCurveEdge>)> = Vec::new();
     for (outer_wire, _area) in outers {
         if !hole_polys_for_discard.is_empty() {
             let poly = sample_wire_loop_uv_via_frame(&outer_wire, frame);
@@ -8577,11 +8717,19 @@ fn split_face_2d_impl(
             precomputed_interior: None,
         };
         // A whole rim spans a period in one edge, which the periodic
-        // sampler folds away: take the interior point from the halves.
-        let rejoined = rejoin_untouched_rims(sub_face.outer_wire.clone(), &closed_rims, tol.linear);
+        // sampler folds away: the interior point is read from the halves,
+        // once the holes are attached.
+        let rejoined = rejoin_untouched_rims(
+            sub_face.outer_wire.clone(),
+            &closed_rims,
+            &trace_splits,
+            tol.linear,
+        );
         if rejoined.len() != sub_face.outer_wire.len() {
-            sub_face.precomputed_interior = interior_point_3d(&sub_face, None, tol.linear);
-            sub_face.outer_wire = rejoined;
+            halves.push((
+                sub_faces.len(),
+                std::mem::replace(&mut sub_face.outer_wire, rejoined),
+            ));
         }
         sub_faces.push(sub_face);
     }
@@ -8805,6 +8953,30 @@ fn split_face_2d_impl(
         attach_whole_holes(&mut sub_faces, &passthrough_inner_wires);
     }
 
+    // The interior point is read once the holes are in: one read before can
+    // sit in a hole. A wall with a lens hole is searched clear of its holes in
+    // 3D, as `fill_images_faces` searches one: the lens's one closed edge
+    // gives no hole polygon in UV.
+    for (i, wire) in halves {
+        let sub_face = &mut sub_faces[i];
+        let whole = std::mem::replace(&mut sub_face.outer_wire, wire);
+        let lens = sub_face.inner_wires.iter().any(|hole| {
+            matches!(
+                hole.as_slice(),
+                [e] if matches!(
+                    e.curve_3d,
+                    EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+                )
+            )
+        });
+        sub_face.precomputed_interior = if lens {
+            cylinder_cone_remainder_interior(sub_face, tol.linear)
+        } else {
+            interior_point_3d(sub_face, None, tol.linear)
+        };
+        sub_face.outer_wire = whole;
+    }
+
     sub_faces
 }
 
@@ -8875,7 +9047,15 @@ pub fn interior_point_3d(
         sampling::sample_wire_loop_uv_on_surface(&sub_face.outer_wire, &sub_face.surface)
     } else if matches!(&sub_face.surface, FaceSurface::Cylinder(_)) {
         let (u_period, v_period) = super::pcurve_compute::surface_periods(&sub_face.surface);
-        sample_wire_loop_uv_periodic(&sub_face.outer_wire, u_period, v_period)
+        // A wire laid out in one unbroken run of u, each edge starting where
+        // the one before it ends, is sampled as it lies: unwrapping would
+        // fold a piece spanning half a turn or more onto its complement.
+        let wire = &sub_face.outer_wire;
+        let unbroken = wire
+            .iter()
+            .zip(wire.iter().cycle().skip(1))
+            .all(|(a, b)| (b.start_uv.x() - a.end_uv.x()).abs() < 1e-9);
+        sample_wire_loop_uv_periodic(wire, if unbroken { None } else { u_period }, v_period)
     } else if let Some(pts) = sphere_loop_uv(sub_face) {
         pts
     } else if let (FaceSurface::Plane { .. }, Some(f)) = (&sub_face.surface, frame) {
