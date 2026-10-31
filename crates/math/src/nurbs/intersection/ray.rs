@@ -222,6 +222,9 @@ impl RaySurface {
     #[must_use]
     pub fn hits(&self, origin: Point3, dir: Vec3, reach: f64) -> RayHits {
         let mut out = RayHits::default();
+        // How near another hit must lie to each hit to be it: a hit settled
+        // on its parameters' spacing is known no closer than that.
+        let mut radii: Vec<f64> = Vec::new();
         let Ok(frame) = Frame3::from_normal(origin, dir) else {
             out.grazed = true;
             return out;
@@ -256,7 +259,7 @@ impl RaySurface {
             if along_u.max(along_v) <= leaf || depth >= MAX_DEPTH {
                 // A leaf the solve cannot settle is cut further, and at the
                 // deepest level the ray is taken to graze it.
-                if self.solve(&patch, origin, frame.z, reach, &mut out) {
+                if self.solve(&patch, origin, frame.z, reach, (&mut out, &mut radii)) {
                     continue;
                 }
                 if depth >= MAX_DEPTH {
@@ -316,7 +319,7 @@ impl RaySurface {
         origin: Point3,
         dir: Vec3,
         reach: f64,
-        out: &mut RayHits,
+        (out, radii): (&mut RayHits, &mut Vec<f64>),
     ) -> bool {
         let (mut u, mut v) = (
             f64::midpoint(leaf.u.0, leaf.u.1),
@@ -330,7 +333,7 @@ impl RaySurface {
             let (s, su, sv) = (d[0][0], d[1][0], d[0][1]);
             let f = s - Vec3::new(origin.x(), origin.y(), origin.z()) - dir * t;
             if f.length() <= 1e-12 * self.scale {
-                return self.record(leaf, (u, v, t), origin, dir, reach, reach, out);
+                return self.record(leaf, (u, v, t), origin, dir, reach, reach, (out, radii));
             }
             let spacing = 4.0 * f64::EPSILON * su.length().mul_add(u.abs(), sv.length() * v.abs());
             stalled = (f.length() <= spacing).then_some((u, v, t, spacing));
@@ -353,12 +356,22 @@ impl RaySurface {
             return false;
         };
         out.grazed |= spacing > reach;
-        self.record(leaf, (u, v, t), origin, dir, reach, spacing.max(reach), out)
+        self.record(
+            leaf,
+            (u, v, t),
+            origin,
+            dir,
+            reach,
+            spacing.max(reach),
+            (out, radii),
+        )
     }
 
     /// Record the hit at `(u, v)`, `t` along the ray, when it lies in `leaf`
-    /// and ahead of `origin` by no less than `-reach`, unless one lies
-    /// within `merge` of it. Always settles the leaf.
+    /// and ahead of `origin` by no less than `-reach`, unless one already
+    /// lies within `merge` of it or within its own radius in `radii`, which
+    /// keeps one radius per hit: the same crossing merges whichever is found
+    /// first. Always settles the leaf.
     #[allow(clippy::too_many_arguments)]
     fn record(
         &self,
@@ -368,7 +381,7 @@ impl RaySurface {
         dir: Vec3,
         reach: f64,
         merge: f64,
-        out: &mut RayHits,
+        (out, radii): (&mut RayHits, &mut Vec<f64>),
     ) -> bool {
         let (du, dv) = (self.surface.domain_u(), self.surface.domain_v());
         let slack_u = 1e-9 * (du.1 - du.0);
@@ -383,8 +396,14 @@ impl RaySurface {
         }
         out.grazed |= self.second_crossing_near(u, v, dir);
         let point = origin + dir * t;
-        if !out.hits.iter().any(|h| (h.point - point).length() <= merge) {
+        let known = out
+            .hits
+            .iter()
+            .zip(radii.iter())
+            .any(|(h, &radius)| (h.point - point).length() <= radius.max(merge));
+        if !known {
             out.hits.push(RayHit { u, v, t, point });
+            radii.push(merge);
         }
         true
     }
@@ -601,6 +620,38 @@ mod tests {
             let case = format!("knots {lo} to {hi} through {through:?}");
             assert_eq!(found.hits.len(), 1, "{case}: {:?}", found.hits);
             assert_eq!(found.grazed, flagged, "{case}");
+        }
+    }
+
+    /// Two hits 1e-4 apart, one settled on a spacing of 1e-3 and one found
+    /// to 1e-6, are one hit whichever is found first.
+    #[test]
+    fn hits_merge_on_the_wider_radius_in_either_order() {
+        let p = Point3::new;
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let flat = NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots,
+            vec![
+                vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let ray = RaySurface::new(&flat).unwrap();
+        let leaf = ray.patches[0].clone();
+        let (origin, dir) = (p(0.5, 0.5, 1.0), Vec3::new(0.0, 0.0, -1.0));
+        let wide = ((0.5, 0.5, 1.0), 1e-3);
+        let near = ((0.5, 0.5, 1.0 + 1e-4), 1e-6);
+        for order in [[wide, near], [near, wide]] {
+            let (mut out, mut radii) = (RayHits::default(), Vec::new());
+            for (hit, merge) in order {
+                assert!(ray.record(&leaf, hit, origin, dir, 1e-6, merge, (&mut out, &mut radii)));
+            }
+            assert_eq!(out.hits.len(), 1, "{order:?}: {:?}", out.hits);
         }
     }
 }
