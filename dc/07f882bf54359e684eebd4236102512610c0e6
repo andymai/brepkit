@@ -1,0 +1,19 @@
+crates/algo/src/builder/face_splitter/special_cases.rs
+  s_489facd0569909::t_db0480af6b364b 8092
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dc07f882bf54359e684eebd4236102512610c0e6",
+  "prompts": {},
+  "sessions": {
+    "s_489facd0569909": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c29f5475-80ce-4718-819f-3b43541bee54",
+        "model": "unknown"
+      },
+      "human_author": "Andy Aragon <hi@andymai.com>"
+    }
+  }
+}
