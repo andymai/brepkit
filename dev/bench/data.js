@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793410614886,
+  "lastUpdate": 1793412855315,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -63179,6 +63179,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 29736605,
             "range": "± 53057",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2c3b8215633b752b26a6d83701e26e3038ff60d4",
+          "message": "chore(main): release 4.6.11 (#2250)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.6.11](https://github.com/andymai/brepkit/compare/v4.6.10...v4.6.11)\n(2026-10-31)\n\n\n### Bug Fixes\n\n* **algo:** cross a plane face's curved edges on the curves when\ntrimming a NURBS section\n([#2241](https://github.com/andymai/brepkit/issues/2241))\n([1d28a0a](https://github.com/andymai/brepkit/commit/1d28a0a736f74f386061b6e1f929ca641a714ca8))\n* **operations:** mesh a twisted NURBS face to its twist\n([#2245](https://github.com/andymai/brepkit/issues/2245))\n([438ca32](https://github.com/andymai/brepkit/commit/438ca323ac4e3c89f80c14ea832fc6ce2aea5c12))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-10-31T02:11:29Z",
+          "tree_id": "023a40e13c4b482f44d53fb2549882df5c8fb993",
+          "url": "https://github.com/andymai/brepkit/commit/2c3b8215633b752b26a6d83701e26e3038ff60d4"
+        },
+        "date": 1793412845703,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 637051,
+            "range": "± 13799",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 675839,
+            "range": "± 6212",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 7966,
+            "range": "± 53",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 390564,
+            "range": "± 1240",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17295812,
+            "range": "± 324509",
             "unit": "ns/iter"
           }
         ]
