@@ -949,9 +949,11 @@ pub(super) fn iso_chords_hold(
 /// `chords` tells whether a count of divisions along `u` (`true`) or `v`
 /// keeps the iso-line chords the starting grid was sized by. A count that
 /// is no multiple of the starting one moves the grid's lines off those the
-/// sizing read, and a chord can then take in two creases it held apart: a
-/// step `chords` refuses is rounded up to the next multiple of the starting
-/// count, whose chords each lie within one it read.
+/// sizing read, and a chord can then take in two creases it held apart. Nor
+/// does a multiple always hold: creases turning opposite ways can leave a
+/// chord's ends alike and turn one of its parts. A step `chords` refuses
+/// goes up through the multiples of the starting count to the first it
+/// holds, and to the first multiple when none within the division cap does.
 pub(super) fn untwisted_grid(
     at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
@@ -1011,11 +1013,21 @@ pub(super) fn untwisted_grid(
                 .min(max_divisions)
         };
         let nested = |n: usize, start: usize, along_u: bool| {
-            if chords.is_none_or(|holds| holds(along_u, n)) {
-                n
-            } else {
-                n.div_ceil(start).saturating_mul(start).min(max_divisions)
+            let Some(holds) = chords else {
+                return n;
+            };
+            if holds(along_u, n) {
+                return n;
             }
+            let first = n.div_ceil(start).saturating_mul(start).min(max_divisions);
+            let mut m = first;
+            while !holds(along_u, m) {
+                if m >= max_divisions {
+                    return first;
+                }
+                m = m.saturating_add(start).min(max_divisions);
+            }
+            m
         };
         let next = (
             nested(step(n_u), start_u, true),

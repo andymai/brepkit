@@ -4123,6 +4123,47 @@ fn a_twisted_grid_keeps_two_creases_in_separate_chords() {
     assert!(turn <= angular_tol, "{grid:?}: a chord turns {turn}");
 }
 
+/// The twisted saddle S(u, v) = (u, v, 5.78uv) from a 4 by 4 grid, under a
+/// chord test that holds only counts divisible by 3, as creases might: a
+/// step the test refuses goes on through the multiples of 4 to one it holds,
+/// and the grid taken holds both the test and the deflection. Rounded up to
+/// the next multiple of 4 alone, it ends on a count the test refuses.
+#[test]
+fn a_twisted_grid_steps_on_to_a_count_its_chords_hold() {
+    let saddle = bilinear(
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, 1.0, 5.78),
+    );
+    let at = |u: f64, v: f64| saddle.evaluate(u, v);
+    let thirds = |_: bool, n: usize| n.is_multiple_of(3);
+    let deflection = 0.01;
+    let grid = super::nurbs::untwisted_grid(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (4, 4),
+        deflection,
+        1024,
+        Some(&thirds),
+    );
+    assert!(
+        thirds(true, grid.0) && thirds(false, grid.1),
+        "grew to {grid:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let (du, dv) = (1.0 / grid.0 as f64, 1.0 / grid.1 as f64);
+    let worst = (0..grid.0)
+        .flat_map(|i| (0..grid.1).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            #[allow(clippy::cast_precision_loss)]
+            let corner = (du * i as f64, dv * j as f64);
+            super::nurbs::cell_twist(&at, corner, (du, dv))
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(worst <= 0.5 * deflection, "{grid:?} strays {worst}");
+}
+
 /// The patch S(u, v) = (20u(1 - 0.99v), 20v, 0.2uv) tapers from 20 wide to
 /// 0.2. Its middle strays 0.05 from the two triangles of either split, but
 /// toward its narrow end, where one triangle is a sliver standing steep,
