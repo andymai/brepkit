@@ -94,7 +94,12 @@ pub fn exact_solid_volume(topo: &Topology, solid: SolidId) -> Result<Option<f64>
             | FaceSurface::Cone(_)
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_) => boundary::curved_face_by_boundary(topo, face, sign, about)?,
-            FaceSurface::Nurbs(_) => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
+            FaceSurface::Nurbs(_) => {
+                match boundary::nurbs_face_over_domain(topo, face, sign, about)? {
+                    Some(whole) => Some(whole),
+                    None => boundary::nurbs_face_by_boundary(topo, face, sign, about)?,
+                }
+            }
         };
         let Some(contribution) = contribution else {
             return Ok(None);
@@ -822,6 +827,114 @@ mod tests {
                 c.volume
             );
         }
+    }
+
+    /// The twisted patch with corners (0, 0, 0), (1, 0, 0), (0, 1, 0) and
+    /// (1, 1, 1), bounded by its four sides: read over its domain it holds
+    /// what it holds along its boundary, area, volume and moments alike.
+    #[test]
+    fn a_whole_nurbs_patch_reads_over_its_domain_as_along_its_boundary() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let p = Point3::new;
+        let twisted = brepkit_math::nurbs::surface::NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(0.0, 0.0, 0.0), p(0.0, 1.0, 0.0)],
+                vec![p(1.0, 0.0, 0.0), p(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let corners: Vec<_> = [
+            p(0.0, 0.0, 0.0),
+            p(1.0, 0.0, 0.0),
+            p(1.0, 1.0, 1.0),
+            p(0.0, 1.0, 0.0),
+        ]
+        .iter()
+        .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+        .collect();
+        let edges = (0..4)
+            .map(|k| {
+                let e = topo.add_edge(Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(twisted));
+        let about = Vec3::new(0.3, -0.2, 0.5);
+        let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+        let along = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+        let read = |c: &face_integrator::FaceContribution| {
+            [
+                c.area,
+                c.volume,
+                c.volume_moment_x,
+                c.volume_moment_y,
+                c.volume_moment_z,
+                c.centroid_x,
+                c.centroid_y,
+                c.centroid_z,
+            ]
+        };
+        for (x, y) in read(&whole).iter().zip(read(&along)) {
+            assert!(
+                (x - y).abs() < 1e-10,
+                "{:?} for {:?}",
+                read(&whole),
+                read(&along)
+            );
+        }
+    }
+
+    /// The flat patch cut down to the square from 0.25 to 0.75, or holed by
+    /// it, is not its whole surface and is left to its boundary; the whole
+    /// patch is read over its domain, a unit square and a third for its
+    /// volume term.
+    #[test]
+    fn only_a_whole_nurbs_patch_is_read_over_its_domain() {
+        use brepkit_topology::face::{Face, FaceSurface};
+        let origin = Vec3::new(0.0, 0.0, 0.0);
+        let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let middle = [(0.25, 0.25), (0.75, 0.25), (0.75, 0.75), (0.25, 0.75)];
+        let mut topo = Topology::new();
+        let inner = wire_through(&mut topo, &middle, |_| None);
+        let cut = Face::new(inner, vec![], FaceSurface::Nurbs(flat_top()));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &cut, 1.0, origin)
+                .unwrap()
+                .is_none()
+        );
+        let outer = wire_through(&mut topo, &unit, |_| None);
+        let hole = wire_through(&mut topo, &middle, |_| None);
+        let holed = Face::new(outer, vec![hole], FaceSurface::Nurbs(flat_top()));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &holed, 1.0, origin)
+                .unwrap()
+                .is_none()
+        );
+        let outer = wire_through(&mut topo, &unit, |_| None);
+        let whole = Face::new(outer, vec![], FaceSurface::Nurbs(flat_top()));
+        let c = boundary::nurbs_face_over_domain(&topo, &whole, 1.0, origin)
+            .unwrap()
+            .unwrap();
+        assert!(
+            (c.area - 1.0).abs() < 1e-12 && (c.volume - 1.0 / 3.0).abs() < 1e-12,
+            "area {}, volume {}",
+            c.area,
+            c.volume
+        );
     }
 
     /// The flat patch with its side at u = 1 the rational line

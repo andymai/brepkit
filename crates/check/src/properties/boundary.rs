@@ -807,6 +807,162 @@ fn whole_torus_less_holes(
     }))
 }
 
+/// A face that is its whole open NURBS surface, its integrals over the
+/// surface's `(u, v)` domain directly, in panels between its knots. Green's
+/// theorem along its boundary comes to the same through a projection of
+/// every boundary point, which a face cut from nothing need not pay for: a
+/// sweep tiles its tube with hundreds of such patches. `None` unless the
+/// face has no holes and its wire runs along the domain's four sides, each
+/// edge from one corner to the next.
+pub(super) fn nurbs_face_over_domain(
+    topo: &Topology,
+    face: &Face,
+    sign: f64,
+    about: Vec3,
+) -> Result<Option<FaceContribution>, CheckError> {
+    const DEPTH: u32 = 24;
+    const SAMPLES: u32 = 16;
+    let FaceSurface::Nurbs(s) = face.surface() else {
+        return Ok(None);
+    };
+    if !face.inner_wires().is_empty() || !open_and_poleless(s) {
+        return Ok(None);
+    }
+    let (u0, u1) = s.domain_u();
+    let (v0, v1) = s.domain_v();
+    let corners = [
+        s.evaluate(u0, v0),
+        s.evaluate(u1, v0),
+        s.evaluate(u1, v1),
+        s.evaluate(u0, v1),
+    ];
+    let size = (corners[2] - corners[0])
+        .length()
+        .max((corners[1] - corners[3]).length());
+    let reach = 1e-6 * size.max(1.0);
+    // Side `k` runs from corner `k` to the next, along `v = v0`, `u = u1`,
+    // `v = v1` and `u = u0` in turn.
+    let along_side = |k: usize, w: f64| match k {
+        0 => s.evaluate((u1 - u0).mul_add(w, u0), v0),
+        1 => s.evaluate(u1, (v1 - v0).mul_add(w, v0)),
+        2 => s.evaluate((u1 - u0).mul_add(w, u0), v1),
+        _ => s.evaluate(u0, (v1 - v0).mul_add(w, v0)),
+    };
+    // The distance from `p` to side `k`, its nearest sample refined by
+    // golden section between the samples either side.
+    let off_side = |k: usize, p: Point3| {
+        let at = |w: f64| (along_side(k, w) - p).length();
+        let step = 1.0 / f64::from(SAMPLES);
+        let nearest = (0..=SAMPLES)
+            .map(|i| f64::from(i) * step)
+            .min_by(|a, b| at(*a).total_cmp(&at(*b)))
+            .unwrap_or(0.0);
+        let (mut lo, mut hi) = ((nearest - step).max(0.0), (nearest + step).min(1.0));
+        let ratio = 0.5 * (5.0_f64.sqrt() - 1.0);
+        for _ in 0..60 {
+            let (a, b) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
+            if at(a) < at(b) {
+                hi = b;
+            } else {
+                lo = a;
+            }
+        }
+        at(f64::midpoint(lo, hi))
+    };
+    let corner_of = |p: Point3| corners.iter().position(|&c| (c - p).length() <= reach);
+    let mut covered = [false; 4];
+    for oe in topo.wire(face.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (Some(i), Some(j)) = (corner_of(a), corner_of(b)) else {
+            return Ok(None);
+        };
+        let side = if (i + 1) % 4 == j {
+            i
+        } else if (j + 1) % 4 == i {
+            j
+        } else {
+            return Ok(None);
+        };
+        // A straight edge is its side where the side is straight: a few
+        // of the side's points on the edge, and the edge's middle on the
+        // side. Another edge is read at its middle.
+        let runs_along = if matches!(edge.curve(), EdgeCurve::Line) {
+            let segment = |p: Point3| {
+                let (ab, ap) = (b - a, p - a);
+                let w = (ap.dot(ab) / ab.dot(ab).max(f64::MIN_POSITIVE)).clamp(0.0, 1.0);
+                (ap - ab * w).length()
+            };
+            [0.25, 0.5, 0.75]
+                .iter()
+                .all(|&w| segment(along_side(side, w)) <= reach)
+        } else {
+            let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+            let middle = edge
+                .curve()
+                .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
+            off_side(side, middle) <= reach
+        };
+        if !runs_along {
+            return Ok(None);
+        }
+        covered[side] = true;
+    }
+    if !covered.iter().all(|&c| c) {
+        return Ok(None);
+    }
+    let cuts = |knots: &[f64], lo: f64, hi: f64| {
+        let mut c: Vec<f64> = std::iter::once(lo)
+            .chain(knots.iter().copied().filter(|&k| k > lo && k < hi))
+            .chain(std::iter::once(hi))
+            .collect();
+        c.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (hi - lo));
+        c
+    };
+    let (u_cuts, v_cuts) = (cuts(s.knots_u(), u0, u1), cuts(s.knots_v(), v0, v1));
+    let floor = 1e-14 * size.powi(3);
+    // The volume's integrand is a polynomial of a few times the surface's
+    // degree in each parameter; each panel is halved until it settles, so
+    // a rule a little above the degree serves.
+    let order = (2 + s.degree_u().max(s.degree_v())).min(8);
+    let gauss = gauss_legendre_points(order);
+    let mut across = |v: f64| -> Option<[f64; 8]> {
+        let mut acc = [0.0; 8];
+        for w in u_cuts.windows(2) {
+            let mut g = |u: f64| Some(integrand(s, u, v, about));
+            add(
+                &mut acc,
+                &adaptive(&mut g, w[0], w[1], gauss, DEPTH, floor)?,
+                1.0,
+            );
+        }
+        Some(acc)
+    };
+    let mut total = [0.0; 8];
+    for w in v_cuts.windows(2) {
+        let Some(panel) = adaptive(&mut across, w[0], w[1], gauss, DEPTH, floor) else {
+            return Ok(None);
+        };
+        add(&mut total, &panel, 1.0);
+    }
+    if total[0] <= 1e-12 {
+        return Ok(None);
+    }
+    Ok(Some(FaceContribution {
+        area: total[0],
+        volume: total[1] * sign,
+        volume_moment_x: total[2] * sign,
+        volume_moment_y: total[3] * sign,
+        volume_moment_z: total[4] * sign,
+        centroid_x: total[5],
+        centroid_y: total[6],
+        centroid_z: total[7],
+    }))
+}
+
 /// A face on an open NURBS surface, its integrals by Green's theorem as
 /// [`integrate_by_boundary`] takes them, with `F(u, v) = ∫ g(s, v) ds` from
 /// the start of `u`'s domain in panels between the surface's knots, and
