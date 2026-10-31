@@ -298,7 +298,13 @@ impl NurbsSurface {
         // Compute homogeneous derivatives Aw[k][l] = (wx, wy, wz, w). Those
         // above the degrees are zero, but a rational surface's are not (a
         // polynomial one's are, and the quotient would only add rounding).
-        let (top_u, top_v) = if self.is_rational() { (d, d) } else { (du, dv) };
+        // Only the span's own weights say which: equal ones make the surface
+        // polynomial there, and reading every weight costs the whole net.
+        let w0 = self.weights[span_u - pu][span_v - pv].to_bits();
+        let varies = self.weights[span_u - pu..=span_u]
+            .iter()
+            .any(|row| row[span_v - pv..=span_v].iter().any(|w| w.to_bits() != w0));
+        let (top_u, top_v) = if varies { (d, d) } else { (du, dv) };
         let mut aw = vec![vec![[0.0f64; 4]; d + 1]; d + 1];
         for k in 0..=du {
             for l in 0..=dv {

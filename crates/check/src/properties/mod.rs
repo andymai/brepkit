@@ -898,6 +898,281 @@ mod tests {
         }
     }
 
+    /// A quarter of a cylinder of radius 2 and height 3 as a rational patch,
+    /// bounded by its bottom arc as a circle edge, `top` from (2, 0, 3) to
+    /// (0, 2, 3) stored running against its side, and two lines.
+    fn quarter_cylinder(
+        top: brepkit_topology::edge::EdgeCurve,
+    ) -> (Topology, brepkit_topology::face::Face) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let p = Point3::new;
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![p(2.0, 0.0, 0.0), p(2.0, 0.0, 3.0)],
+                vec![p(2.0, 2.0, 0.0), p(2.0, 2.0, 3.0)],
+                vec![p(0.0, 2.0, 0.0), p(0.0, 2.0, 3.0)],
+            ],
+            vec![vec![1.0; 2], vec![w; 2], vec![1.0; 2]],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let v: Vec<_> = [
+            p(2.0, 0.0, 0.0),
+            p(0.0, 2.0, 0.0),
+            p(0.0, 2.0, 3.0),
+            p(2.0, 0.0, 3.0),
+        ]
+        .iter()
+        .map(|&c| topo.add_vertex(Vertex::new(c, 1e-7)))
+        .collect();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let bottom = Circle3D::new(p(0.0, 0.0, 0.0), z, 2.0).unwrap();
+        let edges = vec![
+            OrientedEdge::new(
+                topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Circle(bottom))),
+                true,
+            ),
+            OrientedEdge::new(topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line)), true),
+            OrientedEdge::new(topo.add_edge(Edge::new(v[3], v[2], top)), false),
+            OrientedEdge::new(topo.add_edge(Edge::new(v[3], v[0], EdgeCurve::Line)), true),
+        ];
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        (topo, Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
+    }
+
+    /// A circle edge of radius 2 about `center` in a plane z = constant.
+    fn arc_about(center: Point3) -> brepkit_topology::edge::EdgeCurve {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        brepkit_topology::edge::EdgeCurve::Circle(
+            brepkit_math::curves::Circle3D::new(center, z, 2.0).unwrap(),
+        )
+    }
+
+    /// The rational quarter cylinder bounded by its own arcs reads over its
+    /// domain as along its boundary, to 1e-10, its area 3 pi.
+    #[test]
+    fn a_rational_patch_bounded_by_its_own_arcs_reads_over_its_domain() {
+        let (topo, face) = quarter_cylinder(arc_about(Point3::new(0.0, 0.0, 3.0)));
+        let about = Vec3::new(0.3, -0.2, 0.5);
+        let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
+            .unwrap()
+            .expect("read over its domain");
+        let along = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+        assert!(
+            (whole.area - 3.0 * std::f64::consts::PI).abs() < 1e-9,
+            "area {}",
+            whole.area
+        );
+        for (x, y) in [
+            (whole.area, along.area),
+            (whole.volume, along.volume),
+            (whole.volume_moment_x, along.volume_moment_x),
+            (whole.volume_moment_y, along.volume_moment_y),
+            (whole.volume_moment_z, along.volume_moment_z),
+            (whole.centroid_x, along.centroid_x),
+            (whole.centroid_y, along.centroid_y),
+            (whole.centroid_z, along.centroid_z),
+        ] {
+            assert!((x - y).abs() < 1e-10, "{x} for {y}");
+        }
+    }
+
+    /// The same patch with its top arc swapped for one about (2, 2, 3),
+    /// through the same corners but bowing the other way: not its side, so
+    /// the face is left to its boundary.
+    #[test]
+    fn a_rational_patch_under_an_arc_that_is_not_its_side_is_left_to_the_boundary() {
+        let (topo, face) = quarter_cylinder(arc_about(Point3::new(2.0, 2.0, 3.0)));
+        assert!(
+            boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The patch under a top edge on its side's control points and knots:
+    /// weighted 1, 0.5 and 1, a conic 0.11 inside the arc at its middle;
+    /// weighted 1e-310, 1 and 1e-310, which by its first weight overflows in
+    /// the middle and pulls into its middle control point, 0.83 off the
+    /// side. Neither is its side, so the face is left to its boundary, and
+    /// the side's own weights doubled are.
+    #[test]
+    fn a_rational_patch_under_an_edge_off_its_sides_weights_is_left_to_the_boundary() {
+        let p = Point3::new;
+        let edge = |weights: Vec<f64>| {
+            let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![p(2.0, 0.0, 3.0), p(2.0, 2.0, 3.0), p(0.0, 2.0, 3.0)],
+                weights,
+            )
+            .unwrap();
+            quarter_cylinder(brepkit_topology::edge::EdgeCurve::NurbsCurve(curve))
+        };
+        let read = |(topo, face): (Topology, brepkit_topology::face::Face)| {
+            boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                .unwrap()
+                .is_some()
+        };
+        assert!(!read(edge(vec![1.0, 0.5, 1.0])), "a different conic");
+        assert!(
+            !read(edge(vec![1e-310, 1.0, 1e-310])),
+            "overflowing weights"
+        );
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        assert!(
+            read(edge(vec![2.0, 2.0 * w, 2.0])),
+            "the side's own weights"
+        );
+    }
+
+    /// A quadratic patch over two spans each way, its weights 1 to 64 and
+    /// varying along both, bounded by its four sides as their own NURBS
+    /// curves, the one at u = 1 (weights 1, 6, 9, 1) stored running against
+    /// it: read over its domain, it holds the area of a brute tensor
+    /// Gauss sum, 16 points on 16 panels per span each way, and what
+    /// Green's theorem along its boundary gives, to 1e-9.
+    #[test]
+    fn a_rational_patch_weighted_along_both_directions_reads_over_its_domain() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let knots = vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0];
+        let rise = |k: usize| {
+            #[allow(clippy::cast_precision_loss)]
+            let k = k as f64;
+            k * (3.0 - k) / 2.25
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let cps: Vec<Vec<Point3>> = (0..4)
+            .map(|i| {
+                (0..4)
+                    .map(|j| {
+                        Point3::new(
+                            i as f64 / 3.0,
+                            j as f64 / 3.0,
+                            0.4 * rise(i).mul_add(rise(j), 2.5),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let ws = vec![
+            vec![1.0, 8.0, 2.0, 1.0],
+            vec![4.0, 60.0, 16.0, 3.0],
+            vec![2.0, 30.0, 64.0, 5.0],
+            vec![1.0, 6.0, 9.0, 1.0],
+        ];
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            2,
+            knots.clone(),
+            knots.clone(),
+            cps.clone(),
+            ws.clone(),
+        )
+        .unwrap();
+        let side = |points: Vec<Point3>, weights: Vec<f64>| {
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots.clone(), points, weights).unwrap())
+        };
+        let (row, col) = (
+            |j: usize| (0..4).map(|i| cps[i][j]).collect::<Vec<_>>(),
+            |i: usize| cps[i].clone(),
+        );
+        let (row_w, col_w) = (
+            |j: usize| (0..4).map(|i| ws[i][j]).collect::<Vec<_>>(),
+            |i: usize| ws[i].clone(),
+        );
+        let mirrored: Vec<f64> = knots.iter().rev().map(|k| 1.0 - k).collect();
+        let reversed = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                2,
+                mirrored,
+                col(3).into_iter().rev().collect(),
+                col_w(3).into_iter().rev().collect(),
+            )
+            .unwrap(),
+        );
+        let mut topo = Topology::new();
+        let corner = |topo: &mut Topology, q: Point3| topo.add_vertex(Vertex::new(q, 1e-7));
+        let c = [
+            corner(&mut topo, cps[0][0]),
+            corner(&mut topo, cps[3][0]),
+            corner(&mut topo, cps[3][3]),
+            corner(&mut topo, cps[0][3]),
+        ];
+        let mut edge = |a, b, curve, forward| {
+            OrientedEdge::new(topo.add_edge(Edge::new(a, b, curve)), forward)
+        };
+        let edges = vec![
+            edge(c[0], c[1], side(row(0), row_w(0)), true),
+            edge(c[2], c[1], reversed, false),
+            edge(c[3], c[2], side(row(3), row_w(3)), false),
+            edge(c[0], c[3], side(col(0), col_w(0)), false),
+        ];
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone()));
+        let about = Vec3::new(0.3, -0.2, 0.5);
+        let whole = boundary::nurbs_face_over_domain(&topo, &face, 1.0, about)
+            .unwrap()
+            .expect("read over its domain");
+        let by_boundary = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, about)
+            .unwrap()
+            .unwrap();
+
+        let rule = brepkit_math::quadrature::gauss_legendre_points(16);
+        let panels: Vec<(f64, f64)> = (0..32)
+            .map(|k| (f64::from(k) / 32.0, f64::from(k + 1) / 32.0))
+            .collect();
+        let mut brute = 0.0;
+        for &(u0, u1) in &panels {
+            for gu in rule {
+                let u = (0.5 * (u1 - u0)).mul_add(gu.x, 0.5 * (u0 + u1));
+                for &(v0, v1) in &panels {
+                    for gv in rule {
+                        let v = (0.5 * (v1 - v0)).mul_add(gv.x, 0.5 * (v0 + v1));
+                        let d = surface.derivatives(u, v, 1);
+                        let w = 0.25 * (u1 - u0) * (v1 - v0) * gu.w * gv.w;
+                        brute += w * d[1][0].cross(d[0][1]).length();
+                    }
+                }
+            }
+        }
+        assert!(
+            ((whole.area - brute) / brute).abs() < 1e-9,
+            "area {} for {brute}",
+            whole.area
+        );
+        let read = |c: &face_integrator::FaceContribution| {
+            [
+                c.area,
+                c.volume,
+                c.volume_moment_x,
+                c.volume_moment_y,
+                c.volume_moment_z,
+                c.centroid_x,
+                c.centroid_y,
+                c.centroid_z,
+            ]
+        };
+        for (x, y) in read(&whole).into_iter().zip(read(&by_boundary)) {
+            assert!((x - y).abs() <= 1e-9 * x.abs().max(1.0), "{x} for {y}");
+        }
+    }
+
     /// A patch cubic along `v` over two spans, its sides along `v` curved
     /// and bounded by NURBS edges that are those sides' own curves, the one
     /// at `u = 1` stored running against it: read over its domain, it holds
@@ -1161,6 +1436,40 @@ mod tests {
             weights.iter().map(|&w| vec![w; 2]).collect(),
         )
         .unwrap()
+    }
+
+    /// Patches whose weights or samples are not numbers are left to their
+    /// boundaries: a NaN middle weight, which a fold by `min` and `max`
+    /// passes over, and a bilinear patch over u from 0 to 1e-3 weighted
+    /// 1e308, whose homogeneous partials overflow.
+    #[test]
+    fn a_nurbs_patch_that_samples_to_no_number_is_left_to_its_boundary() {
+        let unit = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let columns = [((0.0, 0.0), (0.0, 1.0)), ((1.0, 0.0), (1.0, 1.0))];
+        let middle = [
+            ((0.0, 0.0), (0.0, 1.0)),
+            ((0.5, 0.0), (0.5, 1.0)),
+            ((1.0, 0.0), (1.0, 1.0)),
+        ];
+        for surface in [
+            patch_at_one(
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                &middle,
+                &[1.0, f64::NAN, 1.0],
+            ),
+            patch_at_one(vec![0.0, 0.0, 1e-3, 1e-3], &columns, &[1e308, 1e308]),
+        ] {
+            let mut topo = Topology::new();
+            let face = brepkit_topology::face::Face::new(
+                wire_through(&mut topo, &unit, |_| None),
+                vec![],
+                brepkit_topology::face::FaceSurface::Nurbs(surface),
+            );
+            let read =
+                boundary::nurbs_face_over_domain(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+                    .unwrap();
+            assert!(read.is_none(), "read over its domain as {read:?}");
+        }
     }
 
     /// Faces the domain's integral cannot vouch for are left to their

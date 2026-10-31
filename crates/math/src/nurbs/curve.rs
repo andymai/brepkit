@@ -212,7 +212,14 @@ impl NurbsCurve {
         // Compute homogeneous derivatives: Aw[k] = (Aw_x, Aw_y, Aw_z, w) for k-th deriv.
         // Those above the degree are zero, but a rational curve's are not (a
         // polynomial one's are, and the quotient would only add rounding).
-        let top = if self.is_rational() { d } else { du };
+        // Only the span's own weights say which: equal ones make the curve
+        // polynomial there, and reading every weight costs the whole curve.
+        let support = &self.weights[span - p..=span];
+        let top = if support.iter().any(|w| w.to_bits() != support[0].to_bits()) {
+            d
+        } else {
+            du
+        };
         let mut aw = vec![[0.0f64; 4]; d + 1];
         for (k, aw_k) in aw.iter_mut().enumerate().take(du + 1) {
             for j in 0..=p {
