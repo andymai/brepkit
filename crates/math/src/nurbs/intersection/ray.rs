@@ -428,11 +428,18 @@ impl RaySurface {
 /// crossings before it into one. A crossing before the last whose own reach
 /// takes the hit in would have taken the last one in already.
 fn coalesce(hits: &mut Vec<RayHit>, radii: &[f64]) {
+    /// A crossing's hits so far: the last along the ray, the one whose radius
+    /// reaches farthest past it, and the most precise.
     struct Crossing {
         last: f64,
-        reach: f64,
+        reacher: (f64, f64),
         best: usize,
     }
+    // Separations are taken between `t`s and set against radii, never as
+    // sums: at `t` = 1e10 a unit in the last place is 1.9e-6, and `t + r`
+    // would round a radius of 1e-6 away. A hit at `(t, r)` reaches past one
+    // at `(s, q)` when `t - s` exceeds `q - r`.
+    let farther = |a: (f64, f64), b: (f64, f64)| a.0 - b.0 > b.1 - a.1;
     let mut order: Vec<usize> = (0..hits.len()).collect();
     order.sort_by(|&a, &b| hits[a].t.total_cmp(&hits[b].t));
     let precise = |a: usize, b: usize| {
@@ -445,24 +452,28 @@ fn coalesce(hits: &mut Vec<RayHit>, radii: &[f64]) {
     for i in order {
         let (t, r) = (hits[i].t, radii[i]);
         match crossings.last_mut() {
-            Some(c) if t <= c.reach || t - r <= c.last => {
+            Some(c) if t - c.reacher.0 <= c.reacher.1 || t - c.last <= r => {
                 c.last = t;
-                c.reach = c.reach.max(t + r);
+                if farther((t, r), c.reacher) {
+                    c.reacher = (t, r);
+                }
                 if precise(i, c.best) {
                     c.best = i;
                 }
             }
             _ => crossings.push(Crossing {
                 last: t,
-                reach: t + r,
+                reacher: (t, r),
                 best: i,
             }),
         }
-        while crossings.len() >= 2 && t - r <= crossings[crossings.len() - 2].last {
+        while crossings.len() >= 2 && t - crossings[crossings.len() - 2].last <= r {
             let Some(later) = crossings.pop() else { break };
             if let Some(c) = crossings.last_mut() {
                 c.last = later.last;
-                c.reach = c.reach.max(later.reach);
+                if farther(later.reacher, c.reacher) {
+                    c.reacher = later.reacher;
+                }
                 if precise(later.best, c.best) {
                     c.best = later.best;
                 }
@@ -689,7 +700,8 @@ mod tests {
     /// Three hits along a ray at 1, 1.0001 and 1.0002, the middle one
     /// settled on a spacing of 1e-3 and the others found to 1e-6, are one
     /// crossing in every order they are found in, and so are three a wide
-    /// radius chains from the last hit back past the middle one.
+    /// radius chains from the last hit back past the middle one. Two hits
+    /// 1.9e-6 apart at 1e10 along the ray, each found to 1e-6, are two.
     #[test]
     fn hits_merge_on_the_wider_radius_in_any_order() {
         let p = Point3::new;
@@ -732,6 +744,27 @@ mod tests {
             [2, 0, 1],
             [2, 1, 0],
         ];
+        // Far along the ray a unit in the last place of `t` is 1.9e-6: two hits
+        // that far apart, each found to 1e-6, are two crossings.
+        let far = 1e10_f64;
+        let next = f64::from_bits(far.to_bits() + 1);
+        for order in [[0, 1], [1, 0]] {
+            let (mut out, mut radii) = (RayHits::default(), Vec::new());
+            for k in order {
+                let t = [far, next][k];
+                assert!(ray.record(
+                    &leaf,
+                    (0.5, 0.5, t),
+                    origin,
+                    dir,
+                    1e-6,
+                    1e-6,
+                    (&mut out, &mut radii)
+                ));
+            }
+            coalesce(&mut out.hits, &radii);
+            assert_eq!(out.hits.len(), 2, "far along the ray in {order:?}");
+        }
         for found in chains {
             for order in orders {
                 let (mut out, mut radii) = (RayHits::default(), Vec::new());
