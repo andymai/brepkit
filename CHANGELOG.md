@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.15](https://github.com/andymai/brepkit/compare/v4.6.14...v4.6.15) (2026-10-31)
+
+
+### Performance
+
+* **check:** read a whole rational patch bounded by its own arcs over its domain ([#2261](https://github.com/andymai/brepkit/issues/2261)) ([e4f9079](https://github.com/andymai/brepkit/commit/e4f9079a914f2b1ac54152d9d1c1f3740ab519b1))
+
 ## [4.6.14](https://github.com/andymai/brepkit/compare/v4.6.13...v4.6.14) (2026-10-31)
 
 
