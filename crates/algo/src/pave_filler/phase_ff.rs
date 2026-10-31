@@ -4760,8 +4760,54 @@ fn trim_open_curve_to_plane_face_lines(
                         if !on_edge {
                             return None;
                         }
-                        (lo, hi) = (mid, mid);
-                        break;
+                        // On the boundary, the bracket's crossing only where
+                        // the state changes across it: a tangency touches a
+                        // piece and leaves the state as it was, and the
+                        // crossing lies past it. The state is read either side
+                        // from a hundred tolerances along the section out,
+                        // doubling within the bracket until it clears the band
+                        // the inside test reads as boundary; along a tangency
+                        // the section leaves that band only slowly.
+                        let (t_lo, t_hi) = (
+                            raw.t_range.0.min(raw.t_range.1),
+                            raw.t_range.0.max(raw.t_range.1),
+                        );
+                        let h = (t_hi - t_lo) * 1e-6;
+                        let (a, b) = ((mid - h).max(t_lo), (mid + h).min(t_hi));
+                        let speed = (eval_at(b) - eval_at(a)).length() / (b - a);
+                        if !speed.is_finite() || speed <= 0.0 {
+                            return None;
+                        }
+                        let mut nudge = tol.linear * 100.0 / speed;
+                        let states = loop {
+                            if mid - nudge < t_lo || mid + nudge > t_hi {
+                                return None;
+                            }
+                            let states = (
+                                inside_exact(eval_at(mid - nudge)),
+                                inside_exact(eval_at(mid + nudge)),
+                            );
+                            if let (Some(_), Some(_)) = states {
+                                break states;
+                            }
+                            if nudge >= hi - lo {
+                                return None;
+                            }
+                            nudge *= 2.0;
+                        };
+                        match states {
+                            (Some(b), Some(a)) if b == side && a == other => {
+                                (lo, hi) = (mid, mid);
+                                break;
+                            }
+                            (Some(b), Some(a)) if b == side && a == side && mid + nudge < hi => {
+                                lo = mid + nudge;
+                            }
+                            (Some(b), Some(a)) if b == other && a == other && mid - nudge > lo => {
+                                hi = mid - nudge;
+                            }
+                            _ => return None,
+                        }
                     }
                 }
             }
@@ -9281,6 +9327,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// That line across the disc of radius 2 about the origin with a hole of
+    /// radius 0.25 about (1.5625, 0.25), which the line touches at x = 1.5625
+    /// without crossing, the hole's samples starting 7 degrees round so that
+    /// none lands on the touch. Bisecting the samples about x = 0 and 3.125
+    /// lands on the touch first. The trim keeps the line from -2 to 2.
+    #[test]
+    fn a_section_touching_a_hole_keeps_its_span_past_it() {
+        use brepkit_topology::builder::{make_circle_edge, make_circle_edge_with_ref};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let rim = make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            1e-7,
+        )
+        .unwrap();
+        let start = 7.0_f64.to_radians();
+        let hole = make_circle_edge_with_ref(
+            &mut topo,
+            Point3::new(1.5625, 0.25, 0.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            0.25,
+            Vec3::new(start.cos(), start.sin(), 0.0),
+            1e-7,
+        )
+        .unwrap();
+        let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(hole, true)], true).unwrap());
+        let disc = topo.add_face(Face::new(
+            rim,
+            vec![hole],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let pieces = trim_line_across(&mut topo, disc).expect("a trimmed section");
+        let mut spans: Vec<(f64, f64)> = pieces
+            .iter()
+            .map(|p| {
+                (
+                    p.p_start.x().min(p.p_end.x()),
+                    p.p_start.x().max(p.p_end.x()),
+                )
+            })
+            .collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let covered = spans.first().is_some_and(|s| (s.0 + 2.0).abs() < 1e-6)
+            && spans.last().is_some_and(|s| (s.1 - 2.0).abs() < 1e-6)
+            && spans.windows(2).all(|w| (w[0].1 - w[1].0).abs() < 1e-6);
+        assert!(covered, "{spans:?}");
     }
 
     /// That line across the rectangle x = -0.5 to 2.5, y = -2 to 2 with a
